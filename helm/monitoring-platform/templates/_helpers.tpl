@@ -1,0 +1,90 @@
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "monitoring-platform.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create a default fully qualified app name.
+*/}}
+{{- define "monitoring-platform.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "monitoring-platform.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
+*/}}
+{{- define "monitoring-platform.labels" -}}
+helm.sh/chart: {{ include "monitoring-platform.chart" . }}
+{{ include "monitoring-platform.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "monitoring-platform.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "monitoring-platform.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "monitoring-platform.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "monitoring-platform.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+PostgreSQL connection URL
+*/}}
+{{- define "monitoring-platform.postgresUrl" -}}
+{{- if .Values.postgresql.enabled }}
+{{- printf "postgres://%s:%s@%s-postgresql:5432/%s?sslmode=disable" .Values.postgresql.auth.username .Values.postgresql.auth.password (include "monitoring-platform.fullname" .) .Values.postgresql.auth.database }}
+{{- else }}
+{{- .Values.postgresql.externalUrl }}
+{{- end }}
+{{- end }}{{/*
+NATS connection URL
+*/}}
+{{- define "monitoring-platform.natsUrl" -}}
+{{- if .Values.nats.enabled }}
+{{- printf "nats://%s-nats:4222" (include "monitoring-platform.fullname" .) }}
+{{- else }}
+{{- .Values.nats.externalUrl }}
+{{- end }}
+{{- end }}{{/*
+PostgreSQL host
+*/}}
+{{- define "monitoring-platform.postgresHost" -}}
+{{- printf "%s-postgresql" (include "monitoring-platform.fullname" .) }}
+{{- end }}{{/*
+NATS host
+*/}}
+{{- define "monitoring-platform.natsHost" -}}
+{{- printf "%s-nats" (include "monitoring-platform.fullname" .) }}
+{{- end }}

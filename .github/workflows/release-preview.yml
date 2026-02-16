@@ -1,0 +1,178 @@
+name: Release Preview
+
+on:
+  pull_request:
+    branches: [ dev, staging, main ]
+    types: [ opened, edited, synchronize, reopened, ready_for_review ]
+
+jobs:
+  release-preview:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --force --tags
+
+      - name: Validate PR title and predict next release
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          TARGET_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+
+          const title = (process.env.PR_TITLE || '').trim();
+          const body = process.env.PR_BODY || '';
+          const targetBranch = (process.env.TARGET_BRANCH || '').trim();
+          const outputPath = process.env.GITHUB_OUTPUT;
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+
+          const conventionalPattern = /^(feat|fix|perf|refactor|revert|build|chore|ci|docs|style|test)(\([^)]+\))?(!)?: .+/;
+          const titleMatch = title.match(conventionalPattern);
+
+          const appendSummary = (content) => {
+            fs.appendFileSync(summaryPath, `${content}\n`);
+          };
+
+          if (!titleMatch) {
+            appendSummary('## Release Preview');
+            appendSummary('');
+            appendSummary(':x: PR title is not a valid conventional commit title.');
+            appendSummary('');
+            appendSummary('Expected format examples:');
+            appendSummary('- `feat: add monitor tags`');
+            appendSummary('- `fix(api): handle empty payload`');
+            appendSummary('- `feat!: remove deprecated endpoint`');
+            process.exit(1);
+          }
+
+          const commitType = titleMatch[1];
+          const hasBang = Boolean(titleMatch[3]);
+          const hasBreakingText = /BREAKING CHANGES?:/m.test(body);
+
+          let bumpType = 'none';
+          if (hasBang || hasBreakingText) {
+            bumpType = 'major';
+          } else if (commitType === 'feat') {
+            bumpType = 'minor';
+          } else if (commitType === 'fix' || commitType === 'perf') {
+            bumpType = 'patch';
+          }
+
+          const parseTag = (tag) => {
+            const m = /^v(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)\.(\d+))?$/.exec(tag);
+            if (!m) return null;
+            return {
+              raw: tag,
+              major: Number(m[1]),
+              minor: Number(m[2]),
+              patch: Number(m[3]),
+              channel: m[4] || null,
+              preNum: m[5] ? Number(m[5]) : null,
+            };
+          };
+
+          const compareBase = (a, b) => {
+            if (a.major !== b.major) return a.major - b.major;
+            if (a.minor !== b.minor) return a.minor - b.minor;
+            return a.patch - b.patch;
+          };
+
+          const incVersion = (base, bump) => {
+            if (bump === 'major') return { major: base.major + 1, minor: 0, patch: 0 };
+            if (bump === 'minor') return { major: base.major, minor: base.minor + 1, patch: 0 };
+            return { major: base.major, minor: base.minor, patch: base.patch + 1 };
+          };
+
+          const fallbackBase = { major: 0, minor: 0, patch: 0 };
+
+          const tags = cp
+            .execSync("git tag --list 'v*'", { encoding: 'utf8' })
+            .trim()
+            .split(/\n/)
+            .filter(Boolean)
+            .map(parseTag)
+            .filter(Boolean);
+
+          const stableTags = tags.filter((tag) => tag.channel === null);
+          const latestStable = stableTags.sort(compareBase).pop() || fallbackBase;
+
+          const channelByBranch = {
+            dev: 'alpha',
+            staging: 'beta',
+            main: null,
+          };
+
+          if (!(targetBranch in channelByBranch)) {
+            appendSummary('## Release Preview');
+            appendSummary('');
+            appendSummary(`Target branch \`${targetBranch}\` is not release-managed. Skipping preview.`);
+            fs.appendFileSync(outputPath, 'will_release=false\n');
+            process.exit(0);
+          }
+
+          let predictedVersion = 'none';
+          let willRelease = bumpType !== 'none';
+          const channel = channelByBranch[targetBranch];
+
+          if (bumpType !== 'none') {
+            if (targetBranch === 'main') {
+              const next = incVersion(latestStable, bumpType);
+              predictedVersion = `${next.major}.${next.minor}.${next.patch}`;
+            } else {
+              const channelTags = tags
+                .filter((tag) => tag.channel === channel)
+                .sort((a, b) => {
+                  const baseDiff = compareBase(a, b);
+                  if (baseDiff !== 0) return baseDiff;
+                  return a.preNum - b.preNum;
+                });
+
+              const latestChannel = channelTags.length > 0 ? channelTags[channelTags.length - 1] : null;
+
+              let nextBase;
+              let nextPreNum;
+
+              if (!latestChannel) {
+                nextBase = incVersion(latestStable, bumpType);
+                nextPreNum = 1;
+              } else if (bumpType === 'patch') {
+                nextBase = {
+                  major: latestChannel.major,
+                  minor: latestChannel.minor,
+                  patch: latestChannel.patch,
+                };
+                nextPreNum = latestChannel.preNum + 1;
+              } else {
+                nextBase = incVersion(latestChannel, bumpType);
+                nextPreNum = 1;
+              }
+
+              predictedVersion = `${nextBase.major}.${nextBase.minor}.${nextBase.patch}-${channel}.${nextPreNum}`;
+            }
+          }
+
+          appendSummary('## Release Preview');
+          appendSummary('');
+          appendSummary(`- Target branch: \`${targetBranch}\``);
+          appendSummary(`- PR title: \`${title}\``);
+          appendSummary(`- Conventional type: \`${commitType}${hasBang ? '!' : ''}\``);
+          appendSummary(`- Computed bump: \`${bumpType}\``);
+          appendSummary(`- Predicted next version: \`${predictedVersion}\``);
+          appendSummary('');
+          appendSummary('Prediction is advisory and can change if other PRs merge first.');
+
+          fs.appendFileSync(outputPath, `bump_type=${bumpType}\n`);
+          fs.appendFileSync(outputPath, `predicted_version=${predictedVersion}\n`);
+          fs.appendFileSync(outputPath, `will_release=${willRelease}\n`);
+          NODE

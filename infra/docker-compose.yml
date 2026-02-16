@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: probara-postgres
+    environment:
+      POSTGRES_USER: probara
+      POSTGRES_PASSWORD: probara
+      POSTGRES_DB: probara
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U probara"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - probara-network
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: probara-nats
+    command:
+      - "-js"
+      - "-m"
+      - "8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - probara-network
+
+volumes:
+  postgres_data:
+  nats_data:
+
+networks:
+  probara-network:
+    driver: bridge
+

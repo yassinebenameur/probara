@@ -1,0 +1,254 @@
+version: '3.8'
+
+services:
+  # Infrastructure services
+  postgres:
+    image: postgres:16-alpine
+    container_name: probara-postgres
+    environment:
+      POSTGRES_USER: probara
+      POSTGRES_PASSWORD: probara
+      POSTGRES_DB: probara
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U probara"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - probara-network
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: probara-nats
+    command:
+      - "-js"
+      - "-m"
+      - "8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - probara-network
+
+  # Database migrations
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrations
+    container_name: probara-migrations
+    environment:
+      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+    volumes:
+      - ./shared/db/migrations:/app/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - probara-network
+    restart: "no"
+
+  # Application services
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: probara-api
+    environment:
+      HTTP_PORT: "8080"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: "info"
+      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      ADMIN_JWT_SECRET: "your-secret-key-change-in-production"
+      ADMIN_ACCESS_TTL_MINUTES: "15"
+      ADMIN_REFRESH_TTL_DAYS: "30"
+      ADMIN_COOKIE_SECURE: "false"
+      SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - synthetic_artifacts:/artifacts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - probara-network
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: scheduler/Dockerfile
+    container_name: probara-scheduler
+    environment:
+      HTTP_PORT: "8081"
+      METRICS_PORT: "9091"
+      LOG_LEVEL: "info"
+      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      CHECK_JOB_STREAM: "check-jobs"
+      CHECK_JOB_SUBJECT: "check.job"
+      SCHEDULE_INTERVAL_SECONDS: "5"
+    ports:
+      - "8081:8081"
+      - "9091:9091"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - probara-network
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: probara-worker
+    environment:
+      HTTP_PORT: "8083"
+      METRICS_PORT: "9092"
+      LOG_LEVEL: "info"
+      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      CHECK_JOB_STREAM: "check-jobs"
+      CHECK_JOB_SUBJECT: "check.job"
+      NATS_CONSUMER_NAME: "worker"
+      WORKER_CONCURRENCY: "10"
+      CHROME_BIN: "/usr/bin/chromium-browser"
+      SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
+      SIP_LOCALHOST_AS_HOST_GATEWAY: "true"
+    ports:
+      - "9092:9092"
+    volumes:
+      - synthetic_artifacts:/artifacts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9092/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - probara-network
+    restart: unless-stopped
+    user: "0:0"
+    shm_size: "1gb"
+    # Scale workers if needed
+    deploy:
+      replicas: 1
+
+  status-page:
+    build:
+      context: .
+      dockerfile: status-page/Dockerfile
+    container_name: probara-status-page
+    environment:
+      HTTP_PORT: "8082"
+      METRICS_PORT: "9093"
+      LOG_LEVEL: "info"
+      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      STATUS_PAGE_BASE_URL: "http://localhost:8082"
+      STATUS_PAGE_API_BASE_URL: "http://api:8080"
+    ports:
+      - "8082:8082"
+      - "9093:9093"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - probara-network
+    restart: unless-stopped
+
+  alerter:
+    build:
+      context: .
+      dockerfile: alerter/Dockerfile
+    container_name: probara-alerter
+    environment:
+      HTTP_PORT: "8084"
+      METRICS_PORT: "9094"
+      LOG_LEVEL: "info"
+      POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
+      NATS_URL: "nats://nats:4222"
+      ALERT_STREAM: "ALERTS"
+      ALERT_SUBJECT: "alerts"
+      ALERT_EVAL_INTERVAL_SECONDS: "30"
+      ALERT_REMINDER_INTERVAL_SECONDS: "3600"
+      ALERT_GROUP_WINDOW_SECONDS: "60"
+      ALERT_GROUP_MAX_CHILDREN: "5"
+    ports:
+      - "9094:9094"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9094/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - probara-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  nats_data:
+  synthetic_artifacts:
+
+networks:
+  probara-network:
+    driver: bridge

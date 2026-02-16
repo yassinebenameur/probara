@@ -1,0 +1,368 @@
+package scheduler
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
+
+	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/queue"
+)
+
+// Monitor represents a monitor for scheduling purposes
+type Monitor struct {
+	ID              uuid.UUID
+	TenantID        uuid.UUID
+	Type            string
+	Config          []byte
+	IntervalSeconds int
+	TimeoutSeconds  int
+}
+
+// Scheduler represents the scheduler service
+type Scheduler struct {
+	config   *config.SchedulerConfig
+	logger   *logger.Logger
+	metrics  *metrics.Registry
+	db       *db.Client
+	queue    *queue.Client
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stop     chan struct{}
+	stopOnce sync.Once
+
+	// Metrics
+	loopsTotal        *prometheus.CounterVec
+	monitorsScheduled *prometheus.CounterVec
+	jobsPublishErrors *prometheus.CounterVec
+	dbErrors          *prometheus.CounterVec
+	loopDuration      *prometheus.HistogramVec
+	monitorsInBatch   *prometheus.HistogramVec
+}
+
+// NewScheduler creates a new scheduler instance
+func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegistry *metrics.Registry, dbClient *db.Client, queueClient *queue.Client) *Scheduler {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	s := &Scheduler{
+		config:  cfg,
+		logger:  log,
+		metrics: metricsRegistry,
+		db:      dbClient,
+		queue:   queueClient,
+		ctx:     ctx,
+		cancel:  cancel,
+		stop:    make(chan struct{}),
+	}
+
+	// Initialize metrics (using empty labels, so we'll use With(prometheus.Labels{}))
+	s.loopsTotal = metricsRegistry.NewCounter(
+		"loops_total",
+		"Total number of scheduler loop iterations",
+		[]string{},
+	)
+	s.monitorsScheduled = metricsRegistry.NewCounter(
+		"monitors_scheduled_total",
+		"Total number of monitors scheduled",
+		[]string{},
+	)
+	s.jobsPublishErrors = metricsRegistry.NewCounter(
+		"jobs_publish_errors_total",
+		"Total number of job publish errors",
+		[]string{},
+	)
+	s.dbErrors = metricsRegistry.NewCounter(
+		"db_errors_total",
+		"Total number of database errors",
+		[]string{},
+	)
+	s.loopDuration = metricsRegistry.NewHistogram(
+		"loop_duration_seconds",
+		"Duration of scheduler loop iterations",
+		[]string{},
+		nil,
+	)
+	s.monitorsInBatch = metricsRegistry.NewHistogram(
+		"monitors_in_batch",
+		"Number of monitors processed per batch",
+		[]string{},
+		nil,
+	)
+
+	return s
+}
+
+// Start starts the scheduler loop
+func (s *Scheduler) Start() error {
+	s.logger.WithFields(logrus.Fields{
+		"schedule_interval_seconds": s.config.ScheduleIntervalSeconds,
+		"batch_size":                s.config.SchedulerBatchSize,
+		"check_job_subject":         s.config.CheckJobSubject,
+		"check_job_stream":          s.config.CheckJobStream,
+	}).Info("Starting scheduler loop")
+
+	// Ensure JetStream stream exists
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+
+	_, err := s.queue.EnsureStream(ctx, s.config.CheckJobStream, []string{s.config.CheckJobSubject})
+	if err != nil {
+		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
+	}
+
+	s.logger.WithField("stream", s.config.CheckJobStream).Info("JetStream stream ensured")
+
+	// Create ticker with interval from config
+	ticker := time.NewTicker(time.Duration(s.config.ScheduleIntervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	// Initial run
+	s.scheduleBatch(s.ctx)
+
+	for {
+		select {
+		case <-s.stop:
+			s.logger.Info("Scheduler loop stopped")
+			return nil
+		case <-s.ctx.Done():
+			s.logger.Info("Scheduler context cancelled")
+			return s.ctx.Err()
+		case <-ticker.C:
+			s.scheduleBatch(s.ctx)
+		}
+	}
+}
+
+// fetchDueMonitors fetches monitors that are due to run within a transaction
+func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize int) ([]Monitor, error) {
+	query := `
+		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds
+		FROM monitors
+		WHERE enabled = true
+		  AND type != 'group'
+		  AND (next_run_at IS NULL OR next_run_at <= NOW())
+		ORDER BY next_run_at NULLS FIRST, id
+		LIMIT $1
+		FOR UPDATE SKIP LOCKED
+	`
+
+	rows, err := tx.QueryContext(ctx, query, batchSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query due monitors: %w", err)
+	}
+	defer rows.Close()
+
+	var monitors []Monitor
+	for rows.Next() {
+		var m Monitor
+
+		err := rows.Scan(
+			&m.ID, &m.TenantID, &m.Type, &m.Config,
+			&m.IntervalSeconds, &m.TimeoutSeconds,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monitor: %w", err)
+		}
+
+		monitors = append(monitors, m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating monitors: %w", err)
+	}
+
+	return monitors, nil
+}
+
+// createCheckJob creates a check job for a monitor
+func (s *Scheduler) createCheckJob(monitor Monitor) (*models.Job, error) {
+	jobID := uuid.New().String()
+
+	payload := models.CheckJobPayload{
+		MonitorID:      monitor.ID.String(),
+		Type:           monitor.Type,
+		Config:         json.RawMessage(monitor.Config),
+		TimeoutSeconds: monitor.TimeoutSeconds,
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal job payload: %w", err)
+	}
+
+	now := time.Now()
+	deadline := now.Add(time.Duration(2*monitor.TimeoutSeconds) * time.Second)
+
+	job := models.NewJob(jobID, monitor.TenantID.String(), models.JobTypeCheck, "v1", payloadJSON)
+	job = job.WithDeadline(deadline)
+
+	return job, nil
+}
+
+// publishJob publishes a job to NATS
+func (s *Scheduler) publishJob(ctx context.Context, job *models.Job) error {
+	err := s.queue.PublishJSON(ctx, s.config.CheckJobSubject, job, nil)
+	if err != nil {
+		return fmt.Errorf("failed to publish job: %w", err)
+	}
+	return nil
+}
+
+// updateMonitorNextRunAt updates the next_run_at for a monitor within a transaction
+func (s *Scheduler) updateMonitorNextRunAt(ctx context.Context, tx *sql.Tx, monitorID uuid.UUID, nextRunAt time.Time) error {
+	query := `
+		UPDATE monitors
+		SET next_run_at = $1, updated_at = NOW()
+		WHERE id = $2
+	`
+
+	_, err := tx.ExecContext(ctx, query, nextRunAt, monitorID)
+	if err != nil {
+		return fmt.Errorf("failed to update monitor next_run_at: %w", err)
+	}
+
+	return nil
+}
+
+// scheduleBatch processes a batch of due monitors
+// Uses a transaction to ensure FOR UPDATE SKIP LOCKED works correctly with concurrent schedulers
+func (s *Scheduler) scheduleBatch(ctx context.Context) {
+	startTime := time.Now()
+	s.loopsTotal.With(prometheus.Labels{}).Inc()
+
+	// Start a transaction for atomicity and proper locking
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.dbErrors.With(prometheus.Labels{}).Inc()
+		s.logger.WithError(err).Error("Failed to begin transaction")
+		return
+	}
+	defer tx.Rollback()
+
+	// Fetch due monitors within the transaction (with FOR UPDATE SKIP LOCKED)
+	monitors, err := s.fetchDueMonitors(ctx, tx, s.config.SchedulerBatchSize)
+	if err != nil {
+		s.dbErrors.With(prometheus.Labels{}).Inc()
+		s.logger.WithError(err).Error("Failed to fetch due monitors")
+		return
+	}
+
+	batchSize := len(monitors)
+	s.monitorsInBatch.With(prometheus.Labels{}).Observe(float64(batchSize))
+
+	if batchSize == 0 {
+		// No monitors to schedule, just record the loop duration
+		// Still need to commit (or rollback) the transaction
+		if err := tx.Commit(); err != nil {
+			s.dbErrors.With(prometheus.Labels{}).Inc()
+			s.logger.WithError(err).Error("Failed to commit empty transaction")
+		}
+		duration := time.Since(startTime).Seconds()
+		s.loopDuration.With(prometheus.Labels{}).Observe(duration)
+		return
+	}
+
+	// Process each monitor
+	scheduledCount := 0
+	publishErrors := 0
+
+	for _, monitor := range monitors {
+		// Create check job
+		job, err := s.createCheckJob(monitor)
+		if err != nil {
+			s.logger.WithError(err).
+				WithField("monitor_id", monitor.ID).
+				WithField("tenant_id", monitor.TenantID).
+				Error("Failed to create check job")
+			publishErrors++
+			continue
+		}
+
+		// Publish job to NATS (outside transaction, but we'll only update DB if publish succeeds)
+		if err := s.publishJob(ctx, job); err != nil {
+			s.jobsPublishErrors.With(prometheus.Labels{}).Inc()
+			s.logger.WithError(err).
+				WithField("monitor_id", monitor.ID).
+				WithField("tenant_id", monitor.TenantID).
+				WithField("job_id", job.ID).
+				Error("Failed to publish job")
+			publishErrors++
+			// Skip this monitor - don't update next_run_at if publish failed
+			continue
+		}
+
+		// Calculate next run time
+		nextRunAt := time.Now().Add(time.Duration(monitor.IntervalSeconds) * time.Second)
+
+		// Update monitor's next_run_at within the transaction
+		if err := s.updateMonitorNextRunAt(ctx, tx, monitor.ID, nextRunAt); err != nil {
+			s.dbErrors.With(prometheus.Labels{}).Inc()
+			s.logger.WithError(err).
+				WithField("monitor_id", monitor.ID).
+				WithField("tenant_id", monitor.TenantID).
+				Error("Failed to update monitor next_run_at")
+			// If DB update fails, we've already published the job
+			// This is acceptable - the monitor will be scheduled again, but the job is already queued
+			// We continue to process other monitors
+			continue
+		}
+
+		scheduledCount++
+		s.logger.WithFields(logrus.Fields{
+			"monitor_id": monitor.ID,
+			"tenant_id":  monitor.TenantID,
+			"job_id":     job.ID,
+		}).Debug("Scheduled monitor check")
+	}
+
+	// Commit the transaction
+	// This releases the row locks and makes all updates visible
+	if err := tx.Commit(); err != nil {
+		s.dbErrors.With(prometheus.Labels{}).Inc()
+		s.logger.WithError(err).Error("Failed to commit transaction")
+		return
+	}
+
+	// Update metrics
+	s.monitorsScheduled.With(prometheus.Labels{}).Add(float64(scheduledCount))
+	duration := time.Since(startTime).Seconds()
+	s.loopDuration.With(prometheus.Labels{}).Observe(duration)
+
+	// Log batch summary
+	if scheduledCount > 0 || publishErrors > 0 {
+		s.logger.WithFields(logrus.Fields{
+			"batch_size":       batchSize,
+			"scheduled_count":  scheduledCount,
+			"publish_errors":   publishErrors,
+			"duration_seconds": duration,
+		}).Info("Scheduler batch completed")
+	}
+}
+
+// Shutdown gracefully shuts down the scheduler
+func (s *Scheduler) Shutdown(ctx context.Context) error {
+	s.logger.Info("Shutting down scheduler")
+
+	// Cancel context to stop scheduling loop
+	s.cancel()
+
+	// Close stop channel only once to signal the loop to stop
+	s.stopOnce.Do(func() {
+		close(s.stop)
+	})
+
+	// Start() will return when it sees the context is cancelled or stop channel is closed
+	// The timeout in the caller (main.go) will handle cases where Start() doesn't stop in time
+	return nil
+}

@@ -1,0 +1,70 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+node_modules/
+web/node_modules/
+
+# Go workspace file
+go.work
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+bin/
+dist/
+build/
+coverage
+coverage.html
+
+# Compiled agent binaries
+static/agent/
+agent/uptime-agent
+agent/probara-agent
+status-page/main
+
+# Docker volumes
+postgres_data/
+nats_data/
+
+# Kubernetes secrets
+*.secret.yaml
+secrets/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.envrc
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+
+# Test/report artifacts
+web/playwright-report/
+web/test-results/

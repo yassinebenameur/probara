@@ -1,0 +1,32 @@
+{{- if .Values.nats.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-nats
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  type: ClusterIP
+  ports:
+    - port: 4222
+      targetPort: client
+      protocol: TCP
+      name: client
+    - port: 8222
+      targetPort: monitor
+      protocol: TCP
+      name: monitor
+    - port: 6222
+      targetPort: cluster
+      protocol: TCP
+      name: cluster
+  selector:
+    {{- include "monitoring-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+{{- end }}
+
+
+
+
+

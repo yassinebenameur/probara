@@ -1,0 +1,533 @@
+package config
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// BaseConfig contains common configuration for all services
+type BaseConfig struct {
+	ServiceName string
+	HTTPPort    int
+	MetricsPort int
+	LogLevel    string
+	PostgresURL string
+	NATSURL     string
+}
+
+// APIConfig contains configuration for the API service
+type APIConfig struct {
+	BaseConfig
+	AlertStream           string
+	AlertSubject          string
+	AlertConsumerName     string
+	CheckJobSubject       string
+	AdminJWTSecret        string
+	AdminAccessTTLMinutes int
+	AdminRefreshTTLDays   int
+	AdminCookieSecure     bool
+	AdminBcryptCost       int
+	SyntheticArtifactsDir string
+}
+
+// SchedulerConfig contains configuration for the scheduler service
+type SchedulerConfig struct {
+	BaseConfig
+	ScheduleIntervalSeconds int
+	SchedulerBatchSize      int
+	CheckJobSubject         string
+	CheckJobStream          string
+}
+
+// WorkerConfig contains configuration for the worker service
+type WorkerConfig struct {
+	BaseConfig
+	WorkerConcurrency     int
+	NATSConsumerName      string
+	CheckJobStream        string
+	CheckJobSubject       string
+	MaxHTTPTimeoutSeconds int
+	MaxBodySizeBytes      int
+	HTTPBlockPrivateIPs   bool
+	HTTPAllowedCIDRs      []*net.IPNet
+	SyntheticArtifactsDir string
+}
+
+// AlerterConfig contains configuration for the alerter service
+type AlerterConfig struct {
+	BaseConfig
+	AlertStream                  string
+	AlertSubject                 string
+	AlertEvalIntervalSeconds     int
+	AlertReminderIntervalSeconds int
+	AlertGroupWindowSeconds      int
+	AlertGroupMaxChildren        int
+	SMTPHost                     string
+	SMTPPort                     int
+	SMTPUsername                 string
+	SMTPPassword                 string
+	SMTPFrom                     string
+	SMTPUseTLS                   bool
+	AlertEmailTo                 string
+}
+
+// StatusPageConfig contains configuration for the status page service
+type StatusPageConfig struct {
+	BaseConfig
+	StatusPageBaseURL string
+	APIBaseURL        string
+}
+
+// LoadBaseConfig loads base configuration from environment variables
+func LoadBaseConfig(serviceName string) (*BaseConfig, error) {
+	cfg := &BaseConfig{
+		ServiceName: serviceName,
+	}
+
+	// HTTP_PORT
+	httpPortStr := os.Getenv("HTTP_PORT")
+	if httpPortStr == "" {
+		return nil, fmt.Errorf("HTTP_PORT environment variable is required")
+	}
+	httpPort, err := strconv.Atoi(httpPortStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid HTTP_PORT: %w", err)
+	}
+	cfg.HTTPPort = httpPort
+
+	// METRICS_PORT
+	metricsPortStr := os.Getenv("METRICS_PORT")
+	if metricsPortStr == "" {
+		return nil, fmt.Errorf("METRICS_PORT environment variable is required")
+	}
+	metricsPort, err := strconv.Atoi(metricsPortStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid METRICS_PORT: %w", err)
+	}
+	cfg.MetricsPort = metricsPort
+
+	// LOG_LEVEL
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	cfg.LogLevel = logLevel
+
+	// POSTGRES_URL (optional for some services)
+	cfg.PostgresURL = os.Getenv("POSTGRES_URL")
+
+	// NATS_URL
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://localhost:4222"
+	}
+	cfg.NATSURL = natsURL
+
+	return cfg, nil
+}
+
+// LoadAPIConfig loads API service configuration
+func LoadAPIConfig() (*APIConfig, error) {
+	base, err := LoadBaseConfig("api")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &APIConfig{BaseConfig: *base}
+
+	// ALERT_STREAM
+	alertStream := os.Getenv("ALERT_STREAM")
+	if alertStream == "" {
+		cfg.AlertStream = "ALERTS"
+	} else {
+		cfg.AlertStream = alertStream
+	}
+
+	// ALERT_SUBJECT
+	alertSubject := os.Getenv("ALERT_SUBJECT")
+	if alertSubject == "" {
+		cfg.AlertSubject = "alerts"
+	} else {
+		cfg.AlertSubject = alertSubject
+	}
+
+	// ALERT_CONSUMER_NAME
+	alertConsumerName := os.Getenv("ALERT_CONSUMER_NAME")
+	if alertConsumerName == "" {
+		cfg.AlertConsumerName = "api-alerts"
+	} else {
+		cfg.AlertConsumerName = alertConsumerName
+	}
+
+	// CHECK_JOB_SUBJECT
+	checkJobSubject := os.Getenv("CHECK_JOB_SUBJECT")
+	if checkJobSubject == "" {
+		cfg.CheckJobSubject = "check.jobs"
+	} else {
+		cfg.CheckJobSubject = checkJobSubject
+	}
+
+	// ADMIN_JWT_SECRET
+	adminJWTSecret := os.Getenv("ADMIN_JWT_SECRET")
+	if adminJWTSecret == "" {
+		return nil, fmt.Errorf("ADMIN_JWT_SECRET environment variable is required")
+	}
+	cfg.AdminJWTSecret = adminJWTSecret
+
+	// ADMIN_ACCESS_TTL_MINUTES
+	accessTTLStr := os.Getenv("ADMIN_ACCESS_TTL_MINUTES")
+	if accessTTLStr == "" {
+		cfg.AdminAccessTTLMinutes = 15
+	} else {
+		ttl, err := strconv.Atoi(accessTTLStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ADMIN_ACCESS_TTL_MINUTES: %w", err)
+		}
+		cfg.AdminAccessTTLMinutes = ttl
+	}
+
+	// ADMIN_REFRESH_TTL_DAYS
+	refreshTTLStr := os.Getenv("ADMIN_REFRESH_TTL_DAYS")
+	if refreshTTLStr == "" {
+		cfg.AdminRefreshTTLDays = 30
+	} else {
+		ttl, err := strconv.Atoi(refreshTTLStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ADMIN_REFRESH_TTL_DAYS: %w", err)
+		}
+		cfg.AdminRefreshTTLDays = ttl
+	}
+
+	// ADMIN_COOKIE_SECURE
+	cookieSecureStr := os.Getenv("ADMIN_COOKIE_SECURE")
+	if cookieSecureStr == "" {
+		cfg.AdminCookieSecure = false
+	} else {
+		secure, err := strconv.ParseBool(cookieSecureStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ADMIN_COOKIE_SECURE: %w", err)
+		}
+		cfg.AdminCookieSecure = secure
+	}
+
+	// ADMIN_BCRYPT_COST
+	bcryptCostStr := os.Getenv("ADMIN_BCRYPT_COST")
+	if bcryptCostStr == "" {
+		cfg.AdminBcryptCost = 12
+	} else {
+		cost, err := strconv.Atoi(bcryptCostStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ADMIN_BCRYPT_COST: %w", err)
+		}
+		cfg.AdminBcryptCost = cost
+	}
+
+	// SYNTHETIC_BROWSER_ARTIFACTS_DIR
+	artifactsDir := strings.TrimSpace(os.Getenv("SYNTHETIC_BROWSER_ARTIFACTS_DIR"))
+	if artifactsDir == "" {
+		artifactsDir = filepath.Join(os.TempDir(), "probara", "synthetic-browser-artifacts")
+	}
+	cfg.SyntheticArtifactsDir = artifactsDir
+
+	return cfg, nil
+}
+
+// LoadSchedulerConfig loads scheduler service configuration
+func LoadSchedulerConfig() (*SchedulerConfig, error) {
+	base, err := LoadBaseConfig("scheduler")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &SchedulerConfig{BaseConfig: *base}
+
+	// SCHEDULE_INTERVAL_SECONDS
+	scheduleIntervalStr := os.Getenv("SCHEDULE_INTERVAL_SECONDS")
+	if scheduleIntervalStr == "" {
+		cfg.ScheduleIntervalSeconds = 2
+	} else {
+		scheduleInterval, err := strconv.Atoi(scheduleIntervalStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SCHEDULE_INTERVAL_SECONDS: %w", err)
+		}
+		cfg.ScheduleIntervalSeconds = scheduleInterval
+	}
+
+	// SCHEDULER_BATCH_SIZE
+	batchSizeStr := os.Getenv("SCHEDULER_BATCH_SIZE")
+	if batchSizeStr == "" {
+		cfg.SchedulerBatchSize = 500
+	} else {
+		batchSize, err := strconv.Atoi(batchSizeStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SCHEDULER_BATCH_SIZE: %w", err)
+		}
+		cfg.SchedulerBatchSize = batchSize
+	}
+
+	// CHECK_JOB_SUBJECT
+	checkJobSubject := os.Getenv("CHECK_JOB_SUBJECT")
+	if checkJobSubject == "" {
+		cfg.CheckJobSubject = "check.jobs"
+	} else {
+		cfg.CheckJobSubject = checkJobSubject
+	}
+
+	// CHECK_JOB_STREAM
+	checkJobStream := os.Getenv("CHECK_JOB_STREAM")
+	if checkJobStream == "" {
+		cfg.CheckJobStream = "CHECK_JOBS"
+	} else {
+		cfg.CheckJobStream = checkJobStream
+	}
+
+	return cfg, nil
+}
+
+// LoadWorkerConfig loads worker service configuration
+func LoadWorkerConfig() (*WorkerConfig, error) {
+	base, err := LoadBaseConfig("worker")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &WorkerConfig{BaseConfig: *base}
+
+	// WORKER_CONCURRENCY
+	concurrencyStr := os.Getenv("WORKER_CONCURRENCY")
+	if concurrencyStr == "" {
+		cfg.WorkerConcurrency = 10
+	} else {
+		concurrency, err := strconv.Atoi(concurrencyStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid WORKER_CONCURRENCY: %w", err)
+		}
+		cfg.WorkerConcurrency = concurrency
+	}
+
+	// NATS_CONSUMER_NAME
+	consumerName := os.Getenv("NATS_CONSUMER_NAME")
+	if consumerName == "" {
+		cfg.NATSConsumerName = "check-workers"
+	} else {
+		cfg.NATSConsumerName = consumerName
+	}
+
+	// CHECK_JOB_STREAM
+	checkJobStream := os.Getenv("CHECK_JOB_STREAM")
+	if checkJobStream == "" {
+		cfg.CheckJobStream = "CHECK_JOBS"
+	} else {
+		cfg.CheckJobStream = checkJobStream
+	}
+
+	// CHECK_JOB_SUBJECT
+	checkJobSubject := os.Getenv("CHECK_JOB_SUBJECT")
+	if checkJobSubject == "" {
+		cfg.CheckJobSubject = "check.jobs"
+	} else {
+		cfg.CheckJobSubject = checkJobSubject
+	}
+
+	// MAX_HTTP_TIMEOUT_SECONDS
+	maxTimeoutStr := os.Getenv("MAX_HTTP_TIMEOUT_SECONDS")
+	if maxTimeoutStr == "" {
+		cfg.MaxHTTPTimeoutSeconds = 30
+	} else {
+		maxTimeout, err := strconv.Atoi(maxTimeoutStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MAX_HTTP_TIMEOUT_SECONDS: %w", err)
+		}
+		cfg.MaxHTTPTimeoutSeconds = maxTimeout
+	}
+
+	// MAX_BODY_SIZE_BYTES
+	maxBodySizeStr := os.Getenv("MAX_BODY_SIZE_BYTES")
+	if maxBodySizeStr == "" {
+		cfg.MaxBodySizeBytes = 1048576 // 1 MB
+	} else {
+		maxBodySize, err := strconv.Atoi(maxBodySizeStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MAX_BODY_SIZE_BYTES: %w", err)
+		}
+		cfg.MaxBodySizeBytes = maxBodySize
+	}
+
+	// HTTP_BLOCK_PRIVATE_IPS
+	blockPrivateIPsStr := os.Getenv("HTTP_BLOCK_PRIVATE_IPS")
+	if blockPrivateIPsStr == "" {
+		cfg.HTTPBlockPrivateIPs = false
+	} else {
+		block, err := strconv.ParseBool(blockPrivateIPsStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid HTTP_BLOCK_PRIVATE_IPS: %w", err)
+		}
+		cfg.HTTPBlockPrivateIPs = block
+	}
+
+	// HTTP_ALLOWED_CIDRS (comma-separated CIDRs that bypass the private IP block)
+	allowedCIDRsStr := os.Getenv("HTTP_ALLOWED_CIDRS")
+	if strings.TrimSpace(allowedCIDRsStr) != "" {
+		parts := strings.Split(allowedCIDRsStr, ",")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			_, cidr, err := net.ParseCIDR(p)
+			if err != nil {
+				return nil, fmt.Errorf("invalid HTTP_ALLOWED_CIDRS entry %q: %w", p, err)
+			}
+			cfg.HTTPAllowedCIDRs = append(cfg.HTTPAllowedCIDRs, cidr)
+		}
+	}
+
+	// SYNTHETIC_BROWSER_ARTIFACTS_DIR
+	artifactsDir := strings.TrimSpace(os.Getenv("SYNTHETIC_BROWSER_ARTIFACTS_DIR"))
+	if artifactsDir == "" {
+		artifactsDir = filepath.Join(os.TempDir(), "probara", "synthetic-browser-artifacts")
+	}
+	cfg.SyntheticArtifactsDir = artifactsDir
+
+	return cfg, nil
+}
+
+// LoadAlerterConfig loads alerter service configuration
+func LoadAlerterConfig() (*AlerterConfig, error) {
+	base, err := LoadBaseConfig("alerter")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &AlerterConfig{BaseConfig: *base}
+
+	// ALERT_STREAM
+	alertStream := os.Getenv("ALERT_STREAM")
+	if alertStream == "" {
+		cfg.AlertStream = "ALERTS"
+	} else {
+		cfg.AlertStream = alertStream
+	}
+
+	// ALERT_SUBJECT
+	alertSubject := os.Getenv("ALERT_SUBJECT")
+	if alertSubject == "" {
+		cfg.AlertSubject = "alerts"
+	} else {
+		cfg.AlertSubject = alertSubject
+	}
+
+	// ALERT_EVAL_INTERVAL_SECONDS
+	evalIntervalStr := os.Getenv("ALERT_EVAL_INTERVAL_SECONDS")
+	if evalIntervalStr == "" {
+		cfg.AlertEvalIntervalSeconds = 30
+	} else {
+		val, err := strconv.Atoi(evalIntervalStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERT_EVAL_INTERVAL_SECONDS: %w", err)
+		}
+		cfg.AlertEvalIntervalSeconds = val
+	}
+
+	// ALERT_REMINDER_INTERVAL_SECONDS
+	reminderIntervalStr := os.Getenv("ALERT_REMINDER_INTERVAL_SECONDS")
+	if reminderIntervalStr == "" {
+		cfg.AlertReminderIntervalSeconds = 3600
+	} else {
+		val, err := strconv.Atoi(reminderIntervalStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERT_REMINDER_INTERVAL_SECONDS: %w", err)
+		}
+		cfg.AlertReminderIntervalSeconds = val
+	}
+
+	// ALERT_GROUP_WINDOW_SECONDS
+	groupWindowStr := os.Getenv("ALERT_GROUP_WINDOW_SECONDS")
+	if groupWindowStr == "" {
+		cfg.AlertGroupWindowSeconds = 60
+	} else {
+		val, err := strconv.Atoi(groupWindowStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERT_GROUP_WINDOW_SECONDS: %w", err)
+		}
+		cfg.AlertGroupWindowSeconds = val
+	}
+
+	// ALERT_GROUP_MAX_CHILDREN
+	groupMaxChildrenStr := os.Getenv("ALERT_GROUP_MAX_CHILDREN")
+	if groupMaxChildrenStr == "" {
+		cfg.AlertGroupMaxChildren = 5
+	} else {
+		val, err := strconv.Atoi(groupMaxChildrenStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERT_GROUP_MAX_CHILDREN: %w", err)
+		}
+		cfg.AlertGroupMaxChildren = val
+	}
+
+	// SMTP_HOST
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+
+	// SMTP_PORT
+	smtpPortStr := os.Getenv("SMTP_PORT")
+	if smtpPortStr == "" {
+		cfg.SMTPPort = 587
+	} else {
+		smtpPort, err := strconv.Atoi(smtpPortStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SMTP_PORT: %w", err)
+		}
+		cfg.SMTPPort = smtpPort
+	}
+
+	// SMTP_USERNAME
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+
+	// SMTP_PASSWORD
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
+
+	// SMTP_FROM
+	cfg.SMTPFrom = os.Getenv("SMTP_FROM")
+	if cfg.SMTPFrom == "" {
+		cfg.SMTPFrom = cfg.SMTPUsername
+	}
+
+	// SMTP_USE_TLS
+	smtpUseTLSStr := os.Getenv("SMTP_USE_TLS")
+	if smtpUseTLSStr == "" {
+		cfg.SMTPUseTLS = true
+	} else {
+		useTLS, err := strconv.ParseBool(smtpUseTLSStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SMTP_USE_TLS: %w", err)
+		}
+		cfg.SMTPUseTLS = useTLS
+	}
+
+	// ALERT_EMAIL_TO
+	cfg.AlertEmailTo = os.Getenv("ALERT_EMAIL_TO")
+
+	return cfg, nil
+}
+
+// LoadStatusPageConfig loads status page service configuration
+func LoadStatusPageConfig() (*StatusPageConfig, error) {
+	base, err := LoadBaseConfig("status-page")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &StatusPageConfig{BaseConfig: *base}
+
+	// STATUS_PAGE_BASE_URL
+	cfg.StatusPageBaseURL = os.Getenv("STATUS_PAGE_BASE_URL")
+
+	// STATUS_PAGE_API_BASE_URL (optional; enables /_sp_api/* proxy for the in-page customizer)
+	cfg.APIBaseURL = os.Getenv("STATUS_PAGE_API_BASE_URL")
+
+	return cfg, nil
+}

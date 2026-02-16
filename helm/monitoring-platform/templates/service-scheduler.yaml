@@ -1,0 +1,24 @@
+{{- if .Values.scheduler.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-scheduler
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.scheduler.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "monitoring-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+{{- end }}
+
+
+
+
+

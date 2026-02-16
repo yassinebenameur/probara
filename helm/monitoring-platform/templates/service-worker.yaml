@@ -1,0 +1,24 @@
+{{- if .Values.worker.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-worker
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.worker.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "monitoring-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+{{- end }}
+
+
+
+
+

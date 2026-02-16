@@ -1,0 +1,270 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
+	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
+	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
+	"github.com/yassinebenameur/probara/api/internal/handlers/alertpolicies"
+	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
+	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
+	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
+	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
+	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
+	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
+	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
+	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
+	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
+	adminauthservice "github.com/yassinebenameur/probara/api/internal/services/adminauth"
+	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
+	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
+	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
+	alertpolicyservice "github.com/yassinebenameur/probara/api/internal/services/alertpolicies"
+	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
+	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
+	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
+	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
+	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
+	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
+	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
+	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
+	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/statusupdates"
+)
+
+// Server represents the API HTTP server
+type Server struct {
+	config          *config.APIConfig
+	logger          *logger.Logger
+	metrics         *metrics.Registry
+	db              *db.Client
+	queue           *queue.Client
+	http            *http.Server
+	statusPublisher *statusupdates.Publisher
+}
+
+// NewServer creates a new API server
+func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metrics.Registry, dbClient *db.Client) *Server {
+	r := chi.NewRouter()
+
+	// Middleware chain
+	r.Use(apimiddleware.RequestIDMiddleware)
+	r.Use(apimiddleware.RecoveryMiddleware(log))
+	r.Use(apimiddleware.LoggingMiddleware(log))
+	r.Use(apimiddleware.MetricsMiddleware(cfg.ServiceName))
+	r.Use(middleware.RealIP)
+	r.Use(middleware.RequestID)
+	r.Use(middleware.Recoverer)
+
+	// Health and metrics endpoints (no auth required)
+	healthHandlers := NewHandlers(cfg, log, metricsRegistry, dbClient)
+	r.Get("/healthz", healthHandlers.Healthz)
+	r.Get("/readyz", healthHandlers.Readyz)
+	r.Get("/metrics", metricsRegistry.Handler().ServeHTTP)
+
+	// Static files for agent binaries (no auth required)
+	// Serve from ./static directory
+	staticDir := http.Dir("./static")
+	r.Get("/static/*", func(w http.ResponseWriter, r *http.Request) {
+		http.StripPrefix("/static/", http.FileServer(staticDir)).ServeHTTP(w, r)
+	})
+
+	// Status update publisher (optional)
+	statusPublisher, err := statusupdates.NewPublisher(cfg.NATSURL)
+	if err != nil {
+		log.WithError(err).Warn("Failed to initialize status update publisher")
+		statusPublisher = nil
+	}
+
+	// Check job publisher (optional, used by on-demand monitor runs)
+	checkJobQueue, err := queue.NewClient(cfg.NATSURL)
+	if err != nil {
+		log.WithError(err).Warn("Failed to initialize NATS queue for on-demand monitor runs")
+		checkJobQueue = nil
+	}
+
+	// Push service and handlers (created here to use in both public and authenticated routes)
+	pushSvc := pushservice.NewService(dbClient.DB, statusPublisher)
+	pushHandlers := pushhandlers.NewHandler(pushSvc, log)
+
+	// Push webhook endpoints (no auth - uses token in URL for authentication)
+	r.Route("/api/v1/push", func(r chi.Router) {
+		r.Get("/{token}", pushHandlers.HandlePushGet)
+		r.Post("/{token}", pushHandlers.HandlePushPost)
+	})
+
+	// API v1 routes
+	r.Route("/api/v1", func(r chi.Router) {
+		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
+		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log)
+
+		// Auth endpoints (no auth required)
+		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)
+		authHandlers := authhandlers.NewHandlers(authService, cfg, log)
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/login", authHandlers.Login)
+			r.Post("/refresh", authHandlers.Refresh)
+			r.Post("/logout", authHandlers.Logout)
+			r.Get("/me", authHandlers.Me)
+		})
+		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
+		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
+
+		// Protected API routes
+		r.Route("/", func(r chi.Router) {
+			// Apply auth middleware to all API routes
+			r.Use(apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret))
+
+			// Agent service and handlers (needed by monitors route)
+			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
+			agentHandlers := agenthandlers.NewHandler(agentService, log)
+
+			// Monitor services
+			monitorService := monitorservice.NewService(dbClient)
+			groupSvc := groupservice.NewService(dbClient)
+			resultSvc := resultservice.NewService(dbClient, groupSvc)
+			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
+			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
+
+			// Import service and handlers
+			importSvc := importservice.NewService(dbClient, monitorService)
+			importHdlrs := importhandlers.NewHandlers(importSvc, log)
+
+			r.Route("/monitors", func(r chi.Router) {
+				r.Post("/", monitorHandlers.CreateMonitor)
+				r.Get("/", monitorHandlers.ListMonitors)
+				// Import endpoints (must be before /{id} to avoid conflicts)
+				r.Post("/import/preview", importHdlrs.Preview)
+				r.Post("/import", importHdlrs.Execute)
+				r.Get("/{id}", monitorHandlers.GetMonitor)
+				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
+				r.Post("/{id}/run", monitorHandlers.RunMonitorNow)
+				r.Get("/{id}/artifacts/screenshot", monitorHandlers.GetSyntheticBrowserScreenshot)
+				r.Patch("/{id}", monitorHandlers.UpdateMonitor)
+				r.Delete("/{id}", monitorHandlers.DeleteMonitor)
+				// Group membership endpoints
+				r.Get("/{id}/members", monitorHandlers.GetGroupMembers)
+				r.Post("/{id}/members", monitorHandlers.AddMonitorsToGroup)
+				r.Delete("/{id}/members", monitorHandlers.RemoveMonitorsFromGroup)
+				// Agent install endpoints
+				r.Get("/{id}/agent/install", agentHandlers.HandleGetInstallCommand)
+				r.Get("/{id}/agent/install/script.sh", agentHandlers.HandleGetInstallScript)
+				// Push info endpoint
+				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
+			})
+
+			// Agent metrics endpoint
+			r.Post("/agent/metrics", agentHandlers.HandleReceiveMetrics)
+
+			// Alert policies
+			alertPolicyService := alertpolicyservice.NewService(dbClient)
+			alertPolicyHandlers := alertpolicies.NewHandlers(alertPolicyService, log)
+			r.Route("/alert-policies", func(r chi.Router) {
+				r.Post("/", alertPolicyHandlers.CreateAlertPolicy)
+				r.Get("/", alertPolicyHandlers.ListAlertPolicies)
+				r.Get("/{id}", alertPolicyHandlers.GetAlertPolicy)
+				r.Patch("/{id}", alertPolicyHandlers.UpdateAlertPolicy)
+				r.Delete("/{id}", alertPolicyHandlers.DeleteAlertPolicy)
+			})
+
+			// Alert channels
+			alertChannelService := alertchannelservice.NewService(dbClient)
+			alertChannelHandlers := alertchannelhandlers.NewHandlers(alertChannelService, log)
+			r.Route("/alert-channels", func(r chi.Router) {
+				r.Post("/", alertChannelHandlers.CreateAlertChannel)
+				r.Get("/", alertChannelHandlers.ListAlertChannels)
+				r.Get("/{id}", alertChannelHandlers.GetAlertChannel)
+				r.Patch("/{id}", alertChannelHandlers.UpdateAlertChannel)
+				r.Delete("/{id}", alertChannelHandlers.DeleteAlertChannel)
+				r.Post("/{id}/test", alertChannelHandlers.TestAlertChannel)
+			})
+
+			// API keys
+			apiKeyService := apikeyservice.NewService(dbClient)
+			apiKeyHandlers := apikeyhandlers.NewHandlers(apiKeyService, log)
+			r.Route("/api-keys", func(r chi.Router) {
+				r.Post("/", apiKeyHandlers.CreateAPIKey)
+				r.Get("/", apiKeyHandlers.ListAPIKeys)
+				r.Delete("/{id}", apiKeyHandlers.RevokeAPIKey)
+			})
+
+			// Status pages
+			statusPageService := statuspageservice.NewService(dbClient)
+			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
+			r.Route("/status-pages", func(r chi.Router) {
+				r.Post("/", statusPageHandlers.CreateStatusPage)
+				r.Get("/", statusPageHandlers.ListStatusPages)
+				r.Get("/{id}", statusPageHandlers.GetStatusPage)
+				r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
+				r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
+			})
+
+			// Tenants (admin only)
+			tenantSvc := tenantservice.NewService(dbClient)
+			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
+			r.Route("/tenants", func(r chi.Router) {
+				r.Use(apimiddleware.RequireAdmin)
+				r.Get("/", tenantHandlers.ListTenants)
+			})
+
+			// Users (admin only)
+			r.Route("/users", func(r chi.Router) {
+				r.Use(apimiddleware.RequireAdmin)
+				r.Get("/", adminUsersHandlers.ListUsers)
+				r.Post("/", adminUsersHandlers.CreateUser)
+				r.Get("/{id}", adminUsersHandlers.GetUser)
+				r.Patch("/{id}", adminUsersHandlers.UpdateUser)
+				r.Delete("/{id}", adminUsersHandlers.DeleteUser)
+			})
+		})
+	})
+
+	httpServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	return &Server{
+		config:          cfg,
+		logger:          log,
+		metrics:         metricsRegistry,
+		db:              dbClient,
+		queue:           checkJobQueue,
+		http:            httpServer,
+		statusPublisher: statusPublisher,
+	}
+}
+
+// Start starts the HTTP server
+func (s *Server) Start() error {
+	s.logger.WithFields(map[string]interface{}{
+		"port": s.config.HTTPPort,
+	}).Info("Starting HTTP server")
+
+	return s.http.ListenAndServe()
+}
+
+// Shutdown gracefully shuts down the server
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.logger.Info("Shutting down HTTP server")
+	if s.statusPublisher != nil {
+		s.statusPublisher.Close()
+	}
+	if s.queue != nil {
+		s.queue.Close()
+	}
+	return s.http.Shutdown(ctx)
+}

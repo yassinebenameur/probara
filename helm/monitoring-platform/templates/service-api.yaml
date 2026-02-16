@@ -1,0 +1,24 @@
+{{- if .Values.api.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-api
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.api.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.api.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "monitoring-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+{{- end }}
+

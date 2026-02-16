@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-config
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+data:
+  # Logging configuration
+  log_level: "{{ .Values.api.logLevel }}"
+  
+  # Infrastructure URLs (non-sensitive)
+  nats_url: {{ include "monitoring-platform.natsUrl" . | quote }}
+  postgresql_host: {{ include "monitoring-platform.postgresHost" . | quote }}
+  postgresql_database: "{{ .Values.postgresql.auth.database }}"
+  
+  # Scheduler configuration
+  check_job_stream: "{{ .Values.scheduler.checkJobStream }}"
+  check_job_subject: "{{ .Values.scheduler.checkJobSubject }}"
+  scheduler_interval_seconds: "{{ .Values.scheduler.intervalSeconds }}"
+  
+  # Worker configuration
+  nats_consumer_name: "{{ .Values.worker.consumerName }}"
+  worker_concurrency: "{{ .Values.worker.concurrency }}"

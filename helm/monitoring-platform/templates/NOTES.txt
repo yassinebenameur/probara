@@ -1,0 +1,89 @@
+===============================================================================
+  PROBARA MONITORING PLATFORM
+===============================================================================
+
+Congratulations! The monitoring platform has been deployed successfully.
+
+{{- if .Values.migrations.enabled }}
+
+DATABASE MIGRATIONS:
+  A migrations job has been created and will run automatically.
+  Check the status with:
+    kubectl get jobs -l app.kubernetes.io/component=migrations
+{{- end }}
+
+ACCESSING THE APPLICATION:
+
+{{- if .Values.ingress.enabled }}
+  The application is available at:
+  {{- range .Values.ingress.hosts }}
+    http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+  {{- end }}
+{{- else }}
+  The application is running inside the cluster. To access it:
+
+  1. Frontend (Web UI):
+     kubectl port-forward svc/{{ include "monitoring-platform.fullname" . }}-frontend {{ .Values.frontend.httpPort }}:{{ .Values.frontend.httpPort }}
+     Then open: http://localhost:{{ .Values.frontend.httpPort }}
+
+  2. API:
+     kubectl port-forward svc/{{ include "monitoring-platform.fullname" . }}-api {{ .Values.api.httpPort }}:{{ .Values.api.httpPort }}
+     Then access: http://localhost:{{ .Values.api.httpPort }}
+
+  3. Status Page:
+     kubectl port-forward svc/{{ include "monitoring-platform.fullname" . }}-status-page {{ .Values.statusPage.httpPort }}:{{ .Values.statusPage.httpPort }}
+     Then open: http://localhost:{{ .Values.statusPage.httpPort }}
+{{- end }}
+
+AUTHENTICATION:
+
+  Use the following API key to authenticate:
+  
+    {{ .Values.secrets.initialApiKey }}
+
+  IMPORTANT: Change this key in production by setting:
+    --set secrets.initialApiKey=your-secure-api-key
+
+CHECKING STATUS:
+
+  View all pods:
+    kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+  View services:
+    kubectl get svc -l app.kubernetes.io/instance={{ .Release.Name }}
+
+  View logs for a component (e.g., api):
+    kubectl logs -l app.kubernetes.io/component=api -f
+
+COMPONENTS DEPLOYED:
+{{- if .Values.postgresql.enabled }}
+  - PostgreSQL (database)
+{{- end }}
+{{- if .Values.nats.enabled }}
+  - NATS with JetStream (message queue)
+{{- end }}
+{{- if .Values.api.enabled }}
+  - API Server ({{ .Values.api.replicas }} replicas)
+{{- end }}
+{{- if .Values.scheduler.enabled }}
+  - Scheduler ({{ .Values.scheduler.replicas }} replica)
+{{- end }}
+{{- if .Values.worker.enabled }}
+  - Worker ({{ .Values.worker.replicas }} replicas)
+{{- end }}
+{{- if .Values.alerter.enabled }}
+  - Alerter ({{ .Values.alerter.replicas }} replicas)
+{{- end }}
+{{- if .Values.statusPage.enabled }}
+  - Status Page ({{ .Values.statusPage.replicas }} replicas)
+{{- end }}
+{{- if .Values.frontend.enabled }}
+  - Frontend ({{ .Values.frontend.replicas }} replicas)
+{{- end }}
+
+===============================================================================
+
+
+
+
+

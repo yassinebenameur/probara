@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Status • Probara</title>
+    <style>
+      :root{
+        --bg:#0b1224;
+        --card:rgba(255,255,255,.055);
+        --border:rgba(255,255,255,.09);
+        --text:#e9efff;
+        --muted:rgba(233,239,255,.65);
+        --muted2:rgba(233,239,255,.45);
+        --ok:#39d98a;
+        --warn:#ffcc66;
+        --down:#ff5b6e;
+        --shadow: 0 10px 26px rgba(0,0,0,.35);
+        --radius:18px;
+        --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial;
+      }
+
+      *{box-sizing:border-box}
+      body{
+        margin:0;
+        font-family:var(--font);
+        background:var(--bg);
+        color:var(--text);
+      }
+
+      .wrap{
+        max-width:1100px;
+        margin:0 auto;
+        padding:44px 24px 70px;
+      }
+
+      .header{
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:18px;
+        margin-bottom:30px;
+      }
+
+      .brand{
+        display:flex;
+        align-items:center;
+        gap:12px;
+      }
+      .mark{
+        width:40px;height:40px;border-radius:14px;
+        background:rgba(255,255,255,.05);
+        border:1px solid var(--border);
+        display:grid;place-items:center;
+        box-shadow:0 10px 22px rgba(0,0,0,.35);
+      }
+      .brand h1{
+        margin:0;
+        font-size:18px;
+        font-weight:800;
+        letter-spacing:.2px;
+      }
+      .brand p{
+        margin:6px 0 0;
+        color:var(--muted);
+        font-size:13px;
+      }
+
+      .pill{
+        display:inline-flex;
+        align-items:center;
+        gap:10px;
+        padding:10px 14px;
+        border-radius:999px;
+        border:1px solid rgba(255,255,255,.10);
+        background:rgba(255,255,255,.04);
+        color:var(--muted);
+        font-size:12px;
+        white-space:nowrap;
+      }
+      .dot{
+        width:10px;height:10px;border-radius:50%;
+        background:var(--ok);
+        box-shadow:0 0 0 6px rgba(57,217,138,.12);
+      }
+
+      .grid{
+        display:grid;
+        grid-template-columns: 1.25fr .75fr;
+        gap:28px;
+        margin-top:20px;
+      }
+
+      .card{
+        border:1px solid var(--border);
+        background:var(--card);
+        border-radius:var(--radius);
+        box-shadow:var(--shadow);
+      }
+
+      .cardHeader{
+        padding:20px 22px;
+        border-bottom:1px solid rgba(255,255,255,.07);
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+      }
+      .cardHeader h2{
+        margin:0;
+        font-size:14px;
+        letter-spacing:.18em;
+        text-transform:uppercase;
+        color:rgba(233,239,255,.6);
+      }
+      .meta{
+        color:var(--muted2);
+        font-size:12px;
+      }
+
+      .services{
+        padding:22px;
+        display:flex;
+        flex-direction:column;
+        gap:18px;
+      }
+
+      .svc{
+        display:flex;
+        align-items:flex-start;
+        justify-content:space-between;
+        gap:18px;
+        padding:16px 16px;
+        border-radius:16px;
+        border:1px solid rgba(255,255,255,.08);
+        background:rgba(255,255,255,.03);
+      }
+      .svcLeft{display:flex;flex-direction:column;gap:6px}
+      .svcName{
+        font-weight:800;
+        letter-spacing:.2px;
+      }
+      .svcDesc{
+        color:var(--muted);
+        font-size:13px;
+        line-height:1.5;
+      }
+
+      .badge{
+        display:inline-flex;
+        align-items:center;
+        gap:8px;
+        padding:8px 12px;
+        border-radius:999px;
+        border:1px solid rgba(255,255,255,.12);
+        background:rgba(255,255,255,.04);
+        font-size:12px;
+        white-space:nowrap;
+      }
+      .badge .bDot{width:9px;height:9px;border-radius:50%}
+
+      .ok{color:rgba(233,255,245,.92); border-color:rgba(57,217,138,.28); background:rgba(57,217,138,.10)}
+      .ok .bDot{background:var(--ok)}
+      .degraded{color:rgba(255,245,220,.95); border-color:rgba(255,204,102,.30); background:rgba(255,204,102,.10)}
+      .degraded .bDot{background:var(--warn)}
+      .down{color:rgba(255,230,234,.95); border-color:rgba(255,91,110,.30); background:rgba(255,91,110,.10)}
+      .down .bDot{background:var(--down)}
+
+      /* Uptime blocks */
+      .uptime{
+        padding:22px;
+      }
+      .uptimeTop{
+        display:flex;
+        align-items:baseline;
+        justify-content:space-between;
+        gap:12px;
+        margin-bottom:16px;
+      }
+      .uptimeTop .big{
+        font-size:28px;
+        font-weight:900;
+        letter-spacing:.2px;
+      }
+      .uptimeTop .small{
+        color:var(--muted);
+        font-size:13px;
+      }
+
+      .blocks{
+        display:grid;
+        grid-template-columns: repeat(30, 1fr);
+        gap:6px;
+        padding:14px;
+        border-radius:16px;
+        border:1px solid rgba(255,255,255,.07);
+        background:rgba(255,255,255,.02);
+      }
+      .blk{
+        height:12px;
+        border-radius:4px;
+        background:rgba(57,217,138,.35);
+        border:1px solid rgba(57,217,138,.18);
+      }
+      .blk.warn{
+        background:rgba(255,204,102,.35);
+        border-color:rgba(255,204,102,.18);
+      }
+      .blk.down{
+        background:rgba(255,91,110,.35);
+        border-color:rgba(255,91,110,.18);
+      }
+
+      /* Incident feed */
+      .feed{padding:22px;display:flex;flex-direction:column;gap:14px}
+      .event{
+        padding:16px 16px;
+        border-radius:16px;
+        border:1px solid rgba(255,255,255,.08);
+        background:rgba(255,255,255,.03);
+      }
+      .eventTop{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+        margin-bottom:8px;
+      }
+      .eventTitle{font-weight:850}
+      .eventTime{color:var(--muted2);font-size:12px}
+      .eventBody{color:var(--muted);font-size:13px;line-height:1.55}
+
+      .footer{
+        margin-top:34px;
+        color:rgba(233,239,255,.45);
+        font-size:12px;
+        display:flex;
+        justify-content:space-between;
+        gap:12px;
+        flex-wrap:wrap;
+      }
+
+      @media (max-width: 980px){
+        .grid{grid-template-columns:1fr; gap:22px}
+        .wrap{padding:34px 18px 60px}
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="wrap">
+      <div class="header">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path d="M3 12h4l2-6 4 12 2-6h6" stroke="rgba(233,239,255,.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div>
+            <h1>Acme Status</h1>
+            <p>Live system status and incident updates.</p>
+          </div>
+        </div>
+
+        <div class="pill">
+          <span class="dot" aria-hidden="true"></span>
+          All systems operational
+        </div>
+      </div>
+
+      <div class="grid">
+        <!-- Left: Services -->
+        <section class="card">
+          <div class="cardHeader">
+            <h2>Services</h2>
+            <div class="meta">Updated 21 seconds ago</div>
+          </div>
+
+          <div class="services">
+            <div class="svc">
+              <div class="svcLeft">
+                <div class="svcName">Storefront API</div>
+                <div class="svcDesc">Public API for product browsing and checkout.</div>
+              </div>
+              <div class="badge ok"><span class="bDot"></span>Operational</div>
+            </div>
+
+            <div class="svc">
+              <div class="svcLeft">
+                <div class="svcName">Auth</div>
+                <div class="svcDesc">Login, sessions, and token validation.</div>
+              </div>
+              <div class="badge ok"><span class="bDot"></span>Operational</div>
+            </div>
+
+            <div class="svc">
+              <div class="svcLeft">
+                <div class="svcName">Web App</div>
+                <div class="svcDesc">UI rendering and static assets delivery.</div>
+              </div>
+              <div class="badge degraded"><span class="bDot"></span>Degraded</div>
+            </div>
+
+            <div class="svc">
+              <div class="svcLeft">
+                <div class="svcName">Payments</div>
+                <div class="svcDesc">Payment intents and provider callbacks.</div>
+              </div>
+              <div class="badge ok"><span class="bDot"></span>Operational</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right: 30-day uptime -->
+        <section class="card">
+          <div class="cardHeader">
+            <h2>30-day uptime</h2>
+            <div class="meta">Last 30 days</div>
+          </div>
+
+          <div class="uptime">
+            <div class="uptimeTop">
+              <div class="big">99.98%</div>
+              <div class="small">2m total downtime</div>
+            </div>
+
+            <div class="blocks" aria-label="Daily status blocks">
+              <!-- 30 blocks: tweak classes (warn/down) to show issues -->
+              <div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div>
+              <div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div>
+              <div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div>
+              <div class="blk"></div><div class="blk"></div><div class="blk warn" title="Minor incident"></div><div class="blk"></div><div class="blk"></div>
+              <div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div>
+              <div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div><div class="blk"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Full-width: Incidents -->
+        <section class="card" style="grid-column:1 / -1;">
+          <div class="cardHeader">
+            <h2>Recent incidents</h2>
+            <div class="meta">Past 7 days</div>
+          </div>
+
+          <div class="feed">
+            <div class="event">
+              <div class="eventTop">
+                <div class="eventTitle">Web App latency increased</div>
+                <div class="eventTime">Sep 15 • 04:03–04:05 UTC</div>
+              </div>
+              <div class="eventBody">
+                We observed elevated p95 response times for static assets in EU region. Mitigation applied and performance returned to normal.
+              </div>
+            </div>
+
+            <div class="event">
+              <div class="eventTop">
+                <div class="eventTitle">No incidents reported</div>
+                <div class="eventTime">Last 48 hours</div>
+              </div>
+              <div class="eventBody">
+                All systems have remained stable. Monitoring continues across all regions.
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="footer">
+        <div>Subscribe to updates • RSS / Email / Webhook (placeholder)</div>
+        <div>Powered by Probara (template)</div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,111 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-worker
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "monitoring-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "monitoring-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "monitoring-platform.serviceAccountName" . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if or .Values.postgresql.enabled .Values.nats.enabled }}
+      initContainers:
+        {{- if .Values.postgresql.enabled }}
+        - name: wait-for-postgresql
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until nc -z {{ include "monitoring-platform.postgresHost" . }} 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+        {{- end }}
+        {{- if .Values.nats.enabled }}
+        - name: wait-for-nats
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until nc -z {{ include "monitoring-platform.natsHost" . }} 4222; do
+                echo "Waiting for NATS..."
+                sleep 2
+              done
+        {{- end }}
+      {{- end }}
+      containers:
+      - name: worker
+        image: "{{ .Values.image.repository }}-worker:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        command: ["./worker"]
+        ports:
+        - name: metrics
+          containerPort: {{ .Values.worker.metricsPort }}
+          protocol: TCP
+        env:
+        - name: SERVICE_NAME
+          value: "worker"
+        - name: HTTP_PORT
+          value: "{{ .Values.worker.metricsPort }}"
+        - name: METRICS_PORT
+          value: "{{ .Values.worker.metricsPort }}"
+        - name: LOG_LEVEL
+          value: "{{ .Values.worker.logLevel }}"
+        - name: POSTGRES_URL
+          value: {{ include "monitoring-platform.postgresUrl" . | quote }}
+        - name: NATS_URL
+          value: {{ include "monitoring-platform.natsUrl" . | quote }}
+        - name: CHECK_JOB_STREAM
+          value: "{{ .Values.worker.checkJobStream }}"
+        - name: CHECK_JOB_SUBJECT
+          value: "{{ .Values.worker.checkJobSubject }}"
+        - name: NATS_CONSUMER_NAME
+          value: "{{ .Values.worker.consumerName }}"
+        - name: WORKER_CONCURRENCY
+          value: "{{ .Values.worker.concurrency }}"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: metrics
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.worker.resources | nindent 10 }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

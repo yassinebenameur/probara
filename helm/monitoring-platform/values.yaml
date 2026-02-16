@@ -1,0 +1,262 @@
+# Default values for monitoring-platform
+# This is a YAML-formatted file.
+# All values are pre-configured for a working out-of-the-box installation.
+
+# =============================================================================
+# GLOBAL CONFIGURATION
+# =============================================================================
+global:
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+
+# =============================================================================
+# IMAGE CONFIGURATION
+# =============================================================================
+image:
+  repository: ghcr.io/yassinebenameur/probara
+  tag: "latest"
+  pullSecrets: []
+
+# =============================================================================
+# INFRASTRUCTURE - POSTGRESQL (Embedded or External)
+# =============================================================================
+postgresql:
+  # Set to false to use an external PostgreSQL instance
+  enabled: true
+  # External PostgreSQL URL (used when enabled: false)
+  # Example: "postgres://user:password@external-postgres:5432/probara?sslmode=disable"
+  externalUrl: ""
+  # Embedded PostgreSQL configuration (used when enabled: true)
+  image: postgres:16-alpine
+  auth:
+    username: probara
+    password: probara-secret
+    database: probara
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# =============================================================================
+# INFRASTRUCTURE - NATS (Embedded or External)
+# =============================================================================
+nats:
+  # Set to false to use an external NATS instance
+  enabled: true
+  # External NATS URL (used when enabled: false)
+  # Example: "nats://external-nats:4222"
+  externalUrl: ""
+  # Embedded NATS configuration (used when enabled: true)
+  image: nats:2.10-alpine
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+# =============================================================================
+# SECRETS
+# =============================================================================
+secrets:
+  # Admin JWT secret - CHANGE IN PRODUCTION
+  adminJwtSecret: "change-me-in-production-jwt-secret-minimum-32-chars"
+  # Initial API key for first login - CHANGE IN PRODUCTION
+  initialApiKey: "probara-initial-api-key-change-me"
+
+# =============================================================================
+# MIGRATIONS JOB
+# =============================================================================
+migrations:
+  enabled: true
+  image:
+    # Uses main image repository with -migrations suffix if not specified
+    repository: ""
+    tag: ""
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+# =============================================================================
+# API SERVICE
+# =============================================================================
+api:
+  enabled: true
+  replicas: 2
+  httpPort: 8080
+  metricsPort: 9090
+  logLevel: "info"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# =============================================================================
+# SCHEDULER SERVICE
+# =============================================================================
+scheduler:
+  enabled: true
+  replicas: 1
+  metricsPort: 9090
+  logLevel: "info"
+  # Scheduler-specific configuration
+  checkJobStream: "check-jobs"
+  checkJobSubject: "check.job"
+  intervalSeconds: "5"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+# =============================================================================
+# WORKER SERVICE
+# =============================================================================
+worker:
+  enabled: true
+  replicas: 2
+  metricsPort: 9090
+  logLevel: "info"
+  # Worker-specific configuration
+  checkJobStream: "check-jobs"
+  checkJobSubject: "check.job"
+  consumerName: "worker"
+  concurrency: "10"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+
+# =============================================================================
+# ALERTER SERVICE
+# =============================================================================
+alerter:
+  enabled: true
+  replicas: 2
+  metricsPort: 9090
+  logLevel: "info"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+# =============================================================================
+# STATUS PAGE SERVICE
+# =============================================================================
+statusPage:
+  enabled: true
+  replicas: 2
+  httpPort: 8080
+  metricsPort: 9090
+  logLevel: "info"
+  # Base URL for status page links
+  baseUrl: ""
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+# =============================================================================
+# FRONTEND SERVICE
+# =============================================================================
+frontend:
+  enabled: true
+  replicas: 2
+  httpPort: 3000
+  apiUrl: "/api"
+  image:
+    repository: ghcr.io/yassinebenameur/probara-frontend
+    tag: "latest"
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# =============================================================================
+# INGRESS
+# =============================================================================
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: probara.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: status.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# =============================================================================
+# SERVICE ACCOUNT
+# =============================================================================
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# =============================================================================
+# POD CONFIGURATION
+# =============================================================================
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
