@@ -1,3 +1,10 @@
+# [1.0.0-alpha.9](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.8...v1.0.0-alpha.9) (2026-02-17)
+
+
+### Bug Fixes
+
+* create tenant with first admin ([caa2ce6](https://github.com/yassinebenameur/probara/commit/caa2ce6f6b3692a6fa40d94345a2d07eff66aef2))
+
 # [1.0.0-alpha.8](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.7...v1.0.0-alpha.8) (2026-02-17)
 
 
