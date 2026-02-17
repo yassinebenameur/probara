@@ -1,3 +1,10 @@
+# [1.0.0-alpha.10](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.9...v1.0.0-alpha.10) (2026-02-17)
+
+
+### Bug Fixes
+
+* frontend not forwarding auth cookies ([4ca6bcb](https://github.com/yassinebenameur/probara/commit/4ca6bcb9230c98731f3715bc25d104ec792e83e0))
+
 # [1.0.0-alpha.9](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.8...v1.0.0-alpha.9) (2026-02-17)
 
 
