@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { hasApiKey, clearApiKey } from '@/lib/auth';
-import { getSelectedTenantId, setSelectedTenantId } from '@/lib/tenant';
+import { clearSelectedTenantId, getSelectedTenantId, setSelectedTenantId } from '@/lib/tenant';
 import { getTenants } from '@/lib/api';
 import type { Tenant } from '@/lib/types';
 import { useRouter, usePathname } from 'next/navigation';
@@ -45,6 +45,9 @@ export default function TopBar() {
           setSelectedTenantId(nextTenantId);
           setSelectedTenantIdState(nextTenantId);
           notifyTenantChange();
+        } else {
+          clearSelectedTenantId();
+          setSelectedTenantIdState(null);
         }
       })
       .catch(() => {

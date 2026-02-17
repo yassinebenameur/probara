@@ -1,5 +1,5 @@
 import { getApiKey, clearApiKey } from './auth';
-import { getSelectedTenantId, setSelectedTenantId } from './tenant';
+import { clearSelectedTenantId, getSelectedTenantId, setSelectedTenantId } from './tenant';
 import type {
   Monitor,
   CreateMonitorRequest,
@@ -99,11 +99,9 @@ async function handleResponse<T>(response: Response, hasApiKey: boolean): Promis
 
 const AUTH_PATH_PREFIX = '/v1/auth';
 const TENANTS_PATH = '/v1/tenants';
+let tenantSelectionValidated = false;
 
 async function ensureTenantSelected(): Promise<void> {
-  const existing = getSelectedTenantId();
-  if (existing) return;
-
   try {
     const response = await fetch(getApiUrl(TENANTS_PATH), {
       method: 'GET',
@@ -112,14 +110,27 @@ async function ensureTenantSelected(): Promise<void> {
     if (!response.ok) {
       return;
     }
+
     const data = (await response.json()) as TenantListResponse;
+    const storedTenantId = getSelectedTenantId();
+    const tenantIDs = new Set((data.items || []).map((tenant) => tenant.id));
+
+    if (storedTenantId && tenantIDs.has(storedTenantId)) {
+      tenantSelectionValidated = true;
+      return;
+    }
+
     const firstTenantId = data.items?.[0]?.id;
     if (firstTenantId) {
       setSelectedTenantId(firstTenantId);
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('tenant-changed'));
       }
+    } else if (storedTenantId) {
+      // Stored tenant became invalid (or tenants are empty): avoid sending stale X-Tenant-ID.
+      clearSelectedTenantId();
     }
+    tenantSelectionValidated = true;
   } catch {
     // Ignore tenant selection failures; caller will handle 401s.
   }
@@ -143,7 +154,20 @@ async function apiRequest<T>(
   const isTenantsPath = path.startsWith(TENANTS_PATH);
 
   if (!apiKey && !isAuthPath && !isTenantsPath) {
-    await ensureTenantSelected();
+    // Ensure the selected tenant exists before attaching X-Tenant-ID.
+    if (!tenantSelectionValidated || !getSelectedTenantId()) {
+      await ensureTenantSelected();
+    }
+  }
+
+  if (!apiKey && isAuthPath) {
+    // Auth transitions can invalidate cached tenant context.
+    tenantSelectionValidated = false;
+  }
+
+  if (!apiKey && isTenantsPath) {
+    // Tenant list may have changed since last validation.
+    tenantSelectionValidated = false;
   }
 
   const tenantId = getSelectedTenantId();
@@ -164,6 +188,7 @@ async function apiRequest<T>(
   try {
     const response = await fetch(getApiUrl(path), options);
     if (response.status === 401 && !apiKey) {
+      tenantSelectionValidated = false;
       const refreshed = await tryRefresh();
       if (refreshed) {
         const retryResponse = await fetch(getApiUrl(path), options);
