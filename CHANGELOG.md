@@ -1,3 +1,10 @@
+# [1.0.0-alpha.5](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.4...v1.0.0-alpha.5) (2026-02-17)
+
+
+### Bug Fixes
+
+* frontend publish ([07fd13c](https://github.com/yassinebenameur/probara/commit/07fd13cd58ea2d62b048452e0050321e012d9070))
+
 # [1.0.0-alpha.4](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.3...v1.0.0-alpha.4) (2026-02-17)
 
 
