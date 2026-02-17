@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { getApiKey } from './api';
+import { getApiKey } from './auth';
 import type { Alert } from './types';
 
 // SSE needs to connect directly to the API, not through Next.js proxy

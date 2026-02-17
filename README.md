@@ -49,8 +49,15 @@ Prerequisites:
 
 - Docker + Docker Compose v2
 - Go 1.23+ (for local commands like admin bootstrap)
-- Node.js 18+ (for UI)
+- Node.js LTS via `nvm` (for UI)
 - Make
+
+Use nvm LTS before running UI commands:
+
+```bash
+nvm install --lts
+nvm use --lts
+```
 
 Start backend services:
 

@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { CreateStatusPageRequest } from '@/lib/types';
+import { CreateStatusPageRequest, UpdateStatusPageRequest } from '@/lib/types';
 import { createStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import { useState } from 'react';
@@ -12,10 +12,10 @@ export default function NewStatusPagePage() {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  const handleSubmit = async (data: CreateStatusPageRequest) => {
+  const handleSubmit = async (data: CreateStatusPageRequest | UpdateStatusPageRequest) => {
     try {
       setLoading(true);
-      await createStatusPage(data);
+      await createStatusPage(data as CreateStatusPageRequest);
       setToast({ message: 'Status page created successfully', type: 'success' });
       setTimeout(() => {
         router.push('/status-pages');

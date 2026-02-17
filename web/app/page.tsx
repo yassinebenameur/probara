@@ -237,15 +237,20 @@ function ActivityItem({
   latency 
 }: { 
   monitor: string;
-  status: 'success' | 'failure';
+  status: CheckResult['status'];
   time: string;
   latency?: number;
 }) {
+  const statusColor =
+    status === 'success'
+      ? 'bg-emerald-500'
+      : status === 'degraded'
+      ? 'bg-amber-500'
+      : 'bg-rose-500';
+
   return (
     <div className="flex items-center gap-3 py-2">
-      <div className={`h-2 w-2 rounded-full ${
-        status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-      }`} />
+      <div className={`h-2 w-2 rounded-full ${statusColor}`} />
       <div className="flex-1 min-w-0">
         <p className="truncate text-sm text-white">{monitor}</p>
         <p className="text-xs text-slate-500">{time}</p>

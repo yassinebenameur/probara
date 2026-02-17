@@ -5,6 +5,8 @@ import type {
   CreateMonitorRequest,
   UpdateMonitorRequest,
   MonitorListResponse,
+  Alert,
+  AlertListResponse,
   AlertPolicy,
   CreateAlertPolicyRequest,
   UpdateAlertPolicyRequest,
@@ -235,6 +237,40 @@ export async function toggleMonitorEnabled(
   enabled: boolean
 ): Promise<Monitor> {
   return updateMonitor(id, { enabled });
+}
+
+// Alert API functions
+export async function getAlerts(params?: {
+  status?: string;
+  monitor_id?: string;
+  since?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<AlertListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.status) queryParams.append('status', params.status);
+  if (params?.monitor_id) queryParams.append('monitor_id', params.monitor_id);
+  if (params?.since) queryParams.append('since', params.since);
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/alerts${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<AlertListResponse>('GET', path);
+}
+
+export async function getRecentAlerts(limit = 10): Promise<Alert[]> {
+  const queryParams = new URLSearchParams();
+  queryParams.append('limit', String(limit));
+  return apiRequest<Alert[]>('GET', `/v1/alerts/recent?${queryParams.toString()}`);
+}
+
+export async function acknowledgeAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/acknowledge`);
+}
+
+export async function resolveAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('POST', `/v1/alerts/${id}/resolve`);
 }
 
 // Alert Policy API functions

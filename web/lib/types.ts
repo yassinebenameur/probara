@@ -331,6 +331,33 @@ export interface MonitorListResponse {
   total: number;
 }
 
+// Alert types
+export type AlertStatus = 'active' | 'acknowledged' | 'resolved';
+
+export interface Alert {
+  id: string;
+  tenant_id: string;
+  monitor_id: string;
+  alert_policy_id: string;
+  status: AlertStatus;
+  triggered_at: string;
+  acknowledged_at?: string;
+  resolved_at?: string;
+  failure_count: number;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+  monitor_name?: string;
+  policy_name?: string;
+}
+
+export interface AlertListResponse {
+  items: Alert[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
 // Alert Policy types
 export interface AlertPolicy {
   id: string;

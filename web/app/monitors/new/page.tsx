@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { CreateMonitorRequest } from '@/lib/types';
+import { CreateMonitorRequest, UpdateMonitorRequest } from '@/lib/types';
 import { createMonitor } from '@/lib/api';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import { useState } from 'react';
@@ -12,10 +12,10 @@ export default function NewMonitorPage() {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  const handleSubmit = async (data: CreateMonitorRequest) => {
+  const handleSubmit = async (data: CreateMonitorRequest | UpdateMonitorRequest) => {
     try {
       setLoading(true);
-      const created = await createMonitor(data);
+      const created = await createMonitor(data as CreateMonitorRequest);
       setToast({ message: 'Monitor created successfully', type: 'success' });
       setTimeout(() => {
         router.push(`/monitors/${created.id}`);
