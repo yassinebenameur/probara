@@ -1,3 +1,10 @@
+# [1.0.0-alpha.4](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.3...v1.0.0-alpha.4) (2026-02-17)
+
+
+### Bug Fixes
+
+* release frontend, migrations ([5c70541](https://github.com/yassinebenameur/probara/commit/5c7054145a043e5359af61f1c7e3b081953b837f))
+
 # [1.0.0-alpha.3](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.2...v1.0.0-alpha.3) (2026-02-17)
 
 
