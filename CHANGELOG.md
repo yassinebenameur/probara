@@ -1,3 +1,10 @@
+# [1.0.0-alpha.7](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.6...v1.0.0-alpha.7) (2026-02-17)
+
+
+### Bug Fixes
+
+* api routing ([cff1c8c](https://github.com/yassinebenameur/probara/commit/cff1c8c5d9976eadf0191e8489ca8dc5e780b3d3))
+
 # [1.0.0-alpha.6](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.5...v1.0.0-alpha.6) (2026-02-17)
 
 
