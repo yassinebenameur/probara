@@ -16,7 +16,12 @@ fi
 CHART_DIR="helm/monitoring-platform"
 DIST_DIR="dist/helm"
 OCI_REPO="${GHCR_HELM_REPO:-oci://ghcr.io/${OWNER}/charts}"
-PACKAGE_FILE="${DIST_DIR}/monitoring-platform-${VERSION}.tgz"
+CHART_NAME="$(awk '/^name:/ {print $2; exit}' "${CHART_DIR}/Chart.yaml")"
+if [[ -z "$CHART_NAME" ]]; then
+  echo "unable to read chart name from ${CHART_DIR}/Chart.yaml" >&2
+  exit 1
+fi
+PACKAGE_FILE="${DIST_DIR}/${CHART_NAME}-${VERSION}.tgz"
 
 mkdir -p "$DIST_DIR"
 helm package "$CHART_DIR" --destination "$DIST_DIR"
@@ -28,4 +33,4 @@ fi
 
 helm push "$PACKAGE_FILE" "$OCI_REPO"
 
-echo "Published Helm chart to ${OCI_REPO}/monitoring-platform:${VERSION}"
+echo "Published Helm chart to ${OCI_REPO}/${CHART_NAME}:${VERSION}"

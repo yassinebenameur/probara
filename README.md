@@ -165,9 +165,9 @@ Set scheduler and worker job stream/subject to the same values. If you use API "
 ### Access Without Ingress
 
 ```bash
-kubectl port-forward -n monitoring svc/probara-monitoring-platform-frontend 3000:3000
-kubectl port-forward -n monitoring svc/probara-monitoring-platform-api 8080:8080
-kubectl port-forward -n monitoring svc/probara-monitoring-platform-status-page 8082:8080
+kubectl port-forward -n monitoring svc/probara-frontend 3000:3000
+kubectl port-forward -n monitoring svc/probara-api 8080:8080
+kubectl port-forward -n monitoring svc/probara-status-page 8082:8080
 ```
 
 ## Environment Variables
