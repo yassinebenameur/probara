@@ -38,6 +38,27 @@ function copyHeaders(requestHeaders: Headers): Headers {
   return headers;
 }
 
+function copyResponseHeaders(upstream: Response): Headers {
+  const headers = new Headers();
+  upstream.headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (lower === 'content-length' || lower === 'set-cookie') {
+      return;
+    }
+    headers.append(key, value);
+  });
+
+  // Preserve each cookie header independently. Collapsing them into one
+  // header can break parsing and cause immediate auth logout.
+  const getSetCookie = (upstream.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
+  const setCookies = typeof getSetCookie === 'function' ? getSetCookie.call(upstream.headers) : [];
+  for (const cookie of setCookies) {
+    headers.append('set-cookie', cookie);
+  }
+
+  return headers;
+}
+
 async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Response> {
   const { path } = await ctx.params;
   const targetUrl = buildTargetUrl(req.url, path);
@@ -57,8 +78,7 @@ async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Respon
 
   try {
     const upstream = await fetch(targetUrl, init);
-    const responseHeaders = new Headers(upstream.headers);
-    responseHeaders.delete('content-length');
+    const responseHeaders = copyResponseHeaders(upstream);
     return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,
