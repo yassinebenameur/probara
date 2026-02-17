@@ -199,6 +199,9 @@ frontend:
   replicas: 2
   httpPort: 3000
   apiUrl: "/api"
+  # Runtime API upstream for Next.js server-side API proxy route (/api/*).
+  # Leave empty to use the in-cluster API service automatically.
+  apiProxyTarget: ""
   image:
     repository: ghcr.io/yassinebenameur/probara-frontend
     tag: "latest"

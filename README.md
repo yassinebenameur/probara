@@ -143,6 +143,9 @@ statusPage:
 
 frontend:
   apiUrl: "/api"
+  # Optional override. Defaults to in-cluster API service:
+  # http://<release>-probara-api:8080 (or <release>-api if nameOverride/fullnameOverride changes naming)
+  apiProxyTarget: ""
 
 worker:
   replicas: 2
@@ -176,6 +179,9 @@ kubectl port-forward -n monitoring svc/probara-frontend 3000:3000
 kubectl port-forward -n monitoring svc/probara-api 8080:8080
 kubectl port-forward -n monitoring svc/probara-status-page 8082:8080
 ```
+
+`/api/*` requests go through the frontend server and are proxied to `API_PROXY_TARGET`
+(set automatically by the chart to the API service in-cluster).
 
 ## Environment Variables
 

@@ -1,4 +1,5 @@
 {{- if .Values.frontend.enabled }}
+{{- $apiProxyTarget := .Values.frontend.apiProxyTarget | default (printf "http://%s-api:%v" (include "monitoring-platform.fullname" .) .Values.api.httpPort) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,6 +52,8 @@ spec:
         env:
         - name: NEXT_PUBLIC_API_URL
           value: "{{ .Values.frontend.apiUrl }}"
+        - name: API_PROXY_TARGET
+          value: "{{ $apiProxyTarget }}"
         livenessProbe:
           httpGet:
             path: /
