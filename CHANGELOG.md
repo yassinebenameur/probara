@@ -1,3 +1,10 @@
+# [1.0.0-alpha.3](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.2...v1.0.0-alpha.3) (2026-02-17)
+
+
+### Bug Fixes
+
+* release ([ead1611](https://github.com/yassinebenameur/probara/commit/ead161108cc45c0c2a0ea87b35385c3e8a034b64))
+
 # [1.0.0-alpha.2](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.1...v1.0.0-alpha.2) (2026-02-17)
 
 
