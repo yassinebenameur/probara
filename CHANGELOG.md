@@ -1,3 +1,10 @@
+# [1.0.0-alpha.8](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.7...v1.0.0-alpha.8) (2026-02-17)
+
+
+### Bug Fixes
+
+* api proxy target ([1c9f444](https://github.com/yassinebenameur/probara/commit/1c9f444cf0377ae38f9288c0672c71c9e78f418b))
+
 # [1.0.0-alpha.7](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.6...v1.0.0-alpha.7) (2026-02-17)
 
 
