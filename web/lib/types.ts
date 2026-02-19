@@ -358,6 +358,64 @@ export interface AlertListResponse {
   total: number;
 }
 
+export type DashboardRange = '24h' | '7d' | '30d';
+export type DashboardFailureState = 'firing' | 'resolved';
+
+export interface DashboardStats {
+  total_monitors: number;
+  active_monitors: number;
+  http_monitors: number;
+  agent_monitors: number;
+  overall_uptime: number;
+  avg_response_ms: number;
+}
+
+export interface DashboardTrendPoint {
+  bucket_start: string;
+  label: string;
+  uptime: number;
+  response_time: number;
+  total_checks: number;
+}
+
+export interface DashboardActivityPoint {
+  bucket_start: string;
+  label: string;
+  checks: number;
+  failures: number;
+}
+
+export interface DashboardMonitorHealth {
+  monitor_id: string;
+  monitor_name: string;
+  enabled: boolean;
+  latest_status: string | null;
+  latest_check_at: string | null;
+}
+
+export interface DashboardFailureEvent {
+  check_result_id: string;
+  monitor_id: string;
+  monitor_name: string;
+  status: 'failure' | 'error' | 'success' | 'degraded';
+  error_message?: string;
+  latency_ms?: number;
+  occurred_at: string;
+  state: DashboardFailureState;
+  resolved_at?: string;
+}
+
+export interface DashboardOverviewResponse {
+  range: DashboardRange;
+  generated_at: string;
+  stats: DashboardStats;
+  trend: DashboardTrendPoint[];
+  activity_24h: DashboardActivityPoint[];
+  monitor_health: DashboardMonitorHealth[];
+  recent_failures: DashboardFailureEvent[];
+  recent_alerts: Alert[];
+}
+
 // Alert Policy types
 export interface AlertPolicy {
   id: string;

@@ -23,6 +23,43 @@ const AGENT_RANGE_MS: Record<AgentTimeRange, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
 };
 
+const NON_AGENT_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const MIN_CLIENT_RESULTS = 500;
+const MAX_CLIENT_RESULTS = 100000;
+const LIMIT_PADDING = 120;
+const LIMIT_HEADROOM_NUM = 115;
+const LIMIT_HEADROOM_DEN = 100;
+
+function estimateResultsLimit(
+  windowMs: number,
+  intervalSeconds?: number,
+  fallbackIntervalSeconds = 60
+): number {
+  const safeIntervalSeconds = intervalSeconds && intervalSeconds > 0
+    ? intervalSeconds
+    : fallbackIntervalSeconds;
+
+  const expectedPoints = Math.ceil(windowMs / (safeIntervalSeconds * 1000));
+  const buffered = Math.ceil((expectedPoints * LIMIT_HEADROOM_NUM) / LIMIT_HEADROOM_DEN) + LIMIT_PADDING;
+
+  return Math.max(MIN_CLIENT_RESULTS, Math.min(MAX_CLIENT_RESULTS, buffered));
+}
+
+function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckResult[]): CheckResult[] {
+  const byID = new Map<string, CheckResult>();
+
+  for (const result of existingResults) {
+    byID.set(result.id, result);
+  }
+  for (const result of newResults) {
+    byID.set(result.id, result);
+  }
+
+  return Array.from(byID.values()).sort(
+    (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
+  );
+}
+
 // Status badge component
 function StatusBadge({ status }: { status: 'up' | 'down' | 'degraded' }) {
   const config = {
@@ -57,6 +94,11 @@ export default function EditMonitorPage() {
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
   const isPollingRef = useRef(false);
+  const resultsRef = useRef<MonitorResultsResponse | null>(null);
+
+  useEffect(() => {
+    resultsRef.current = results;
+  }, [results]);
 
   const loadMonitor = useCallback(async () => {
     try {
@@ -76,14 +118,49 @@ export default function EditMonitorPage() {
       if (!opts?.silent) {
         setResultsLoading(true);
       }
+
       const isAgentMonitor = monitor?.type === 'agent';
       const range = opts?.range ?? agentTimeRange;
-      const since = new Date(Date.now() - AGENT_RANGE_MS[range]).toISOString();
-      const data = await getMonitorResults(
-        id,
-        isAgentMonitor ? { limit: 200, since } : { limit: 100 }
+      const nowMs = Date.now();
+      const currentResults = resultsRef.current;
+      const latestKnownCreatedAt = currentResults?.results?.[0]?.created_at;
+
+      const selectedWindowMs = isAgentMonitor
+        ? AGENT_RANGE_MS[range]
+        : NON_AGENT_HISTORY_WINDOW_MS;
+      const cutoffMs = nowMs - selectedWindowMs;
+      const cutoffISO = new Date(cutoffMs).toISOString();
+      const maxResults = estimateResultsLimit(
+        selectedWindowMs,
+        monitor?.interval_seconds,
+        isAgentMonitor ? 30 : 60
       );
-      setResults(data);
+
+      const requestParams =
+        opts?.silent && latestKnownCreatedAt
+          ? { since: latestKnownCreatedAt }
+          : { since: cutoffISO };
+
+      const data = await getMonitorResults(id, requestParams);
+
+      if (opts?.silent && currentResults?.results?.length) {
+        const mergedResults = mergeAndSortResults(data.results, currentResults.results)
+          .filter((result) => {
+            const ts = Date.parse(result.created_at);
+            return Number.isFinite(ts) && ts >= cutoffMs;
+          })
+          .slice(0, maxResults);
+
+        const mergedPayload: MonitorResultsResponse = {
+          monitor_id: currentResults.monitor_id || data.monitor_id,
+          results: mergedResults,
+        };
+        resultsRef.current = mergedPayload;
+        setResults(mergedPayload);
+      } else {
+        resultsRef.current = data;
+        setResults(data);
+      }
     } catch (err: any) {
       console.error('Failed to load monitor results:', err);
     } finally {
@@ -91,7 +168,7 @@ export default function EditMonitorPage() {
         setResultsLoading(false);
       }
     }
-  }, [id, monitor?.type, agentTimeRange]);
+  }, [id, monitor?.type, monitor?.interval_seconds, agentTimeRange]);
 
   useEffect(() => {
     void loadMonitor();

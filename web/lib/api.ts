@@ -19,8 +19,8 @@ import type {
   CreateStatusPageRequest,
   UpdateStatusPageRequest,
   StatusPageListResponse,
-  CheckResult,
   MonitorResultsResponse,
+  DashboardOverviewResponse,
   RunMonitorNowResponse,
   AddMonitorsToGroupRequest,
   RemoveMonitorsFromGroupRequest,
@@ -478,6 +478,21 @@ export async function getMonitorResults(
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${id}/results${queryString ? `?${queryString}` : ''}`;
   return apiRequest<MonitorResultsResponse>('GET', path);
+}
+
+export async function getDashboardOverview(params?: {
+  range?: '24h' | '7d' | '30d';
+  failures_limit?: number;
+  alerts_limit?: number;
+}): Promise<DashboardOverviewResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  if (params?.failures_limit) queryParams.append('failures_limit', String(params.failures_limit));
+  if (params?.alerts_limit) queryParams.append('alerts_limit', String(params.alerts_limit));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/overview${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardOverviewResponse>('GET', path);
 }
 
 // Group API functions

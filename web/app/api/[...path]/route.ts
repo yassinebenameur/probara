@@ -51,7 +51,21 @@ function copyResponseHeaders(upstream: Response): Headers {
   // Preserve each cookie header independently. Collapsing them into one
   // header can break parsing and cause immediate auth logout.
   const getSetCookie = (upstream.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
-  const setCookies = typeof getSetCookie === 'function' ? getSetCookie.call(upstream.headers) : [];
+  let setCookies = typeof getSetCookie === 'function' ? getSetCookie.call(upstream.headers) : [];
+
+  // Fallback for environments where getSetCookie is unavailable.
+  if (setCookies.length === 0) {
+    const combined = upstream.headers.get('set-cookie');
+    if (combined) {
+      // Cookies emitted by this API use Max-Age (no Expires), so splitting
+      // on ", " between cookie name-value pairs is safe here.
+      setCookies = combined
+        .split(/,\s*(?=[^;,=\s]+=[^;,]+)/g)
+        .map((v) => v.trim())
+        .filter(Boolean);
+    }
+  }
+
   for (const cookie of setCookies) {
     headers.append('set-cookie', cookie);
   }

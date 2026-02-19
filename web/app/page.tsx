@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { getMonitors, getMonitorResults } from '@/lib/api';
-import { Monitor, CheckResult } from '@/lib/types';
+import { getDashboardOverview } from '@/lib/api';
+import { Alert, DashboardFailureEvent, DashboardMonitorHealth, DashboardOverviewResponse } from '@/lib/types';
 import Link from 'next/link';
 import {
   AreaChart,
@@ -13,116 +13,44 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
-  Cell,
 } from 'recharts';
 
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-
-type ResultItem = { monitorId: string; monitor: string; result: CheckResult };
 type TrendPoint = { date: string; uptime: number; responseTime: number; total: number };
 type ActivityPoint = { time: string; checks: number; failures: number };
 
-function buildTrendData(results: ResultItem[], timeRange: '24h' | '7d' | '30d'): TrendPoint[] {
+const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d', number> = {
+  '24h': 10,
+  '7d': 25,
+  '30d': 50,
+};
+
+function formatRelativeTime(dateString: string): string {
+  const date = new Date(dateString);
   const now = new Date();
-  const isHourly = timeRange === '24h';
-  const bucketCount = isHourly ? 24 : timeRange === '7d' ? 7 : 30;
-  const intervalMs = isHourly ? HOUR_MS : DAY_MS;
+  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
-  const end = new Date(now);
-  if (isHourly) {
-    end.setMinutes(0, 0, 0);
-  } else {
-    end.setHours(0, 0, 0, 0);
-  }
-  const start = new Date(end.getTime() - (bucketCount - 1) * intervalMs);
-
-  const labelFor = (d: Date) =>
-    isHourly
-      ? d.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false })
-      : timeRange === '7d'
-      ? d.toLocaleDateString('en-US', { weekday: 'short' })
-      : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-  const buckets = Array.from({ length: bucketCount }, (_, i) => {
-    const bucketStart = new Date(start.getTime() + i * intervalMs);
-    return {
-      date: labelFor(bucketStart),
-      start: bucketStart.getTime(),
-      success: 0,
-      total: 0,
-      latencySum: 0,
-      latencyCount: 0,
-    };
-  });
-
-  const rangeStart = start.getTime();
-  const rangeEnd = start.getTime() + bucketCount * intervalMs;
-
-  for (const { result } of results) {
-    const t = new Date(result.created_at).getTime();
-    if (Number.isNaN(t) || t < rangeStart || t >= rangeEnd) continue;
-    const idx = Math.floor((t - rangeStart) / intervalMs);
-    const bucket = buckets[idx];
-    if (!bucket) continue;
-    bucket.total += 1;
-    if (result.status === 'success') bucket.success += 1;
-    if (typeof result.latency_ms === 'number') {
-      bucket.latencySum += result.latency_ms;
-      bucket.latencyCount += 1;
-    }
-  }
-
-  return buckets.map((b) => ({
-    date: b.date,
-    uptime: b.total > 0 ? (b.success / b.total) * 100 : 0,
-    responseTime: b.latencyCount > 0 ? b.latencySum / b.latencyCount : 0,
-    total: b.total,
-  }));
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-function buildActivityData(results: ResultItem[]): ActivityPoint[] {
-  const now = new Date();
-  const end = new Date(now);
-  end.setMinutes(0, 0, 0);
-  const start = new Date(end.getTime() - 23 * HOUR_MS);
-
-  const buckets = Array.from({ length: 24 }, (_, i) => {
-    const bucketStart = new Date(start.getTime() + i * HOUR_MS);
-    return {
-      time: bucketStart.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false }),
-      start: bucketStart.getTime(),
-      checks: 0,
-      failures: 0,
-    };
-  });
-
-  const rangeStart = start.getTime();
-  const rangeEnd = start.getTime() + 24 * HOUR_MS;
-
-  for (const { result } of results) {
-    const t = new Date(result.created_at).getTime();
-    if (Number.isNaN(t) || t < rangeStart || t >= rangeEnd) continue;
-    const idx = Math.floor((t - rangeStart) / HOUR_MS);
-    const bucket = buckets[idx];
-    if (!bucket) continue;
-    bucket.checks += 1;
-    if (result.status !== 'success') bucket.failures += 1;
-  }
-
-  return buckets.map(({ time, checks, failures }) => ({ time, checks, failures }));
+function mapMonitorHealthStatus(row: DashboardMonitorHealth): 'up' | 'down' | 'paused' {
+  if (!row.enabled) return 'paused';
+  if (!row.latest_status) return 'paused';
+  return row.latest_status === 'success' ? 'up' : 'down';
 }
 
 // Stat Card Component
-function StatCard({ 
-  label, 
-  value, 
+function StatCard({
+  label,
+  value,
   unit,
   change,
   changeLabel,
   positive = true,
   icon,
-}: { 
+}: {
   label: string;
   value: string | number;
   unit?: string;
@@ -143,8 +71,8 @@ function StatCard({
           {change && (
             <div className="mt-2 flex items-center gap-2">
               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                positive 
-                  ? 'bg-emerald-500/10 text-emerald-400' 
+                positive
+                  ? 'bg-emerald-500/10 text-emerald-400'
                   : 'bg-rose-500/10 text-rose-400'
               }`}>
                 {positive ? '↑' : '↓'} {change}
@@ -193,7 +121,7 @@ function UptimeBar({
           dense ? 'mx-auto' : ''
         }`}
       >
-        <div 
+        <div
           className={`absolute bottom-0 left-0 right-0 rounded-full transition-all ${getColor(value)}`}
           style={{ height: `${value}%` }}
         />
@@ -218,7 +146,7 @@ function HealthDot({ status, name }: { status: 'up' | 'down' | 'paused'; name: s
 
   return (
     <div className="group relative">
-      <div 
+      <div
         className={`h-3 w-3 rounded-sm ${colors[status]} ${status !== 'paused' ? 'shadow-[0_0_8px]' : ''} transition-transform hover:scale-150`}
         title={name}
       />
@@ -229,35 +157,64 @@ function HealthDot({ status, name }: { status: 'up' | 'down' | 'paused'; name: s
   );
 }
 
-// Recent Activity Item
-function ActivityItem({ 
-  monitor, 
-  status, 
-  time, 
-  latency 
-}: { 
-  monitor: string;
-  status: CheckResult['status'];
-  time: string;
-  latency?: number;
-}) {
-  const statusColor =
-    status === 'success'
-      ? 'bg-emerald-500'
-      : status === 'degraded'
-      ? 'bg-amber-500'
-      : 'bg-rose-500';
+function FailureItem({ event }: { event: DashboardFailureEvent }) {
+  const statusColor = event.status === 'error' ? 'bg-amber-500' : 'bg-rose-500';
+  const stateClass =
+    event.state === 'resolved'
+      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+      : 'bg-rose-500/10 text-rose-400 border-rose-500/20';
 
   return (
-    <div className="flex items-center gap-3 py-2">
-      <div className={`h-2 w-2 rounded-full ${statusColor}`} />
-      <div className="flex-1 min-w-0">
-        <p className="truncate text-sm text-white">{monitor}</p>
-        <p className="text-xs text-slate-500">{time}</p>
+    <div className="flex items-start gap-3 py-2">
+      <div className={`mt-1.5 h-2 w-2 rounded-full ${statusColor}`} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate text-sm text-white">{event.monitor_name}</p>
+          <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${stateClass}`}>
+            {event.state}
+          </span>
+        </div>
+        <p className="text-xs text-slate-500">
+          {formatRelativeTime(event.occurred_at)} · {event.status}
+          {typeof event.latency_ms === 'number' ? ` · ${event.latency_ms}ms` : ''}
+        </p>
+        {event.error_message && (
+          <p className="mt-0.5 truncate text-xs text-slate-500" title={event.error_message}>
+            {event.error_message}
+          </p>
+        )}
       </div>
-      {latency && (
-        <span className="text-xs text-slate-400">{latency}ms</span>
-      )}
+    </div>
+  );
+}
+
+function AlertItem({ alert }: { alert: Alert }) {
+  const statusClass =
+    alert.status === 'active'
+      ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+      : alert.status === 'acknowledged'
+      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+
+  return (
+    <div className="flex items-start gap-3 py-2">
+      <div className={`mt-1.5 h-2 w-2 rounded-full ${alert.status === 'resolved' ? 'bg-emerald-500' : alert.status === 'acknowledged' ? 'bg-amber-500' : 'bg-rose-500'}`} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate text-sm text-white">{alert.monitor_name || 'Unknown monitor'}</p>
+          <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${statusClass}`}>
+            {alert.status}
+          </span>
+        </div>
+        <p className="text-xs text-slate-500">
+          {formatRelativeTime(alert.triggered_at)} · {alert.failure_count} failure{alert.failure_count !== 1 ? 's' : ''}
+        </p>
+        {alert.last_error && (
+          <p className="mt-0.5 truncate text-xs text-slate-500" title={alert.last_error}>
+            {alert.last_error}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -265,7 +222,7 @@ function ActivityItem({
 // Custom Tooltip for charts
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-  
+
   return (
     <div className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 shadow-xl">
       <p className="text-xs text-slate-400">{label}</p>
@@ -305,48 +262,21 @@ function EmptyChart({ message }: { message: string }) {
 }
 
 export default function DashboardPage() {
-  const [monitors, setMonitors] = useState<Monitor[]>([]);
-  const [allResults, setAllResults] = useState<ResultItem[]>([]);
+  const [dashboard, setDashboard] = useState<DashboardOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
-
-  // Memoized chart data
-  const uptimeData = useMemo(() => buildTrendData(allResults, timeRange), [allResults, timeRange]);
-  const hourlyData = useMemo(() => buildActivityData(allResults), [allResults]);
-  const hasTrendData = useMemo(() => uptimeData.some((d) => d.total > 0), [uptimeData]);
-  const hasActivityData = useMemo(() => hourlyData.some((d) => d.checks > 0), [hourlyData]);
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await getMonitors({ page_size: 50 });
-      const monitorList = response.items || [];
-      setMonitors(monitorList);
-
-      if (monitorList.length === 0) {
-        setAllResults([]);
-        return;
-      }
-
-      const now = Date.now();
-      const rangeMs =
-        timeRange === '24h' ? 24 * HOUR_MS : timeRange === '7d' ? 7 * DAY_MS : 30 * DAY_MS;
-      const since = new Date(now - rangeMs).toISOString();
-      const limit = timeRange === '24h' ? 200 : timeRange === '7d' ? 1000 : 2000;
-
-      const resultsPromises = monitorList.map(async (m) => {
-        try {
-          const res = await getMonitorResults(m.id, { limit, since });
-          return res.results.map((r) => ({ monitorId: m.id, monitor: m.name, result: r }));
-        } catch {
-          return [];
-        }
+      const response = await getDashboardOverview({
+        range: timeRange,
+        failures_limit: DASHBOARD_LIST_LIMIT[timeRange],
+        alerts_limit: DASHBOARD_LIST_LIMIT[timeRange],
       });
-
-      const results = (await Promise.all(resultsPromises)).flat();
-      setAllResults(results);
+      setDashboard(response);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
       setError('Failed to load dashboard data');
@@ -359,44 +289,42 @@ export default function DashboardPage() {
     loadData();
   }, [loadData]);
 
-  // Calculate statistics
-  const totalMonitors = monitors.length;
-  const activeMonitors = monitors.filter(m => m.enabled).length;
-  const httpMonitors = monitors.filter(m => m.type === 'http').length;
-  const agentMonitors = monitors.filter(m => m.type === 'agent').length;
+  const trendData = useMemo<TrendPoint[]>(() => {
+    return (dashboard?.trend || []).map((point) => ({
+      date: point.label,
+      uptime: point.uptime,
+      responseTime: point.response_time,
+      total: point.total_checks,
+    }));
+  }, [dashboard]);
 
-  const totalChecks = allResults.length;
-  const successChecks = allResults.filter((r) => r.result.status === 'success').length;
-  const avgUptime = totalChecks > 0 ? ((successChecks / totalChecks) * 100).toFixed(2) : '0.00';
-  const latencyValues = allResults
-    .map((r) => r.result.latency_ms)
-    .filter((v): v is number => typeof v === 'number');
-  const avgResponseTime =
-    latencyValues.length > 0
-      ? Math.round(latencyValues.reduce((sum, v) => sum + v, 0) / latencyValues.length)
-      : 0;
+  const activityData = useMemo<ActivityPoint[]>(() => {
+    return (dashboard?.activity_24h || []).map((point) => ({
+      time: point.label,
+      checks: point.checks,
+      failures: point.failures,
+    }));
+  }, [dashboard]);
 
-  const recentResults = useMemo(() => {
-    return [...allResults]
-      .sort((a, b) => new Date(b.result.created_at).getTime() - new Date(a.result.created_at).getTime())
-      .slice(0, 10);
-  }, [allResults]);
+  const monitorHealth = dashboard?.monitor_health || [];
+  const recentFailures = dashboard?.recent_failures || [];
+  const recentAlerts = dashboard?.recent_alerts || [];
 
-  const latestResultByMonitor = useMemo(() => {
-    const map = new Map<string, CheckResult>();
-    for (const item of allResults) {
-      const existing = map.get(item.monitorId);
-      if (!existing || new Date(item.result.created_at) > new Date(existing.created_at)) {
-        map.set(item.monitorId, item.result);
-      }
-    }
-    return map;
-  }, [allResults]);
+  const hasTrendData = useMemo(() => trendData.some((d) => d.total > 0), [trendData]);
+  const hasActivityData = useMemo(() => activityData.some((d) => d.checks > 0), [activityData]);
+
+  const stats = dashboard?.stats;
+  const totalMonitors = stats?.total_monitors || 0;
+  const activeMonitors = stats?.active_monitors || 0;
+  const httpMonitors = stats?.http_monitors || 0;
+  const agentMonitors = stats?.agent_monitors || 0;
+  const avgUptime = (stats?.overall_uptime || 0).toFixed(2);
+  const avgResponseTime = Math.round(stats?.avg_response_ms || 0);
 
   const minUptime = useMemo(() => {
     if (!hasTrendData) return 95;
-    return Math.min(...uptimeData.map((d) => (d.total > 0 ? d.uptime : 100)));
-  }, [uptimeData, hasTrendData]);
+    return Math.min(...trendData.map((d) => (d.total > 0 ? d.uptime : 100)));
+  }, [trendData, hasTrendData]);
   const uptimeDomain: [number, number] = minUptime < 95 ? [0, 100] : [95, 100];
 
   if (loading) {
@@ -438,7 +366,7 @@ export default function DashboardPage() {
 
       {/* Stats Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard 
+        <StatCard
           label="Overall Uptime"
           value={avgUptime}
           unit="%"
@@ -451,7 +379,7 @@ export default function DashboardPage() {
             </svg>
           }
         />
-        <StatCard 
+        <StatCard
           label="Avg Response"
           value={avgResponseTime}
           unit="ms"
@@ -464,7 +392,7 @@ export default function DashboardPage() {
             </svg>
           }
         />
-        <StatCard 
+        <StatCard
           label="Total Monitors"
           value={totalMonitors}
           change={`${httpMonitors} HTTP, ${agentMonitors} Agent`}
@@ -475,7 +403,7 @@ export default function DashboardPage() {
             </svg>
           }
         />
-        <StatCard 
+        <StatCard
           label="Active"
           value={activeMonitors}
           change={totalMonitors > 0 ? `${((activeMonitors / totalMonitors) * 100).toFixed(0)}% enabled` : 'No monitors'}
@@ -495,7 +423,7 @@ export default function DashboardPage() {
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h3 className="font-medium text-white">Uptime Trend</h3>
-              <p className="text-xs text-slate-500">Average uptime across all monitors</p>
+              <p className="text-xs text-slate-500">Monitor-weighted uptime across enabled services</p>
             </div>
             <div className="flex items-center gap-2 text-xs">
               <span className="flex items-center gap-1 text-emerald-400">
@@ -507,33 +435,34 @@ export default function DashboardPage() {
           {hasTrendData ? (
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={uptimeData}>
+                <AreaChart data={trendData}>
                   <defs>
                     <linearGradient id="uptimeGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#10b981" stopOpacity={0.3} />
                       <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis 
-                    dataKey="date" 
-                    axisLine={false} 
-                    tickLine={false} 
+                  <XAxis
+                    dataKey="date"
+                    axisLine={false}
+                    tickLine={false}
                     tick={{ fill: '#64748b', fontSize: 11 }}
                   />
-                  <YAxis 
-                    domain={uptimeDomain} 
-                    axisLine={false} 
-                    tickLine={false} 
+                  <YAxis
+                    domain={uptimeDomain}
+                    axisLine={false}
+                    tickLine={false}
                     tick={{ fill: '#64748b', fontSize: 11 }}
                     tickFormatter={(v) => `${v}%`}
                   />
                   <Tooltip content={<CustomTooltip />} />
-                  <Area 
-                    type="monotone" 
-                    dataKey="uptime" 
-                    stroke="#10b981" 
+                  <Area
+                    type="monotone"
+                    dataKey="uptime"
+                    stroke="#10b981"
                     strokeWidth={2}
-                    fill="url(#uptimeGradient)" 
+                    fill="url(#uptimeGradient)"
+                    name="uptime"
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -560,32 +489,33 @@ export default function DashboardPage() {
           {hasTrendData ? (
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={uptimeData}>
+                <AreaChart data={trendData}>
                   <defs>
                     <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.3} />
                       <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis 
-                    dataKey="date" 
-                    axisLine={false} 
-                    tickLine={false} 
+                  <XAxis
+                    dataKey="date"
+                    axisLine={false}
+                    tickLine={false}
                     tick={{ fill: '#64748b', fontSize: 11 }}
                   />
-                  <YAxis 
-                    axisLine={false} 
-                    tickLine={false} 
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
                     tick={{ fill: '#64748b', fontSize: 11 }}
                     tickFormatter={(v) => `${v}ms`}
                   />
                   <Tooltip content={<CustomTooltip />} />
-                  <Area 
-                    type="monotone" 
-                    dataKey="responseTime" 
-                    stroke="#06b6d4" 
+                  <Area
+                    type="monotone"
+                    dataKey="responseTime"
+                    stroke="#06b6d4"
                     strokeWidth={2}
-                    fill="url(#latencyGradient)" 
+                    fill="url(#latencyGradient)"
+                    name="responseTime"
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -597,7 +527,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Bottom Section */}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         {/* Daily Uptime Bars */}
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
           <div className="mb-4">
@@ -619,7 +549,7 @@ export default function DashboardPage() {
                     : 'justify-between gap-1 px-2'
                 }`}
               >
-                {uptimeData.map((d, i) => (
+                {trendData.map((d, i) => (
                   <UptimeBar
                     key={i}
                     value={d.uptime}
@@ -658,33 +588,25 @@ export default function DashboardPage() {
               View all →
             </Link>
           </div>
-          {monitors.length > 0 ? (
+          {monitorHealth.length > 0 ? (
             <div className="flex flex-wrap gap-2">
-              {monitors.slice(0, 30).map((m) => (
-                <HealthDot 
-                  key={m.id} 
-                  status={
-                    !m.enabled
-                      ? 'paused'
-                      : latestResultByMonitor.get(m.id)?.status === 'success'
-                      ? 'up'
-                      : latestResultByMonitor.has(m.id)
-                      ? 'down'
-                      : 'paused'
-                  } 
-                  name={m.name}
+              {monitorHealth.slice(0, 30).map((row) => (
+                <HealthDot
+                  key={row.monitor_id}
+                  status={mapMonitorHealthStatus(row)}
+                  name={row.monitor_name}
                 />
               ))}
-              {monitors.length > 30 && (
+              {monitorHealth.length > 30 && (
                 <span className="flex h-3 items-center text-xs text-slate-500">
-                  +{monitors.length - 30} more
+                  +{monitorHealth.length - 30} more
                 </span>
               )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <p className="text-sm text-slate-500">No monitors configured</p>
-              <Link 
+              <Link
                 href="/monitors/new"
                 className="mt-2 text-xs text-cyan-400 hover:text-cyan-300"
               >
@@ -694,30 +616,53 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Recent Activity */}
+        {/* Last Failures */}
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h3 className="font-medium text-white">Recent Checks</h3>
-              <p className="text-xs text-slate-500">Latest check results</p>
+              <h3 className="font-medium text-white">Last Failures</h3>
+              <p className="text-xs text-slate-500">
+                {recentFailures.length === 0 ? 'No recent failures' : `${recentFailures.length} recent failure${recentFailures.length !== 1 ? 's' : ''}`}
+              </p>
             </div>
           </div>
-          {recentResults.length > 0 ? (
+          {recentFailures.length > 0 ? (
             <div className="divide-y divide-white/[0.04]">
-              {recentResults.slice(0, 6).map((item, i) => (
-                <ActivityItem
-                  key={i}
-                  monitor={item.monitor}
-                  status={item.result.status}
-                  time={new Date(item.result.created_at).toLocaleTimeString()}
-                  latency={item.result.latency_ms}
-                />
+              {recentFailures.map((event) => (
+                <FailureItem key={event.check_result_id} event={event} />
               ))}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-8 text-center">
-              <p className="text-sm text-slate-500">No recent checks</p>
-              <p className="mt-1 text-xs text-slate-600">Results will appear once monitors run</p>
+              <p className="text-sm text-slate-500">No recent failures</p>
+              <p className="mt-1 text-xs text-slate-600">Failure events will appear here when checks fail</p>
+            </div>
+          )}
+        </div>
+
+        {/* Last Alerts */}
+        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h3 className="font-medium text-white">Last Alerts</h3>
+              <p className="text-xs text-slate-500">
+                {recentAlerts.length === 0 ? 'No recent alerts' : `${recentAlerts.length} recent alert${recentAlerts.length !== 1 ? 's' : ''}`}
+              </p>
+            </div>
+            <Link href="/alerts" className="text-xs text-cyan-400 hover:text-cyan-300">
+              View all →
+            </Link>
+          </div>
+          {recentAlerts.length > 0 ? (
+            <div className="divide-y divide-white/[0.04]">
+              {recentAlerts.map((alert) => (
+                <AlertItem key={alert.id} alert={alert} />
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <p className="text-sm text-slate-500">No recent alerts</p>
+              <p className="mt-1 text-xs text-slate-600">Alerts will appear when failures trigger policies</p>
             </div>
           )}
         </div>
@@ -744,17 +689,17 @@ export default function DashboardPage() {
         {hasActivityData ? (
           <div className="h-32">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={hourlyData} barGap={2}>
-                <XAxis 
-                  dataKey="time" 
-                  axisLine={false} 
-                  tickLine={false} 
+              <BarChart data={activityData} barGap={2}>
+                <XAxis
+                  dataKey="time"
+                  axisLine={false}
+                  tickLine={false}
                   tick={{ fill: '#64748b', fontSize: 10 }}
                   interval={3}
                 />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: '#0f172a', 
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#0f172a',
                     border: '1px solid rgba(255,255,255,0.1)',
                     borderRadius: '8px',
                     fontSize: '12px'
@@ -786,7 +731,7 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500">HTTP, Ping, or Agent</p>
           </div>
         </Link>
-        
+
         <Link
           href="/status-pages"
           className="group flex items-center gap-4 rounded-xl border border-white/[0.06] bg-slate-900/50 p-4 transition-all hover:border-emerald-500/30 hover:bg-slate-900/70"
@@ -801,7 +746,7 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500">Manage public pages</p>
           </div>
         </Link>
-        
+
         <Link
           href="/alert-policies"
           className="group flex items-center gap-4 rounded-xl border border-white/[0.06] bg-slate-900/50 p-4 transition-all hover:border-rose-500/30 hover:bg-slate-900/70"
