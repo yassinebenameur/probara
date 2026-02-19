@@ -1,3 +1,10 @@
+# [1.0.0-alpha.11](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.10...v1.0.0-alpha.11) (2026-02-19)
+
+
+### Bug Fixes
+
+* dashboard load all data ([6d9c812](https://github.com/yassinebenameur/probara/commit/6d9c812b943b86fb419c6b7d5d966f1a54dc4bfd))
+
 # [1.0.0-alpha.10](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.9...v1.0.0-alpha.10) (2026-02-17)
 
 
