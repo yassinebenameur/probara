@@ -1,3 +1,10 @@
+# [1.0.0-alpha.13](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.12...v1.0.0-alpha.13) (2026-02-21)
+
+
+### Bug Fixes
+
+* errors in app schedules are ignored ([8e8553d](https://github.com/yassinebenameur/probara/commit/8e8553dcae58009650a0b40f26abe68e367c037d))
+
 # [1.0.0-alpha.12](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.11...v1.0.0-alpha.12) (2026-02-21)
 
 
