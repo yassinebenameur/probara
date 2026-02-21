@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/logger"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
 
 // StaleWorker monitors push monitors and marks them as down if stale
@@ -143,13 +144,14 @@ func (w *StaleWorker) handleStaleMonitor(ctx context.Context, monitorID, tenantI
 
 	_, err := w.db.ExecContext(ctx,
 		`INSERT INTO check_results 
-		 (id, monitor_id, tenant_id, job_id, status, error_message, created_at, started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		 (id, monitor_id, tenant_id, job_id, status, result_source, error_message, created_at, started_at, completed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		uuid.New(),
 		monitorID,
 		tenantID,
 		jobID,
 		"failure",
+		string(sharedmodels.ResultSourceMonitor),
 		errorMessage,
 		now,
 		now,

@@ -158,7 +158,8 @@ function HealthDot({ status, name }: { status: 'up' | 'down' | 'paused'; name: s
 }
 
 function FailureItem({ event }: { event: DashboardFailureEvent }) {
-  const statusColor = event.status === 'error' ? 'bg-amber-500' : 'bg-rose-500';
+  const isPlatformEvent = event.result_source === 'platform';
+  const statusColor = isPlatformEvent ? 'bg-slate-400' : event.status === 'error' ? 'bg-amber-500' : 'bg-rose-500';
   const stateClass =
     event.state === 'resolved'
       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
@@ -170,9 +171,16 @@ function FailureItem({ event }: { event: DashboardFailureEvent }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <p className="truncate text-sm text-white">{event.monitor_name}</p>
-          <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${stateClass}`}>
-            {event.state}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {isPlatformEvent && (
+              <span className="rounded border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 text-[10px] font-medium uppercase text-slate-300">
+                Platform
+              </span>
+            )}
+            <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${stateClass}`}>
+              {event.state}
+            </span>
+          </div>
         </div>
         <p className="text-xs text-slate-500">
           {formatRelativeTime(event.occurred_at)} · {event.status}

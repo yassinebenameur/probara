@@ -61,11 +61,12 @@ function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckRe
 }
 
 // Status badge component
-function StatusBadge({ status }: { status: 'up' | 'down' | 'degraded' }) {
+function StatusBadge({ status }: { status: 'up' | 'down' | 'degraded' | 'unknown' }) {
   const config = {
     up: { label: 'Operational', bg: 'bg-emerald-500/10', text: 'text-emerald-400', dot: 'bg-emerald-500' },
     down: { label: 'Down', bg: 'bg-rose-500/10', text: 'text-rose-400', dot: 'bg-rose-500' },
     degraded: { label: 'Degraded', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
+    unknown: { label: 'Paused', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
   };
   const { label, bg, text, dot } = config[status];
 

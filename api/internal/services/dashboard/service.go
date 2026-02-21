@@ -119,6 +119,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, rangeStart, 
 			WHERE cr.tenant_id = $1
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
+			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
 			GROUP BY cr.monitor_id
@@ -141,6 +142,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, rangeStart, 
 			WHERE cr.tenant_id = $1
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
+			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
 			  AND cr.status = 'success'
@@ -181,6 +183,7 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			WHERE cr.tenant_id = $1
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
+			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $4
 			GROUP BY 1, cr.monitor_id
@@ -300,6 +303,7 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID) ([]m
 			FROM check_results cr
 			WHERE cr.monitor_id = m.id
 			  AND cr.tenant_id = m.tenant_id
+			  AND cr.result_source <> 'platform'
 			ORDER BY cr.created_at DESC
 			LIMIT 1
 		) lr ON TRUE
@@ -345,6 +349,7 @@ func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, ran
 			cr.monitor_id,
 			m.name,
 			cr.status,
+			cr.result_source,
 			cr.error_message,
 			cr.latency_ms,
 			cr.created_at,
@@ -387,6 +392,7 @@ func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, ran
 			&event.MonitorID,
 			&event.MonitorName,
 			&event.Status,
+			&event.ResultSource,
 			&errorMessage,
 			&latency,
 			&event.OccurredAt,

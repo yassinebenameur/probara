@@ -1,15 +1,37 @@
 import { CheckResult } from './types';
 
+export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
+
+// Backward-compatible fallback while older rows/API payloads may miss result_source.
+const EXPIRED_JOB_MESSAGE = 'Job expired before processing';
+
+export function isPlatformResult(result: CheckResult): boolean {
+  if (result.result_source) {
+    return result.result_source === 'platform';
+  }
+  return result.error_message === EXPIRED_JOB_MESSAGE;
+}
+
+export function getOperationalResults(results: CheckResult[]): CheckResult[] {
+  if (!results || results.length === 0) return [];
+  return results.filter((r) => !isPlatformResult(r));
+}
+
+export function countOperationalResults(results: CheckResult[]): number {
+  return getOperationalResults(results).length;
+}
+
 /**
  * Calculate uptime percentage from check results
  * @param results Array of check results
  * @returns Uptime percentage (0-100)
  */
 export function calculateUptime(results: CheckResult[]): number {
-  if (!results || results.length === 0) return 0;
+  const operationalResults = getOperationalResults(results);
+  if (operationalResults.length === 0) return 0;
 
-  const successCount = results.filter((r) => r.status === 'success').length;
-  return (successCount / results.length) * 100;
+  const successCount = operationalResults.filter((r) => r.status === 'success').length;
+  return (successCount / operationalResults.length) * 100;
 }
 
 /**
@@ -34,10 +56,11 @@ export function formatInterval(seconds: number): string {
  * @param results Array of check results
  * @returns Status indicator
  */
-export function getLatestStatus(results: CheckResult[]): 'up' | 'down' | 'degraded' {
-  if (!results || results.length === 0) return 'down';
+export function getLatestStatus(results: CheckResult[]): MonitorHealthStatus {
+  const operationalResults = getOperationalResults(results);
+  if (operationalResults.length === 0) return 'unknown';
 
-  const latest = results[0]; // Assuming results are sorted by created_at desc
+  const latest = operationalResults[0]; // Assuming results are sorted by created_at desc
   
   // Handle explicit status values from API (including synthetic group status)
   if (latest.status === 'success') {
@@ -46,7 +69,7 @@ export function getLatestStatus(results: CheckResult[]): 'up' | 'down' | 'degrad
     return 'degraded';
   } else if (latest.status === 'failure' || latest.status === 'error') {
     // Check if we have recent failures to determine degraded vs down
-    const recentResults = results.slice(0, 5);
+    const recentResults = operationalResults.slice(0, 5);
     const failureCount = recentResults.filter(
       (r) => r.status === 'failure' || r.status === 'error'
     ).length;
@@ -58,7 +81,7 @@ export function getLatestStatus(results: CheckResult[]): 'up' | 'down' | 'degrad
     return 'down';
   }
 
-  return 'down';
+  return 'unknown';
 }
 
 /**
@@ -96,11 +119,12 @@ export function calculateLatencyStats(results: CheckResult[]): {
   p95: number;
   latest: number;
 } {
-  if (!results || results.length === 0) {
+  const operationalResults = getOperationalResults(results);
+  if (operationalResults.length === 0) {
     return { median: 0, p95: 0, latest: 0 };
   }
 
-  const latencies = results
+  const latencies = operationalResults
     .filter((r) => r.latency_ms !== undefined && r.latency_ms !== null)
     .map((r) => r.latency_ms!);
 
@@ -109,7 +133,7 @@ export function calculateLatencyStats(results: CheckResult[]): {
   }
 
   const sorted = [...latencies].sort((a, b) => a - b);
-  const latest = results[0]?.latency_ms ?? 0;
+  const latest = operationalResults.find((r) => r.latency_ms !== undefined && r.latency_ms !== null)?.latency_ms ?? 0;
 
   // Calculate median
   const mid = Math.floor(sorted.length / 2);
@@ -126,4 +150,3 @@ export function calculateLatencyStats(results: CheckResult[]): {
     latest: Math.round(latest),
   };
 }
-

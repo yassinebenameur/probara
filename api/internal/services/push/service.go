@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -84,13 +85,14 @@ func (s *Service) ProcessPush(ctx context.Context, token string, payload PushPay
 	// Insert check result
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO check_results 
-		 (id, monitor_id, tenant_id, job_id, status, error_message, metrics_data, created_at, started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		 (id, monitor_id, tenant_id, job_id, status, result_source, error_message, metrics_data, created_at, started_at, completed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		uuid.New(),
 		monitorID,
 		tenantID,
 		jobID,
 		status,
+		string(sharedmodels.ResultSourceMonitor),
 		errorMessage,
 		metricsJSON,
 		now,

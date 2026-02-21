@@ -84,6 +84,7 @@ type DashboardFailureEvent struct {
 	MonitorID     uuid.UUID             `json:"monitor_id"`
 	MonitorName   string                `json:"monitor_name"`
 	Status        string                `json:"status"`
+	ResultSource  string                `json:"result_source"`
 	ErrorMessage  *string               `json:"error_message"`
 	LatencyMS     *int                  `json:"latency_ms"`
 	OccurredAt    time.Time             `json:"occurred_at"`

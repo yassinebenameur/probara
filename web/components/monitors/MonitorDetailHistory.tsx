@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckResult } from '@/lib/types';
-import { calculateUptime } from '@/lib/monitor-utils';
+import { calculateUptime, countOperationalResults, getOperationalResults } from '@/lib/monitor-utils';
 
 interface MonitorDetailHistoryProps {
   results: CheckResult[];
@@ -20,11 +20,12 @@ export default function MonitorDetailHistory({
     );
   }
 
-  const failures = results.filter(r => r.status === 'failure' || r.status === 'error');
+  const operationalResults = getOperationalResults(results);
+  const failures = operationalResults.filter(r => r.status === 'failure' || r.status === 'error');
   const uptime = calculateUptime(results);
-  const totalChecks = results.length;
+  const totalChecks = countOperationalResults(results);
   const failedChecks = failures.length;
-  const recentFailures = failures.slice(0, 15);
+  const recentFailures = results.filter(r => r.status === 'failure' || r.status === 'error').slice(0, 15);
 
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toISOString().replace('T', ' ').slice(0, 19);

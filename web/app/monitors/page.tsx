@@ -7,9 +7,12 @@ import { getMonitors, deleteMonitor, getMonitorResults, getGroupMembers, createM
 import { getApiKey } from '@/lib/auth';
 import {
   calculateUptime,
+  countOperationalResults,
   formatInterval,
   formatTimeAgo,
   getLatestStatus,
+  isPlatformResult,
+  MonitorHealthStatus,
   calculateLatencyStats,
 } from '@/lib/monitor-utils';
 
@@ -78,11 +81,12 @@ function TagPill({ tag, size = 'sm', onClick, selected = false }: {
 }
 
 // Status dot component
-function StatusDot({ status }: { status: 'up' | 'down' | 'degraded' }) {
+function StatusDot({ status }: { status: MonitorHealthStatus }) {
   const colors = {
     up: 'bg-emerald-500',
     down: 'bg-rose-500',
     degraded: 'bg-amber-500',
+    unknown: 'bg-slate-500',
   };
   return <span className={`h-2 w-2 rounded-full ${colors[status]}`} />;
 }
@@ -116,7 +120,11 @@ function MiniUptimeBars({ results }: { results: CheckResult[] }) {
         <div
           key={i}
           className={`h-3 w-0.5 rounded-sm ${
-            result.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
+            isPlatformResult(result)
+              ? 'bg-slate-500'
+              : result.status === 'success'
+                ? 'bg-emerald-500'
+                : 'bg-rose-500'
           }`}
         />
       ))}
@@ -235,6 +243,7 @@ function MonitorRow({
 }) {
   const status = getLatestStatus(results);
   const uptime = calculateUptime(results);
+  const operationalCount = countOperationalResults(results);
   const latencyStats = calculateLatencyStats(results);
   const latestResult = results[0];
   const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
@@ -307,7 +316,7 @@ function MonitorRow({
       <div className="hidden md:flex items-center gap-4 text-xs">
         <div className="w-14 text-right">
           <span className={`font-medium ${uptime >= 99 ? 'text-emerald-400' : uptime >= 95 ? 'text-amber-400' : 'text-rose-400'}`}>
-            {results.length > 0 ? `${uptime.toFixed(1)}%` : '—'}
+            {operationalCount > 0 ? `${uptime.toFixed(1)}%` : '—'}
           </span>
         </div>
         <div className="w-16 text-right text-slate-400">
@@ -371,6 +380,7 @@ function GroupCard({
   const [expanded, setExpanded] = useState(false); // Collapsed by default
   const status = getLatestStatus(results);
   const uptime = calculateUptime(results);
+  const operationalCount = countOperationalResults(results);
 
   // Calculate aggregate stats from members
   const memberStats = members.map(m => ({
@@ -432,7 +442,7 @@ function GroupCard({
             )}
           </div>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {healthyCount}/{members.length} healthy · {uptime.toFixed(1)}% uptime
+            {healthyCount}/{members.length} healthy · {operationalCount > 0 ? `${uptime.toFixed(1)}%` : 'N/A'} uptime
           </p>
         </div>
 
@@ -442,9 +452,11 @@ function GroupCard({
             <div
               key={m.id}
               className={`h-2 w-2 rounded-full ${
-                getLatestStatus(memberResults[m.id] || []) === 'up' 
-                  ? 'bg-emerald-500' 
-                  : 'bg-rose-500'
+                getLatestStatus(memberResults[m.id] || []) === 'up'
+                  ? 'bg-emerald-500'
+                  : getLatestStatus(memberResults[m.id] || []) === 'unknown'
+                    ? 'bg-slate-500'
+                    : 'bg-rose-500'
               }`}
               title={m.name}
             />
@@ -598,6 +610,7 @@ function DetailPanel({
 
   const status = getLatestStatus(results);
   const uptime = calculateUptime(results);
+  const operationalCount = countOperationalResults(results);
   const latencyStats = calculateLatencyStats(results);
   const latestResult = results[0];
   const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
@@ -627,7 +640,7 @@ function DetailPanel({
       {/* Stats */}
       <div className="grid grid-cols-3 divide-x divide-white/[0.06] border-b border-white/[0.06]">
         <div className="p-3 text-center">
-          <p className="text-lg font-semibold text-white">{uptime.toFixed(1)}%</p>
+          <p className="text-lg font-semibold text-white">{operationalCount > 0 ? `${uptime.toFixed(1)}%` : '—'}</p>
           <p className="text-[10px] text-slate-500">Uptime</p>
         </div>
         <div className="p-3 text-center">
@@ -763,7 +776,11 @@ function DetailPanel({
             {results.slice(0, 5).map((r, i) => (
               <div key={i} className="flex items-center justify-between text-xs py-1">
                 <div className="flex items-center gap-2">
-                  <span className={`h-1.5 w-1.5 rounded-full ${r.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      isPlatformResult(r) ? 'bg-slate-500' : r.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
+                    }`}
+                  />
                   <span className="text-slate-500">{formatTimeAgo(r.created_at)}</span>
                 </div>
                 <span className="text-slate-400">{r.latency_ms || 0}ms</span>
@@ -1074,7 +1091,8 @@ export default function MonitorsPage() {
     const status = getLatestStatus(checkResultsMap[monitor.id] || []);
     const matchesStatus = statusFilter === 'all' || 
       (statusFilter === 'up' && status === 'up') ||
-      (statusFilter === 'down' && (status === 'down' || status === 'degraded'));
+      (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
+      (statusFilter === 'paused' && status === 'unknown');
     const matchesTags = selectedTags.size === 0 || 
       (monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
     return matchesSearch && matchesType && matchesStatus && matchesTags;
@@ -1146,7 +1164,11 @@ export default function MonitorsPage() {
 
   // Stats
   const totalUp = monitors.filter((m) => getLatestStatus(checkResultsMap[m.id] || []) === 'up').length;
-  const totalDown = monitors.filter((m) => getLatestStatus(checkResultsMap[m.id] || []) !== 'up').length;
+  const totalDown = monitors.filter((m) => {
+    const status = getLatestStatus(checkResultsMap[m.id] || []);
+    return status === 'down' || status === 'degraded';
+  }).length;
+  const totalPaused = monitors.filter((m) => getLatestStatus(checkResultsMap[m.id] || []) === 'unknown').length;
 
   return (
     <div className="space-y-5">
@@ -1155,7 +1177,7 @@ export default function MonitorsPage() {
         <div>
           <h1 className="text-xl font-semibold text-white">Monitors</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            {monitors.length} monitors · {totalUp} up · {totalDown} down
+            {monitors.length} monitors · {totalUp} up · {totalDown} down · {totalPaused} paused
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1215,7 +1237,7 @@ export default function MonitorsPage() {
           </div>
 
           <div className="flex items-center gap-0.5 rounded-lg border border-white/[0.06] bg-slate-900/50 p-0.5">
-            {['all', 'up', 'down'].map((status) => (
+            {['all', 'up', 'down', 'paused'].map((status) => (
               <button
                 key={status}
                 onClick={() => setStatusFilter(status)}
@@ -1223,7 +1245,7 @@ export default function MonitorsPage() {
                   statusFilter === status ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                {status === 'all' ? 'All' : status === 'up' ? 'Up' : 'Down'}
+                {status === 'all' ? 'All' : status === 'up' ? 'Up' : status === 'down' ? 'Down' : 'Paused'}
               </button>
             ))}
           </div>

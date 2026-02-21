@@ -208,7 +208,7 @@ func (s *Service) GetGroupStatus(ctx context.Context, tenantID, groupID uuid.UUI
 		query := `
 			SELECT status
 			FROM check_results
-			WHERE monitor_id = $1 AND tenant_id = $2
+			WHERE monitor_id = $1 AND tenant_id = $2 AND result_source <> 'platform'
 			ORDER BY created_at DESC
 			LIMIT 1
 		`

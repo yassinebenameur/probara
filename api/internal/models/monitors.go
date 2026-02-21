@@ -81,6 +81,7 @@ type MonitorListResponse struct {
 type CheckResult struct {
 	ID           uuid.UUID       `json:"id"`
 	Status       string          `json:"status"` // "success", "failure", "error"
+	ResultSource string          `json:"result_source"`
 	HTTPStatus   *int            `json:"http_status,omitempty"`
 	LatencyMS    *int            `json:"latency_ms,omitempty"`
 	ErrorMessage *string         `json:"error_message,omitempty"`

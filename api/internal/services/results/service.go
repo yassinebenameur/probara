@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/groups"
 	"github.com/yassinebenameur/probara/shared/db"
+	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
 
 // Service handles results business logic
@@ -90,7 +91,7 @@ func (s *Service) getGroupResults(ctx context.Context, tenantID, monitorID uuid.
 
 	if since != nil {
 		query = `
-			SELECT id, status, http_status, latency_ms, error_message, created_at
+			SELECT id, status, result_source, http_status, latency_ms, error_message, created_at
 			FROM check_results
 			WHERE monitor_id = ANY($1) AND tenant_id = $2 AND created_at >= $3
 			ORDER BY created_at DESC
@@ -99,7 +100,7 @@ func (s *Service) getGroupResults(ctx context.Context, tenantID, monitorID uuid.
 		args = []interface{}{pq.Array(memberIDs), tenantID, *since, limit}
 	} else {
 		query = `
-			SELECT id, status, http_status, latency_ms, error_message, created_at
+			SELECT id, status, result_source, http_status, latency_ms, error_message, created_at
 			FROM check_results
 			WHERE monitor_id = ANY($1) AND tenant_id = $2
 			ORDER BY created_at DESC
@@ -121,7 +122,7 @@ func (s *Service) getGroupResults(ctx context.Context, tenantID, monitorID uuid.
 		var latencyMS sql.NullInt64
 		var errorMessage sql.NullString
 
-		err := rows.Scan(&result.ID, &result.Status, &httpStatus, &latencyMS, &errorMessage, &result.CreatedAt)
+		err := rows.Scan(&result.ID, &result.Status, &result.ResultSource, &httpStatus, &latencyMS, &errorMessage, &result.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan check result: %w", err)
 		}
@@ -159,9 +160,10 @@ func (s *Service) getGroupResults(ctx context.Context, tenantID, monitorID uuid.
 	// This represents the current status of the group
 	if groupStatus != "unknown" && len(results) > 0 {
 		syntheticResult := models.CheckResult{
-			ID:        uuid.New(),
-			Status:    groupStatus,
-			CreatedAt: time.Now(),
+			ID:           uuid.New(),
+			Status:       groupStatus,
+			ResultSource: string(sharedmodels.ResultSourceDerived),
+			CreatedAt:    time.Now(),
 		}
 
 		// Prepend the synthetic result
@@ -181,7 +183,7 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 
 	if since != nil {
 		query = `
-			SELECT id, status, http_status, latency_ms, error_message, created_at, COALESCE(metrics_data::text, '')
+			SELECT id, status, result_source, http_status, latency_ms, error_message, created_at, COALESCE(metrics_data::text, '')
 			FROM check_results
 			WHERE monitor_id = $1 AND tenant_id = $2 AND created_at >= $3
 			ORDER BY created_at DESC
@@ -190,7 +192,7 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 		args = []interface{}{monitorID, tenantID, *since, limit}
 	} else {
 		query = `
-			SELECT id, status, http_status, latency_ms, error_message, created_at, COALESCE(metrics_data::text, '')
+			SELECT id, status, result_source, http_status, latency_ms, error_message, created_at, COALESCE(metrics_data::text, '')
 			FROM check_results
 			WHERE monitor_id = $1 AND tenant_id = $2
 			ORDER BY created_at DESC
@@ -213,7 +215,7 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 		var errorMessage sql.NullString
 		var metricsDataStr string
 
-		err := rows.Scan(&result.ID, &result.Status, &httpStatus, &latencyMS, &errorMessage, &result.CreatedAt, &metricsDataStr)
+		err := rows.Scan(&result.ID, &result.Status, &result.ResultSource, &httpStatus, &latencyMS, &errorMessage, &result.CreatedAt, &metricsDataStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan check result: %w", err)
 		}

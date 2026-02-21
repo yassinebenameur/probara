@@ -325,10 +325,10 @@ func (w *Worker) persistResult(ctx context.Context, job *models.Job, payload *mo
 
 	query := `
 		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, http_status,
+			id, monitor_id, tenant_id, job_id, status, result_source, http_status,
 			latency_ms, error_message, matched_body_substring, metrics_data,
 			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
 	resultID := uuid.New()
@@ -338,6 +338,7 @@ func (w *Worker) persistResult(ctx context.Context, job *models.Job, payload *mo
 		tenantID,
 		jobID,
 		checkResult.Status,
+		string(models.ResultSourceMonitor),
 		checkResult.HTTPStatus,
 		checkResult.LatencyMs,
 		checkResult.ErrorMessage,
@@ -384,10 +385,10 @@ func (w *Worker) persistExpiredJob(ctx context.Context, job *models.Job) error {
 
 	query := `
 		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, http_status,
+			id, monitor_id, tenant_id, job_id, status, result_source, http_status,
 			latency_ms, error_message, matched_body_substring, metrics_data,
 			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
 	resultID := uuid.New()
@@ -397,6 +398,7 @@ func (w *Worker) persistExpiredJob(ctx context.Context, job *models.Job) error {
 		tenantID,
 		jobID,
 		string(models.ResultStatusError),
+		string(models.ResultSourcePlatform),
 		nil,
 		nil,
 		&errorMsg,

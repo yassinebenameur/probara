@@ -17,9 +17,11 @@ import { getMonitorResults, getAlertPolicy, getSyntheticBrowserScreenshotUrl } f
 import { getApiKey } from '@/lib/auth';
 import {
   calculateUptime,
+  countOperationalResults,
   formatInterval,
   formatTimeAgo,
   calculateLatencyStats,
+  getOperationalResults,
 } from '@/lib/monitor-utils';
 import TagPill from '@/components/ui/TagPill';
 
@@ -154,9 +156,12 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
   }, [monitor]);
 
   const uptime = calculateUptime(checkResults);
+  const operationalResults = getOperationalResults(checkResults);
+  const operationalCount = countOperationalResults(checkResults);
   const latencyStats = calculateLatencyStats(checkResults);
   const recentResults = checkResults.slice(0, 10);
-  const latestHTTPMetrics = monitor?.type === 'http' ? getHTTPMetrics(checkResults[0]) : null;
+  const latestOperationalResult = operationalResults[0];
+  const latestHTTPMetrics = monitor?.type === 'http' ? getHTTPMetrics(latestOperationalResult) : null;
   const latestTLS = latestHTTPMetrics?.tls;
   const latestSyntheticBrowserResult = monitor?.type === 'synthetic_browser'
     ? checkResults.find((result) => {
@@ -281,9 +286,9 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
             <div className="flex flex-wrap gap-2 text-xs">
               <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
                 <div className="mb-0.5 text-[0.72rem] text-muted">Uptime 30 days</div>
-                <div className="text-[0.9rem] font-medium">{uptime.toFixed(2)}%</div>
+                <div className="text-[0.9rem] font-medium">{operationalCount > 0 ? `${uptime.toFixed(2)}%` : '—'}</div>
                 <div className="text-[0.72rem] text-muted">
-                  {checkResults.length > 0 ? `${checkResults.length} checks` : 'No data'}
+                  {operationalCount > 0 ? `${operationalCount} checks` : 'No data'}
                 </div>
               </div>
               <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
@@ -296,13 +301,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
               <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
                 <div className="mb-0.5 text-[0.72rem] text-muted">Last run</div>
                 <div className="text-[0.9rem] font-medium">
-                  {checkResults.length > 0
-                    ? formatTimeAgo(checkResults[0].created_at)
+                  {latestOperationalResult
+                    ? formatTimeAgo(latestOperationalResult.created_at)
                     : 'Never'}
                 </div>
                 <div className="text-[0.72rem] text-muted">
-                  {checkResults.length > 0 && checkResults[0].http_status
-                    ? `Status code: ${checkResults[0].http_status}`
+                  {latestOperationalResult?.http_status
+                    ? `Status code: ${latestOperationalResult.http_status}`
                     : 'No status'}
                 </div>
               </div>

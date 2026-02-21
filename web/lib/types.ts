@@ -398,6 +398,7 @@ export interface DashboardFailureEvent {
   monitor_id: string;
   monitor_name: string;
   status: 'failure' | 'error' | 'success' | 'degraded';
+  result_source: 'monitor' | 'platform';
   error_message?: string;
   latency_ms?: number;
   occurred_at: string;
@@ -538,6 +539,7 @@ export interface StatusPageListResponse {
 export interface CheckResult {
   id: string;
   status: 'success' | 'failure' | 'error' | 'degraded';
+  result_source?: 'monitor' | 'platform' | 'derived';
   http_status?: number;
   latency_ms?: number;
   error_message?: string;

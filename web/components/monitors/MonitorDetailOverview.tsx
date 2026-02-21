@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckResult, Monitor, PushMetrics } from '@/lib/types';
-import { calculateUptime, calculateLatencyStats } from '@/lib/monitor-utils';
+import { calculateUptime, calculateLatencyStats, getOperationalResults } from '@/lib/monitor-utils';
 import AgentMetricsView from './AgentMetricsView';
 
 // Helper function to format metric names
@@ -42,7 +42,9 @@ function PushMetricsView({ results, loading }: { results: CheckResult[]; loading
   // Get the latest result with metrics
   const latestWithMetrics = results.find(r => r.metrics_data && Object.keys(r.metrics_data).length > 0);
   const metrics = latestWithMetrics?.metrics_data as PushMetrics | undefined;
-  const latestResult = results[0];
+  const operationalResults = getOperationalResults(results);
+  const operationalCount = operationalResults.length;
+  const latestResult = operationalResults[0];
 
   // Get time ago for latest result
   const getTimeAgo = (dateStr: string) => {
@@ -85,13 +87,13 @@ function PushMetricsView({ results, loading }: { results: CheckResult[]; loading
       <div className="grid gap-4 sm:grid-cols-3">
         <div className={`rounded-xl border ${uptimeColor === 'emerald' ? 'border-emerald-500/20 bg-emerald-500/5' : uptimeColor === 'amber' ? 'border-amber-500/20 bg-amber-500/5' : 'border-rose-500/20 bg-rose-500/5'} p-4`}>
           <p className="text-xs text-slate-500">Uptime (30 days)</p>
-          <p className="mt-1 text-xl font-semibold text-white">{results.length > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}</p>
+          <p className="mt-1 text-xl font-semibold text-white">{operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}</p>
           <p className="mt-0.5 text-xs text-slate-500">{uptime === 100 ? 'Perfect uptime' : `${(100 - uptime).toFixed(2)}% downtime`}</p>
         </div>
         <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
           <p className="text-xs text-slate-500">Total Pushes</p>
-          <p className="mt-1 text-xl font-semibold text-white">{results.length}</p>
-          <p className="mt-0.5 text-xs text-slate-500">{results.filter(r => r.status === 'success').length} successful</p>
+          <p className="mt-1 text-xl font-semibold text-white">{operationalCount}</p>
+          <p className="mt-0.5 text-xs text-slate-500">{operationalResults.filter(r => r.status === 'success').length} successful</p>
         </div>
         <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-4">
           <p className="text-xs text-slate-500">Auto-Detected Metrics</p>
@@ -236,7 +238,7 @@ function StatCard({
 
 // Mini bar chart for response times
 function ResponseTimeBars({ results }: { results: CheckResult[] }) {
-  const recentResults = results.slice(0, 30).reverse();
+  const recentResults = getOperationalResults(results).slice(0, 30).reverse();
   const maxLatency = Math.max(...recentResults.map(r => r.latency_ms || 0), 1);
 
   if (recentResults.length === 0) {
@@ -345,7 +347,9 @@ export default function MonitorDetailOverview({
 
   const uptime = calculateUptime(results);
   const latencyStats = calculateLatencyStats(results);
-  const latestResult = results[0];
+  const operationalResults = getOperationalResults(results);
+  const operationalCount = operationalResults.length;
+  const latestResult = operationalResults[0];
   const syntheticInsights = extractSyntheticInsights(monitor, latestResult);
 
   // Get time ago for latest result
@@ -383,7 +387,7 @@ export default function MonitorDetailOverview({
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
           label="Uptime (30 days)"
-          value={results.length > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}
+          value={operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}
           subValue={uptime === 100 ? 'Perfect uptime' : `${(100 - uptime).toFixed(2)}% downtime`}
           color={uptimeColor}
         />
@@ -395,8 +399,8 @@ export default function MonitorDetailOverview({
         />
         <StatCard
           label="Total Checks"
-          value={results.length.toString()}
-          subValue={`${results.filter(r => r.status === 'success').length} successful`}
+          value={operationalCount.toString()}
+          subValue={`${operationalResults.filter(r => r.status === 'success').length} successful`}
           color="cyan"
         />
       </div>
