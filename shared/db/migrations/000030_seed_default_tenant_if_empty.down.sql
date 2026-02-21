@@ -1,0 +1,2 @@
+-- Intentionally no-op.
+-- This migration backfills a default tenant for compatibility and safety.

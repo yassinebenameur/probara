@@ -19,20 +19,19 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Resolve release token
-        id: release-token
+      - name: Ensure semantic release token is configured
         run: |
-          if [ -n "${{ secrets.SEMANTIC_RELEASE_TOKEN }}" ]; then
-            echo "token=${{ secrets.SEMANTIC_RELEASE_TOKEN }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "token=${{ secrets.GITHUB_TOKEN }}" >> "$GITHUB_OUTPUT"
+          if [ -z "${{ secrets.SEMANTIC_RELEASE_TOKEN }}" ]; then
+            echo "SEMANTIC_RELEASE_TOKEN is required."
+            echo "Configure a PAT so tag pushes can trigger downstream workflows."
+            exit 1
           fi
 
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.release-token.outputs.token }}
+          token: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -49,14 +48,14 @@ jobs:
 
       - name: Authenticate Helm to GHCR
         run: |
-          echo "${{ steps.release-token.outputs.token }}" | helm registry login ghcr.io \
+          echo "${{ secrets.SEMANTIC_RELEASE_TOKEN }}" | helm registry login ghcr.io \
             --username "${{ github.actor }}" \
             --password-stdin
 
       - name: Run semantic-release
         env:
-          GH_TOKEN: ${{ steps.release-token.outputs.token }}
-          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
           GHCR_OWNER: ${{ github.repository_owner }}
           GHCR_HELM_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
           GIT_AUTHOR_NAME: github-actions[bot]

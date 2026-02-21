@@ -24,6 +24,11 @@ var (
 	ErrBootstrapClosed      = errors.New("admin bootstrap is disabled because an admin already exists")
 )
 
+const (
+	defaultTenantID   = "00000000-0000-0000-0000-000000000001"
+	defaultTenantName = "Default"
+)
+
 type repository interface {
 	ListUsers(ctx context.Context, page, pageSize int) ([]models.AdminUser, int, error)
 	GetUser(ctx context.Context, userID uuid.UUID) (*models.AdminUser, error)
@@ -320,13 +325,22 @@ func (r *sqlRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, usern
 				SELECT 1 FROM admin_users WHERE disabled_at IS NULL
 			)
 			RETURNING id, username, created_at, updated_at, last_login_at, disabled_at
+		),
+		seeded_tenant AS (
+			INSERT INTO tenants (id, name, created_at, updated_at)
+			SELECT $5::uuid, $6, $4, $4
+			FROM inserted
+			WHERE NOT EXISTS (
+				SELECT 1 FROM tenants
+			)
+			ON CONFLICT (id) DO NOTHING
 		)
 		SELECT id, username, created_at, updated_at, last_login_at, disabled_at
 		FROM inserted
 	`
 
 	var user models.AdminUser
-	if err := r.db.QueryRowContext(ctx, query, id, username, passwordHash, now).Scan(
+	if err := r.db.QueryRowContext(ctx, query, id, username, passwordHash, now, defaultTenantID, defaultTenantName).Scan(
 		&user.ID,
 		&user.Username,
 		&user.CreatedAt,

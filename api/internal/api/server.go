@@ -12,8 +12,10 @@ import (
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
 	"github.com/yassinebenameur/probara/api/internal/handlers/alertpolicies"
+	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
+	dashboardhandlers "github.com/yassinebenameur/probara/api/internal/handlers/dashboard"
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
@@ -26,7 +28,9 @@ import (
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
 	alertpolicyservice "github.com/yassinebenameur/probara/api/internal/services/alertpolicies"
+	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
+	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
@@ -129,6 +133,15 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
 			agentHandlers := agenthandlers.NewHandler(agentService, log)
 
+			// Alert service and handlers (shared across alerts + dashboard routes)
+			alertSvc := alertservice.NewService(dbClient)
+			alertHub := alertservice.NewHub()
+			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
+
+			// Dashboard service and handlers
+			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc)
+			dashboardHandlers := dashboardhandlers.NewHandlers(dashboardSvc, log)
+
 			// Monitor services
 			monitorService := monitorservice.NewService(dbClient)
 			groupSvc := groupservice.NewService(dbClient)
@@ -166,12 +179,31 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Agent metrics endpoint
 			r.Post("/agent/metrics", agentHandlers.HandleReceiveMetrics)
 
+			// Dashboard
+			r.Route("/dashboard", func(r chi.Router) {
+				r.Get("/overview", dashboardHandlers.GetOverview)
+			})
+
+			// Alerts
+			r.Route("/alerts", func(r chi.Router) {
+				r.Get("/", alertHandlers.ListAlerts)
+				r.Get("/recent", alertHandlers.GetRecentAlerts)
+				r.Get("/stream", alertHandlers.StreamAlerts)
+				r.Get("/counts/by-policy", alertHandlers.GetAlertCountsByPolicy)
+				r.Get("/counts/monitors-by-policy", alertHandlers.GetMonitorCountsByPolicy)
+				r.Get("/{id}", alertHandlers.GetAlert)
+				r.Post("/{id}/acknowledge", alertHandlers.AcknowledgeAlert)
+				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)
+			})
+
 			// Alert policies
 			alertPolicyService := alertpolicyservice.NewService(dbClient)
 			alertPolicyHandlers := alertpolicies.NewHandlers(alertPolicyService, log)
 			r.Route("/alert-policies", func(r chi.Router) {
 				r.Post("/", alertPolicyHandlers.CreateAlertPolicy)
 				r.Get("/", alertPolicyHandlers.ListAlertPolicies)
+				r.Get("/{id}/alerts", alertHandlers.GetAlertsByPolicy)
+				r.Get("/{id}/monitors", alertHandlers.GetMonitorsByPolicy)
 				r.Get("/{id}", alertPolicyHandlers.GetAlertPolicy)
 				r.Patch("/{id}", alertPolicyHandlers.UpdateAlertPolicy)
 				r.Delete("/{id}", alertPolicyHandlers.DeleteAlertPolicy)

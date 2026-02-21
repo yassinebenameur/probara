@@ -449,9 +449,9 @@ func (h *Handlers) GetMonitorResults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse query parameters
-	limit := 50
+	limit := 0
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
 			limit = l
 		}
 	}

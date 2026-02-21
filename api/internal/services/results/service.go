@@ -21,6 +21,15 @@ type Service struct {
 	groupService groups.GroupService
 }
 
+const (
+	defaultMonitorResultsLimit = 50
+	maxMonitorResultsLimit     = 1000000
+	dynamicLimitFloor          = 200
+	dynamicLimitPadding        = 100
+	dynamicLimitHeadroomNum    = 115
+	dynamicLimitHeadroomDen    = 100
+)
+
 // NewService creates a new results service
 func NewService(database db.DB, groupSvc groups.GroupService) *Service {
 	return &Service{
@@ -38,10 +47,13 @@ func (s *Service) GetMonitorResults(ctx context.Context, tenantID, monitorID uui
 	}
 
 	if limit <= 0 {
-		limit = 50
+		limit = computeDynamicLimit(since, monitor.IntervalSeconds)
+		if limit <= 0 {
+			limit = defaultMonitorResultsLimit
+		}
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > maxMonitorResultsLimit {
+		limit = maxMonitorResultsLimit
 	}
 
 	// If this is a group monitor, aggregate results from all member monitors
@@ -263,4 +275,31 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 
 	monitor.Tags = tags
 	return &monitor, nil
+}
+
+func computeDynamicLimit(since *time.Time, intervalSeconds int) int {
+	if since == nil {
+		return 0
+	}
+
+	if intervalSeconds <= 0 {
+		intervalSeconds = 60
+	}
+
+	duration := time.Since(since.UTC())
+	if duration <= 0 {
+		return dynamicLimitFloor
+	}
+
+	expectedPoints := int(duration.Seconds() / float64(intervalSeconds))
+	if expectedPoints < 1 {
+		expectedPoints = 1
+	}
+
+	limit := (expectedPoints*dynamicLimitHeadroomNum)/dynamicLimitHeadroomDen + dynamicLimitPadding
+	if limit < dynamicLimitFloor {
+		limit = dynamicLimitFloor
+	}
+
+	return limit
 }
