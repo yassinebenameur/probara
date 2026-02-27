@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import Layout from '@/components/layout/Layout';
+import { ToastProvider } from '@/components/ui/ToastProvider';
 
 export const metadata: Metadata = {
   title: 'Probara',
@@ -15,7 +16,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body suppressHydrationWarning>
-        <Layout>{children}</Layout>
+        <ToastProvider>
+          <Layout>{children}</Layout>
+        </ToastProvider>
       </body>
     </html>
   );

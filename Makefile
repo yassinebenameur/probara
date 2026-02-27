@@ -134,6 +134,30 @@ dev-start:
 dev-stop:
 	docker compose stop postgres nats
 
+# Start everything (backend + UI with nvm LTS)
+start-all:
+	@echo "Starting backend services..."
+	docker compose up -d
+	@echo "Waiting for services to be healthy..."
+	@sleep 10
+	@echo "Starting UI with nvm LTS..."
+	@bash scripts/start-ui.sh > /tmp/probara-ui.log 2>&1 &
+	@echo "UI started. Logs: tail -f /tmp/probara-ui.log"
+	@echo ""
+	@echo "Service URLs:"
+	@echo "  UI:           http://localhost:3000"
+	@echo "  API:          http://localhost:8080"
+	@echo "  Status Page:  http://localhost:8082"
+	@echo "  NATS Monitor: http://localhost:8222"
+
+# Stop everything (backend + UI)
+stop-all:
+	@echo "Stopping UI..."
+	@pkill -f "npm run dev" || true
+	@echo "Stopping backend services..."
+	docker compose down
+	@echo "All services stopped."
+
 # Testing and CI
 test:
 	@echo "Running tests with race detection and coverage..."
