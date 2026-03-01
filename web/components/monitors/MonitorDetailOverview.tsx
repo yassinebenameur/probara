@@ -4,6 +4,7 @@ import { CheckResult, Monitor, PushMetrics } from '@/lib/types';
 import { calculateUptime, calculateLatencyStats, getOperationalResults } from '@/lib/monitor-utils';
 import AgentMetricsView from './AgentMetricsView';
 import HttpMonitorOverview from './HttpMonitorOverview';
+import { UptimeHeroGauge, SLA_TARGET } from './UptimeHeroGauge';
 import type { TimeRange } from './AgentMetricsView';
 
 // Helper function to format metric names
@@ -31,6 +32,14 @@ function formatMetricValue(value: string | number | boolean): string {
   return String(value);
 }
 
+function getTimeAgo(dateStr: string): string {
+  const diffSec = Math.floor((Date.now() - Date.parse(dateStr)) / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
 // Push Metrics View component
 function PushMetricsView({ results, loading }: { results: CheckResult[]; loading?: boolean }) {
   if (loading) {
@@ -41,66 +50,77 @@ function PushMetricsView({ results, loading }: { results: CheckResult[]; loading
     );
   }
 
-  // Get the latest result with metrics
   const latestWithMetrics = results.find(r => r.metrics_data && Object.keys(r.metrics_data).length > 0);
   const metrics = latestWithMetrics?.metrics_data as PushMetrics | undefined;
   const operationalResults = getOperationalResults(results);
   const operationalCount = operationalResults.length;
+  const successCount = operationalResults.filter(r => r.status === 'success').length;
   const latestResult = operationalResults[0];
-
-  // Get time ago for latest result
-  const getTimeAgo = (dateStr: string) => {
-    const now = new Date();
-    const then = new Date(dateStr);
-    const diffMs = now.getTime() - then.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-
-    if (diffSec < 60) return `${diffSec}s ago`;
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-    return `${Math.floor(diffSec / 86400)}d ago`;
-  };
-
   const uptime = calculateUptime(results);
-  const uptimeColor = uptime >= 99.9 ? 'emerald' : uptime >= 99 ? 'amber' : 'rose';
+  const downtimePct = operationalCount > 0 ? 100 - uptime : 0;
+  const metricsCount = metrics ? Object.keys(metrics).length : 0;
 
   return (
     <div className="space-y-6">
-      {/* Last Push Banner */}
-      {latestResult && (
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/50 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className={`h-2 w-2 rounded-full ${latestResult.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-            <span className="text-sm text-slate-300">Last push {getTimeAgo(latestResult.created_at)}</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className={`px-2 py-0.5 rounded ${
-              latestResult.status === 'success' 
-                ? 'bg-emerald-500/10 text-emerald-400' 
-                : 'bg-rose-500/10 text-rose-400'
+      {/* ── Hero: Uptime Gauge ─────────────────────────────────────────────── */}
+      <div className="relative rounded-2xl border border-white/[0.06] bg-slate-900/60 backdrop-blur-sm overflow-hidden">
+        <div
+          className="pointer-events-none absolute inset-0 rounded-2xl"
+          style={{
+            background: uptime >= SLA_TARGET
+              ? 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(6,182,212,0.08), transparent)'
+              : 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(244,63,94,0.08), transparent)',
+          }}
+        />
+        <UptimeHeroGauge uptime={uptime} hasData={operationalCount > 0} />
+
+        {/* Last push strip */}
+        {latestResult && (
+          <div className="mx-6 mb-6 flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-950/40 px-4 py-2.5">
+            <div className="flex items-center gap-2.5">
+              <span className={`h-2 w-2 rounded-full ${latestResult.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <span className="text-xs text-slate-400">
+                Last push <span className="text-slate-300">{getTimeAgo(latestResult.created_at)}</span>
+              </span>
+            </div>
+            <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+              latestResult.status === 'success' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
             }`}>
               {latestResult.status === 'success' ? 'UP' : 'DOWN'}
             </span>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Uptime Stats */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className={`rounded-xl border ${uptimeColor === 'emerald' ? 'border-emerald-500/20 bg-emerald-500/5' : uptimeColor === 'amber' ? 'border-amber-500/20 bg-amber-500/5' : 'border-rose-500/20 bg-rose-500/5'} p-4`}>
-          <p className="text-xs text-slate-500">Uptime (30 days)</p>
-          <p className="mt-1 text-xl font-semibold text-white">{operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}</p>
-          <p className="mt-0.5 text-xs text-slate-500">{uptime === 100 ? 'Perfect uptime' : `${(100 - uptime).toFixed(2)}% downtime`}</p>
+      {/* ── Secondary stats row ────────────────────────────────────────────── */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-violet-500/15 bg-violet-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Pushes</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">{operationalCount}</p>
+          <p className="mt-1 text-xs text-slate-500">
+            <span className="text-emerald-400">{successCount}</span> successful
+          </p>
         </div>
-        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-          <p className="text-xs text-slate-500">Total Pushes</p>
-          <p className="mt-1 text-xl font-semibold text-white">{operationalCount}</p>
-          <p className="mt-0.5 text-xs text-slate-500">{operationalResults.filter(r => r.status === 'success').length} successful</p>
+        <div className="rounded-xl border border-cyan-500/15 bg-cyan-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Auto Metrics</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">{metricsCount}</p>
+          <p className="mt-1 text-xs text-slate-500">From latest push</p>
         </div>
-        <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-4">
-          <p className="text-xs text-slate-500">Auto-Detected Metrics</p>
-          <p className="mt-1 text-xl font-semibold text-white">{metrics ? Object.keys(metrics).length : 0}</p>
-          <p className="mt-0.5 text-xs text-slate-500">From latest push</p>
+        <div className="rounded-xl border border-white/[0.06] bg-slate-800/30 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Success Rate</p>
+          <p className="mt-2 font-mono text-xl font-bold text-emerald-400">
+            {operationalCount > 0 ? `${((successCount / operationalCount) * 100).toFixed(1)}%` : 'N/A'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">{operationalCount - successCount} failed</p>
+        </div>
+        <div className="rounded-xl border border-rose-500/15 bg-rose-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Downtime</p>
+          <p className={`mt-2 font-mono text-xl font-bold ${downtimePct > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+            {operationalCount > 0 ? `${downtimePct.toFixed(3)}%` : 'N/A'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {downtimePct === 0 ? 'No downtime recorded' : `${operationalCount - successCount} missed pushes`}
+          </p>
         </div>
       </div>
 
@@ -118,10 +138,7 @@ function PushMetricsView({ results, loading }: { results: CheckResult[]; loading
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {Object.entries(metrics).map(([key, value]) => (
-              <div
-                key={key}
-                className="rounded-lg border border-white/[0.06] bg-slate-800/30 px-4 py-3"
-              >
+              <div key={key} className="rounded-lg border border-white/[0.06] bg-slate-800/30 px-4 py-3">
                 <p className="text-xs text-slate-500">{formatMetricName(key)}</p>
                 <p className="mt-1 text-lg font-semibold text-white">{formatMetricValue(value)}</p>
               </div>
@@ -138,7 +155,7 @@ function PushMetricsView({ results, loading }: { results: CheckResult[]; loading
             </svg>
             <h3 className="text-sm font-medium text-white mb-1">Awaiting metrics</h3>
             <p className="text-xs text-slate-500 max-w-sm">
-              No custom metrics have been received yet. Send metrics with your push request 
+              No custom metrics have been received yet. Send metrics with your push request
               and they will automatically appear here.
             </p>
           </div>
@@ -163,33 +180,24 @@ function PushMetricsView({ results, loading }: { results: CheckResult[]; loading
             <tbody>
               {results.slice(0, 10).map((result, idx) => {
                 const time = new Date(result.created_at).toISOString().replace('T', ' ').slice(0, 19);
-                const metricsCount = result.metrics_data ? Object.keys(result.metrics_data).length : 0;
+                const mc = result.metrics_data ? Object.keys(result.metrics_data).length : 0;
                 return (
-                  <tr
-                    key={result.id}
-                    className={`border-b border-white/[0.03] ${idx % 2 === 1 ? 'bg-slate-800/20' : ''}`}
-                  >
+                  <tr key={result.id} className={`border-b border-white/[0.03] ${idx % 2 === 1 ? 'bg-slate-800/20' : ''}`}>
                     <td className="px-5 py-3 text-sm font-mono text-slate-400">{time}</td>
                     <td className="px-5 py-3">
-                      <span className={`inline-flex items-center gap-1.5 text-xs ${
-                        result.status === 'success' ? 'text-emerald-400' : 'text-rose-400'
-                      }`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${
-                          result.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-                        }`} />
+                      <span className={`inline-flex items-center gap-1.5 text-xs ${result.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${result.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                         {result.status === 'success' ? 'UP' : 'DOWN'}
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-sm text-slate-400">{metricsCount > 0 ? `${metricsCount} metrics` : '—'}</td>
+                    <td className="px-5 py-3 text-sm text-slate-400">{mc > 0 ? `${mc} metrics` : '—'}</td>
                     <td className="px-5 py-3 text-sm text-slate-400">{result.error_message || '—'}</td>
                   </tr>
                 );
               })}
               {results.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">
-                    No push results available yet
-                  </td>
+                  <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">No push results available yet</td>
                 </tr>
               )}
             </tbody>
@@ -208,36 +216,6 @@ interface MonitorDetailOverviewProps {
   onAgentTimeRangeChange?: (range: TimeRange) => void;
   timeRange?: TimeRange;
   onTimeRangeChange?: (range: TimeRange) => void;
-}
-
-// Stat card component
-function StatCard({ 
-  label, 
-  value, 
-  subValue, 
-  trend,
-  color = 'cyan' 
-}: { 
-  label: string; 
-  value: string; 
-  subValue?: string; 
-  trend?: 'up' | 'down' | 'neutral';
-  color?: 'cyan' | 'emerald' | 'amber' | 'rose';
-}) {
-  const colors = {
-    cyan: 'border-cyan-500/20 bg-cyan-500/5',
-    emerald: 'border-emerald-500/20 bg-emerald-500/5',
-    amber: 'border-amber-500/20 bg-amber-500/5',
-    rose: 'border-rose-500/20 bg-rose-500/5',
-  };
-
-  return (
-    <div className={`rounded-xl border ${colors[color]} p-4`}>
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 text-xl font-semibold text-white">{value}</p>
-      {subValue && <p className="mt-0.5 text-xs text-slate-500">{subValue}</p>}
-    </div>
-  );
 }
 
 // Mini bar chart for response times
@@ -368,62 +346,99 @@ export default function MonitorDetailOverview({
   const latencyStats = calculateLatencyStats(results);
   const operationalResults = getOperationalResults(results);
   const operationalCount = operationalResults.length;
+  const successCount = operationalResults.filter(r => r.status === 'success').length;
   const latestResult = operationalResults[0];
   const syntheticInsights = extractSyntheticInsights(monitor, latestResult);
+  const downtimePct = operationalCount > 0 ? 100 - uptime : 0;
 
-  // Get time ago for latest result
-  const getTimeAgo = (dateStr: string) => {
-    const now = new Date();
-    const then = new Date(dateStr);
-    const diffMs = now.getTime() - then.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-
-    if (diffSec < 60) return `${diffSec}s ago`;
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-    return `${Math.floor(diffSec / 86400)}d ago`;
+  const formatLatency = (ms: number | null | undefined): string => {
+    if (!ms) return '—';
+    return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(0)}ms`;
   };
-
-  const uptimeColor = uptime >= 99.9 ? 'emerald' : uptime >= 99 ? 'amber' : 'rose';
 
   return (
     <div className="space-y-6">
-      {/* Last Check Banner */}
-      {latestResult && (
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/50 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className={`h-2 w-2 rounded-full ${latestResult.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-            <span className="text-sm text-slate-300">Last check {getTimeAgo(latestResult.created_at)}</span>
-          </div>
-          <div className="flex items-center gap-4 text-sm text-slate-400">
-            <span>{latestResult.latency_ms || 0}ms</span>
-            <span>HTTP {latestResult.http_status || 'N/A'}</span>
-          </div>
-        </div>
-      )}
+      {/* ── Hero: Uptime Gauge ─────────────────────────────────────────────── */}
+      <div className="relative rounded-2xl border border-white/[0.06] bg-slate-900/60 backdrop-blur-sm overflow-hidden">
+        <div
+          className="pointer-events-none absolute inset-0 rounded-2xl"
+          style={{
+            background: uptime >= SLA_TARGET
+              ? 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(6,182,212,0.08), transparent)'
+              : 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(244,63,94,0.08), transparent)',
+          }}
+        />
+        <UptimeHeroGauge uptime={uptime} hasData={operationalCount > 0} />
 
-      {/* Stats Grid */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard
-          label="Uptime (30 days)"
-          value={operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}
-          subValue={uptime === 100 ? 'Perfect uptime' : `${(100 - uptime).toFixed(2)}% downtime`}
-          color={uptimeColor}
-        />
-        <StatCard
-          label="Response Time (P95)"
-          value={`${latencyStats.p95 || 0}ms`}
-          subValue={`Median: ${latencyStats.median || 0}ms`}
-          color="cyan"
-        />
-        <StatCard
-          label="Total Checks"
-          value={operationalCount.toString()}
-          subValue={`${operationalResults.filter(r => r.status === 'success').length} successful`}
-          color="cyan"
-        />
+        {/* Last check strip */}
+        {latestResult && (
+          <div className="mx-6 mb-6 flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-950/40 px-4 py-2.5">
+            <div className="flex items-center gap-2.5">
+              <span className={`h-2 w-2 rounded-full ${
+                latestResult.status === 'success' ? 'bg-emerald-500'
+                : latestResult.status === 'degraded' ? 'bg-amber-500' : 'bg-rose-500'
+              }`} />
+              <span className="text-xs text-slate-400">
+                Last check <span className="text-slate-300">{getTimeAgo(latestResult.created_at)}</span>
+              </span>
+            </div>
+            <div className="flex items-center gap-4">
+              {latestResult.latency_ms ? (
+                <span className="font-mono text-xs text-slate-400">{formatLatency(latestResult.latency_ms)}</span>
+              ) : null}
+              {latestResult.http_status ? (
+                <span className={`font-mono text-xs ${latestResult.http_status < 400 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  HTTP {latestResult.http_status}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* ── Secondary stats row ────────────────────────────────────────────── */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-cyan-500/15 bg-cyan-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">P95 Latency</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">
+            {latencyStats.p95 ? formatLatency(latencyStats.p95) : 'N/A'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Median: <span className="font-mono text-slate-400">{latencyStats.median ? formatLatency(latencyStats.median) : 'N/A'}</span>
+          </p>
+        </div>
+        <div className="rounded-xl border border-violet-500/15 bg-violet-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Latest Response</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">
+            {formatLatency(latestResult?.latency_ms)}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {latestResult?.http_status ? (
+              <span className={`font-mono ${latestResult.http_status < 400 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                HTTP {latestResult.http_status}
+              </span>
+            ) : '—'}
+          </p>
+        </div>
+        <div className="rounded-xl border border-white/[0.06] bg-slate-800/30 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Checks</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">{operationalCount}</p>
+          <p className="mt-1 text-xs text-slate-500">
+            <span className="text-emerald-400">{successCount}</span> successful
+          </p>
+        </div>
+        <div className="rounded-xl border border-rose-500/15 bg-rose-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Downtime</p>
+          <p className={`mt-2 font-mono text-xl font-bold ${downtimePct > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+            {operationalCount > 0 ? `${downtimePct.toFixed(3)}%` : 'N/A'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {downtimePct === 0 ? 'No downtime recorded' : `${operationalCount - successCount} failed checks`}
+          </p>
+        </div>
+      </div>
+
+      {/* Synthetic journey insights panel */}
       {syntheticInsights && (
         <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-5">
           <div className="flex items-center justify-between">
@@ -470,14 +485,8 @@ export default function MonitorDetailOverview({
             <p className="text-xs text-slate-500 mt-0.5">Last 30 checks</p>
           </div>
           <div className="flex items-center gap-4 text-xs text-slate-500">
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              Success
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-rose-500" />
-              Failed
-            </span>
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Success</span>
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" />Failed</span>
           </div>
         </div>
         <ResponseTimeBars results={results} />
@@ -506,31 +515,22 @@ export default function MonitorDetailOverview({
               {results.slice(0, 10).map((result, idx) => {
                 const time = new Date(result.created_at).toISOString().replace('T', ' ').slice(0, 19);
                 return (
-                  <tr
-                    key={result.id}
-                    className={`border-b border-white/[0.03] ${idx % 2 === 1 ? 'bg-slate-800/20' : ''}`}
-                  >
+                  <tr key={result.id} className={`border-b border-white/[0.03] ${idx % 2 === 1 ? 'bg-slate-800/20' : ''}`}>
                     <td className="px-5 py-3 text-sm font-mono text-slate-400">{time}</td>
                     <td className="px-5 py-3">
-                      <span className={`inline-flex items-center gap-1.5 text-xs ${
-                        result.status === 'success' ? 'text-emerald-400' : 'text-rose-400'
-                      }`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${
-                          result.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-                        }`} />
+                      <span className={`inline-flex items-center gap-1.5 text-xs ${result.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${result.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                         {result.status === 'success' ? 'OK' : 'Failed'}
                       </span>
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-400">{result.http_status || 'N/A'}</td>
-                    <td className="px-5 py-3 text-sm text-slate-400">{result.latency_ms || 0}ms</td>
+                    <td className="px-5 py-3 text-sm text-slate-400">{formatLatency(result.latency_ms)}</td>
                   </tr>
                 );
               })}
               {results.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">
-                    No check results available yet
-                  </td>
+                  <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">No check results available yet</td>
                 </tr>
               )}
             </tbody>
@@ -544,12 +544,7 @@ export default function MonitorDetailOverview({
           <span className="text-xs text-slate-500">Tags:</span>
           <div className="flex flex-wrap gap-1.5">
             {monitor.tags.map((tag) => (
-              <span
-                key={tag}
-                className="badge badge-default text-xs"
-              >
-                {tag}
-              </span>
+              <span key={tag} className="badge badge-default text-xs">{tag}</span>
             ))}
           </div>
         </div>
