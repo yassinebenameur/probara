@@ -1,3 +1,13 @@
+# [1.0.0-alpha.14](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.13...v1.0.0-alpha.14) (2026-03-01)
+
+
+### Bug Fixes
+
+* monitor detail design ([bf16d9c](https://github.com/yassinebenameur/probara/commit/bf16d9c6bafb9bf8bbfa26e7aa5ebd9bcc0fc8da))
+* ui of http monitor ([2b93d38](https://github.com/yassinebenameur/probara/commit/2b93d38ae51baf2f9962ee224f9d5ec29ff98955))
+* ui of http monitor form ([e8ad657](https://github.com/yassinebenameur/probara/commit/e8ad6575318bc7b9bacdaf52bfea58803f284903))
+* ui of other monitors ([8d8cf84](https://github.com/yassinebenameur/probara/commit/8d8cf847ff7957d03b9178b9216e5ec204d007c3))
+
 # [1.0.0-alpha.13](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.12...v1.0.0-alpha.13) (2026-02-21)
 
 
