@@ -443,3 +443,72 @@ body::before {
   color: #fde047;
   border: 1px solid rgba(234, 179, 8, 0.2);
 }
+
+/* ── Uptime gauge animations ───────────────────────────────────────────────── */
+
+@keyframes gauge-spin-in {
+  from {
+    stroke-dashoffset: var(--gauge-circumference, 1000);
+    opacity: 0;
+  }
+  to {
+    stroke-dashoffset: var(--gauge-target-offset, 0);
+    opacity: 1;
+  }
+}
+
+@keyframes gauge-pulse-glow {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1; }
+}
+
+.animate-gauge-fill {
+  animation: gauge-spin-in 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-gauge-glow-pulse {
+  animation: gauge-pulse-glow 3s ease-in-out infinite;
+}
+
+.uptime-gauge-outer {
+  filter: drop-shadow(0 0 18px rgba(6, 182, 212, 0.55))
+          drop-shadow(0 0 40px rgba(6, 182, 212, 0.25));
+}
+
+.uptime-gauge-outer--breach {
+  filter: drop-shadow(0 0 18px rgba(244, 63, 94, 0.55))
+          drop-shadow(0 0 40px rgba(244, 63, 94, 0.25));
+}
+
+.uptime-number-int {
+  /* Fixed at 4rem: "100" ≈ 111px wide — fits inside the ~278px inner ring */
+  font-size: 4rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  background: linear-gradient(180deg, #ffffff 0%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.uptime-number-dec {
+  /* Fixed at 2.8rem: ".000" ≈ 105px wide */
+  font-size: 2.8rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  background: linear-gradient(180deg, #e2e8f0 0%, #64748b 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.uptime-number-pct {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1;
+  align-self: flex-end;
+  padding-bottom: 0.3em;
+}

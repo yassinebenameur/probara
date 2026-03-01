@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { CheckResult, Monitor, HTTPMetricsEnvelope, HTTPTimingInfo, HTTPTLSInfo } from '@/lib/types';
 import { calculateUptime, calculateLatencyStats, getOperationalResults } from '@/lib/monitor-utils';
+
+// TODO: make SLA_TARGET configurable per-monitor from settings
+const SLA_TARGET = 99.9;
 
 export type TimeRange = '1h' | '6h' | '24h' | '7d';
 
@@ -91,6 +94,203 @@ function splitByGaps(series: SeriesPoint[], timeRange: TimeRange): SeriesPoint[]
   }
   segments.push(current);
   return segments;
+}
+
+// ─── Uptime Hero Gauge ───────────────────────────────────────────────────────
+
+function UptimeHeroGauge({
+  uptime,
+  hasData,
+}: {
+  uptime: number;
+  hasData: boolean;
+}) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  const isCompliant = uptime >= SLA_TARGET;
+
+  // Arc geometry: gap of ~100deg at the bottom, arc sweeps 260deg
+  // SIZE=380, R=148 → inner clear diameter ≈278px; font budget fits "100.000%"
+  const SIZE = 380;
+  const cx = SIZE / 2;
+  const cy = SIZE / 2;
+  const R = 148;
+  const GAP_DEG = 100;
+  const ARC_DEG = 360 - GAP_DEG;
+  const circumference = 2 * Math.PI * R;
+  const arcLength = (ARC_DEG / 360) * circumference;
+  const gapLength = circumference - arcLength;
+
+  // Filled portion of the arc
+  const fillRatio = hasData ? Math.max(0, Math.min(1, uptime / 100)) : 0;
+  const fillLength = fillRatio * arcLength;
+
+  // Rotate so the arc starts at bottom-left and opens at bottom-right
+  // SVG 0deg = 3-o'clock; we want the gap centered at 6-o'clock
+  // Arc starts at (90 + GAP_DEG/2) = 90+50 = 140deg from SVG zero
+  const rotationDeg = 90 + GAP_DEG / 2;
+
+  const accentColor = isCompliant ? '#06b6d4' : '#f43f5e';
+  const glowClass = isCompliant ? 'uptime-gauge-outer' : 'uptime-gauge-outer--breach';
+
+  // Split uptime into integer and decimal parts
+  const uptimeStr = hasData ? uptime.toFixed(3) : '—';
+  const dotIdx = uptimeStr.indexOf('.');
+  const intPart = dotIdx >= 0 ? uptimeStr.slice(0, dotIdx) : uptimeStr;
+  const decPart = dotIdx >= 0 ? uptimeStr.slice(dotIdx) : '';
+
+  const slaLabel = isCompliant ? 'SLA COMPLIANT' : 'SLA BREACH';
+  const slaBorderColor = isCompliant
+    ? 'border-cyan-400/40 text-cyan-300 bg-slate-900/70'
+    : 'border-rose-400/40 text-rose-300 bg-slate-900/70';
+  const slaDotColor = isCompliant ? 'bg-cyan-400' : 'bg-rose-400';
+
+  return (
+    <div className="flex flex-col items-center select-none py-6">
+      {/* SLA badge */}
+      <div
+        className={`mb-6 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] backdrop-blur-sm ${slaBorderColor}`}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full animate-pulse-soft ${slaDotColor}`} />
+        {slaLabel}
+      </div>
+
+      {/* Gauge SVG */}
+      <div className="relative" style={{ width: SIZE, height: SIZE }}>
+        <svg
+          width={SIZE}
+          height={SIZE}
+          viewBox={`0 0 ${SIZE} ${SIZE}`}
+          className="overflow-visible"
+        >
+          <defs>
+            {/* Blurred glow layer */}
+            <filter id="gauge-glow" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="8" result="blur" />
+              <feComposite in="SourceGraphic" in2="blur" operator="over" />
+            </filter>
+            {/* Gradient along the arc */}
+            <linearGradient id="gauge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor={accentColor} stopOpacity="0.6" />
+              <stop offset="100%" stopColor={accentColor} stopOpacity="1" />
+            </linearGradient>
+          </defs>
+
+          {/* Track ring */}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={R}
+            fill="none"
+            stroke="rgba(255,255,255,0.06)"
+            strokeWidth="14"
+            strokeLinecap="round"
+            strokeDasharray={`${arcLength} ${gapLength}`}
+            transform={`rotate(${rotationDeg} ${cx} ${cy})`}
+          />
+
+          {/* Inner subtle dark track fill */}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={R}
+            fill="none"
+            stroke="rgba(0,0,0,0.3)"
+            strokeWidth="18"
+            strokeLinecap="butt"
+            strokeDasharray={`${arcLength} ${gapLength}`}
+            transform={`rotate(${rotationDeg} ${cx} ${cy})`}
+          />
+
+          {/* Glow duplicate (blurred, rendered behind) */}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={R}
+            fill="none"
+            stroke={accentColor}
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeDashoffset="0"
+            transform={`rotate(${rotationDeg} ${cx} ${cy})`}
+            filter="url(#gauge-glow)"
+            opacity="0.5"
+            className="animate-gauge-glow-pulse transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+            style={{ strokeDasharray: `${mounted ? fillLength : 0} ${circumference}` }}
+          />
+
+          {/* Main filled arc */}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={R}
+            fill="none"
+            stroke="url(#gauge-gradient)"
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeDashoffset="0"
+            transform={`rotate(${rotationDeg} ${cx} ${cy})`}
+            className={`${glowClass} transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)]`}
+            style={{ strokeDasharray: `${mounted ? fillLength : 0} ${circumference}` }}
+          />
+
+          {/* Leading edge dot */}
+          {hasData && (
+            <>
+              {/* Compute the angle at the tip of the fill arc */}
+              {(() => {
+                const tipAngle = (rotationDeg + (fillRatio * ARC_DEG)) * (Math.PI / 180);
+                const tipX = cx + R * Math.cos(tipAngle);
+                const tipY = cy + R * Math.sin(tipAngle);
+                return (
+                  <>
+                    <circle
+                      cx={tipX}
+                      cy={tipY}
+                      r="10"
+                      fill={accentColor}
+                      opacity="0.3"
+                      className={`transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${mounted ? '' : 'opacity-0'}`}
+                    />
+                    <circle
+                      cx={tipX}
+                      cy={tipY}
+                      r="5"
+                      fill={accentColor}
+                      className={`transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${mounted ? '' : 'opacity-0'}`}
+                    />
+                  </>
+                );
+              })()}
+            </>
+          )}
+        </svg>
+
+        {/* Center text overlay — hard-capped to inner ring width */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <div
+            className="flex items-baseline gap-0.5 overflow-hidden"
+            style={{ maxWidth: R * 1.72 }}
+          >
+            <span className="uptime-number-int">{intPart}</span>
+            {decPart && <span className="uptime-number-dec">{decPart}</span>}
+            <span className="uptime-number-pct">%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Subtitle label */}
+      <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+        Uptime Aggregate&nbsp;
+        <span className="text-slate-600">//</span>
+        &nbsp;30 Day Window
+      </p>
+    </div>
+  );
 }
 
 // ─── Latency Time Series Chart ──────────────────────────────────────────────
@@ -821,87 +1021,110 @@ export default function HttpMonitorOverview({
 
   const latestResult = operationalResults[0];
   const operationalCount = operationalResults.length;
-  const uptimeColor =
-    uptime >= 99.9 ? 'emerald' : uptime >= 99 ? 'amber' : 'rose';
-
-  const uptimePalette = {
-    emerald: 'border-emerald-500/20 bg-emerald-500/5',
-    amber: 'border-amber-500/20 bg-amber-500/5',
-    rose: 'border-rose-500/20 bg-rose-500/5',
-  } as const;
+  const successCount = operationalResults.filter((r) => r.status === 'success').length;
+  const downtimePct = operationalCount > 0 ? 100 - uptime : 0;
 
   return (
     <div className="space-y-6">
-      {/* Last check banner */}
-      {latestResult && (
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/50 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div
-              className={`h-2 w-2 rounded-full ${
-                latestResult.status === 'success'
-                  ? 'bg-emerald-500'
-                  : latestResult.status === 'degraded'
-                    ? 'bg-amber-500'
-                    : 'bg-rose-500'
-              }`}
-            />
-            <span className="text-sm text-slate-300">
-              Last check {getTimeAgo(latestResult.created_at)}
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-sm text-slate-400">
-            <span className="font-mono">
-              {latestResult.latency_ms ? formatMs(latestResult.latency_ms) : '—'}
-            </span>
-            <span
-              className={`font-mono ${
-                latestResult.http_status && latestResult.http_status < 400
-                  ? 'text-emerald-400'
-                  : 'text-rose-400'
-              }`}
-            >
-              HTTP {latestResult.http_status ?? 'N/A'}
-            </span>
-          </div>
-        </div>
-      )}
+      {/* ── Hero: Uptime Gauge ─────────────────────────────────────────────── */}
+      <div className="rounded-2xl border border-white/[0.06] bg-slate-900/60 backdrop-blur-sm overflow-hidden">
+        {/* Ambient glow radial behind gauge */}
+        <div
+          className="pointer-events-none absolute inset-0 rounded-2xl"
+          style={{
+            background: uptime >= SLA_TARGET
+              ? 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(6,182,212,0.08), transparent)'
+              : 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(244,63,94,0.08), transparent)',
+          }}
+        />
+        <div className="relative">
+          <UptimeHeroGauge uptime={uptime} hasData={operationalCount > 0} />
 
-      {/* Stats row */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className={`rounded-xl border ${uptimePalette[uptimeColor]} p-4`}>
-          <p className="text-xs text-slate-500">Uptime (30 days)</p>
-          <p className="mt-1 text-xl font-semibold text-white">
-            {operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}
-          </p>
-          <p className="mt-0.5 text-xs text-slate-500">
-            {uptime === 100
-              ? 'Perfect uptime'
-              : `${(100 - uptime).toFixed(2)}% downtime`}
-          </p>
+          {/* Last check strip */}
+          {latestResult && (
+            <div className="mx-6 mb-6 flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-950/40 px-4 py-2.5">
+              <div className="flex items-center gap-2.5">
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    latestResult.status === 'success'
+                      ? 'bg-emerald-500'
+                      : latestResult.status === 'degraded'
+                        ? 'bg-amber-500'
+                        : 'bg-rose-500'
+                  }`}
+                />
+                <span className="text-xs text-slate-400">
+                  Last check{' '}
+                  <span className="text-slate-300">{getTimeAgo(latestResult.created_at)}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="font-mono text-xs text-slate-400">
+                  {latestResult.latency_ms ? formatMs(latestResult.latency_ms) : '—'}
+                </span>
+                <span
+                  className={`font-mono text-xs ${
+                    latestResult.http_status && latestResult.http_status < 400
+                      ? 'text-emerald-400'
+                      : 'text-rose-400'
+                  }`}
+                >
+                  HTTP {latestResult.http_status ?? 'N/A'}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
-        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-          <p className="text-xs text-slate-500">P95 Latency</p>
-          <p className="mt-1 text-xl font-semibold text-white">
+      </div>
+
+      {/* ── Secondary stats row ────────────────────────────────────────────── */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {/* P95 Latency */}
+        <div className="rounded-xl border border-cyan-500/15 bg-cyan-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">P95 Latency</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">
             {latencyStats.p95 ? formatMs(latencyStats.p95) : 'N/A'}
           </p>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Median: {latencyStats.median ? formatMs(latencyStats.median) : 'N/A'}
+          <p className="mt-1 text-xs text-slate-500">
+            Median: <span className="font-mono text-slate-400">{latencyStats.median ? formatMs(latencyStats.median) : 'N/A'}</span>
           </p>
         </div>
-        <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-4">
-          <p className="text-xs text-slate-500">Latest Response</p>
-          <p className="mt-1 text-xl font-semibold text-white">
+        {/* Latest Response */}
+        <div className="rounded-xl border border-violet-500/15 bg-violet-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Latest Response</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">
             {latestResult?.latency_ms ? formatMs(latestResult.latency_ms) : 'N/A'}
           </p>
-          <p className="mt-0.5 text-xs text-slate-500">
-            {latestResult ? `HTTP ${latestResult.http_status ?? 'N/A'}` : '—'}
+          <p className="mt-1 text-xs text-slate-500">
+            {latestResult ? (
+              <span
+                className={`font-mono ${
+                  latestResult.http_status && latestResult.http_status < 400
+                    ? 'text-emerald-400'
+                    : 'text-rose-400'
+                }`}
+              >
+                HTTP {latestResult.http_status ?? 'N/A'}
+              </span>
+            ) : '—'}
           </p>
         </div>
-        <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-          <p className="text-xs text-slate-500">Total Checks</p>
-          <p className="mt-1 text-xl font-semibold text-white">{operationalCount}</p>
-          <p className="mt-0.5 text-xs text-slate-500">
-            {operationalResults.filter((r) => r.status === 'success').length} successful
+        {/* Total Checks */}
+        <div className="rounded-xl border border-white/[0.06] bg-slate-800/30 p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Checks</p>
+          <p className="mt-2 font-mono text-xl font-bold text-white">{operationalCount}</p>
+          <p className="mt-1 text-xs text-slate-500">
+            <span className="text-emerald-400">{successCount}</span> successful
+          </p>
+        </div>
+        {/* Downtime */}
+        <div className="rounded-xl border border-rose-500/15 bg-rose-500/[0.04] p-4">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Downtime</p>
+          <p className={`mt-2 font-mono text-xl font-bold ${downtimePct > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+            {operationalCount > 0 ? `${downtimePct.toFixed(3)}%` : 'N/A'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {downtimePct === 0 ? 'No downtime recorded' : `${(operationalCount - successCount)} failed checks`}
           </p>
         </div>
       </div>
