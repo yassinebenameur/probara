@@ -1,3 +1,10 @@
+# [1.0.0-alpha.15](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.14...v1.0.0-alpha.15) (2026-03-01)
+
+
+### Bug Fixes
+
+* build ([5f91ff6](https://github.com/yassinebenameur/probara/commit/5f91ff60ac0725d370ec01dcc58f44d07a9af229))
+
 # [1.0.0-alpha.14](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.13...v1.0.0-alpha.14) (2026-03-01)
 
 
