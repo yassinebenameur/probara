@@ -169,7 +169,7 @@ export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
       {/* Subtitle label */}
       <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
         Uptime Aggregate&nbsp;
-        <span className="text-slate-600">//</span>
+        <span className="text-slate-600">{'//'}</span>
         &nbsp;30 Day Window
       </p>
     </div>
