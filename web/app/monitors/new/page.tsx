@@ -27,7 +27,7 @@ export default function NewMonitorPage() {
   };
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-6xl">
       {/* Breadcrumb */}
       <div className="mb-6">
         <div className="flex items-center gap-2 text-xs text-slate-500">

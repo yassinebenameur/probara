@@ -32,6 +32,8 @@ import GroupForm from './GroupForm';
 import AgentForm from './AgentForm';
 import PushForm from './PushForm';
 import SipForm from './SipForm';
+import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
+import HttpRequestFlowPreview from './HttpRequestFlowPreview';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -839,6 +841,7 @@ export default function MonitorForm({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   const [syntheticAPIMode, setSyntheticAPIMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserMode, setSyntheticBrowserMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserSetupMode, setSyntheticBrowserSetupMode] = useState<SyntheticBrowserSetupMode>(
@@ -1887,27 +1890,34 @@ export default function MonitorForm({
       }
     };
 
+  // Compact type tab bar (shared across all delegated forms)
+  const TypeTabBar = () => (
+    <div className="mb-6">
+      <div className="flex flex-wrap gap-1.5 rounded-xl border border-white/[0.06] bg-slate-900/40 p-1.5">
+        {monitorTypes.map((type) => (
+          <button
+            key={type}
+            type="button"
+            disabled={!!monitor}
+            onClick={() => setMonitorType(type)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
+              monitorType === type
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent disabled:opacity-40'
+            }`}
+          >
+            {getTypeLabel(type)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   // Delegate to specialized forms
   if (monitorType === 'group') {
     return (
-      <div className="space-y-6">
-        <div>
-          <SectionHeader title="Monitor Type" />
-          <div className="grid grid-cols-2 gap-3">
-            {monitorTypes.map((type) => (
-              <TypeCard
-                key={type}
-                type={type}
-                icon={typeIcons[type]}
-                label={getTypeLabel(type)}
-                description={getTypeDescription(type)}
-                selected={monitorType === type}
-                onClick={() => setMonitorType(type)}
-                disabled={!!monitor}
-              />
-            ))}
-          </div>
-        </div>
+      <div className="space-y-4">
+        <TypeTabBar />
         <GroupForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1915,24 +1925,8 @@ export default function MonitorForm({
 
   if (monitorType === 'agent') {
     return (
-      <div className="space-y-6">
-        <div>
-          <SectionHeader title="Monitor Type" />
-          <div className="grid grid-cols-2 gap-3">
-            {monitorTypes.map((type) => (
-              <TypeCard
-                key={type}
-                type={type}
-                icon={typeIcons[type]}
-                label={getTypeLabel(type)}
-                description={getTypeDescription(type)}
-                selected={monitorType === type}
-                onClick={() => setMonitorType(type)}
-                disabled={!!monitor}
-              />
-            ))}
-          </div>
-        </div>
+      <div className="space-y-4">
+        <TypeTabBar />
         <AgentForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1940,24 +1934,8 @@ export default function MonitorForm({
 
   if (monitorType === 'push') {
     return (
-      <div className="space-y-6">
-        <div>
-          <SectionHeader title="Monitor Type" />
-          <div className="grid grid-cols-2 gap-3">
-            {monitorTypes.map((type) => (
-              <TypeCard
-                key={type}
-                type={type}
-                icon={typeIcons[type]}
-                label={getTypeLabel(type)}
-                description={getTypeDescription(type)}
-                selected={monitorType === type}
-                onClick={() => setMonitorType(type)}
-                disabled={!!monitor}
-              />
-            ))}
-          </div>
-        </div>
+      <div className="space-y-4">
+        <TypeTabBar />
         <PushForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1965,525 +1943,109 @@ export default function MonitorForm({
 
   if (monitorType === 'sip') {
     return (
-      <div className="space-y-6">
-        <div>
-          <SectionHeader title="Monitor Type" />
-          <div className="grid grid-cols-2 gap-3">
-            {monitorTypes.map((type) => (
-              <TypeCard
-                key={type}
-                type={type}
-                icon={typeIcons[type]}
-                label={getTypeLabel(type)}
-                description={getTypeDescription(type)}
-                selected={monitorType === type}
-                onClick={() => setMonitorType(type)}
-                disabled={!!monitor}
-              />
-            ))}
-          </div>
-        </div>
+      <div className="space-y-4">
+        <TypeTabBar />
         <SipForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
   }
 
+  const httpData = {
+    url: formData.url,
+    method: formData.method,
+    status_rules: formData.status_rules,
+    request_headers: formData.request_headers,
+    body: formData.body,
+    body_assertions: formData.body_assertions,
+    response_header_assertions: formData.response_header_assertions,
+    json_assertions: formData.json_assertions,
+    max_latency_ms: formData.max_latency_ms,
+    follow_redirects: formData.follow_redirects,
+    max_redirects: formData.max_redirects,
+    tls_skip_verify: formData.tls_skip_verify,
+    tls_min_days_valid: formData.tls_min_days_valid,
+    tls_server_name: formData.tls_server_name,
+    tls_ca_pem: formData.tls_ca_pem,
+    collect_timing: formData.collect_timing,
+  };
+
+  const activeHeaderCount = formData.request_headers.filter((h: HeaderKV) => h.key.trim()).length;
+  const assertionCount =
+    (formData.body_assertions?.length || 0) +
+    (formData.response_header_assertions?.length || 0) +
+    (formData.json_assertions?.length || 0);
+
+  const handleScrollToSection = (sectionId: string) => {
+    // Open the section if it's a collapsible one
+    setOpenSections((prev) => ({ ...prev, [sectionId]: true }));
+    // For the monitor name field, target its wrapper div
+    const targetId = sectionId === 'monitor-name' ? 'monitor-name-field' : sectionId;
+    setTimeout(() => {
+      const el = document.getElementById(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 80);
+  };
+
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Monitor Type Selection */}
-      <div>
-        <SectionHeader title="Monitor Type" description="Choose how you want to monitor your service" />
-        <div className="grid grid-cols-2 gap-3">
-          {monitorTypes.map((type) => (
-            <TypeCard
-              key={type}
-              type={type}
-              icon={typeIcons[type]}
-              label={getTypeLabel(type)}
-              description={getTypeDescription(type)}
-              selected={monitorType === type}
-              onClick={() => setMonitorType(type)}
-              disabled={!!monitor}
-            />
-          ))}
-        </div>
+      {/* Compact type tab bar */}
+      <div className="flex flex-wrap gap-1.5 rounded-xl border border-white/[0.06] bg-slate-900/40 p-1.5">
+        {monitorTypes.map((type) => (
+          <button
+            key={type}
+            type="button"
+            disabled={!!monitor}
+            onClick={() => setMonitorType(type)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
+              monitorType === type
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent disabled:opacity-40'
+            }`}
+          >
+            {getTypeLabel(type)}
+          </button>
+        ))}
       </div>
+
+      {/* Two-column layout for HTTP: form left, preview right */}
+      <div className={monitorType === 'http' ? 'grid grid-cols-1 xl:grid-cols-5 gap-6 items-start' : ''}>
+        {/* Form column */}
+        <div className={`space-y-6 ${monitorType === 'http' ? 'xl:col-span-3' : ''}`}>
 
       {/* Basic Info */}
-      <div>
-        <SectionHeader title="Basic Information" />
-        <div className="space-y-4">
-          <FormInput
-            label="Monitor Name"
-            value={formData.name}
-            onChange={(v) => setFormData({ ...formData, name: v })}
-            placeholder="My API Health Check"
-            error={errors.name}
-            hint="A descriptive name for this monitor"
+      <div className="space-y-4" id="monitor-name-field">
+        <FormInput
+          label="Monitor Name"
+          value={formData.name}
+          onChange={(v) => setFormData({ ...formData, name: v })}
+          placeholder="My API Health Check"
+          error={errors.name}
+          hint="A descriptive name for this monitor"
+        />
+
+        {/* HTTP URL + Method hero row */}
+        {monitorType === 'http' && (
+          <MethodUrlRow
+            method={formData.method}
+            url={formData.url}
+            onMethodChange={(v) => setFormData({ ...formData, method: v })}
+            onUrlChange={(v) => setFormData({ ...formData, url: v })}
+            error={errors.url}
           />
-        </div>
+        )}
       </div>
 
-      {/* HTTP Configuration */}
+      {/* HTTP collapsible sections */}
       {monitorType === 'http' && (
-        <div>
-          <SectionHeader title="HTTP Configuration" description="Configure the HTTP request" />
-          <div className="space-y-4">
-            <FormInput
-              label="URL"
-              type="url"
-              value={formData.url}
-              onChange={(v) => setFormData({ ...formData, url: v })}
-              placeholder="https://api.example.com/health"
-              error={errors.url}
-            />
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormSelect
-                label="Method"
-                value={formData.method}
-                onChange={(v) => setFormData({ ...formData, method: v })}
-                options={[
-                  { value: 'GET', label: 'GET' },
-                  { value: 'HEAD', label: 'HEAD' },
-                  { value: 'POST', label: 'POST' },
-                  { value: 'PUT', label: 'PUT' },
-                  { value: 'DELETE', label: 'DELETE' },
-                  { value: 'PATCH', label: 'PATCH' },
-                  { value: 'OPTIONS', label: 'OPTIONS' },
-                ]}
-              />
-              <FormInput
-                label="Expected Status Rules (optional)"
-                value={formData.status_rules}
-                onChange={(v) => setFormData({ ...formData, status_rules: v })}
-                placeholder="2xx, 304, 200-299"
-                error={errors.status_rules}
-                hint="Leave empty for default success: 2xx"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">Request Headers (optional)</label>
-              {errors.request_headers && <p className="mt-1 text-xs text-rose-400">{errors.request_headers}</p>}
-              <div className="space-y-2">
-                {formData.request_headers.map((h: HeaderKV, idx: number) => {
-                  const sensitive = isSensitiveHeaderName(h.key);
-                  const showToggle = sensitive && h.value.trim().length > 0;
-                  return (
-                    <div key={`${idx}-${h.key}`} className="grid grid-cols-12 gap-2">
-                      <input
-                        className="input col-span-4"
-                        placeholder="Header name"
-                        value={h.key}
-                        onChange={(e) => {
-                          const next = [...formData.request_headers];
-                          next[idx] = { ...next[idx], key: e.target.value };
-                          setFormData({ ...formData, request_headers: next });
-                        }}
-                      />
-                      <input
-                        className="input col-span-6"
-                        placeholder="Header value"
-                        type={sensitive && !h.reveal ? 'password' : 'text'}
-                        value={h.value}
-                        onChange={(e) => {
-                          const next = [...formData.request_headers];
-                          next[idx] = { ...next[idx], value: e.target.value };
-                          setFormData({ ...formData, request_headers: next });
-                        }}
-                      />
-                      <button
-                        type="button"
-                        disabled={!showToggle}
-                        onClick={() => {
-                          const next = [...formData.request_headers];
-                          next[idx] = { ...next[idx], reveal: !next[idx].reveal };
-                          setFormData({ ...formData, request_headers: next });
-                        }}
-                        className="btn btn-secondary btn-sm col-span-1 disabled:opacity-50"
-                        title={showToggle ? (h.reveal ? 'Hide value' : 'Show value') : 'Add a value to show/hide'}
-                      >
-                        {h.reveal ? 'Hide' : 'Show'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = [...formData.request_headers];
-                          if (next.length === 1) {
-                            next[0] = { key: '', value: '', reveal: false };
-                          } else {
-                            next.splice(idx, 1);
-                          }
-                          setFormData({ ...formData, request_headers: next });
-                        }}
-                        className="btn btn-secondary btn-sm col-span-1"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="mt-2">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setFormData({ ...formData, request_headers: [...formData.request_headers, { key: '', value: '', reveal: false }] })}
-                >
-                  + Add header
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">Tip: Authorization / API key headers are hidden by default.</p>
-            </div>
-
-            <FormTextarea
-              label="Request Body (optional)"
-              value={formData.body}
-              onChange={(v) => setFormData({ ...formData, body: v })}
-              placeholder='{"status":"ok"}'
-              hint="Sent as-is for POST/PUT/PATCH. Set Content-Type in headers if needed."
-              rows={5}
-            />
-
-            <div className="rounded-lg border border-white/[0.06] bg-slate-800/20 p-4 space-y-4">
-              <div className="text-xs font-medium text-slate-300">Response Checks (optional)</div>
-
-              {/* Body Assertions */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">Body assertions</label>
-                <div className="space-y-2">
-                  {(formData.body_assertions || []).map((a: HTTPBodyAssertion, idx: number) => (
-                    <div key={`body-${idx}`} className="grid grid-cols-12 gap-2">
-                      <select
-                        className="input col-span-3"
-                        value={a.op}
-                        onChange={(e) => {
-                          const next = [...formData.body_assertions];
-                          next[idx] = { ...next[idx], op: e.target.value as HTTPBodyAssertionOp };
-                          setFormData({ ...formData, body_assertions: next });
-                        }}
-                      >
-                        <option value="contains">contains</option>
-                        <option value="not_contains">not contains</option>
-                        <option value="regex">regex</option>
-                        <option value="not_regex">not regex</option>
-                      </select>
-                      <input
-                        className="input col-span-7"
-                        placeholder="Value / pattern"
-                        value={a.value}
-                        onChange={(e) => {
-                          const next = [...formData.body_assertions];
-                          next[idx] = { ...next[idx], value: e.target.value };
-                          setFormData({ ...formData, body_assertions: next });
-                        }}
-                      />
-                      <label className="col-span-1 flex items-center justify-center gap-1 text-xs text-slate-400">
-                        <input
-                          type="checkbox"
-                          checked={!!a.case_insensitive}
-                          onChange={(e) => {
-                            const next = [...formData.body_assertions];
-                            next[idx] = { ...next[idx], case_insensitive: e.target.checked };
-                            setFormData({ ...formData, body_assertions: next });
-                          }}
-                        />
-                        CI
-                      </label>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm col-span-1"
-                        onClick={() => {
-                          const next = [...formData.body_assertions];
-                          next.splice(idx, 1);
-                          setFormData({ ...formData, body_assertions: next });
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() =>
-                      setFormData({
-                        ...formData,
-                        body_assertions: [...(formData.body_assertions || []), { op: 'contains', value: '', case_insensitive: false }],
-                      })
-                    }
-                  >
-                    + Add body assertion
-                  </button>
-                </div>
-              </div>
-
-              {/* Response Header Assertions */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">Response header assertions</label>
-                <div className="space-y-2">
-                  {(formData.response_header_assertions || []).map((a: HTTPHeaderAssertion, idx: number) => {
-                    const needsValue = a.op !== 'exists';
-                    return (
-                      <div key={`hdr-${idx}`} className="grid grid-cols-12 gap-2">
-                        <input
-                          className="input col-span-4"
-                          placeholder="Header name (e.g. Content-Type)"
-                          value={a.name}
-                          onChange={(e) => {
-                            const next = [...formData.response_header_assertions];
-                            next[idx] = { ...next[idx], name: e.target.value };
-                            setFormData({ ...formData, response_header_assertions: next });
-                          }}
-                        />
-                        <select
-                          className="input col-span-3"
-                          value={a.op}
-                          onChange={(e) => {
-                            const next = [...formData.response_header_assertions];
-                            next[idx] = { ...next[idx], op: e.target.value as HTTPHeaderAssertionOp };
-                            setFormData({ ...formData, response_header_assertions: next });
-                          }}
-                        >
-                          <option value="exists">exists</option>
-                          <option value="equals">equals</option>
-                          <option value="contains">contains</option>
-                          <option value="regex">regex</option>
-                          <option value="not_equals">not equals</option>
-                          <option value="not_contains">not contains</option>
-                          <option value="not_regex">not regex</option>
-                        </select>
-                        <input
-                          className="input col-span-3"
-                          placeholder={needsValue ? 'Value / pattern' : '—'}
-                          disabled={!needsValue}
-                          value={a.value || ''}
-                          onChange={(e) => {
-                            const next = [...formData.response_header_assertions];
-                            next[idx] = { ...next[idx], value: e.target.value };
-                            setFormData({ ...formData, response_header_assertions: next });
-                          }}
-                        />
-                        <label className="col-span-1 flex items-center justify-center gap-1 text-xs text-slate-400">
-                          <input
-                            type="checkbox"
-                            checked={!!a.case_insensitive}
-                            onChange={(e) => {
-                              const next = [...formData.response_header_assertions];
-                              next[idx] = { ...next[idx], case_insensitive: e.target.checked };
-                              setFormData({ ...formData, response_header_assertions: next });
-                            }}
-                          />
-                          CI
-                        </label>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm col-span-1"
-                          onClick={() => {
-                            const next = [...formData.response_header_assertions];
-                            next.splice(idx, 1);
-                            setFormData({ ...formData, response_header_assertions: next });
-                          }}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() =>
-                      setFormData({
-                        ...formData,
-                        response_header_assertions: [
-                          ...(formData.response_header_assertions || []),
-                          { name: '', op: 'exists', value: '', case_insensitive: false },
-                        ],
-                      })
-                    }
-                  >
-                    + Add header assertion
-                  </button>
-                </div>
-              </div>
-
-              {/* JSON Assertions */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">JSON assertions (gjson path)</label>
-                <div className="space-y-2">
-                  {(formData.json_assertions || []).map((a: HTTPJSONAssertion, idx: number) => {
-                    const needsValue = a.op !== 'exists';
-                    return (
-                      <div key={`json-${idx}`} className="grid grid-cols-12 gap-2">
-                        <input
-                          className="input col-span-4"
-                          placeholder="Path (e.g. data.status)"
-                          value={a.path}
-                          onChange={(e) => {
-                            const next = [...formData.json_assertions];
-                            next[idx] = { ...next[idx], path: e.target.value };
-                            setFormData({ ...formData, json_assertions: next });
-                          }}
-                        />
-                        <select
-                          className="input col-span-3"
-                          value={a.op}
-                          onChange={(e) => {
-                            const next = [...formData.json_assertions];
-                            next[idx] = { ...next[idx], op: e.target.value as HTTPJSONAssertionOp };
-                            setFormData({ ...formData, json_assertions: next });
-                          }}
-                        >
-                          <option value="exists">exists</option>
-                          <option value="equals">equals</option>
-                          <option value="not_equals">not equals</option>
-                          <option value="contains">contains</option>
-                          <option value="not_contains">not contains</option>
-                          <option value="regex">regex</option>
-                          <option value="number_gt">number &gt;</option>
-                          <option value="number_gte">number ≥</option>
-                          <option value="number_lt">number &lt;</option>
-                          <option value="number_lte">number ≤</option>
-                          <option value="bool_is">bool is</option>
-                        </select>
-                        <input
-                          className="input col-span-3"
-                          placeholder={needsValue ? 'Value / pattern' : '—'}
-                          disabled={!needsValue}
-                          value={a.value || ''}
-                          onChange={(e) => {
-                            const next = [...formData.json_assertions];
-                            next[idx] = { ...next[idx], value: e.target.value };
-                            setFormData({ ...formData, json_assertions: next });
-                          }}
-                        />
-                        <label className="col-span-1 flex items-center justify-center gap-1 text-xs text-slate-400">
-                          <input
-                            type="checkbox"
-                            checked={!!a.case_insensitive}
-                            onChange={(e) => {
-                              const next = [...formData.json_assertions];
-                              next[idx] = { ...next[idx], case_insensitive: e.target.checked };
-                              setFormData({ ...formData, json_assertions: next });
-                            }}
-                          />
-                          CI
-                        </label>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm col-span-1"
-                          onClick={() => {
-                            const next = [...formData.json_assertions];
-                            next.splice(idx, 1);
-                            setFormData({ ...formData, json_assertions: next });
-                          }}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() =>
-                      setFormData({
-                        ...formData,
-                        json_assertions: [...(formData.json_assertions || []), { path: '', op: 'exists', value: '', case_insensitive: false }],
-                      })
-                    }
-                  >
-                    + Add JSON assertion
-                  </button>
-                </div>
-                <p className="mt-2 text-xs text-slate-500">Paths use the gjson syntax (e.g. <code>data.items.#.id</code>).</p>
-              </div>
-
-              <FormInput
-                label="Max Latency (ms)"
-                type="number"
-                value={formData.max_latency_ms}
-                onChange={(v) => setFormData({ ...formData, max_latency_ms: v })}
-                placeholder="500"
-                min={1}
-                error={errors.max_latency_ms}
-                hint="Fail the check if total latency exceeds this threshold"
-              />
-            </div>
-
-            <div className="rounded-lg border border-white/[0.06] bg-slate-800/20 p-4 space-y-4">
-              <div className="text-xs font-medium text-slate-300">Redirects & TLS (optional)</div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <FormToggle
-                  label="Follow redirects"
-                  description="Stop following if you want to validate 3xx responses"
-                  checked={formData.follow_redirects}
-                  onChange={(v) => setFormData({ ...formData, follow_redirects: v })}
-                />
-                <FormInput
-                  label="Max Redirects"
-                  type="number"
-                  value={formData.max_redirects}
-                  onChange={(v) => setFormData({ ...formData, max_redirects: parseInt(v) || 0 })}
-                  min={0}
-                  error={errors.max_redirects}
-                />
-              </div>
-
-              <FormToggle
-                label="Skip TLS verification"
-                description="Useful for self-signed certs (not recommended for public endpoints)"
-                checked={formData.tls_skip_verify}
-                onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
-              />
-
-              <div className="grid grid-cols-2 gap-4">
-                <FormInput
-                  label="TLS min days valid"
-                  type="number"
-                  value={formData.tls_min_days_valid}
-                  onChange={(v) => setFormData({ ...formData, tls_min_days_valid: v })}
-                  placeholder="14"
-                  min={0}
-                  error={errors.tls_min_days_valid}
-                  hint="Fail if cert expires sooner"
-                />
-                <FormInput
-                  label="TLS server name (SNI)"
-                  value={formData.tls_server_name}
-                  onChange={(v) => setFormData({ ...formData, tls_server_name: v })}
-                  placeholder="api.example.com"
-                  hint="Override SNI / hostname verification"
-                />
-              </div>
-
-              <FormTextarea
-                label="Custom CA bundle (PEM)"
-                value={formData.tls_ca_pem}
-                onChange={(v) => setFormData({ ...formData, tls_ca_pem: v })}
-                placeholder="-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
-                hint="Optional: add trusted root CAs for this monitor"
-                rows={6}
-              />
-
-              <FormToggle
-                label="Collect timing breakdown"
-                description="Store DNS/connect/TLS/TTFB timings in check results"
-                checked={formData.collect_timing}
-                onChange={(v) => setFormData({ ...formData, collect_timing: v })}
-              />
-            </div>
-          </div>
-        </div>
+        <HttpMonitorForm
+          data={httpData}
+          onChange={(patch) => setFormData({ ...formData, ...patch })}
+          errors={errors}
+          openSections={openSections}
+          onToggleSection={(id, open) => setOpenSections((prev) => ({ ...prev, [id]: open }))}
+        />
       )}
 
       {/* Ping Configuration */}
@@ -3861,6 +3423,38 @@ export default function MonitorForm({
           />
         </div>
       </div>
+
+        </div>{/* end form column */}
+
+        {/* Preview panel — only shown for HTTP type */}
+        {monitorType === 'http' && (
+          <div className="hidden xl:block xl:col-span-2">
+            <div className="sticky top-6 rounded-2xl border border-white/[0.07] bg-slate-900/50 p-6">
+              <HttpRequestFlowPreview
+                monitorName={formData.name}
+                method={formData.method}
+                url={formData.url}
+                headers={formData.request_headers}
+                body={formData.body}
+                statusRules={formData.status_rules}
+                bodyAssertionCount={formData.body_assertions?.length || 0}
+                headerAssertionCount={formData.response_header_assertions?.length || 0}
+                jsonAssertionCount={formData.json_assertions?.length || 0}
+                maxLatencyMs={formData.max_latency_ms}
+                tlsSkipVerify={formData.tls_skip_verify}
+                tlsMinDaysValid={formData.tls_min_days_valid}
+                tlsServerName={formData.tls_server_name}
+                followRedirects={formData.follow_redirects}
+                maxRedirects={formData.max_redirects}
+                collectTiming={formData.collect_timing}
+                intervalSeconds={formData.interval_seconds}
+                timeoutSeconds={formData.timeout_seconds}
+                onScrollToSection={handleScrollToSection}
+              />
+            </div>
+          </div>
+        )}
+      </div>{/* end two-column grid */}
 
       {/* Alerting */}
       <div>
