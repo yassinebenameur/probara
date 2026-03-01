@@ -3,6 +3,8 @@
 import { CheckResult, Monitor, PushMetrics } from '@/lib/types';
 import { calculateUptime, calculateLatencyStats, getOperationalResults } from '@/lib/monitor-utils';
 import AgentMetricsView from './AgentMetricsView';
+import HttpMonitorOverview from './HttpMonitorOverview';
+import type { TimeRange } from './AgentMetricsView';
 
 // Helper function to format metric names
 function formatMetricName(name: string): string {
@@ -202,8 +204,10 @@ interface MonitorDetailOverviewProps {
   monitor: Monitor;
   results: CheckResult[];
   loading?: boolean;
-  agentTimeRange?: '1h' | '6h' | '24h' | '7d';
-  onAgentTimeRangeChange?: (range: '1h' | '6h' | '24h' | '7d') => void;
+  agentTimeRange?: TimeRange;
+  onAgentTimeRangeChange?: (range: TimeRange) => void;
+  timeRange?: TimeRange;
+  onTimeRangeChange?: (range: TimeRange) => void;
 }
 
 // Stat card component
@@ -319,6 +323,8 @@ export default function MonitorDetailOverview({
   loading = false,
   agentTimeRange = '24h',
   onAgentTimeRangeChange,
+  timeRange,
+  onTimeRangeChange,
 }: MonitorDetailOverviewProps) {
   if (loading) {
     return (
@@ -336,6 +342,19 @@ export default function MonitorDetailOverview({
         loading={loading}
         timeRange={agentTimeRange}
         onTimeRangeChange={onAgentTimeRangeChange}
+      />
+    );
+  }
+
+  // For HTTP monitors, show the rich HTTP-specific overview
+  if (monitor.type === 'http') {
+    return (
+      <HttpMonitorOverview
+        monitor={monitor}
+        results={results}
+        loading={loading}
+        timeRange={timeRange}
+        onTimeRangeChange={onTimeRangeChange}
       />
     );
   }

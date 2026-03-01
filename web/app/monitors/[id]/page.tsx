@@ -429,6 +429,11 @@ export default function EditMonitorPage() {
                 setAgentTimeRange(range);
                 void loadResults({ range });
               }}
+              timeRange={agentTimeRange}
+              onTimeRangeChange={(range) => {
+                setAgentTimeRange(range);
+                void loadResults({ range });
+              }}
             />
           )}
           {activeTab === 'history' && (
