@@ -1,3 +1,10 @@
+# [1.0.0-alpha.16](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.15...v1.0.0-alpha.16) (2026-03-02)
+
+
+### Bug Fixes
+
+* api url ([6d199da](https://github.com/yassinebenameur/probara/commit/6d199da14943a6e9c4e7b15d0a74ca94053ee111))
+
 # [1.0.0-alpha.15](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.14...v1.0.0-alpha.15) (2026-03-01)
 
 
