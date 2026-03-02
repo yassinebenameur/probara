@@ -33,6 +33,7 @@ spec:
       http:
         paths:
           {{- if $.Values.frontend.enabled }}
+          {{- if $.Values.api.enabled }}
           - path: /api
             pathType: Prefix
             backend:
@@ -40,6 +41,15 @@ spec:
                 name: {{ $fullName }}-api
                 port:
                   number: {{ $apiPort }}
+          {{- else }}
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-frontend
+                port:
+                  number: {{ $frontendPort }}
+          {{- end }}
           - path: /
             pathType: Prefix
             backend:
@@ -47,7 +57,7 @@ spec:
                 name: {{ $fullName }}-frontend
                 port:
                   number: {{ $frontendPort }}
-          {{- else }}
+          {{- else if $.Values.api.enabled }}
           - path: /
             pathType: Prefix
             backend:
@@ -71,4 +81,3 @@ spec:
           {{- end }}
 {{- end }}
 {{- end }}
-

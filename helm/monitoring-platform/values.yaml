@@ -200,7 +200,9 @@ frontend:
   httpPort: 3000
   apiUrl: "/api"
   # Runtime API upstream for Next.js server-side API proxy route (/api/*).
-  # Leave empty to use the in-cluster API service automatically.
+  # Leave empty to use the in-cluster API service automatically when api.enabled=true.
+  # If api.enabled=false, set this to an external/internal Kubernetes service URL
+  # (for example: "http://my-api.my-namespace.svc.cluster.local:8080").
   apiProxyTarget: ""
   image:
     repository: ghcr.io/yassinebenameur/probara-frontend
