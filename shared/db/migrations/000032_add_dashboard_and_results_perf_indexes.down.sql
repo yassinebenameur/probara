@@ -1,0 +1,5 @@
+DROP INDEX IF EXISTS idx_check_results_tenant_monitor_success_created_at;
+DROP INDEX IF EXISTS idx_check_results_tenant_failure_created_monitor;
+DROP INDEX IF EXISTS idx_check_results_monitor_non_platform_created_at;
+DROP INDEX IF EXISTS idx_check_results_tenant_non_platform_created_monitor;
+DROP INDEX IF EXISTS idx_alerts_tenant_triggered_at;
