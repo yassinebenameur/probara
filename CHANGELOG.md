@@ -1,3 +1,10 @@
+# [1.0.0-alpha.18](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.17...v1.0.0-alpha.18) (2026-03-03)
+
+
+### Bug Fixes
+
+* improve dashboard/detail defaults and agent install public backend url ([a4f1dab](https://github.com/yassinebenameur/probara/commit/a4f1dabeca64a54ddb53d338f03bf5632936880d))
+
 # [1.0.0-alpha.17](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.16...v1.0.0-alpha.17) (2026-03-03)
 
 
