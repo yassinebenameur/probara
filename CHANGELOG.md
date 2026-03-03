@@ -1,3 +1,10 @@
+# [1.0.0-alpha.17](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.16...v1.0.0-alpha.17) (2026-03-03)
+
+
+### Bug Fixes
+
+* **performance:** add db indexes ([503e207](https://github.com/yassinebenameur/probara/commit/503e207dcd8737622fac3f5994d9281459a9fd97))
+
 # [1.0.0-alpha.16](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.15...v1.0.0-alpha.16) (2026-03-02)
 
 
