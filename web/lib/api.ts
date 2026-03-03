@@ -521,9 +521,11 @@ export async function getAgentInstallCommand(
   monitorId: string,
   backendUrl?: string
 ): Promise<AgentInstallCommand> {
+  const resolvedBackendUrl =
+    backendUrl || (typeof window !== 'undefined' ? window.location.origin : undefined);
   const queryParams = new URLSearchParams();
-  if (backendUrl) queryParams.append('backend_url', backendUrl);
-  
+  if (resolvedBackendUrl) queryParams.append('backend_url', resolvedBackendUrl);
+
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${monitorId}/agent/install${queryString ? `?${queryString}` : ''}`;
   return apiRequest<AgentInstallCommand>('GET', path);
@@ -534,9 +536,11 @@ export async function getPushInfo(
   monitorId: string,
   backendUrl?: string
 ): Promise<PushInfo> {
+  const resolvedBackendUrl =
+    backendUrl || (typeof window !== 'undefined' ? window.location.origin : undefined);
   const queryParams = new URLSearchParams();
-  if (backendUrl) queryParams.append('backend_url', backendUrl);
-  
+  if (resolvedBackendUrl) queryParams.append('backend_url', resolvedBackendUrl);
+
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${monitorId}/push/info${queryString ? `?${queryString}` : ''}`;
   return apiRequest<PushInfo>('GET', path);

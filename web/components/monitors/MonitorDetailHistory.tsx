@@ -36,7 +36,7 @@ export default function MonitorDetailHistory({
       {/* Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-          <p className="text-xs text-slate-500">Uptime (30 days)</p>
+          <p className="text-xs text-slate-500">Uptime (7 days)</p>
           <p className={`mt-1 text-2xl font-semibold ${uptime >= 99 ? 'text-emerald-400' : 'text-amber-400'}`}>
             {uptime.toFixed(3)}%
           </p>

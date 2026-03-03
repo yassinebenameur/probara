@@ -424,7 +424,7 @@ func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, ran
 
 func normalizeOverviewParams(params *models.DashboardOverviewQuery) models.DashboardOverviewQuery {
 	normalized := models.DashboardOverviewQuery{
-		Range:         models.DashboardRange7d,
+		Range:         models.DashboardRange24h,
 		FailuresLimit: defaultFailuresLimit,
 		AlertsLimit:   defaultAlertsLimit,
 	}

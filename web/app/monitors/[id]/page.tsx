@@ -23,7 +23,7 @@ const AGENT_RANGE_MS: Record<AgentTimeRange, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
 };
 
-const NON_AGENT_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const NON_AGENT_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_CLIENT_RESULTS = 500;
 const MAX_CLIENT_RESULTS = 100000;
 const LIMIT_PADDING = 120;

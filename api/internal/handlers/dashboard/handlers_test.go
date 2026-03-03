@@ -47,8 +47,8 @@ func TestHandlers_GetOverview_DefaultParams(t *testing.T) {
 	if mockSvc.lastParams == nil {
 		t.Fatalf("expected params to be passed to service")
 	}
-	if mockSvc.lastParams.Range != models.DashboardRange7d {
-		t.Fatalf("range = %s, want %s", mockSvc.lastParams.Range, models.DashboardRange7d)
+	if mockSvc.lastParams.Range != models.DashboardRange24h {
+		t.Fatalf("range = %s, want %s", mockSvc.lastParams.Range, models.DashboardRange24h)
 	}
 	if mockSvc.lastParams.FailuresLimit != 10 {
 		t.Fatalf("failures_limit = %d, want 10", mockSvc.lastParams.FailuresLimit)
@@ -76,8 +76,8 @@ func TestHandlers_GetOverview_InvalidRangeAndClampedLimits(t *testing.T) {
 	if mockSvc.lastParams == nil {
 		t.Fatalf("expected params to be passed to service")
 	}
-	if mockSvc.lastParams.Range != models.DashboardRange7d {
-		t.Fatalf("range = %s, want %s", mockSvc.lastParams.Range, models.DashboardRange7d)
+	if mockSvc.lastParams.Range != models.DashboardRange24h {
+		t.Fatalf("range = %s, want %s", mockSvc.lastParams.Range, models.DashboardRange24h)
 	}
 	if mockSvc.lastParams.FailuresLimit != 50 {
 		t.Fatalf("failures_limit = %d, want 50", mockSvc.lastParams.FailuresLimit)

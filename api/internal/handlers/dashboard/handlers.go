@@ -42,11 +42,11 @@ func (h *Handlers) GetOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := &models.DashboardOverviewQuery{
-		Range:         models.DashboardRange7d,
-		FailuresLimit: 10,
-		AlertsLimit:   10,
-	}
+		params := &models.DashboardOverviewQuery{
+			Range:         models.DashboardRange24h,
+			FailuresLimit: 10,
+			AlertsLimit:   10,
+		}
 
 	switch models.DashboardRange(r.URL.Query().Get("range")) {
 	case models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange30d:

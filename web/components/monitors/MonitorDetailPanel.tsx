@@ -285,7 +285,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
             </div>
             <div className="flex flex-wrap gap-2 text-xs">
               <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
-                <div className="mb-0.5 text-[0.72rem] text-muted">Uptime 30 days</div>
+                <div className="mb-0.5 text-[0.72rem] text-muted">Uptime 7 days</div>
                 <div className="text-[0.9rem] font-medium">{operationalCount > 0 ? `${uptime.toFixed(2)}%` : '—'}</div>
                 <div className="text-[0.72rem] text-muted">
                   {operationalCount > 0 ? `${operationalCount} checks` : 'No data'}

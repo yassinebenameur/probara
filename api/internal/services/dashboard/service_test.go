@@ -10,8 +10,8 @@ import (
 func TestNormalizeOverviewParams_Defaults(t *testing.T) {
 	got := normalizeOverviewParams(nil)
 
-	if got.Range != models.DashboardRange7d {
-		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange7d)
+	if got.Range != models.DashboardRange24h {
+		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange24h)
 	}
 	if got.FailuresLimit != defaultFailuresLimit {
 		t.Fatalf("FailuresLimit = %d, want %d", got.FailuresLimit, defaultFailuresLimit)
@@ -28,8 +28,8 @@ func TestNormalizeOverviewParams_ClampsAndFallbacks(t *testing.T) {
 		AlertsLimit:   -5,
 	})
 
-	if got.Range != models.DashboardRange7d {
-		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange7d)
+	if got.Range != models.DashboardRange24h {
+		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange24h)
 	}
 	if got.FailuresLimit != maxListLimit {
 		t.Fatalf("FailuresLimit = %d, want %d", got.FailuresLimit, maxListLimit)

@@ -273,7 +273,7 @@ export default function DashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
+  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('24h');
 
   const loadData = useCallback(async () => {
     try {
