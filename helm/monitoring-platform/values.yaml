@@ -122,6 +122,10 @@ scheduler:
   checkJobStream: "check-jobs"
   checkJobSubject: "check.job"
   intervalSeconds: "5"
+  retentionCleanupEnabled: "true"
+  retentionCleanupHourUTC: "2"
+  retentionCleanupBatchSize: "5000"
+  retentionCleanupMaxRowsPerRun: "200000"
   resources:
     requests:
       cpu: "50m"

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { getDashboardOverview } from '@/lib/api';
+import { getDashboardOverview, getTenantSettings } from '@/lib/api';
 import { Alert, DashboardFailureEvent, DashboardMonitorHealth, DashboardOverviewResponse } from '@/lib/types';
 import Link from 'next/link';
 import {
@@ -271,6 +271,7 @@ function EmptyChart({ message }: { message: string }) {
 
 export default function DashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardOverviewResponse | null>(null);
+  const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('24h');
@@ -279,12 +280,18 @@ export default function DashboardPage() {
     try {
       setLoading(true);
       setError(null);
-      const response = await getDashboardOverview({
-        range: timeRange,
-        failures_limit: DASHBOARD_LIST_LIMIT[timeRange],
-        alerts_limit: DASHBOARD_LIST_LIMIT[timeRange],
-      });
+      const [response, settings] = await Promise.all([
+        getDashboardOverview({
+          range: timeRange,
+          failures_limit: DASHBOARD_LIST_LIMIT[timeRange],
+          alerts_limit: DASHBOARD_LIST_LIMIT[timeRange],
+        }),
+        getTenantSettings().catch(() => null),
+      ]);
       setDashboard(response);
+      if (settings) {
+        setTenantRetentionDays(settings.data_retention_days);
+      }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
       setError('Failed to load dashboard data');
@@ -335,6 +342,13 @@ export default function DashboardPage() {
   }, [trendData, hasTrendData]);
   const uptimeDomain: [number, number] = minUptime < 95 ? [0, 100] : [95, 100];
 
+  const selectedRangeDays = useMemo(() => {
+    if (timeRange === '24h') return 1;
+    if (timeRange === '7d') return 7;
+    return 30;
+  }, [timeRange]);
+  const showRetentionWarning = tenantRetentionDays !== null && tenantRetentionDays > 0 && selectedRangeDays > tenantRetentionDays;
+
   if (loading) {
     return <LoadingSkeleton />;
   }
@@ -371,6 +385,15 @@ export default function DashboardPage() {
           ))}
         </div>
       </div>
+
+      {showRetentionWarning && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-sm text-amber-300">
+            Data retention is set to {tenantRetentionDays} day{tenantRetentionDays === 1 ? '' : 's'}.
+            Older history is deleted, so this {timeRange} view may be partial.
+          </p>
+        </div>
+      )}
 
       {/* Stats Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

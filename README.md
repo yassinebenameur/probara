@@ -217,6 +217,14 @@ When running services directly (outside Helm), these are the main environment va
 | `SCHEDULER_BATCH_SIZE` | no | `500` |
 | `CHECK_JOB_STREAM` | no | `CHECK_JOBS` |
 | `CHECK_JOB_SUBJECT` | no | `check.jobs` |
+| `RETENTION_CLEANUP_ENABLED` | no | `true` |
+| `RETENTION_CLEANUP_HOUR_UTC` | no | `2` |
+| `RETENTION_CLEANUP_BATCH_SIZE` | no | `5000` |
+| `RETENTION_CLEANUP_MAX_ROWS_PER_RUN` | no | `200000` |
+
+Retention setting semantics:
+- `data_retention_days = 0` means unlimited history retention.
+- `data_retention_days` between `30` and `3650` enables automatic deletion of older check results.
 
 ### Worker
 

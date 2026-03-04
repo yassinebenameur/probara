@@ -244,6 +244,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Tenants (admin only)
 			tenantSvc := tenantservice.NewService(dbClient)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
+			r.Route("/tenant-settings", func(r chi.Router) {
+				r.Get("/", tenantHandlers.GetTenantSettings)
+				r.Patch("/", tenantHandlers.UpdateTenantSettings)
+			})
 			r.Route("/tenants", func(r chi.Router) {
 				r.Use(apimiddleware.RequireAdmin)
 				r.Get("/", tenantHandlers.ListTenants)

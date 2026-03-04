@@ -59,3 +59,36 @@ func TestLoadAlerterConfig_Defaults(t *testing.T) {
 		t.Fatalf("expected SMTPFrom to default to SMTP_USERNAME, got %s", cfg.SMTPFrom)
 	}
 }
+
+func TestLoadSchedulerConfig_RetentionDefaults(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8080")
+	t.Setenv("METRICS_PORT", "9090")
+
+	cfg, err := LoadSchedulerConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.RetentionCleanupEnabled {
+		t.Fatalf("expected retention cleanup to be enabled by default")
+	}
+	if cfg.RetentionCleanupHourUTC != 2 {
+		t.Fatalf("expected default retention hour 2, got %d", cfg.RetentionCleanupHourUTC)
+	}
+	if cfg.RetentionCleanupBatchSize != 5000 {
+		t.Fatalf("expected default retention batch size 5000, got %d", cfg.RetentionCleanupBatchSize)
+	}
+	if cfg.RetentionCleanupMaxRowsPerRun != 200000 {
+		t.Fatalf("expected default retention max rows per run 200000, got %d", cfg.RetentionCleanupMaxRowsPerRun)
+	}
+}
+
+func TestLoadSchedulerConfig_InvalidRetentionHour(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8080")
+	t.Setenv("METRICS_PORT", "9090")
+	t.Setenv("RETENTION_CLEANUP_HOUR_UTC", "24")
+
+	if _, err := LoadSchedulerConfig(); err == nil {
+		t.Fatalf("expected error for invalid retention hour")
+	}
+}

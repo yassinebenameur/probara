@@ -37,10 +37,14 @@ type APIConfig struct {
 // SchedulerConfig contains configuration for the scheduler service
 type SchedulerConfig struct {
 	BaseConfig
-	ScheduleIntervalSeconds int
-	SchedulerBatchSize      int
-	CheckJobSubject         string
-	CheckJobStream          string
+	ScheduleIntervalSeconds       int
+	SchedulerBatchSize            int
+	CheckJobSubject               string
+	CheckJobStream                string
+	RetentionCleanupEnabled       bool
+	RetentionCleanupHourUTC       int
+	RetentionCleanupBatchSize     int
+	RetentionCleanupMaxRowsPerRun int
 }
 
 // WorkerConfig contains configuration for the worker service
@@ -283,6 +287,63 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 		cfg.CheckJobStream = "CHECK_JOBS"
 	} else {
 		cfg.CheckJobStream = checkJobStream
+	}
+
+	// RETENTION_CLEANUP_ENABLED
+	retentionCleanupEnabledStr := strings.TrimSpace(os.Getenv("RETENTION_CLEANUP_ENABLED"))
+	if retentionCleanupEnabledStr == "" {
+		cfg.RetentionCleanupEnabled = true
+	} else {
+		enabled, err := strconv.ParseBool(retentionCleanupEnabledStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_ENABLED: %w", err)
+		}
+		cfg.RetentionCleanupEnabled = enabled
+	}
+
+	// RETENTION_CLEANUP_HOUR_UTC
+	retentionCleanupHourUTCStr := strings.TrimSpace(os.Getenv("RETENTION_CLEANUP_HOUR_UTC"))
+	if retentionCleanupHourUTCStr == "" {
+		cfg.RetentionCleanupHourUTC = 2
+	} else {
+		hour, err := strconv.Atoi(retentionCleanupHourUTCStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_HOUR_UTC: %w", err)
+		}
+		if hour < 0 || hour > 23 {
+			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_HOUR_UTC: must be between 0 and 23")
+		}
+		cfg.RetentionCleanupHourUTC = hour
+	}
+
+	// RETENTION_CLEANUP_BATCH_SIZE
+	retentionCleanupBatchSizeStr := strings.TrimSpace(os.Getenv("RETENTION_CLEANUP_BATCH_SIZE"))
+	if retentionCleanupBatchSizeStr == "" {
+		cfg.RetentionCleanupBatchSize = 5000
+	} else {
+		size, err := strconv.Atoi(retentionCleanupBatchSizeStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_BATCH_SIZE: %w", err)
+		}
+		if size <= 0 {
+			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_BATCH_SIZE: must be greater than 0")
+		}
+		cfg.RetentionCleanupBatchSize = size
+	}
+
+	// RETENTION_CLEANUP_MAX_ROWS_PER_RUN
+	retentionCleanupMaxRowsStr := strings.TrimSpace(os.Getenv("RETENTION_CLEANUP_MAX_ROWS_PER_RUN"))
+	if retentionCleanupMaxRowsStr == "" {
+		cfg.RetentionCleanupMaxRowsPerRun = 200000
+	} else {
+		maxRows, err := strconv.Atoi(retentionCleanupMaxRowsStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_MAX_ROWS_PER_RUN: %w", err)
+		}
+		if maxRows <= 0 {
+			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_MAX_ROWS_PER_RUN: must be greater than 0")
+		}
+		cfg.RetentionCleanupMaxRowsPerRun = maxRows
 	}
 
 	return cfg, nil

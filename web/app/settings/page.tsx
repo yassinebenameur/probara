@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Panel from '@/components/ui/Panel';
 import Toast from '@/components/ui/Toast';
 import { ApiKey } from '@/lib/types';
-import { createApiKey, getApiKeys, revokeApiKey } from '@/lib/api';
+import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
 
@@ -24,6 +24,11 @@ export default function SettingsPage() {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [retentionLoading, setRetentionLoading] = useState(true);
+  const [retentionError, setRetentionError] = useState('');
+  const [savingRetention, setSavingRetention] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(0);
+  const [retentionInput, setRetentionInput] = useState('');
   const [creating, setCreating] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [createdKey, setCreatedKey] = useState<ApiKey | null>(null);
@@ -49,9 +54,52 @@ export default function SettingsPage() {
     }
   };
 
+  const loadRetentionSettings = async () => {
+    try {
+      setRetentionLoading(true);
+      setRetentionError('');
+      const settings = await getTenantSettings();
+      const value = settings.data_retention_days || 0;
+      setRetentionDays(value);
+      setRetentionInput(value === 0 ? '' : String(value));
+    } catch (err: any) {
+      setRetentionError(err.message || 'Failed to load data retention settings');
+    } finally {
+      setRetentionLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadKeys();
+    loadRetentionSettings();
   }, []);
+
+  const handleSaveRetention = async () => {
+    const trimmed = retentionInput.trim();
+    const nextValue = trimmed === '' ? 0 : Number(trimmed);
+
+    if (!Number.isInteger(nextValue)) {
+      setToast({ message: 'Retention must be an integer number of days', type: 'error' });
+      return;
+    }
+    if (nextValue !== 0 && (nextValue < 30 || nextValue > 3650)) {
+      setToast({ message: 'Retention must be 0 (Unlimited) or between 30 and 3650 days', type: 'error' });
+      return;
+    }
+
+    try {
+      setSavingRetention(true);
+      const updated = await updateTenantSettings({ data_retention_days: nextValue });
+      const saved = updated.data_retention_days || 0;
+      setRetentionDays(saved);
+      setRetentionInput(saved === 0 ? '' : String(saved));
+      setToast({ message: saved === 0 ? 'Retention set to Unlimited' : `Retention set to ${saved} days`, type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to update retention', type: 'error' });
+    } finally {
+      setSavingRetention(false);
+    }
+  };
 
   const copyToClipboard = (value: string, field: string) => {
     if (!value) return;
@@ -113,8 +161,106 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-white">Settings</h1>
-        <p className="text-sm text-muted">Manage API access for agents and integrations.</p>
+        <p className="text-sm text-muted">Manage retention, API access, and integrations.</p>
       </div>
+
+      <Panel
+        title="Data Retention"
+        subtitle="Control how long check result history is kept for this tenant."
+        actions={(
+          <button
+            onClick={loadRetentionSettings}
+            className="btn btn-secondary btn-sm"
+          >
+            Refresh
+          </button>
+        )}
+      >
+        {retentionLoading ? (
+          <div className="text-sm text-muted">Loading retention settings...</div>
+        ) : retentionError ? (
+          <div className="space-y-3">
+            <p className="text-sm text-rose-400">{retentionError}</p>
+            <button
+              onClick={loadRetentionSettings}
+              className="btn btn-danger btn-sm"
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
+              <p className="text-sm font-medium text-white">
+                Current retention: {retentionDays === 0 ? 'Unlimited' : `${retentionDays} days`}
+              </p>
+              <p className="text-xs text-muted mt-1">
+                0 means unlimited history. Any value from 30 to 3650 deletes older check data during daily cleanup.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <span className="block text-xs font-medium text-slate-400">Presets</span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRetentionInput('')}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Unlimited
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRetentionInput('30')}
+                  className="btn btn-secondary btn-sm"
+                >
+                  30 days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRetentionInput('90')}
+                  className="btn btn-secondary btn-sm"
+                >
+                  90 days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRetentionInput('365')}
+                  className="btn btn-secondary btn-sm"
+                >
+                  365 days
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">Retention Days</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={retentionInput}
+                  onChange={(event) => setRetentionInput(event.target.value)}
+                  placeholder="Leave empty for Unlimited"
+                  className="input"
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Leave empty to store 0 (Unlimited), or enter a value between 30 and 3650.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveRetention}
+                disabled={savingRetention}
+                className="btn btn-primary btn-sm disabled:opacity-50"
+              >
+                {savingRetention ? 'Saving...' : 'Save Retention'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Panel>
 
       <Panel
         title="API Keys"

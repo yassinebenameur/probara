@@ -311,3 +311,18 @@ func ValidateAlertChannelUpdate(req *models.UpdateAlertChannelRequest) error {
 
 	return nil
 }
+
+// ValidateTenantDataRetentionDays validates tenant data retention settings.
+func ValidateTenantDataRetentionDays(days int) error {
+	if days == models.DataRetentionUnlimited {
+		return nil
+	}
+	if days < models.MinDataRetentionDays || days > models.MaxDataRetentionDays {
+		return fmt.Errorf(
+			"data_retention_days must be 0 or between %d and %d",
+			models.MinDataRetentionDays,
+			models.MaxDataRetentionDays,
+		)
+	}
+	return nil
+}

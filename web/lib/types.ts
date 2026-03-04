@@ -21,6 +21,14 @@ export interface TenantListResponse {
   items: Tenant[];
 }
 
+export interface TenantSettings {
+  data_retention_days: number;
+}
+
+export interface UpdateTenantSettingsRequest {
+  data_retention_days?: number;
+}
+
 // Admin user types
 export interface AdminUser {
   id: string;

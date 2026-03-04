@@ -82,6 +82,14 @@ spec:
           value: "{{ .Values.scheduler.checkJobSubject }}"
         - name: SCHEDULE_INTERVAL_SECONDS
           value: "{{ .Values.scheduler.intervalSeconds }}"
+        - name: RETENTION_CLEANUP_ENABLED
+          value: "{{ .Values.scheduler.retentionCleanupEnabled }}"
+        - name: RETENTION_CLEANUP_HOUR_UTC
+          value: "{{ .Values.scheduler.retentionCleanupHourUTC }}"
+        - name: RETENTION_CLEANUP_BATCH_SIZE
+          value: "{{ .Values.scheduler.retentionCleanupBatchSize }}"
+        - name: RETENTION_CLEANUP_MAX_ROWS_PER_RUN
+          value: "{{ .Values.scheduler.retentionCleanupMaxRowsPerRun }}"
         livenessProbe:
           httpGet:
             path: /healthz

@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult } from '@/lib/types';
-import { getMonitor, updateMonitor, getMonitorResults, deleteMonitor, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
+import { getMonitor, updateMonitor, getMonitorResults, deleteMonitor, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
@@ -89,6 +89,7 @@ export default function EditMonitorPage() {
   const [error, setError] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [results, setResults] = useState<MonitorResultsResponse | null>(null);
+  const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [agentTimeRange, setAgentTimeRange] = useState<AgentTimeRange>('24h');
@@ -174,6 +175,26 @@ export default function EditMonitorPage() {
   useEffect(() => {
     void loadMonitor();
   }, [loadMonitor]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadTenantSettings = async () => {
+      try {
+        const settings = await getTenantSettings();
+        if (!cancelled) {
+          setTenantRetentionDays(settings.data_retention_days);
+        }
+      } catch {
+        if (!cancelled) {
+          setTenantRetentionDays(null);
+        }
+      }
+    };
+    void loadTenantSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     void loadResults();
@@ -359,6 +380,20 @@ export default function EditMonitorPage() {
     { id: 'settings', label: 'Settings' },
     { id: 'json', label: 'JSON' },
   ] as const;
+  const selectedWindowMs =
+    monitor.type === 'agent'
+      ? AGENT_RANGE_MS[agentTimeRange]
+      : NON_AGENT_HISTORY_WINDOW_MS;
+  const boundedRetentionDays =
+    tenantRetentionDays && tenantRetentionDays > 0 ? tenantRetentionDays : null;
+  const retentionWindowMs =
+    boundedRetentionDays !== null
+      ? boundedRetentionDays * 24 * 60 * 60 * 1000
+      : null;
+  const showRetentionWarning =
+    (activeTab === 'overview' || activeTab === 'history') &&
+    retentionWindowMs !== null &&
+    selectedWindowMs > retentionWindowMs;
 
   return (
     <div className="space-y-6">
@@ -414,6 +449,15 @@ export default function EditMonitorPage() {
           </button>
         ))}
       </div>
+
+      {showRetentionWarning && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-sm text-amber-300">
+            Data retention is set to {boundedRetentionDays} day{boundedRetentionDays === 1 ? '' : 's'}.
+            Older history is deleted, so this view may be partial.
+          </p>
+        </div>
+      )}
 
       {/* Content */}
       <div className="grid gap-6 lg:grid-cols-[1fr_400px]">

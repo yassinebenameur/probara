@@ -20,6 +20,12 @@ import (
 	"github.com/yassinebenameur/probara/shared/queue"
 )
 
+const (
+	retentionCleanupTickerInterval = time.Minute
+	retentionCleanupRunTimeout     = 30 * time.Minute
+	retentionCleanupAdvisoryLock   = int64(901_337_401)
+)
+
 // Monitor represents a monitor for scheduling purposes
 type Monitor struct {
 	ID              uuid.UUID
@@ -32,15 +38,18 @@ type Monitor struct {
 
 // Scheduler represents the scheduler service
 type Scheduler struct {
-	config   *config.SchedulerConfig
-	logger   *logger.Logger
-	metrics  *metrics.Registry
-	db       *db.Client
-	queue    *queue.Client
-	ctx      context.Context
-	cancel   context.CancelFunc
-	stop     chan struct{}
-	stopOnce sync.Once
+	config                  *config.SchedulerConfig
+	logger                  *logger.Logger
+	metrics                 *metrics.Registry
+	db                      *db.Client
+	queue                   *queue.Client
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	stop                    chan struct{}
+	stopOnce                sync.Once
+	retentionMu             sync.Mutex
+	retentionRunning        bool
+	lastRetentionRunUTCDate string
 
 	// Metrics
 	loopsTotal        *prometheus.CounterVec
@@ -49,6 +58,8 @@ type Scheduler struct {
 	dbErrors          *prometheus.CounterVec
 	loopDuration      *prometheus.HistogramVec
 	monitorsInBatch   *prometheus.HistogramVec
+	retentionRuns     *prometheus.CounterVec
+	retentionRows     *prometheus.CounterVec
 }
 
 // NewScheduler creates a new scheduler instance
@@ -99,6 +110,16 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		[]string{},
 		nil,
 	)
+	s.retentionRuns = metricsRegistry.NewCounter(
+		"retention_cleanup_runs_total",
+		"Total number of retention cleanup runs",
+		[]string{},
+	)
+	s.retentionRows = metricsRegistry.NewCounter(
+		"retention_cleanup_rows_total",
+		"Total number of check result rows deleted by retention cleanup",
+		[]string{},
+	)
 
 	return s
 }
@@ -126,9 +147,12 @@ func (s *Scheduler) Start() error {
 	// Create ticker with interval from config
 	ticker := time.NewTicker(time.Duration(s.config.ScheduleIntervalSeconds) * time.Second)
 	defer ticker.Stop()
+	retentionTicker := time.NewTicker(retentionCleanupTickerInterval)
+	defer retentionTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
+	s.triggerRetentionCleanup()
 
 	for {
 		select {
@@ -140,8 +164,178 @@ func (s *Scheduler) Start() error {
 			return s.ctx.Err()
 		case <-ticker.C:
 			s.scheduleBatch(s.ctx)
+		case <-retentionTicker.C:
+			s.triggerRetentionCleanup()
 		}
 	}
+}
+
+func (s *Scheduler) triggerRetentionCleanup() {
+	if !s.config.RetentionCleanupEnabled {
+		return
+	}
+
+	now := time.Now().UTC()
+	if now.Hour() < s.config.RetentionCleanupHourUTC {
+		return
+	}
+	runDate := now.Format("2006-01-02")
+
+	s.retentionMu.Lock()
+	if s.retentionRunning || s.lastRetentionRunUTCDate == runDate {
+		s.retentionMu.Unlock()
+		return
+	}
+	s.retentionRunning = true
+	s.retentionMu.Unlock()
+
+	go func(runDate string) {
+		defer func() {
+			s.retentionMu.Lock()
+			s.retentionRunning = false
+			s.retentionMu.Unlock()
+		}()
+
+		executed, deletedRows, err := s.runRetentionCleanup()
+		if err != nil {
+			s.logger.WithError(err).Error("Retention cleanup run failed")
+			return
+		}
+		if !executed {
+			return
+		}
+
+		s.retentionMu.Lock()
+		s.lastRetentionRunUTCDate = runDate
+		s.retentionMu.Unlock()
+
+		s.retentionRuns.With(prometheus.Labels{}).Inc()
+		if deletedRows > 0 {
+			s.retentionRows.With(prometheus.Labels{}).Add(float64(deletedRows))
+		}
+
+		s.logger.WithFields(logrus.Fields{
+			"run_date_utc":    runDate,
+			"deleted_rows":    deletedRows,
+			"target_hour_utc": s.config.RetentionCleanupHourUTC,
+		}).Info("Retention cleanup run completed")
+	}(runDate)
+}
+
+func (s *Scheduler) runRetentionCleanup() (bool, int64, error) {
+	ctx, cancel := context.WithTimeout(s.ctx, retentionCleanupRunTimeout)
+	defer cancel()
+
+	var locked bool
+	if err := s.db.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", retentionCleanupAdvisoryLock).Scan(&locked); err != nil {
+		return false, 0, fmt.Errorf("failed to acquire retention cleanup advisory lock: %w", err)
+	}
+	if !locked {
+		return false, 0, nil
+	}
+	defer func() {
+		if _, err := s.db.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", retentionCleanupAdvisoryLock); err != nil {
+			s.logger.WithError(err).Warn("Failed to release retention cleanup advisory lock")
+		}
+	}()
+
+	query := `
+		SELECT id, data_retention_days
+		FROM tenants
+		WHERE data_retention_days > 0
+		ORDER BY id
+	`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return true, 0, fmt.Errorf("failed to list tenant retention settings: %w", err)
+	}
+	defer rows.Close()
+
+	var totalDeleted int64
+	for rows.Next() {
+		var tenantID uuid.UUID
+		var retentionDays int
+		if err := rows.Scan(&tenantID, &retentionDays); err != nil {
+			return true, totalDeleted, fmt.Errorf("failed to scan tenant retention row: %w", err)
+		}
+
+		deleted, err := s.pruneTenantCheckResults(ctx, tenantID, retentionDays)
+		if err != nil {
+			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s: %w", tenantID, err)
+		}
+		totalDeleted += deleted
+
+		if deleted > 0 {
+			s.logger.WithFields(logrus.Fields{
+				"tenant_id":        tenantID,
+				"retention_days":   retentionDays,
+				"deleted_rows":     deleted,
+				"batch_size":       s.config.RetentionCleanupBatchSize,
+				"max_rows_per_run": s.config.RetentionCleanupMaxRowsPerRun,
+			}).Info("Pruned stale check results for tenant")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return true, totalDeleted, fmt.Errorf("error iterating tenant retention rows: %w", err)
+	}
+
+	return true, totalDeleted, nil
+}
+
+func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.UUID, retentionDays int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	deleteQuery := `
+		DELETE FROM check_results
+		WHERE id IN (
+			SELECT id
+			FROM check_results
+			WHERE tenant_id = $1
+			  AND created_at < $2
+			ORDER BY created_at ASC
+			LIMIT $3
+		)
+	`
+
+	var totalDeleted int64
+	maxRows := s.config.RetentionCleanupMaxRowsPerRun
+	batchSize := s.config.RetentionCleanupBatchSize
+	if batchSize <= 0 {
+		batchSize = 5000
+	}
+	if maxRows <= 0 {
+		maxRows = 200000
+	}
+
+	for int(totalDeleted) < maxRows {
+		remaining := maxRows - int(totalDeleted)
+		limit := batchSize
+		if remaining < limit {
+			limit = remaining
+		}
+
+		result, err := s.db.ExecContext(ctx, deleteQuery, tenantID, cutoff, limit)
+		if err != nil {
+			return totalDeleted, err
+		}
+		rowsDeleted, err := result.RowsAffected()
+		if err != nil {
+			return totalDeleted, fmt.Errorf("failed to read rows affected: %w", err)
+		}
+		if rowsDeleted == 0 {
+			break
+		}
+
+		totalDeleted += rowsDeleted
+		if rowsDeleted < int64(limit) {
+			break
+		}
+	}
+
+	return totalDeleted, nil
 }
 
 // fetchDueMonitors fetches monitors that are due to run within a transaction
