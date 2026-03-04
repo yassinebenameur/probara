@@ -24,6 +24,9 @@ type FieldMapping struct {
 	ExpectedStatus  string `json:"expected_status,omitempty"`
 	ExpectedBody    string `json:"expected_body,omitempty"`
 	Host            string `json:"host,omitempty"`
+	Port            string `json:"port,omitempty"`
+	Service         string `json:"service,omitempty"`
+	UseTLS          string `json:"use_tls,omitempty"`
 	IntervalSeconds string `json:"interval_seconds,omitempty"`
 	TimeoutSeconds  string `json:"timeout_seconds,omitempty"`
 	Tags            string `json:"tags,omitempty"`

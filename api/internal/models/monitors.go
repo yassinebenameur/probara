@@ -14,6 +14,7 @@ const (
 	MonitorTypeHTTP             MonitorType = "http"
 	MonitorTypePing             MonitorType = "ping"
 	MonitorTypeDNS              MonitorType = "dns"
+	MonitorTypeGRPC             MonitorType = "grpc"
 	MonitorTypeGroup            MonitorType = "group"
 	MonitorTypeAgent            MonitorType = "agent"
 	MonitorTypePush             MonitorType = "push"
@@ -134,6 +135,14 @@ type DNSConfig struct {
 	Host            string   `json:"host"`
 	RecordType      string   `json:"record_type,omitempty"`      // A, AAAA, CNAME, TXT, MX, NS
 	ExpectedAnswers []string `json:"expected_answers,omitempty"` // Optional expected answers
+}
+
+// GRPCConfig represents the configuration for a gRPC health monitor
+type GRPCConfig struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port,omitempty"`
+	Service string `json:"service,omitempty"`
+	UseTLS  *bool  `json:"use_tls,omitempty"`
 }
 
 // SyntheticAPIConfig represents the configuration for a synthetic API monitor

@@ -119,6 +119,10 @@ func TestNewDefaultRegistry(t *testing.T) {
 		t.Error("Default registry should have 'dns' checker")
 	}
 
+	if !registry.Has("grpc") {
+		t.Error("Default registry should have 'grpc' checker")
+	}
+
 	if !registry.Has("synthetic_api") {
 		t.Error("Default registry should have 'synthetic_api' checker")
 	}

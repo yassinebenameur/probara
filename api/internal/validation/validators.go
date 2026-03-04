@@ -325,6 +325,39 @@ func (v *DNSConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	return nil
 }
 
+// GRPCConfigValidator validates gRPC health monitor configuration
+type GRPCConfigValidator struct{}
+
+// ValidateConfig validates gRPC monitor config
+func (v *GRPCConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
+	var config sharedmodels.GRPCMonitorConfig
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		return fmt.Errorf("invalid grpc config: %w", err)
+	}
+
+	host := strings.TrimSpace(config.Host)
+	if host == "" {
+		return fmt.Errorf("host is required")
+	}
+
+	if ip := net.ParseIP(host); ip == nil {
+		if !isValidHostname(host) {
+			return fmt.Errorf("host must be a valid IP address or hostname")
+		}
+	}
+
+	// Port is optional; checker will default to 443 for TLS or 80 for plaintext.
+	if config.Port != 0 && (config.Port < 1 || config.Port > 65535) {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+
+	if config.Service != "" && strings.TrimSpace(config.Service) == "" {
+		return fmt.Errorf("service cannot be empty")
+	}
+
+	return nil
+}
+
 // GroupConfigValidator validates group monitor configuration
 type GroupConfigValidator struct{}
 

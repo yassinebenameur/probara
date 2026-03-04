@@ -26,6 +26,7 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypePing:             true,
 	models.MonitorTypeSIP:              true,
 	models.MonitorTypeDNS:              true,
+	models.MonitorTypeGRPC:             true,
 	models.MonitorTypeSyntheticAPI:     true,
 	models.MonitorTypeSyntheticBrowser: true,
 }

@@ -8,7 +8,9 @@ import {
   HTTPMonitorConfig,
   PingMonitorConfig,
   DNSMonitorConfig,
+  GRPCMonitorConfig,
   HTTPMetricsEnvelope,
+  GRPCMetricsEnvelope,
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserMetricsEnvelope,
@@ -59,6 +61,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
     return env.synthetic_browser || null;
   };
 
+  const getGRPCMetrics = (result?: CheckResult) => {
+    const md = result?.metrics_data as unknown;
+    if (!md || typeof md !== 'object') return null;
+    const env = md as GRPCMetricsEnvelope;
+    return env.grpc || null;
+  };
+
   // Helper to get config safely (handles both old and new formats)
   const getHTTPConfig = (mon: Monitor): HTTPMonitorConfig | null => {
     if (mon.type !== 'http') return null;
@@ -93,6 +102,14 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
     if (mon.type !== 'dns') return null;
     if (mon.config && typeof mon.config === 'object') {
       return mon.config as DNSMonitorConfig;
+    }
+    return null;
+  };
+
+  const getGRPCConfig = (mon: Monitor): GRPCMonitorConfig | null => {
+    if (mon.type !== 'grpc') return null;
+    if (mon.config && typeof mon.config === 'object') {
+      return mon.config as GRPCMonitorConfig;
     }
     return null;
   };
@@ -170,6 +187,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
       })
     : undefined;
   const latestSyntheticBrowserMetrics = getSyntheticBrowserMetrics(latestSyntheticBrowserResult);
+  const latestGRPCMetrics = monitor?.type === 'grpc' ? getGRPCMetrics(latestOperationalResult) : null;
   const latestSyntheticBrowserScreenshot = latestSyntheticBrowserMetrics?.artifacts?.screenshot_path;
   const syntheticBrowserScreenshotURL = monitor && latestSyntheticBrowserScreenshot
     ? getSyntheticBrowserScreenshotUrl(monitor.id, monitor.tenant_id, latestSyntheticBrowserScreenshot)
@@ -425,6 +443,43 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                         <span className="text-muted">Expected</span>
                         <span className="truncate text-right text-[#e5e7eb]">
                           {expected.join(', ')}
+                        </span>
+                      </li>
+                    )}
+                  </>
+                );
+              })()}
+              {monitor.type === 'grpc' && (() => {
+                const grpcConfig = getGRPCConfig(monitor);
+                if (!grpcConfig) return null;
+                const resolvedPort = grpcConfig.port || (grpcConfig.use_tls === false ? 80 : 443);
+                return (
+                  <>
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <span className="text-muted">Target</span>
+                      <span className="truncate text-right text-[#e5e7eb]">
+                        {grpcConfig.host}:{resolvedPort}
+                      </span>
+                    </li>
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <span className="text-muted">TLS</span>
+                      <span className="text-[#e5e7eb]">
+                        {grpcConfig.use_tls === false ? 'disabled' : 'enabled'}
+                      </span>
+                    </li>
+                    {grpcConfig.service && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Service</span>
+                        <span className="truncate text-right text-[#e5e7eb]">
+                          {grpcConfig.service}
+                        </span>
+                      </li>
+                    )}
+                    {latestGRPCMetrics?.serving_status && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Last health</span>
+                        <span className="text-[#e5e7eb]">
+                          {latestGRPCMetrics.serving_status}
                         </span>
                       </li>
                     )}

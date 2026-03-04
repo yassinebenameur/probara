@@ -64,6 +64,18 @@ func TestValidatorRegistry_Validate(t *testing.T) {
 			wantErr:     true,
 		},
 		{
+			name:        "valid grpc config",
+			monitorType: models.MonitorTypeGRPC,
+			config:      json.RawMessage(`{"host":"grpc.example.com","port":443,"use_tls":true}`),
+			wantErr:     false,
+		},
+		{
+			name:        "invalid grpc config - missing host",
+			monitorType: models.MonitorTypeGRPC,
+			config:      json.RawMessage(`{"port":443}`),
+			wantErr:     true,
+		},
+		{
 			name:        "valid group config",
 			monitorType: models.MonitorTypeGroup,
 			config:      json.RawMessage(`{"monitor_ids":["id1","id2"]}`),
@@ -124,6 +136,10 @@ func TestValidatorRegistry_Has(t *testing.T) {
 		t.Error("Expected Has(DNS) to return true")
 	}
 
+	if !registry.Has(models.MonitorTypeGRPC) {
+		t.Error("Expected Has(GRPC) to return true")
+	}
+
 	if !registry.Has(models.MonitorTypeAgent) {
 		t.Error("Expected Has(Agent) to return true")
 	}
@@ -153,9 +169,9 @@ func TestValidatorRegistry_Types(t *testing.T) {
 	registry := NewDefaultValidatorRegistry()
 	types := registry.Types()
 
-	// HTTP, Ping, DNS, Group, Agent, Push, SIP, Synthetic API, Synthetic Browser = 9 types
-	if len(types) != 9 {
-		t.Errorf("Expected 9 types, got %d", len(types))
+	// HTTP, Ping, DNS, GRPC, Group, Agent, Push, SIP, Synthetic API, Synthetic Browser = 10 types
+	if len(types) != 10 {
+		t.Errorf("Expected 10 types, got %d", len(types))
 	}
 }
 

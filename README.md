@@ -18,12 +18,15 @@ Supported monitor types in the codebase:
 - `http`
 - `ping`
 - `dns`
+- `grpc`
 - `sip`
 - `synthetic_api`
 - `synthetic_browser`
 - `push`
 - `agent`
 - `group`
+
+`grpc` monitors call `grpc.health.v1.Health/Check` and mark success only when status is `SERVING`.
 
 ## Why This Is Kubernetes-Focused And Built For Scale
 

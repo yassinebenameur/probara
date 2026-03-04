@@ -97,6 +97,7 @@ function TypeBadge({ type }: { type: string }) {
     http: 'text-cyan-400',
     ping: 'text-violet-400',
     dns: 'text-sky-400',
+    grpc: 'text-teal-400',
     agent: 'text-amber-400',
     group: 'text-indigo-400',
     push: 'text-emerald-400',
@@ -252,6 +253,13 @@ function MonitorRow({
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
     if (monitor.config && 'base_url' in monitor.config) return monitor.config.base_url || null;
     if (monitor.config && 'start_url' in monitor.config) return monitor.config.start_url;
+    if (monitor.type === 'grpc' && monitor.config && 'host' in monitor.config) {
+      const cfg = monitor.config as { host?: string; port?: number; use_tls?: boolean };
+      if (cfg.host) {
+        const port = cfg.port || (cfg.use_tls === false ? 80 : 443);
+        return `${cfg.host}:${port}`;
+      }
+    }
     if (monitor.url) return monitor.url;
     if (monitor.config && 'host' in monitor.config) return monitor.config.host;
     return null;
@@ -1217,7 +1225,7 @@ export default function MonitorsPage() {
           </div>
 
           <div className="flex items-center gap-0.5 rounded-lg border border-white/[0.06] bg-slate-900/50 p-0.5">
-            {['all', 'http', 'ping', 'dns', 'agent', 'group', 'push', 'sip', 'synthetic_api', 'synthetic_browser'].map((type) => (
+            {['all', 'http', 'ping', 'dns', 'grpc', 'agent', 'group', 'push', 'sip', 'synthetic_api', 'synthetic_browser'].map((type) => (
               <button
                 key={type}
                 onClick={() => setTypeFilter(type)}

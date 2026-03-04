@@ -32,6 +32,7 @@ import GroupForm from './GroupForm';
 import AgentForm from './AgentForm';
 import PushForm from './PushForm';
 import SipForm from './SipForm';
+import GrpcForm from './GrpcForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
 import HttpRequestFlowPreview from './HttpRequestFlowPreview';
 
@@ -1834,11 +1835,12 @@ export default function MonitorForm({
       agent: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>,
       push: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>,
       sip: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>,
+      grpc: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h10M7 16h6M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2h-2l-4 0H5a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
       synthetic_api: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
       synthetic_browser: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l6-3m-7-9h8m-8 4h6m-7-8h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
     };
 
-    const monitorTypes: MonitorType[] = ['http', 'ping', 'dns', 'group', 'agent', 'push', 'sip', 'synthetic_api', 'synthetic_browser'];
+    const monitorTypes: MonitorType[] = ['http', 'ping', 'dns', 'grpc', 'group', 'agent', 'push', 'sip', 'synthetic_api', 'synthetic_browser'];
 
     const getTypeLabel = (type: MonitorType) => {
       switch (type) {
@@ -1848,6 +1850,8 @@ export default function MonitorForm({
           return 'Ping';
         case 'dns':
           return 'DNS';
+        case 'grpc':
+          return 'gRPC';
         case 'group':
           return 'Group';
         case 'agent':
@@ -1873,6 +1877,8 @@ export default function MonitorForm({
           return 'ICMP ping checks';
         case 'dns':
           return 'DNS record checks';
+        case 'grpc':
+          return 'gRPC health checks';
         case 'group':
           return 'Group multiple monitors';
         case 'agent':
@@ -1946,6 +1952,15 @@ export default function MonitorForm({
       <div className="space-y-4">
         <TypeTabBar />
         <SipForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+      </div>
+    );
+  }
+
+  if (monitorType === 'grpc') {
+    return (
+      <div className="space-y-4">
+        <TypeTabBar />
+        <GrpcForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
   }

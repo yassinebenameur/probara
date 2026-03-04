@@ -82,6 +82,7 @@ export type MonitorType =
   | "http"
   | "ping"
   | "dns"
+  | "grpc"
   | "group"
   | "agent"
   | "push"
@@ -170,6 +171,13 @@ export interface DNSMonitorConfig {
   host: string;
   record_type?: string;
   expected_answers?: string[];
+}
+
+export interface GRPCMonitorConfig {
+  host: string;
+  port?: number;
+  service?: string;
+  use_tls?: boolean;
 }
 
 export interface GroupMonitorConfig {
@@ -274,6 +282,7 @@ export type MonitorConfig =
   | HTTPMonitorConfig
   | PingMonitorConfig
   | DNSMonitorConfig
+  | GRPCMonitorConfig
   | GroupMonitorConfig
   | AgentMonitorConfig
   | PushMonitorConfig
@@ -555,6 +564,7 @@ export interface CheckResult {
     | AgentMetrics
     | PushMetrics
     | HTTPMetricsEnvelope
+    | GRPCMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
     | SyntheticBrowserMetricsEnvelope;
   created_at: string;
@@ -609,6 +619,19 @@ export interface HTTPMetrics {
   timing?: HTTPTimingInfo;
   tls?: HTTPTLSInfo;
   assertions_failed?: string[];
+}
+
+export interface GRPCMetricsEnvelope {
+  grpc?: GRPCMetrics;
+}
+
+export interface GRPCMetrics {
+  target?: string;
+  host?: string;
+  port?: number;
+  service?: string;
+  use_tls?: boolean;
+  serving_status?: string;
 }
 
 export interface HTTPTimingInfo {
@@ -705,6 +728,9 @@ export interface FieldMapping {
   expected_status?: string;
   expected_body?: string;
   host?: string;
+  port?: string;
+  service?: string;
+  use_tls?: string;
   interval_seconds?: string;
   timeout_seconds?: string;
   tags?: string;

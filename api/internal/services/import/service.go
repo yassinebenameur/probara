@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -377,6 +379,30 @@ func (s *Service) suggestMapping(fields []string) models.FieldMapping {
 		}
 	}
 
+	// Port mappings (for gRPC monitors)
+	for _, candidate := range []string{"port", "grpc_port", "config.port"} {
+		if original, ok := fieldMap[candidate]; ok {
+			mapping.Port = original
+			break
+		}
+	}
+
+	// Service mappings (for gRPC health checks)
+	for _, candidate := range []string{"service", "grpc_service", "service_name", "config.service"} {
+		if original, ok := fieldMap[candidate]; ok {
+			mapping.Service = original
+			break
+		}
+	}
+
+	// TLS mappings (for gRPC monitors)
+	for _, candidate := range []string{"use_tls", "tls", "ssl", "secure", "config.use_tls"} {
+		if original, ok := fieldMap[candidate]; ok {
+			mapping.UseTLS = original
+			break
+		}
+	}
+
 	// Interval mappings
 	for _, candidate := range []string{"interval", "interval_seconds", "check_interval", "frequency"} {
 		if original, ok := fieldMap[candidate]; ok {
@@ -454,6 +480,7 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"http":  true,
 		"ping":  true,
 		"dns":   true,
+		"grpc":  true,
 		"group": true,
 		"agent": true,
 	}
@@ -473,6 +500,10 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"web_check":   "http",
 		"healthcheck": "http",
 		"health":      "http",
+		// gRPC aliases
+		"grpcs":       "grpc",
+		"grpc_health": "grpc",
+		"g-rpc":       "grpc",
 		// Ping aliases
 		"icmp":       "ping",
 		"ping_check": "ping",
@@ -561,7 +592,14 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 
 		// If still empty, try to infer type from fields
 		if monitorType == "" {
-			if s.extractString(row.Fields, req.Mapping.Host) != "" {
+			hasHost := s.extractString(row.Fields, req.Mapping.Host) != ""
+			hasGRPCHint := s.extractString(row.Fields, req.Mapping.Service) != "" ||
+				s.extractString(row.Fields, req.Mapping.UseTLS) != "" ||
+				s.extractString(row.Fields, req.Mapping.Port) != ""
+
+			if hasHost && hasGRPCHint {
+				monitorType = "grpc"
+			} else if hasHost {
 				monitorType = "ping"
 			} else if s.extractString(row.Fields, req.Mapping.URL) != "" {
 				monitorType = "http"
@@ -582,7 +620,7 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 			continue
 		}
 
-		if monitorType != "http" && monitorType != "ping" && monitorType != "dns" && monitorType != "group" {
+		if monitorType != "http" && monitorType != "ping" && monitorType != "dns" && monitorType != "grpc" && monitorType != "group" {
 			result.Status = "skipped"
 			result.SkipReason = fmt.Sprintf("Unknown monitor type '%s' - please configure type mapping", monitorType)
 			skippedCount++
@@ -687,6 +725,8 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, row mod
 		config, err = s.buildPingConfig(row, mapping)
 	case "dns":
 		config, err = s.buildDNSConfig(row, mapping)
+	case "grpc":
+		config, err = s.buildGRPCConfig(row, mapping)
 	default:
 		return nil, fmt.Errorf("unsupported monitor type: %s", monitorType)
 	}
@@ -857,6 +897,135 @@ func (s *Service) buildDNSConfig(row models.ImportRow, mapping models.FieldMappi
 	}
 
 	return json.Marshal(config)
+}
+
+// buildGRPCConfig builds gRPC monitor config from row
+func (s *Service) buildGRPCConfig(row models.ImportRow, mapping models.FieldMapping) (json.RawMessage, error) {
+	host := s.extractString(row.Fields, mapping.Host)
+	port := s.extractInt(row.Fields, mapping.Port)
+	service := strings.TrimSpace(s.extractString(row.Fields, mapping.Service))
+
+	useTLS := true
+	if mapping.UseTLS != "" {
+		if raw, ok := row.Fields[mapping.UseTLS]; ok {
+			parsed, ok := parseBoolValue(raw)
+			if !ok {
+				return nil, fmt.Errorf("use_tls must be a boolean value")
+			}
+			useTLS = parsed
+		}
+	}
+
+	if host == "" {
+		urlTarget := s.extractString(row.Fields, mapping.URL)
+		parsedHost, parsedPort, inferredTLS := parseHostPortAndTLS(urlTarget)
+		host = parsedHost
+		if port == 0 {
+			port = parsedPort
+		}
+		if mapping.UseTLS == "" && inferredTLS != nil {
+			useTLS = *inferredTLS
+		}
+	}
+
+	if host == "" {
+		return nil, fmt.Errorf("host is required for grpc monitor")
+	}
+
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return nil, fmt.Errorf("host is required for grpc monitor")
+	}
+
+	if port <= 0 {
+		if useTLS {
+			port = 443
+		} else {
+			port = 80
+		}
+	}
+
+	config := map[string]interface{}{
+		"host":    host,
+		"port":    port,
+		"use_tls": useTLS,
+	}
+	if service != "" {
+		config["service"] = service
+	}
+
+	return json.Marshal(config)
+}
+
+func parseHostPortAndTLS(target string) (string, int, *bool) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", 0, nil
+	}
+
+	var inferredTLS *bool
+	parsePort := func(raw string) int {
+		if raw == "" {
+			return 0
+		}
+		p, err := strconv.Atoi(raw)
+		if err != nil || p < 1 || p > 65535 {
+			return 0
+		}
+		return p
+	}
+
+	parsedURL, err := url.Parse(target)
+	if err == nil && parsedURL.Host != "" {
+		switch strings.ToLower(strings.TrimSpace(parsedURL.Scheme)) {
+		case "grpcs", "https":
+			v := true
+			inferredTLS = &v
+		case "grpc", "http":
+			v := false
+			inferredTLS = &v
+		}
+		return strings.Trim(strings.TrimSpace(parsedURL.Hostname()), "[]"), parsePort(parsedURL.Port()), inferredTLS
+	}
+
+	rawHost := target
+	if idx := strings.Index(rawHost, "/"); idx > 0 {
+		rawHost = rawHost[:idx]
+	}
+	rawHost = strings.TrimSpace(rawHost)
+
+	if strings.Contains(rawHost, ":") {
+		if h, p, err := net.SplitHostPort(rawHost); err == nil {
+			return strings.Trim(strings.TrimSpace(h), "[]"), parsePort(p), inferredTLS
+		}
+	}
+
+	return strings.Trim(rawHost, "[]"), 0, inferredTLS
+}
+
+func parseBoolValue(val interface{}) (bool, bool) {
+	switch v := val.(type) {
+	case bool:
+		return v, true
+	case string:
+		s := strings.TrimSpace(strings.ToLower(v))
+		switch s {
+		case "true", "yes", "1", "on":
+			return true, true
+		case "false", "no", "0", "off":
+			return false, true
+		default:
+			return false, false
+		}
+	case int:
+		return v != 0, true
+	case int64:
+		return v != 0, true
+	case float64:
+		return v != 0, true
+	default:
+		return false, false
+	}
 }
 
 // extractString extracts a string value from fields

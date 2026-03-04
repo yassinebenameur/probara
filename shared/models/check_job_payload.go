@@ -64,6 +64,14 @@ type DNSMonitorConfig struct {
 	ExpectedAnswers []string `json:"expected_answers,omitempty"` // Optional expected answers
 }
 
+// GRPCMonitorConfig represents configuration for gRPC health monitors
+type GRPCMonitorConfig struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port,omitempty"`
+	Service string `json:"service,omitempty"`
+	UseTLS  *bool  `json:"use_tls,omitempty"`
+}
+
 // GroupMonitorConfig represents configuration for group monitors
 type GroupMonitorConfig struct {
 	MonitorIDs []string `json:"monitor_ids"`

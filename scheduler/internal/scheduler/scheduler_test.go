@@ -140,6 +140,7 @@ func TestCreateCheckJob_DifferentMonitorTypes(t *testing.T) {
 	}{
 		{"http", []byte(`{"url":"https://example.com","method":"GET"}`)},
 		{"ping", []byte(`{"host":"example.com"}`)},
+		{"grpc", []byte(`{"host":"grpc.example.com","port":443,"use_tls":true}`)},
 		{"agent", []byte(`{"agent_id":"abc123"}`)},
 		{"push", []byte(`{"push_token":"token123"}`)},
 	}

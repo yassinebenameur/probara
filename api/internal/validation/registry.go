@@ -80,6 +80,7 @@ func NewDefaultValidatorRegistry() *ValidatorRegistry {
 	registry.Register(models.MonitorTypeHTTP, &HTTPConfigValidator{})
 	registry.Register(models.MonitorTypePing, &PingConfigValidator{})
 	registry.Register(models.MonitorTypeDNS, &DNSConfigValidator{})
+	registry.Register(models.MonitorTypeGRPC, &GRPCConfigValidator{})
 	registry.Register(models.MonitorTypeGroup, &GroupConfigValidator{})
 	registry.Register(models.MonitorTypeAgent, &AgentConfigValidator{})
 	registry.Register(models.MonitorTypePush, &PushConfigValidator{})

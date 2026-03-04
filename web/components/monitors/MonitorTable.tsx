@@ -5,6 +5,7 @@ import {
   HTTPMonitorConfig,
   PingMonitorConfig,
   DNSMonitorConfig,
+  GRPCMonitorConfig,
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
 } from '@/lib/types';
@@ -55,6 +56,11 @@ export default function MonitorTable({
       if (monitor.config && typeof monitor.config === 'object') {
         return (monitor.config as DNSMonitorConfig).host;
       }
+    } else if (monitor.type === 'grpc') {
+      if (monitor.config && typeof monitor.config === 'object') {
+        const cfg = monitor.config as GRPCMonitorConfig;
+        if (cfg.host) return `${cfg.host}:${cfg.port || (cfg.use_tls === false ? 80 : 443)}`;
+      }
     } else if (monitor.type === 'synthetic_api') {
       if (monitor.config && typeof monitor.config === 'object') {
         return (monitor.config as SyntheticAPIMonitorConfig).base_url || 'Workflow';
@@ -82,6 +88,8 @@ export default function MonitorTable({
       if (monitor.config && typeof monitor.config === 'object') {
         return ((monitor.config as DNSMonitorConfig).record_type || 'A').toUpperCase();
       }
+    } else if (monitor.type === 'grpc') {
+      return 'GRPC';
     } else if (monitor.type === 'synthetic_api') {
       return 'WORKFLOW';
     } else if (monitor.type === 'synthetic_browser') {

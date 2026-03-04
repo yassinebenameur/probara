@@ -20,7 +20,10 @@ const TARGET_FIELDS = [
   { key: 'method', label: 'Method (HTTP)', required: false },
   { key: 'expected_status', label: 'Expected Status (HTTP)', required: false },
   { key: 'expected_body', label: 'Expected Body (HTTP)', required: false },
-  { key: 'host', label: 'Host (Ping/DNS)', required: false },
+  { key: 'host', label: 'Host (Ping/DNS/gRPC)', required: false },
+  { key: 'port', label: 'Port (gRPC)', required: false },
+  { key: 'service', label: 'Service (gRPC)', required: false },
+  { key: 'use_tls', label: 'Use TLS (gRPC)', required: false },
   { key: 'interval_seconds', label: 'Interval (seconds)', required: false },
   { key: 'timeout_seconds', label: 'Timeout (seconds)', required: false },
   { key: 'tags', label: 'Tags', required: false },
@@ -35,6 +38,7 @@ const SUPPORTED_TYPES = [
   { value: 'http', label: 'HTTP', description: 'HTTP/HTTPS endpoint monitoring' },
   { value: 'ping', label: 'Ping', description: 'ICMP ping checks' },
   { value: 'dns', label: 'DNS', description: 'DNS record checks' },
+  { value: 'grpc', label: 'gRPC', description: 'gRPC health checks' },
   { value: 'group', label: 'Group', description: 'Group of monitors' },
 ];
 
@@ -240,14 +244,23 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
     if (rawType) return rawType;
     
     // Infer type
-    if (mapping.host && row.fields[mapping.host]) return 'ping';
+    if (mapping.host && row.fields[mapping.host]) {
+      if (
+        (mapping.service && row.fields[mapping.service]) ||
+        (mapping.use_tls && row.fields[mapping.use_tls] !== undefined) ||
+        (mapping.port && row.fields[mapping.port] !== undefined)
+      ) {
+        return 'grpc';
+      }
+      return 'ping';
+    }
     if (mapping.group_members && row.fields[mapping.group_members]) return 'group';
     return 'http';
   };
 
   const isSupported = (row: ImportRow) => {
     const type = getMonitorType(row);
-    return type !== 'agent' && ['http', 'ping', 'group', ''].includes(type);
+    return type !== 'agent' && ['http', 'ping', 'dns', 'grpc', 'group', ''].includes(type);
   };
 
   return (
@@ -277,6 +290,8 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                       type === 'http' ? 'bg-cyan-500/20 text-cyan-400' :
                       type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
+                      type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
+                      type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
                       type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
                       type === 'agent' ? 'bg-amber-500/20 text-amber-400' :
                       'bg-slate-500/20 text-slate-400'
@@ -285,7 +300,11 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-400 truncate max-w-[200px]">
-                    {type === 'ping' ? getFieldValue(row, 'host') : getFieldValue(row, 'url')}
+                    {type === 'ping' || type === 'dns'
+                      ? getFieldValue(row, 'host')
+                      : type === 'grpc'
+                        ? `${getFieldValue(row, 'host')}:${getFieldValue(row, 'port') === '-' ? '443' : getFieldValue(row, 'port')}`
+                        : getFieldValue(row, 'url')}
                   </td>
                   <td className="px-4 py-3">
                     {supported ? (
@@ -345,6 +364,8 @@ function ResultsTable({ results }: { results: ImportRowResult[] }) {
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                     result.type === 'http' ? 'bg-cyan-500/20 text-cyan-400' :
                     result.type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
+                    result.type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
+                    result.type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
                     result.type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
                     'bg-slate-500/20 text-slate-400'
                   }`}>
@@ -477,7 +498,7 @@ export default function ImportPage() {
   // Get types that need mapping (not supported types)
   const getUnmappedTypes = () => {
     if (!previewData?.detected_types) return [];
-    const supportedTypes = ['http', 'ping', 'group', 'agent'];
+    const supportedTypes = ['http', 'ping', 'dns', 'grpc', 'group', 'agent'];
     return previewData.detected_types.filter(t => !supportedTypes.includes(t.toLowerCase()));
   };
 
