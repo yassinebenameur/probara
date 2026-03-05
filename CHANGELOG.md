@@ -1,3 +1,17 @@
+# [1.0.0-alpha.19](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.18...v1.0.0-alpha.19) (2026-03-05)
+
+
+### Bug Fixes
+
+* **web:** resolve status page URLs from runtime origin and public_url ([9841c2a](https://github.com/yassinebenameur/probara/commit/9841c2aef7e9f4da5362e670d0b383637d063f77))
+
+
+### Features
+
+* add tenant data retention settings with 0-as-unlimited and daily cleanup ([1e00122](https://github.com/yassinebenameur/probara/commit/1e001222c533ada7c0fee87930cfbc3ebed0461c))
+* **monitors:** add grpc monitor type with health-check execution, import support, UI integration, and unit tests ([9de1b88](https://github.com/yassinebenameur/probara/commit/9de1b88742bb13f14449553297e9b852e472ab9a))
+* **monitors:** add monitor cloning and group management updates ([31253c8](https://github.com/yassinebenameur/probara/commit/31253c813999b5be89b2eac061d12a03790faaed))
+
 # [1.0.0-alpha.18](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.17...v1.0.0-alpha.18) (2026-03-03)
 
 
