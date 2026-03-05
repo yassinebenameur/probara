@@ -3,7 +3,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
-import { getMonitors, deleteMonitor, getMonitorResults, getGroupMembers, createMonitor, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
+import {
+  getMonitors,
+  deleteMonitor,
+  getMonitorResults,
+  getGroupMembers,
+  createMonitor,
+  addMonitorsToGroup,
+  removeMonitorsFromGroup,
+  getSyntheticBrowserScreenshotUrl,
+} from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import {
   calculateUptime,
@@ -17,6 +26,33 @@ import {
 } from '@/lib/monitor-utils';
 
 const DEBUG_INGEST_URL = process.env.NEXT_PUBLIC_DEBUG_INGEST_URL;
+const NO_GROUP_VALUE = '__no_group__';
+
+function groupContainsGroup(
+  rootGroupID: string,
+  candidateDescendantID: string,
+  groupMembersMap: Record<string, Monitor[]>
+): boolean {
+  const visited = new Set<string>();
+  const stack = [rootGroupID];
+
+  while (stack.length > 0) {
+    const currentGroupID = stack.pop();
+    if (!currentGroupID) continue;
+    if (currentGroupID === candidateDescendantID) return true;
+    if (visited.has(currentGroupID)) continue;
+
+    visited.add(currentGroupID);
+    const members = groupMembersMap[currentGroupID] || [];
+    members.forEach((member) => {
+      if (member.type === 'group' && !visited.has(member.id)) {
+        stack.push(member.id);
+      }
+    });
+  }
+
+  return false;
+}
 
 function debugIngest(payload: Record<string, unknown>) {
   if (!DEBUG_INGEST_URL) return;
@@ -220,6 +256,66 @@ function SelectCheckbox({
   );
 }
 
+function MonitorActionsMenu({
+  monitorId,
+  onDelete,
+}: {
+  monitorId: string;
+  onDelete: () => void;
+}) {
+  const closeMenu = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) return;
+    const details = target.closest('details') as HTMLDetailsElement | null;
+    if (details) details.open = false;
+  };
+
+  return (
+    <details className="relative" onClick={(e) => e.stopPropagation()}>
+      <summary
+        onClick={(e) => e.stopPropagation()}
+        aria-label="Monitor actions"
+        className="list-none rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white cursor-pointer [&::-webkit-details-marker]:hidden"
+      >
+        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6h.01M12 12h.01M12 18h.01" />
+        </svg>
+      </summary>
+      <div className="absolute right-0 z-30 mt-1 w-36 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-lg">
+        <Link
+          href={`/monitors/${monitorId}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            closeMenu(e.currentTarget);
+          }}
+          className="block rounded px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
+        >
+          Edit
+        </Link>
+        <Link
+          href={`/monitors/new?clone=${monitorId}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            closeMenu(e.currentTarget);
+          }}
+          className="block rounded px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
+        >
+          Clone
+        </Link>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            closeMenu(e.currentTarget);
+            onDelete();
+          }}
+          className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-rose-300 transition-colors hover:bg-rose-500/10 hover:text-rose-200"
+        >
+          Delete
+        </button>
+      </div>
+    </details>
+  );
+}
+
 // Compact monitor row component
 function MonitorRow({ 
   monitor, 
@@ -276,14 +372,12 @@ function MonitorRow({
           : 'border-transparent hover:border-white/[0.06] hover:bg-slate-800/30'
       } ${isChild ? 'ml-4 bg-slate-800/20 rounded-lg' : ''}`}
     >
-      {!isChild && (
-        <SelectCheckbox 
-          checked={isChecked} 
-          onChange={onToggleSelect}
-          visible={selectionMode}
-          label={`Select ${monitor.name}`}
-        />
-      )}
+      <SelectCheckbox
+        checked={isChecked}
+        onChange={onToggleSelect}
+        visible={selectionMode}
+        label={`Select ${monitor.name}`}
+      />
       {/* Status */}
       <StatusDot status={status} />
 
@@ -337,21 +431,7 @@ function MonitorRow({
 
       {/* Actions */}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <Link href={`/monitors/${monitor.id}`} onClick={(e) => e.stopPropagation()}>
-          <button className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white">
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-            </svg>
-          </button>
-        </Link>
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="rounded p-1.5 text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"
-        >
-          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-        </button>
+        <MonitorActionsMenu monitorId={monitor.id} onDelete={onDelete} />
       </div>
     </div>
   );
@@ -362,33 +442,45 @@ function GroupCard({
   monitor,
   results,
   members,
+  groupMembersMap,
   memberResults,
   isSelected,
   onClick,
   onDelete,
   isChecked,
   onToggleSelect,
+  onToggleMonitorSelection,
+  onDeleteMonitor,
   selectionMode,
-  onSelectMember,
+  onSelectMonitor,
   selectedMonitorId,
+  selectedMonitorIds,
+  visitedGroupIds = new Set<string>(),
 }: {
   monitor: Monitor;
   results: CheckResult[];
   members: Monitor[];
+  groupMembersMap: Record<string, Monitor[]>;
   memberResults: Record<string, CheckResult[]>;
   isSelected: boolean;
   onClick: () => void;
   onDelete: () => void;
   isChecked: boolean;
   onToggleSelect: () => void;
+  onToggleMonitorSelection: (id: string) => void;
+  onDeleteMonitor: (id: string) => void;
   selectionMode: boolean;
-  onSelectMember: (id: string) => void;
+  onSelectMonitor: (id: string) => void;
   selectedMonitorId: string | null;
+  selectedMonitorIds: Set<string>;
+  visitedGroupIds?: Set<string>;
 }) {
   const [expanded, setExpanded] = useState(false); // Collapsed by default
   const status = getLatestStatus(results);
   const uptime = calculateUptime(results);
   const operationalCount = countOperationalResults(results);
+  const nextVisitedGroupIDs = new Set(visitedGroupIds);
+  nextVisitedGroupIDs.add(monitor.id);
 
   // Calculate aggregate stats from members
   const memberStats = members.map(m => ({
@@ -479,41 +571,77 @@ function GroupCard({
 
         {/* Actions */}
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Link href={`/monitors/${monitor.id}`} onClick={(e) => e.stopPropagation()}>
-            <button className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white">
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-              </svg>
-            </button>
-          </Link>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="rounded p-1.5 text-slate-400 hover:bg-rose-500/10 hover:text-rose-400"
-          >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
+          <MonitorActionsMenu monitorId={monitor.id} onDelete={onDelete} />
         </div>
       </div>
 
       {/* Expanded Children */}
       {expanded && members.length > 0 && (
         <div className="border-t border-white/[0.04] px-3 py-3 space-y-2">
-          {members.map((member) => (
-            <MonitorRow
-              key={member.id}
-              monitor={member}
-              results={memberResults[member.id] || []}
-              isSelected={member.id === selectedMonitorId}
-              onClick={() => onSelectMember(member.id)}
-              onDelete={() => {}}
-              isChecked={false}
-              onToggleSelect={() => {}}
-              selectionMode={false}
-              isChild
-            />
-          ))}
+          {members.map((member) => {
+            const memberKey = `${monitor.id}:${member.id}`;
+            if (member.type === 'group') {
+              const cycleDetected = nextVisitedGroupIDs.has(member.id);
+              return (
+                <div key={memberKey} className="ml-4 space-y-1">
+                  {cycleDetected ? (
+                    <>
+                      <MonitorRow
+                        monitor={member}
+                        results={memberResults[member.id] || []}
+                        isSelected={member.id === selectedMonitorId}
+                        onClick={() => onSelectMonitor(member.id)}
+                        onDelete={() => onDeleteMonitor(member.id)}
+                        isChecked={selectedMonitorIds.has(member.id)}
+                        onToggleSelect={() => onToggleMonitorSelection(member.id)}
+                        selectionMode={selectionMode}
+                        isChild
+                      />
+                      <p className="ml-6 text-[10px] text-rose-400">
+                        Cycle detected in group nesting. Expansion stopped.
+                      </p>
+                    </>
+                  ) : (
+                    <GroupCard
+                      monitor={member}
+                      results={memberResults[member.id] || []}
+                      members={groupMembersMap[member.id] || []}
+                      groupMembersMap={groupMembersMap}
+                      memberResults={memberResults}
+                      isSelected={member.id === selectedMonitorId}
+                      onClick={() => onSelectMonitor(member.id)}
+                      onDelete={() => onDeleteMonitor(member.id)}
+                      isChecked={selectedMonitorIds.has(member.id)}
+                      onToggleSelect={() => onToggleMonitorSelection(member.id)}
+                      onToggleMonitorSelection={onToggleMonitorSelection}
+                      onDeleteMonitor={onDeleteMonitor}
+                      selectionMode={selectionMode}
+                      onSelectMonitor={onSelectMonitor}
+                      selectedMonitorId={selectedMonitorId}
+                      selectedMonitorIds={selectedMonitorIds}
+                      visitedGroupIds={nextVisitedGroupIDs}
+                    />
+                  )}
+                </div>
+              );
+            }
+
+            return (
+              <div key={memberKey} className="ml-4">
+                <MonitorRow
+                  monitor={member}
+                  results={memberResults[member.id] || []}
+                  isSelected={member.id === selectedMonitorId}
+                  onClick={() => onSelectMonitor(member.id)}
+                  onDelete={() => onDeleteMonitor(member.id)}
+                  isChecked={selectedMonitorIds.has(member.id)}
+                  onToggleSelect={() => onToggleMonitorSelection(member.id)}
+                  selectionMode={selectionMode}
+                  isChild
+                />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -860,6 +988,7 @@ export default function MonitorsPage() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<Set<string>>(new Set());
   const [groupNameInput, setGroupNameInput] = useState('');
+  const [targetGroupId, setTargetGroupId] = useState('');
 
   useEffect(() => {
     loadMonitors();
@@ -1051,6 +1180,7 @@ export default function MonitorsPage() {
     setSelectedMonitorIds(new Set());
     setSelectionMode(false);
     setGroupNameInput('');
+    setTargetGroupId('');
   };
 
   // Collect all unique tags from monitors
@@ -1108,9 +1238,21 @@ export default function MonitorsPage() {
 
   const selectedMonitor = monitors.find((m) => m.id === selectedMonitorId) || null;
   const selectedMonitors = monitors.filter((m) => selectedMonitorIds.has(m.id));
+  const availableGroups = monitors
+    .filter((m) => m.type === 'group' && !selectedMonitorIds.has(m.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
   const allFilteredSelected = filteredMonitors.length > 0 && filteredMonitors.every((m) => selectedMonitorIds.has(m.id));
   const canDeleteSelected = selectedMonitorIds.size > 0;
-  const canCreateGroup = selectedMonitorIds.size > 1 && groupNameInput.trim().length > 0;
+  const canCreateGroup = selectedMonitorIds.size > 0 && groupNameInput.trim().length > 0;
+  const canMoveToGroup = targetGroupId.length > 0 && selectedMonitors.length > 0;
+
+  useEffect(() => {
+    if (!targetGroupId) return;
+    if (targetGroupId === NO_GROUP_VALUE) return;
+    if (!availableGroups.some((group) => group.id === targetGroupId)) {
+      setTargetGroupId('');
+    }
+  }, [targetGroupId, availableGroups]);
 
   const toggleSelectAllFiltered = () => {
     if (allFilteredSelected) {
@@ -1147,8 +1289,8 @@ export default function MonitorsPage() {
       setToast({ message: 'Group name is required', type: 'error' });
       return;
     }
-    if (selectedMonitors.length < 2) {
-      setToast({ message: 'Select at least two monitors to create a group', type: 'error' });
+    if (selectedMonitors.length < 1) {
+      setToast({ message: 'Select at least one item to create a group', type: 'error' });
       return;
     }
 
@@ -1167,6 +1309,102 @@ export default function MonitorsPage() {
       setToast({ message: 'Group created', type: 'success' });
     } catch (err: any) {
       setToast({ message: err.message || 'Failed to create group', type: 'error' });
+    }
+  };
+
+  const handleMoveToGroup = async () => {
+    if (!targetGroupId) {
+      setToast({ message: 'Select a destination group first', type: 'error' });
+      return;
+    }
+    if (selectedMonitors.length === 0) {
+      setToast({ message: 'Select at least one monitor or group to move', type: 'error' });
+      return;
+    }
+
+    const isNoGroupDestination = targetGroupId === NO_GROUP_VALUE;
+    const targetGroup = isNoGroupDestination
+      ? null
+      : monitors.find((m) => m.id === targetGroupId && m.type === 'group');
+    if (!isNoGroupDestination && !targetGroup) {
+      setToast({ message: 'Destination group not found', type: 'error' });
+      return;
+    }
+
+    const selectedIds = selectedMonitors.map((m) => m.id);
+    const selectedGroupIDs = selectedMonitors
+      .filter((monitor) => monitor.type === 'group')
+      .map((monitor) => monitor.id);
+
+    if (!isNoGroupDestination) {
+      if (selectedGroupIDs.includes(targetGroupId)) {
+        setToast({ message: 'Cannot move a group into itself', type: 'error' });
+        return;
+      }
+
+      const wouldCreateCycle = selectedGroupIDs.some((groupID) =>
+        groupContainsGroup(groupID, targetGroupId, groupMembersMap)
+      );
+      if (wouldCreateCycle) {
+        setToast({ message: 'Cannot move a group into one of its descendants', type: 'error' });
+        return;
+      }
+    }
+
+    const removalsByGroup: Record<string, string[]> = {};
+
+    for (const [groupId, members] of Object.entries(groupMembersMap)) {
+      if (!isNoGroupDestination && groupId === targetGroupId) continue;
+      const overlappingIds = members
+        .filter((member) => selectedIds.includes(member.id))
+        .map((member) => member.id);
+      if (overlappingIds.length > 0) {
+        removalsByGroup[groupId] = overlappingIds;
+      }
+    }
+
+    const hasRemovals = Object.keys(removalsByGroup).length > 0;
+
+    if (isNoGroupDestination && !hasRemovals) {
+      setToast({ message: 'Selected items are not in any group', type: 'error' });
+      return;
+    }
+
+    const targetMemberIds = new Set(
+      isNoGroupDestination ? [] : (groupMembersMap[targetGroupId] || []).map((m) => m.id)
+    );
+    const idsToAdd = isNoGroupDestination
+      ? []
+      : selectedIds.filter((id) => !targetMemberIds.has(id));
+
+    if (!isNoGroupDestination && !hasRemovals && idsToAdd.length === 0) {
+      setToast({ message: 'Selected items are already in the target group', type: 'error' });
+      return;
+    }
+
+    try {
+      if (!isNoGroupDestination && idsToAdd.length > 0) {
+        await addMonitorsToGroup(targetGroupId, idsToAdd);
+      }
+
+      if (hasRemovals) {
+        await Promise.all(
+          Object.entries(removalsByGroup).map(([groupId, monitorIds]) =>
+            removeMonitorsFromGroup(groupId, monitorIds)
+          )
+        );
+      }
+
+      setSelectedMonitorIds(new Set());
+      await loadMonitors();
+      setToast({
+        message: isNoGroupDestination
+          ? `Removed ${selectedMonitors.length} item(s) from all groups`
+          : `Moved ${selectedMonitors.length} item(s) to ${targetGroup?.name}`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to move monitors', type: 'error' });
     }
   };
 
@@ -1400,6 +1638,32 @@ export default function MonitorsPage() {
 
                         <div className="h-4 w-px bg-white/[0.08]" />
 
+                        {/* Move to existing group */}
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={targetGroupId}
+                            onChange={(e) => setTargetGroupId(e.target.value)}
+                            className="input input-xs h-6 w-36 text-[10px]"
+                          >
+                            <option value="">Move to group...</option>
+                            <option value={NO_GROUP_VALUE}>No group</option>
+                            {availableGroups.map((group) => (
+                              <option key={group.id} value={group.id}>
+                                {group.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={handleMoveToGroup}
+                            disabled={!canMoveToGroup}
+                            className={`btn btn-secondary btn-xs ${canMoveToGroup ? '' : 'cursor-not-allowed opacity-60'}`}
+                          >
+                            Move
+                          </button>
+                        </div>
+
+                        <div className="h-4 w-px bg-white/[0.08]" />
+
                         {/* Delete */}
                         <button
                           onClick={handleBulkDelete}
@@ -1429,15 +1693,19 @@ export default function MonitorsPage() {
                     monitor={monitor}
                     results={checkResultsMap[monitor.id] || []}
                     members={groupMembersMap[monitor.id] || []}
+                    groupMembersMap={groupMembersMap}
                     memberResults={checkResultsMap}
                     isSelected={monitor.id === selectedMonitorId}
                     isChecked={selectedMonitorIds.has(monitor.id)}
                     onToggleSelect={() => toggleMonitorSelection(monitor.id)}
+                    onToggleMonitorSelection={toggleMonitorSelection}
+                    onDeleteMonitor={handleDelete}
                     selectionMode={selectionMode}
                     onClick={() => setSelectedMonitorId(monitor.id)}
                     onDelete={() => handleDelete(monitor.id)}
-                    onSelectMember={(id) => setSelectedMonitorId(id)}
+                    onSelectMonitor={(id) => setSelectedMonitorId(id)}
                     selectedMonitorId={selectedMonitorId}
+                    selectedMonitorIds={selectedMonitorIds}
                   />
                 ) : (
                   <MonitorRow

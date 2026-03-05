@@ -68,7 +68,7 @@ func (s *Service) GetMonitorResults(ctx context.Context, tenantID, monitorID uui
 
 // getGroupResults retrieves aggregated results for a group monitor
 func (s *Service) getGroupResults(ctx context.Context, tenantID, monitorID uuid.UUID, limit int, since *time.Time) (*models.MonitorResultsResponse, error) {
-	members, err := s.groupService.GetGroupMembers(ctx, tenantID, monitorID)
+	members, err := s.groupService.GetGroupLeafMembers(ctx, tenantID, monitorID)
 	if err != nil {
 		return nil, err
 	}

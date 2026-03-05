@@ -7,6 +7,7 @@ import { getApiKey } from '@/lib/auth';
 
 interface PushFormProps {
   monitor?: Monitor;
+  initialData?: CreateMonitorRequest;
   onSubmit: (data: CreateMonitorRequest | UpdateMonitorRequest) => Promise<void>;
   onCancel?: () => void;
   loading?: boolean;
@@ -14,6 +15,7 @@ interface PushFormProps {
 
 export default function PushForm({
   monitor,
+  initialData,
   onSubmit,
   onCancel,
   loading = false,
@@ -23,18 +25,23 @@ export default function PushForm({
   const [pushInfo, setPushInfo] = useState<PushInfo | null>(null);
   const [loadingPushInfo, setLoadingPushInfo] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const isEditMode = Boolean(monitor);
+  const initialPushConfig =
+    !isEditMode && initialData?.type === 'push' ? (initialData.config as PushMonitorConfig) : undefined;
 
   const [formData, setFormData] = useState({
-    name: monitor?.name || '',
+    name: monitor?.name || initialData?.name || '',
     expected_interval_seconds: monitor && monitor.type === 'push' 
       ? (monitor.config as PushMonitorConfig)?.expected_interval_seconds || 60 
-      : 60,
+      : initialPushConfig?.expected_interval_seconds || 60,
     grace_period_seconds: monitor && monitor.type === 'push' 
       ? (monitor.config as PushMonitorConfig)?.grace_period_seconds || 120 
-      : 120,
-    alert_policy_ids: monitor?.alert_policy_ids || (monitor?.alert_policy_id ? [monitor.alert_policy_id] : []),
-    enabled: monitor?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || '',
+      : initialPushConfig?.grace_period_seconds || 120,
+    alert_policy_ids:
+      monitor?.alert_policy_ids ||
+      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
+    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
+    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -45,13 +52,13 @@ export default function PushForm({
 
   // Auto-calculate grace period when interval changes (default to 2x interval)
   useEffect(() => {
-    if (!monitor) {
+    if (!isEditMode && !initialPushConfig) {
       setFormData(prev => ({
         ...prev,
         grace_period_seconds: prev.expected_interval_seconds * 2,
       }));
     }
-  }, [formData.expected_interval_seconds, monitor]);
+  }, [formData.expected_interval_seconds, isEditMode, initialPushConfig]);
 
   const loadAlertPolicies = async () => {
     try {
@@ -77,7 +84,7 @@ export default function PushForm({
     }
 
     const config: PushMonitorConfig = {
-      push_token: monitor?.push_token || '',
+      push_token: isEditMode ? monitor?.push_token || '' : '',
       expected_interval_seconds: formData.expected_interval_seconds,
       grace_period_seconds: formData.grace_period_seconds,
     };
@@ -98,7 +105,7 @@ export default function PushForm({
 
     try {
       await onSubmit(requestData);
-      if (!monitor) setShowWebhookInfo(true);
+      if (!isEditMode) setShowWebhookInfo(true);
     } catch (error) {
       console.error('Failed to save monitor:', error);
     }
@@ -124,7 +131,7 @@ export default function PushForm({
   };
 
   // Webhook info view (shown after creation or when viewing existing)
-  if (monitor && showWebhookInfo) {
+  if (isEditMode && monitor && showWebhookInfo) {
     if (!pushInfo && !loadingPushInfo) loadPushInfo();
 
     return (
@@ -377,12 +384,12 @@ export default function PushForm({
           disabled={loading}
           className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? 'Saving...' : monitor ? 'Save Changes' : 'Create Push Monitor'}
+          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Push Monitor'}
         </button>
       </div>
 
       {/* Webhook Link for existing monitors */}
-      {monitor && (
+      {isEditMode && monitor && (
         <div className="pt-4 border-t border-white/[0.06]">
           <button
             type="button"

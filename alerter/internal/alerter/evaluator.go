@@ -405,11 +405,26 @@ func (a *Alerter) loadGroupMembers(ctx context.Context, bindings []policyBinding
 	}
 
 	query := `
-		SELECT mg.group_id, m.id, m.name
-		FROM monitor_groups mg
-		JOIN monitors m ON mg.monitor_id = m.id
-		WHERE mg.group_id = ANY($1)
-		ORDER BY mg.group_id, m.name
+		WITH RECURSIVE member_tree AS (
+			SELECT root.id AS root_group_id, root.tenant_id, mg.monitor_id
+			FROM monitors root
+			JOIN monitor_groups mg ON mg.group_id = root.id
+			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = root.tenant_id
+			WHERE root.id = ANY($1)
+			  AND root.type = 'group'
+			UNION
+			SELECT mt.root_group_id, mt.tenant_id, mg.monitor_id
+			FROM member_tree mt
+			JOIN monitors parent ON parent.id = mt.monitor_id AND parent.tenant_id = mt.tenant_id
+			JOIN monitor_groups mg ON mg.group_id = parent.id
+			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = mt.tenant_id
+			WHERE parent.type = 'group'
+		)
+		SELECT mt.root_group_id, m.id, m.name
+		FROM member_tree mt
+		JOIN monitors m ON m.id = mt.monitor_id AND m.tenant_id = mt.tenant_id
+		WHERE m.type <> 'group'
+		ORDER BY mt.root_group_id, m.name
 	`
 
 	rows, err := a.db.QueryContext(ctx, query, pq.Array(groupIDs))

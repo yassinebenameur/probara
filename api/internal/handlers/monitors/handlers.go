@@ -3,6 +3,7 @@ package monitors
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -746,6 +747,10 @@ func (h *Handlers) AddMonitorsToGroup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if err.Error() == "monitor not found" || err.Error() == "monitor is not a group" {
 			errors.WriteNotFoundError(w, err.Error())
+			return
+		}
+		if stderrors.Is(err, groupservice.ErrGroupCycleDetected) {
+			errors.WriteValidationError(w, err.Error())
 			return
 		}
 		h.logger.WithFields(map[string]interface{}{

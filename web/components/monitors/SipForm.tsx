@@ -6,6 +6,7 @@ import { getAlertPolicies } from '@/lib/api';
 
 interface SipFormProps {
   monitor?: Monitor;
+  initialData?: CreateMonitorRequest;
   onSubmit: (data: CreateMonitorRequest | UpdateMonitorRequest) => Promise<void>;
   onCancel?: () => void;
   loading?: boolean;
@@ -13,31 +14,37 @@ interface SipFormProps {
 
 export default function SipForm({
   monitor,
+  initialData,
   onSubmit,
   onCancel,
   loading = false,
 }: SipFormProps) {
   const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
+  const isEditMode = Boolean(monitor);
+  const initialSipConfig =
+    !isEditMode && initialData?.type === 'sip' ? (initialData.config as SIPMonitorConfig) : undefined;
 
   const [formData, setFormData] = useState({
-    name: monitor?.name || '',
+    name: monitor?.name || initialData?.name || '',
     host: monitor && monitor.type === 'sip' 
       ? (monitor.config as SIPMonitorConfig)?.host || '' 
-      : '',
+      : initialSipConfig?.host || '',
     port: monitor && monitor.type === 'sip' 
       ? (monitor.config as SIPMonitorConfig)?.port || 5060 
-      : 5060,
+      : initialSipConfig?.port || 5060,
     transport: monitor && monitor.type === 'sip' 
       ? (monitor.config as SIPMonitorConfig)?.transport || 'udp' 
-      : 'udp' as 'udp' | 'tcp',
+      : initialSipConfig?.transport || 'udp' as 'udp' | 'tcp',
     expected_status: monitor && monitor.type === 'sip' 
       ? (monitor.config as SIPMonitorConfig)?.expected_status?.toString() || '' 
-      : '',
-    interval_seconds: monitor?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || 10,
-    alert_policy_ids: monitor?.alert_policy_ids || (monitor?.alert_policy_id ? [monitor.alert_policy_id] : []),
-    enabled: monitor?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || '',
+      : initialSipConfig?.expected_status?.toString() || '',
+    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
+    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
+    alert_policy_ids:
+      monitor?.alert_policy_ids ||
+      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
+    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
+    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -299,11 +306,10 @@ export default function SipForm({
           disabled={loading}
           className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? 'Saving...' : monitor ? 'Save Changes' : 'Create SIP Monitor'}
+          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create SIP Monitor'}
         </button>
       </div>
     </form>
   );
 }
-
 

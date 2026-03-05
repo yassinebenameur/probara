@@ -6,6 +6,7 @@ import { getAlertPolicies, getMonitors } from '@/lib/api';
 
 interface GroupFormProps {
   monitor?: Monitor;
+  initialData?: CreateMonitorRequest;
   onSubmit: (data: CreateMonitorRequest | UpdateMonitorRequest) => Promise<void>;
   onCancel?: () => void;
   loading?: boolean;
@@ -13,20 +14,26 @@ interface GroupFormProps {
 
 export default function GroupForm({
   monitor,
+  initialData,
   onSubmit,
   onCancel,
   loading = false,
 }: GroupFormProps) {
   const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
   const [availableMonitors, setAvailableMonitors] = useState<Monitor[]>([]);
-  const existingMemberIds = monitor?.member_ids || [];
+  const isEditMode = Boolean(monitor);
+  const initialGroupConfig =
+    !isEditMode && initialData?.type === 'group' ? (initialData.config as GroupMonitorConfig) : undefined;
+  const existingMemberIds = monitor?.member_ids || initialGroupConfig?.monitor_ids || [];
 
   const [formData, setFormData] = useState({
-    name: monitor?.name || '',
+    name: monitor?.name || initialData?.name || '',
     monitor_ids: existingMemberIds,
-    alert_policy_ids: monitor?.alert_policy_ids || (monitor?.alert_policy_id ? [monitor.alert_policy_id] : []),
-    enabled: monitor?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || '',
+    alert_policy_ids:
+      monitor?.alert_policy_ids ||
+      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
+    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
+    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -71,8 +78,8 @@ export default function GroupForm({
   const loadAvailableMonitors = async () => {
     try {
       const response = await getMonitors({ page_size: 100 });
-      const nonGroupMonitors = (response?.items || []).filter(m => m.type !== 'group' && m.id !== monitor?.id);
-      setAvailableMonitors(nonGroupMonitors);
+      const selectableMonitors = (response?.items || []).filter((m) => m.id !== monitor?.id);
+      setAvailableMonitors(selectableMonitors);
     } catch (error) {
       console.error('Failed to load monitors:', error);
     }
@@ -280,10 +287,9 @@ export default function GroupForm({
           disabled={loading}
           className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? 'Saving...' : monitor ? 'Save Changes' : 'Create Group'}
+          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Group'}
         </button>
       </div>
     </form>
   );
 }
-

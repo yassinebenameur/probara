@@ -19,6 +19,9 @@ type GroupService interface {
 	// GetGroupMembers retrieves all monitors in a group
 	GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error)
 
+	// GetGroupLeafMembers retrieves all non-group members in a group recursively, deduplicated by monitor ID.
+	GetGroupLeafMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error)
+
 	// GetMonitorGroups retrieves all groups a monitor belongs to
 	GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid.UUID) ([]models.Monitor, error)
 

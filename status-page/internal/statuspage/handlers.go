@@ -287,6 +287,28 @@ func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
 
 // renderStatusPageHTML renders the status page HTML template
 func (h *Handlers) renderStatusPageHTML(w http.ResponseWriter, data *StatusPageData) {
+	formatLatencyBound := func(points []LatencyPoint, wantMax bool) string {
+		if len(points) == 0 {
+			return "—"
+		}
+
+		bound := points[0].LatencyMS
+		for i := 1; i < len(points); i++ {
+			latency := points[i].LatencyMS
+			if wantMax {
+				if latency > bound {
+					bound = latency
+				}
+				continue
+			}
+			if latency < bound {
+				bound = latency
+			}
+		}
+
+		return fmt.Sprintf("%dms", bound)
+	}
+
 	// Create template with custom functions
 	funcMap := template.FuncMap{
 		"formatUptime": func(uptime *float64) string {
@@ -308,6 +330,12 @@ func (h *Handlers) renderStatusPageHTML(w http.ResponseWriter, data *StatusPageD
 				return "—"
 			}
 			return fmt.Sprintf("%dms", *latency)
+		},
+		"formatLatencyMin": func(points []LatencyPoint) string {
+			return formatLatencyBound(points, false)
+		},
+		"formatLatencyMax": func(points []LatencyPoint) string {
+			return formatLatencyBound(points, true)
 		},
 		"formatDate": func(val string) string {
 			if strings.TrimSpace(val) == "" {
@@ -1093,6 +1121,7 @@ const statusPageTemplate = `<!DOCTYPE html>
     .component-card.compact-mode .component-stats,
     .component-card.compact-mode .component-uptime,
     .component-card.compact-mode .latency-chart-container,
+    .component-card.compact-mode .group-latency-summary,
     .component-card.compact-mode .component-tls,
     .component-card.compact-mode .agent-metrics {
       display: none;
@@ -1287,6 +1316,81 @@ const statusPageTemplate = `<!DOCTYPE html>
       font-weight: 500;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+    }
+
+    /* GROUP LATENCY SUMMARY */
+    .group-latency-summary {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .group-latency-summary-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .group-latency-summary-title {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .group-latency-summary-table {
+      display: grid;
+      gap: 6px;
+    }
+
+    .group-latency-summary-row {
+      display: grid;
+      grid-template-columns: 56px repeat(3, minmax(0, 1fr));
+      align-items: center;
+      gap: 10px;
+    }
+
+    .group-latency-summary-row--header {
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .group-latency-summary-cell {
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+      text-align: right;
+    }
+
+    .group-latency-summary-row--header .group-latency-summary-cell {
+      font-size: 0.62rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .group-latency-summary-cell--label {
+      text-align: left;
+    }
+
+    .group-latency-summary-row:not(.group-latency-summary-row--header) .group-latency-summary-cell--label {
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .group-latency-summary-cell--min { color: var(--success); }
+    .group-latency-summary-cell--avg { color: var(--cyan); }
+    .group-latency-summary-cell--max { color: var(--warning); }
+
+    .group-latency-empty {
+      margin-top: 8px;
+      font-size: 0.68rem;
+      color: var(--text-muted);
     }
 
     /* LATENCY CHART */
@@ -2263,6 +2367,36 @@ const statusPageTemplate = `<!DOCTYPE html>
             {{end}}
 
             {{if and $.ShowLatencyCharts (ne .MonitorType "agent") (ne .MonitorType "push")}}
+            {{if eq .MonitorType "group"}}
+            <div class="group-latency-summary">
+              <div class="group-latency-summary-header">
+                <span class="group-latency-summary-title">Group Latency Summary</span>
+              </div>
+              <div class="group-latency-summary-table">
+                <div class="group-latency-summary-row group-latency-summary-row--header">
+                  <span class="group-latency-summary-cell group-latency-summary-cell--label">Range</span>
+                  <span class="group-latency-summary-cell">Min</span>
+                  <span class="group-latency-summary-cell">Avg</span>
+                  <span class="group-latency-summary-cell">Max</span>
+                </div>
+                <div class="group-latency-summary-row">
+                  <span class="group-latency-summary-cell group-latency-summary-cell--label">1h</span>
+                  <span class="group-latency-summary-cell group-latency-summary-cell--min">{{formatLatencyMin .LatencyHistory1h}}</span>
+                  <span class="group-latency-summary-cell group-latency-summary-cell--avg">{{formatLatency .AvgLatency1h}}</span>
+                  <span class="group-latency-summary-cell group-latency-summary-cell--max">{{formatLatencyMax .LatencyHistory1h}}</span>
+                </div>
+                <div class="group-latency-summary-row">
+                  <span class="group-latency-summary-cell group-latency-summary-cell--label">24h</span>
+                  <span class="group-latency-summary-cell group-latency-summary-cell--min">{{formatLatencyMin .LatencyHistory}}</span>
+                  <span class="group-latency-summary-cell group-latency-summary-cell--avg">{{formatLatency .AvgLatency24h}}</span>
+                  <span class="group-latency-summary-cell group-latency-summary-cell--max">{{formatLatencyMax .LatencyHistory}}</span>
+                </div>
+              </div>
+              {{if and (eq (len .LatencyHistory1h) 0) (eq (len .LatencyHistory) 0)}}
+              <div class="group-latency-empty">No latency samples yet.</div>
+              {{end}}
+            </div>
+            {{else}}
             <div class="latency-chart-container" data-monitor-id="{{.ID}}" data-monitor-name="{{.Name}}">
               <div class="latency-chart-header">
                 <div style="display: flex; align-items: center; gap: 8px;">
@@ -2312,6 +2446,7 @@ const statusPageTemplate = `<!DOCTYPE html>
                 <div class="latency-tooltip"></div>
               </div>
             </div>
+            {{end}}
             {{end}}
           </div>
           {{end}}
@@ -4026,7 +4161,7 @@ const statusPageTemplate = `<!DOCTYPE html>
           document.querySelectorAll(".component-url").forEach(el => { el.style.display = showURL ? "" : "none"; });
           document.querySelectorAll(".component-uptime").forEach(el => { el.style.display = showUptime ? "" : "none"; });
           document.querySelectorAll(".component-tls").forEach(el => { el.style.display = showTLS ? "" : "none"; });
-          document.querySelectorAll(".latency-chart-container").forEach(el => { el.style.display = showLatency ? "" : "none"; });
+          document.querySelectorAll(".latency-chart-container, .group-latency-summary").forEach(el => { el.style.display = showLatency ? "" : "none"; });
 
         document.querySelectorAll('.component-card[data-type="agent"] .agent-metrics, .component-card[data-type="agent"] .component-stats, .component-card[data-type="push"] .agent-metrics, .component-card[data-type="push"] .component-stats').forEach(el => {
           el.style.display = showAgent ? "" : "none";

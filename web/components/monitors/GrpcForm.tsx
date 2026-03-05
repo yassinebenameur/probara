@@ -12,6 +12,7 @@ import { getAlertPolicies } from '@/lib/api';
 
 interface GrpcFormProps {
   monitor?: Monitor;
+  initialData?: CreateMonitorRequest;
   onSubmit: (data: CreateMonitorRequest | UpdateMonitorRequest) => Promise<void>;
   onCancel?: () => void;
   loading?: boolean;
@@ -19,31 +20,37 @@ interface GrpcFormProps {
 
 export default function GrpcForm({
   monitor,
+  initialData,
   onSubmit,
   onCancel,
   loading = false,
 }: GrpcFormProps) {
   const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
+  const isEditMode = Boolean(monitor);
+  const initialGrpcConfig =
+    !isEditMode && initialData?.type === 'grpc' ? (initialData.config as GRPCMonitorConfig) : undefined;
 
   const [formData, setFormData] = useState({
-    name: monitor?.name || '',
+    name: monitor?.name || initialData?.name || '',
     host: monitor && monitor.type === 'grpc'
       ? (monitor.config as GRPCMonitorConfig)?.host || ''
-      : '',
+      : initialGrpcConfig?.host || '',
     port: monitor && monitor.type === 'grpc'
       ? (monitor.config as GRPCMonitorConfig)?.port || 443
-      : 443,
+      : initialGrpcConfig?.port || 443,
     service: monitor && monitor.type === 'grpc'
       ? (monitor.config as GRPCMonitorConfig)?.service || ''
-      : '',
+      : initialGrpcConfig?.service || '',
     use_tls: monitor && monitor.type === 'grpc'
       ? (monitor.config as GRPCMonitorConfig)?.use_tls ?? true
-      : true,
-    interval_seconds: monitor?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || 10,
-    alert_policy_ids: monitor?.alert_policy_ids || (monitor?.alert_policy_id ? [monitor.alert_policy_id] : []),
-    enabled: monitor?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || '',
+      : initialGrpcConfig?.use_tls ?? true,
+    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
+    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
+    alert_policy_ids:
+      monitor?.alert_policy_ids ||
+      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
+    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
+    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -274,7 +281,7 @@ export default function GrpcForm({
 
       <div className="flex gap-3 pt-2">
         <button type="submit" disabled={loading} className="btn btn-primary flex-1">
-          {loading ? 'Saving...' : monitor ? 'Update Monitor' : 'Create Monitor'}
+          {loading ? 'Saving...' : isEditMode ? 'Update Monitor' : 'Create Monitor'}
         </button>
         {onCancel && (
           <button type="button" onClick={onCancel} className="btn btn-secondary">

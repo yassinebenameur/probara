@@ -111,6 +111,10 @@ func (m *MockGroupService) GetGroupMembers(ctx context.Context, tenantID, groupI
 	return []models.Monitor{}, nil
 }
 
+func (m *MockGroupService) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error) {
+	return []models.Monitor{}, nil
+}
+
 func (m *MockGroupService) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid.UUID) ([]models.Monitor, error) {
 	return []models.Monitor{}, nil
 }

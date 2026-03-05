@@ -1625,13 +1625,27 @@ func mapResultStatus(status string) string {
 	}
 }
 
-// getGroupMemberIDs retrieves all member monitor IDs for a group
+// getGroupMemberIDs retrieves non-group member monitor IDs for a group recursively, deduplicated.
 func (s *Service) getGroupMemberIDs(ctx context.Context, groupID, tenantID uuid.UUID) ([]uuid.UUID, error) {
 	query := `
+		WITH RECURSIVE member_tree AS (
+			SELECT mg.monitor_id
+			FROM monitor_groups mg
+			JOIN monitors m ON m.id = mg.monitor_id
+			WHERE mg.group_id = $1 AND m.tenant_id = $2
+			UNION
+			SELECT mg.monitor_id
+			FROM member_tree mt
+			JOIN monitors parent ON parent.id = mt.monitor_id AND parent.tenant_id = $2
+			JOIN monitor_groups mg ON mg.group_id = parent.id
+			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = $2
+			WHERE parent.type = 'group'
+		)
 		SELECT m.id
 		FROM monitors m
-		INNER JOIN monitor_groups mg ON m.id = mg.monitor_id
-		WHERE mg.group_id = $1 AND m.tenant_id = $2
+		JOIN member_tree mt ON mt.monitor_id = m.id
+		WHERE m.tenant_id = $2
+		  AND m.type <> 'group'
 		ORDER BY m.name
 	`
 

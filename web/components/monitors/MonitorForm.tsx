@@ -38,6 +38,7 @@ import HttpRequestFlowPreview from './HttpRequestFlowPreview';
 
 interface MonitorFormProps {
   monitor?: Monitor;
+  initialData?: CreateMonitorRequest;
   onSubmit: (data: CreateMonitorRequest | UpdateMonitorRequest) => Promise<void>;
   onCancel?: () => void;
   loading?: boolean;
@@ -744,24 +745,37 @@ const buildSyntheticBrowserGuidedDraft = (draft: SyntheticBrowserGuidedDraft): {
 
 export default function MonitorForm({
   monitor,
+  initialData,
   onSubmit,
   onCancel,
   loading = false,
 }: MonitorFormProps) {
   const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
-  const initialType: MonitorType = monitor?.type || 'http';
+  const isEditMode = Boolean(monitor);
+  const sourceType: MonitorType = monitor?.type || initialData?.type || 'http';
+  const sourceConfig = monitor?.config || initialData?.config;
+  const sourceAlertPolicyIds =
+    monitor?.alert_policy_ids ||
+    (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []);
+  const sourceTags = monitor?.tags || initialData?.tags || [];
+  const sourceName = monitor?.name || initialData?.name || '';
+  const sourceIntervalSeconds = monitor?.interval_seconds || initialData?.interval_seconds || 60;
+  const sourceTimeoutSeconds = monitor?.timeout_seconds || initialData?.timeout_seconds || 30;
+  const sourceEnabled = monitor?.enabled ?? initialData?.enabled ?? true;
+
+  const initialType: MonitorType = sourceType;
   const [monitorType, setMonitorType] = useState<MonitorType>(initialType);
 
   const initialHTTPConfig: HTTPMonitorConfig | undefined =
-    monitor && monitor.type === 'http' ? (monitor.config as HTTPMonitorConfig) : undefined;
+    sourceType === 'http' ? (sourceConfig as HTTPMonitorConfig) : undefined;
   const initialPingConfig: PingMonitorConfig | undefined =
-    monitor && monitor.type === 'ping' ? (monitor.config as PingMonitorConfig) : undefined;
+    sourceType === 'ping' ? (sourceConfig as PingMonitorConfig) : undefined;
   const initialDNSConfig: DNSMonitorConfig | undefined =
-    monitor && monitor.type === 'dns' ? (monitor.config as DNSMonitorConfig) : undefined;
+    sourceType === 'dns' ? (sourceConfig as DNSMonitorConfig) : undefined;
   const initialSyntheticAPIConfig: SyntheticAPIMonitorConfig | undefined =
-    monitor && monitor.type === 'synthetic_api' ? (monitor.config as SyntheticAPIMonitorConfig) : undefined;
+    sourceType === 'synthetic_api' ? (sourceConfig as SyntheticAPIMonitorConfig) : undefined;
   const initialSyntheticBrowserConfig: SyntheticBrowserMonitorConfig | undefined =
-    monitor && monitor.type === 'synthetic_browser' ? (monitor.config as SyntheticBrowserMonitorConfig) : undefined;
+    sourceType === 'synthetic_browser' ? (sourceConfig as SyntheticBrowserMonitorConfig) : undefined;
   const initialSyntheticBrowserTemplate: SyntheticBrowserGuidedTemplate =
     (initialSyntheticBrowserConfig?.steps || []).some((step) => {
       const id = (step.id || '').toLowerCase();
@@ -780,7 +794,7 @@ export default function MonitorForm({
   };
 
   const [formData, setFormData] = useState({
-    name: monitor?.name || '',
+    name: sourceName,
     url: initialHTTPConfig?.url || '',
     method: initialHTTPConfig?.method || 'GET',
     status_rules: buildStatusRulesFromHTTPConfig(initialHTTPConfig),
@@ -834,11 +848,11 @@ export default function MonitorForm({
     synthetic_browser_guided_expected_url: initialSyntheticBrowserGuided.expected_url,
     synthetic_browser_guided_username: initialSyntheticBrowserGuided.username,
     synthetic_browser_guided_password: initialSyntheticBrowserGuided.password,
-    interval_seconds: monitor?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || 30,
-    alert_policy_ids: monitor?.alert_policy_ids || (monitor?.alert_policy_id ? [monitor.alert_policy_id] : []),
-    enabled: monitor?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || '',
+    interval_seconds: sourceIntervalSeconds,
+    timeout_seconds: sourceTimeoutSeconds,
+    alert_policy_ids: sourceAlertPolicyIds,
+    enabled: sourceEnabled,
+    tags: sourceTags.join(', '),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -846,7 +860,7 @@ export default function MonitorForm({
   const [syntheticAPIMode, setSyntheticAPIMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserMode, setSyntheticBrowserMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserSetupMode, setSyntheticBrowserSetupMode] = useState<SyntheticBrowserSetupMode>(
-    monitor ? 'expert' : 'guided'
+    isEditMode ? 'expert' : 'guided'
   );
   const [syntheticBrowserGuidedStep, setSyntheticBrowserGuidedStep] = useState<SyntheticBrowserGuidedStep>(1);
   const [syntheticTestState, setSyntheticTestState] = useState<SyntheticTestState>({ phase: 'idle' });
@@ -1051,11 +1065,11 @@ export default function MonitorForm({
   useEffect(() => {
     setSyntheticTestState({ phase: 'idle' });
     testSequenceRef.current += 1;
-    if (monitorType === 'synthetic_browser' && !monitor) {
+    if (monitorType === 'synthetic_browser' && !isEditMode) {
       setSyntheticBrowserSetupMode('guided');
       setSyntheticBrowserGuidedStep(1);
     }
-  }, [monitorType, monitor]);
+  }, [monitorType, isEditMode]);
 
   const loadAlertPolicies = async () => {
     try {
@@ -1904,7 +1918,7 @@ export default function MonitorForm({
           <button
             key={type}
             type="button"
-            disabled={!!monitor}
+            disabled={isEditMode}
             onClick={() => setMonitorType(type)}
             className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
               monitorType === type
@@ -1924,7 +1938,7 @@ export default function MonitorForm({
     return (
       <div className="space-y-4">
         <TypeTabBar />
-        <GroupForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+        <GroupForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
   }
@@ -1933,7 +1947,7 @@ export default function MonitorForm({
     return (
       <div className="space-y-4">
         <TypeTabBar />
-        <AgentForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+        <AgentForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
   }
@@ -1942,7 +1956,7 @@ export default function MonitorForm({
     return (
       <div className="space-y-4">
         <TypeTabBar />
-        <PushForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+        <PushForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
   }
@@ -1951,7 +1965,7 @@ export default function MonitorForm({
     return (
       <div className="space-y-4">
         <TypeTabBar />
-        <SipForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+        <SipForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
   }
@@ -1960,7 +1974,7 @@ export default function MonitorForm({
     return (
       <div className="space-y-4">
         <TypeTabBar />
-        <GrpcForm monitor={monitor} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+        <GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
   }
@@ -2011,7 +2025,7 @@ export default function MonitorForm({
           <button
             key={type}
             type="button"
-            disabled={!!monitor}
+            disabled={isEditMode}
             onClick={() => setMonitorType(type)}
             className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
               monitorType === type
@@ -3541,7 +3555,7 @@ export default function MonitorForm({
           disabled={loading}
           className="btn btn-primary btn-sm disabled:opacity-50"
         >
-          {loading ? 'Saving...' : monitor ? 'Save Changes' : 'Create Monitor'}
+          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Monitor'}
         </button>
       </div>
     </form>

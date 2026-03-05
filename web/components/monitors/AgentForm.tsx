@@ -43,6 +43,7 @@ type ApiKeyOption = {
 
 interface AgentFormProps {
   monitor?: Monitor;
+  initialData?: CreateMonitorRequest;
   onSubmit: (data: CreateMonitorRequest | UpdateMonitorRequest) => Promise<void>;
   onCancel?: () => void;
   loading?: boolean;
@@ -50,6 +51,7 @@ interface AgentFormProps {
 
 export default function AgentForm({
   monitor,
+  initialData,
   onSubmit,
   onCancel,
   loading = false,
@@ -66,13 +68,20 @@ export default function AgentForm({
   const [loadingApiKeys, setLoadingApiKeys] = useState(false);
   const [apiKeyError, setApiKeyError] = useState<string>('');
   const [apiKeysLoaded, setApiKeysLoaded] = useState(false);
+  const isEditMode = Boolean(monitor);
+  const initialAgentConfig =
+    !isEditMode && initialData?.type === 'agent' ? (initialData.config as AgentMonitorConfig) : undefined;
 
   const [formData, setFormData] = useState({
-    name: monitor?.name || '',
-    expected_interval_seconds: monitor && monitor.type === 'agent' ? (monitor.config as AgentMonitorConfig).expected_interval_seconds : 60,
-    alert_policy_ids: monitor?.alert_policy_ids || (monitor?.alert_policy_id ? [monitor.alert_policy_id] : []),
-    enabled: monitor?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || '',
+    name: monitor?.name || initialData?.name || '',
+    expected_interval_seconds: monitor && monitor.type === 'agent'
+      ? (monitor.config as AgentMonitorConfig).expected_interval_seconds
+      : initialAgentConfig?.expected_interval_seconds || 60,
+    alert_policy_ids:
+      monitor?.alert_policy_ids ||
+      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
+    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
+    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -106,7 +115,7 @@ export default function AgentForm({
     }
 
     const config: AgentMonitorConfig = {
-      agent_id: monitor?.agent_id || '',
+      agent_id: isEditMode ? monitor?.agent_id || '' : '',
       expected_interval_seconds: formData.expected_interval_seconds,
     };
 
@@ -126,7 +135,7 @@ export default function AgentForm({
 
     try {
       await onSubmit(requestData);
-      if (!monitor) setShowInstallInstructions(true);
+      if (!isEditMode) setShowInstallInstructions(true);
     } catch (error) {
       console.error('Failed to save monitor:', error);
     }
@@ -251,7 +260,7 @@ export default function AgentForm({
   };
 
   // Installation instructions view
-  if (monitor && showInstallInstructions) {
+  if (isEditMode && monitor && showInstallInstructions) {
     if (!installCommand && !loadingInstallCmd) loadInstallCommand();
     if (!loadingApiKeys && !apiKeysLoaded) loadApiKeyOptions();
 
@@ -568,12 +577,12 @@ chmod +x ${UNIX_INSTALL_PATH}`
           disabled={loading}
           className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? 'Saving...' : monitor ? 'Save Changes' : 'Create Agent Monitor'}
+          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Agent Monitor'}
         </button>
       </div>
 
       {/* Installation Link for existing monitors */}
-      {monitor && (
+      {isEditMode && monitor && (
         <div className="pt-4 border-t border-white/[0.06]">
           <button
             type="button"
