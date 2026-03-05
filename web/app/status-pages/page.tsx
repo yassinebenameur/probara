@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { StatusPage } from '@/lib/types';
 import { getStatusPages, deleteStatusPage } from '@/lib/api';
-import { hasApiKey } from '@/lib/auth';
+import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 
 export default function StatusPagesPage() {
   const router = useRouter();
@@ -42,12 +42,6 @@ export default function StatusPagesPage() {
     } catch (err: any) {
       setToast({ message: err.message || 'Failed to delete', type: 'error' });
     }
-  };
-
-  const getPublicUrl = (slug: string) => {
-    const baseUrl = process.env.NEXT_PUBLIC_STATUS_PAGE_BASE_URL || 'http://localhost:8082';
-    const editQuery = hasApiKey() ? '' : '?edit=1';
-    return `${baseUrl}/public/status/${slug}${editQuery}`;
   };
 
   if (loading) {
@@ -173,7 +167,7 @@ export default function StatusPagesPage() {
               {/* Actions */}
               <div className="flex items-center gap-2 pt-4 border-t border-white/[0.06]">
                 <a
-                  href={getPublicUrl(page.slug)}
+                  href={resolveStatusPagePublicUrl(page)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 btn btn-outline btn-sm"

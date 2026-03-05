@@ -5,8 +5,8 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
-import { hasApiKey } from '@/lib/auth';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
+import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
@@ -49,12 +49,6 @@ export default function EditStatusPagePage() {
     }
   };
 
-  const getPublicUrl = () => {
-    const baseUrl = process.env.NEXT_PUBLIC_STATUS_PAGE_BASE_URL || 'http://localhost:8082';
-    const editQuery = hasApiKey() ? '' : '?edit=1';
-    return `${baseUrl}/public/status/${statusPage?.slug}${editQuery}`;
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -73,6 +67,8 @@ export default function EditStatusPagePage() {
       </div>
     );
   }
+
+  const publicUrl = resolveStatusPagePublicUrl(statusPage);
 
   return (
     <div className="space-y-6">
@@ -109,10 +105,10 @@ export default function EditStatusPagePage() {
           <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
             <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-3">Public URL</h3>
             <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 mb-3">
-              <code className="text-xs text-cyan-400 break-all">{getPublicUrl()}</code>
+              <code className="text-xs text-cyan-400 break-all">{publicUrl}</code>
             </div>
             <a
-              href={getPublicUrl()}
+              href={publicUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="btn btn-primary btn-sm w-full justify-center"

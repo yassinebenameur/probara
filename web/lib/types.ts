@@ -515,6 +515,7 @@ export interface StatusPage {
   id: string;
   tenant_id: string;
   slug: string;
+  public_url?: string;
   title: string;
   description?: string;
   logo_url?: string;
