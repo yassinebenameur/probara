@@ -1,3 +1,10 @@
+# [1.0.0-alpha.22](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.21...v1.0.0-alpha.22) (2026-03-06)
+
+
+### Bug Fixes
+
+* **scheduler:** improve rollup backfill throughput ([4c7f19e](https://github.com/yassinebenameur/probara/commit/4c7f19ec9e90ca8077be444d1fc51d7a4621a973))
+
 # [1.0.0-alpha.21](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.20...v1.0.0-alpha.21) (2026-03-06)
 
 
