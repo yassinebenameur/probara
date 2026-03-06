@@ -10,9 +10,11 @@ import (
 type DashboardRange string
 
 const (
-	DashboardRange24h DashboardRange = "24h"
-	DashboardRange7d  DashboardRange = "7d"
-	DashboardRange30d DashboardRange = "30d"
+	DashboardRange24h  DashboardRange = "24h"
+	DashboardRange7d   DashboardRange = "7d"
+	DashboardRange30d  DashboardRange = "30d"
+	DashboardRange90d  DashboardRange = "90d"
+	DashboardRange365d DashboardRange = "365d"
 )
 
 // DashboardFailureState represents whether a failure is still firing or resolved.

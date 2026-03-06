@@ -92,6 +92,25 @@ func TestHandlers_GetOverview_InvalidRangeAndClampedLimits(t *testing.T) {
 	}
 }
 
+func TestHandlers_GetOverview_LongRangeAccepted(t *testing.T) {
+	log := logger.New("test", "debug")
+	mockSvc := &mockDashboardService{}
+	handlers := NewHandlers(mockSvc, log)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview?range=365d", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+
+	w := httptest.NewRecorder()
+	handlers.GetOverview(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if mockSvc.lastParams == nil || mockSvc.lastParams.Range != models.DashboardRange365d {
+		t.Fatalf("range = %v, want %s", mockSvc.lastParams, models.DashboardRange365d)
+	}
+}
+
 func TestHandlers_GetOverview_MissingTenant(t *testing.T) {
 	log := logger.New("test", "debug")
 	mockSvc := &mockDashboardService{}

@@ -24,6 +24,7 @@ const (
 	retentionCleanupTickerInterval = time.Minute
 	retentionCleanupRunTimeout     = 30 * time.Minute
 	retentionCleanupAdvisoryLock   = int64(901_337_401)
+	rollupMaintenanceTicker        = time.Minute
 )
 
 // Monitor represents a monitor for scheduling purposes
@@ -50,6 +51,8 @@ type Scheduler struct {
 	retentionMu             sync.Mutex
 	retentionRunning        bool
 	lastRetentionRunUTCDate string
+	rollupMu                sync.Mutex
+	rollupRunning           bool
 
 	// Metrics
 	loopsTotal        *prometheus.CounterVec
@@ -60,6 +63,11 @@ type Scheduler struct {
 	monitorsInBatch   *prometheus.HistogramVec
 	retentionRuns     *prometheus.CounterVec
 	retentionRows     *prometheus.CounterVec
+	rollupRuns        *prometheus.CounterVec
+	rollupRows        *prometheus.CounterVec
+	rollupErrors      *prometheus.CounterVec
+	rollupDuration    *prometheus.HistogramVec
+	rollupCursor      *prometheus.GaugeVec
 }
 
 // NewScheduler creates a new scheduler instance
@@ -120,6 +128,32 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Total number of check result rows deleted by retention cleanup",
 		[]string{},
 	)
+	s.rollupRuns = metricsRegistry.NewCounter(
+		"rollup_runs_total",
+		"Total number of monitor rollup maintenance runs",
+		[]string{},
+	)
+	s.rollupRows = metricsRegistry.NewCounter(
+		"rollup_rows_total",
+		"Total number of check result rows processed by rollup maintenance",
+		[]string{},
+	)
+	s.rollupErrors = metricsRegistry.NewCounter(
+		"rollup_errors_total",
+		"Total number of rollup maintenance failures",
+		[]string{},
+	)
+	s.rollupDuration = metricsRegistry.NewHistogram(
+		"rollup_duration_seconds",
+		"Duration of rollup maintenance runs",
+		[]string{},
+		nil,
+	)
+	s.rollupCursor = metricsRegistry.NewGauge(
+		"rollup_cursor_unix",
+		"Unix timestamp of the latest processed check result cursor",
+		[]string{},
+	)
 
 	return s
 }
@@ -149,10 +183,13 @@ func (s *Scheduler) Start() error {
 	defer ticker.Stop()
 	retentionTicker := time.NewTicker(retentionCleanupTickerInterval)
 	defer retentionTicker.Stop()
+	rollupTicker := time.NewTicker(rollupMaintenanceTicker)
+	defer rollupTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
 	s.triggerRetentionCleanup()
+	s.triggerRollupMaintenance()
 
 	for {
 		select {
@@ -166,6 +203,8 @@ func (s *Scheduler) Start() error {
 			s.scheduleBatch(s.ctx)
 		case <-retentionTicker.C:
 			s.triggerRetentionCleanup()
+		case <-rollupTicker.C:
+			s.triggerRollupMaintenance()
 		}
 	}
 }

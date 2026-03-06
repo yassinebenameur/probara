@@ -375,7 +375,7 @@ export interface AlertListResponse {
   total: number;
 }
 
-export type DashboardRange = '24h' | '7d' | '30d';
+export type DashboardRange = '24h' | '7d' | '30d' | '90d' | '365d';
 export type DashboardFailureState = 'firing' | 'resolved';
 
 export interface DashboardStats {
@@ -695,6 +695,47 @@ export interface SyntheticBrowserArtifactMetrics {
 export interface MonitorResultsResponse {
   monitor_id: string;
   results: CheckResult[];
+}
+
+export type MonitorAnalyticsRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' | '365d';
+export type AnalyticsSource = 'raw' | 'rollup';
+
+export interface MonitorAnalyticsSummary {
+  uptime_pct: number;
+  sla_pct: number;
+  downtime_pct: number;
+  avg_latency_ms?: number;
+  median_latency_ms?: number;
+  p95_latency_ms?: number;
+  latest_status?: string;
+  latest_check_at?: string;
+}
+
+export interface MonitorAnalyticsSeriesPoint {
+  bucket_start: string;
+  uptime_pct: number;
+  avg_latency_ms?: number;
+  total_checks: number;
+  has_data: boolean;
+}
+
+export interface MonitorAnalyticsDowntimePeriod {
+  start_time: string;
+  end_time: string;
+  is_open: boolean;
+}
+
+export interface MonitorAnalyticsResponse {
+  monitor_id: string;
+  range: MonitorAnalyticsRange;
+  generated_at: string;
+  source: AnalyticsSource;
+  coverage_start?: string;
+  is_partial: boolean;
+  summary: MonitorAnalyticsSummary;
+  uptime_series: MonitorAnalyticsSeriesPoint[];
+  latency_series: MonitorAnalyticsSeriesPoint[];
+  downtime_periods: MonitorAnalyticsDowntimePeriod[];
 }
 
 export interface RunMonitorNowResponse {

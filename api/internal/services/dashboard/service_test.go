@@ -41,19 +41,37 @@ func TestNormalizeOverviewParams_ClampsAndFallbacks(t *testing.T) {
 
 func TestNormalizeOverviewParams_ValidValues(t *testing.T) {
 	got := normalizeOverviewParams(&models.DashboardOverviewQuery{
-		Range:         models.DashboardRange30d,
+		Range:         models.DashboardRange365d,
 		FailuresLimit: 25,
 		AlertsLimit:   50,
 	})
 
-	if got.Range != models.DashboardRange30d {
-		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange30d)
+	if got.Range != models.DashboardRange365d {
+		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange365d)
 	}
 	if got.FailuresLimit != 25 {
 		t.Fatalf("FailuresLimit = %d, want 25", got.FailuresLimit)
 	}
 	if got.AlertsLimit != 50 {
 		t.Fatalf("AlertsLimit = %d, want 50", got.AlertsLimit)
+	}
+}
+
+func TestRangeBounds_LongRanges(t *testing.T) {
+	for _, rangeValue := range []models.DashboardRange{
+		models.DashboardRange90d,
+		models.DashboardRange365d,
+	} {
+		start, end, bucket, err := rangeBounds(rangeValue)
+		if err != nil {
+			t.Fatalf("rangeBounds(%s) error = %v", rangeValue, err)
+		}
+		if !start.Before(end) {
+			t.Fatalf("rangeBounds(%s) start must be before end", rangeValue)
+		}
+		if bucket != 24*time.Hour {
+			t.Fatalf("rangeBounds(%s) bucket = %v, want 24h", rangeValue, bucket)
+		}
 	}
 }
 

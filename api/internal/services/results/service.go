@@ -12,6 +12,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/groups"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
@@ -20,6 +21,7 @@ import (
 type Service struct {
 	db           db.DB
 	groupService groups.GroupService
+	analytics    *sharedanalytics.Repository
 }
 
 const (
@@ -36,6 +38,7 @@ func NewService(database db.DB, groupSvc groups.GroupService) *Service {
 	return &Service{
 		db:           database,
 		groupService: groupSvc,
+		analytics:    sharedanalytics.NewRepository(database),
 	}
 }
 
@@ -64,6 +67,62 @@ func (s *Service) GetMonitorResults(ctx context.Context, tenantID, monitorID uui
 
 	// Regular monitor - fetch its own results
 	return s.getRegularResults(ctx, tenantID, monitorID, limit, since)
+}
+
+func (s *Service) GetMonitorAnalytics(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorAnalyticsResponse, error) {
+	monitor, err := s.getMonitor(ctx, tenantID, monitorID)
+	if err != nil {
+		return nil, err
+	}
+
+	monitorIDs := []uuid.UUID{monitorID}
+	if monitor.Type == models.MonitorTypeGroup {
+		members, err := s.groupService.GetGroupLeafMembers(ctx, tenantID, monitorID)
+		if err != nil {
+			return nil, err
+		}
+		monitorIDs = make([]uuid.UUID, 0, len(members))
+		for _, member := range members {
+			monitorIDs = append(monitorIDs, member.ID)
+		}
+	}
+
+	analyticsResult, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, sharedanalytics.Range(rangeValue), time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get monitor analytics: %w", err)
+	}
+
+	response := &models.MonitorAnalyticsResponse{
+		MonitorID:       monitorID,
+		Range:           rangeValue,
+		GeneratedAt:     analyticsResult.GeneratedAt,
+		Source:          models.AnalyticsSource(analyticsResult.Source),
+		CoverageStart:   analyticsResult.CoverageStart,
+		IsPartial:       analyticsResult.IsPartial,
+		Summary:         mapSummary(analyticsResult.Summary),
+		UptimeSeries:    make([]models.MonitorAnalyticsSeriesPoint, 0, len(analyticsResult.Series)),
+		LatencySeries:   make([]models.MonitorAnalyticsSeriesPoint, 0, len(analyticsResult.Series)),
+		DowntimePeriods: make([]models.MonitorAnalyticsDowntimePeriod, 0, len(analyticsResult.Downtime)),
+	}
+	for _, point := range analyticsResult.Series {
+		seriesPoint := models.MonitorAnalyticsSeriesPoint{
+			BucketStart:  point.BucketStart,
+			UptimePct:    point.UptimePct,
+			AvgLatencyMS: point.AvgLatencyMS,
+			TotalChecks:  point.TotalChecks,
+			HasData:      point.HasData,
+		}
+		response.UptimeSeries = append(response.UptimeSeries, seriesPoint)
+		response.LatencySeries = append(response.LatencySeries, seriesPoint)
+	}
+	for _, period := range analyticsResult.Downtime {
+		response.DowntimePeriods = append(response.DowntimePeriods, models.MonitorAnalyticsDowntimePeriod{
+			StartTime: period.Start,
+			EndTime:   period.End,
+			IsOpen:    period.IsOpen,
+		})
+	}
+	return response, nil
 }
 
 // getGroupResults retrieves aggregated results for a group monitor
@@ -304,4 +363,17 @@ func computeDynamicLimit(since *time.Time, intervalSeconds int) int {
 	}
 
 	return limit
+}
+
+func mapSummary(summary sharedanalytics.Summary) models.MonitorAnalyticsSummary {
+	return models.MonitorAnalyticsSummary{
+		UptimePct:       summary.UptimePct,
+		SLAPct:          summary.SLAPct,
+		DowntimePct:     summary.DowntimePct,
+		AvgLatencyMS:    summary.AvgLatencyMS,
+		MedianLatencyMS: summary.MedianLatencyMS,
+		P95LatencyMS:    summary.P95LatencyMS,
+		LatestStatus:    summary.LatestStatus,
+		LatestCheckAt:   summary.LatestCheckAt,
+	}
 }

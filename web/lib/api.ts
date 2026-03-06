@@ -20,6 +20,7 @@ import type {
   UpdateStatusPageRequest,
   StatusPageListResponse,
   MonitorResultsResponse,
+  MonitorAnalyticsResponse,
   DashboardOverviewResponse,
   RunMonitorNowResponse,
   AddMonitorsToGroupRequest,
@@ -492,8 +493,20 @@ export async function getMonitorResults(
   return apiRequest<MonitorResultsResponse>('GET', path);
 }
 
+export async function getMonitorAnalytics(
+  id: string,
+  params?: { range?: '1h' | '6h' | '24h' | '7d' | '30d' | '90d' | '365d' }
+): Promise<MonitorAnalyticsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+
+  const queryString = queryParams.toString();
+  const path = `/v1/monitors/${id}/analytics${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<MonitorAnalyticsResponse>('GET', path);
+}
+
 export async function getDashboardOverview(params?: {
-  range?: '24h' | '7d' | '30d';
+  range?: '24h' | '7d' | '30d' | '90d' | '365d';
   failures_limit?: number;
   alerts_limit?: number;
 }): Promise<DashboardOverviewResponse> {

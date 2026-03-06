@@ -133,6 +133,15 @@ func (m *MockResultsService) GetMonitorResults(ctx context.Context, tenantID, mo
 	}, nil
 }
 
+func (m *MockResultsService) GetMonitorAnalytics(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorAnalyticsResponse, error) {
+	return &models.MonitorAnalyticsResponse{
+		MonitorID: monitorID,
+		Range:     rangeValue,
+		Source:    models.AnalyticsSourceRaw,
+		Summary:   models.MonitorAnalyticsSummary{},
+	}, nil
+}
+
 type MockCheckJobPublisher struct {
 	subject string
 	job     *sharedmodels.Job
@@ -269,6 +278,46 @@ func TestHandlers_ListMonitors(t *testing.T) {
 
 	if response.Total != 3 {
 		t.Errorf("Expected 3 monitors, got %d", response.Total)
+	}
+}
+
+func TestHandlers_GetMonitorAnalytics(t *testing.T) {
+	log := logger.New("test", "debug")
+	monitorSvc := NewMockMonitorService()
+	groupSvc := &MockGroupService{}
+	resultSvc := &MockResultsService{}
+	handlers := NewHandlers(monitorSvc, groupSvc, resultSvc, log, t.TempDir())
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	monitorSvc.monitors[monitorID] = &models.Monitor{
+		ID:              monitorID,
+		TenantID:        tenantID,
+		Name:            "Analytics Monitor",
+		Type:            models.MonitorTypeHTTP,
+		IntervalSeconds: 60,
+		TimeoutSeconds:  30,
+	}
+
+	r := chi.NewRouter()
+	r.Get("/{id}/analytics", handlers.GetMonitorAnalytics)
+
+	req := httptest.NewRequest(http.MethodGet, "/"+monitorID.String()+"/analytics?range=90d", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var response models.MonitorAnalyticsResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if response.Range != models.MonitorAnalyticsRange90d {
+		t.Fatalf("range = %s, want %s", response.Range, models.MonitorAnalyticsRange90d)
 	}
 }
 

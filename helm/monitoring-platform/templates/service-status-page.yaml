@@ -1,4 +1,5 @@
 {{- if .Values.statusPage.enabled }}
+{{- $serviceType := .Values.statusPage.service.type | default "ClusterIP" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -7,18 +8,23 @@ metadata:
     {{- include "monitoring-platform.labels" . | nindent 4 }}
     app.kubernetes.io/component: status-page
 spec:
-  type: ClusterIP
+  type: {{ $serviceType }}
   ports:
-    - port: {{ .Values.statusPage.httpPort }}
+    - port: {{ .Values.statusPage.service.port | default .Values.statusPage.httpPort }}
       targetPort: http
       protocol: TCP
       name: http
+      {{- if and (eq $serviceType "NodePort") .Values.statusPage.service.nodePort }}
+      nodePort: {{ .Values.statusPage.service.nodePort }}
+      {{- end }}
     - port: {{ .Values.statusPage.metricsPort }}
       targetPort: metrics
       protocol: TCP
       name: metrics
+      {{- if and (eq $serviceType "NodePort") .Values.statusPage.service.metricsNodePort }}
+      nodePort: {{ .Values.statusPage.service.metricsNodePort }}
+      {{- end }}
   selector:
     {{- include "monitoring-platform.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: status-page
 {{- end }}
-

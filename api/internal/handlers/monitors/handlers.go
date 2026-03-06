@@ -483,6 +483,59 @@ func (h *Handlers) GetMonitorResults(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
+// GetMonitorAnalytics handles GET /api/v1/monitors/{id}/analytics
+func (h *Handlers) GetMonitorAnalytics(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+
+	monitorIDStr := chi.URLParam(r, "id")
+	monitorID, err := uuid.Parse(monitorIDStr)
+	if err != nil {
+		errors.WriteValidationError(w, "invalid monitor ID")
+		return
+	}
+
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	rangeValue := models.MonitorAnalyticsRange24h
+	switch models.MonitorAnalyticsRange(r.URL.Query().Get("range")) {
+	case models.MonitorAnalyticsRange1h,
+		models.MonitorAnalyticsRange6h,
+		models.MonitorAnalyticsRange24h,
+		models.MonitorAnalyticsRange7d,
+		models.MonitorAnalyticsRange30d,
+		models.MonitorAnalyticsRange90d,
+		models.MonitorAnalyticsRange365d:
+		rangeValue = models.MonitorAnalyticsRange(r.URL.Query().Get("range"))
+	}
+
+	response, err := h.resultService.GetMonitorAnalytics(r.Context(), tenantUUID, monitorID, rangeValue)
+	if err != nil {
+		if err.Error() == "monitor not found" {
+			errors.WriteNotFoundError(w, "monitor not found")
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":      err.Error(),
+			"tenant_id":  tenantID,
+			"monitor_id": monitorID,
+			"range":      rangeValue,
+		}).Error("Failed to get monitor analytics")
+		errors.WriteInternalError(w, "failed to get monitor analytics")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // RunMonitorNow handles POST /api/v1/monitors/{id}/run
 func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := middleware.GetTenantID(r.Context())

@@ -96,6 +96,63 @@ type MonitorResultsResponse struct {
 	Results   []CheckResult `json:"results"`
 }
 
+type MonitorAnalyticsRange string
+
+const (
+	MonitorAnalyticsRange1h   MonitorAnalyticsRange = "1h"
+	MonitorAnalyticsRange6h   MonitorAnalyticsRange = "6h"
+	MonitorAnalyticsRange24h  MonitorAnalyticsRange = "24h"
+	MonitorAnalyticsRange7d   MonitorAnalyticsRange = "7d"
+	MonitorAnalyticsRange30d  MonitorAnalyticsRange = "30d"
+	MonitorAnalyticsRange90d  MonitorAnalyticsRange = "90d"
+	MonitorAnalyticsRange365d MonitorAnalyticsRange = "365d"
+)
+
+type AnalyticsSource string
+
+const (
+	AnalyticsSourceRaw    AnalyticsSource = "raw"
+	AnalyticsSourceRollup AnalyticsSource = "rollup"
+)
+
+type MonitorAnalyticsSummary struct {
+	UptimePct       float64    `json:"uptime_pct"`
+	SLAPct          float64    `json:"sla_pct"`
+	DowntimePct     float64    `json:"downtime_pct"`
+	AvgLatencyMS    *float64   `json:"avg_latency_ms,omitempty"`
+	MedianLatencyMS *float64   `json:"median_latency_ms,omitempty"`
+	P95LatencyMS    *float64   `json:"p95_latency_ms,omitempty"`
+	LatestStatus    *string    `json:"latest_status,omitempty"`
+	LatestCheckAt   *time.Time `json:"latest_check_at,omitempty"`
+}
+
+type MonitorAnalyticsSeriesPoint struct {
+	BucketStart  time.Time `json:"bucket_start"`
+	UptimePct    float64   `json:"uptime_pct"`
+	AvgLatencyMS *float64  `json:"avg_latency_ms,omitempty"`
+	TotalChecks  int       `json:"total_checks"`
+	HasData      bool      `json:"has_data"`
+}
+
+type MonitorAnalyticsDowntimePeriod struct {
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+	IsOpen    bool      `json:"is_open"`
+}
+
+type MonitorAnalyticsResponse struct {
+	MonitorID       uuid.UUID                        `json:"monitor_id"`
+	Range           MonitorAnalyticsRange            `json:"range"`
+	GeneratedAt     time.Time                        `json:"generated_at"`
+	Source          AnalyticsSource                  `json:"source"`
+	CoverageStart   *time.Time                       `json:"coverage_start,omitempty"`
+	IsPartial       bool                             `json:"is_partial"`
+	Summary         MonitorAnalyticsSummary          `json:"summary"`
+	UptimeSeries    []MonitorAnalyticsSeriesPoint    `json:"uptime_series"`
+	LatencySeries   []MonitorAnalyticsSeriesPoint    `json:"latency_series"`
+	DowntimePeriods []MonitorAnalyticsDowntimePeriod `json:"downtime_periods"`
+}
+
 // RunMonitorNowResponse represents a response for an on-demand monitor run
 type RunMonitorNowResponse struct {
 	JobID     string    `json:"job_id"`

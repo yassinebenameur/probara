@@ -141,7 +141,10 @@ start-all:
 	@echo "Waiting for services to be healthy..."
 	@sleep 10
 	@echo "Starting UI with nvm LTS..."
-	@bash scripts/start-ui.sh > /tmp/probara-ui.log 2>&1 &
+	@cd "$(CURDIR)" && { \
+		nohup bash scripts/start-ui.sh > /tmp/probara-ui.log 2>&1 </dev/null & \
+		echo $$! > /tmp/probara-ui.pid; \
+	}
 	@echo "UI started. Logs: tail -f /tmp/probara-ui.log"
 	@echo ""
 	@echo "Service URLs:"
@@ -153,7 +156,16 @@ start-all:
 # Stop everything (backend + UI)
 stop-all:
 	@echo "Stopping UI..."
-	@pkill -f "npm run dev" || true
+	@if [ -f /tmp/probara-ui.pid ]; then \
+		ui_pid=$$(cat /tmp/probara-ui.pid); \
+		kill "$$ui_pid" 2>/dev/null || true; \
+		sleep 1; \
+		kill -9 "$$ui_pid" 2>/dev/null || true; \
+		rm -f /tmp/probara-ui.pid; \
+	else \
+		pkill -f "$(CURDIR)/web/node_modules/.bin/next dev" || true; \
+		pkill -f "next dev --hostname 0.0.0.0 --port 3000" || true; \
+	fi
 	@echo "Stopping backend services..."
 	docker compose down
 	@echo "All services stopped."

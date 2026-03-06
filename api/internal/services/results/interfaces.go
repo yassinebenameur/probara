@@ -13,6 +13,7 @@ import (
 type ResultsService interface {
 	// GetMonitorResults retrieves check results for a monitor
 	GetMonitorResults(ctx context.Context, tenantID, monitorID uuid.UUID, limit int, since *time.Time) (*models.MonitorResultsResponse, error)
+	GetMonitorAnalytics(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorAnalyticsResponse, error)
 }
 
 // Ensure Service implements ResultsService

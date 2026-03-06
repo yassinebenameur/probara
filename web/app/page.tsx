@@ -18,10 +18,12 @@ import {
 type TrendPoint = { date: string; uptime: number; responseTime: number; total: number };
 type ActivityPoint = { time: string; checks: number; failures: number };
 
-const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d', number> = {
+const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d' | '90d' | '365d', number> = {
   '24h': 10,
   '7d': 25,
   '30d': 50,
+  '90d': 50,
+  '365d': 50,
 };
 
 function formatRelativeTime(dateString: string): string {
@@ -274,7 +276,7 @@ export default function DashboardPage() {
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('24h');
+  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | '90d' | '365d'>('24h');
 
   const loadData = useCallback(async () => {
     try {
@@ -345,7 +347,9 @@ export default function DashboardPage() {
   const selectedRangeDays = useMemo(() => {
     if (timeRange === '24h') return 1;
     if (timeRange === '7d') return 7;
-    return 30;
+    if (timeRange === '30d') return 30;
+    if (timeRange === '90d') return 90;
+    return 365;
   }, [timeRange]);
   const showRetentionWarning = tenantRetentionDays !== null && tenantRetentionDays > 0 && selectedRangeDays > tenantRetentionDays;
 
@@ -374,7 +378,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {(['24h', '7d', '30d'] as const).map((range) => (
+          {(['24h', '7d', '30d', '90d', '365d'] as const).map((range) => (
             <button
               key={range}
               onClick={() => setTimeRange(range)}
@@ -568,7 +572,7 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500">
               {timeRange === '24h'
                 ? 'Last 24 hours performance'
-                : `Last ${timeRange === '30d' ? '30' : '7'} days performance`}
+                : `Last ${timeRange.replace('d', '')} days performance`}
             </p>
           </div>
           {hasTrendData ? (

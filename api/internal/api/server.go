@@ -160,6 +160,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/import/preview", importHdlrs.Preview)
 				r.Post("/import", importHdlrs.Execute)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
+				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
 				r.Post("/{id}/run", monitorHandlers.RunMonitorNow)
 				r.Get("/{id}/artifacts/screenshot", monitorHandlers.GetSyntheticBrowserScreenshot)

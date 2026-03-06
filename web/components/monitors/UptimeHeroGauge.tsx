@@ -8,9 +8,10 @@ export const SLA_TARGET = 99.9;
 interface UptimeHeroGaugeProps {
   uptime: number;
   hasData: boolean;
+  rangeLabel?: string;
 }
 
-export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
+export function UptimeHeroGauge({ uptime, hasData, rangeLabel = '30 Day Window' }: UptimeHeroGaugeProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     const id = requestAnimationFrame(() => setMounted(true));
@@ -19,12 +20,11 @@ export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
 
   const isCompliant = uptime >= SLA_TARGET;
 
-  // Arc geometry: gap of ~100deg at the bottom, arc sweeps 260deg
-  // SIZE=380, R=148 → inner clear diameter ≈278px; font budget fits "100.000%"
-  const SIZE = 380;
+  // Compact gauge geometry tuned for a denser hero layout.
+  const SIZE = 300;
   const cx = SIZE / 2;
   const cy = SIZE / 2;
-  const R = 148;
+  const R = 116;
   const GAP_DEG = 100;
   const ARC_DEG = 360 - GAP_DEG;
   const circumference = 2 * Math.PI * R;
@@ -46,27 +46,12 @@ export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
   const intPart = dotIdx >= 0 ? uptimeStr.slice(0, dotIdx) : uptimeStr;
   const decPart = dotIdx >= 0 ? uptimeStr.slice(dotIdx) : '';
 
-  const slaLabel = isCompliant ? 'SLA COMPLIANT' : 'SLA BREACH';
-  const slaBorderColor = isCompliant
-    ? 'border-cyan-400/40 text-cyan-300 bg-slate-900/70'
-    : 'border-rose-400/40 text-rose-300 bg-slate-900/70';
-  const slaDotColor = isCompliant ? 'bg-cyan-400' : 'bg-rose-400';
-
   return (
-    <div className="flex flex-col items-center select-none py-6">
-      {/* SLA compliance badge */}
-      <div
-        className={`mb-6 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] backdrop-blur-sm ${slaBorderColor}`}
-      >
-        <span className={`h-1.5 w-1.5 rounded-full animate-pulse-soft ${slaDotColor}`} />
-        {slaLabel}
-      </div>
-
-      {/* Gauge SVG */}
-      <div className="relative" style={{ width: SIZE, height: SIZE }}>
+    <div className="flex flex-col items-center select-none py-2">
+      <div className="relative aspect-square w-[200px] sm:w-[220px] lg:w-[250px]">
         <svg
-          width={SIZE}
-          height={SIZE}
+          width="100%"
+          height="100%"
           viewBox={`0 0 ${SIZE} ${SIZE}`}
           className="overflow-visible"
         >
@@ -153,7 +138,6 @@ export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
           })()}
         </svg>
 
-        {/* Center text — hard-capped to inner ring width */}
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
           <div
             className="flex items-baseline gap-0.5 overflow-hidden"
@@ -166,11 +150,10 @@ export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
         </div>
       </div>
 
-      {/* Subtitle label */}
-      <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+      <p className="mt-3 text-center text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
         Uptime Aggregate&nbsp;
         <span className="text-slate-600">{'//'}</span>
-        &nbsp;30 Day Window
+        &nbsp;{rangeLabel}
       </p>
     </div>
   );

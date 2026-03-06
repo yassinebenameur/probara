@@ -187,6 +187,13 @@ statusPage:
   logLevel: "info"
   # Base URL for status page links
   baseUrl: ""
+  service:
+    type: ClusterIP
+    port: 8080
+    # Optional fixed NodePorts (used only when service.type=NodePort).
+    # If left null, Kubernetes assigns a port automatically.
+    nodePort: null
+    metricsNodePort: null
   resources:
     requests:
       cpu: "50m"

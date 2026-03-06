@@ -143,6 +143,8 @@ ingress:
 
 statusPage:
   baseUrl: "https://status.example.com"
+  service:
+    type: NodePort
 
 frontend:
   apiUrl: "/api"

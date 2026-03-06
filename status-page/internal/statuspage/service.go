@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -162,12 +163,13 @@ type HourlyUptime struct {
 
 // Service handles status page business logic
 type Service struct {
-	db *db.Client
+	db        *db.Client
+	analytics *sharedanalytics.Repository
 }
 
 // NewService creates a new status page service
 func NewService(db *db.Client) *Service {
-	return &Service{db: db}
+	return &Service{db: db, analytics: sharedanalytics.NewRepository(db)}
 }
 
 type statusPageSettingsPatch struct {
@@ -322,21 +324,16 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.ShowLatencyCharts = settings.ShowLatencyCharts
 	page.ShowAgentMetrics = settings.ShowAgentMetrics
 
-	// Fetch uptime history for all time ranges
+	// Fetch only short-range global uptime to keep public page responses bounded.
+	// Long-range (30/90/365d) aggregates are expensive on large check_results tables.
 	if uptimeHistory1h, err := s.GetGlobal5MinuteUptime(ctx, pageID, tenantID); err == nil {
 		page.UptimeHistory1h = uptimeHistory1h
 	}
 	if uptimeHistory1, err := s.GetGlobalHourlyUptime(ctx, pageID, tenantID); err == nil {
 		page.UptimeHistory1 = uptimeHistory1
 	}
-	if uptimeHistory30, err := s.GetGlobalDailyUptime(ctx, pageID, tenantID, 30); err == nil {
-		page.UptimeHistory30 = uptimeHistory30
-	}
-	if uptimeHistory90, err := s.GetGlobalDailyUptime(ctx, pageID, tenantID, 90); err == nil {
-		page.UptimeHistory90 = uptimeHistory90
-	}
-	if uptimeHistory365, err := s.GetGlobalDailyUptime(ctx, pageID, tenantID, 365); err == nil {
-		page.UptimeHistory365 = uptimeHistory365
+	if globalMonitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, pageID, tenantID); err == nil {
+		s.applyGlobalLongRangeAnalytics(ctx, &page, tenantID, globalMonitorIDs)
 	}
 
 	return &page, nil
@@ -555,22 +552,6 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 					monitor.UptimeHistory1h = uptimeHistory1h
 				}
 
-				// Get aggregated 30d, 90d, 365d uptime history (daily buckets)
-				uptime30d, err := s.GetGroupDailyUptime(ctx, memberIDs, tenantID, 30)
-				if err == nil {
-					monitor.UptimeHistory30d = uptime30d
-				}
-
-				uptime90d, err := s.GetGroupDailyUptime(ctx, memberIDs, tenantID, 90)
-				if err == nil {
-					monitor.UptimeHistory90d = uptime90d
-				}
-
-				uptime365d, err := s.GetGroupDailyUptime(ctx, memberIDs, tenantID, 365)
-				if err == nil {
-					monitor.UptimeHistory365d = uptime365d
-				}
-
 				// Get aggregated latency history for all time ranges
 				latencyHistory1h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "1 hour", 100)
 				if err == nil {
@@ -580,21 +561,6 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 				latencyHistory24h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "24 hours", 100)
 				if err == nil {
 					monitor.LatencyHistory = latencyHistory24h
-				}
-
-				latencyHistory30d, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "30 days", 150)
-				if err == nil {
-					monitor.LatencyHistory30d = latencyHistory30d
-				}
-
-				latencyHistory90d, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "90 days", 200)
-				if err == nil {
-					monitor.LatencyHistory90d = latencyHistory90d
-				}
-
-				latencyHistory365d, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "365 days", 300)
-				if err == nil {
-					monitor.LatencyHistory365d = latencyHistory365d
 				}
 
 				// Get aggregated downtime periods for all time ranges
@@ -608,26 +574,13 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 					monitor.DowntimePeriods24h = downtimePeriods24h
 				}
 
-				downtimePeriods30d, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "30 days")
-				if err == nil {
-					monitor.DowntimePeriods30d = downtimePeriods30d
-				}
-
-				downtimePeriods90d, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "90 days")
-				if err == nil {
-					monitor.DowntimePeriods90d = downtimePeriods90d
-				}
-
-				downtimePeriods365d, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "365 days")
-				if err == nil {
-					monitor.DowntimePeriods365d = downtimePeriods365d
-				}
-
 				// Get aggregated history
 				history, err := s.GetGroupHistory(ctx, memberIDs, tenantID, 50)
 				if err == nil {
 					monitor.History = history
 				}
+
+				s.applyMonitorLongRangeAnalytics(ctx, &monitor, tenantID, memberIDs)
 			}
 		} else {
 			// Regular monitor - use existing single-monitor functions
@@ -683,22 +636,6 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 				monitor.UptimeHistory1h = uptimeHistory1h
 			}
 
-			// Get 30d, 90d, 365d uptime history (daily buckets)
-			uptime30d, err := s.GetMonitorDailyUptime(ctx, monitorID, tenantID, 30)
-			if err == nil {
-				monitor.UptimeHistory30d = uptime30d
-			}
-
-			uptime90d, err := s.GetMonitorDailyUptime(ctx, monitorID, tenantID, 90)
-			if err == nil {
-				monitor.UptimeHistory90d = uptime90d
-			}
-
-			uptime365d, err := s.GetMonitorDailyUptime(ctx, monitorID, tenantID, 365)
-			if err == nil {
-				monitor.UptimeHistory365d = uptime365d
-			}
-
 			// Get latency history for sparkline chart (all time ranges)
 			latencyHistory1h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "1 hour", 100)
 			if err == nil {
@@ -708,21 +645,6 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 			latencyHistory24h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "24 hours", 100)
 			if err == nil {
 				monitor.LatencyHistory = latencyHistory24h // Keep for backward compat
-			}
-
-			latencyHistory30d, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "30 days", 150)
-			if err == nil {
-				monitor.LatencyHistory30d = latencyHistory30d
-			}
-
-			latencyHistory90d, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "90 days", 200)
-			if err == nil {
-				monitor.LatencyHistory90d = latencyHistory90d
-			}
-
-			latencyHistory365d, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "365 days", 300)
-			if err == nil {
-				monitor.LatencyHistory365d = latencyHistory365d
 			}
 
 			// Get downtime periods for all time ranges (to show red shaded areas on charts)
@@ -736,26 +658,13 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 				monitor.DowntimePeriods24h = downtimePeriods24h
 			}
 
-			downtimePeriods30d, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "30 days")
-			if err == nil {
-				monitor.DowntimePeriods30d = downtimePeriods30d
-			}
-
-			downtimePeriods90d, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "90 days")
-			if err == nil {
-				monitor.DowntimePeriods90d = downtimePeriods90d
-			}
-
-			downtimePeriods365d, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "365 days")
-			if err == nil {
-				monitor.DowntimePeriods365d = downtimePeriods365d
-			}
-
 			// Get history (last 50 or last 24h)
 			history, err := s.GetMonitorHistory(ctx, monitorID, tenantID, 50, nil)
 			if err == nil {
 				monitor.History = history
 			}
+
+			s.applyMonitorLongRangeAnalytics(ctx, &monitor, tenantID, []uuid.UUID{monitorID})
 		}
 
 		// For agent monitors, fetch the latest metrics
@@ -782,6 +691,153 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 	}
 
 	return monitors, nil
+}
+
+func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *MonitorStatus, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
+	ranges := []sharedanalytics.Range{sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
+	now := time.Now().UTC()
+	for _, rangeValue := range ranges {
+		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
+		if err != nil {
+			continue
+		}
+		uptimeHistory := mapDailySeries(result.Series)
+		latencyHistory := mapLatencySeries(result.Series, rangeValue)
+		downtime := mapDowntimePeriods(result.Downtime)
+		switch rangeValue {
+		case sharedanalytics.Range30d:
+			monitor.UptimeHistory30d = uptimeHistory
+			monitor.LatencyHistory30d = latencyHistory
+			monitor.DowntimePeriods30d = downtime
+		case sharedanalytics.Range90d:
+			monitor.UptimeHistory90d = uptimeHistory
+			monitor.LatencyHistory90d = latencyHistory
+			monitor.DowntimePeriods90d = downtime
+		case sharedanalytics.Range365d:
+			monitor.UptimeHistory365d = uptimeHistory
+			monitor.LatencyHistory365d = latencyHistory
+			monitor.DowntimePeriods365d = downtime
+		}
+	}
+}
+
+func (s *Service) applyGlobalLongRangeAnalytics(ctx context.Context, page *StatusPageData, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
+	ranges := []sharedanalytics.Range{sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
+	now := time.Now().UTC()
+	for _, rangeValue := range ranges {
+		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
+		if err != nil {
+			continue
+		}
+		uptimeHistory := mapDailySeries(result.Series)
+		switch rangeValue {
+		case sharedanalytics.Range30d:
+			page.UptimeHistory30 = uptimeHistory
+		case sharedanalytics.Range90d:
+			page.UptimeHistory90 = uptimeHistory
+		case sharedanalytics.Range365d:
+			page.UptimeHistory365 = uptimeHistory
+		}
+	}
+}
+
+func (s *Service) resolveStatusPageOperationalMonitorIDs(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.id, m.type
+		FROM monitors m
+		JOIN status_page_monitors spm ON spm.monitor_id = m.id
+		WHERE spm.status_page_id = $1 AND m.tenant_id = $2
+	`, statusPageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list status page monitor ids: %w", err)
+	}
+	defer rows.Close()
+
+	resolved := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var monitorType string
+		if err := rows.Scan(&monitorID, &monitorType); err != nil {
+			return nil, fmt.Errorf("failed to scan status page monitor id: %w", err)
+		}
+		if monitorType == "group" {
+			memberIDs, err := s.getGroupMemberIDs(ctx, monitorID, tenantID)
+			if err != nil {
+				continue
+			}
+			resolved = append(resolved, memberIDs...)
+			continue
+		}
+		resolved = append(resolved, monitorID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating status page monitor ids: %w", err)
+	}
+	return dedupeMonitorIDs(resolved), nil
+}
+
+func mapDailySeries(series []sharedanalytics.SeriesPoint) []DailyUptime {
+	result := make([]DailyUptime, 0, len(series))
+	for _, point := range series {
+		uptime := point.UptimePct
+		if !point.HasData {
+			uptime = -1
+		}
+		result = append(result, DailyUptime{
+			Date:   point.BucketStart.UTC().Format("2006-01-02"),
+			Uptime: uptime,
+		})
+	}
+	return result
+}
+
+func mapLatencySeries(series []sharedanalytics.SeriesPoint, rangeValue sharedanalytics.Range) []LatencyPoint {
+	result := make([]LatencyPoint, 0, len(series))
+	timeFormat := "Jan 2"
+	if rangeValue == sharedanalytics.Range30d {
+		timeFormat = "Jan 2"
+	}
+	for _, point := range series {
+		if point.AvgLatencyMS == nil || !point.HasData {
+			continue
+		}
+		result = append(result, LatencyPoint{
+			Timestamp: point.BucketStart.UTC(),
+			LatencyMS: int(*point.AvgLatencyMS),
+			Time:      point.BucketStart.UTC().Format(timeFormat),
+			Unix:      point.BucketStart.UTC().Unix(),
+		})
+	}
+	return result
+}
+
+func mapDowntimePeriods(periods []sharedanalytics.DowntimePeriod) []DowntimePeriod {
+	result := make([]DowntimePeriod, 0, len(periods))
+	for _, period := range periods {
+		result = append(result, DowntimePeriod{
+			StartTime: period.Start.UTC().Format("Jan 2 15:04"),
+			EndTime:   period.End.UTC().Format("Jan 2 15:04"),
+			StartUnix: period.Start.UTC().Unix(),
+			EndUnix:   period.End.UTC().Unix(),
+		})
+	}
+	return result
+}
+
+func dedupeMonitorIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	result := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
 }
 
 // CurrentStatus represents the current status of a monitor

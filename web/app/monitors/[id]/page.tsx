@@ -4,8 +4,8 @@ import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult } from '@/lib/types';
-import { getMonitor, updateMonitor, getMonitorResults, deleteMonitor, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
+import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
@@ -15,12 +15,23 @@ import { getLatestStatus } from '@/lib/monitor-utils';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
 type AgentTimeRange = '1h' | '6h' | '24h' | '7d';
+type OverviewTimeRange = MonitorAnalyticsRange;
 
 const AGENT_RANGE_MS: Record<AgentTimeRange, number> = {
   '1h': 60 * 60 * 1000,
   '6h': 6 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
+};
+
+const OVERVIEW_RANGE_MS: Record<OverviewTimeRange, number> = {
+  '1h': 60 * 60 * 1000,
+  '6h': 6 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  '90d': 90 * 24 * 60 * 60 * 1000,
+  '365d': 365 * 24 * 60 * 60 * 1000,
 };
 
 const NON_AGENT_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -89,10 +100,13 @@ export default function EditMonitorPage() {
   const [error, setError] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [results, setResults] = useState<MonitorResultsResponse | null>(null);
+  const [analytics, setAnalytics] = useState<MonitorAnalyticsResponse | null>(null);
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [agentTimeRange, setAgentTimeRange] = useState<AgentTimeRange>('24h');
+  const [overviewRange, setOverviewRange] = useState<OverviewTimeRange>('24h');
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
   const isPollingRef = useRef(false);
@@ -172,6 +186,23 @@ export default function EditMonitorPage() {
     }
   }, [id, monitor?.type, monitor?.interval_seconds, agentTimeRange]);
 
+  const loadAnalytics = useCallback(async (range?: OverviewTimeRange) => {
+    if (monitor?.type === 'agent') {
+      setAnalytics(null);
+      return;
+    }
+    try {
+      setAnalyticsLoading(true);
+      const data = await getMonitorAnalytics(id, { range: range ?? overviewRange });
+      setAnalytics(data);
+    } catch (err) {
+      console.error('Failed to load monitor analytics:', err);
+      setAnalytics(null);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, [id, monitor?.type, overviewRange]);
+
   useEffect(() => {
     void loadMonitor();
   }, [loadMonitor]);
@@ -199,6 +230,10 @@ export default function EditMonitorPage() {
   useEffect(() => {
     void loadResults();
   }, [loadResults]);
+
+  useEffect(() => {
+    void loadAnalytics();
+  }, [loadAnalytics]);
 
   useEffect(() => {
     if (activeTab !== 'overview' && activeTab !== 'history') {
@@ -383,7 +418,7 @@ export default function EditMonitorPage() {
   const selectedWindowMs =
     monitor.type === 'agent'
       ? AGENT_RANGE_MS[agentTimeRange]
-      : NON_AGENT_HISTORY_WINDOW_MS;
+      : OVERVIEW_RANGE_MS[overviewRange];
   const boundedRetentionDays =
     tenantRetentionDays && tenantRetentionDays > 0 ? tenantRetentionDays : null;
   const retentionWindowMs =
@@ -467,16 +502,17 @@ export default function EditMonitorPage() {
             <MonitorDetailOverview
               monitor={monitor}
               results={results?.results || []}
-              loading={resultsLoading}
+              analytics={analytics}
+              loading={resultsLoading || analyticsLoading}
               agentTimeRange={agentTimeRange}
               onAgentTimeRangeChange={(range) => {
                 setAgentTimeRange(range);
                 void loadResults({ range });
               }}
-              timeRange={agentTimeRange}
+              timeRange={overviewRange}
               onTimeRangeChange={(range) => {
-                setAgentTimeRange(range);
-                void loadResults({ range });
+                setOverviewRange(range);
+                void loadAnalytics(range);
               }}
             />
           )}
