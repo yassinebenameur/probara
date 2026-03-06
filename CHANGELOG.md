@@ -1,3 +1,10 @@
+# [1.0.0-alpha.26](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.25...v1.0.0-alpha.26) (2026-03-06)
+
+
+### Bug Fixes
+
+* **api:** start alert SSE subscriber ([d213308](https://github.com/yassinebenameur/probara/commit/d213308352f1840f2b83c3ddb1e1b0224c1c693f))
+
 # [1.0.0-alpha.25](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.24...v1.0.0-alpha.25) (2026-03-06)
 
 
