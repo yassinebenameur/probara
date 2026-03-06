@@ -18,7 +18,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-type TrendPoint = { date: string; uptime: number; responseTime: number; total: number };
+type TrendPoint = { date: string; uptime: number | null; responseTime: number | null; total: number };
 
 type TrendDelta = {
   value: number;       // absolute delta (e.g. +0.3 or -12)
@@ -46,12 +46,12 @@ function formatRelativeTime(dateString: string): string {
 
 /** Compute a trend delta by comparing the second half vs first half of the series. */
 function computeUptimeTrend(data: TrendPoint[]): TrendDelta | null {
-  const active = data.filter((d) => d.total > 0);
+  const active = data.filter((d) => d.total > 0 && d.uptime !== null);
   if (active.length < 4) return null;
   const mid = Math.floor(active.length / 2);
   const first = active.slice(0, mid);
   const second = active.slice(mid);
-  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + d.uptime, 0) / arr.length;
+  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + (d.uptime ?? 0), 0) / arr.length;
   const delta = avg(second) - avg(first);
   return {
     value: Math.abs(delta),
@@ -61,12 +61,12 @@ function computeUptimeTrend(data: TrendPoint[]): TrendDelta | null {
 }
 
 function computeResponseTrend(data: TrendPoint[]): TrendDelta | null {
-  const active = data.filter((d) => d.total > 0 && d.responseTime > 0);
+  const active = data.filter((d) => d.total > 0 && d.responseTime !== null && d.responseTime > 0);
   if (active.length < 4) return null;
   const mid = Math.floor(active.length / 2);
   const first = active.slice(0, mid);
   const second = active.slice(mid);
-  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + d.responseTime, 0) / arr.length;
+  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + (d.responseTime ?? 0), 0) / arr.length;
   const delta = avg(second) - avg(first);
   // For response time, going down is good
   return {
@@ -511,8 +511,8 @@ export default function DashboardPage() {
   const trendData = useMemo<TrendPoint[]>(() => {
     return (dashboard?.trend || []).map((point) => ({
       date: point.label,
-      uptime: point.uptime,
-      responseTime: point.response_time,
+      uptime: point.total_checks > 0 ? point.uptime : null,
+      responseTime: point.total_checks > 0 ? point.response_time : null,
       total: point.total_checks,
     }));
   }, [dashboard]);
@@ -536,7 +536,7 @@ export default function DashboardPage() {
 
   const minUptime = useMemo(() => {
     if (!hasTrendData) return 95;
-    return Math.min(...trendData.map((d) => (d.total > 0 ? d.uptime : 100)));
+    return Math.min(...trendData.map((d) => (d.total > 0 ? d.uptime ?? 100 : 100)));
   }, [trendData, hasTrendData]);
   const uptimeDomain: [number, number] = minUptime < 95 ? [0, 100] : [95, 100];
 
