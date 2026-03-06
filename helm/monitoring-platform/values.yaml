@@ -210,6 +210,9 @@ frontend:
   replicas: 2
   httpPort: 3000
   apiUrl: "/api"
+  # Public base URL for status page links shown in the frontend.
+  # Defaults to statusPage.baseUrl when empty.
+  statusPageUrl: ""
   # Runtime API upstream for Next.js server-side API proxy route (/api/*).
   # Leave empty to use the in-cluster API service automatically when api.enabled=true.
   # If api.enabled=false, set this to an external/internal Kubernetes service URL

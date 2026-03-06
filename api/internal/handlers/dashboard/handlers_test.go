@@ -23,9 +23,11 @@ func (m *mockDashboardService) GetOverview(ctx context.Context, tenantID uuid.UU
 	copied := *params
 	m.lastParams = &copied
 	return &models.DashboardOverviewResponse{
-		Range:       params.Range,
-		GeneratedAt: time.Now().UTC(),
-		Stats:       models.DashboardStats{},
+		Range:           params.Range,
+		GeneratedAt:     time.Now().UTC(),
+		Stats:           models.DashboardStats{},
+		OpsSummary:      models.DashboardOpsSummary{},
+		ProblemMonitors: []models.DashboardProblemMonitor{},
 	}, nil
 }
 
@@ -55,6 +57,17 @@ func TestHandlers_GetOverview_DefaultParams(t *testing.T) {
 	}
 	if mockSvc.lastParams.AlertsLimit != 10 {
 		t.Fatalf("alerts_limit = %d, want 10", mockSvc.lastParams.AlertsLimit)
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if _, ok := body["ops_summary"]; !ok {
+		t.Fatalf("expected ops_summary field in response")
+	}
+	if _, ok := body["problem_monitors"]; !ok {
+		t.Fatalf("expected problem_monitors field in response")
 	}
 }
 

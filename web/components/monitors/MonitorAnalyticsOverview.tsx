@@ -13,6 +13,7 @@ import {
 import { Info } from 'lucide-react';
 
 import { CheckResult, Monitor, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
+import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 import { SLA_TARGET, UptimeHeroGauge } from './UptimeHeroGauge';
 
 const OVERVIEW_RANGES: MonitorAnalyticsRange[] = ['1h', '6h', '24h', '7d', '30d', '90d', '365d'];
@@ -63,20 +64,23 @@ function formatTooltipValue(value: unknown, kind: 'uptime' | 'latency'): string 
   return formatLatency(value);
 }
 
-function StatusPill({ status }: { status?: string }) {
-  const normalized = status || 'unknown';
+function StatusPill({ status }: { status: string }) {
   const className =
-    normalized === 'success'
+    status === 'success' || status === 'up'
       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-      : normalized === 'error'
+      : status === 'error' || status === 'degraded'
         ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-        : normalized === 'failure'
+        : status === 'failure' || status === 'down'
           ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+          : status === 'paused'
+            ? 'bg-slate-500/10 text-slate-300 border-slate-500/20'
           : 'bg-slate-500/10 text-slate-300 border-slate-500/20';
+
+  const label = status === 'paused' ? 'paused' : status;
 
   return (
     <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium uppercase ${className}`}>
-      {normalized}
+      {label}
     </span>
   );
 }
@@ -254,6 +258,7 @@ export default function MonitorAnalyticsOverview({
   const hasData = Boolean(chartData.some((point) => point.hasData));
   const hasLatencyData = Boolean(chartData.some((point) => typeof point.latency === 'number'));
   const isSlaCompliant = (summary?.sla_pct ?? 0) >= SLA_TARGET;
+  const effectiveStatus = getEffectiveMonitorStatus(monitor, results);
 
   if (loading) {
     return <div className="py-12 text-center text-slate-500">Loading monitor analytics...</div>;
@@ -327,7 +332,7 @@ export default function MonitorAnalyticsOverview({
               <div>
                 <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Latest Status</p>
                 <div className="mt-0.5 flex items-center gap-2">
-                  <StatusPill status={summary?.latest_status} />
+                  <StatusPill status={monitor.enabled ? (summary?.latest_status || 'unknown') : effectiveStatus} />
                   <span className="text-xs text-slate-500">{formatTime(summary?.latest_check_at)}</span>
                 </div>
               </div>

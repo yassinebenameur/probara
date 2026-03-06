@@ -1,5 +1,5 @@
 interface StatusPillProps {
-  status: 'up' | 'down' | 'degraded' | 'unknown';
+  status: 'up' | 'down' | 'degraded' | 'unknown' | 'paused';
   label?: string;
 }
 
@@ -23,11 +23,17 @@ export default function StatusPill({ status, label }: StatusPillProps) {
       text: '#fef3c7',
       label: label || 'Degraded',
     },
-    unknown: {
+    paused: {
       border: 'rgba(148, 163, 184, 0.6)',
       bg: 'rgba(51, 65, 85, 0.5)',
       text: '#cbd5e1',
       label: label || 'Paused',
+    },
+    unknown: {
+      border: 'rgba(148, 163, 184, 0.6)',
+      bg: 'rgba(51, 65, 85, 0.5)',
+      text: '#cbd5e1',
+      label: label || 'Unknown',
     },
   };
 

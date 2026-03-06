@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Monitor, CheckResult } from '@/lib/types';
 import { getMonitors, getMonitorResults, getGroupMembers } from '@/lib/api';
 import StatusPill from '@/components/ui/StatusPill';
-import { calculateUptime, countOperationalResults, getLatestStatus, MonitorHealthStatus } from '@/lib/monitor-utils';
+import { calculateUptime, countOperationalResults, getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 
 export default function GroupedChecksView() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -74,8 +74,10 @@ export default function GroupedChecksView() {
     setExpandedGroups(newExpanded);
   };
 
-  const getGroupStatus = (groupId: string): MonitorHealthStatus => {
-    const members = groupMembers[groupId] || [];
+  const getGroupStatus = (group: Monitor): MonitorDisplayStatus => {
+    if (!group.enabled) return 'paused';
+
+    const members = groupMembers[group.id] || [];
     if (members.length === 0) return 'unknown';
 
     let upCount = 0;
@@ -84,11 +86,11 @@ export default function GroupedChecksView() {
 
     members.forEach(member => {
       const results = checkResults[member.id] || [];
-      const status = getLatestStatus(results);
+      const status = getEffectiveMonitorStatus(member, results);
       if (status === 'up') upCount++;
       else if (status === 'down') downCount++;
       else if (status === 'degraded') downCount++;
-      else if (status === 'unknown') unknownCount++;
+      else if (status === 'unknown' || status === 'paused') unknownCount++;
     });
 
     if (upCount === members.length) return 'up';
@@ -112,7 +114,7 @@ export default function GroupedChecksView() {
           {groups.map((group) => {
             const isExpanded = expandedGroups.has(group.id);
             const members = groupMembers[group.id] || [];
-            const status = getGroupStatus(group.id);
+            const status = getGroupStatus(group);
             const results = checkResults[group.id] || [];
             const uptime = calculateUptime(results);
             const operationalCount = countOperationalResults(results);
@@ -140,7 +142,7 @@ export default function GroupedChecksView() {
                     <StatusPill
                       status={status}
                       label={
-                        status === 'up' ? 'All Up' : status === 'down' ? 'All Down' : status === 'unknown' ? 'Paused' : 'Degraded'
+                        status === 'up' ? 'All Up' : status === 'down' ? 'All Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'
                       }
                     />
                   </div>
@@ -151,7 +153,7 @@ export default function GroupedChecksView() {
                   <div className="border-t border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)]">
                     {members.map((member) => {
                       const memberResults = checkResults[member.id] || [];
-                      const memberStatus = getLatestStatus(memberResults);
+                      const memberStatus = getEffectiveMonitorStatus(member, memberResults);
                       const memberUptime = calculateUptime(memberResults);
                       const memberOperationalCount = countOperationalResults(memberResults);
 
@@ -175,8 +177,10 @@ export default function GroupedChecksView() {
                                   ? 'Up'
                                   : memberStatus === 'down'
                                   ? 'Down'
-                                  : memberStatus === 'unknown'
+                                  : memberStatus === 'paused'
                                   ? 'Paused'
+                                  : memberStatus === 'unknown'
+                                  ? 'Unknown'
                                   : 'Degraded'
                               }
                             />
@@ -199,7 +203,7 @@ export default function GroupedChecksView() {
           <div className="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.92)]">
             {monitors.map((monitor, idx) => {
               const results = checkResults[monitor.id] || [];
-              const status = getLatestStatus(results);
+              const status = getEffectiveMonitorStatus(monitor, results);
               const uptime = calculateUptime(results);
               const operationalCount = countOperationalResults(results);
 
@@ -223,7 +227,7 @@ export default function GroupedChecksView() {
                     <StatusPill
                       status={status}
                       label={
-                        status === 'up' ? 'Up' : status === 'down' ? 'Down' : status === 'unknown' ? 'Paused' : 'Degraded'
+                        status === 'up' ? 'Up' : status === 'down' ? 'Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'
                       }
                     />
                   </div>

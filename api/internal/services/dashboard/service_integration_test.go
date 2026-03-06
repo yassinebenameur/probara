@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -82,6 +83,133 @@ func TestService_GetOverview_LongRangeParityMatchesMonitorAnalytics(t *testing.T
 			expectedDay2Uptime := averageMonitorSeriesAt(day2, monitorAAnalytics.UptimeSeries, monitorBAnalytics.UptimeSeries)
 			assertDashboardClose(t, pointDay2.Uptime, expectedDay2Uptime)
 		})
+	}
+}
+
+func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-action")
+	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
+	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
+	monitorC := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-c")
+	monitorPaused := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-paused")
+	_ = testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-no-data")
+
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET enabled = FALSE WHERE id = $1`, monitorPaused); err != nil {
+		t.Fatalf("disable paused monitor: %v", err)
+	}
+
+	now := time.Now().UTC()
+	bucketDay := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.UTC)
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, bucketDay, 10, 7, 700, 7, "error", bucketDay.Add(23*time.Hour))
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorB, bucketDay, 10, 9, 900, 9, "failure", bucketDay.Add(22*time.Hour))
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorC, bucketDay, 10, 10, 1000, 10, "success", bucketDay.Add(21*time.Hour))
+
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-72*time.Hour), "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-48*time.Hour), "error", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-24*time.Hour), "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, now.Add(-36*time.Hour), "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorC, now.Add(-12*time.Hour), "success", "monitor", testutil.IntPtr(120))
+
+	policyID := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
+		VALUES ($1, $2, 'default-policy', 2, 300, NOW(), NOW())
+	`, policyID, tenantID); err != nil {
+		t.Fatalf("insert alert policy: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES
+			($1, $4, $5, $7, 'active', NOW(), 3, NOW(), NOW()),
+			($2, $4, $6, $7, 'acknowledged', NOW(), 2, NOW(), NOW()),
+			($3, $4, $5, $7, 'resolved', NOW(), 1, NOW(), NOW())
+	`, uuid.New(), uuid.New(), uuid.New(), tenantID, monitorA, monitorB, policyID); err != nil {
+		t.Fatalf("insert alerts: %v", err)
+	}
+
+	overview, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
+		Range:         models.DashboardRange30d,
+		FailuresLimit: 10,
+	})
+	if err != nil {
+		t.Fatalf("GetOverview(30d) error = %v", err)
+	}
+
+	if overview.OpsSummary.UpMonitors != 1 {
+		t.Fatalf("OpsSummary.UpMonitors = %d, want 1", overview.OpsSummary.UpMonitors)
+	}
+	if overview.OpsSummary.DownMonitors != 2 {
+		t.Fatalf("OpsSummary.DownMonitors = %d, want 2", overview.OpsSummary.DownMonitors)
+	}
+	if overview.OpsSummary.PausedMonitors != 1 {
+		t.Fatalf("OpsSummary.PausedMonitors = %d, want 1", overview.OpsSummary.PausedMonitors)
+	}
+	if overview.OpsSummary.ActiveAlerts != 1 {
+		t.Fatalf("OpsSummary.ActiveAlerts = %d, want 1", overview.OpsSummary.ActiveAlerts)
+	}
+	if overview.OpsSummary.AcknowledgedAlerts != 1 {
+		t.Fatalf("OpsSummary.AcknowledgedAlerts = %d, want 1", overview.OpsSummary.AcknowledgedAlerts)
+	}
+
+	if len(overview.ProblemMonitors) != 2 {
+		t.Fatalf("ProblemMonitors length = %d, want 2", len(overview.ProblemMonitors))
+	}
+	if overview.ProblemMonitors[0].MonitorID != monitorA {
+		t.Fatalf("ProblemMonitors[0].MonitorID = %s, want %s", overview.ProblemMonitors[0].MonitorID, monitorA)
+	}
+	if overview.ProblemMonitors[0].FailureCount != 2 || overview.ProblemMonitors[0].ErrorCount != 1 {
+		t.Fatalf("ProblemMonitors[0] counts = (%d,%d), want (2,1)", overview.ProblemMonitors[0].FailureCount, overview.ProblemMonitors[0].ErrorCount)
+	}
+	if math.Abs(overview.ProblemMonitors[0].Uptime-70.0) > 0.0001 {
+		t.Fatalf("ProblemMonitors[0].Uptime = %.4f, want 70.0", overview.ProblemMonitors[0].Uptime)
+	}
+	if overview.ProblemMonitors[0].CurrentStatus == nil || *overview.ProblemMonitors[0].CurrentStatus != "error" {
+		t.Fatalf("ProblemMonitors[0].CurrentStatus = %v, want error", overview.ProblemMonitors[0].CurrentStatus)
+	}
+	if overview.ProblemMonitors[1].MonitorID != monitorB {
+		t.Fatalf("ProblemMonitors[1].MonitorID = %s, want %s", overview.ProblemMonitors[1].MonitorID, monitorB)
+	}
+
+	if len(overview.RecentFailures) != 4 {
+		t.Fatalf("RecentFailures length = %d, want 4", len(overview.RecentFailures))
+	}
+}
+
+func TestService_GetOverview_ActionSummaryEmptyTenant(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-empty")
+
+	overview, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
+		Range: models.DashboardRange30d,
+	})
+	if err != nil {
+		t.Fatalf("GetOverview(30d) error = %v", err)
+	}
+
+	if overview.OpsSummary.UpMonitors != 0 || overview.OpsSummary.DownMonitors != 0 || overview.OpsSummary.PausedMonitors != 0 {
+		t.Fatalf("OpsSummary monitor counts = %+v, want all zero", overview.OpsSummary)
+	}
+	if overview.OpsSummary.ActiveAlerts != 0 || overview.OpsSummary.AcknowledgedAlerts != 0 {
+		t.Fatalf("OpsSummary alert counts = %+v, want all zero", overview.OpsSummary)
+	}
+	if len(overview.ProblemMonitors) != 0 {
+		t.Fatalf("ProblemMonitors length = %d, want 0", len(overview.ProblemMonitors))
+	}
+	if len(overview.RecentFailures) != 0 {
+		t.Fatalf("RecentFailures length = %d, want 0", len(overview.RecentFailures))
 	}
 }
 

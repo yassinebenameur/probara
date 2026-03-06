@@ -410,6 +410,24 @@ export interface DashboardMonitorHealth {
   latest_check_at: string | null;
 }
 
+export interface DashboardOpsSummary {
+  up_monitors: number;
+  down_monitors: number;
+  paused_monitors: number;
+  active_alerts: number;
+  acknowledged_alerts: number;
+}
+
+export interface DashboardProblemMonitor {
+  monitor_id: string;
+  monitor_name: string;
+  current_status: string | null;
+  failure_count: number;
+  error_count: number;
+  uptime: number;
+  latest_failure_at: string | null;
+}
+
 export interface DashboardFailureEvent {
   check_result_id: string;
   monitor_id: string;
@@ -429,7 +447,9 @@ export interface DashboardOverviewResponse {
   stats: DashboardStats;
   trend: DashboardTrendPoint[];
   activity_24h: DashboardActivityPoint[];
+  ops_summary: DashboardOpsSummary;
   monitor_health: DashboardMonitorHealth[];
+  problem_monitors: DashboardProblemMonitor[];
   recent_failures: DashboardFailureEvent[];
   recent_alerts: Alert[];
 }

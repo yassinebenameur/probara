@@ -5,6 +5,8 @@ type StatusPageUrlInput = {
   public_url?: string;
 };
 
+const STATUS_PAGE_BASE_URL = process.env.NEXT_PUBLIC_STATUS_PAGE_URL?.trim();
+
 export function resolveStatusPagePublicUrl(input: StatusPageUrlInput): string {
   let resolved: URL;
 
@@ -12,7 +14,7 @@ export function resolveStatusPagePublicUrl(input: StatusPageUrlInput): string {
     try {
       resolved = new URL(input.public_url);
     } catch {
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const origin = resolveStatusPageOrigin();
       if (origin) {
         resolved = new URL(input.public_url, origin);
       } else {
@@ -20,7 +22,7 @@ export function resolveStatusPagePublicUrl(input: StatusPageUrlInput): string {
       }
     }
   } else {
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const origin = resolveStatusPageOrigin();
     const relativePath = `/public/status/${input.slug}`;
 
     if (!origin) {
@@ -44,4 +46,23 @@ function appendEditQuery(url: string): string {
 
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}edit=1`;
+}
+
+function resolveStatusPageOrigin(): string {
+  if (STATUS_PAGE_BASE_URL) {
+    return STATUS_PAGE_BASE_URL.replace(/\/+$/, '');
+  }
+
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  const { protocol, hostname, port, origin } = window.location;
+  const isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1';
+
+  if (isLocalHost && port !== '8082') {
+    return `${protocol}//${hostname}:8082`;
+  }
+
+  return origin;
 }

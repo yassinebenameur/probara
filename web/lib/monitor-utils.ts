@@ -1,6 +1,7 @@
-import { CheckResult } from './types';
+import { CheckResult, Monitor } from './types';
 
 export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
+export type MonitorDisplayStatus = MonitorHealthStatus | 'paused';
 
 // Backward-compatible fallback while older rows/API payloads may miss result_source.
 const EXPIRED_JOB_MESSAGE = 'Job expired before processing';
@@ -82,6 +83,17 @@ export function getLatestStatus(results: CheckResult[]): MonitorHealthStatus {
   }
 
   return 'unknown';
+}
+
+export function getEffectiveMonitorStatus(
+  monitor: Pick<Monitor, 'enabled'>,
+  results: CheckResult[]
+): MonitorDisplayStatus {
+  if (!monitor.enabled) {
+    return 'paused';
+  }
+
+  return getLatestStatus(results);
 }
 
 /**

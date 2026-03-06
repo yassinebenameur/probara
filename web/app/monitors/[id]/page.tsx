@@ -11,7 +11,7 @@ import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
-import { getLatestStatus } from '@/lib/monitor-utils';
+import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
 type AgentTimeRange = '1h' | '6h' | '24h' | '7d';
@@ -72,12 +72,13 @@ function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckRe
 }
 
 // Status badge component
-function StatusBadge({ status }: { status: 'up' | 'down' | 'degraded' | 'unknown' }) {
+function StatusBadge({ status }: { status: MonitorDisplayStatus }) {
   const config = {
     up: { label: 'Operational', bg: 'bg-emerald-500/10', text: 'text-emerald-400', dot: 'bg-emerald-500' },
     down: { label: 'Down', bg: 'bg-rose-500/10', text: 'text-rose-400', dot: 'bg-rose-500' },
     degraded: { label: 'Degraded', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
-    unknown: { label: 'Paused', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
+    paused: { label: 'Paused', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
+    unknown: { label: 'Unknown', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
   };
   const { label, bg, text, dot } = config[status];
 
@@ -310,7 +311,7 @@ export default function EditMonitorPage() {
     return null;
   };
 
-  const status = getLatestStatus(results?.results || []);
+  const status = monitor ? getEffectiveMonitorStatus(monitor, results?.results || []) : 'unknown';
   const getSyntheticBrowserScreenshotPath = (result?: CheckResult): string | null => {
     const metrics = result?.metrics_data as { synthetic_browser?: { artifacts?: { screenshot_path?: string } } } | undefined;
     return metrics?.synthetic_browser?.artifacts?.screenshot_path || null;
@@ -499,11 +500,11 @@ export default function EditMonitorPage() {
         {/* Main Content */}
         <div>
           {activeTab === 'overview' && (
-            <MonitorDetailOverview
-              monitor={monitor}
-              results={results?.results || []}
-              analytics={analytics}
-              loading={resultsLoading || analyticsLoading}
+              <MonitorDetailOverview
+                monitor={monitor}
+                results={results?.results || []}
+                analytics={analytics}
+                loading={resultsLoading || analyticsLoading}
               agentTimeRange={agentTimeRange}
               onAgentTimeRangeChange={(range) => {
                 setAgentTimeRange(range);

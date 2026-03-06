@@ -18,6 +18,7 @@ const (
 	defaultFailuresLimit = 10
 	defaultAlertsLimit   = 10
 	maxListLimit         = 50
+	problemMonitorLimit  = 5
 )
 
 // Service handles dashboard aggregation logic.
@@ -63,17 +64,24 @@ func (s *Service) GetOverview(ctx context.Context, tenantID uuid.UUID, params *m
 		}
 	}
 
-	monitorHealth, err := s.getMonitorHealth(ctx, tenantID, normalized.Range)
+	monitorHealth, err := s.getMonitorHealth(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive)
 	if err != nil {
 		return nil, err
 	}
 
-	recentFailures := []models.DashboardFailureEvent{}
-	if normalized.Range == models.DashboardRange24h {
-		recentFailures, err = s.getRecentFailures(ctx, tenantID, rangeStart, rangeEndExclusive, normalized.FailuresLimit)
-		if err != nil {
-			return nil, err
-		}
+	opsSummary, err := s.getOpsSummary(ctx, tenantID, monitorHealth)
+	if err != nil {
+		return nil, err
+	}
+
+	problemMonitors, err := s.getProblemMonitors(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, problemMonitorLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	recentFailures, err := s.getRecentFailures(ctx, tenantID, rangeStart, rangeEndExclusive, normalized.FailuresLimit)
+	if err != nil {
+		return nil, err
 	}
 
 	recentAlerts := []models.AlertWithDetails{}
@@ -85,14 +93,16 @@ func (s *Service) GetOverview(ctx context.Context, tenantID uuid.UUID, params *m
 	}
 
 	return &models.DashboardOverviewResponse{
-		Range:          normalized.Range,
-		GeneratedAt:    time.Now().UTC(),
-		Stats:          stats,
-		Trend:          trend,
-		Activity24h:    activity,
-		MonitorHealth:  monitorHealth,
-		RecentFailures: recentFailures,
-		RecentAlerts:   recentAlerts,
+		Range:           normalized.Range,
+		GeneratedAt:     time.Now().UTC(),
+		Stats:           stats,
+		Trend:           trend,
+		Activity24h:     activity,
+		OpsSummary:      opsSummary,
+		MonitorHealth:   monitorHealth,
+		ProblemMonitors: problemMonitors,
+		RecentFailures:  recentFailures,
+		RecentAlerts:    recentAlerts,
 	}, nil
 }
 
@@ -340,7 +350,7 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID) ([]mod
 	return activity, nil
 }
 
-func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange) ([]models.DashboardMonitorHealth, error) {
+func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time) ([]models.DashboardMonitorHealth, error) {
 	query := `
 		SELECT
 			m.id,
@@ -355,6 +365,8 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 			WHERE cr.monitor_id = m.id
 			  AND cr.tenant_id = m.tenant_id
 			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
 			ORDER BY cr.created_at DESC
 			LIMIT 1
 		) lr ON TRUE
@@ -375,6 +387,8 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 				FROM monitor_daily_rollups mdr
 				WHERE mdr.monitor_id = m.id
 				  AND mdr.tenant_id = m.tenant_id
+				  AND mdr.bucket_day >= $2::date
+				  AND mdr.bucket_day < $3::date
 				ORDER BY mdr.bucket_day DESC
 				LIMIT 1
 			) lr ON TRUE
@@ -383,7 +397,7 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 		`
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, tenantID)
+	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEndExclusive)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query monitor health: %w", err)
 	}
@@ -412,6 +426,191 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 	}
 
 	return healthRows, nil
+}
+
+func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitorHealth []models.DashboardMonitorHealth) (models.DashboardOpsSummary, error) {
+	summary := models.DashboardOpsSummary{}
+	for _, row := range monitorHealth {
+		switch {
+		case !row.Enabled:
+			summary.PausedMonitors++
+		case row.LatestStatus == nil:
+			continue
+		case *row.LatestStatus == "success":
+			summary.UpMonitors++
+		default:
+			summary.DownMonitors++
+		}
+	}
+
+	query := `
+		SELECT
+			COUNT(*) FILTER (WHERE status = 'active') AS active_alerts,
+			COUNT(*) FILTER (WHERE status = 'acknowledged') AS acknowledged_alerts
+		FROM alerts
+		WHERE tenant_id = $1
+		  AND status IN ('active', 'acknowledged')
+	`
+	if err := s.db.QueryRowContext(ctx, query, tenantID).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts); err != nil {
+		return summary, fmt.Errorf("failed to query ops summary alerts: %w", err)
+	}
+
+	return summary, nil
+}
+
+func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time, limit int) ([]models.DashboardProblemMonitor, error) {
+	if limit < 1 {
+		limit = problemMonitorLimit
+	}
+
+	monitorStatusJoin := `
+		LEFT JOIN LATERAL (
+			SELECT cr.status AS current_status
+			FROM check_results cr
+			WHERE cr.monitor_id = m.id
+			  AND cr.tenant_id = m.tenant_id
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) cs ON TRUE
+	`
+	uptimeStats := `
+		uptime_stats AS (
+			SELECT
+				cr.monitor_id,
+				COUNT(*) AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks
+			FROM check_results cr
+			JOIN monitors m ON m.id = cr.monitor_id
+			WHERE cr.tenant_id = $1
+			  AND m.tenant_id = $1
+			  AND m.enabled = TRUE
+			  AND m.type <> 'group'
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			GROUP BY cr.monitor_id
+		),
+	`
+	if dashboardRange != models.DashboardRange24h {
+		monitorStatusJoin = `
+		LEFT JOIN LATERAL (
+			SELECT mdr.latest_status AS current_status
+			FROM monitor_daily_rollups mdr
+			WHERE mdr.monitor_id = m.id
+			  AND mdr.tenant_id = m.tenant_id
+			  AND mdr.bucket_day >= $2::date
+			  AND mdr.bucket_day < $3::date
+			ORDER BY mdr.bucket_day DESC
+			LIMIT 1
+		) cs ON TRUE
+	`
+		uptimeStats = `
+		uptime_stats AS (
+			SELECT
+				mdr.monitor_id,
+				SUM(mdr.total_checks) AS total_checks,
+				SUM(mdr.success_checks) AS success_checks
+			FROM monitor_daily_rollups mdr
+			JOIN monitors m ON m.id = mdr.monitor_id
+			WHERE mdr.tenant_id = $1
+			  AND m.tenant_id = $1
+			  AND m.enabled = TRUE
+			  AND m.type <> 'group'
+			  AND mdr.bucket_day >= $2::date
+			  AND mdr.bucket_day < $3::date
+			GROUP BY mdr.monitor_id
+		),
+	`
+	}
+
+	query := fmt.Sprintf(`
+		WITH
+		failure_stats AS (
+			SELECT
+				cr.monitor_id,
+				COUNT(*) FILTER (WHERE cr.status = 'failure') AS failure_count,
+				COUNT(*) FILTER (WHERE cr.status = 'error') AS error_count,
+				MAX(cr.created_at) FILTER (WHERE cr.status IN ('failure', 'error')) AS latest_failure_at
+			FROM check_results cr
+			JOIN monitors m ON m.id = cr.monitor_id
+			WHERE cr.tenant_id = $1
+			  AND m.tenant_id = $1
+			  AND m.enabled = TRUE
+			  AND m.type <> 'group'
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			GROUP BY cr.monitor_id
+		),
+		%s
+		ranked_monitors AS (
+			SELECT
+				m.id,
+				m.name,
+				cs.current_status,
+				COALESCE(fs.failure_count, 0) AS failure_count,
+				COALESCE(fs.error_count, 0) AS error_count,
+				CASE
+					WHEN COALESCE(us.total_checks, 0) > 0 THEN (us.success_checks::float / us.total_checks::float) * 100.0
+					ELSE 0
+				END AS uptime,
+				fs.latest_failure_at
+			FROM monitors m
+			LEFT JOIN failure_stats fs ON fs.monitor_id = m.id
+			LEFT JOIN uptime_stats us ON us.monitor_id = m.id
+			%s
+			WHERE m.tenant_id = $1
+			  AND m.enabled = TRUE
+			  AND m.type <> 'group'
+			  AND (COALESCE(fs.failure_count, 0) + COALESCE(fs.error_count, 0)) > 0
+		)
+		SELECT id, name, current_status, failure_count, error_count, uptime, latest_failure_at
+		FROM ranked_monitors
+		ORDER BY (failure_count + error_count) DESC, latest_failure_at DESC NULLS LAST, name ASC
+		LIMIT $4
+	`, uptimeStats, monitorStatusJoin)
+
+	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEndExclusive, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query problem monitors: %w", err)
+	}
+	defer rows.Close()
+
+	monitors := make([]models.DashboardProblemMonitor, 0)
+	for rows.Next() {
+		var row models.DashboardProblemMonitor
+		var currentStatus sql.NullString
+		var latestFailureAt sql.NullTime
+
+		if err := rows.Scan(
+			&row.MonitorID,
+			&row.MonitorName,
+			&currentStatus,
+			&row.FailureCount,
+			&row.ErrorCount,
+			&row.Uptime,
+			&latestFailureAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan problem monitor row: %w", err)
+		}
+
+		if currentStatus.Valid {
+			row.CurrentStatus = &currentStatus.String
+		}
+		if latestFailureAt.Valid {
+			ts := latestFailureAt.Time
+			row.LatestFailureAt = &ts
+		}
+		monitors = append(monitors, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating problem monitor rows: %w", err)
+	}
+
+	return monitors, nil
 }
 
 func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEnd time.Time, limit int) ([]models.DashboardFailureEvent, error) {

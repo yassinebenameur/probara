@@ -52,6 +52,8 @@ spec:
         env:
         - name: NEXT_PUBLIC_API_URL
           value: "{{ .Values.frontend.apiUrl }}"
+        - name: NEXT_PUBLIC_STATUS_PAGE_URL
+          value: "{{ .Values.frontend.statusPageUrl | default .Values.statusPage.baseUrl }}"
         - name: API_PROXY_TARGET
           value: "{{ $apiProxyTarget }}"
         livenessProbe:

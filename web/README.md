@@ -26,6 +26,7 @@ The development server will start on `http://localhost:3000`.
 ## Environment Variables
 
 - `NEXT_PUBLIC_API_URL` - Base URL for the API (defaults to `/api` for relative paths)
+- `NEXT_PUBLIC_STATUS_PAGE_URL` - Public base URL for status page links; in local dev the UI falls back to `http://localhost:8082`
 
 ## Authentication
 
@@ -51,10 +52,12 @@ The application can be built and run using Docker:
 
 ```bash
 docker build -t probara-frontend .
-docker run -p 3000:3000 -e NEXT_PUBLIC_API_URL=/api probara-frontend
+docker run -p 3000:3000 \
+  -e NEXT_PUBLIC_API_URL=/api \
+  -e NEXT_PUBLIC_STATUS_PAGE_URL=http://localhost:8082 \
+  probara-frontend
 ```
 
 ## Deployment
 
 The application is configured for Kubernetes deployment via Helm. See the main project's Helm chart for deployment configuration.
-

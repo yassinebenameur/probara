@@ -34,14 +34,16 @@ type DashboardOverviewQuery struct {
 
 // DashboardOverviewResponse is the aggregated dashboard payload.
 type DashboardOverviewResponse struct {
-	Range          DashboardRange           `json:"range"`
-	GeneratedAt    time.Time                `json:"generated_at"`
-	Stats          DashboardStats           `json:"stats"`
-	Trend          []DashboardTrendPoint    `json:"trend"`
-	Activity24h    []DashboardActivityHour  `json:"activity_24h"`
-	MonitorHealth  []DashboardMonitorHealth `json:"monitor_health"`
-	RecentFailures []DashboardFailureEvent  `json:"recent_failures"`
-	RecentAlerts   []AlertWithDetails       `json:"recent_alerts"`
+	Range           DashboardRange            `json:"range"`
+	GeneratedAt     time.Time                 `json:"generated_at"`
+	Stats           DashboardStats            `json:"stats"`
+	Trend           []DashboardTrendPoint     `json:"trend"`
+	Activity24h     []DashboardActivityHour   `json:"activity_24h"`
+	OpsSummary      DashboardOpsSummary       `json:"ops_summary"`
+	MonitorHealth   []DashboardMonitorHealth  `json:"monitor_health"`
+	ProblemMonitors []DashboardProblemMonitor `json:"problem_monitors"`
+	RecentFailures  []DashboardFailureEvent   `json:"recent_failures"`
+	RecentAlerts    []AlertWithDetails        `json:"recent_alerts"`
 }
 
 // DashboardStats contains KPI counters and summary values.
@@ -78,6 +80,26 @@ type DashboardMonitorHealth struct {
 	Enabled       bool       `json:"enabled"`
 	LatestStatus  *string    `json:"latest_status"`
 	LatestCheckAt *time.Time `json:"latest_check_at"`
+}
+
+// DashboardOpsSummary contains current operational counts for the fleet.
+type DashboardOpsSummary struct {
+	UpMonitors         int `json:"up_monitors"`
+	DownMonitors       int `json:"down_monitors"`
+	PausedMonitors     int `json:"paused_monitors"`
+	ActiveAlerts       int `json:"active_alerts"`
+	AcknowledgedAlerts int `json:"acknowledged_alerts"`
+}
+
+// DashboardProblemMonitor represents a monitor that needs attention for the selected range.
+type DashboardProblemMonitor struct {
+	MonitorID       uuid.UUID  `json:"monitor_id"`
+	MonitorName     string     `json:"monitor_name"`
+	CurrentStatus   *string    `json:"current_status"`
+	FailureCount    int        `json:"failure_count"`
+	ErrorCount      int        `json:"error_count"`
+	Uptime          float64    `json:"uptime"`
+	LatestFailureAt *time.Time `json:"latest_failure_at"`
 }
 
 // DashboardFailureEvent represents a recent failing check and its current state.

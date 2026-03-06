@@ -2,7 +2,12 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { getDashboardOverview, getTenantSettings } from '@/lib/api';
-import { Alert, DashboardFailureEvent, DashboardMonitorHealth, DashboardOverviewResponse } from '@/lib/types';
+import {
+  Alert,
+  DashboardFailureEvent,
+  DashboardOverviewResponse,
+  DashboardProblemMonitor,
+} from '@/lib/types';
 import Link from 'next/link';
 import {
   AreaChart,
@@ -11,12 +16,9 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  BarChart,
-  Bar,
 } from 'recharts';
 
 type TrendPoint = { date: string; uptime: number; responseTime: number; total: number };
-type ActivityPoint = { time: string; checks: number; failures: number };
 
 const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d' | '90d' | '365d', number> = {
   '24h': 10,
@@ -35,12 +37,6 @@ function formatRelativeTime(dateString: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-function mapMonitorHealthStatus(row: DashboardMonitorHealth): 'up' | 'down' | 'paused' {
-  if (!row.enabled) return 'paused';
-  if (!row.latest_status) return 'paused';
-  return row.latest_status === 'success' ? 'up' : 'down';
 }
 
 // Stat Card Component
@@ -91,70 +87,74 @@ function StatCard({
   );
 }
 
-// Uptime Bar Component
-function UptimeBar({
-  value,
-  label,
-  dense = false,
-}: {
-  value: number;
-  label: string;
-  dense?: boolean;
-}) {
-  const getColor = (v: number) => {
-    if (v >= 99.9) return 'bg-emerald-500';
-    if (v >= 99) return 'bg-emerald-400';
-    if (v >= 95) return 'bg-amber-400';
-    return 'bg-rose-400';
-  };
-
-  const barWidthClass = dense ? 'w-full max-w-[10px]' : 'w-3';
-  const labelClass = dense
-    ? 'w-full text-center text-[9px] tracking-tight tabular-nums text-slate-600 group-hover:text-slate-400 truncate'
-    : 'text-[10px] text-slate-600 group-hover:text-slate-400';
-  const valueClass = dense
-    ? 'w-full justify-center text-[10px] text-slate-400 tabular-nums'
-    : 'text-xs text-slate-400';
+function StatusPill({ status }: { status: string | null | undefined }) {
+  const normalized = status || 'paused';
+  const classes =
+    normalized === 'success'
+      ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
+      : normalized === 'error'
+      ? 'border-amber-500/20 bg-amber-500/10 text-amber-400'
+      : normalized === 'failure'
+      ? 'border-rose-500/20 bg-rose-500/10 text-rose-400'
+      : 'border-slate-500/20 bg-slate-500/10 text-slate-300';
 
   return (
-    <div className={`group flex flex-col items-center ${dense ? 'flex-1 min-w-0 gap-0.5' : 'gap-1'}`}>
-      <div
-        className={`relative h-20 overflow-hidden rounded-full bg-slate-800 ${barWidthClass} ${
-          dense ? 'mx-auto' : ''
-        }`}
-      >
-        <div
-          className={`absolute bottom-0 left-0 right-0 rounded-full transition-all ${getColor(value)}`}
-          style={{ height: `${value}%` }}
-        />
-      </div>
-      <span className={labelClass}>{label}</span>
-      <span
-        className={`inline-flex h-4 items-center opacity-0 transition-opacity group-hover:opacity-100 ${valueClass}`}
-      >
-        {value.toFixed(1)}%
-      </span>
+    <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${classes}`}>
+      {normalized}
+    </span>
+  );
+}
+
+function OpsSummaryMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'rose' | 'amber' | 'cyan' | 'slate';
+}) {
+  const tones = {
+    rose: 'border-rose-500/20 bg-rose-500/10 text-rose-300',
+    amber: 'border-amber-500/20 bg-amber-500/10 text-amber-300',
+    cyan: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300',
+    slate: 'border-white/[0.08] bg-slate-800/50 text-slate-200',
+  };
+
+  return (
+    <div className={`flex min-h-[132px] flex-col rounded-lg border p-4 ${tones[tone]}`}>
+      <p className="min-h-[40px] text-[11px] font-medium uppercase tracking-[0.18em] leading-6 text-slate-500">{label}</p>
+      <p className="mt-auto text-3xl font-semibold tracking-tight text-white">{value}</p>
     </div>
   );
 }
 
-// Monitor Health Dot
-function HealthDot({ status, name }: { status: 'up' | 'down' | 'paused'; name: string }) {
-  const colors = {
-    up: 'bg-emerald-500 shadow-emerald-500/50',
-    down: 'bg-rose-500 shadow-rose-500/50',
-    paused: 'bg-slate-500',
-  };
+function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
+  const issueCount = monitor.failure_count + monitor.error_count;
 
   return (
-    <div className="group relative">
-      <div
-        className={`h-3 w-3 rounded-sm ${colors[status]} ${status !== 'paused' ? 'shadow-[0_0_8px]' : ''} transition-transform hover:scale-150`}
-        title={name}
-      />
-      <div className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-        {name}
+    <div className="flex items-start justify-between gap-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-white">{monitor.monitor_name}</p>
+          <p className="mt-1 text-xs text-slate-500">
+            {issueCount} issue{issueCount !== 1 ? 's' : ''} in range
+            {monitor.latest_failure_at ? ` · latest ${formatRelativeTime(monitor.latest_failure_at)}` : ''}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <span className="text-slate-500">
+              Failures <span className="ml-1 font-medium text-rose-300">{monitor.failure_count}</span>
+            </span>
+            <span className="text-slate-500">
+              Errors <span className="ml-1 font-medium text-amber-300">{monitor.error_count}</span>
+            </span>
+            <span className="text-slate-500">
+              Uptime <span className="ml-1 font-medium text-white">{monitor.uptime.toFixed(1)}%</span>
+            </span>
+          </div>
+        </div>
       </div>
+      <StatusPill status={monitor.current_status} />
     </div>
   );
 }
@@ -315,20 +315,12 @@ export default function DashboardPage() {
     }));
   }, [dashboard]);
 
-  const activityData = useMemo<ActivityPoint[]>(() => {
-    return (dashboard?.activity_24h || []).map((point) => ({
-      time: point.label,
-      checks: point.checks,
-      failures: point.failures,
-    }));
-  }, [dashboard]);
-
-  const monitorHealth = dashboard?.monitor_health || [];
+  const opsSummary = dashboard?.ops_summary;
+  const problemMonitors = dashboard?.problem_monitors || [];
   const recentFailures = dashboard?.recent_failures || [];
   const recentAlerts = dashboard?.recent_alerts || [];
 
   const hasTrendData = useMemo(() => trendData.some((d) => d.total > 0), [trendData]);
-  const hasActivityData = useMemo(() => activityData.some((d) => d.checks > 0), [activityData]);
 
   const stats = dashboard?.stats;
   const totalMonitors = stats?.total_monitors || 0;
@@ -561,241 +553,99 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Bottom Section */}
-      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-        {/* Daily Uptime Bars */}
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-          <div className="mb-4">
-            <h3 className="font-medium text-white">
-              {timeRange === '24h' ? 'Hourly Uptime' : 'Daily Uptime'}
-            </h3>
-            <p className="text-xs text-slate-500">
-              {timeRange === '24h'
-                ? 'Last 24 hours performance'
-                : `Last ${timeRange.replace('d', '')} days performance`}
-            </p>
+      {/* Action Section */}
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(320px,1.15fr)]">
+        <div className="min-w-0 self-start overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
+          <div className="mb-5">
+            <h3 className="font-medium text-white">Operations Summary</h3>
+            <p className="text-xs text-slate-500">Current monitor and alert posture</p>
           </div>
-          {hasTrendData ? (
-            <>
-              <div
-                className={`flex items-end ${
-                  timeRange === '24h' || timeRange === '30d'
-                    ? 'gap-0.5 px-1'
-                    : 'justify-between gap-1 px-2'
-                }`}
-              >
-                {trendData.map((d, i) => (
-                  <UptimeBar
-                    key={i}
-                    value={d.uptime}
-                    label={d.date}
-                    dense={timeRange === '24h' || timeRange === '30d'}
-                  />
-                ))}
-              </div>
-              <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-                <span>Hover for details</span>
-                <span className="flex items-center gap-2">
-                  <span className="flex items-center gap-1">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                    &gt;99%
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="h-2 w-2 rounded-full bg-amber-400" />
-                    95-99%
-                  </span>
-                </span>
-              </div>
-            </>
-          ) : (
-            <EmptyChart message="No uptime data yet" />
-          )}
+          <div className="grid grid-cols-2 gap-3">
+            <OpsSummaryMetric label="Down monitors" value={opsSummary?.down_monitors || 0} tone="rose" />
+            <OpsSummaryMetric label="Paused monitors" value={opsSummary?.paused_monitors || 0} tone="slate" />
+            <OpsSummaryMetric label="Active alerts" value={opsSummary?.active_alerts || 0} tone="amber" />
+            <OpsSummaryMetric
+              label="Ack alerts"
+              value={opsSummary?.acknowledged_alerts || 0}
+              tone="cyan"
+            />
+          </div>
         </div>
 
-        {/* Monitor Health Grid */}
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
+        <div className="min-w-0 self-start rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h3 className="font-medium text-white">Monitor Health</h3>
-              <p className="text-xs text-slate-500">{totalMonitors} monitors at a glance</p>
+              <h3 className="font-medium text-white">Problem Monitors</h3>
+              <p className="text-xs text-slate-500">Top monitors with the most issues in range</p>
             </div>
             <Link href="/monitors" className="text-xs text-cyan-400 hover:text-cyan-300">
               View all →
             </Link>
           </div>
-          {monitorHealth.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {monitorHealth.slice(0, 30).map((row) => (
-                <HealthDot
-                  key={row.monitor_id}
-                  status={mapMonitorHealthStatus(row)}
-                  name={row.monitor_name}
-                />
+          {problemMonitors.length > 0 ? (
+            <div className="dashboard-scroll max-h-[320px] divide-y divide-white/[0.04] overflow-x-hidden overflow-y-auto pb-1 pr-2">
+              {problemMonitors.map((monitor) => (
+                <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
               ))}
-              {monitorHealth.length > 30 && (
-                <span className="flex h-3 items-center text-xs text-slate-500">
-                  +{monitorHealth.length - 30} more
-                </span>
-              )}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <p className="text-sm text-slate-500">No monitors configured</p>
-              <Link
-                href="/monitors/new"
-                className="mt-2 text-xs text-cyan-400 hover:text-cyan-300"
-              >
-                Create your first monitor →
+            <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
+              <p className="text-sm text-slate-500">No noisy monitors in this range</p>
+              <p className="mt-1 text-xs text-slate-600">Nothing is standing out from recent checks.</p>
+            </div>
+          )}
+        </div>
+
+          <div className="min-w-0 self-start grid gap-4 content-start">
+          <div className="min-w-0 overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="font-medium text-white">Last Failures</h3>
+                <p className="text-xs text-slate-500">
+                  {recentFailures.length === 0 ? 'No recent failures' : `${recentFailures.length} recent failure${recentFailures.length !== 1 ? 's' : ''}`}
+                </p>
+              </div>
+            </div>
+            {recentFailures.length > 0 ? (
+              <div className="dashboard-scroll max-h-[320px] divide-y divide-white/[0.04] overflow-x-hidden overflow-y-auto pb-1 pr-2">
+                {recentFailures.map((event) => (
+                  <FailureItem key={event.check_result_id} event={event} />
+                ))}
+              </div>
+            ) : (
+              <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
+                <p className="text-sm text-slate-500">No recent failures</p>
+                <p className="mt-1 text-xs text-slate-600">Failure events will appear here when checks fail</p>
+              </div>
+            )}
+          </div>
+
+          <div className="min-w-0 overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="font-medium text-white">Last Alerts</h3>
+                <p className="text-xs text-slate-500">
+                  {recentAlerts.length === 0 ? 'No recent alerts' : `${recentAlerts.length} recent alert${recentAlerts.length !== 1 ? 's' : ''}`}
+                </p>
+              </div>
+              <Link href="/alerts" className="text-xs text-cyan-400 hover:text-cyan-300">
+                View all →
               </Link>
             </div>
-          )}
-        </div>
-
-        {/* Last Failures */}
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="font-medium text-white">Last Failures</h3>
-              <p className="text-xs text-slate-500">
-                {recentFailures.length === 0 ? 'No recent failures' : `${recentFailures.length} recent failure${recentFailures.length !== 1 ? 's' : ''}`}
-              </p>
-            </div>
-          </div>
-          {recentFailures.length > 0 ? (
-            <div className="divide-y divide-white/[0.04]">
-              {recentFailures.map((event) => (
-                <FailureItem key={event.check_result_id} event={event} />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <p className="text-sm text-slate-500">No recent failures</p>
-              <p className="mt-1 text-xs text-slate-600">Failure events will appear here when checks fail</p>
-            </div>
-          )}
-        </div>
-
-        {/* Last Alerts */}
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="font-medium text-white">Last Alerts</h3>
-              <p className="text-xs text-slate-500">
-                {recentAlerts.length === 0 ? 'No recent alerts' : `${recentAlerts.length} recent alert${recentAlerts.length !== 1 ? 's' : ''}`}
-              </p>
-            </div>
-            <Link href="/alerts" className="text-xs text-cyan-400 hover:text-cyan-300">
-              View all →
-            </Link>
-          </div>
-          {recentAlerts.length > 0 ? (
-            <div className="divide-y divide-white/[0.04]">
-              {recentAlerts.map((alert) => (
-                <AlertItem key={alert.id} alert={alert} />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <p className="text-sm text-slate-500">No recent alerts</p>
-              <p className="mt-1 text-xs text-slate-600">Alerts will appear when failures trigger policies</p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Hourly Activity Chart */}
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="font-medium text-white">24-Hour Activity</h3>
-            <p className="text-xs text-slate-500">Checks performed per hour</p>
-          </div>
-          <div className="flex items-center gap-4 text-xs">
-            <span className="flex items-center gap-1 text-cyan-400">
-              <span className="h-2 w-2 rounded-full bg-cyan-400" />
-              Checks
-            </span>
-            <span className="flex items-center gap-1 text-rose-400">
-              <span className="h-2 w-2 rounded-full bg-rose-400" />
-              Failures
-            </span>
+            {recentAlerts.length > 0 ? (
+              <div className="dashboard-scroll max-h-[220px] divide-y divide-white/[0.04] overflow-x-hidden overflow-y-auto pb-1 pr-2">
+                {recentAlerts.map((alert) => (
+                  <AlertItem key={alert.id} alert={alert} />
+                ))}
+              </div>
+            ) : (
+              <div className="flex min-h-[160px] flex-col items-center justify-center text-center">
+                <p className="text-sm text-slate-500">No recent alerts</p>
+                <p className="mt-1 text-xs text-slate-600">Alerts will appear when failures trigger policies</p>
+              </div>
+            )}
           </div>
         </div>
-        {hasActivityData ? (
-          <div className="h-32">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={activityData} barGap={2}>
-                <XAxis
-                  dataKey="time"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: '#64748b', fontSize: 10 }}
-                  interval={3}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '8px',
-                    fontSize: '12px'
-                  }}
-                />
-                <Bar dataKey="checks" fill="#06b6d4" radius={[2, 2, 0, 0]} />
-                <Bar dataKey="failures" fill="#f43f5e" radius={[2, 2, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        ) : (
-          <EmptyChart message="No activity yet" />
-        )}
-      </div>
-
-      {/* Quick Actions */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Link
-          href="/monitors/new"
-          className="group flex items-center gap-4 rounded-xl border border-white/[0.06] bg-slate-900/50 p-4 transition-all hover:border-cyan-500/30 hover:bg-slate-900/70"
-        >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-400 transition-colors group-hover:bg-cyan-500/20">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
-            </svg>
-          </div>
-          <div>
-            <p className="font-medium text-white">Add Monitor</p>
-            <p className="text-xs text-slate-500">HTTP, Ping, or Agent</p>
-          </div>
-        </Link>
-
-        <Link
-          href="/status-pages"
-          className="group flex items-center gap-4 rounded-xl border border-white/[0.06] bg-slate-900/50 p-4 transition-all hover:border-emerald-500/30 hover:bg-slate-900/70"
-        >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 transition-colors group-hover:bg-emerald-500/20">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          </div>
-          <div>
-            <p className="font-medium text-white">Status Pages</p>
-            <p className="text-xs text-slate-500">Manage public pages</p>
-          </div>
-        </Link>
-
-        <Link
-          href="/alert-policies"
-          className="group flex items-center gap-4 rounded-xl border border-white/[0.06] bg-slate-900/50 p-4 transition-all hover:border-rose-500/30 hover:bg-slate-900/70"
-        >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/10 text-rose-400 transition-colors group-hover:bg-rose-500/20">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-            </svg>
-          </div>
-          <div>
-            <p className="font-medium text-white">Alert Policies</p>
-            <p className="text-xs text-slate-500">Configure alerts</p>
-          </div>
-        </Link>
       </div>
     </div>
   );

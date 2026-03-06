@@ -12,6 +12,7 @@ import {
   addMonitorsToGroup,
   removeMonitorsFromGroup,
   getSyntheticBrowserScreenshotUrl,
+  toggleMonitorEnabled,
 } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import {
@@ -19,9 +20,9 @@ import {
   countOperationalResults,
   formatInterval,
   formatTimeAgo,
-  getLatestStatus,
+  getEffectiveMonitorStatus,
   isPlatformResult,
-  MonitorHealthStatus,
+  MonitorDisplayStatus,
   calculateLatencyStats,
 } from '@/lib/monitor-utils';
 
@@ -117,11 +118,12 @@ function TagPill({ tag, size = 'sm', onClick, selected = false }: {
 }
 
 // Status dot component
-function StatusDot({ status }: { status: MonitorHealthStatus }) {
+function StatusDot({ status }: { status: MonitorDisplayStatus }) {
   const colors = {
     up: 'bg-emerald-500',
     down: 'bg-rose-500',
     degraded: 'bg-amber-500',
+    paused: 'bg-slate-500',
     unknown: 'bg-slate-500',
   };
   return <span className={`h-2 w-2 rounded-full ${colors[status]}`} />;
@@ -257,9 +259,13 @@ function SelectCheckbox({
 }
 
 function MonitorActionsMenu({
+  monitor,
+  onToggleEnabled,
   monitorId,
   onDelete,
 }: {
+  monitor: Monitor;
+  onToggleEnabled: (monitor: Monitor) => void;
   monitorId: string;
   onDelete: () => void;
 }) {
@@ -305,6 +311,16 @@ function MonitorActionsMenu({
           onClick={(e) => {
             e.stopPropagation();
             closeMenu(e.currentTarget);
+            onToggleEnabled(monitor);
+          }}
+          className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
+        >
+          {monitor.enabled ? 'Pause' : 'Start'}
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            closeMenu(e.currentTarget);
             onDelete();
           }}
           className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-rose-300 transition-colors hover:bg-rose-500/10 hover:text-rose-200"
@@ -323,6 +339,7 @@ function MonitorRow({
   isSelected, 
   onClick, 
   onDelete,
+  onToggleEnabled,
   isChecked,
   onToggleSelect,
   selectionMode,
@@ -333,12 +350,13 @@ function MonitorRow({
   isSelected: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onToggleEnabled: (monitor: Monitor) => void;
   isChecked: boolean;
   onToggleSelect: () => void;
   selectionMode: boolean;
   isChild?: boolean;
 }) {
-  const status = getLatestStatus(results);
+  const status = getEffectiveMonitorStatus(monitor, results);
   const uptime = calculateUptime(results);
   const operationalCount = countOperationalResults(results);
   const latencyStats = calculateLatencyStats(results);
@@ -431,7 +449,12 @@ function MonitorRow({
 
       {/* Actions */}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <MonitorActionsMenu monitorId={monitor.id} onDelete={onDelete} />
+        <MonitorActionsMenu
+          monitor={monitor}
+          monitorId={monitor.id}
+          onToggleEnabled={onToggleEnabled}
+          onDelete={onDelete}
+        />
       </div>
     </div>
   );
@@ -447,6 +470,7 @@ function GroupCard({
   isSelected,
   onClick,
   onDelete,
+  onToggleEnabled,
   isChecked,
   onToggleSelect,
   onToggleMonitorSelection,
@@ -465,6 +489,7 @@ function GroupCard({
   isSelected: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onToggleEnabled: (monitor: Monitor) => void;
   isChecked: boolean;
   onToggleSelect: () => void;
   onToggleMonitorSelection: (id: string) => void;
@@ -476,7 +501,7 @@ function GroupCard({
   visitedGroupIds?: Set<string>;
 }) {
   const [expanded, setExpanded] = useState(false); // Collapsed by default
-  const status = getLatestStatus(results);
+  const status = getEffectiveMonitorStatus(monitor, results);
   const uptime = calculateUptime(results);
   const operationalCount = countOperationalResults(results);
   const nextVisitedGroupIDs = new Set(visitedGroupIds);
@@ -484,7 +509,7 @@ function GroupCard({
 
   // Calculate aggregate stats from members
   const memberStats = members.map(m => ({
-    status: getLatestStatus(memberResults[m.id] || []),
+    status: getEffectiveMonitorStatus(m, memberResults[m.id] || []),
     uptime: calculateUptime(memberResults[m.id] || [])
   }));
   const healthyCount = memberStats.filter(s => s.status === 'up').length;
@@ -552,9 +577,11 @@ function GroupCard({
             <div
               key={m.id}
               className={`h-2 w-2 rounded-full ${
-                getLatestStatus(memberResults[m.id] || []) === 'up'
+                getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'up'
                   ? 'bg-emerald-500'
-                  : getLatestStatus(memberResults[m.id] || []) === 'unknown'
+                  : getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'paused'
+                    ? 'bg-slate-500'
+                    : getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'unknown'
                     ? 'bg-slate-500'
                     : 'bg-rose-500'
               }`}
@@ -571,7 +598,12 @@ function GroupCard({
 
         {/* Actions */}
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <MonitorActionsMenu monitorId={monitor.id} onDelete={onDelete} />
+          <MonitorActionsMenu
+            monitor={monitor}
+            monitorId={monitor.id}
+            onToggleEnabled={onToggleEnabled}
+            onDelete={onDelete}
+          />
         </div>
       </div>
 
@@ -592,6 +624,7 @@ function GroupCard({
                         isSelected={member.id === selectedMonitorId}
                         onClick={() => onSelectMonitor(member.id)}
                         onDelete={() => onDeleteMonitor(member.id)}
+                        onToggleEnabled={onToggleEnabled}
                         isChecked={selectedMonitorIds.has(member.id)}
                         onToggleSelect={() => onToggleMonitorSelection(member.id)}
                         selectionMode={selectionMode}
@@ -611,6 +644,7 @@ function GroupCard({
                       isSelected={member.id === selectedMonitorId}
                       onClick={() => onSelectMonitor(member.id)}
                       onDelete={() => onDeleteMonitor(member.id)}
+                      onToggleEnabled={onToggleEnabled}
                       isChecked={selectedMonitorIds.has(member.id)}
                       onToggleSelect={() => onToggleMonitorSelection(member.id)}
                       onToggleMonitorSelection={onToggleMonitorSelection}
@@ -634,6 +668,7 @@ function GroupCard({
                   isSelected={member.id === selectedMonitorId}
                   onClick={() => onSelectMonitor(member.id)}
                   onDelete={() => onDeleteMonitor(member.id)}
+                  onToggleEnabled={onToggleEnabled}
                   isChecked={selectedMonitorIds.has(member.id)}
                   onToggleSelect={() => onToggleMonitorSelection(member.id)}
                   selectionMode={selectionMode}
@@ -744,7 +779,7 @@ function DetailPanel({
     );
   }
 
-  const status = getLatestStatus(results);
+  const status = getEffectiveMonitorStatus(monitor, results);
   const uptime = calculateUptime(results);
   const operationalCount = countOperationalResults(results);
   const latencyStats = calculateLatencyStats(results);
@@ -1164,6 +1199,26 @@ export default function MonitorsPage() {
     }
   };
 
+  const handleToggleEnabled = async (monitor: Monitor) => {
+    try {
+      const updated = await toggleMonitorEnabled(monitor.id, !monitor.enabled);
+      setMonitors((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setGroupMembersMap((prev) => {
+        const nextEntries = Object.entries(prev).map(([groupId, members]) => [
+          groupId,
+          members.map((member) => (member.id === updated.id ? updated : member)),
+        ] as const);
+        return Object.fromEntries(nextEntries);
+      });
+      setToast({
+        message: updated.enabled ? 'Monitor resumed' : 'Monitor paused',
+        type: 'success',
+      });
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to update monitor', type: 'error' });
+    }
+  };
+
   const toggleMonitorSelection = (id: string) => {
     setSelectedMonitorIds((prev) => {
       const next = new Set(prev);
@@ -1226,11 +1281,11 @@ export default function MonitorsPage() {
     
     const matchesSearch = monitor.name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = typeFilter === 'all' || monitor.type === typeFilter;
-    const status = getLatestStatus(checkResultsMap[monitor.id] || []);
+    const status = getEffectiveMonitorStatus(monitor, checkResultsMap[monitor.id] || []);
     const matchesStatus = statusFilter === 'all' || 
       (statusFilter === 'up' && status === 'up') ||
       (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
-      (statusFilter === 'paused' && status === 'unknown');
+      (statusFilter === 'paused' && status === 'paused');
     const matchesTags = selectedTags.size === 0 || 
       (monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
     return matchesSearch && matchesType && matchesStatus && matchesTags;
@@ -1409,12 +1464,12 @@ export default function MonitorsPage() {
   };
 
   // Stats
-  const totalUp = monitors.filter((m) => getLatestStatus(checkResultsMap[m.id] || []) === 'up').length;
+  const totalUp = monitors.filter((m) => getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []) === 'up').length;
   const totalDown = monitors.filter((m) => {
-    const status = getLatestStatus(checkResultsMap[m.id] || []);
+    const status = getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []);
     return status === 'down' || status === 'degraded';
   }).length;
-  const totalPaused = monitors.filter((m) => getLatestStatus(checkResultsMap[m.id] || []) === 'unknown').length;
+  const totalPaused = monitors.filter((m) => getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []) === 'paused').length;
 
   return (
     <div className="space-y-5">
@@ -1700,6 +1755,7 @@ export default function MonitorsPage() {
                     onToggleSelect={() => toggleMonitorSelection(monitor.id)}
                     onToggleMonitorSelection={toggleMonitorSelection}
                     onDeleteMonitor={handleDelete}
+                    onToggleEnabled={handleToggleEnabled}
                     selectionMode={selectionMode}
                     onClick={() => setSelectedMonitorId(monitor.id)}
                     onDelete={() => handleDelete(monitor.id)}
@@ -1718,6 +1774,7 @@ export default function MonitorsPage() {
                     selectionMode={selectionMode}
                     onClick={() => setSelectedMonitorId(monitor.id)}
                     onDelete={() => handleDelete(monitor.id)}
+                    onToggleEnabled={handleToggleEnabled}
                   />
                 )
               ))
