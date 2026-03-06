@@ -3,6 +3,9 @@ package alerts
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,11 +40,12 @@ type AlertDetails struct {
 
 // Subscriber listens for alert events from NATS and broadcasts to SSE clients
 type Subscriber struct {
-	nats   *queue.Client
-	hub    *Hub
-	config *config.APIConfig
-	logger *logger.Logger
-	cancel context.CancelFunc
+	nats         *queue.Client
+	hub          *Hub
+	config       *config.APIConfig
+	logger       *logger.Logger
+	cancel       context.CancelFunc
+	consumerName string
 }
 
 // NewSubscriber creates a new alert subscriber
@@ -65,6 +69,8 @@ func (s *Subscriber) Start(ctx context.Context) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 
+	consumerName := buildConsumerName(s.config.AlertConsumerName)
+
 	// Ensure the ALERTS stream exists
 	_, err := s.nats.EnsureStream(subCtx, s.config.AlertStream, []string{s.config.AlertSubject + ".*"})
 	if err != nil {
@@ -72,14 +78,15 @@ func (s *Subscriber) Start(ctx context.Context) error {
 	}
 
 	// Create consumer for the API
-	consumer, err := s.nats.CreateConsumer(subCtx, s.config.AlertStream, s.config.AlertConsumerName)
+	consumer, err := s.nats.CreateConsumer(subCtx, s.config.AlertStream, consumerName)
 	if err != nil {
 		return err
 	}
+	s.consumerName = consumerName
 
 	s.logger.WithFields(map[string]interface{}{
 		"stream":   s.config.AlertStream,
-		"consumer": s.config.AlertConsumerName,
+		"consumer": consumerName,
 		"subject":  s.config.AlertSubject + ".*",
 	}).Info("Starting alert event subscription")
 
@@ -111,6 +118,37 @@ func (s *Subscriber) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.nats != nil && s.consumerName != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.nats.DeleteConsumer(ctx, s.config.AlertStream, s.consumerName); err != nil {
+			s.logger.WithError(err).Warn("Failed to delete alert consumer")
+		}
+	}
+}
+
+func buildConsumerName(base string) string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		return base
+	}
+
+	sanitized := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == '-' || r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, hostname)
+
+	return fmt.Sprintf("%s-%s", base, sanitized)
 }
 
 // handleMessage processes an incoming alert event

@@ -142,6 +142,21 @@ func (c *Client) CreateConsumer(ctx context.Context, streamName string, consumer
 	return consumer, nil
 }
 
+// DeleteConsumer deletes a consumer for the given stream.
+func (c *Client) DeleteConsumer(ctx context.Context, streamName string, consumerName string) error {
+	stream, err := c.js.Stream(ctx, streamName)
+	if err != nil {
+		return fmt.Errorf("stream not found: %w", err)
+	}
+
+	if err := stream.DeleteConsumer(ctx, consumerName); err != nil {
+		return fmt.Errorf("failed to delete consumer: %w", err)
+	}
+
+	delete(c.consumers, fmt.Sprintf("%s:%s", streamName, consumerName))
+	return nil
+}
+
 // Consume consumes messages from a consumer
 func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handler func(*Message) error) error {
 	// Use FetchMaxWait to control the timeout for fetching messages
