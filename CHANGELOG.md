@@ -1,3 +1,10 @@
+# [1.0.0-alpha.25](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.24...v1.0.0-alpha.25) (2026-03-06)
+
+
+### Features
+
+* **web:** add global alert SSE toasts ([e52eb93](https://github.com/yassinebenameur/probara/commit/e52eb937572f3c3b1aa261df0cc0179f6e69b0f6))
+
 # [1.0.0-alpha.24](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.23...v1.0.0-alpha.24) (2026-03-06)
 
 
