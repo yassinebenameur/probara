@@ -509,11 +509,13 @@ export async function getDashboardOverview(params?: {
   range?: '24h' | '7d' | '30d' | '90d' | '365d';
   failures_limit?: number;
   alerts_limit?: number;
+  tags?: string[];
 }): Promise<DashboardOverviewResponse> {
   const queryParams = new URLSearchParams();
   if (params?.range) queryParams.append('range', params.range);
   if (params?.failures_limit) queryParams.append('failures_limit', String(params.failures_limit));
   if (params?.alerts_limit) queryParams.append('alerts_limit', String(params.alerts_limit));
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
 
   const queryString = queryParams.toString();
   const path = `/v1/dashboard/overview${queryString ? `?${queryString}` : ''}`;

@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
@@ -46,47 +49,52 @@ func (s *Service) GetOverview(ctx context.Context, tenantID uuid.UUID, params *m
 	}
 	rangeEndExclusive := rangeEnd.Add(bucketDuration)
 
-	stats, err := s.getStats(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive)
+	availableTags, err := s.getAvailableTags(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
 
-	trend, err := s.getTrend(ctx, tenantID, normalized.Range, rangeStart, rangeEnd)
+	stats, err := s.getStats(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags)
+	if err != nil {
+		return nil, err
+	}
+
+	trend, err := s.getTrend(ctx, tenantID, normalized.Range, rangeStart, rangeEnd, normalized.Tags)
 	if err != nil {
 		return nil, err
 	}
 
 	activity := []models.DashboardActivityHour{}
 	if normalized.Range == models.DashboardRange24h {
-		activity, err = s.getActivity24h(ctx, tenantID)
+		activity, err = s.getActivity24h(ctx, tenantID, normalized.Tags)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	monitorHealth, err := s.getMonitorHealth(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive)
+	monitorHealth, err := s.getMonitorHealth(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags)
 	if err != nil {
 		return nil, err
 	}
 
-	opsSummary, err := s.getOpsSummary(ctx, tenantID, monitorHealth)
+	opsSummary, err := s.getOpsSummary(ctx, tenantID, monitorHealth, normalized.Tags)
 	if err != nil {
 		return nil, err
 	}
 
-	problemMonitors, err := s.getProblemMonitors(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, problemMonitorLimit)
+	problemMonitors, err := s.getProblemMonitors(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, problemMonitorLimit, normalized.Tags)
 	if err != nil {
 		return nil, err
 	}
 
-	recentFailures, err := s.getRecentFailures(ctx, tenantID, rangeStart, rangeEndExclusive, normalized.FailuresLimit)
+	recentFailures, err := s.getRecentFailures(ctx, tenantID, rangeStart, rangeEndExclusive, normalized.FailuresLimit, normalized.Tags)
 	if err != nil {
 		return nil, err
 	}
 
 	recentAlerts := []models.AlertWithDetails{}
 	if s.alertService != nil {
-		recentAlerts, err = s.alertService.GetRecentAlerts(ctx, tenantID, normalized.AlertsLimit)
+		recentAlerts, err = s.alertService.GetRecentAlertsForTags(ctx, tenantID, normalized.Tags, normalized.AlertsLimit)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get recent alerts: %w", err)
 		}
@@ -95,6 +103,7 @@ func (s *Service) GetOverview(ctx context.Context, tenantID uuid.UUID, params *m
 	return &models.DashboardOverviewResponse{
 		Range:           normalized.Range,
 		GeneratedAt:     time.Now().UTC(),
+		AvailableTags:   availableTags,
 		Stats:           stats,
 		Trend:           trend,
 		Activity24h:     activity,
@@ -106,7 +115,7 @@ func (s *Service) GetOverview(ctx context.Context, tenantID uuid.UUID, params *m
 	}, nil
 }
 
-func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time) (models.DashboardStats, error) {
+func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string) (models.DashboardStats, error) {
 	stats := models.DashboardStats{}
 
 	countQuery := `
@@ -118,7 +127,12 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		FROM monitors
 		WHERE tenant_id = $1
 	`
-	if err := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(
+	countArgs := []interface{}{tenantID}
+	if len(tags) > 0 {
+		countQuery += ` AND tags @> $2::text[]`
+		countArgs = append(countArgs, pq.Array(tags))
+	}
+	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(
 		&stats.TotalMonitors,
 		&stats.ActiveMonitors,
 		&stats.HTTPMonitors,
@@ -128,7 +142,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	}
 
 	if dashboardRange != models.DashboardRange24h {
-		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID)
+		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 		if err != nil {
 			return stats, err
 		}
@@ -157,13 +171,20 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
+			  %s
 			GROUP BY cr.monitor_id
 		)
 		SELECT COALESCE(AVG((success_checks::float / NULLIF(total_checks, 0)) * 100.0), 0)
 		FROM per_monitor
 		WHERE total_checks > 0
 	`
-	if err := s.db.QueryRowContext(ctx, uptimeQuery, tenantID, rangeStart, rangeEnd).Scan(&stats.OverallUptime); err != nil {
+	uptimeTagClause := ""
+	uptimeArgs := []interface{}{tenantID, rangeStart, rangeEnd}
+	if len(tags) > 0 {
+		uptimeTagClause = "AND m.tags @> $4::text[]"
+		uptimeArgs = append(uptimeArgs, pq.Array(tags))
+	}
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(uptimeQuery, uptimeTagClause), uptimeArgs...).Scan(&stats.OverallUptime); err != nil {
 		return stats, fmt.Errorf("failed to query monitor-weighted uptime: %w", err)
 	}
 
@@ -182,21 +203,28 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			  AND cr.created_at < $3
 			  AND cr.status = 'success'
 			  AND cr.latency_ms IS NOT NULL
+			  %s
 			GROUP BY cr.monitor_id
 		)
 		SELECT COALESCE(AVG(avg_latency), 0)
 		FROM per_monitor
 	`
-	if err := s.db.QueryRowContext(ctx, latencyQuery, tenantID, rangeStart, rangeEnd).Scan(&stats.AvgResponseMS); err != nil {
+	latencyTagClause := ""
+	latencyArgs := []interface{}{tenantID, rangeStart, rangeEnd}
+	if len(tags) > 0 {
+		latencyTagClause = "AND m.tags @> $4::text[]"
+		latencyArgs = append(latencyArgs, pq.Array(tags))
+	}
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(latencyQuery, latencyTagClause), latencyArgs...).Scan(&stats.AvgResponseMS); err != nil {
 		return stats, fmt.Errorf("failed to query monitor-weighted response time: %w", err)
 	}
 
 	return stats, nil
 }
 
-func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time) ([]models.DashboardTrendPoint, error) {
+func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string) ([]models.DashboardTrendPoint, error) {
 	if dashboardRange != models.DashboardRange24h {
-		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID)
+		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 		if err != nil {
 			return nil, err
 		}
@@ -228,6 +256,18 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		interval = "1 hour"
 	}
 
+	endExclusive := rangeEnd.Add(24 * time.Hour)
+	if dashboardRange == models.DashboardRange24h {
+		endExclusive = rangeEnd.Add(time.Hour)
+	}
+
+	tagClause := ""
+	args := []interface{}{tenantID, rangeStart, rangeEnd, endExclusive}
+	if len(tags) > 0 {
+		tagClause = "AND m.tags @> $5::text[]"
+		args = append(args, pq.Array(tags))
+	}
+
 	query := fmt.Sprintf(`
 		WITH buckets AS (
 			SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '%s') AS bucket_start
@@ -247,6 +287,7 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $4
+			  %s
 			GROUP BY 1, cr.monitor_id
 		),
 		bucket_agg AS (
@@ -266,14 +307,9 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		FROM buckets b
 		LEFT JOIN bucket_agg ba ON ba.bucket_start = b.bucket_start
 		ORDER BY b.bucket_start
-	`, interval, unit)
+	`, interval, unit, tagClause)
 
-	endExclusive := rangeEnd.Add(24 * time.Hour)
-	if dashboardRange == models.DashboardRange24h {
-		endExclusive = rangeEnd.Add(time.Hour)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEnd, endExclusive)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query trend data: %w", err)
 	}
@@ -295,13 +331,20 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	return trend, nil
 }
 
-func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID) ([]models.DashboardActivityHour, error) {
+func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags []string) ([]models.DashboardActivityHour, error) {
 	now := time.Now().UTC()
 	end := now.Truncate(time.Hour)
 	start := end.Add(-23 * time.Hour)
 	endExclusive := end.Add(time.Hour)
 
-	query := `
+	tagClause := ""
+	args := []interface{}{tenantID, start, end, endExclusive}
+	if len(tags) > 0 {
+		tagClause = "AND m.tags @> $5::text[]"
+		args = append(args, pq.Array(tags))
+	}
+
+	query := fmt.Sprintf(`
 		WITH buckets AS (
 			SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '1 hour') AS bucket_start
 		),
@@ -317,6 +360,7 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID) ([]mod
 			  AND m.enabled = TRUE
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $4
+			  %s
 			GROUP BY 1
 		)
 		SELECT
@@ -326,9 +370,9 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID) ([]mod
 		FROM buckets b
 		LEFT JOIN hourly_stats hs ON hs.bucket_start = b.bucket_start
 		ORDER BY b.bucket_start
-	`
+	`, tagClause)
 
-	rows, err := s.db.QueryContext(ctx, query, tenantID, start, end, endExclusive)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query 24-hour activity: %w", err)
 	}
@@ -350,8 +394,15 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID) ([]mod
 	return activity, nil
 }
 
-func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time) ([]models.DashboardMonitorHealth, error) {
-	query := `
+func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time, tags []string) ([]models.DashboardMonitorHealth, error) {
+	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
+	whereClause := "WHERE m.tenant_id = $1"
+	if len(tags) > 0 {
+		whereClause += " AND m.tags @> $4::text[]"
+		args = append(args, pq.Array(tags))
+	}
+
+	query := fmt.Sprintf(`
 		SELECT
 			m.id,
 			m.name,
@@ -370,11 +421,11 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 			ORDER BY cr.created_at DESC
 			LIMIT 1
 		) lr ON TRUE
-		WHERE m.tenant_id = $1
+		%s
 		ORDER BY m.name
-	`
+	`, whereClause)
 	if dashboardRange != models.DashboardRange24h {
-		query = `
+		query = fmt.Sprintf(`
 			SELECT
 				m.id,
 				m.name,
@@ -392,12 +443,12 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 				ORDER BY mdr.bucket_day DESC
 				LIMIT 1
 			) lr ON TRUE
-			WHERE m.tenant_id = $1
+			%s
 			ORDER BY m.name
-		`
+		`, whereClause)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEndExclusive)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query monitor health: %w", err)
 	}
@@ -428,7 +479,7 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 	return healthRows, nil
 }
 
-func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitorHealth []models.DashboardMonitorHealth) (models.DashboardOpsSummary, error) {
+func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitorHealth []models.DashboardMonitorHealth, tags []string) (models.DashboardOpsSummary, error) {
 	summary := models.DashboardOpsSummary{}
 	for _, row := range monitorHealth {
 		switch {
@@ -445,22 +496,36 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 
 	query := `
 		SELECT
-			COUNT(*) FILTER (WHERE status = 'active') AS active_alerts,
-			COUNT(*) FILTER (WHERE status = 'acknowledged') AS acknowledged_alerts
-		FROM alerts
-		WHERE tenant_id = $1
-		  AND status IN ('active', 'acknowledged')
+			COUNT(*) FILTER (WHERE a.status = 'active') AS active_alerts,
+			COUNT(*) FILTER (WHERE a.status = 'acknowledged') AS acknowledged_alerts
+		FROM alerts a
+		JOIN monitors m ON m.id = a.monitor_id AND m.tenant_id = a.tenant_id
+		WHERE a.tenant_id = $1
+		  AND a.status IN ('active', 'acknowledged')
 	`
-	if err := s.db.QueryRowContext(ctx, query, tenantID).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts); err != nil {
+	args := []interface{}{tenantID}
+	if len(tags) > 0 {
+		query += ` AND m.tags @> $2::text[]`
+		args = append(args, pq.Array(tags))
+	}
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts); err != nil {
 		return summary, fmt.Errorf("failed to query ops summary alerts: %w", err)
 	}
 
 	return summary, nil
 }
 
-func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time, limit int) ([]models.DashboardProblemMonitor, error) {
+func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
 	if limit < 1 {
 		limit = problemMonitorLimit
+	}
+
+	tagClause := ""
+	limitPlaceholder := 4
+	args := []interface{}{tenantID, rangeStart, rangeEndExclusive, limit}
+	if len(tags) > 0 {
+		tagClause = "AND m.tags @> $5::text[]"
+		args = []interface{}{tenantID, rangeStart, rangeEndExclusive, limit, pq.Array(tags)}
 	}
 
 	monitorStatusJoin := `
@@ -491,6 +556,7 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
+			  %s
 			GROUP BY cr.monitor_id
 		),
 	`
@@ -521,6 +587,7 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 			  AND m.type <> 'group'
 			  AND mdr.bucket_day >= $2::date
 			  AND mdr.bucket_day < $3::date
+			  %s
 			GROUP BY mdr.monitor_id
 		),
 	`
@@ -543,6 +610,7 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
+			  %s
 			GROUP BY cr.monitor_id
 		),
 		%s
@@ -565,15 +633,16 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 			WHERE m.tenant_id = $1
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
+			  %s
 			  AND (COALESCE(fs.failure_count, 0) + COALESCE(fs.error_count, 0)) > 0
 		)
 		SELECT id, name, current_status, failure_count, error_count, uptime, latest_failure_at
 		FROM ranked_monitors
 		ORDER BY (failure_count + error_count) DESC, latest_failure_at DESC NULLS LAST, name ASC
-		LIMIT $4
-	`, uptimeStats, monitorStatusJoin)
+		LIMIT $%d
+	`, tagClause, fmt.Sprintf(uptimeStats, tagClause), monitorStatusJoin, tagClause, limitPlaceholder)
 
-	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEndExclusive, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query problem monitors: %w", err)
 	}
@@ -613,7 +682,7 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 	return monitors, nil
 }
 
-func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEnd time.Time, limit int) ([]models.DashboardFailureEvent, error) {
+func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEnd time.Time, limit int, tags []string) ([]models.DashboardFailureEvent, error) {
 	query := `
 		SELECT
 			cr.id,
@@ -641,11 +710,20 @@ func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, ran
 		  AND cr.status IN ('failure', 'error')
 		  AND cr.created_at >= $2
 		  AND cr.created_at < $3
+		  %s
 		ORDER BY cr.created_at DESC
-		LIMIT $4
+		LIMIT $%d
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEnd, limit)
+	tagClause := ""
+	limitPlaceholder := 4
+	args := []interface{}{tenantID, rangeStart, rangeEnd, limit}
+	if len(tags) > 0 {
+		tagClause = "AND m.tags @> $5::text[]"
+		args = []interface{}{tenantID, rangeStart, rangeEnd, limit, pq.Array(tags)}
+	}
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(query, tagClause, limitPlaceholder), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query recent failures: %w", err)
 	}
@@ -693,15 +771,30 @@ func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, ran
 	return failures, nil
 }
 
-func (s *Service) listEnabledOperationalMonitorIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *Service) listEnabledOperationalMonitorIDs(ctx context.Context, tenantID uuid.UUID, tags []string) ([]uuid.UUID, error) {
+	query := `
 		SELECT id
 		FROM monitors
 		WHERE tenant_id = $1
 		  AND enabled = TRUE
 		  AND type <> 'group'
 		ORDER BY id
-	`, tenantID)
+	`
+	args := []interface{}{tenantID}
+	if len(tags) > 0 {
+		query = `
+			SELECT id
+			FROM monitors
+			WHERE tenant_id = $1
+			  AND enabled = TRUE
+			  AND type <> 'group'
+			  AND tags @> $2::text[]
+			ORDER BY id
+		`
+		args = append(args, pq.Array(tags))
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list enabled dashboard monitors: %w", err)
 	}
@@ -719,6 +812,36 @@ func (s *Service) listEnabledOperationalMonitorIDs(ctx context.Context, tenantID
 		return nil, fmt.Errorf("error iterating dashboard monitor ids: %w", err)
 	}
 	return ids, nil
+}
+
+func (s *Service) getAvailableTags(ctx context.Context, tenantID uuid.UUID) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT unnest(tags) AS tag
+		FROM monitors
+		WHERE tenant_id = $1
+		  AND tags IS NOT NULL
+		ORDER BY tag
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list dashboard tags: %w", err)
+	}
+	defer rows.Close()
+
+	tags := make([]string, 0)
+	for rows.Next() {
+		var tag sql.NullString
+		if err := rows.Scan(&tag); err != nil {
+			return nil, fmt.Errorf("failed to scan dashboard tag: %w", err)
+		}
+		if tag.Valid && tag.String != "" {
+			tags = append(tags, tag.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating dashboard tags: %w", err)
+	}
+
+	return tags, nil
 }
 
 func normalizeOverviewParams(params *models.DashboardOverviewQuery) models.DashboardOverviewQuery {
@@ -748,6 +871,24 @@ func normalizeOverviewParams(params *models.DashboardOverviewQuery) models.Dashb
 	}
 	if normalized.AlertsLimit > maxListLimit {
 		normalized.AlertsLimit = maxListLimit
+	}
+
+	if len(params.Tags) > 0 {
+		tagSet := make(map[string]struct{}, len(params.Tags))
+		for _, tag := range params.Tags {
+			trimmed := strings.TrimSpace(tag)
+			if trimmed == "" {
+				continue
+			}
+			tagSet[trimmed] = struct{}{}
+		}
+		if len(tagSet) > 0 {
+			normalized.Tags = make([]string, 0, len(tagSet))
+			for tag := range tagSet {
+				normalized.Tags = append(normalized.Tags, tag)
+			}
+			sort.Strings(normalized.Tags)
+		}
 	}
 
 	return normalized

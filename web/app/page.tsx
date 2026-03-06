@@ -132,6 +132,97 @@ function InfoPopover({ entries, title }: { entries: PopoverEntry[]; title?: stri
   );
 }
 
+function TagFilterPicker({
+  availableTags,
+  selectedTags,
+  onToggleTag,
+  onClear,
+}: {
+  availableTags: string[];
+  selectedTags: string[];
+  onToggleTag: (tag: string) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const hasSelection = selectedTags.length > 0;
+
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (availableTags.length === 0) return null;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((value) => !value)}
+        className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+          hasSelection
+            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
+            : 'border-white/[0.06] bg-slate-900/50 text-slate-300 hover:text-white'
+        }`}
+      >
+        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+        </svg>
+        <span>Tags</span>
+        {hasSelection && (
+          <span className="rounded-full bg-cyan-500/20 px-1.5 py-0.5 text-[10px] text-cyan-200">
+            {selectedTags.length}
+          </span>
+        )}
+        <svg className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border border-white/[0.08] bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Filter dashboard by tags</p>
+            {hasSelection && (
+              <button onClick={onClear} className="text-[11px] text-slate-400 transition-colors hover:text-white">
+                Clear all
+              </button>
+            )}
+          </div>
+          <div className="flex max-h-56 flex-wrap gap-2 overflow-y-auto pr-1">
+            {availableTags.map((tag) => {
+              const selected = selectedTags.includes(tag);
+              return (
+                <button
+                  key={tag}
+                  onClick={() => onToggleTag(tag)}
+                  className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    selected
+                      ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200'
+                      : 'border-white/[0.08] bg-slate-900 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Stat Card ─────────────────────────────────────────────────────────────────
 
 function StatCard({
@@ -481,6 +572,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | '90d' | '365d'>('24h');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   const loadData = useCallback(async () => {
     try {
@@ -491,6 +583,7 @@ export default function DashboardPage() {
           range: timeRange,
           failures_limit: DASHBOARD_LIST_LIMIT[timeRange],
           alerts_limit: DASHBOARD_LIST_LIMIT[timeRange],
+          tags: selectedTags,
         }),
         getTenantSettings().catch(() => null),
       ]);
@@ -502,11 +595,36 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [timeRange]);
+  }, [timeRange, selectedTags]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const availableTags = useMemo(() => dashboard?.available_tags || [], [dashboard]);
+
+  useEffect(() => {
+    if (availableTags.length === 0) {
+      setSelectedTags((current) => (current.length === 0 ? current : []));
+      return;
+    }
+    setSelectedTags((current) => {
+      const next = current.filter((tag) => availableTags.includes(tag));
+      return next.length === current.length ? current : next;
+    });
+  }, [availableTags]);
+
+  const toggleTag = useCallback((tag: string) => {
+    setSelectedTags((current) =>
+      current.includes(tag)
+        ? current.filter((value) => value !== tag)
+        : [...current, tag].sort((a, b) => a.localeCompare(b))
+    );
+  }, []);
+
+  const clearTags = useCallback(() => {
+    setSelectedTags((current) => (current.length === 0 ? current : []));
+  }, []);
 
   const trendData = useMemo<TrendPoint[]>(() => {
     return (dashboard?.trend || []).map((point) => ({
@@ -533,6 +651,8 @@ export default function DashboardPage() {
   const agentMonitors = stats?.agent_monitors || 0;
   const avgUptime = (stats?.overall_uptime || 0).toFixed(2);
   const avgResponseTime = Math.round(stats?.avg_response_ms || 0);
+  const hasTagFilter = selectedTags.length > 0;
+  const noMatchingMonitors = hasTagFilter && totalMonitors === 0;
 
   const minUptime = useMemo(() => {
     if (!hasTrendData) return 95;
@@ -563,12 +683,18 @@ export default function DashboardPage() {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-white">Dashboard</h1>
           <p className="mt-0.5 text-sm text-slate-500">Overview of your monitoring infrastructure</p>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <TagFilterPicker
+            availableTags={availableTags}
+            selectedTags={selectedTags}
+            onToggleTag={toggleTag}
+            onClear={clearTags}
+          />
           {(['24h', '7d', '30d', '90d', '365d'] as const).map((range) => (
             <button
               key={range}
@@ -581,12 +707,33 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {hasTagFilter && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
+          <span className="text-xs font-medium uppercase tracking-wider text-cyan-300">Scoped to</span>
+          {selectedTags.map((tag) => (
+            <span key={tag} className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-xs text-cyan-200">
+              {tag}
+            </span>
+          ))}
+          <button onClick={clearTags} className="ml-auto text-xs text-slate-400 transition-colors hover:text-white">
+            Clear all
+          </button>
+        </div>
+      )}
+
       {showRetentionWarning && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
           <p className="text-sm text-amber-300">
             Data retention is set to {tenantRetentionDays} day{tenantRetentionDays === 1 ? '' : 's'}.
             Older history is deleted, so this {timeRange} view may be partial.
           </p>
+        </div>
+      )}
+
+      {noMatchingMonitors && (
+        <div className="rounded-lg border border-white/[0.08] bg-slate-900/60 px-4 py-3">
+          <p className="text-sm text-slate-300">No monitors match the selected tag combination.</p>
+          <p className="mt-1 text-xs text-slate-500">Adjust the tag filter to broaden the dashboard scope.</p>
         </div>
       )}
 
@@ -694,7 +841,7 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div className="flex h-44 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
-              <p className="text-sm text-slate-500">No uptime data yet</p>
+              <p className="text-sm text-slate-500">{noMatchingMonitors ? 'No monitors match these tags' : 'No uptime data yet'}</p>
             </div>
           )}
         </div>
@@ -732,7 +879,7 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div className="flex h-44 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
-              <p className="text-sm text-slate-500">No response time data yet</p>
+              <p className="text-sm text-slate-500">{noMatchingMonitors ? 'No monitors match these tags' : 'No response time data yet'}</p>
             </div>
           )}
         </div>
@@ -757,8 +904,8 @@ export default function DashboardPage() {
             </div>
           ) : (
             <EmptyState
-              message="No problem monitors"
-              sub="All monitors are running cleanly in this range."
+              message={noMatchingMonitors ? 'No monitors match these tags' : 'No problem monitors'}
+              sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'All monitors are running cleanly in this range.'}
             />
           )}
         </SectionCard>
@@ -780,7 +927,10 @@ export default function DashboardPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState message="No recent failures" sub="Failure events will appear here when checks fail." />
+              <EmptyState
+                message={noMatchingMonitors ? 'No monitors match these tags' : 'No recent failures'}
+                sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Failure events will appear here when checks fail.'}
+              />
             )}
           </SectionCard>
 
@@ -799,7 +949,10 @@ export default function DashboardPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState message="No recent alerts" sub="Alerts appear when failures trigger your policies." />
+              <EmptyState
+                message={noMatchingMonitors ? 'No monitors match these tags' : 'No recent alerts'}
+                sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Alerts appear when failures trigger your policies.'}
+              />
             )}
           </SectionCard>
         </div>

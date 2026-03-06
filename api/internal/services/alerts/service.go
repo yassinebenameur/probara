@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -190,6 +191,60 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
 		}
 		alerts = append(alerts, alert)
+	}
+
+	return alerts, nil
+}
+
+// GetRecentAlertsForTags retrieves recent alerts for monitors matching all selected tags.
+func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID, tags []string, limit int) ([]models.AlertWithDetails, error) {
+	if len(tags) == 0 {
+		return s.GetRecentAlerts(ctx, tenantID, limit)
+	}
+	if limit < 1 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	query := `
+		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
+			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
+			a.last_error, a.created_at, a.updated_at,
+			m.name as monitor_name, ap.name as policy_name
+		FROM alerts a
+		JOIN monitors m ON a.monitor_id = m.id
+		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		WHERE a.tenant_id = $1
+		  AND m.tenant_id = $1
+		  AND m.tags @> $2::text[]
+		ORDER BY a.triggered_at DESC
+		LIMIT $3
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(tags), limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recent alerts for tags: %w", err)
+	}
+	defer rows.Close()
+
+	var alerts []models.AlertWithDetails
+	for rows.Next() {
+		var alert models.AlertWithDetails
+		err := rows.Scan(
+			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
+			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
+			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+			&alert.MonitorName, &alert.PolicyName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan alert: %w", err)
+		}
+		alerts = append(alerts, alert)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating alerts: %w", err)
 	}
 
 	return alerts, nil

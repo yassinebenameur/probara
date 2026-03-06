@@ -57,6 +57,22 @@ func TestNormalizeOverviewParams_ValidValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeOverviewParams_NormalizesTags(t *testing.T) {
+	got := normalizeOverviewParams(&models.DashboardOverviewQuery{
+		Tags: []string{" prod ", "", "api", "prod", "backend"},
+	})
+
+	want := []string{"api", "backend", "prod"}
+	if len(got.Tags) != len(want) {
+		t.Fatalf("Tags length = %d, want %d", len(got.Tags), len(want))
+	}
+	for i := range want {
+		if got.Tags[i] != want[i] {
+			t.Fatalf("Tags[%d] = %q, want %q", i, got.Tags[i], want[i])
+		}
+	}
+}
+
 func TestRangeBounds_LongRanges(t *testing.T) {
 	for _, rangeValue := range []models.DashboardRange{
 		models.DashboardRange90d,

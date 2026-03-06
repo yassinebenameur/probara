@@ -124,6 +124,31 @@ func TestHandlers_GetOverview_LongRangeAccepted(t *testing.T) {
 	}
 }
 
+func TestHandlers_GetOverview_RepeatedTagsPassedThrough(t *testing.T) {
+	log := logger.New("test", "debug")
+	mockSvc := &mockDashboardService{}
+	handlers := NewHandlers(mockSvc, log)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview?tag=prod&tag=api&tag=prod", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+
+	w := httptest.NewRecorder()
+	handlers.GetOverview(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if mockSvc.lastParams == nil {
+		t.Fatalf("expected params to be passed to service")
+	}
+	if len(mockSvc.lastParams.Tags) != 3 {
+		t.Fatalf("tags length = %d, want 3", len(mockSvc.lastParams.Tags))
+	}
+	if mockSvc.lastParams.Tags[0] != "prod" || mockSvc.lastParams.Tags[1] != "api" || mockSvc.lastParams.Tags[2] != "prod" {
+		t.Fatalf("tags = %#v, want [prod api prod]", mockSvc.lastParams.Tags)
+	}
+}
+
 func TestHandlers_GetOverview_MissingTenant(t *testing.T) {
 	log := logger.New("test", "debug")
 	mockSvc := &mockDashboardService{}

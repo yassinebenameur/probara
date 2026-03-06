@@ -444,6 +444,7 @@ export interface DashboardFailureEvent {
 export interface DashboardOverviewResponse {
   range: DashboardRange;
   generated_at: string;
+  available_tags: string[];
   stats: DashboardStats;
   trend: DashboardTrendPoint[];
   activity_24h: DashboardActivityPoint[];

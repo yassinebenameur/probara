@@ -30,12 +30,14 @@ type DashboardOverviewQuery struct {
 	Range         DashboardRange `json:"range"`
 	FailuresLimit int            `json:"failures_limit"`
 	AlertsLimit   int            `json:"alerts_limit"`
+	Tags          []string       `json:"tags"`
 }
 
 // DashboardOverviewResponse is the aggregated dashboard payload.
 type DashboardOverviewResponse struct {
 	Range           DashboardRange            `json:"range"`
 	GeneratedAt     time.Time                 `json:"generated_at"`
+	AvailableTags   []string                  `json:"available_tags"`
 	Stats           DashboardStats            `json:"stats"`
 	Trend           []DashboardTrendPoint     `json:"trend"`
 	Activity24h     []DashboardActivityHour   `json:"activity_24h"`

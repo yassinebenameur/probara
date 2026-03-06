@@ -7,11 +7,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
+	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -210,6 +213,112 @@ func TestService_GetOverview_ActionSummaryEmptyTenant(t *testing.T) {
 	}
 	if len(overview.RecentFailures) != 0 {
 		t.Fatalf("RecentFailures length = %d, want 0", len(overview.RecentFailures))
+	}
+}
+
+func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient))
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-tags")
+	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
+	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
+	monitorC := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-c")
+
+	setMonitorTags(ctx, t, dbClient, monitorA, []string{"prod", "api"})
+	setMonitorTags(ctx, t, dbClient, monitorB, []string{"prod"})
+	setMonitorTags(ctx, t, dbClient, monitorC, []string{"api"})
+
+	now := time.Now().UTC()
+	bucketDay := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.UTC)
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, bucketDay, 10, 7, 700, 7, "error", bucketDay.Add(23*time.Hour))
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorB, bucketDay, 10, 10, 900, 10, "success", bucketDay.Add(22*time.Hour))
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorC, bucketDay, 10, 8, 800, 8, "failure", bucketDay.Add(21*time.Hour))
+
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-72*time.Hour), "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-48*time.Hour), "error", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-24*time.Hour), "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, now.Add(-24*time.Hour), "success", "monitor", testutil.IntPtr(110))
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorC, now.Add(-12*time.Hour), "failure", "monitor", nil)
+
+	policyID := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
+		VALUES ($1, $2, 'default-policy', 2, 300, NOW(), NOW())
+	`, policyID, tenantID); err != nil {
+		t.Fatalf("insert alert policy: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES
+			($1, $3, $4, $6, 'active', NOW(), 3, NOW(), NOW()),
+			($2, $3, $5, $6, 'acknowledged', NOW(), 2, NOW(), NOW())
+	`, uuid.New(), uuid.New(), tenantID, monitorA, monitorC, policyID); err != nil {
+		t.Fatalf("insert alerts: %v", err)
+	}
+
+	overview, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
+		Range:         models.DashboardRange30d,
+		FailuresLimit: 10,
+		AlertsLimit:   10,
+		Tags:          []string{"prod", "api"},
+	})
+	if err != nil {
+		t.Fatalf("GetOverview(30d, tags) error = %v", err)
+	}
+
+	if len(overview.AvailableTags) != 2 || overview.AvailableTags[0] != "api" || overview.AvailableTags[1] != "prod" {
+		t.Fatalf("AvailableTags = %#v, want [api prod]", overview.AvailableTags)
+	}
+	if overview.Stats.TotalMonitors != 1 || overview.Stats.ActiveMonitors != 1 || overview.Stats.HTTPMonitors != 1 {
+		t.Fatalf("Stats = %+v, want one matching monitor", overview.Stats)
+	}
+	assertDashboardClose(t, overview.Stats.OverallUptime, 70.0)
+	if overview.OpsSummary.UpMonitors != 0 || overview.OpsSummary.DownMonitors != 1 || overview.OpsSummary.ActiveAlerts != 1 || overview.OpsSummary.AcknowledgedAlerts != 0 {
+		t.Fatalf("OpsSummary = %+v, want one down monitor and one active alert", overview.OpsSummary)
+	}
+	if len(overview.ProblemMonitors) != 1 || overview.ProblemMonitors[0].MonitorID != monitorA {
+		t.Fatalf("ProblemMonitors = %+v, want only monitorA", overview.ProblemMonitors)
+	}
+	if len(overview.RecentFailures) != 3 {
+		t.Fatalf("RecentFailures length = %d, want 3", len(overview.RecentFailures))
+	}
+	for _, failure := range overview.RecentFailures {
+		if failure.MonitorID != monitorA {
+			t.Fatalf("RecentFailures included monitor %s, want only %s", failure.MonitorID, monitorA)
+		}
+	}
+	if len(overview.RecentAlerts) != 1 || overview.RecentAlerts[0].MonitorID != monitorA {
+		t.Fatalf("RecentAlerts = %+v, want only monitorA alert", overview.RecentAlerts)
+	}
+
+	zeroMatch, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
+		Range: models.DashboardRange30d,
+		Tags:  []string{"missing"},
+	})
+	if err != nil {
+		t.Fatalf("GetOverview(30d, missing tag) error = %v", err)
+	}
+
+	if zeroMatch.Stats.TotalMonitors != 0 || zeroMatch.Stats.ActiveMonitors != 0 {
+		t.Fatalf("zero-match stats = %+v, want zero monitor counts", zeroMatch.Stats)
+	}
+	if len(zeroMatch.ProblemMonitors) != 0 || len(zeroMatch.RecentFailures) != 0 || len(zeroMatch.RecentAlerts) != 0 {
+		t.Fatalf("zero-match lists should be empty, got problems=%d failures=%d alerts=%d", len(zeroMatch.ProblemMonitors), len(zeroMatch.RecentFailures), len(zeroMatch.RecentAlerts))
+	}
+	if len(zeroMatch.AvailableTags) != 2 || zeroMatch.AvailableTags[0] != "api" || zeroMatch.AvailableTags[1] != "prod" {
+		t.Fatalf("zero-match available tags = %#v, want [api prod]", zeroMatch.AvailableTags)
+	}
+}
+
+func setMonitorTags(ctx context.Context, t *testing.T, dbClient shareddb.DB, monitorID uuid.UUID, tags []string) {
+	t.Helper()
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET tags = $2 WHERE id = $1`, monitorID, pq.Array(tags)); err != nil {
+		t.Fatalf("set monitor tags: %v", err)
 	}
 }
 
