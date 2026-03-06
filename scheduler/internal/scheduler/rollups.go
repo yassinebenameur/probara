@@ -17,6 +17,7 @@ const (
 	rollupMaintenanceAdvisoryLock = int64(901_337_402)
 	rollupMaintenanceTimeout      = 30 * time.Minute
 	rollupMaintenanceBatchSize    = 5000
+	rollupProgressLogInterval     = 15 * time.Second
 	rollupRetentionDays           = 400
 	rollupJobName                 = "monitor_daily_rollups"
 )
@@ -99,6 +100,13 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 	totalProcessed := 0
 	lastCursorUnix := int64(0)
 	batches := 0
+	lastProgressLog := started
+
+	s.logger.WithFields(logrus.Fields{
+		"cursor_time": state.LastCreatedAt,
+		"cursor_id":   state.LastResultID,
+		"timeout":     rollupMaintenanceTimeout.String(),
+	}).Info("Rollup maintenance run started")
 
 	for {
 		rows, err := s.loadRollupBatch(ctx, state)
@@ -148,6 +156,18 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 		batches++
 		lastCursorUnix = rows[len(rows)-1].CreatedAt.UTC().Unix()
 
+		now := time.Now()
+		if now.Sub(lastProgressLog) >= rollupProgressLogInterval {
+			s.logger.WithFields(logrus.Fields{
+				"processed_rows": totalProcessed,
+				"batches":        batches,
+				"elapsed":        now.Sub(started).String(),
+				"cursor_time":    state.LastCreatedAt,
+				"cursor_id":      state.LastResultID,
+			}).Info("Rollup maintenance progress")
+			lastProgressLog = now
+		}
+
 		if len(rows) < rollupMaintenanceBatchSize {
 			break
 		}
@@ -163,6 +183,7 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 	s.logger.WithFields(logrus.Fields{
 		"processed_rows": totalProcessed,
 		"batches":        batches,
+		"elapsed":        time.Since(started).String(),
 		"cursor_time":    state.LastCreatedAt,
 		"cursor_id":      state.LastResultID,
 	}).Info("Rollup maintenance run completed")
