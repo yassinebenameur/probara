@@ -1,3 +1,15 @@
+# [1.0.0-alpha.24](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.23...v1.0.0-alpha.24) (2026-03-06)
+
+
+### Bug Fixes
+
+* **scheduler:** log rollup backfill progress ([745f10c](https://github.com/yassinebenameur/probara/commit/745f10c1478f80442f10de6efee970e330cc12ac))
+
+
+### Features
+
+* **dashboard:** add tag-scoped stats filtering ([8bf1cfb](https://github.com/yassinebenameur/probara/commit/8bf1cfb171c7fb8acff9d64ace9d42d1343e4e66))
+
 # [1.0.0-alpha.23](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.22...v1.0.0-alpha.23) (2026-03-06)
 
 
