@@ -165,11 +165,16 @@ type HourlyUptime struct {
 type Service struct {
 	db        *db.Client
 	analytics *sharedanalytics.Repository
+	now       func() time.Time
 }
 
 // NewService creates a new status page service
 func NewService(db *db.Client) *Service {
-	return &Service{db: db, analytics: sharedanalytics.NewRepository(db)}
+	return &Service{
+		db:        db,
+		analytics: sharedanalytics.NewRepository(db),
+		now:       func() time.Time { return time.Now().UTC() },
+	}
 }
 
 type statusPageSettingsPatch struct {
@@ -695,7 +700,7 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 
 func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *MonitorStatus, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
 	ranges := []sharedanalytics.Range{sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
-	now := time.Now().UTC()
+	now := s.now()
 	for _, rangeValue := range ranges {
 		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
 		if err != nil {
@@ -723,7 +728,7 @@ func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *M
 
 func (s *Service) applyGlobalLongRangeAnalytics(ctx context.Context, page *StatusPageData, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
 	ranges := []sharedanalytics.Range{sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
-	now := time.Now().UTC()
+	now := s.now()
 	for _, rangeValue := range ranges {
 		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
 		if err != nil {

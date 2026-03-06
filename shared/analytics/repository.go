@@ -355,8 +355,8 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 	dayBuckets := make(map[time.Time]map[uuid.UUID]dayAccumulator)
 	perMonitor := make(map[uuid.UUID][]dayAccumulator)
 	var coverageStart *time.Time
-	latestStatuses := make([]string, 0)
 	var latestCheckAt *time.Time
+	var latestStatus *string
 
 	for _, row := range rows {
 		day := time.Date(row.BucketDay.Year(), row.BucketDay.Month(), row.BucketDay.Day(), 0, 0, 0, 0, time.UTC)
@@ -378,7 +378,8 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 			ts := row.LatestCheckAt.Time.UTC()
 			acc.latestCheckAt = &ts
 			if latestCheckAt == nil || ts.After(*latestCheckAt) {
-				latestCheckAt = &ts
+				latestCheckAt = cloneTimePtr(&ts)
+				latestStatus = cloneStringPtr(acc.latestStatus)
 			}
 		}
 		if _, ok := dayBuckets[day]; !ok {
@@ -415,9 +416,6 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 			if stat.avgLatencyMS != nil {
 				latencies = append(latencies, *stat.avgLatencyMS)
 			}
-			if stat.latestStatus != nil {
-				latestStatuses = append(latestStatuses, *stat.latestStatus)
-			}
 		}
 		point.UptimePct = average(uptimes)
 		if len(latencies) > 0 {
@@ -429,12 +427,10 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 
 	perMonitorSLA := make([]float64, 0, len(perMonitor))
 	perMonitorLatency := make([]float64, 0, len(perMonitor))
-	latestStatuses = latestStatuses[:0]
 	for _, stats := range perMonitor {
 		dailyUptimes := make([]float64, 0, len(stats))
 		dailyLatencies := make([]float64, 0, len(stats))
 		var monitorLatest *time.Time
-		var monitorStatus *string
 		for _, stat := range stats {
 			if stat.totalChecks > 0 {
 				dailyUptimes = append(dailyUptimes, (float64(stat.successChecks)/float64(stat.totalChecks))*100)
@@ -444,7 +440,6 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 			}
 			if stat.latestCheckAt != nil && (monitorLatest == nil || stat.latestCheckAt.After(*monitorLatest)) {
 				monitorLatest = cloneTimePtr(stat.latestCheckAt)
-				monitorStatus = cloneStringPtr(stat.latestStatus)
 			}
 		}
 		if len(dailyUptimes) > 0 {
@@ -452,9 +447,6 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 		}
 		if len(dailyLatencies) > 0 {
 			perMonitorLatency = append(perMonitorLatency, average(dailyLatencies))
-		}
-		if monitorStatus != nil {
-			latestStatuses = append(latestStatuses, *monitorStatus)
 		}
 	}
 	sla := average(perMonitorSLA)
@@ -464,7 +456,7 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 	if len(perMonitorLatency) > 0 {
 		res.Summary.AvgLatencyMS = PtrFloat64(average(perMonitorLatency))
 	}
-	res.Summary.LatestStatus = aggregateStatus(latestStatuses)
+	res.Summary.LatestStatus = latestStatus
 	res.Summary.LatestCheckAt = latestCheckAt
 	return res
 }

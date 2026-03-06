@@ -30,6 +30,7 @@ func TestService_GetStatusPageBySlug_LongRangeParityMatchesSharedAnalytics(t *te
 	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorB, 1)
 
 	now := time.Date(2026, time.March, 6, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
 	day1 := time.Date(2026, time.March, 5, 0, 0, 0, 0, time.UTC)
 	day2 := time.Date(2026, time.March, 6, 0, 0, 0, 0, time.UTC)
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, day1, 10, 8, 1000, 10, "failure", day1.Add(22*time.Hour))
