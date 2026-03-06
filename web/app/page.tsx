@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { getDashboardOverview, getTenantSettings } from '@/lib/api';
 import {
   Alert,
@@ -82,27 +83,72 @@ type PopoverEntry = { label: string; value: string | number };
 
 function InfoPopover({ entries, title }: { entries: PopoverEntry[]; title?: string }) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({
+    left: 0,
+    top: 0,
+    placement: 'top' as 'top' | 'bottom',
+    ready: false,
+  });
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const updatePosition = useCallback(() => {
+    const trigger = buttonRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const popoverWidth = popoverRef.current?.offsetWidth ?? 208;
+    const popoverHeight = popoverRef.current?.offsetHeight ?? 0;
+    const viewportPadding = 12;
+    const offset = 8;
+    const canPlaceAbove = rect.top >= popoverHeight + offset + viewportPadding;
+    const left = Math.min(
+      window.innerWidth - viewportPadding - popoverWidth / 2,
+      Math.max(viewportPadding + popoverWidth / 2, rect.left + rect.width / 2)
+    );
+
+    setPosition({
+      left,
+      top: canPlaceAbove ? rect.top - offset : rect.bottom + offset,
+      placement: canPlaceAbove ? 'top' : 'bottom',
+      ready: true,
+    });
+  }, []);
 
   useEffect(() => {
     if (!open) return;
+
+    const frame = window.requestAnimationFrame(updatePosition);
+
     function onClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
     }
+
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
     }
+
     document.addEventListener('mousedown', onClickOutside);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', updatePosition);
+    document.addEventListener('scroll', updatePosition, true);
+
     return () => {
+      window.cancelAnimationFrame(frame);
       document.removeEventListener('mousedown', onClickOutside);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', updatePosition);
+      document.removeEventListener('scroll', updatePosition, true);
     };
-  }, [open]);
+  }, [open, updatePosition]);
 
   return (
     <div className="relative inline-flex" ref={ref}>
       <button
+        ref={buttonRef}
         onClick={() => setOpen((v) => !v)}
         className="flex h-4 w-4 items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-300 focus:outline-none"
         aria-label="Show details"
@@ -111,8 +157,17 @@ function InfoPopover({ entries, title }: { entries: PopoverEntry[]; title?: stri
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       </button>
-      {open && (
-        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-52 -translate-x-1/2 rounded-lg border border-white/10 bg-slate-800 shadow-xl">
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={popoverRef}
+          className="fixed left-0 top-0 z-[100] w-52 rounded-lg border border-white/10 bg-slate-800 shadow-xl"
+          style={{
+            left: position.left,
+            top: position.top,
+            opacity: position.ready ? 1 : 0,
+            transform: position.placement === 'top' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+          }}
+        >
           {title && (
             <div className="border-b border-white/[0.06] px-3 py-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{title}</p>
@@ -126,7 +181,8 @@ function InfoPopover({ entries, title }: { entries: PopoverEntry[]; title?: stri
               </div>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

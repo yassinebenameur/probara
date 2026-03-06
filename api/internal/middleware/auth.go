@@ -35,19 +35,24 @@ func GetAdminID(ctx context.Context) (string, error) {
 func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			applyCORSHeaders(w, r)
+
 			// Prefer admin JWT cookie if present
 			if cookie, err := r.Cookie("admin_access"); err == nil && cookie.Value != "" {
 				claims, err := auth.ParseAdminToken(cookie.Value, jwtSecret)
 				if err == nil && claims.AdminID != "" {
 					ctx := ctxpkg.WithAdminID(r.Context(), claims.AdminID)
 
-					tenantHeader := r.Header.Get("X-Tenant-ID")
-					if tenantHeader != "" {
-						if _, err := uuid.Parse(tenantHeader); err != nil {
-							writeBadRequestError(w, "invalid X-Tenant-ID header")
+					tenantValue := r.Header.Get("X-Tenant-ID")
+					if tenantValue == "" {
+						tenantValue = r.URL.Query().Get("tenant_id")
+					}
+					if tenantValue != "" {
+						if _, err := uuid.Parse(tenantValue); err != nil {
+							writeBadRequestError(w, "invalid tenant identifier")
 							return
 						}
-						ctx = ctxpkg.WithTenantID(ctx, tenantHeader)
+						ctx = ctxpkg.WithTenantID(ctx, tenantValue)
 					}
 
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -81,6 +86,14 @@ func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) f
 			ctx := ctxpkg.WithTenantID(r.Context(), tenantID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
+	}
+}
+
+func applyCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Vary", "Origin")
 	}
 }
 

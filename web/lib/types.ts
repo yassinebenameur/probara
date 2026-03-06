@@ -375,6 +375,14 @@ export interface AlertListResponse {
   total: number;
 }
 
+export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved';
+
+export interface AlertStreamEvent {
+  type: AlertStreamEventType;
+  alert: Alert;
+  received_at: string;
+}
+
 export type DashboardRange = '24h' | '7d' | '30d' | '90d' | '365d';
 export type DashboardFailureState = 'firing' | 'resolved';
 

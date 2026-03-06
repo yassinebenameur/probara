@@ -4,8 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getRecentAlerts, acknowledgeAlert, resolveAlert } from '@/lib/api';
-import { useAlertStream } from '@/lib/useAlertStream';
-import { useToast } from '@/components/ui/ToastProvider';
+import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 
 interface RecentAlertsProps {
   limit?: number;
@@ -59,7 +58,7 @@ export default function RecentAlerts({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processingId, setProcessingId] = useState<string | null>(null);
-  const { showAlertToast } = useToast();
+  const { subscribe } = useAlertEvents();
 
   const loadAlerts = useCallback(async () => {
     try {
@@ -86,28 +85,35 @@ export default function RecentAlerts({
       return updated;
     });
     onAlertUpdate?.(alert);
-    // Show toast notification for new alert
-    showAlertToast(alert.id, alert.monitor_name || 'Monitor', 'created');
-  }, [limit, onAlertUpdate, showAlertToast]);
+  }, [limit, onAlertUpdate]);
 
   const handleAlertAcknowledged = useCallback((alert: Alert) => {
     setAlerts(prev => prev.map(a => a.id === alert.id ? alert : a));
     onAlertUpdate?.(alert);
-    showAlertToast(alert.id, alert.monitor_name || 'Monitor', 'acknowledged');
-  }, [onAlertUpdate, showAlertToast]);
+  }, [onAlertUpdate]);
 
   const handleAlertResolved = useCallback((alert: Alert) => {
     setAlerts(prev => prev.map(a => a.id === alert.id ? alert : a));
     onAlertUpdate?.(alert);
-    showAlertToast(alert.id, alert.monitor_name || 'Monitor', 'resolved');
-  }, [onAlertUpdate, showAlertToast]);
+  }, [onAlertUpdate]);
 
-  useAlertStream({
-    onAlertCreated: handleAlertCreated,
-    onAlertAcknowledged: handleAlertAcknowledged,
-    onAlertResolved: handleAlertResolved,
-    enabled: true,
-  });
+  useEffect(() => {
+    return subscribe((event) => {
+      switch (event.type) {
+        case 'created':
+          handleAlertCreated(event.alert);
+          break;
+        case 'acknowledged':
+          handleAlertAcknowledged(event.alert);
+          break;
+        case 'resolved':
+          handleAlertResolved(event.alert);
+          break;
+        default:
+          break;
+      }
+    });
+  }, [handleAlertAcknowledged, handleAlertCreated, handleAlertResolved, subscribe]);
 
   const handleAcknowledge = async (alertId: string) => {
     try {

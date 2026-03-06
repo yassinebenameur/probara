@@ -3,10 +3,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getAlerts } from '@/lib/api';
-import { useAlertStream } from '@/lib/useAlertStream';
+import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import AlertTable from '@/components/alerts/AlertTable';
 import Panel from '@/components/ui/Panel';
-import { useToast } from '@/components/ui/ToastProvider';
 
 type TimeFilter = '1h' | '24h' | '7d' | '30d' | 'all';
 
@@ -19,7 +18,7 @@ export default function AlertsPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const pageSize = 20;
-  const { showAlertToast } = useToast();
+  const { subscribe } = useAlertEvents();
 
   const loadAlerts = useCallback(async () => {
     try {
@@ -86,16 +85,13 @@ export default function AlertsPage() {
       return prev;
     });
     
-    // Show toast notification
-    showAlertToast(alert.id, alert.monitor_name || 'Monitor', eventType);
-  }, [statusFilter, showAlertToast]);
+  }, [statusFilter]);
 
-  useAlertStream({
-    onAlertCreated: (alert) => handleAlertUpdate(alert, 'created'),
-    onAlertAcknowledged: (alert) => handleAlertUpdate(alert, 'acknowledged'),
-    onAlertResolved: (alert) => handleAlertUpdate(alert, 'resolved'),
-    enabled: true,
-  });
+  useEffect(() => {
+    return subscribe((event) => {
+      handleAlertUpdate(event.alert, event.type);
+    });
+  }, [handleAlertUpdate, subscribe]);
 
   const handleAlertTableUpdate = (alert: Alert) => {
     setAlerts(prev => prev.map(a => a.id === alert.id ? alert : a));
