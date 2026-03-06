@@ -1,3 +1,10 @@
+# [1.0.0-alpha.23](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.22...v1.0.0-alpha.23) (2026-03-06)
+
+
+### Bug Fixes
+
+* **frontend:** show gaps for incomplete dashboard rollups ([8dab682](https://github.com/yassinebenameur/probara/commit/8dab6829af4f2e77326dc0c6ddce0c558b4091bc))
+
 # [1.0.0-alpha.22](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.21...v1.0.0-alpha.22) (2026-03-06)
 
 
