@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { getDashboardOverview, getTenantSettings } from '@/lib/api';
 import {
   Alert,
@@ -20,6 +20,12 @@ import {
 
 type TrendPoint = { date: string; uptime: number; responseTime: number; total: number };
 
+type TrendDelta = {
+  value: number;       // absolute delta (e.g. +0.3 or -12)
+  direction: 'up' | 'down' | 'neutral';
+  label: string;       // e.g. "0.3% vs prior period"
+};
+
 const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d' | '90d' | '365d', number> = {
   '24h': 10,
   '7d': 25,
@@ -32,54 +38,154 @@ function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
   const now = new Date();
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
   if (seconds < 60) return 'just now';
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-// Stat Card Component
+/** Compute a trend delta by comparing the second half vs first half of the series. */
+function computeUptimeTrend(data: TrendPoint[]): TrendDelta | null {
+  const active = data.filter((d) => d.total > 0);
+  if (active.length < 4) return null;
+  const mid = Math.floor(active.length / 2);
+  const first = active.slice(0, mid);
+  const second = active.slice(mid);
+  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + d.uptime, 0) / arr.length;
+  const delta = avg(second) - avg(first);
+  return {
+    value: Math.abs(delta),
+    direction: delta > 0.05 ? 'up' : delta < -0.05 ? 'down' : 'neutral',
+    label: `${Math.abs(delta).toFixed(2)}% vs prior period`,
+  };
+}
+
+function computeResponseTrend(data: TrendPoint[]): TrendDelta | null {
+  const active = data.filter((d) => d.total > 0 && d.responseTime > 0);
+  if (active.length < 4) return null;
+  const mid = Math.floor(active.length / 2);
+  const first = active.slice(0, mid);
+  const second = active.slice(mid);
+  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + d.responseTime, 0) / arr.length;
+  const delta = avg(second) - avg(first);
+  // For response time, going down is good
+  return {
+    value: Math.abs(delta),
+    direction: delta < -5 ? 'up' : delta > 5 ? 'down' : 'neutral',
+    label: `${Math.abs(Math.round(delta))}ms vs prior period`,
+  };
+}
+
+// ─── Info Popover ──────────────────────────────────────────────────────────────
+
+type PopoverEntry = { label: string; value: string | number };
+
+function InfoPopover({ entries, title }: { entries: PopoverEntry[]; title?: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-flex" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-4 w-4 items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-300 focus:outline-none"
+        aria-label="Show details"
+      >
+        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-1/2 z-50 mb-2 w-52 -translate-x-1/2 rounded-lg border border-white/10 bg-slate-800 shadow-xl">
+          {title && (
+            <div className="border-b border-white/[0.06] px-3 py-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{title}</p>
+            </div>
+          )}
+          <div className="divide-y divide-white/[0.04] px-3 py-1">
+            {entries.map((e, i) => (
+              <div key={i} className="flex items-center justify-between py-1.5">
+                <span className="text-xs text-slate-500">{e.label}</span>
+                <span className="text-xs font-medium text-slate-200">{e.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Stat Card ─────────────────────────────────────────────────────────────────
+
 function StatCard({
   label,
   value,
   unit,
-  change,
-  changeLabel,
-  positive = true,
+  trend,
+  higherIsBetter = true,
   icon,
+  subtitle,
+  infoEntries,
 }: {
   label: string;
   value: string | number;
   unit?: string;
-  change?: string;
-  changeLabel?: string;
-  positive?: boolean;
+  trend?: TrendDelta | null;
+  higherIsBetter?: boolean;
   icon: React.ReactNode;
+  subtitle?: string;
+  infoEntries?: PopoverEntry[];
 }) {
+  const trendPositive =
+    trend && trend.direction !== 'neutral'
+      ? (trend.direction === 'up') === higherIsBetter
+      : null;
+
   return (
     <div className="relative overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
       <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</p>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</p>
+            {infoEntries && <InfoPopover entries={infoEntries} title={label} />}
+          </div>
           <div className="mt-2 flex items-baseline gap-1">
             <span className="text-3xl font-semibold tracking-tight text-white">{value}</span>
             {unit && <span className="text-lg text-slate-500">{unit}</span>}
           </div>
-          {change && (
-            <div className="mt-2 flex items-center gap-2">
-              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                positive
-                  ? 'bg-emerald-500/10 text-emerald-400'
-                  : 'bg-rose-500/10 text-rose-400'
-              }`}>
-                {positive ? '↑' : '↓'} {change}
+          <div className="mt-2 h-5">
+            {trend && trend.direction !== 'neutral' ? (
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${trendPositive
+                    ? 'bg-emerald-500/10 text-emerald-400'
+                    : 'bg-rose-500/10 text-rose-400'
+                  }`}
+              >
+                {trend.direction === 'up' ? '↑' : '↓'} {trend.label}
               </span>
-              {changeLabel && <span className="text-xs text-slate-500">{changeLabel}</span>}
-            </div>
-          )}
+            ) : subtitle ? (
+              <span className="text-xs text-slate-500">{subtitle}</span>
+            ) : null}
+          </div>
         </div>
-        <div className="rounded-lg bg-slate-800/50 p-2.5 text-slate-400">
+        <div className="ml-3 shrink-0 rounded-lg bg-slate-800/60 p-2.5 text-slate-400">
           {icon}
         </div>
       </div>
@@ -87,16 +193,62 @@ function StatCard({
   );
 }
 
+// ─── Fleet Status Bar ──────────────────────────────────────────────────────────
+
+function FleetStatusBar({
+  up,
+  down,
+  paused,
+  activeAlerts,
+  acknowledgedAlerts,
+}: {
+  up: number;
+  down: number;
+  paused: number;
+  activeAlerts: number;
+  acknowledgedAlerts: number;
+}) {
+  const items = [
+    { label: 'Up', value: up, dot: 'bg-emerald-400', text: 'text-emerald-400' },
+    { label: 'Down', value: down, dot: 'bg-rose-400', text: 'text-rose-400' },
+    { label: 'Paused', value: paused, dot: 'bg-slate-500', text: 'text-slate-400' },
+    { label: 'Alerts', value: activeAlerts, dot: 'bg-amber-400', text: 'text-amber-400', info: acknowledgedAlerts > 0 ? `${acknowledgedAlerts} acknowledged` : undefined },
+  ];
+
+  return (
+    <div className="flex items-center gap-5 rounded-xl border border-white/[0.06] bg-slate-900/50 px-5 py-3">
+      <p className="text-xs font-medium uppercase tracking-wider text-slate-500 shrink-0">Fleet</p>
+      <div className="h-4 w-px bg-white/[0.06]" />
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-center gap-2">
+            <span className={`h-2 w-2 rounded-full ${item.dot} ${item.value === 0 ? 'opacity-30' : ''}`} />
+            <span className={`text-sm font-semibold ${item.value > 0 ? item.text : 'text-slate-600'}`}>
+              {item.value}
+            </span>
+            <span className="text-xs text-slate-500">{item.label}</span>
+            {item.info && item.value > 0 && (
+              <InfoPopover entries={[{ label: 'Acknowledged', value: acknowledgedAlerts }]} />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Status Pill ───────────────────────────────────────────────────────────────
+
 function StatusPill({ status }: { status: string | null | undefined }) {
   const normalized = status || 'paused';
   const classes =
     normalized === 'success'
       ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
       : normalized === 'error'
-      ? 'border-amber-500/20 bg-amber-500/10 text-amber-400'
-      : normalized === 'failure'
-      ? 'border-rose-500/20 bg-rose-500/10 text-rose-400'
-      : 'border-slate-500/20 bg-slate-500/10 text-slate-300';
+        ? 'border-amber-500/20 bg-amber-500/10 text-amber-400'
+        : normalized === 'failure'
+          ? 'border-rose-500/20 bg-rose-500/10 text-rose-400'
+          : 'border-slate-500/20 bg-slate-500/10 text-slate-400';
 
   return (
     <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${classes}`}>
@@ -105,122 +257,141 @@ function StatusPill({ status }: { status: string | null | undefined }) {
   );
 }
 
-function OpsSummaryMetric({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: 'rose' | 'amber' | 'cyan' | 'slate';
-}) {
-  const tones = {
-    rose: 'border-rose-500/20 bg-rose-500/10 text-rose-300',
-    amber: 'border-amber-500/20 bg-amber-500/10 text-amber-300',
-    cyan: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300',
-    slate: 'border-white/[0.08] bg-slate-800/50 text-slate-200',
-  };
-
-  return (
-    <div className={`flex min-h-[132px] flex-col rounded-lg border p-4 ${tones[tone]}`}>
-      <p className="min-h-[40px] text-[11px] font-medium uppercase tracking-[0.18em] leading-6 text-slate-500">{label}</p>
-      <p className="mt-auto text-3xl font-semibold tracking-tight text-white">{value}</p>
-    </div>
-  );
-}
+// ─── Problem Monitor Item ──────────────────────────────────────────────────────
 
 function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
   const issueCount = monitor.failure_count + monitor.error_count;
+  const uptimePct = Math.max(0, Math.min(100, monitor.uptime));
+  const uptimeGood = uptimePct >= 99;
+  const uptimeMid = uptimePct >= 95;
+  const barColor = uptimeGood
+    ? 'bg-emerald-400'
+    : uptimeMid
+      ? 'bg-amber-400'
+      : 'bg-rose-400';
+  const uptimeTextColor = uptimeGood
+    ? 'text-emerald-400'
+    : uptimeMid
+      ? 'text-amber-400'
+      : 'text-rose-400';
+
+  const infoEntries: PopoverEntry[] = [
+    { label: 'Failures', value: monitor.failure_count },
+    { label: 'Errors', value: monitor.error_count },
+    { label: 'Total issues', value: issueCount },
+    { label: 'Latest issue', value: monitor.latest_failure_at ? formatRelativeTime(monitor.latest_failure_at) : '—' },
+    { label: 'Uptime', value: `${uptimePct.toFixed(2)}%` },
+  ];
 
   return (
-    <div className="flex items-start justify-between gap-3 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-white">{monitor.monitor_name}</p>
-          <p className="mt-1 text-xs text-slate-500">
-            {issueCount} issue{issueCount !== 1 ? 's' : ''} in range
-            {monitor.latest_failure_at ? ` · latest ${formatRelativeTime(monitor.latest_failure_at)}` : ''}
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            <span className="text-slate-500">
-              Failures <span className="ml-1 font-medium text-rose-300">{monitor.failure_count}</span>
-            </span>
-            <span className="text-slate-500">
-              Errors <span className="ml-1 font-medium text-amber-300">{monitor.error_count}</span>
-            </span>
-            <span className="text-slate-500">
-              Uptime <span className="ml-1 font-medium text-white">{monitor.uptime.toFixed(1)}%</span>
+    <div className="py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/monitors/${monitor.monitor_id}`}
+              className="truncate text-sm font-medium text-white hover:text-cyan-400 transition-colors"
+            >
+              {monitor.monitor_name}
+            </Link>
+            <InfoPopover entries={infoEntries} title={monitor.monitor_name} />
+          </div>
+          <div className="mt-2 flex items-center gap-3">
+            {/* Uptime bar */}
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+              <div
+                className={`h-full rounded-full ${barColor} transition-all`}
+                style={{ width: `${uptimePct}%` }}
+              />
+            </div>
+            <span className={`shrink-0 text-xs font-medium tabular-nums ${uptimeTextColor}`}>
+              {uptimePct.toFixed(1)}%
             </span>
           </div>
+          <p className="mt-1 text-[11px] text-slate-500">
+            {issueCount} issue{issueCount !== 1 ? 's' : ''}
+            {monitor.latest_failure_at ? ` · last ${formatRelativeTime(monitor.latest_failure_at)}` : ''}
+          </p>
         </div>
+        <StatusPill status={monitor.current_status} />
       </div>
-      <StatusPill status={monitor.current_status} />
     </div>
   );
 }
 
+// ─── Failure Item ──────────────────────────────────────────────────────────────
+
 function FailureItem({ event }: { event: DashboardFailureEvent }) {
   const isPlatformEvent = event.result_source === 'platform';
-  const statusColor = isPlatformEvent ? 'bg-slate-400' : event.status === 'error' ? 'bg-amber-500' : 'bg-rose-500';
-  const stateClass =
-    event.state === 'resolved'
-      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-      : 'bg-rose-500/10 text-rose-400 border-rose-500/20';
+  const dotColor = isPlatformEvent ? 'bg-slate-500' : event.status === 'error' ? 'bg-amber-400' : 'bg-rose-400';
+  const resolved = event.state === 'resolved';
+
+  const infoEntries: PopoverEntry[] = [
+    { label: 'Status', value: event.status },
+    { label: 'Source', value: event.result_source },
+    ...(typeof event.latency_ms === 'number' ? [{ label: 'Latency', value: `${event.latency_ms}ms` }] : []),
+    ...(event.error_message ? [{ label: 'Error', value: event.error_message }] : []),
+  ];
 
   return (
-    <div className="flex items-start gap-3 py-2">
-      <div className={`mt-1.5 h-2 w-2 rounded-full ${statusColor}`} />
+    <div className="flex items-start gap-3 py-2.5">
+      <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor} ${resolved ? 'opacity-40' : ''}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <p className="truncate text-sm text-white">{event.monitor_name}</p>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <p className="truncate text-sm text-white">{event.monitor_name}</p>
+            <InfoPopover entries={infoEntries} title="Check Details" />
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
             {isPlatformEvent && (
-              <span className="rounded border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 text-[10px] font-medium uppercase text-slate-300">
+              <span className="rounded border border-slate-500/30 bg-slate-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-slate-400">
                 Platform
               </span>
             )}
-            <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${stateClass}`}>
+            <span
+              className={`rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${resolved
+                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
+                  : 'border-rose-500/20 bg-rose-500/10 text-rose-400'
+                }`}
+            >
               {event.state}
             </span>
           </div>
         </div>
-        <p className="text-xs text-slate-500">
-          {formatRelativeTime(event.occurred_at)} · {event.status}
+        <p className="mt-0.5 text-xs text-slate-500">
+          {formatRelativeTime(event.occurred_at)}
           {typeof event.latency_ms === 'number' ? ` · ${event.latency_ms}ms` : ''}
         </p>
-        {event.error_message && (
-          <p className="mt-0.5 truncate text-xs text-slate-500" title={event.error_message}>
-            {event.error_message}
-          </p>
-        )}
       </div>
     </div>
   );
 }
 
+// ─── Alert Item ────────────────────────────────────────────────────────────────
+
 function AlertItem({ alert }: { alert: Alert }) {
-  const statusClass =
-    alert.status === 'active'
-      ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-      : alert.status === 'acknowledged'
-      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+  const colors = {
+    active: { dot: 'bg-rose-400', badge: 'border-rose-500/20 bg-rose-500/10 text-rose-400' },
+    acknowledged: { dot: 'bg-amber-400', badge: 'border-amber-500/20 bg-amber-500/10 text-amber-400' },
+    resolved: { dot: 'bg-emerald-400', badge: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' },
+  };
+  const c = colors[alert.status] ?? colors.resolved;
 
   return (
-    <div className="flex items-start gap-3 py-2">
-      <div className={`mt-1.5 h-2 w-2 rounded-full ${alert.status === 'resolved' ? 'bg-emerald-500' : alert.status === 'acknowledged' ? 'bg-amber-500' : 'bg-rose-500'}`} />
+    <div className="flex items-start gap-3 py-2.5">
+      <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${c.dot} ${alert.status === 'resolved' ? 'opacity-40' : ''}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <p className="truncate text-sm text-white">{alert.monitor_name || 'Unknown monitor'}</p>
-          <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${statusClass}`}>
+          <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${c.badge}`}>
             {alert.status}
           </span>
         </div>
-        <p className="text-xs text-slate-500">
+        <p className="mt-0.5 text-xs text-slate-500">
           {formatRelativeTime(alert.triggered_at)} · {alert.failure_count} failure{alert.failure_count !== 1 ? 's' : ''}
         </p>
         {alert.last_error && (
-          <p className="mt-0.5 truncate text-xs text-slate-500" title={alert.last_error}>
+          <p className="mt-0.5 truncate text-xs text-slate-600" title={alert.last_error}>
             {alert.last_error}
           </p>
         )}
@@ -229,16 +400,16 @@ function AlertItem({ alert }: { alert: Alert }) {
   );
 }
 
-// Custom Tooltip for charts
+// ─── Chart Tooltip ─────────────────────────────────────────────────────────────
+
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-
   return (
     <div className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 shadow-xl">
-      <p className="text-xs text-slate-400">{label}</p>
+      <p className="mb-1 text-xs text-slate-400">{label}</p>
       {payload.map((entry: any, idx: number) => (
         <p key={idx} className="text-sm font-medium text-white">
-          {entry.name}: {typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value}
+          {typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value}
           {entry.name === 'uptime' ? '%' : entry.name === 'responseTime' ? 'ms' : ''}
         </p>
       ))}
@@ -246,14 +417,20 @@ function CustomTooltip({ active, payload, label }: any) {
   );
 }
 
-// Loading Skeleton
+// ─── Loading Skeleton ──────────────────────────────────────────────────────────
+
 function LoadingSkeleton() {
   return (
-    <div className="space-y-6 animate-pulse">
+    <div className="animate-pulse space-y-5">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="h-32 rounded-xl bg-slate-800/50" />
+          <div key={i} className="h-28 rounded-xl bg-slate-800/50" />
         ))}
+      </div>
+      <div className="h-10 rounded-xl bg-slate-800/50" />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="h-64 rounded-xl bg-slate-800/50" />
+        <div className="h-64 rounded-xl bg-slate-800/50" />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="h-72 rounded-xl bg-slate-800/50" />
@@ -263,13 +440,40 @@ function LoadingSkeleton() {
   );
 }
 
-function EmptyChart({ message }: { message: string }) {
+function EmptyState({ message, sub }: { message: string; sub?: string }) {
   return (
-    <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-white/[0.08] bg-slate-900/30">
+    <div className="flex min-h-[160px] flex-col items-center justify-center text-center">
       <p className="text-sm text-slate-500">{message}</p>
+      {sub && <p className="mt-1 text-xs text-slate-600">{sub}</p>}
     </div>
   );
 }
+
+// ─── Section Card ──────────────────────────────────────────────────────────────
+
+function SectionCard({
+  title,
+  action,
+  children,
+  className,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-xl border border-white/[0.06] bg-slate-900/50 ${className ?? ''}`}>
+      <div className="flex items-center justify-between border-b border-white/[0.04] px-5 py-3.5">
+        <h3 className="text-sm font-medium text-white">{title}</h3>
+        {action && <div className="text-xs text-slate-500">{action}</div>}
+      </div>
+      <div className="px-5">{children}</div>
+    </div>
+  );
+}
+
+// ─── Dashboard Page ────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardOverviewResponse | null>(null);
@@ -291,9 +495,7 @@ export default function DashboardPage() {
         getTenantSettings().catch(() => null),
       ]);
       setDashboard(response);
-      if (settings) {
-        setTenantRetentionDays(settings.data_retention_days);
-      }
+      if (settings) setTenantRetentionDays(settings.data_retention_days);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
       setError('Failed to load dashboard data');
@@ -315,12 +517,14 @@ export default function DashboardPage() {
     }));
   }, [dashboard]);
 
+  const hasTrendData = useMemo(() => trendData.some((d) => d.total > 0), [trendData]);
+  const uptimeTrend = useMemo(() => computeUptimeTrend(trendData), [trendData]);
+  const responseTrend = useMemo(() => computeResponseTrend(trendData), [trendData]);
+
   const opsSummary = dashboard?.ops_summary;
   const problemMonitors = dashboard?.problem_monitors || [];
   const recentFailures = dashboard?.recent_failures || [];
   const recentAlerts = dashboard?.recent_alerts || [];
-
-  const hasTrendData = useMemo(() => trendData.some((d) => d.total > 0), [trendData]);
 
   const stats = dashboard?.stats;
   const totalMonitors = stats?.total_monitors || 0;
@@ -343,33 +547,28 @@ export default function DashboardPage() {
     if (timeRange === '90d') return 90;
     return 365;
   }, [timeRange]);
-  const showRetentionWarning = tenantRetentionDays !== null && tenantRetentionDays > 0 && selectedRangeDays > tenantRetentionDays;
+  const showRetentionWarning =
+    tenantRetentionDays !== null && tenantRetentionDays > 0 && selectedRangeDays > tenantRetentionDays;
 
-  if (loading) {
-    return <LoadingSkeleton />;
-  }
+  if (loading) return <LoadingSkeleton />;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Error Banner */}
       {error && (
         <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
           <p className="text-sm text-rose-400">{error}</p>
-          <button onClick={loadData} className="btn btn-danger btn-sm">
-            Retry
-          </button>
+          <button onClick={loadData} className="btn btn-danger btn-sm">Retry</button>
         </div>
       )}
 
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Overview of your monitoring infrastructure
-          </p>
+          <h1 className="text-xl font-semibold tracking-tight text-white">Dashboard</h1>
+          <p className="mt-0.5 text-sm text-slate-500">Overview of your monitoring infrastructure</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {(['24h', '7d', '30d', '90d', '365d'] as const).map((range) => (
             <button
               key={range}
@@ -391,15 +590,18 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Stats Grid */}
+      {/* Stat Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Overall Uptime"
           value={avgUptime}
           unit="%"
-          change={undefined}
-          changeLabel={undefined}
-          positive={true}
+          trend={uptimeTrend}
+          higherIsBetter={true}
+          infoEntries={[
+            { label: 'Period', value: timeRange },
+            { label: 'Monitors', value: `${activeMonitors} active` },
+          ]}
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -410,9 +612,12 @@ export default function DashboardPage() {
           label="Avg Response"
           value={avgResponseTime}
           unit="ms"
-          change={undefined}
-          changeLabel={undefined}
-          positive={true}
+          trend={responseTrend}
+          higherIsBetter={false}
+          infoEntries={[
+            { label: 'Period', value: timeRange },
+            { label: 'Scope', value: 'HTTP monitors' },
+          ]}
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -422,8 +627,7 @@ export default function DashboardPage() {
         <StatCard
           label="Total Monitors"
           value={totalMonitors}
-          change={`${httpMonitors} HTTP, ${agentMonitors} Agent`}
-          positive={true}
+          subtitle={`${httpMonitors} HTTP · ${agentMonitors} Agent`}
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -433,8 +637,11 @@ export default function DashboardPage() {
         <StatCard
           label="Active"
           value={activeMonitors}
-          change={totalMonitors > 0 ? `${((activeMonitors / totalMonitors) * 100).toFixed(0)}% enabled` : 'No monitors'}
-          positive={activeMonitors === totalMonitors}
+          subtitle={
+            totalMonitors > 0
+              ? `${((activeMonitors / totalMonitors) * 100).toFixed(0)}% enabled`
+              : 'No monitors configured'
+          }
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.829a5 5 0 010-7.07m7.072 0a5 5 0 010 7.07M13 12a1 1 0 11-2 0 1 1 0 012 0z" />
@@ -443,208 +650,158 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Charts Row */}
+      {/* Fleet Status Bar */}
+      <FleetStatusBar
+        up={opsSummary?.up_monitors ?? 0}
+        down={opsSummary?.down_monitors ?? 0}
+        paused={opsSummary?.paused_monitors ?? 0}
+        activeAlerts={opsSummary?.active_alerts ?? 0}
+        acknowledgedAlerts={opsSummary?.acknowledged_alerts ?? 0}
+      />
+
+      {/* Charts */}
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Uptime Trend Chart */}
+        {/* Uptime Trend */}
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
           <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="font-medium text-white">Uptime Trend</h3>
-              <p className="text-xs text-slate-500">Monitor-weighted uptime across enabled services</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-medium text-white">Uptime Trend</h3>
+              <InfoPopover
+                entries={[{ label: 'Metric', value: 'Monitor-weighted average uptime across all enabled services for the selected period' }]}
+                title="Uptime Trend"
+              />
             </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="flex items-center gap-1 text-emerald-400">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                Uptime
-              </span>
-            </div>
+            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" /> Uptime
+            </span>
           </div>
           {hasTrendData ? (
-            <div className="h-48">
+            <div className="h-44">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={trendData}>
                   <defs>
                     <linearGradient id="uptimeGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.3} />
+                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
                       <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis
-                    dataKey="date"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                  />
-                  <YAxis
-                    domain={uptimeDomain}
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                    tickFormatter={(v) => `${v}%`}
-                  />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                  <YAxis domain={uptimeDomain} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
                   <Tooltip content={<CustomTooltip />} />
-                  <Area
-                    type="monotone"
-                    dataKey="uptime"
-                    stroke="#10b981"
-                    strokeWidth={2}
-                    fill="url(#uptimeGradient)"
-                    name="uptime"
-                  />
+                  <Area type="monotone" dataKey="uptime" stroke="#10b981" strokeWidth={2} fill="url(#uptimeGradient)" name="uptime" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           ) : (
-            <EmptyChart message="No uptime data yet" />
+            <div className="flex h-44 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
+              <p className="text-sm text-slate-500">No uptime data yet</p>
+            </div>
           )}
         </div>
 
-        {/* Response Time Chart */}
+        {/* Response Time */}
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
           <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="font-medium text-white">Response Time</h3>
-              <p className="text-xs text-slate-500">Average response time trend</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-medium text-white">Response Time</h3>
+              <InfoPopover
+                entries={[{ label: 'Metric', value: 'Average HTTP response latency across all active monitors for the selected period' }]}
+                title="Response Time"
+              />
             </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="flex items-center gap-1 text-cyan-400">
-                <span className="h-2 w-2 rounded-full bg-cyan-400" />
-                Latency
-              </span>
-            </div>
+            <span className="flex items-center gap-1.5 text-xs text-cyan-400">
+              <span className="h-2 w-2 rounded-full bg-cyan-400" /> Latency
+            </span>
           </div>
           {hasTrendData ? (
-            <div className="h-48">
+            <div className="h-44">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={trendData}>
                   <defs>
                     <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.3} />
+                      <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.25} />
                       <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis
-                    dataKey="date"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#64748b', fontSize: 11 }}
-                    tickFormatter={(v) => `${v}ms`}
-                  />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}ms`} />
                   <Tooltip content={<CustomTooltip />} />
-                  <Area
-                    type="monotone"
-                    dataKey="responseTime"
-                    stroke="#06b6d4"
-                    strokeWidth={2}
-                    fill="url(#latencyGradient)"
-                    name="responseTime"
-                  />
+                  <Area type="monotone" dataKey="responseTime" stroke="#06b6d4" strokeWidth={2} fill="url(#latencyGradient)" name="responseTime" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           ) : (
-            <EmptyChart message="No response time data yet" />
+            <div className="flex h-44 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
+              <p className="text-sm text-slate-500">No response time data yet</p>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Action Section */}
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(320px,1.15fr)]">
-        <div className="min-w-0 self-start overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-          <div className="mb-5">
-            <h3 className="font-medium text-white">Operations Summary</h3>
-            <p className="text-xs text-slate-500">Current monitor and alert posture</p>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <OpsSummaryMetric label="Down monitors" value={opsSummary?.down_monitors || 0} tone="rose" />
-            <OpsSummaryMetric label="Paused monitors" value={opsSummary?.paused_monitors || 0} tone="slate" />
-            <OpsSummaryMetric label="Active alerts" value={opsSummary?.active_alerts || 0} tone="amber" />
-            <OpsSummaryMetric
-              label="Ack alerts"
-              value={opsSummary?.acknowledged_alerts || 0}
-              tone="cyan"
-            />
-          </div>
-        </div>
-
-        <div className="min-w-0 self-start rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="font-medium text-white">Problem Monitors</h3>
-              <p className="text-xs text-slate-500">Top monitors with the most issues in range</p>
-            </div>
-            <Link href="/monitors" className="text-xs text-cyan-400 hover:text-cyan-300">
+      {/* Bottom Grid: Problems | Failures + Alerts */}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        {/* Problem Monitors */}
+        <SectionCard
+          title="Problem Monitors"
+          action={
+            <Link href="/monitors" className="text-cyan-400 hover:text-cyan-300 transition-colors">
               View all →
             </Link>
-          </div>
+          }
+        >
           {problemMonitors.length > 0 ? (
-            <div className="dashboard-scroll max-h-[320px] divide-y divide-white/[0.04] overflow-x-hidden overflow-y-auto pb-1 pr-2">
+            <div className="dashboard-scroll max-h-80 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
               {problemMonitors.map((monitor) => (
                 <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
               ))}
             </div>
           ) : (
-            <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
-              <p className="text-sm text-slate-500">No noisy monitors in this range</p>
-              <p className="mt-1 text-xs text-slate-600">Nothing is standing out from recent checks.</p>
-            </div>
+            <EmptyState
+              message="No problem monitors"
+              sub="All monitors are running cleanly in this range."
+            />
           )}
-        </div>
+        </SectionCard>
 
-          <div className="min-w-0 self-start grid gap-4 content-start">
-          <div className="min-w-0 overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h3 className="font-medium text-white">Last Failures</h3>
-                <p className="text-xs text-slate-500">
-                  {recentFailures.length === 0 ? 'No recent failures' : `${recentFailures.length} recent failure${recentFailures.length !== 1 ? 's' : ''}`}
-                </p>
-              </div>
-            </div>
+        {/* Right Column: Failures + Alerts */}
+        <div className="grid gap-4">
+          <SectionCard
+            title="Recent Failures"
+            action={
+              recentFailures.length > 0 ? (
+                <span className="text-slate-500">{recentFailures.length} event{recentFailures.length !== 1 ? 's' : ''}</span>
+              ) : undefined
+            }
+          >
             {recentFailures.length > 0 ? (
-              <div className="dashboard-scroll max-h-[320px] divide-y divide-white/[0.04] overflow-x-hidden overflow-y-auto pb-1 pr-2">
+              <div className="dashboard-scroll max-h-64 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
                 {recentFailures.map((event) => (
                   <FailureItem key={event.check_result_id} event={event} />
                 ))}
               </div>
             ) : (
-              <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
-                <p className="text-sm text-slate-500">No recent failures</p>
-                <p className="mt-1 text-xs text-slate-600">Failure events will appear here when checks fail</p>
-              </div>
+              <EmptyState message="No recent failures" sub="Failure events will appear here when checks fail." />
             )}
-          </div>
+          </SectionCard>
 
-          <div className="min-w-0 overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h3 className="font-medium text-white">Last Alerts</h3>
-                <p className="text-xs text-slate-500">
-                  {recentAlerts.length === 0 ? 'No recent alerts' : `${recentAlerts.length} recent alert${recentAlerts.length !== 1 ? 's' : ''}`}
-                </p>
-              </div>
-              <Link href="/alerts" className="text-xs text-cyan-400 hover:text-cyan-300">
+          <SectionCard
+            title="Recent Alerts"
+            action={
+              <Link href="/alerts" className="text-cyan-400 hover:text-cyan-300 transition-colors">
                 View all →
               </Link>
-            </div>
+            }
+          >
             {recentAlerts.length > 0 ? (
-              <div className="dashboard-scroll max-h-[220px] divide-y divide-white/[0.04] overflow-x-hidden overflow-y-auto pb-1 pr-2">
+              <div className="dashboard-scroll max-h-52 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
                 {recentAlerts.map((alert) => (
                   <AlertItem key={alert.id} alert={alert} />
                 ))}
               </div>
             ) : (
-              <div className="flex min-h-[160px] flex-col items-center justify-center text-center">
-                <p className="text-sm text-slate-500">No recent alerts</p>
-                <p className="mt-1 text-xs text-slate-600">Alerts will appear when failures trigger policies</p>
-              </div>
+              <EmptyState message="No recent alerts" sub="Alerts appear when failures trigger your policies." />
             )}
-          </div>
+          </SectionCard>
         </div>
       </div>
     </div>
