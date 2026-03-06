@@ -1,3 +1,10 @@
+# [1.0.0-alpha.21](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.20...v1.0.0-alpha.21) (2026-03-06)
+
+
+### Bug Fixes
+
+* stabilize rollup analytics timestamps ([38ce144](https://github.com/yassinebenameur/probara/commit/38ce1441cbae0fd45b90a8ab31058e7c1e243c23))
+
 # [1.0.0-alpha.20](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.19...v1.0.0-alpha.20) (2026-03-06)
 
 
