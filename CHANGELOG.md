@@ -1,3 +1,10 @@
+# [1.0.0-alpha.28](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.27...v1.0.0-alpha.28) (2026-03-06)
+
+
+### Bug Fixes
+
+* **api:** fan out alert events to all SSE pods ([6c5e819](https://github.com/yassinebenameur/probara/commit/6c5e81978349fe2624d46316b46596b83a61d685))
+
 # [1.0.0-alpha.27](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.26...v1.0.0-alpha.27) (2026-03-06)
 
 
