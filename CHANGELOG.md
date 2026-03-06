@@ -1,3 +1,10 @@
+# [1.0.0-alpha.27](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.26...v1.0.0-alpha.27) (2026-03-06)
+
+
+### Bug Fixes
+
+* **web:** replay active alert toasts on connect ([ac31044](https://github.com/yassinebenameur/probara/commit/ac3104478eda1d8bb991b25ec930ac9e946f7e9f))
+
 # [1.0.0-alpha.26](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.25...v1.0.0-alpha.26) (2026-03-06)
 
 
