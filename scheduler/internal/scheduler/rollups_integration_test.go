@@ -39,8 +39,8 @@ func TestRollupMaintenance_BackfillExcludesPlatformAndClosesDowntime(t *testing.
 	if err != nil {
 		t.Fatalf("runRollupMaintenance() error = %v", err)
 	}
-	if processed != 4 {
-		t.Fatalf("processed = %d, want 4", processed)
+	if processed != 3 {
+		t.Fatalf("processed = %d, want 3", processed)
 	}
 
 	var totalChecks, successChecks, latencyCount int
@@ -125,6 +125,58 @@ func TestRollupMaintenance_IncrementalCursorProcessing(t *testing.T) {
 	}
 	if totalChecks != 2 {
 		t.Fatalf("total_checks = %d, want 2", totalChecks)
+	}
+}
+
+func TestRollupMaintenance_ProcessesMultipleBatchesPerRun(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	s := newTestScheduler(dbClient)
+	tenantID := insertTenant(ctx, t, dbClient)
+	monitorID := insertMonitor(ctx, t, dbClient, tenantID, "rollup-multi-batch")
+
+	base := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
+	rowCount := rollupMaintenanceBatchSize + 3
+	for i := 0; i < rowCount; i++ {
+		insertCheckResult(
+			ctx,
+			t,
+			dbClient,
+			tenantID,
+			monitorID,
+			base.Add(time.Duration(i)*time.Second),
+			string(sharedmodels.ResultStatusSuccess),
+			string(sharedmodels.ResultSourceMonitor),
+			50,
+		)
+	}
+
+	processed, cursorUnix, err := s.runRollupMaintenance()
+	if err != nil {
+		t.Fatalf("runRollupMaintenance() error = %v", err)
+	}
+	if processed != rowCount {
+		t.Fatalf("processed = %d, want %d", processed, rowCount)
+	}
+	if cursorUnix != base.Add(time.Duration(rowCount-1)*time.Second).Unix() {
+		t.Fatalf("cursorUnix = %d, want %d", cursorUnix, base.Add(time.Duration(rowCount-1)*time.Second).Unix())
+	}
+
+	var totalChecks int
+	err = dbClient.QueryRowContext(ctx, `
+		SELECT total_checks
+		FROM monitor_daily_rollups
+		WHERE tenant_id = $1 AND monitor_id = $2 AND bucket_day = $3::date
+	`, tenantID, monitorID, base).Scan(&totalChecks)
+	if err != nil {
+		t.Fatalf("query rollup totals: %v", err)
+	}
+	if totalChecks != rowCount {
+		t.Fatalf("total_checks = %d, want %d", totalChecks, rowCount)
 	}
 }
 

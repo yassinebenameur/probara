@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_check_results_rollup_monitor_cursor;

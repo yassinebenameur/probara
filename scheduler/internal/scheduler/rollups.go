@@ -96,60 +96,78 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 		return 0, 0, err
 	}
 
-	rows, err := s.loadRollupBatch(ctx, state)
-	if err != nil {
-		return 0, 0, err
-	}
-	if len(rows) == 0 {
-		if err := s.pruneRollupTables(ctx); err != nil {
-			return 0, 0, err
+	totalProcessed := 0
+	lastCursorUnix := int64(0)
+	batches := 0
+
+	for {
+		rows, err := s.loadRollupBatch(ctx, state)
+		if err != nil {
+			return totalProcessed, lastCursorUnix, err
 		}
-		if state.LastCreatedAt != nil {
-			return 0, state.LastCreatedAt.UTC().Unix(), nil
+		if len(rows) == 0 {
+			break
 		}
-		return 0, 0, nil
+
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return totalProcessed, lastCursorUnix, fmt.Errorf("failed to begin rollup transaction: %w", err)
+		}
+		committed := false
+		func() {
+			defer func() {
+				if !committed {
+					_ = tx.Rollback()
+				}
+			}()
+
+			for _, row := range rows {
+				if err = applyRollupRow(ctx, tx, row); err != nil {
+					return
+				}
+				lastCreatedAt := row.CreatedAt.UTC()
+				lastResultID := row.ID
+				state.LastCreatedAt = &lastCreatedAt
+				state.LastResultID = &lastResultID
+			}
+
+			if err = upsertRollupState(ctx, tx, state); err != nil {
+				return
+			}
+			if err = tx.Commit(); err != nil {
+				err = fmt.Errorf("failed to commit rollup transaction: %w", err)
+				return
+			}
+			committed = true
+		}()
+		if err != nil {
+			return totalProcessed, lastCursorUnix, err
+		}
+
+		totalProcessed += len(rows)
+		batches++
+		lastCursorUnix = rows[len(rows)-1].CreatedAt.UTC().Unix()
+
+		if len(rows) < rollupMaintenanceBatchSize {
+			break
+		}
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to begin rollup transaction: %w", err)
+	if err := s.pruneRollupTables(ctx); err != nil {
+		return totalProcessed, lastCursorUnix, err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
-	for _, row := range rows {
-		if err := applyRollupRow(ctx, tx, row); err != nil {
-			return 0, 0, err
-		}
-		lastCreatedAt := row.CreatedAt.UTC()
-		lastResultID := row.ID
-		state.LastCreatedAt = &lastCreatedAt
-		state.LastResultID = &lastResultID
+	if totalProcessed == 0 && state.LastCreatedAt != nil {
+		lastCursorUnix = state.LastCreatedAt.UTC().Unix()
 	}
 
-	if err := upsertRollupState(ctx, tx, state); err != nil {
-		return 0, 0, err
-	}
-	if err := pruneRollupTablesTx(ctx, tx); err != nil {
-		return 0, 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, 0, fmt.Errorf("failed to commit rollup transaction: %w", err)
-	}
-	committed = true
-
-	lastCursorUnix := rows[len(rows)-1].CreatedAt.UTC().Unix()
 	s.logger.WithFields(logrus.Fields{
-		"processed_rows": len(rows),
-		"cursor_time":    rows[len(rows)-1].CreatedAt.UTC(),
-		"cursor_id":      rows[len(rows)-1].ID,
+		"processed_rows": totalProcessed,
+		"batches":        batches,
+		"cursor_time":    state.LastCreatedAt,
+		"cursor_id":      state.LastResultID,
 	}).Info("Rollup maintenance run completed")
 
-	return len(rows), lastCursorUnix, nil
+	return totalProcessed, lastCursorUnix, nil
 }
 
 func (s *Scheduler) loadRollupState(ctx context.Context) (*rollupState, error) {
@@ -185,7 +203,8 @@ func (s *Scheduler) loadRollupBatch(ctx context.Context, state *rollupState) ([]
 	query := `
 		SELECT id, tenant_id, monitor_id, status, latency_ms, result_source, created_at
 		FROM check_results
-		WHERE ($1::timestamptz IS NULL OR (created_at, id) > ($1::timestamptz, $2::uuid))
+		WHERE result_source = $4
+		  AND ($1::timestamptz IS NULL OR (created_at, id) > ($1::timestamptz, $2::uuid))
 		ORDER BY created_at ASC, id ASC
 		LIMIT $3
 	`
@@ -201,7 +220,14 @@ func (s *Scheduler) loadRollupBatch(ctx context.Context, state *rollupState) ([]
 	} else {
 		lastResultID = uuid.Nil
 	}
-	rows, err := s.db.QueryContext(ctx, query, lastCreatedAt, lastResultID, rollupMaintenanceBatchSize)
+	rows, err := s.db.QueryContext(
+		ctx,
+		query,
+		lastCreatedAt,
+		lastResultID,
+		rollupMaintenanceBatchSize,
+		string(sharedmodels.ResultSourceMonitor),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load rollup batch: %w", err)
 	}
