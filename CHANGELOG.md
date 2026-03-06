@@ -1,3 +1,16 @@
+# [1.0.0-alpha.20](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.19...v1.0.0-alpha.20) (2026-03-06)
+
+
+### Bug Fixes
+
+* fix dashboard panel sizing and status page links ([ec663da](https://github.com/yassinebenameur/probara/commit/ec663da651abd6b03790e9320a71543e644b250d))
+* fix dashboard ui ([1435755](https://github.com/yassinebenameur/probara/commit/143575548c542b268ddc12128ea67571e917ea60))
+
+
+### Features
+
+* rollups ([8dc1546](https://github.com/yassinebenameur/probara/commit/8dc154610e6b0281e8b7682d0e480d3cfb6993f8))
+
 # [1.0.0-alpha.19](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.18...v1.0.0-alpha.19) (2026-03-05)
 
 
