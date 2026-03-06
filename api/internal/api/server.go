@@ -54,6 +54,7 @@ type Server struct {
 	db              *db.Client
 	queue           *queue.Client
 	http            *http.Server
+	alertSubscriber *alertservice.Subscriber
 	statusPublisher *statusupdates.Publisher
 }
 
@@ -100,6 +101,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Push service and handlers (created here to use in both public and authenticated routes)
 	pushSvc := pushservice.NewService(dbClient.DB, statusPublisher)
 	pushHandlers := pushhandlers.NewHandler(pushSvc, log)
+	alertHub := alertservice.NewHub()
+	alertSubscriber := alertservice.NewSubscriber(checkJobQueue, alertHub, cfg, log)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
 	r.Route("/api/v1/push", func(r chi.Router) {
@@ -135,7 +138,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Alert service and handlers (shared across alerts + dashboard routes)
 			alertSvc := alertservice.NewService(dbClient)
-			alertHub := alertservice.NewHub()
 			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
 
 			// Dashboard service and handlers
@@ -270,7 +272,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -281,6 +283,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		db:              dbClient,
 		queue:           checkJobQueue,
 		http:            httpServer,
+		alertSubscriber: alertSubscriber,
 		statusPublisher: statusPublisher,
 	}
 }
@@ -291,12 +294,21 @@ func (s *Server) Start() error {
 		"port": s.config.HTTPPort,
 	}).Info("Starting HTTP server")
 
+	if s.alertSubscriber != nil {
+		if err := s.alertSubscriber.Start(context.Background()); err != nil {
+			return fmt.Errorf("start alert subscriber: %w", err)
+		}
+	}
+
 	return s.http.ListenAndServe()
 }
 
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down HTTP server")
+	if s.alertSubscriber != nil {
+		s.alertSubscriber.Stop()
+	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()
 	}
