@@ -25,6 +25,7 @@ const (
 	retentionCleanupRunTimeout     = 30 * time.Minute
 	retentionCleanupAdvisoryLock   = int64(901_337_401)
 	rollupMaintenanceTicker        = time.Minute
+	checkJobStreamMaxAge           = 24 * time.Hour
 )
 
 // Monitor represents a monitor for scheduling purposes
@@ -171,7 +172,7 @@ func (s *Scheduler) Start() error {
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
-	_, err := s.queue.EnsureStream(ctx, s.config.CheckJobStream, []string{s.config.CheckJobSubject})
+	_, err := s.queue.EnsureWorkQueueStream(ctx, s.config.CheckJobStream, []string{s.config.CheckJobSubject}, checkJobStreamMaxAge)
 	if err != nil {
 		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
 	}

@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -20,6 +21,7 @@ type Consumer interface {
 // StreamManager defines stream and consumer management operations
 type StreamManager interface {
 	EnsureStream(ctx context.Context, streamName string, subjects []string) (jetstream.Stream, error)
+	EnsureWorkQueueStream(ctx context.Context, streamName string, subjects []string, maxAge time.Duration) (jetstream.Stream, error)
 	CreateConsumer(ctx context.Context, streamName string, consumerName string) (jetstream.Consumer, error)
 }
 

@@ -21,6 +21,8 @@ import (
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
+const checkJobStreamMaxAge = 24 * time.Hour
+
 // Worker represents the worker service
 type Worker struct {
 	config  *config.WorkerConfig
@@ -140,7 +142,7 @@ func (w *Worker) Start() error {
 	ctx, cancel := context.WithTimeout(w.ctx, 10*time.Second)
 	defer cancel()
 
-	_, err := w.queue.EnsureStream(ctx, w.config.CheckJobStream, []string{w.config.CheckJobSubject})
+	_, err := w.queue.EnsureWorkQueueStream(ctx, w.config.CheckJobStream, []string{w.config.CheckJobSubject}, checkJobStreamMaxAge)
 	if err != nil {
 		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
 	}

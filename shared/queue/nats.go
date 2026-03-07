@@ -75,6 +75,27 @@ func (c *Client) EnsureStream(ctx context.Context, streamName string, subjects [
 	return stream, nil
 }
 
+// EnsureWorkQueueStream ensures a stream exists with work-queue retention.
+func (c *Client) EnsureWorkQueueStream(ctx context.Context, streamName string, subjects []string, maxAge time.Duration) (jetstream.Stream, error) {
+	cfg := jetstream.StreamConfig{
+		Name:      streamName,
+		Subjects:  subjects,
+		Retention: jetstream.WorkQueuePolicy,
+		Discard:   jetstream.DiscardOld,
+		MaxAge:    maxAge,
+		Storage:   jetstream.FileStorage,
+		Replicas:  1,
+	}
+
+	stream, err := c.js.CreateOrUpdateStream(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create or update work queue stream: %w", err)
+	}
+
+	c.streams[streamName] = stream
+	return stream, nil
+}
+
 // Publish publishes a message to the given subject
 func (c *Client) Publish(ctx context.Context, subject string, data []byte, headers map[string][]string) error {
 	var msgHeaders nats.Header
