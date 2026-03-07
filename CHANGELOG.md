@@ -1,3 +1,10 @@
+# [1.0.0-alpha.30](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.29...v1.0.0-alpha.30) (2026-03-07)
+
+
+### Bug Fixes
+
+* **queue:** retain check jobs as work queue ([d661b9d](https://github.com/yassinebenameur/probara/commit/d661b9d52f0e1742b0e54bb274614ecde54e29b4))
+
 # [1.0.0-alpha.29](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.28...v1.0.0-alpha.29) (2026-03-07)
 
 
