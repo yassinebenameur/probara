@@ -1,3 +1,10 @@
+# [1.0.0-alpha.29](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.28...v1.0.0-alpha.29) (2026-03-07)
+
+
+### Bug Fixes
+
+* **api:** use core nats for alert SSE fanout ([f933e6a](https://github.com/yassinebenameur/probara/commit/f933e6a9c6b0c26f3ba54b675fe4ffdae809d566))
+
 # [1.0.0-alpha.28](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.27...v1.0.0-alpha.28) (2026-03-06)
 
 
