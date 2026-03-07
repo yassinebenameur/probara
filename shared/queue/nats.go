@@ -157,6 +157,26 @@ func (c *Client) DeleteConsumer(ctx context.Context, streamName string, consumer
 	return nil
 }
 
+// Subscribe registers a core NATS subscription for live fan-out use cases.
+func (c *Client) Subscribe(subject string, handler func(*Message)) (*nats.Subscription, error) {
+	return c.nc.Subscribe(subject, func(msg *nats.Msg) {
+		handler(&Message{
+			Data:    msg.Data,
+			Subject: msg.Subject,
+			Headers: msg.Header,
+			Ack: func() error {
+				return nil
+			},
+			Nak: func() error {
+				return nil
+			},
+			InProgress: func() error {
+				return nil
+			},
+		})
+	})
+}
+
 // Consume consumes messages from a consumer
 func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handler func(*Message) error) error {
 	// Use FetchMaxWait to control the timeout for fetching messages

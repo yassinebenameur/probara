@@ -3,9 +3,6 @@ package alerts
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,12 +37,11 @@ type AlertDetails struct {
 
 // Subscriber listens for alert events from NATS and broadcasts to SSE clients
 type Subscriber struct {
-	nats         *queue.Client
-	hub          *Hub
-	config       *config.APIConfig
-	logger       *logger.Logger
-	cancel       context.CancelFunc
-	consumerName string
+	nats   *queue.Client
+	hub    *Hub
+	config *config.APIConfig
+	logger *logger.Logger
+	cancel context.CancelFunc
 }
 
 // NewSubscriber creates a new alert subscriber
@@ -69,45 +65,26 @@ func (s *Subscriber) Start(ctx context.Context) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 
-	consumerName := buildConsumerName(s.config.AlertConsumerName)
-
-	// Ensure the ALERTS stream exists
-	_, err := s.nats.EnsureStream(subCtx, s.config.AlertStream, []string{s.config.AlertSubject + ".*"})
-	if err != nil {
-		s.logger.WithError(err).Warn("Failed to ensure ALERTS stream (continuing anyway)")
-	}
-
-	// Create consumer for the API
-	consumer, err := s.nats.CreateConsumer(subCtx, s.config.AlertStream, consumerName)
+	subject := s.config.AlertSubject + ".*"
+	subscription, err := s.nats.Subscribe(subject, func(msg *queue.Message) {
+		if err := s.handleMessage(msg); err != nil {
+			s.logger.WithError(err).Error("Failed to process alert event")
+		}
+	})
 	if err != nil {
 		return err
 	}
-	s.consumerName = consumerName
 
 	s.logger.WithFields(map[string]interface{}{
-		"stream":   s.config.AlertStream,
-		"consumer": consumerName,
-		"subject":  s.config.AlertSubject + ".*",
+		"subject": subject,
 	}).Info("Starting alert event subscription")
 
-	// Start consuming in a goroutine
 	go func() {
-		for {
-			select {
-			case <-subCtx.Done():
-				s.logger.Info("Alert subscription stopped")
-				return
-			default:
-				if err := s.nats.Consume(subCtx, consumer, s.handleMessage); err != nil {
-					if subCtx.Err() != nil {
-						// Context cancelled, exit gracefully
-						return
-					}
-					s.logger.WithError(err).Error("Error consuming alert events, retrying...")
-					time.Sleep(5 * time.Second)
-				}
-			}
+		<-subCtx.Done()
+		if err := subscription.Unsubscribe(); err != nil {
+			s.logger.WithError(err).Warn("Failed to unsubscribe from alert events")
 		}
+		s.logger.Info("Alert subscription stopped")
 	}()
 
 	return nil
@@ -118,37 +95,6 @@ func (s *Subscriber) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.nats != nil && s.consumerName != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.nats.DeleteConsumer(ctx, s.config.AlertStream, s.consumerName); err != nil {
-			s.logger.WithError(err).Warn("Failed to delete alert consumer")
-		}
-	}
-}
-
-func buildConsumerName(base string) string {
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "" {
-		return base
-	}
-
-	sanitized := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r
-		case r >= '0' && r <= '9':
-			return r
-		case r == '-' || r == '_':
-			return r
-		default:
-			return '-'
-		}
-	}, hostname)
-
-	return fmt.Sprintf("%s-%s", base, sanitized)
 }
 
 // handleMessage processes an incoming alert event
