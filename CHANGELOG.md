@@ -1,3 +1,10 @@
+# [1.0.0-alpha.32](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.31...v1.0.0-alpha.32) (2026-03-09)
+
+
+### Bug Fixes
+
+* **worker:** recover consumer loop after nats heartbeat loss ([e4ba74b](https://github.com/yassinebenameur/probara/commit/e4ba74b6adb2adbf8fdb1383b5c4dc3996379d7c))
+
 # [1.0.0-alpha.31](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.30...v1.0.0-alpha.31) (2026-03-09)
 
 

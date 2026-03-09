@@ -2,7 +2,7 @@ apiVersion: v2
 name: probara
 description: A Helm chart for the Probara monitoring platform
 type: application
-version: 1.0.0-alpha.31
-appVersion: "1.0.0-alpha.31"
+version: 1.0.0-alpha.32
+appVersion: "1.0.0-alpha.32"
 
 # No external dependencies - PostgreSQL and NATS are embedded as templates
