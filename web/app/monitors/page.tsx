@@ -13,6 +13,7 @@ import {
   removeMonitorsFromGroup,
   getSyntheticBrowserScreenshotUrl,
   toggleMonitorEnabled,
+  exportMonitors,
 } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import {
@@ -1024,6 +1025,7 @@ export default function MonitorsPage() {
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<Set<string>>(new Set());
   const [groupNameInput, setGroupNameInput] = useState('');
   const [targetGroupId, setTargetGroupId] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     loadMonitors();
@@ -1182,6 +1184,26 @@ export default function MonitorsPage() {
       hypothesisId: 'A',
     });
     // #endregion
+  };
+
+  const handleExport = async () => {
+    try {
+      setExporting(true);
+      const { blob, filename } = await exportMonitors();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setToast({ message: 'Monitor export downloaded', type: 'success' });
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to export monitors', type: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -1482,6 +1504,16 @@ export default function MonitorsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="btn btn-secondary btn-sm disabled:opacity-60"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            {exporting ? 'Exporting...' : 'Export'}
+          </button>
           <Link href="/monitors/import">
             <button className="btn btn-secondary btn-sm">
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

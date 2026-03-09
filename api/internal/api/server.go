@@ -159,6 +159,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/", monitorHandlers.CreateMonitor)
 				r.Get("/", monitorHandlers.ListMonitors)
 				// Import endpoints (must be before /{id} to avoid conflicts)
+				r.Get("/export", importHdlrs.Export)
 				r.Post("/import/preview", importHdlrs.Preview)
 				r.Post("/import", importHdlrs.Execute)
 				r.Get("/{id}", monitorHandlers.GetMonitor)

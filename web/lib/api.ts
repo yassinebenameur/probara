@@ -650,3 +650,70 @@ export async function previewImport(file: File): Promise<ImportPreviewResponse> 
 export async function executeImport(data: ImportExecuteRequest): Promise<ImportExecuteResponse> {
   return apiRequest<ImportExecuteResponse>('POST', '/v1/monitors/import', data);
 }
+
+export async function exportMonitors(): Promise<{ blob: Blob; filename: string }> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    await ensureTenantSelected();
+  }
+
+  const makeRequest = async (): Promise<Response> => {
+    const headers: HeadersInit = {};
+
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    } else {
+      const tenantId = getSelectedTenantId();
+      if (tenantId) {
+        headers['X-Tenant-ID'] = tenantId;
+      }
+    }
+
+    return fetch(getApiUrl('/v1/monitors/export'), {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+  };
+
+  let response = await makeRequest();
+  if (response.status === 401 && !apiKey) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      response = await makeRequest();
+    }
+  }
+
+  if (response.status === 401) {
+    if (apiKey) {
+      clearApiKey();
+      if (typeof window !== 'undefined') {
+        window.location.href = '/connect';
+      }
+    } else if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
+    throw new Error('Unauthorized');
+  }
+
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const data = await response.json();
+      const error: ApiError = data.error
+        ? { error: data.error, message: data.message || data.error }
+        : { error: 'unknown_error', message: data.message || 'An error occurred' };
+      throw error;
+    }
+
+    throw new Error(`Export failed with status ${response.status}`);
+  }
+
+  const contentDisposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+
+  return {
+    blob: await response.blob(),
+    filename: filenameMatch?.[1] || 'monitors-export.yaml',
+  };
+}

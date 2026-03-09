@@ -16,6 +16,7 @@ import type {
 const TARGET_FIELDS = [
   { key: 'name', label: 'Name', required: true },
   { key: 'type', label: 'Type', required: false },
+  { key: 'config', label: 'Raw Config', required: false },
   { key: 'url', label: 'URL (HTTP)', required: false },
   { key: 'method', label: 'Method (HTTP)', required: false },
   { key: 'expected_status', label: 'Expected Status (HTTP)', required: false },
@@ -29,6 +30,7 @@ const TARGET_FIELDS = [
   { key: 'tags', label: 'Tags', required: false },
   { key: 'enabled', label: 'Enabled', required: false },
   { key: 'group_members', label: 'Group Members', required: false },
+  { key: 'alert_policy_names', label: 'Alert Policy Names', required: false },
 ];
 
 type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';
@@ -40,6 +42,11 @@ const SUPPORTED_TYPES = [
   { value: 'dns', label: 'DNS', description: 'DNS record checks' },
   { value: 'grpc', label: 'gRPC', description: 'gRPC health checks' },
   { value: 'group', label: 'Group', description: 'Group of monitors' },
+  { value: 'agent', label: 'Agent', description: 'Heartbeat checks from installed agents' },
+  { value: 'push', label: 'Push', description: 'Token-based push heartbeat checks' },
+  { value: 'sip', label: 'SIP', description: 'SIP endpoint checks' },
+  { value: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API workflow checks' },
+  { value: 'synthetic_browser', label: 'Synthetic Browser', description: 'Browser workflow checks' },
 ];
 
 // Step indicator component
@@ -260,7 +267,7 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
 
   const isSupported = (row: ImportRow) => {
     const type = getMonitorType(row);
-    return type !== 'agent' && ['http', 'ping', 'dns', 'grpc', 'group', ''].includes(type);
+    return ['', ...SUPPORTED_TYPES.map((supportedType) => supportedType.value)].includes(type);
   };
 
   return (
@@ -498,7 +505,7 @@ export default function ImportPage() {
   // Get types that need mapping (not supported types)
   const getUnmappedTypes = () => {
     if (!previewData?.detected_types) return [];
-    const supportedTypes = ['http', 'ping', 'dns', 'grpc', 'group', 'agent'];
+    const supportedTypes = SUPPORTED_TYPES.map((type) => type.value);
     return previewData.detected_types.filter(t => !supportedTypes.includes(t.toLowerCase()));
   };
 
@@ -595,7 +602,9 @@ export default function ImportPage() {
               <div>
                 <h2 className="text-lg font-medium text-white">Map Fields</h2>
                 <p className="text-sm text-slate-400 mt-0.5">
-                  Detected {previewData.total_rows} rows in {previewData.format.toUpperCase()} format
+                  {previewData.schema === 'portable_monitor_export'
+                    ? `Detected ${previewData.total_rows} monitors from a portable YAML export`
+                    : `Detected ${previewData.total_rows} rows in ${previewData.format.toUpperCase()} format`}
                 </p>
               </div>
               <span className="inline-flex items-center px-2 py-1 rounded bg-slate-700/50 text-xs text-slate-300">
@@ -617,6 +626,15 @@ export default function ImportPage() {
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+
+            {previewData.schema === 'portable_monitor_export' && (
+              <div className="mb-6 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
+                <p className="text-sm text-cyan-300">
+                  Portable export detected. The suggested mappings preserve raw monitor config, alert policy names,
+                  and group membership by monitor name so this file can be reimported into another instance.
+                </p>
               </div>
             )}
 
@@ -712,7 +730,9 @@ export default function ImportPage() {
               <div>
                 <h2 className="text-lg font-medium text-white">Review Import</h2>
                 <p className="text-sm text-slate-400 mt-0.5">
-                  {previewData.total_rows} monitors will be processed
+                  {previewData.schema === 'portable_monitor_export'
+                    ? `${previewData.total_rows} monitors from the portable export will be recreated`
+                    : `${previewData.total_rows} monitors will be processed`}
                 </p>
               </div>
             </div>

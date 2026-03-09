@@ -10,10 +10,12 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"gopkg.in/yaml.v3"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -23,12 +25,12 @@ import (
 
 // Service handles monitor import operations
 type Service struct {
-	db             *db.Client
-	monitorService *monitorservice.Service
+	db             db.DB
+	monitorService monitorservice.MonitorService
 }
 
 // NewService creates a new import service
-func NewService(dbClient *db.Client, monitorSvc *monitorservice.Service) *Service {
+func NewService(dbClient db.DB, monitorSvc monitorservice.MonitorService) *Service {
 	return &Service{
 		db:             dbClient,
 		monitorService: monitorSvc,
@@ -40,6 +42,7 @@ func (s *Service) ParseFile(data []byte, filename string) (*models.ImportPreview
 	ext := strings.ToLower(filepath.Ext(filename))
 
 	var format models.ImportFormat
+	var schema string
 	var rows []models.ImportRow
 	var err error
 
@@ -50,13 +53,13 @@ func (s *Service) ParseFile(data []byte, filename string) (*models.ImportPreview
 		rows, err = s.parseJSON(data)
 	case ".yaml", ".yml":
 		format = models.ImportFormatYAML
-		rows, err = s.parseYAML(data)
+		rows, schema, err = s.parseYAML(data)
 	case ".csv":
 		format = models.ImportFormatCSV
 		rows, err = s.parseCSV(data)
 	default:
 		// Try to auto-detect from content
-		format, rows, err = s.autoDetectAndParse(data)
+		format, rows, schema, err = s.autoDetectAndParse(data)
 	}
 
 	if err != nil {
@@ -94,6 +97,7 @@ func (s *Service) ParseFile(data []byte, filename string) (*models.ImportPreview
 
 	return &models.ImportPreviewResponse{
 		Format:               format,
+		Schema:               schema,
 		Rows:                 rows,
 		DetectedFields:       detectedFields,
 		SuggestedMapping:     suggestedMapping,
@@ -140,11 +144,17 @@ func (s *Service) parseJSON(data []byte) ([]models.ImportRow, error) {
 }
 
 // parseYAML parses YAML data
-func (s *Service) parseYAML(data []byte) ([]models.ImportRow, error) {
+func (s *Service) parseYAML(data []byte) ([]models.ImportRow, string, error) {
+	if rows, ok, err := s.parsePortableExport(data); err != nil {
+		return nil, "", err
+	} else if ok {
+		return rows, models.ImportSchemaPortableMonitorExport, nil
+	}
+
 	// First, try to parse as a generic interface to see what we have
 	var generic interface{}
 	if err := yaml.Unmarshal(data, &generic); err != nil {
-		return nil, fmt.Errorf("invalid YAML: %v", err)
+		return nil, "", fmt.Errorf("invalid YAML: %v", err)
 	}
 
 	// Handle based on type
@@ -158,9 +168,9 @@ func (s *Service) parseYAML(data []byte) ([]models.ImportRow, error) {
 			}
 		}
 		if len(maps) > 0 {
-			return s.mapsToRows(maps), nil
+			return s.mapsToRows(maps), "", nil
 		}
-		return nil, fmt.Errorf("YAML array contains no valid objects")
+		return nil, "", fmt.Errorf("YAML array contains no valid objects")
 
 	case map[string]interface{}:
 		// It's an object - check for common wrapper keys
@@ -174,20 +184,59 @@ func (s *Service) parseYAML(data []byte) ([]models.ImportRow, error) {
 						}
 					}
 					if len(maps) > 0 {
-						return s.mapsToRows(maps), nil
+						return s.mapsToRows(maps), "", nil
 					}
 				}
 			}
 		}
 		// Treat as single monitor
 		if len(v) > 0 {
-			return s.mapsToRows([]map[string]interface{}{v}), nil
+			return s.mapsToRows([]map[string]interface{}{v}), "", nil
 		}
-		return nil, fmt.Errorf("YAML object is empty")
+		return nil, "", fmt.Errorf("YAML object is empty")
 
 	default:
-		return nil, fmt.Errorf("YAML must be an array or object, got %T", generic)
+		return nil, "", fmt.Errorf("YAML must be an array or object, got %T", generic)
 	}
+}
+
+func (s *Service) parsePortableExport(data []byte) ([]models.ImportRow, bool, error) {
+	var bundle models.PortableMonitorExport
+	if err := yaml.Unmarshal(data, &bundle); err != nil {
+		return nil, false, nil
+	}
+
+	if bundle.Kind != "monitor_export" || bundle.Version != 1 {
+		return nil, false, nil
+	}
+
+	rows := make([]models.ImportRow, 0, len(bundle.Monitors))
+	for i, monitor := range bundle.Monitors {
+		fields := map[string]interface{}{
+			"name":             monitor.Name,
+			"type":             string(monitor.Type),
+			"config":           monitor.Config,
+			"interval_seconds": monitor.IntervalSeconds,
+			"timeout_seconds":  monitor.TimeoutSeconds,
+			"enabled":          monitor.Enabled,
+		}
+		if len(monitor.Tags) > 0 {
+			fields["tags"] = monitor.Tags
+		}
+		if len(monitor.AlertPolicyNames) > 0 {
+			fields["alert_policy_names"] = monitor.AlertPolicyNames
+		}
+		if len(monitor.GroupMembers) > 0 {
+			fields["group_members"] = monitor.GroupMembers
+		}
+
+		rows = append(rows, models.ImportRow{
+			Index:  i,
+			Fields: fields,
+		})
+	}
+
+	return rows, true, nil
 }
 
 // parseCSV parses CSV data
@@ -231,26 +280,27 @@ func (s *Service) parseCSV(data []byte) ([]models.ImportRow, error) {
 }
 
 // autoDetectAndParse tries to auto-detect format from content
-func (s *Service) autoDetectAndParse(data []byte) (models.ImportFormat, []models.ImportRow, error) {
+func (s *Service) autoDetectAndParse(data []byte) (models.ImportFormat, []models.ImportRow, string, error) {
 	// Try JSON first
 	rows, err := s.parseJSON(data)
 	if err == nil {
-		return models.ImportFormatJSON, rows, nil
+		return models.ImportFormatJSON, rows, "", nil
 	}
 
 	// Try YAML
-	rows, err = s.parseYAML(data)
+	var schema string
+	rows, schema, err = s.parseYAML(data)
 	if err == nil {
-		return models.ImportFormatYAML, rows, nil
+		return models.ImportFormatYAML, rows, schema, nil
 	}
 
 	// Try CSV
 	rows, err = s.parseCSV(data)
 	if err == nil {
-		return models.ImportFormatCSV, rows, nil
+		return models.ImportFormatCSV, rows, "", nil
 	}
 
-	return "", nil, fmt.Errorf("could not detect file format")
+	return "", nil, "", fmt.Errorf("could not detect file format")
 }
 
 // mapsToRows converts a slice of maps to ImportRows
@@ -335,6 +385,13 @@ func (s *Service) suggestMapping(fields []string) models.FieldMapping {
 	for _, candidate := range []string{"type", "monitor_type", "kind"} {
 		if original, ok := fieldMap[candidate]; ok {
 			mapping.Type = original
+			break
+		}
+	}
+
+	for _, candidate := range []string{"config", "monitor_config"} {
+		if original, ok := fieldMap[candidate]; ok {
+			mapping.Config = original
 			break
 		}
 	}
@@ -443,6 +500,13 @@ func (s *Service) suggestMapping(fields []string) models.FieldMapping {
 		}
 	}
 
+	for _, candidate := range []string{"alert_policy_names", "alert_policies", "policies"} {
+		if original, ok := fieldMap[candidate]; ok {
+			mapping.AlertPolicyNames = original
+			break
+		}
+	}
+
 	return mapping
 }
 
@@ -463,7 +527,7 @@ func (s *Service) generateWarnings(rows []models.ImportRow, mapping models.Field
 			agentCount++
 		}
 	}
-	if agentCount > 0 {
+	if agentCount > 0 && mapping.Config == "" {
 		warnings = append(warnings, fmt.Sprintf("%d monitor(s) have type 'agent' which cannot be batch imported (requires agent installation).", agentCount))
 	}
 
@@ -477,12 +541,16 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 
 	// Supported types
 	supportedTypes := map[string]bool{
-		"http":  true,
-		"ping":  true,
-		"dns":   true,
-		"grpc":  true,
-		"group": true,
-		"agent": true,
+		"http":              true,
+		"ping":              true,
+		"dns":               true,
+		"grpc":              true,
+		"group":             true,
+		"agent":             true,
+		"push":              true,
+		"sip":               true,
+		"synthetic_api":     true,
+		"synthetic_browser": true,
 	}
 
 	// Common type aliases that map to supported types
@@ -558,6 +626,7 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 	successCount := 0
 	failedCount := 0
 	skippedCount := 0
+	useRawConfig := strings.TrimSpace(req.Mapping.Config) != ""
 
 	// Build type mapping (ensure non-nil)
 	typeMapping := req.TypeMapping
@@ -565,8 +634,9 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		typeMapping = make(map[string]string)
 	}
 
-	// First pass: create non-group monitors and collect name->ID mapping
+	// First pass: create non-group monitors and collect references for group resolution.
 	monitorNameToID := make(map[string]uuid.UUID)
+	monitorNameToIDs := make(map[string][]uuid.UUID)
 	groupRows := make([]int, 0)
 
 	for i, row := range req.Rows {
@@ -581,38 +651,18 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		}
 		result.Name = name
 
-		// Extract type (default to http)
-		rawType := strings.ToLower(strings.TrimSpace(s.extractString(row.Fields, req.Mapping.Type)))
-		monitorType := rawType
-
-		// Apply type mapping if available
-		if mappedType, ok := typeMapping[rawType]; ok && mappedType != "" {
-			monitorType = strings.ToLower(mappedType)
-		}
-
-		// If still empty, try to infer type from fields
-		if monitorType == "" {
-			hasHost := s.extractString(row.Fields, req.Mapping.Host) != ""
-			hasGRPCHint := s.extractString(row.Fields, req.Mapping.Service) != "" ||
-				s.extractString(row.Fields, req.Mapping.UseTLS) != "" ||
-				s.extractString(row.Fields, req.Mapping.Port) != ""
-
-			if hasHost && hasGRPCHint {
-				monitorType = "grpc"
-			} else if hasHost {
-				monitorType = "ping"
-			} else if s.extractString(row.Fields, req.Mapping.URL) != "" {
-				monitorType = "http"
-			} else if s.extractString(row.Fields, req.Mapping.GroupMembers) != "" {
-				monitorType = "group"
-			} else {
-				monitorType = "http"
-			}
-		}
+		monitorType := s.resolveMonitorType(row, req.Mapping, typeMapping)
 		result.Type = monitorType
 
-		// Check for unsupported types
-		if monitorType == "agent" {
+		if !isSupportedMonitorType(monitorType) {
+			result.Status = "skipped"
+			result.SkipReason = fmt.Sprintf("Unknown monitor type '%s' - please configure type mapping", monitorType)
+			skippedCount++
+			results[i] = result
+			continue
+		}
+
+		if !useRawConfig && monitorType == "agent" {
 			result.Status = "skipped"
 			result.SkipReason = "Agent monitors cannot be batch imported (requires agent installation)"
 			skippedCount++
@@ -620,9 +670,9 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 			continue
 		}
 
-		if monitorType != "http" && monitorType != "ping" && monitorType != "dns" && monitorType != "grpc" && monitorType != "group" {
+		if !useRawConfig && monitorType != "http" && monitorType != "ping" && monitorType != "dns" && monitorType != "grpc" && monitorType != "group" {
 			result.Status = "skipped"
-			result.SkipReason = fmt.Sprintf("Unknown monitor type '%s' - please configure type mapping", monitorType)
+			result.SkipReason = fmt.Sprintf("Monitor type '%s' requires a raw config field for import", monitorType)
 			skippedCount++
 			results[i] = result
 			continue
@@ -635,8 +685,15 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 			continue
 		}
 
-		// Create the monitor
-		monitor, err := s.createMonitor(ctx, tenantID, row, req.Mapping, monitorType)
+		var (
+			monitor *models.Monitor
+			err     error
+		)
+		if useRawConfig {
+			monitor, err = s.createMonitorFromConfig(ctx, tenantID, row, req.Mapping, monitorType)
+		} else {
+			monitor, err = s.createMonitor(ctx, tenantID, row, req.Mapping, monitorType)
+		}
 		if err != nil {
 			result.Status = "failed"
 			result.Error = err.Error()
@@ -653,6 +710,7 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 
 		// Store name->ID mapping for group resolution
 		monitorNameToID[name] = monitor.ID
+		monitorNameToIDs[name] = append(monitorNameToIDs[name], monitor.ID)
 	}
 
 	// Second pass: create group monitors
@@ -660,7 +718,15 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		row := req.Rows[i]
 		result := results[i]
 
-		monitor, err := s.createGroupMonitor(ctx, tenantID, row, req.Mapping, monitorNameToID)
+		var (
+			monitor *models.Monitor
+			err     error
+		)
+		if useRawConfig {
+			monitor, err = s.createGroupMonitorFromConfig(ctx, tenantID, row, req.Mapping, monitorNameToIDs)
+		} else {
+			monitor, err = s.createGroupMonitor(ctx, tenantID, row, req.Mapping, monitorNameToID)
+		}
 		if err != nil {
 			result.Status = "failed"
 			result.Error = err.Error()
@@ -674,6 +740,8 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		result.MonitorID = &monitorID
 		successCount++
 		results[i] = result
+		monitorNameToID[result.Name] = monitor.ID
+		monitorNameToIDs[result.Name] = append(monitorNameToIDs[result.Name], monitor.ID)
 	}
 
 	return &models.ImportExecuteResponse{
@@ -748,6 +816,60 @@ func (s *Service) createMonitor(ctx context.Context, tenantID uuid.UUID, row mod
 	return s.monitorService.CreateMonitor(ctx, tenantID, req)
 }
 
+func (s *Service) createMonitorFromConfig(ctx context.Context, tenantID uuid.UUID, row models.ImportRow, mapping models.FieldMapping, monitorType string) (*models.Monitor, error) {
+	name := s.extractString(row.Fields, mapping.Name)
+	if name == "" {
+		name = fmt.Sprintf("Monitor %d", row.Index+1)
+	}
+
+	intervalSeconds := s.extractInt(row.Fields, mapping.IntervalSeconds)
+	if intervalSeconds <= 0 {
+		intervalSeconds = 60
+	}
+
+	timeoutSeconds := s.extractInt(row.Fields, mapping.TimeoutSeconds)
+	if activeCheckType(models.MonitorType(monitorType)) {
+		if timeoutSeconds <= 0 {
+			timeoutSeconds = 30
+		}
+		if timeoutSeconds >= intervalSeconds {
+			timeoutSeconds = intervalSeconds - 1
+		}
+	} else {
+		timeoutSeconds = 0
+	}
+
+	enabled := s.extractBool(row.Fields, mapping.Enabled)
+	if mapping.Enabled == "" {
+		enabled = true
+	}
+
+	tags := s.extractTags(row.Fields, mapping.Tags)
+
+	config, err := s.extractRawConfig(row.Fields, mapping.Config, monitorType)
+	if err != nil {
+		return nil, err
+	}
+
+	alertPolicyIDs, err := s.resolveAlertPolicyIDs(ctx, tenantID, s.extractStrings(row.Fields, mapping.AlertPolicyNames))
+	if err != nil {
+		return nil, err
+	}
+
+	req := &models.CreateMonitorRequest{
+		Name:            name,
+		Type:            models.MonitorType(monitorType),
+		Config:          config,
+		IntervalSeconds: intervalSeconds,
+		TimeoutSeconds:  timeoutSeconds,
+		AlertPolicyIDs:  alertPolicyIDs,
+		Enabled:         &enabled,
+		Tags:            tags,
+	}
+
+	return s.monitorService.CreateMonitor(ctx, tenantID, req)
+}
+
 // createGroupMonitor creates a group monitor with members
 func (s *Service) createGroupMonitor(ctx context.Context, tenantID uuid.UUID, row models.ImportRow, mapping models.FieldMapping, nameToID map[string]uuid.UUID) (*models.Monitor, error) {
 	name := s.extractString(row.Fields, mapping.Name)
@@ -802,6 +924,75 @@ func (s *Service) createGroupMonitor(ctx context.Context, tenantID uuid.UUID, ro
 		Config:          configBytes,
 		IntervalSeconds: intervalSeconds,
 		TimeoutSeconds:  timeoutSeconds,
+		Enabled:         &enabled,
+		Tags:            tags,
+	}
+
+	return s.monitorService.CreateMonitor(ctx, tenantID, req)
+}
+
+func (s *Service) createGroupMonitorFromConfig(ctx context.Context, tenantID uuid.UUID, row models.ImportRow, mapping models.FieldMapping, nameToIDs map[string][]uuid.UUID) (*models.Monitor, error) {
+	name := s.extractString(row.Fields, mapping.Name)
+	if name == "" {
+		name = fmt.Sprintf("Group %d", row.Index+1)
+	}
+
+	intervalSeconds := s.extractInt(row.Fields, mapping.IntervalSeconds)
+	if intervalSeconds <= 0 {
+		intervalSeconds = 60
+	}
+
+	enabled := s.extractBool(row.Fields, mapping.Enabled)
+	if mapping.Enabled == "" {
+		enabled = true
+	}
+
+	tags := s.extractTags(row.Fields, mapping.Tags)
+	memberNames := s.extractStrings(row.Fields, mapping.GroupMembers)
+	if len(memberNames) == 0 {
+		return nil, fmt.Errorf("group_members is required for portable group import")
+	}
+
+	configValue, ok := row.Fields[mapping.Config]
+	if mapping.Config == "" || !ok {
+		return nil, fmt.Errorf("config is required for portable group import")
+	}
+	configMap, ok := configValue.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("group config must be an object")
+	}
+
+	memberIDs := make([]string, 0, len(memberNames))
+	for _, memberName := range memberNames {
+		ids := nameToIDs[memberName]
+		if len(ids) == 0 {
+			return nil, fmt.Errorf("group member name '%s' could not be resolved", memberName)
+		}
+		if len(ids) > 1 {
+			return nil, fmt.Errorf("group member name '%s' is ambiguous", memberName)
+		}
+		memberIDs = append(memberIDs, ids[0].String())
+	}
+
+	configCopy := cloneMap(configMap)
+	configCopy["monitor_ids"] = memberIDs
+	config, err := s.marshalSanitizedConfig(configCopy, models.MonitorTypeGroup)
+	if err != nil {
+		return nil, err
+	}
+
+	alertPolicyIDs, err := s.resolveAlertPolicyIDs(ctx, tenantID, s.extractStrings(row.Fields, mapping.AlertPolicyNames))
+	if err != nil {
+		return nil, err
+	}
+
+	req := &models.CreateMonitorRequest{
+		Name:            name,
+		Type:            models.MonitorTypeGroup,
+		Config:          config,
+		IntervalSeconds: intervalSeconds,
+		TimeoutSeconds:  0,
+		AlertPolicyIDs:  alertPolicyIDs,
 		Enabled:         &enabled,
 		Tags:            tags,
 	}
@@ -1026,6 +1217,350 @@ func parseBoolValue(val interface{}) (bool, bool) {
 	default:
 		return false, false
 	}
+}
+
+func (s *Service) resolveMonitorType(row models.ImportRow, mapping models.FieldMapping, typeMapping map[string]string) string {
+	rawType := strings.ToLower(strings.TrimSpace(s.extractString(row.Fields, mapping.Type)))
+	monitorType := rawType
+
+	if mappedType, ok := typeMapping[rawType]; ok && mappedType != "" {
+		monitorType = strings.ToLower(mappedType)
+	}
+
+	if monitorType != "" {
+		return monitorType
+	}
+
+	hasHost := s.extractString(row.Fields, mapping.Host) != ""
+	hasGRPCHint := s.extractString(row.Fields, mapping.Service) != "" ||
+		s.extractString(row.Fields, mapping.UseTLS) != "" ||
+		s.extractString(row.Fields, mapping.Port) != ""
+
+	if hasHost && hasGRPCHint {
+		return "grpc"
+	}
+	if hasHost {
+		return "ping"
+	}
+	if s.extractString(row.Fields, mapping.URL) != "" {
+		return "http"
+	}
+	if len(s.extractStrings(row.Fields, mapping.GroupMembers)) > 0 || s.extractString(row.Fields, mapping.GroupMembers) != "" {
+		return "group"
+	}
+	return "http"
+}
+
+func isSupportedMonitorType(monitorType string) bool {
+	switch monitorType {
+	case "http", "ping", "dns", "grpc", "group", "agent", "push", "sip", "synthetic_api", "synthetic_browser":
+		return true
+	default:
+		return false
+	}
+}
+
+func activeCheckType(monitorType models.MonitorType) bool {
+	switch monitorType {
+	case models.MonitorTypeHTTP, models.MonitorTypePing, models.MonitorTypeSIP, models.MonitorTypeDNS,
+		models.MonitorTypeGRPC, models.MonitorTypeSyntheticAPI, models.MonitorTypeSyntheticBrowser:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) extractRawConfig(fields map[string]interface{}, fieldName, monitorType string) (json.RawMessage, error) {
+	if fieldName == "" {
+		return nil, fmt.Errorf("config mapping is required for portable import")
+	}
+	value, ok := fields[fieldName]
+	if !ok || value == nil {
+		return nil, fmt.Errorf("config is required for monitor type '%s'", monitorType)
+	}
+	return s.marshalSanitizedConfig(value, models.MonitorType(monitorType))
+}
+
+func (s *Service) marshalSanitizedConfig(value interface{}, monitorType models.MonitorType) (json.RawMessage, error) {
+	switch monitorType {
+	case models.MonitorTypePush:
+		if configMap, ok := value.(map[string]interface{}); ok {
+			value = cloneMap(configMap)
+			delete(value.(map[string]interface{}), "push_token")
+		}
+	case models.MonitorTypeAgent:
+		if configMap, ok := value.(map[string]interface{}); ok {
+			value = cloneMap(configMap)
+			delete(value.(map[string]interface{}), "agent_id")
+		}
+	}
+
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config: %w", err)
+	}
+	return raw, nil
+}
+
+func (s *Service) resolveAlertPolicyIDs(ctx context.Context, tenantID uuid.UUID, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]string, 0, len(names))
+	for _, name := range names {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT id
+			FROM alert_policies
+			WHERE tenant_id = $1 AND name = $2
+		`, tenantID, name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve alert policy '%s': %w", name, err)
+		}
+
+		matches := make([]uuid.UUID, 0, 2)
+		for rows.Next() {
+			var id uuid.UUID
+			if scanErr := rows.Scan(&id); scanErr != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("failed to resolve alert policy '%s': %w", name, scanErr)
+			}
+			matches = append(matches, id)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("failed to resolve alert policy '%s': %w", name, err)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("alert policy '%s' was not found", name)
+		}
+		if len(matches) > 1 {
+			return nil, fmt.Errorf("alert policy '%s' is ambiguous", name)
+		}
+		ids = append(ids, matches[0].String())
+	}
+
+	return ids, nil
+}
+
+func (s *Service) extractStrings(fields map[string]interface{}, fieldName string) []string {
+	if fieldName == "" {
+		return nil
+	}
+	value, ok := fields[fieldName]
+	if !ok || value == nil {
+		return nil
+	}
+
+	switch v := value.(type) {
+	case []string:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				result = append(result, item)
+			}
+		}
+		return result
+	case []interface{}:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			itemStr := strings.TrimSpace(fmt.Sprint(item))
+			if itemStr != "" {
+				result = append(result, itemStr)
+			}
+		}
+		return result
+	case string:
+		parts := strings.Split(v, ",")
+		result := make([]string, 0, len(parts))
+		for _, item := range parts {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				result = append(result, item)
+			}
+		}
+		return result
+	default:
+		item := strings.TrimSpace(fmt.Sprint(v))
+		if item == "" {
+			return nil
+		}
+		return []string{item}
+	}
+}
+
+func cloneMap(source map[string]interface{}) map[string]interface{} {
+	cloned := make(map[string]interface{}, len(source))
+	for key, value := range source {
+		cloned[key] = cloneValue(value)
+	}
+	return cloned
+}
+
+func cloneValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		return cloneMap(v)
+	case []interface{}:
+		cloned := make([]interface{}, len(v))
+		for i := range v {
+			cloned[i] = cloneValue(v[i])
+		}
+		return cloned
+	default:
+		return v
+	}
+}
+
+// ExportMonitors exports all tenant monitors as a portable YAML bundle.
+func (s *Service) ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byte, error) {
+	monitors, err := s.loadAllMonitors(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	alertPolicyNames, err := s.loadAlertPolicyNames(ctx, tenantID, monitors)
+	if err != nil {
+		return nil, err
+	}
+
+	nameByMonitorID := make(map[uuid.UUID]string, len(monitors))
+	for _, monitor := range monitors {
+		nameByMonitorID[monitor.ID] = monitor.Name
+	}
+
+	sort.SliceStable(monitors, func(i, j int) bool {
+		if monitors[i].Type == models.MonitorTypeGroup && monitors[j].Type != models.MonitorTypeGroup {
+			return false
+		}
+		if monitors[i].Type != models.MonitorTypeGroup && monitors[j].Type == models.MonitorTypeGroup {
+			return true
+		}
+		return monitors[i].CreatedAt.Before(monitors[j].CreatedAt)
+	})
+
+	exported := make([]models.PortableExportMonitor, 0, len(monitors))
+	for _, monitor := range monitors {
+		configValue, err := decodeRawJSON(monitor.Config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode config for monitor %s: %w", monitor.ID, err)
+		}
+
+		groupMembers := make([]string, 0, len(monitor.MemberIDs))
+		for _, memberID := range monitor.MemberIDs {
+			if name, ok := nameByMonitorID[memberID]; ok {
+				groupMembers = append(groupMembers, name)
+			}
+		}
+
+		alertNames := make([]string, 0, len(monitor.AlertPolicyIDs))
+		for _, policyID := range monitor.AlertPolicyIDs {
+			if name, ok := alertPolicyNames[policyID]; ok {
+				alertNames = append(alertNames, name)
+			}
+		}
+		sort.Strings(alertNames)
+
+		exported = append(exported, models.PortableExportMonitor{
+			Name:             monitor.Name,
+			Type:             monitor.Type,
+			IntervalSeconds:  monitor.IntervalSeconds,
+			TimeoutSeconds:   monitor.TimeoutSeconds,
+			Enabled:          monitor.Enabled,
+			Tags:             monitor.Tags,
+			Config:           configValue,
+			AlertPolicyNames: alertNames,
+			GroupMembers:     groupMembers,
+		})
+	}
+
+	return yaml.Marshal(models.PortableMonitorExport{
+		Kind:     "monitor_export",
+		Version:  1,
+		Monitors: exported,
+	})
+}
+
+func (s *Service) loadAllMonitors(ctx context.Context, tenantID uuid.UUID) ([]models.Monitor, error) {
+	const pageSize = 100
+
+	all := make([]models.Monitor, 0)
+	for page := 1; ; page++ {
+		resp, err := s.monitorService.ListMonitors(ctx, tenantID, nil, nil, page, pageSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list monitors: %w", err)
+		}
+		all = append(all, resp.Items...)
+		if len(all) >= resp.Total || len(resp.Items) == 0 {
+			break
+		}
+	}
+
+	for i := range all {
+		if all[i].Type != models.MonitorTypeGroup {
+			continue
+		}
+		monitor, err := s.monitorService.GetMonitor(ctx, tenantID, all[i].ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load group members for monitor %s: %w", all[i].ID, err)
+		}
+		all[i].MemberIDs = monitor.MemberIDs
+	}
+
+	return all, nil
+}
+
+func (s *Service) loadAlertPolicyNames(ctx context.Context, tenantID uuid.UUID, monitors []models.Monitor) (map[uuid.UUID]string, error) {
+	unique := make(map[uuid.UUID]struct{})
+	for _, monitor := range monitors {
+		for _, policyID := range monitor.AlertPolicyIDs {
+			unique[policyID] = struct{}{}
+		}
+	}
+	if len(unique) == 0 {
+		return map[uuid.UUID]string{}, nil
+	}
+
+	ids := make([]uuid.UUID, 0, len(unique))
+	for id := range unique {
+		ids = append(ids, id)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name
+		FROM alert_policies
+		WHERE tenant_id = $1 AND id = ANY($2)
+	`, tenantID, pq.Array(ids))
+	if err != nil {
+		return nil, fmt.Errorf("failed to load alert policies: %w", err)
+	}
+	defer rows.Close()
+
+	names := make(map[uuid.UUID]string, len(ids))
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("failed to scan alert policy: %w", err)
+		}
+		names[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to load alert policies: %w", err)
+	}
+
+	return names, nil
+}
+
+func decodeRawJSON(raw json.RawMessage) (interface{}, error) {
+	if len(raw) == 0 {
+		return map[string]interface{}{}, nil
+	}
+	var value interface{}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
 // extractString extracts a string value from fields

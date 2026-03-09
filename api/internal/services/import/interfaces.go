@@ -15,6 +15,9 @@ type ImportService interface {
 
 	// ExecuteImport executes the import with the given rows and mapping
 	ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *models.ImportExecuteRequest) (*models.ImportExecuteResponse, error)
+
+	// ExportMonitors exports all tenant monitors as portable YAML
+	ExportMonitors(ctx context.Context, tenantID uuid.UUID) ([]byte, error)
 }
 
 // Ensure Service implements ImportService

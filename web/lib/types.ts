@@ -794,6 +794,7 @@ export interface ImportRow {
 export interface FieldMapping {
   name?: string;
   type?: string;
+  config?: string;
   url?: string;
   method?: string;
   expected_status?: string;
@@ -807,10 +808,12 @@ export interface FieldMapping {
   tags?: string;
   enabled?: string;
   group_members?: string;
+  alert_policy_names?: string;
 }
 
 export interface ImportPreviewResponse {
   format: ImportFormat;
+  schema?: string;
   rows: ImportRow[];
   detected_fields: string[];
   suggested_mapping: FieldMapping;
