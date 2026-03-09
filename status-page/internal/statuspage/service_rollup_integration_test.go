@@ -20,8 +20,8 @@ func TestService_GetStatusPageBySlug_LongRangeParityMatchesSharedAnalytics(t *te
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	svc := NewService(dbClient)
 	repo := sharedanalytics.NewRepository(dbClient)
+	svc := NewService(dbClient, repo)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "status-page-rollup")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")

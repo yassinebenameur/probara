@@ -10,6 +10,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -21,7 +22,8 @@ func TestService_GetMonitorAnalytics_SelectsRawVsRollupSource(t *testing.T) {
 	defer cleanup()
 
 	groupSvc := groupservice.NewService(dbClient)
-	svc := NewService(dbClient, groupSvc)
+	analyticsRepo := sharedanalytics.NewRepository(dbClient)
+	svc := NewService(dbClient, groupSvc, analyticsRepo)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "results-source-selection")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	now := time.Now().UTC()
@@ -68,7 +70,8 @@ func TestService_GetMonitorAnalytics_GroupRollupParityMatchesLeafMonitorAverage(
 	defer cleanup()
 
 	groupSvc := groupservice.NewService(dbClient)
-	svc := NewService(dbClient, groupSvc)
+	analyticsRepo := sharedanalytics.NewRepository(dbClient)
+	svc := NewService(dbClient, groupSvc, analyticsRepo)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "results-group-parity")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")

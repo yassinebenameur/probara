@@ -30,10 +30,16 @@ type checkJobPublisher interface {
 	PublishJSON(ctx context.Context, subject string, v interface{}, headers map[string][]string) error
 }
 
+type groupMembershipService interface {
+	AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
+	RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
+	GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error)
+}
+
 // Handlers handles monitor HTTP requests
 type Handlers struct {
 	service       monitorservice.MonitorService
-	groupService  groupservice.GroupService
+	groupService  groupMembershipService
 	resultService resultservice.ResultsService
 	jobPublisher  checkJobPublisher
 	checkSubject  string
@@ -42,7 +48,7 @@ type Handlers struct {
 }
 
 // NewHandlers creates a new monitors handler
-func NewHandlers(service monitorservice.MonitorService, groupSvc groupservice.GroupService, resultSvc resultservice.ResultsService, log *logger.Logger, artifactsDir string) *Handlers {
+func NewHandlers(service monitorservice.MonitorService, groupSvc groupMembershipService, resultSvc resultservice.ResultsService, log *logger.Logger, artifactsDir string) *Handlers {
 	baseDir := strings.TrimSpace(artifactsDir)
 	if baseDir == "" {
 		baseDir = filepath.Join(os.TempDir(), "probara", "synthetic-browser-artifacts")

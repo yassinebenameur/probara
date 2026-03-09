@@ -163,17 +163,19 @@ type HourlyUptime struct {
 
 // Service handles status page business logic
 type Service struct {
-	db        *db.Client
-	analytics *sharedanalytics.Repository
-	now       func() time.Time
+	db         *db.Client
+	analytics  sharedanalytics.Reader
+	presenters map[string]monitorPresenter
+	now        func() time.Time
 }
 
 // NewService creates a new status page service
-func NewService(db *db.Client) *Service {
+func NewService(db *db.Client, analytics sharedanalytics.Reader) *Service {
 	return &Service{
-		db:        db,
-		analytics: sharedanalytics.NewRepository(db),
-		now:       func() time.Time { return time.Now().UTC() },
+		db:         db,
+		analytics:  analytics,
+		presenters: newMonitorPresenters(),
+		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -442,251 +444,18 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 		monitor.ID = monitorID.String()
 		monitor.MonitorType = monitorType
 		monitor.Tags = []string(tags)
+		presenter := s.monitorPresenter(monitorType)
 
 		if displayName.Valid && strings.TrimSpace(displayName.String) != "" {
 			monitor.Name = strings.TrimSpace(displayName.String)
 		}
 
-		// Extract URL from config if it's an HTTP monitor
-		if monitorType == "http" && len(configJSON) > 0 {
-			var config map[string]interface{}
-			if err := json.Unmarshal(configJSON, &config); err == nil {
-				if url, ok := config["url"].(string); ok {
-					monitor.URL = url
-				}
-			}
-		} else if monitorType == "ping" {
-			// For ping monitors, show the host
-			var config map[string]interface{}
-			if err := json.Unmarshal(configJSON, &config); err == nil {
-				if host, ok := config["host"].(string); ok {
-					monitor.URL = host
-				}
-			}
-		} else if monitorType == "dns" {
-			// For DNS monitors, show the host
-			var config map[string]interface{}
-			if err := json.Unmarshal(configJSON, &config); err == nil {
-				if host, ok := config["host"].(string); ok {
-					monitor.URL = host
-				}
-			}
-		} else if monitorType == "sip" {
-			// For SIP monitors, show the host and port
-			var config map[string]interface{}
-			if err := json.Unmarshal(configJSON, &config); err == nil {
-				host, _ := config["host"].(string)
-				port, _ := config["port"].(float64)
-				if port == 0 {
-					port = 5060
-				}
-				monitor.URL = fmt.Sprintf("%s:%d", host, int(port))
-			}
-		} else if monitorType == "agent" {
-			monitor.URL = "System Agent"
-		} else if monitorType == "push" {
-			monitor.URL = "Push Monitor"
-		} else if monitorType == "group" {
-			monitor.URL = "Group Monitor"
-		}
+		presenter.Configure(&monitor, configJSON)
 
 		// Initialize formatted fields to empty string
 		monitor.Uptime24hFormatted = ""
 		monitor.Uptime1hFormatted = ""
-
-		// For group monitors, use aggregated metrics from member monitors
-		if monitorType == "group" {
-			// Get group member IDs
-			memberIDs, err := s.getGroupMemberIDs(ctx, monitorID, tenantID)
-			if err != nil {
-				// If we can't get members, treat as unknown
-				monitor.Status = "unknown"
-				monitor.Uptime24hFormatted = "N/A"
-				monitor.Uptime1hFormatted = "N/A"
-			} else if len(memberIDs) == 0 {
-				// Empty group
-				monitor.Status = "unknown"
-				monitor.Uptime24hFormatted = "N/A"
-				monitor.Uptime1hFormatted = "N/A"
-			} else {
-				// Get aggregated status from members
-				groupStatus, err := s.GetGroupAggregatedStatus(ctx, memberIDs, tenantID)
-				if err != nil {
-					monitor.Status = "unknown"
-				} else {
-					monitor.Status = groupStatus.Status
-					monitor.LastCheckTime = groupStatus.LastCheckTime
-					monitor.LastLatency = groupStatus.LastLatency
-				}
-
-				// Get aggregated 24h uptime
-				uptime24h, err := s.CalculateGroupUptime24h(ctx, memberIDs, tenantID)
-				monitor.Uptime24h = uptime24h
-				if err != nil || uptime24h == nil {
-					monitor.Uptime24hFormatted = "N/A"
-				} else {
-					monitor.Uptime24hFormatted = fmt.Sprintf("%.2f%%", *uptime24h)
-				}
-
-				// Get aggregated 1h uptime
-				uptime1h, err := s.CalculateGroupUptime1h(ctx, memberIDs, tenantID)
-				monitor.Uptime1h = uptime1h
-				if err != nil || uptime1h == nil {
-					monitor.Uptime1hFormatted = "N/A"
-				} else {
-					monitor.Uptime1hFormatted = fmt.Sprintf("%.2f%%", *uptime1h)
-				}
-
-				// Get aggregated latencies
-				avgLatency1h, _ := s.CalculateGroupAvgLatency(ctx, memberIDs, tenantID, "1 hour")
-				monitor.AvgLatency1h = avgLatency1h
-
-				avgLatency24h, _ := s.CalculateGroupAvgLatency(ctx, memberIDs, tenantID, "24 hours")
-				monitor.AvgLatency24h = avgLatency24h
-
-				// Get aggregated hourly uptime for 24h
-				hourlyUptime, err := s.GetGroupHourlyUptime(ctx, memberIDs, tenantID)
-				if err == nil {
-					monitor.HourlyUptime = hourlyUptime
-					monitor.UptimeHistory24h = hourlyUptime
-				}
-
-				// Get aggregated 1h uptime history (5-minute buckets)
-				uptimeHistory1h, err := s.GetGroup5MinuteUptime(ctx, memberIDs, tenantID)
-				if err == nil {
-					monitor.UptimeHistory1h = uptimeHistory1h
-				}
-
-				// Get aggregated latency history for all time ranges
-				latencyHistory1h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "1 hour", 100)
-				if err == nil {
-					monitor.LatencyHistory1h = latencyHistory1h
-				}
-
-				latencyHistory24h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "24 hours", 100)
-				if err == nil {
-					monitor.LatencyHistory = latencyHistory24h
-				}
-
-				// Get aggregated downtime periods for all time ranges
-				downtimePeriods1h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "1 hour")
-				if err == nil {
-					monitor.DowntimePeriods1h = downtimePeriods1h
-				}
-
-				downtimePeriods24h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "24 hours")
-				if err == nil {
-					monitor.DowntimePeriods24h = downtimePeriods24h
-				}
-
-				// Get aggregated history
-				history, err := s.GetGroupHistory(ctx, memberIDs, tenantID, 50)
-				if err == nil {
-					monitor.History = history
-				}
-
-				s.applyMonitorLongRangeAnalytics(ctx, &monitor, tenantID, memberIDs)
-			}
-		} else {
-			// Regular monitor - use existing single-monitor functions
-			// Get current status
-			currentStatus, err := s.GetMonitorCurrentStatus(ctx, monitorID, tenantID)
-			if err != nil {
-				// If no results, set to unknown
-				monitor.Status = "unknown"
-			} else {
-				monitor.Status = currentStatus.Status
-				monitor.LastCheckTime = currentStatus.LastCheckTime
-				monitor.LastHTTPStatus = currentStatus.LastHTTPStatus
-				monitor.LastLatency = currentStatus.LastLatency
-				monitor.TLSDaysUntilExpiry = currentStatus.TLSDaysUntilExpiry
-				monitor.TLSNotAfter = currentStatus.TLSNotAfter
-			}
-
-			// Get 24h uptime and format it
-			uptime24h, err := s.CalculateUptime24h(ctx, monitorID, tenantID)
-			monitor.Uptime24h = uptime24h
-			if err != nil || uptime24h == nil {
-				monitor.Uptime24hFormatted = "N/A"
-			} else {
-				monitor.Uptime24hFormatted = fmt.Sprintf("%.2f%%", *uptime24h)
-			}
-
-			// Get 1h uptime and format it
-			uptime1h, err := s.CalculateUptime1h(ctx, monitorID, tenantID)
-			monitor.Uptime1h = uptime1h
-			if err != nil || uptime1h == nil {
-				monitor.Uptime1hFormatted = "N/A"
-			} else {
-				monitor.Uptime1hFormatted = fmt.Sprintf("%.2f%%", *uptime1h)
-			}
-
-			// Get average latencies
-			avgLatency1h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "1 hour")
-			monitor.AvgLatency1h = avgLatency1h
-
-			avgLatency24h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "24 hours")
-			monitor.AvgLatency24h = avgLatency24h
-
-			// Get per-component hourly uptime for the last 24 hours (backward compat)
-			hourlyUptime, err := s.GetMonitorHourlyUptime(ctx, monitorID, tenantID)
-			if err == nil {
-				monitor.HourlyUptime = hourlyUptime
-				monitor.UptimeHistory24h = hourlyUptime
-			}
-
-			// Get 1h uptime history (5-minute buckets)
-			uptimeHistory1h, err := s.GetMonitor5MinuteUptime(ctx, monitorID, tenantID)
-			if err == nil {
-				monitor.UptimeHistory1h = uptimeHistory1h
-			}
-
-			// Get latency history for sparkline chart (all time ranges)
-			latencyHistory1h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "1 hour", 100)
-			if err == nil {
-				monitor.LatencyHistory1h = latencyHistory1h
-			}
-
-			latencyHistory24h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "24 hours", 100)
-			if err == nil {
-				monitor.LatencyHistory = latencyHistory24h // Keep for backward compat
-			}
-
-			// Get downtime periods for all time ranges (to show red shaded areas on charts)
-			downtimePeriods1h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "1 hour")
-			if err == nil {
-				monitor.DowntimePeriods1h = downtimePeriods1h
-			}
-
-			downtimePeriods24h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "24 hours")
-			if err == nil {
-				monitor.DowntimePeriods24h = downtimePeriods24h
-			}
-
-			// Get history (last 50 or last 24h)
-			history, err := s.GetMonitorHistory(ctx, monitorID, tenantID, 50, nil)
-			if err == nil {
-				monitor.History = history
-			}
-
-			s.applyMonitorLongRangeAnalytics(ctx, &monitor, tenantID, []uuid.UUID{monitorID})
-		}
-
-		// For agent monitors, fetch the latest metrics
-		if monitorType == "agent" {
-			agentMetrics, err := s.GetLatestAgentMetrics(ctx, monitorID, tenantID)
-			if err == nil {
-				monitor.AgentMetrics = agentMetrics
-			}
-		}
-
-		// For push monitors, fetch the latest metrics (auto-detected)
-		if monitorType == "push" {
-			pushMetrics, err := s.GetLatestPushMetrics(ctx, monitorID, tenantID)
-			if err == nil {
-				monitor.PushMetrics = pushMetrics
-			}
-		}
+		presenter.Populate(ctx, s, &monitor, monitorID, tenantID)
 
 		monitors = append(monitors, monitor)
 	}
@@ -696,6 +465,158 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 	}
 
 	return monitors, nil
+}
+
+func (s *Service) monitorPresenter(monitorType string) monitorPresenter {
+	presenter, ok := s.presenters[monitorType]
+	if ok {
+		return presenter
+	}
+	return regularMonitorPresenter{}
+}
+
+func (s *Service) populateRegularMonitorStatus(ctx context.Context, monitor *MonitorStatus, monitorID, tenantID uuid.UUID) {
+	currentStatus, err := s.GetMonitorCurrentStatus(ctx, monitorID, tenantID)
+	if err != nil {
+		monitor.Status = "unknown"
+	} else {
+		monitor.Status = currentStatus.Status
+		monitor.LastCheckTime = currentStatus.LastCheckTime
+		monitor.LastHTTPStatus = currentStatus.LastHTTPStatus
+		monitor.LastLatency = currentStatus.LastLatency
+		monitor.TLSDaysUntilExpiry = currentStatus.TLSDaysUntilExpiry
+		monitor.TLSNotAfter = currentStatus.TLSNotAfter
+	}
+
+	uptime24h, err := s.CalculateUptime24h(ctx, monitorID, tenantID)
+	monitor.Uptime24h = uptime24h
+	monitor.Uptime24hFormatted = formatUptime(uptime24h, err)
+
+	uptime1h, err := s.CalculateUptime1h(ctx, monitorID, tenantID)
+	monitor.Uptime1h = uptime1h
+	monitor.Uptime1hFormatted = formatUptime(uptime1h, err)
+
+	avgLatency1h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "1 hour")
+	monitor.AvgLatency1h = avgLatency1h
+
+	avgLatency24h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "24 hours")
+	monitor.AvgLatency24h = avgLatency24h
+
+	hourlyUptime, err := s.GetMonitorHourlyUptime(ctx, monitorID, tenantID)
+	if err == nil {
+		monitor.HourlyUptime = hourlyUptime
+		monitor.UptimeHistory24h = hourlyUptime
+	}
+
+	uptimeHistory1h, err := s.GetMonitor5MinuteUptime(ctx, monitorID, tenantID)
+	if err == nil {
+		monitor.UptimeHistory1h = uptimeHistory1h
+	}
+
+	latencyHistory1h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "1 hour", 100)
+	if err == nil {
+		monitor.LatencyHistory1h = latencyHistory1h
+	}
+
+	latencyHistory24h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "24 hours", 100)
+	if err == nil {
+		monitor.LatencyHistory = latencyHistory24h
+	}
+
+	downtimePeriods1h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "1 hour")
+	if err == nil {
+		monitor.DowntimePeriods1h = downtimePeriods1h
+	}
+
+	downtimePeriods24h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "24 hours")
+	if err == nil {
+		monitor.DowntimePeriods24h = downtimePeriods24h
+	}
+
+	history, err := s.GetMonitorHistory(ctx, monitorID, tenantID, 50, nil)
+	if err == nil {
+		monitor.History = history
+	}
+
+	s.applyMonitorLongRangeAnalytics(ctx, monitor, tenantID, []uuid.UUID{monitorID})
+}
+
+func (s *Service) populateGroupMonitorStatus(ctx context.Context, monitor *MonitorStatus, monitorID, tenantID uuid.UUID) {
+	memberIDs, err := s.getGroupMemberIDs(ctx, monitorID, tenantID)
+	if err != nil || len(memberIDs) == 0 {
+		monitor.Status = "unknown"
+		monitor.Uptime24hFormatted = "N/A"
+		monitor.Uptime1hFormatted = "N/A"
+		return
+	}
+
+	groupStatus, err := s.GetGroupAggregatedStatus(ctx, memberIDs, tenantID)
+	if err != nil {
+		monitor.Status = "unknown"
+	} else {
+		monitor.Status = groupStatus.Status
+		monitor.LastCheckTime = groupStatus.LastCheckTime
+		monitor.LastLatency = groupStatus.LastLatency
+	}
+
+	uptime24h, err := s.CalculateGroupUptime24h(ctx, memberIDs, tenantID)
+	monitor.Uptime24h = uptime24h
+	monitor.Uptime24hFormatted = formatUptime(uptime24h, err)
+
+	uptime1h, err := s.CalculateGroupUptime1h(ctx, memberIDs, tenantID)
+	monitor.Uptime1h = uptime1h
+	monitor.Uptime1hFormatted = formatUptime(uptime1h, err)
+
+	avgLatency1h, _ := s.CalculateGroupAvgLatency(ctx, memberIDs, tenantID, "1 hour")
+	monitor.AvgLatency1h = avgLatency1h
+
+	avgLatency24h, _ := s.CalculateGroupAvgLatency(ctx, memberIDs, tenantID, "24 hours")
+	monitor.AvgLatency24h = avgLatency24h
+
+	hourlyUptime, err := s.GetGroupHourlyUptime(ctx, memberIDs, tenantID)
+	if err == nil {
+		monitor.HourlyUptime = hourlyUptime
+		monitor.UptimeHistory24h = hourlyUptime
+	}
+
+	uptimeHistory1h, err := s.GetGroup5MinuteUptime(ctx, memberIDs, tenantID)
+	if err == nil {
+		monitor.UptimeHistory1h = uptimeHistory1h
+	}
+
+	latencyHistory1h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "1 hour", 100)
+	if err == nil {
+		monitor.LatencyHistory1h = latencyHistory1h
+	}
+
+	latencyHistory24h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "24 hours", 100)
+	if err == nil {
+		monitor.LatencyHistory = latencyHistory24h
+	}
+
+	downtimePeriods1h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "1 hour")
+	if err == nil {
+		monitor.DowntimePeriods1h = downtimePeriods1h
+	}
+
+	downtimePeriods24h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "24 hours")
+	if err == nil {
+		monitor.DowntimePeriods24h = downtimePeriods24h
+	}
+
+	history, err := s.GetGroupHistory(ctx, memberIDs, tenantID, 50)
+	if err == nil {
+		monitor.History = history
+	}
+
+	s.applyMonitorLongRangeAnalytics(ctx, monitor, tenantID, memberIDs)
+}
+
+func formatUptime(uptime *float64, err error) string {
+	if err != nil || uptime == nil {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.2f%%", *uptime)
 }
 
 func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *MonitorStatus, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
@@ -765,15 +686,11 @@ func (s *Service) resolveStatusPageOperationalMonitorIDs(ctx context.Context, st
 		if err := rows.Scan(&monitorID, &monitorType); err != nil {
 			return nil, fmt.Errorf("failed to scan status page monitor id: %w", err)
 		}
-		if monitorType == "group" {
-			memberIDs, err := s.getGroupMemberIDs(ctx, monitorID, tenantID)
-			if err != nil {
-				continue
-			}
-			resolved = append(resolved, memberIDs...)
+		operationalIDs, err := s.monitorPresenter(monitorType).ResolveOperationalIDs(ctx, s, monitorID, tenantID)
+		if err != nil {
 			continue
 		}
-		resolved = append(resolved, monitorID)
+		resolved = append(resolved, operationalIDs...)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating status page monitor ids: %w", err)

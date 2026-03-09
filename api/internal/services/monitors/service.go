@@ -11,28 +11,17 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
-	"github.com/yassinebenameur/probara/shared/db"
 )
 
 // Service handles monitor business logic
 type Service struct {
 	repo Repository
-	db   db.DB
 }
 
 // NewService creates a new monitor service
-func NewService(database db.DB) *Service {
+func NewService(database Repository) *Service {
 	return &Service{
-		repo: NewPostgresRepository(database),
-		db:   database,
-	}
-}
-
-// NewServiceWithRepository creates a new monitor service with a custom repository
-func NewServiceWithRepository(repo Repository, database db.DB) *Service {
-	return &Service{
-		repo: repo,
-		db:   database,
+		repo: database,
 	}
 }
 
@@ -384,124 +373,6 @@ func derefUUID(id *uuid.UUID) uuid.UUID {
 // DeleteMonitor deletes a monitor
 func (s *Service) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error {
 	return s.repo.Delete(ctx, tenantID, monitorID)
-}
-
-// Legacy methods that delegate to appropriate services - kept for backwards compatibility
-// These will be removed once handlers are updated to use the new services
-
-// AddMonitorsToGroup adds monitors to a group (legacy - use groups.Service instead)
-func (s *Service) AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error {
-	// First verify the group exists and is of type 'group'
-	group, err := s.GetMonitor(ctx, tenantID, groupID)
-	if err != nil {
-		return err
-	}
-	if group.Type != models.MonitorTypeGroup {
-		return fmt.Errorf("monitor is not a group")
-	}
-
-	// Verify all monitors exist and belong to the tenant
-	for _, monitorID := range monitorIDs {
-		monitor, err := s.GetMonitor(ctx, tenantID, monitorID)
-		if err != nil {
-			return fmt.Errorf("monitor %s: %w", monitorID, err)
-		}
-		// Prevent adding groups to groups (no nesting)
-		if monitor.Type == models.MonitorTypeGroup {
-			return fmt.Errorf("cannot add group monitor %s to another group", monitorID)
-		}
-	}
-
-	// Insert into monitor_groups (ignore duplicates)
-	for _, monitorID := range monitorIDs {
-		query := `
-			INSERT INTO monitor_groups (monitor_id, group_id, created_at)
-			VALUES ($1, $2, NOW())
-			ON CONFLICT (monitor_id, group_id) DO NOTHING
-		`
-		_, err := s.db.ExecContext(ctx, query, monitorID, groupID)
-		if err != nil {
-			return fmt.Errorf("failed to add monitor to group: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// RemoveMonitorsFromGroup removes monitors from a group (legacy - use groups.Service instead)
-func (s *Service) RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error {
-	// First verify the group exists and belongs to the tenant
-	group, err := s.GetMonitor(ctx, tenantID, groupID)
-	if err != nil {
-		return err
-	}
-	if group.Type != models.MonitorTypeGroup {
-		return fmt.Errorf("monitor is not a group")
-	}
-
-	// Remove from monitor_groups
-	for _, monitorID := range monitorIDs {
-		query := `DELETE FROM monitor_groups WHERE monitor_id = $1 AND group_id = $2`
-		_, err := s.db.ExecContext(ctx, query, monitorID, groupID)
-		if err != nil {
-			return fmt.Errorf("failed to remove monitor from group: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// GetGroupMembers retrieves all monitors in a group (legacy - use groups.Service instead)
-func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error) {
-	// First verify the group exists and belongs to the tenant
-	group, err := s.GetMonitor(ctx, tenantID, groupID)
-	if err != nil {
-		return nil, err
-	}
-	if group.Type != models.MonitorTypeGroup {
-		return nil, fmt.Errorf("monitor is not a group")
-	}
-
-	query := `
-		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
-			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
-			m.next_run_at, m.created_at, m.updated_at
-		FROM monitors m
-		INNER JOIN monitor_groups mg ON m.id = mg.monitor_id
-		WHERE mg.group_id = $1 AND m.tenant_id = $2
-		ORDER BY m.name
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, groupID, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get group members: %w", err)
-	}
-	defer rows.Close()
-
-	var monitors []models.Monitor
-	for rows.Next() {
-		var monitor models.Monitor
-		var tags []string
-
-		err := rows.Scan(
-			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
-			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
-			&monitor.AlertPolicyID, &monitor.Enabled,
-			pq.Array(&tags), &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan monitor: %w", err)
-		}
-
-		monitor.Tags = tags
-		monitors = append(monitors, monitor)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating monitors: %w", err)
-	}
-
-	return monitors, nil
 }
 
 // generatePushToken generates a unique token for push monitors

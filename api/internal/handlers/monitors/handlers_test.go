@@ -19,6 +19,11 @@ import (
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
 
+type groupCall struct {
+	groupID    uuid.UUID
+	monitorIDs []uuid.UUID
+}
+
 // MockMonitorService implements the MonitorService interface for testing
 type MockMonitorService struct {
 	monitors map[uuid.UUID]*models.Monitor
@@ -96,31 +101,27 @@ func (e *mockNotFoundError) Error() string {
 	return "monitor not found"
 }
 
-// MockGroupService implements the GroupService interface for testing
-type MockGroupService struct{}
+// MockGroupService implements the handler group membership dependency for testing.
+type MockGroupService struct {
+	currentMembers []models.Monitor
+	addCalls       []groupCall
+	removeCalls    []groupCall
+}
 
 func (m *MockGroupService) AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error {
+	ids := append([]uuid.UUID(nil), monitorIDs...)
+	m.addCalls = append(m.addCalls, groupCall{groupID: groupID, monitorIDs: ids})
 	return nil
 }
 
 func (m *MockGroupService) RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error {
+	ids := append([]uuid.UUID(nil), monitorIDs...)
+	m.removeCalls = append(m.removeCalls, groupCall{groupID: groupID, monitorIDs: ids})
 	return nil
 }
 
 func (m *MockGroupService) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error) {
-	return []models.Monitor{}, nil
-}
-
-func (m *MockGroupService) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error) {
-	return []models.Monitor{}, nil
-}
-
-func (m *MockGroupService) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid.UUID) ([]models.Monitor, error) {
-	return []models.Monitor{}, nil
-}
-
-func (m *MockGroupService) GetGroupStatus(ctx context.Context, tenantID, groupID uuid.UUID) (string, error) {
-	return "success", nil
+	return append([]models.Monitor(nil), m.currentMembers...), nil
 }
 
 // MockResultsService implements the ResultsService interface for testing
@@ -201,6 +202,44 @@ func TestHandlers_CreateMonitor(t *testing.T) {
 
 	if monitor.Name != "Test Monitor" {
 		t.Errorf("Expected name 'Test Monitor', got '%s'", monitor.Name)
+	}
+}
+
+func TestHandlers_CreateMonitor_GroupSyncsMembersViaGroupService(t *testing.T) {
+	log := logger.New("test", "debug")
+	monitorSvc := NewMockMonitorService()
+	groupSvc := &MockGroupService{}
+	resultSvc := &MockResultsService{}
+	handlers := NewHandlers(monitorSvc, groupSvc, resultSvc, log, t.TempDir())
+
+	tenantID := uuid.New()
+	memberA := uuid.New()
+	memberB := uuid.New()
+
+	reqBody := `{
+		"name": "Grouped Monitor",
+		"type": "group",
+		"config": {"monitor_ids": ["` + memberA.String() + `", "` + memberB.String() + `"]},
+		"interval_seconds": 60,
+		"timeout_seconds": 30
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/monitors", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+
+	w := httptest.NewRecorder()
+	handlers.CreateMonitor(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Expected status %d, got %d: %s", http.StatusCreated, w.Code, w.Body.String())
+	}
+
+	if len(groupSvc.addCalls) != 1 {
+		t.Fatalf("expected 1 add call, got %d", len(groupSvc.addCalls))
+	}
+	if len(groupSvc.addCalls[0].monitorIDs) != 2 {
+		t.Fatalf("expected 2 monitor IDs, got %d", len(groupSvc.addCalls[0].monitorIDs))
 	}
 }
 
@@ -355,6 +394,65 @@ func TestHandlers_DeleteMonitor(t *testing.T) {
 	// Verify monitor is deleted
 	if _, ok := monitorSvc.monitors[monitorID]; ok {
 		t.Error("Expected monitor to be deleted")
+	}
+}
+
+func TestHandlers_UpdateMonitor_GroupSyncsMembershipDiff(t *testing.T) {
+	log := logger.New("test", "debug")
+	monitorSvc := NewMockMonitorService()
+	groupID := uuid.New()
+	memberA := uuid.New()
+	memberB := uuid.New()
+	memberC := uuid.New()
+	tenantID := uuid.New()
+
+	monitorSvc.monitors[groupID] = &models.Monitor{
+		ID:              groupID,
+		TenantID:        tenantID,
+		Name:            "Group Monitor",
+		Type:            models.MonitorTypeGroup,
+		Config:          json.RawMessage(`{"monitor_ids":[]}`),
+		IntervalSeconds: 60,
+		TimeoutSeconds:  30,
+	}
+
+	groupSvc := &MockGroupService{
+		currentMembers: []models.Monitor{
+			{ID: memberA},
+			{ID: memberB},
+		},
+	}
+	resultSvc := &MockResultsService{}
+	handlers := NewHandlers(monitorSvc, groupSvc, resultSvc, log, t.TempDir())
+
+	r := chi.NewRouter()
+	r.Patch("/{id}", handlers.UpdateMonitor)
+
+	reqBody := `{
+		"config": {"monitor_ids": ["` + memberB.String() + `", "` + memberC.String() + `"]}
+	}`
+	req := httptest.NewRequest(http.MethodPatch, "/"+groupID.String(), bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	if len(groupSvc.addCalls) != 1 {
+		t.Fatalf("expected 1 add call, got %d", len(groupSvc.addCalls))
+	}
+	if len(groupSvc.removeCalls) != 1 {
+		t.Fatalf("expected 1 remove call, got %d", len(groupSvc.removeCalls))
+	}
+	if got := groupSvc.addCalls[0].monitorIDs; len(got) != 1 || got[0] != memberC {
+		t.Fatalf("expected add call for %s, got %+v", memberC, got)
+	}
+	if got := groupSvc.removeCalls[0].monitorIDs; len(got) != 1 || got[0] != memberA {
+		t.Fatalf("expected remove call for %s, got %+v", memberA, got)
 	}
 }
 

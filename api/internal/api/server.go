@@ -38,6 +38,7 @@ import (
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -138,16 +139,17 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Alert service and handlers (shared across alerts + dashboard routes)
 			alertSvc := alertservice.NewService(dbClient)
+			analyticsRepo := sharedanalytics.NewRepository(dbClient)
 			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
 
 			// Dashboard service and handlers
-			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc)
+			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc, analyticsRepo)
 			dashboardHandlers := dashboardhandlers.NewHandlers(dashboardSvc, log)
 
 			// Monitor services
-			monitorService := monitorservice.NewService(dbClient)
+			monitorService := monitorservice.NewService(monitorservice.NewPostgresRepository(dbClient))
 			groupSvc := groupservice.NewService(dbClient)
-			resultSvc := resultservice.NewService(dbClient, groupSvc)
+			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
 

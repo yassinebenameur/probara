@@ -28,15 +28,15 @@ const (
 type Service struct {
 	db           db.DB
 	alertService alertservice.AlertService
-	analytics    *sharedanalytics.Repository
+	analytics    sharedanalytics.Reader
 }
 
 // NewService creates a new dashboard service.
-func NewService(database db.DB, alerts alertservice.AlertService) *Service {
+func NewService(database db.DB, alerts alertservice.AlertService, analytics sharedanalytics.Reader) *Service {
 	return &Service{
 		db:           database,
 		alertService: alerts,
-		analytics:    sharedanalytics.NewRepository(database),
+		analytics:    analytics,
 	}
 }
 

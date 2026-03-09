@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -27,7 +28,8 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	mux := http.NewServeMux()
 
 	// Initialize service and handlers
-	service := NewService(dbClient)
+	analyticsRepo := sharedanalytics.NewRepository(dbClient)
+	service := NewService(dbClient, analyticsRepo)
 	hub := NewHub()
 	handlers := NewHandlers(service, cfg, log, hub)
 

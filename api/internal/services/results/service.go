@@ -11,7 +11,6 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
-	"github.com/yassinebenameur/probara/api/internal/services/groups"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
@@ -20,8 +19,14 @@ import (
 // Service handles results business logic
 type Service struct {
 	db           db.DB
-	groupService groups.GroupService
-	analytics    *sharedanalytics.Repository
+	groupService GroupReader
+	analytics    sharedanalytics.Reader
+}
+
+// GroupReader provides the group lookups required by the results service.
+type GroupReader interface {
+	GetGroupLeafMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error)
+	GetGroupStatus(ctx context.Context, tenantID, groupID uuid.UUID) (string, error)
 }
 
 const (
@@ -34,11 +39,11 @@ const (
 )
 
 // NewService creates a new results service
-func NewService(database db.DB, groupSvc groups.GroupService) *Service {
+func NewService(database db.DB, groupSvc GroupReader, analytics sharedanalytics.Reader) *Service {
 	return &Service{
 		db:           database,
 		groupService: groupSvc,
-		analytics:    sharedanalytics.NewRepository(database),
+		analytics:    analytics,
 	}
 }
 

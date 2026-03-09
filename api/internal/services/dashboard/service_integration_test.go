@@ -14,6 +14,7 @@ import (
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
@@ -25,9 +26,10 @@ func TestService_GetOverview_LongRangeParityMatchesMonitorAnalytics(t *testing.T
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, nil)
+	analyticsRepo := sharedanalytics.NewRepository(dbClient)
+	dashboardSvc := NewService(dbClient, nil, analyticsRepo)
 	groupSvc := groupservice.NewService(dbClient)
-	resultsSvc := resultservice.NewService(dbClient, groupSvc)
+	resultsSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-rollup")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
@@ -96,7 +98,7 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, nil)
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient))
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-action")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
@@ -192,7 +194,7 @@ func TestService_GetOverview_ActionSummaryEmptyTenant(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, nil)
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient))
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-empty")
 
 	overview, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
@@ -223,7 +225,7 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient))
+	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient), sharedanalytics.NewRepository(dbClient))
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-tags")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
