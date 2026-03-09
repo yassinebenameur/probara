@@ -22,6 +22,7 @@ import (
 )
 
 const checkJobStreamMaxAge = 24 * time.Hour
+const consumerRestartBackoff = 2 * time.Second
 
 // Worker represents the worker service
 type Worker struct {
@@ -181,9 +182,21 @@ func (w *Worker) processMessages(ctx context.Context, consumer jetstream.Consume
 		return w.processJob(ctx, msg)
 	}
 
-	err := w.queue.Consume(ctx, consumer, handler)
-	if err != nil && err != context.Canceled {
+	for {
+		err := w.queue.Consume(ctx, consumer, handler)
+		if err == nil || err == context.Canceled {
+			break
+		}
+
 		w.logger.WithError(err).WithField("worker_id", workerID).Error("Worker goroutine error")
+
+		timer := time.NewTimer(consumerRestartBackoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 
 	w.logger.WithField("worker_id", workerID).Debug("Worker goroutine stopped")
