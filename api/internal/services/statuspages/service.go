@@ -24,6 +24,8 @@ type statusPageSettingsStored struct {
 	ShowGlobalUptime  bool    `json:"show_global_uptime"`
 	ShowFooter        bool    `json:"show_footer"`
 	FooterText        *string `json:"footer_text,omitempty"`
+	DefaultTheme      string  `json:"default_theme"`
+	AllowThemeToggle  bool    `json:"allow_theme_toggle"`
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -36,6 +38,8 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		ShowAgentMetrics:  true,
 		ShowGlobalUptime:  true,
 		ShowFooter:        true,
+		DefaultTheme:      "dark",
+		AllowThemeToggle:  true,
 	}
 }
 
@@ -75,6 +79,17 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 			s.FooterText = &v
 		}
 	}
+	if patch.DefaultTheme != nil {
+		switch strings.ToLower(strings.TrimSpace(*patch.DefaultTheme)) {
+		case "light":
+			s.DefaultTheme = "light"
+		default:
+			s.DefaultTheme = "dark"
+		}
+	}
+	if patch.AllowThemeToggle != nil {
+		s.AllowThemeToggle = *patch.AllowThemeToggle
+	}
 	return s
 }
 
@@ -99,6 +114,8 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	showAgentMetrics := s.ShowAgentMetrics
 	showGlobalUptime := s.ShowGlobalUptime
 	showFooter := s.ShowFooter
+	defaultTheme := s.DefaultTheme
+	allowThemeToggle := s.AllowThemeToggle
 	return &models.StatusPageSettings{
 		ShowMonitorTags:   &showMonitorTags,
 		ShowMonitorURL:    &showMonitorURL,
@@ -109,6 +126,8 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		ShowGlobalUptime:  &showGlobalUptime,
 		ShowFooter:        &showFooter,
 		FooterText:        s.FooterText,
+		DefaultTheme:      &defaultTheme,
+		AllowThemeToggle:  &allowThemeToggle,
 	}
 }
 

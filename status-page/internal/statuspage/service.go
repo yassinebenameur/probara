@@ -31,6 +31,8 @@ type StatusPageData struct {
 	ShowGlobalUptime  bool            `json:"-"` // For template use only
 	ShowFooter        bool            `json:"-"` // For template use only
 	CustomFooterText  *string         `json:"-"` // For template use only
+	DefaultTheme      string          `json:"-"` // For template use only
+	AllowThemeToggle  bool            `json:"-"` // For template use only
 	ShowMonitorTags   bool            `json:"-"` // For template use only
 	ShowMonitorURL    bool            `json:"-"` // For template use only
 	ShowMonitorUptime bool            `json:"-"` // For template use only
@@ -189,6 +191,8 @@ type statusPageSettingsPatch struct {
 	ShowGlobalUptime  *bool   `json:"show_global_uptime,omitempty"`
 	ShowFooter        *bool   `json:"show_footer,omitempty"`
 	FooterText        *string `json:"footer_text,omitempty"`
+	DefaultTheme      *string `json:"default_theme,omitempty"`
+	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -201,6 +205,8 @@ type statusPageSettingsStored struct {
 	ShowGlobalUptime  bool
 	ShowFooter        bool
 	FooterText        *string
+	DefaultTheme      string
+	AllowThemeToggle  bool
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -213,6 +219,8 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		ShowAgentMetrics:  true,
 		ShowGlobalUptime:  true,
 		ShowFooter:        true,
+		DefaultTheme:      "dark",
+		AllowThemeToggle:  true,
 	}
 }
 
@@ -256,6 +264,17 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 		} else {
 			stored.FooterText = &v
 		}
+	}
+	if patch.DefaultTheme != nil {
+		switch strings.ToLower(strings.TrimSpace(*patch.DefaultTheme)) {
+		case "light":
+			stored.DefaultTheme = "light"
+		default:
+			stored.DefaultTheme = "dark"
+		}
+	}
+	if patch.AllowThemeToggle != nil {
+		stored.AllowThemeToggle = *patch.AllowThemeToggle
 	}
 	return stored
 }
@@ -324,6 +343,8 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.ShowUptimeHistory = settings.ShowGlobalUptime // Backward-compatible flag used by some template parts
 	page.ShowFooter = settings.ShowFooter
 	page.CustomFooterText = settings.FooterText
+	page.DefaultTheme = settings.DefaultTheme
+	page.AllowThemeToggle = settings.AllowThemeToggle
 	page.ShowMonitorTags = settings.ShowMonitorTags
 	page.ShowMonitorURL = settings.ShowMonitorURL
 	page.ShowMonitorUptime = settings.ShowMonitorUptime

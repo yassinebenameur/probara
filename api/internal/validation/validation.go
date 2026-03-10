@@ -252,6 +252,13 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 			return fmt.Errorf("footer_text must be 250 characters or less")
 		}
 	}
+	if settings.DefaultTheme != nil {
+		switch strings.ToLower(strings.TrimSpace(*settings.DefaultTheme)) {
+		case "dark", "light":
+		default:
+			return fmt.Errorf("default_theme must be either dark or light")
+		}
+	}
 	return nil
 }
 

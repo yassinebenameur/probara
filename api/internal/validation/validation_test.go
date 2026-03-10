@@ -234,7 +234,11 @@ func TestValidateStatusPage(t *testing.T) {
 				LogoURL:        ptr("https://example.com/logo.png"),
 				PrimaryColor:   ptr("#1e90ff"),
 				SecondaryColor: ptr("#ffffff"),
-				MonitorIDs:     []string{"id1", "id2"},
+				Settings: &models.StatusPageSettings{
+					DefaultTheme:     ptr("dark"),
+					AllowThemeToggle: ptr(true),
+				},
+				MonitorIDs: []string{"id1", "id2"},
 			},
 			wantErr: false,
 		},
@@ -374,6 +378,18 @@ func TestValidateStatusPage(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "invalid default theme",
+			req: &models.CreateStatusPageRequest{
+				Slug:  "my-status",
+				Title: "My Status Page",
+				Settings: &models.StatusPageSettings{
+					DefaultTheme: ptr("blue"),
+				},
+			},
+			wantErr:     true,
+			errContains: "default_theme must be either dark or light",
+		},
 	}
 
 	for _, tt := range tests {
@@ -442,6 +458,25 @@ func TestValidateStatusPageUpdate(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "secondary_color must be a valid hex color",
+		},
+		{
+			name: "valid theme update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					DefaultTheme: ptr("light"),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid theme update",
+			req: &models.UpdateStatusPageRequest{
+				Settings: &models.StatusPageSettings{
+					DefaultTheme: ptr("sepia"),
+				},
+			},
+			wantErr:     true,
+			errContains: "default_theme must be either dark or light",
 		},
 	}
 

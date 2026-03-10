@@ -3,7 +3,6 @@ package statuspage
 import (
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -287,150 +286,16 @@ func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
 
 // renderStatusPageHTML renders the status page HTML template
 func (h *Handlers) renderStatusPageHTML(w http.ResponseWriter, data *StatusPageData) {
-	formatLatencyBound := func(points []LatencyPoint, wantMax bool) string {
-		if len(points) == 0 {
-			return "—"
-		}
-
-		bound := points[0].LatencyMS
-		for i := 1; i < len(points); i++ {
-			latency := points[i].LatencyMS
-			if wantMax {
-				if latency > bound {
-					bound = latency
-				}
-				continue
-			}
-			if latency < bound {
-				bound = latency
-			}
-		}
-
-		return fmt.Sprintf("%dms", bound)
-	}
-
-	// Create template with custom functions
-	funcMap := template.FuncMap{
-		"formatUptime": func(uptime *float64) string {
-			if uptime == nil {
-				return "N/A"
-			}
-			val := *uptime
-			return fmt.Sprintf("%.2f%%", val)
-		},
-		"formatLatency": func(latency *float64) string {
-			if latency == nil {
-				return "—"
-			}
-			val := *latency
-			return fmt.Sprintf("%.0fms", val)
-		},
-		"formatLatencyInt": func(latency *int) string {
-			if latency == nil {
-				return "—"
-			}
-			return fmt.Sprintf("%dms", *latency)
-		},
-		"formatLatencyMin": func(points []LatencyPoint) string {
-			return formatLatencyBound(points, false)
-		},
-		"formatLatencyMax": func(points []LatencyPoint) string {
-			return formatLatencyBound(points, true)
-		},
-		"formatDate": func(val string) string {
-			if strings.TrimSpace(val) == "" {
-				return "â€”"
-			}
-			if parsed, err := time.Parse(time.RFC3339, val); err == nil {
-				return parsed.Format("2006-01-02")
-			}
-			return val
-		},
-		"formatBytes": func(bytes uint64) string {
-			const (
-				KB = 1024
-				MB = KB * 1024
-				GB = MB * 1024
-				TB = GB * 1024
-			)
-			switch {
-			case bytes >= TB:
-				return fmt.Sprintf("%.1f TB", float64(bytes)/float64(TB))
-			case bytes >= GB:
-				return fmt.Sprintf("%.1f GB", float64(bytes)/float64(GB))
-			case bytes >= MB:
-				return fmt.Sprintf("%.1f MB", float64(bytes)/float64(MB))
-			case bytes >= KB:
-				return fmt.Sprintf("%.1f KB", float64(bytes)/float64(KB))
-			default:
-				return fmt.Sprintf("%d B", bytes)
-			}
-		},
-		"formatPercent": func(val float64) string {
-			return fmt.Sprintf("%.1f%%", val)
-		},
-		"formatLoad": func(val float64) string {
-			return fmt.Sprintf("%.2f", val)
-		},
-		"formatMetricName": func(name string) string {
-			// Convert snake_case to Title Case
-			// e.g., "cpu_percent" -> "CPU Percent", "latency_ms" -> "Latency (ms)"
-			result := ""
-			words := strings.Split(name, "_")
-			for i, word := range words {
-				if word == "ms" {
-					result += "(ms)"
-				} else if word == "percent" || word == "pct" {
-					result += "%"
-				} else if word == "cpu" || word == "io" || word == "id" {
-					result += strings.ToUpper(word)
-				} else {
-					result += strings.Title(word)
-				}
-				if i < len(words)-1 && words[i+1] != "ms" && words[i+1] != "percent" && words[i+1] != "pct" {
-					result += " "
-				}
-			}
-			return result
-		},
-		"formatMetricValue": func(val interface{}) string {
-			switch v := val.(type) {
-			case float64:
-				// Check if it's a whole number
-				if v == float64(int(v)) {
-					return fmt.Sprintf("%.0f", v)
-				}
-				return fmt.Sprintf("%.2f", v)
-			case int:
-				return fmt.Sprintf("%d", v)
-			case int64:
-				return fmt.Sprintf("%d", v)
-			case string:
-				return v
-			case bool:
-				if v {
-					return "Yes"
-				}
-				return "No"
-			default:
-				return fmt.Sprintf("%v", val)
-			}
-		},
-	}
-
-	// Load template
-	tmpl, err := template.New("status_page.html").Funcs(funcMap).Parse(statusPageTemplate)
+	html, err := renderPublicStatusPage(data, h.config != nil && strings.TrimSpace(h.config.APIBaseURL) != "")
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to parse template")
+		h.logger.WithError(err).Error("Failed to render status page")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.Execute(w, data); err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error": err.Error(),
-		}).Error("Failed to execute template")
+	if _, err := w.Write([]byte(html)); err != nil {
+		h.logger.WithError(err).Error("Failed to write status page response")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

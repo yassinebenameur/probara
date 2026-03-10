@@ -18,6 +18,8 @@ type StatusPageSettings struct {
 	ShowGlobalUptime  *bool   `json:"show_global_uptime,omitempty"`
 	ShowFooter        *bool   `json:"show_footer,omitempty"`
 	FooterText        *string `json:"footer_text,omitempty"`
+	DefaultTheme      *string `json:"default_theme,omitempty"`
+	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
 }
 
 // StatusPage represents a status page
