@@ -434,10 +434,10 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
     <div className="py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-start gap-2">
             <Link
               href={`/monitors/${monitor.monitor_id}`}
-              className="truncate text-sm font-medium text-white hover:text-cyan-400 transition-colors"
+              className="min-w-0 whitespace-normal break-all text-sm font-medium text-white transition-colors hover:text-cyan-400"
             >
               {monitor.monitor_name}
             </Link>
@@ -484,9 +484,9 @@ function FailureItem({ event }: { event: DashboardFailureEvent }) {
     <div className="flex items-start gap-3 py-2.5">
       <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor} ${resolved ? 'opacity-40' : ''}`} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <p className="truncate text-sm text-white">{event.monitor_name}</p>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-1 items-start gap-1.5">
+            <p className="min-w-0 whitespace-normal break-all text-sm text-white">{event.monitor_name}</p>
             <InfoPopover entries={infoEntries} title="Check Details" />
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -528,8 +528,8 @@ function AlertItem({ alert }: { alert: Alert }) {
     <div className="flex items-start gap-3 py-2.5">
       <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${c.dot} ${alert.status === 'resolved' ? 'opacity-40' : ''}`} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <p className="truncate text-sm text-white">{alert.monitor_name || 'Unknown monitor'}</p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="min-w-0 flex-1 whitespace-normal break-all text-sm text-white">{alert.monitor_name || 'Unknown monitor'}</p>
           <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${c.badge}`}>
             {alert.status}
           </span>
@@ -538,7 +538,7 @@ function AlertItem({ alert }: { alert: Alert }) {
           {formatRelativeTime(alert.triggered_at)} · {alert.failure_count} failure{alert.failure_count !== 1 ? 's' : ''}
         </p>
         {alert.last_error && (
-          <p className="mt-0.5 truncate text-xs text-slate-600" title={alert.last_error}>
+          <p className="mt-0.5 whitespace-normal break-all text-xs text-slate-600" title={alert.last_error}>
             {alert.last_error}
           </p>
         )}
@@ -610,12 +610,12 @@ function SectionCard({
   className?: string;
 }) {
   return (
-    <div className={`rounded-xl border border-white/[0.06] bg-slate-900/50 ${className ?? ''}`}>
-      <div className="flex items-center justify-between border-b border-white/[0.04] px-5 py-3.5">
-        <h3 className="text-sm font-medium text-white">{title}</h3>
-        {action && <div className="text-xs text-slate-500">{action}</div>}
+    <div className={`min-w-0 rounded-xl border border-white/[0.06] bg-slate-900/50 ${className ?? ''}`}>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-white/[0.04] px-5 py-3.5">
+        <h3 className="min-w-0 text-sm font-medium text-white">{title}</h3>
+        {action && <div className="min-w-0 text-xs text-slate-500">{action}</div>}
       </div>
-      <div className="px-5">{children}</div>
+      <div className="min-w-0 px-5">{children}</div>
     </div>
   );
 }
@@ -945,6 +945,7 @@ export default function DashboardPage() {
       <div className="grid items-start gap-4 lg:grid-cols-2">
         {/* Problem Monitors */}
         <SectionCard
+          className="min-w-0"
           title="Problem Monitors"
           action={
             <Link href="/monitors" className="text-cyan-400 hover:text-cyan-300 transition-colors">
@@ -967,8 +968,9 @@ export default function DashboardPage() {
         </SectionCard>
 
         {/* Right Column: Failures + Alerts */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 gap-4">
           <SectionCard
+            className="min-w-0"
             title="Recent Failures"
             action={
               recentFailures.length > 0 ? (
@@ -991,6 +993,7 @@ export default function DashboardPage() {
           </SectionCard>
 
           <SectionCard
+            className="min-w-0"
             title="Recent Alerts"
             action={
               <Link href="/alerts" className="text-cyan-400 hover:text-cyan-300 transition-colors">
