@@ -1,3 +1,10 @@
+# [1.0.0-alpha.34](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.33...v1.0.0-alpha.34) (2026-03-10)
+
+
+### Bug Fixes
+
+* **dashboard:** wrap overflowing panel content ([cf55e6e](https://github.com/yassinebenameur/probara/commit/cf55e6e03345376916b525fbe9707f96212c642a))
+
 # [1.0.0-alpha.33](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.32...v1.0.0-alpha.33) (2026-03-10)
 
 
