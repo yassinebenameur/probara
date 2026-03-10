@@ -1,3 +1,10 @@
+# [1.0.0-alpha.33](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.32...v1.0.0-alpha.33) (2026-03-10)
+
+
+### Features
+
+* **status-page:** add theme settings and dedicated renderer ([1c1bd23](https://github.com/yassinebenameur/probara/commit/1c1bd23bf035c7823d2f0d4cb9d5d8fe530a93cc))
+
 # [1.0.0-alpha.32](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.31...v1.0.0-alpha.32) (2026-03-09)
 
 
