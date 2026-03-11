@@ -1,3 +1,10 @@
+# [1.0.0-alpha.35](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.34...v1.0.0-alpha.35) (2026-03-11)
+
+
+### Features
+
+* **local:** improve status pages and local workflows ([3f4e553](https://github.com/yassinebenameur/probara/commit/3f4e55345e99027716f6d3f6cae6628102290a17))
+
 # [1.0.0-alpha.34](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.33...v1.0.0-alpha.34) (2026-03-10)
 
 
