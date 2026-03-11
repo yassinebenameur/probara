@@ -22,6 +22,21 @@ type StatusPageSettings struct {
 	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
 }
 
+type StatusPageSectionMonitor struct {
+	MonitorID   string  `json:"monitor_id"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Position    int     `json:"position,omitempty"`
+}
+
+type StatusPageSection struct {
+	ID        string                     `json:"id,omitempty"`
+	Title     string                     `json:"title"`
+	Position  int                        `json:"position,omitempty"`
+	Monitors  []StatusPageSectionMonitor `json:"monitors,omitempty"`
+	CreatedAt *time.Time                 `json:"created_at,omitempty"`
+	UpdatedAt *time.Time                 `json:"updated_at,omitempty"`
+}
+
 // StatusPage represents a status page
 type StatusPage struct {
 	ID             uuid.UUID           `json:"id"`
@@ -33,6 +48,7 @@ type StatusPage struct {
 	PrimaryColor   *string             `json:"primary_color,omitempty"`
 	SecondaryColor *string             `json:"secondary_color,omitempty"`
 	MonitorIDs     []uuid.UUID         `json:"monitor_ids,omitempty"`
+	Sections       []StatusPageSection `json:"sections,omitempty"`
 	Settings       *StatusPageSettings `json:"settings,omitempty"`
 	CreatedAt      time.Time           `json:"created_at"`
 	UpdatedAt      time.Time           `json:"updated_at"`
@@ -48,20 +64,22 @@ type CreateStatusPageRequest struct {
 	SecondaryColor      *string             `json:"secondary_color,omitempty"`
 	MonitorIDs          []string            `json:"monitor_ids,omitempty"`
 	MonitorDisplayNames map[string]string   `json:"monitor_display_names,omitempty"`
+	Sections            []StatusPageSection `json:"sections,omitempty"`
 	Settings            *StatusPageSettings `json:"settings,omitempty"`
 }
 
 // UpdateStatusPageRequest represents a request to update a status page
 type UpdateStatusPageRequest struct {
-	Slug                *string             `json:"slug,omitempty"`
-	Title               *string             `json:"title,omitempty"`
-	Description         *string             `json:"description,omitempty"`
-	LogoURL             *string             `json:"logo_url,omitempty"`
-	PrimaryColor        *string             `json:"primary_color,omitempty"`
-	SecondaryColor      *string             `json:"secondary_color,omitempty"`
-	MonitorIDs          *[]string           `json:"monitor_ids,omitempty"`
-	MonitorDisplayNames *map[string]string  `json:"monitor_display_names,omitempty"`
-	Settings            *StatusPageSettings `json:"settings,omitempty"`
+	Slug                *string              `json:"slug,omitempty"`
+	Title               *string              `json:"title,omitempty"`
+	Description         *string              `json:"description,omitempty"`
+	LogoURL             *string              `json:"logo_url,omitempty"`
+	PrimaryColor        *string              `json:"primary_color,omitempty"`
+	SecondaryColor      *string              `json:"secondary_color,omitempty"`
+	MonitorIDs          *[]string            `json:"monitor_ids,omitempty"`
+	MonitorDisplayNames *map[string]string   `json:"monitor_display_names,omitempty"`
+	Sections            *[]StatusPageSection `json:"sections,omitempty"`
+	Settings            *StatusPageSettings  `json:"settings,omitempty"`
 }
 
 // StatusPageListResponse represents a paginated list of status pages

@@ -20,6 +20,22 @@ This single command will:
 tail -f /tmp/probara-ui.log
 ```
 
+### Start App Services Locally
+
+```bash
+make start-all-local
+```
+
+This command:
+- starts `postgres` and `nats` with Docker Compose
+- runs database bootstrap and migrations locally
+- starts `api`, `scheduler`, `worker`, `status-page`, and `alerter` with `go run`
+- starts the Next.js UI locally with `nvm use --lts`
+
+Local service logs are saved under `/tmp/probara-*.log`, and startup validation logs are written to `/tmp/probara-local-start.log`.
+
+If Go is missing or the installed version does not match the repo requirement from [`go.mod`](/mnt/c/Users/eVoo/WebstormProjects/probara/go.mod), startup fails immediately and logs the reason.
+
 ### Stop Everything
 
 ```bash
@@ -27,6 +43,12 @@ make stop-all
 ```
 
 This will stop both backend services and the UI.
+
+To stop the local-Go variant:
+
+```bash
+make stop-all-local
+```
 
 ## Service URLs
 
@@ -84,6 +106,7 @@ make db-restore    # Restore database
 ## Requirements
 
 - Docker & Docker Compose v2
+- Go `1.23.x`
 - Node.js (via nvm) - LTS version (v24.11.1 recommended)
 - Make
 - Bash
@@ -101,7 +124,8 @@ All backend services run in Docker containers with health checks and automatic r
 - The `start-all` command automatically uses nvm LTS for the UI
 - All backend services run in Docker containers
 - The UI runs locally using npm/next for hot-reload support
+- `start-all-local` keeps only infrastructure in Docker and runs app services with local Go
 - UI logs are saved to `/tmp/probara-ui.log`
+- Local Go service logs are saved to `/tmp/probara-api.log`, `/tmp/probara-scheduler.log`, `/tmp/probara-worker.log`, `/tmp/probara-status-page.log`, and `/tmp/probara-alerter.log`
 - Use `make help` to see all available commands
 - The startup script (`scripts/start-ui.sh`) handles nvm initialization automatically
-

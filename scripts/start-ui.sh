@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Start the Next.js UI with nvm
 
 set -euo pipefail
@@ -20,12 +20,10 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-# Stop any existing Probara Next dev servers before starting a new one.
-pkill -f "$WEB_DIR/node_modules/.bin/next dev" || true
+# Stop any existing Probara Next dev servers before starting a new one
+# without matching this shell's own command line.
+pkill -f "$WEB_DIR/node_modules/.bin/[n]ext dev" || true
 
 # Start Next.js dev server on the expected port.
 cd "$WEB_DIR"
 exec npm run dev -- --hostname 0.0.0.0 --port 3000
-
-
-

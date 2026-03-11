@@ -24,6 +24,9 @@ type MonitorService interface {
 
 	// DeleteMonitor deletes a monitor
 	DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error
+
+	// DeleteMonitorHistory clears check, alert, and analytics history while preserving the monitor.
+	DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error
 }
 
 // Ensure Service implements MonitorService

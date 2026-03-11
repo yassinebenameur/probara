@@ -260,6 +260,10 @@ export async function deleteMonitor(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/monitors/${id}`);
 }
 
+export async function deleteMonitorHistory(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/monitors/${id}/history`);
+}
+
 export async function toggleMonitorEnabled(
   id: string,
   enabled: boolean

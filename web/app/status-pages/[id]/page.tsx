@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useParams } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
@@ -19,11 +19,7 @@ export default function EditStatusPagePage() {
   const [error, setError] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  useEffect(() => {
-    loadStatusPage();
-  }, [id]);
-
-  const loadStatusPage = async () => {
+  const loadStatusPage = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -34,7 +30,11 @@ export default function EditStatusPagePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    loadStatusPage();
+  }, [loadStatusPage]);
 
   const handleSubmit = async (data: UpdateStatusPageRequest) => {
     try {
@@ -69,6 +69,9 @@ export default function EditStatusPagePage() {
   }
 
   const publicUrl = resolveStatusPagePublicUrl(statusPage);
+  const monitorCount = statusPage.sections?.reduce((count, section) => {
+    return count + (section.monitors?.length || 0);
+  }, 0) || statusPage.monitor_ids?.length || 0;
 
   return (
     <div className="space-y-6">
@@ -130,7 +133,7 @@ export default function EditStatusPagePage() {
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Monitors</span>
-                <span className="text-slate-300">{statusPage.monitor_ids?.length || 0}</span>
+                <span className="text-slate-300">{monitorCount}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Created</span>

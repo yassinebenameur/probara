@@ -206,6 +206,10 @@ func ValidateStatusPage(req *models.CreateStatusPageRequest) error {
 		return err
 	}
 
+	if err := validateStatusPageSections(req.Sections); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -231,6 +235,12 @@ func ValidateStatusPageUpdate(req *models.UpdateStatusPageRequest) error {
 
 	if req.MonitorDisplayNames != nil {
 		if err := validateStatusPageDisplayNames(*req.MonitorDisplayNames); err != nil {
+			return err
+		}
+	}
+
+	if req.Sections != nil {
+		if err := validateStatusPageSections(*req.Sections); err != nil {
 			return err
 		}
 	}
@@ -269,6 +279,37 @@ func validateStatusPageDisplayNames(displayNames map[string]string) error {
 		}
 		if len(strings.TrimSpace(name)) > 80 {
 			return fmt.Errorf("monitor_display_names display name must be 80 characters or less")
+		}
+	}
+	return nil
+}
+
+func validateStatusPageSections(sections []models.StatusPageSection) error {
+	seenMonitorIDs := make(map[string]struct{})
+	for _, section := range sections {
+		title := strings.TrimSpace(section.Title)
+		if title == "" {
+			return fmt.Errorf("section title is required")
+		}
+		if len(title) > 80 {
+			return fmt.Errorf("section title must be 80 characters or less")
+		}
+
+		for _, monitor := range section.Monitors {
+			idStr := strings.TrimSpace(monitor.MonitorID)
+			if idStr == "" {
+				return fmt.Errorf("section monitor_id is required")
+			}
+			if _, err := uuid.Parse(idStr); err != nil {
+				return fmt.Errorf("sections contains invalid monitor id: %s", idStr)
+			}
+			if _, exists := seenMonitorIDs[idStr]; exists {
+				return fmt.Errorf("monitor %s appears in more than one section", idStr)
+			}
+			seenMonitorIDs[idStr] = struct{}{}
+			if monitor.DisplayName != nil && len(strings.TrimSpace(*monitor.DisplayName)) > 80 {
+				return fmt.Errorf("section display name must be 80 characters or less")
+			}
 		}
 	}
 	return nil

@@ -540,6 +540,21 @@ export interface AlertChannelListResponse {
 }
 
 // Status Page types
+export interface StatusPageSectionMonitor {
+  monitor_id: string;
+  display_name?: string;
+  position?: number;
+}
+
+export interface StatusPageSection {
+  id?: string;
+  title: string;
+  position?: number;
+  monitors?: StatusPageSectionMonitor[];
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface StatusPage {
   id: string;
   tenant_id: string;
@@ -551,6 +566,7 @@ export interface StatusPage {
   primary_color?: string;
   secondary_color?: string;
   monitor_ids?: string[];
+  sections?: StatusPageSection[];
   created_at: string;
   updated_at: string;
 }
@@ -563,6 +579,8 @@ export interface CreateStatusPageRequest {
   primary_color?: string;
   secondary_color?: string;
   monitor_ids?: string[];
+  monitor_display_names?: Record<string, string>;
+  sections?: StatusPageSection[];
 }
 
 export interface UpdateStatusPageRequest {
@@ -573,6 +591,8 @@ export interface UpdateStatusPageRequest {
   primary_color?: string;
   secondary_color?: string;
   monitor_ids?: string[];
+  monitor_display_names?: Record<string, string>;
+  sections?: StatusPageSection[];
 }
 
 export interface StatusPageListResponse {

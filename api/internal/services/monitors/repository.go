@@ -20,6 +20,7 @@ type Repository interface {
 	List(ctx context.Context, tenantID uuid.UUID, tag *string, enabled *bool, page, pageSize int) ([]models.Monitor, int, error)
 	Update(ctx context.Context, monitor *models.Monitor, fields []string, values []interface{}) error
 	Delete(ctx context.Context, tenantID, monitorID uuid.UUID) error
+	DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
 	VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error
 	SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error
 	GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
@@ -245,6 +246,42 @@ func (r *PostgresRepository) Delete(ctx context.Context, tenantID, monitorID uui
 
 	if rowsAffected == 0 {
 		return fmt.Errorf("monitor not found")
+	}
+
+	return nil
+}
+
+// DeleteHistory removes monitor-scoped checks, alerts, and persisted analytics state.
+func (r *PostgresRepository) DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
+	if len(monitorIDs) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin history deletion transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	deleteStatements := []string{
+		`DELETE FROM alert_notification_states WHERE alert_id IN (SELECT id FROM alerts WHERE tenant_id = $1 AND monitor_id = ANY($2))`,
+		`DELETE FROM alerts WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		`DELETE FROM monitor_downtime_open WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		`DELETE FROM monitor_downtime_periods WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		`DELETE FROM monitor_daily_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		`DELETE FROM check_results WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+	}
+
+	for _, stmt := range deleteStatements {
+		if _, err := tx.ExecContext(ctx, stmt, tenantID, pq.Array(monitorIDs)); err != nil {
+			return fmt.Errorf("failed to delete monitor history: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit monitor history deletion: %w", err)
 	}
 
 	return nil

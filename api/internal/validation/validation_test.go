@@ -390,6 +390,46 @@ func TestValidateStatusPage(t *testing.T) {
 			wantErr:     true,
 			errContains: "default_theme must be either dark or light",
 		},
+		{
+			name: "valid sections",
+			req: &models.CreateStatusPageRequest{
+				Slug:  "grouped-status",
+				Title: "Grouped Status",
+				Sections: []models.StatusPageSection{
+					{
+						Title: "Core",
+						Monitors: []models.StatusPageSectionMonitor{
+							{MonitorID: "11111111-1111-1111-1111-111111111111"},
+							{MonitorID: "22222222-2222-2222-2222-222222222222", DisplayName: ptr("API Edge")},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "duplicate section monitor assignment",
+			req: &models.CreateStatusPageRequest{
+				Slug:  "grouped-status",
+				Title: "Grouped Status",
+				Sections: []models.StatusPageSection{
+					{
+						Title: "Core",
+						Monitors: []models.StatusPageSectionMonitor{
+							{MonitorID: "11111111-1111-1111-1111-111111111111"},
+						},
+					},
+					{
+						Title: "Edge",
+						Monitors: []models.StatusPageSectionMonitor{
+							{MonitorID: "11111111-1111-1111-1111-111111111111"},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "appears in more than one section",
+		},
 	}
 
 	for _, tt := range tests {
@@ -477,6 +517,35 @@ func TestValidateStatusPageUpdate(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "default_theme must be either dark or light",
+		},
+		{
+			name: "valid sections update",
+			req: &models.UpdateStatusPageRequest{
+				Sections: &[]models.StatusPageSection{
+					{
+						Title: "Critical",
+						Monitors: []models.StatusPageSectionMonitor{
+							{MonitorID: "33333333-3333-3333-3333-333333333333"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid section display name update",
+			req: &models.UpdateStatusPageRequest{
+				Sections: &[]models.StatusPageSection{
+					{
+						Title: "Critical",
+						Monitors: []models.StatusPageSectionMonitor{
+							{MonitorID: "33333333-3333-3333-3333-333333333333", DisplayName: ptr(strings.Repeat("a", 81))},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "section display name must be 80 characters or less",
 		},
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,35 +17,43 @@ import (
 
 // StatusPageData represents the public status page data
 type StatusPageData struct {
-	ID                string          `json:"id"`
-	Slug              string          `json:"slug"`
-	Title             string          `json:"title"`
-	Description       *string         `json:"description,omitempty"`
-	LogoURL           *string         `json:"logo_url,omitempty"`
-	HasLogo           bool            `json:"-"` // For template use only - true if LogoURL is set and non-empty
-	PrimaryColor      *string         `json:"primary_color,omitempty"`
-	SecondaryColor    *string         `json:"secondary_color,omitempty"`
-	Monitors          []MonitorStatus `json:"monitors"`
-	HasIssues         bool            `json:"-"` // For template use only
-	ShowIncidents     bool            `json:"-"` // For template use only
-	ShowUptimeHistory bool            `json:"-"` // For template use only
-	ShowGlobalUptime  bool            `json:"-"` // For template use only
-	ShowFooter        bool            `json:"-"` // For template use only
-	CustomFooterText  *string         `json:"-"` // For template use only
-	DefaultTheme      string          `json:"-"` // For template use only
-	AllowThemeToggle  bool            `json:"-"` // For template use only
-	ShowMonitorTags   bool            `json:"-"` // For template use only
-	ShowMonitorURL    bool            `json:"-"` // For template use only
-	ShowMonitorUptime bool            `json:"-"` // For template use only
-	ShowMonitorTLS    bool            `json:"-"` // For template use only
-	ShowLatencyCharts bool            `json:"-"` // For template use only
-	ShowAgentMetrics  bool            `json:"-"` // For template use only
+	ID                string                  `json:"id"`
+	Slug              string                  `json:"slug"`
+	Title             string                  `json:"title"`
+	Description       *string                 `json:"description,omitempty"`
+	LogoURL           *string                 `json:"logo_url,omitempty"`
+	HasLogo           bool                    `json:"-"` // For template use only - true if LogoURL is set and non-empty
+	PrimaryColor      *string                 `json:"primary_color,omitempty"`
+	SecondaryColor    *string                 `json:"secondary_color,omitempty"`
+	Sections          []StatusPageSectionData `json:"sections,omitempty"`
+	Monitors          []MonitorStatus         `json:"monitors"`
+	HasIssues         bool                    `json:"-"` // For template use only
+	ShowIncidents     bool                    `json:"-"` // For template use only
+	ShowUptimeHistory bool                    `json:"-"` // For template use only
+	ShowGlobalUptime  bool                    `json:"-"` // For template use only
+	ShowFooter        bool                    `json:"-"` // For template use only
+	CustomFooterText  *string                 `json:"-"` // For template use only
+	DefaultTheme      string                  `json:"-"` // For template use only
+	AllowThemeToggle  bool                    `json:"-"` // For template use only
+	ShowMonitorTags   bool                    `json:"-"` // For template use only
+	ShowMonitorURL    bool                    `json:"-"` // For template use only
+	ShowMonitorUptime bool                    `json:"-"` // For template use only
+	ShowMonitorTLS    bool                    `json:"-"` // For template use only
+	ShowLatencyCharts bool                    `json:"-"` // For template use only
+	ShowAgentMetrics  bool                    `json:"-"` // For template use only
 	// Uptime history for different time ranges
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
 	UptimeHistory1   []HourlyUptime `json:"-"` // Last 24 hours (hourly buckets)
 	UptimeHistory30  []DailyUptime  `json:"-"` // Last 30 days
 	UptimeHistory90  []DailyUptime  `json:"-"` // Last 90 days
 	UptimeHistory365 []DailyUptime  `json:"-"` // Last 1 year
+}
+
+type StatusPageSectionData struct {
+	ID       string          `json:"id"`
+	Title    string          `json:"title"`
+	Position int             `json:"position"`
+	Monitors []MonitorStatus `json:"monitors"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -319,16 +328,15 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	// Set HasLogo flag for template use
 	page.HasLogo = page.LogoURL != nil && *page.LogoURL != ""
 
-	// Get monitors for this status page
-	monitors, err := s.GetStatusPageMonitors(ctx, pageID, tenantID)
+	sections, err := s.GetStatusPageSections(ctx, pageID, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get monitors: %w", err)
 	}
-
-	page.Monitors = monitors
+	page.Sections = sections
+	page.Monitors = flattenStatusPageSections(sections)
 
 	// Determine if there are any issues
-	for _, monitor := range monitors {
+	for _, monitor := range page.Monitors {
 		if monitor.Status == "down" || monitor.Status == "error" {
 			page.HasIssues = true
 			break
@@ -369,6 +377,14 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 
 // GetGlobal5MinuteUptime calculates 5-minute bucket uptime across all monitors in a status page for the last 1 hour
 func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]MinuteUptime, error) {
+	monitorIDs, err := s.listStatusPageMonitorIDs(ctx, statusPageID)
+	if err != nil {
+		return nil, err
+	}
+	if len(monitorIDs) == 0 {
+		return []MinuteUptime{}, nil
+	}
+
 	query := `
 		WITH buckets AS (
 			SELECT generate_series(
@@ -377,16 +393,13 @@ func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tena
 				INTERVAL '5 minutes'
 			) AS bucket
 		),
-		monitor_ids AS (
-			SELECT monitor_id FROM status_page_monitors WHERE status_page_id = $1
-		),
 		bucket_stats AS (
 			SELECT 
 				date_trunc('minute', cr.created_at) - (EXTRACT(minute FROM cr.created_at)::int % 5) * INTERVAL '1 minute' AS bucket,
 				COUNT(*) AS total,
 				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
 			FROM check_results cr
-			WHERE cr.monitor_id IN (SELECT monitor_id FROM monitor_ids)
+			WHERE cr.monitor_id = ANY($1)
 			  AND cr.tenant_id = $2
 			  AND cr.created_at >= NOW() - INTERVAL '1 hour'
 			GROUP BY 1
@@ -400,7 +413,7 @@ func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tena
 		ORDER BY b.bucket
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, statusPageID, tenantID)
+	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query global 5-minute uptime: %w", err)
 	}
@@ -433,24 +446,109 @@ func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tena
 	return result, nil
 }
 
-// GetStatusPageMonitors retrieves monitors for a status page with their status
+func (s *Service) GetStatusPageSections(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageSectionData, error) {
+	type sectionRow struct {
+		ID       uuid.UUID
+		Title    string
+		Position int
+	}
+
+	sectionRows, err := s.db.QueryContext(ctx, `
+		SELECT id, title, position
+		FROM status_page_sections
+		WHERE status_page_id = $1
+		ORDER BY position ASC, created_at ASC, id ASC
+	`, statusPageID)
+	if err != nil {
+		if !isUndefinedTableError(err) {
+			return nil, fmt.Errorf("failed to query status page sections: %w", err)
+		}
+		return s.loadLegacyStatusPageSections(ctx, statusPageID, tenantID)
+	}
+	defer sectionRows.Close()
+
+	sections := make([]StatusPageSectionData, 0)
+	for sectionRows.Next() {
+		var row sectionRow
+		if err := sectionRows.Scan(&row.ID, &row.Title, &row.Position); err != nil {
+			return nil, fmt.Errorf("failed to scan status page section: %w", err)
+		}
+		monitors, err := s.getStatusPageSectionMonitors(ctx, row.ID, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		sections = append(sections, StatusPageSectionData{
+			ID:       row.ID.String(),
+			Title:    strings.TrimSpace(row.Title),
+			Position: row.Position,
+			Monitors: monitors,
+		})
+	}
+	if err := sectionRows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating status page sections: %w", err)
+	}
+	if len(sections) == 0 {
+		return s.loadLegacyStatusPageSections(ctx, statusPageID, tenantID)
+	}
+	return sections, nil
+}
+
+// GetStatusPageMonitors retrieves monitors for a status page with their status.
 func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]MonitorStatus, error) {
-	// Get monitors via join
+	sections, err := s.GetStatusPageSections(ctx, statusPageID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return flattenStatusPageSections(sections), nil
+}
+
+func (s *Service) getStatusPageSectionMonitors(ctx context.Context, sectionID, tenantID uuid.UUID) ([]MonitorStatus, error) {
 	query := `
+		SELECT m.id, m.name, spsm.display_name, m.type, m.config, m.tags
+		FROM monitors m
+		INNER JOIN status_page_section_monitors spsm ON m.id = spsm.monitor_id
+		WHERE spsm.section_id = $1 AND m.tenant_id = $2
+		ORDER BY spsm.position ASC, m.name
+	`
+	rows, err := s.db.QueryContext(ctx, query, sectionID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query section monitors: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanMonitorStatuses(ctx, rows, tenantID)
+}
+
+func (s *Service) loadLegacyStatusPageSections(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageSectionData, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.name, spm.display_name, m.type, m.config, m.tags
 		FROM monitors m
 		INNER JOIN status_page_monitors spm ON m.id = spm.monitor_id
 		WHERE spm.status_page_id = $1 AND m.tenant_id = $2
 		ORDER BY spm.position ASC, m.name
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, statusPageID, tenantID)
+	`, statusPageID, tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query monitors: %w", err)
+		return nil, fmt.Errorf("failed to query legacy monitors: %w", err)
 	}
 	defer rows.Close()
 
-	var monitors []MonitorStatus
+	monitors, err := s.scanMonitorStatuses(ctx, rows, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if len(monitors) == 0 {
+		return nil, nil
+	}
+	return []StatusPageSectionData{{
+		ID:       "",
+		Title:    "Services",
+		Position: 0,
+		Monitors: monitors,
+	}}, nil
+}
+
+func (s *Service) scanMonitorStatuses(ctx context.Context, rows *sql.Rows, tenantID uuid.UUID) ([]MonitorStatus, error) {
+	monitors := make([]MonitorStatus, 0)
 	for rows.Next() {
 		var monitor MonitorStatus
 		var monitorID uuid.UUID
@@ -458,8 +556,7 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 		var monitorType string
 		var configJSON []byte
 		var tags pq.StringArray
-		err := rows.Scan(&monitorID, &monitor.Name, &displayName, &monitorType, &configJSON, &tags)
-		if err != nil {
+		if err := rows.Scan(&monitorID, &monitor.Name, &displayName, &monitorType, &configJSON, &tags); err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)
 		}
 		monitor.ID = monitorID.String()
@@ -472,20 +569,90 @@ func (s *Service) GetStatusPageMonitors(ctx context.Context, statusPageID, tenan
 		}
 
 		presenter.Configure(&monitor, configJSON)
-
-		// Initialize formatted fields to empty string
 		monitor.Uptime24hFormatted = ""
 		monitor.Uptime1hFormatted = ""
 		presenter.Populate(ctx, s, &monitor, monitorID, tenantID)
-
 		monitors = append(monitors, monitor)
 	}
-
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating monitors: %w", err)
 	}
-
 	return monitors, nil
+}
+
+func flattenStatusPageSections(sections []StatusPageSectionData) []MonitorStatus {
+	monitors := make([]MonitorStatus, 0)
+	for _, section := range sections {
+		monitors = append(monitors, section.Monitors...)
+	}
+	return monitors
+}
+
+func (s *Service) listStatusPageMonitorIDs(ctx context.Context, statusPageID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT spsm.monitor_id
+		FROM status_page_sections sps
+		JOIN status_page_section_monitors spsm ON spsm.section_id = sps.id
+		WHERE sps.status_page_id = $1
+		ORDER BY sps.position ASC, spsm.position ASC, spsm.monitor_id ASC
+	`, statusPageID)
+	if err != nil {
+		if !isUndefinedTableError(err) {
+			return nil, fmt.Errorf("failed to list section monitor ids: %w", err)
+		}
+		return s.listLegacyStatusPageMonitorIDs(ctx, statusPageID)
+	}
+	defer rows.Close()
+
+	monitorIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var monitorID uuid.UUID
+		if err := rows.Scan(&monitorID); err != nil {
+			return nil, fmt.Errorf("failed to scan section monitor id: %w", err)
+		}
+		monitorIDs = append(monitorIDs, monitorID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating section monitor ids: %w", err)
+	}
+	if len(monitorIDs) == 0 {
+		return s.listLegacyStatusPageMonitorIDs(ctx, statusPageID)
+	}
+	return dedupeMonitorIDs(monitorIDs), nil
+}
+
+func (s *Service) listLegacyStatusPageMonitorIDs(ctx context.Context, statusPageID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT monitor_id
+		FROM status_page_monitors
+		WHERE status_page_id = $1
+		ORDER BY position ASC, monitor_id ASC
+	`, statusPageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list legacy status page monitor ids: %w", err)
+	}
+	defer rows.Close()
+
+	monitorIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var monitorID uuid.UUID
+		if err := rows.Scan(&monitorID); err != nil {
+			return nil, fmt.Errorf("failed to scan legacy status page monitor id: %w", err)
+		}
+		monitorIDs = append(monitorIDs, monitorID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating legacy status page monitor ids: %w", err)
+	}
+	return dedupeMonitorIDs(monitorIDs), nil
+}
+
+func isUndefinedTableError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	return pqErr.Code == "42P01"
 }
 
 func (s *Service) monitorPresenter(monitorType string) monitorPresenter {
@@ -689,12 +856,19 @@ func (s *Service) applyGlobalLongRangeAnalytics(ctx context.Context, page *Statu
 }
 
 func (s *Service) resolveStatusPageOperationalMonitorIDs(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	monitorIDs, err := s.listStatusPageMonitorIDs(ctx, statusPageID)
+	if err != nil {
+		return nil, err
+	}
+	if len(monitorIDs) == 0 {
+		return []uuid.UUID{}, nil
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type
 		FROM monitors m
-		JOIN status_page_monitors spm ON spm.monitor_id = m.id
-		WHERE spm.status_page_id = $1 AND m.tenant_id = $2
-	`, statusPageID, tenantID)
+		WHERE m.id = ANY($1) AND m.tenant_id = $2
+	`, pq.Array(monitorIDs), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list status page monitor ids: %w", err)
 	}
@@ -1308,6 +1482,14 @@ func (s *Service) GetMonitorLatencyHistoryForRange(ctx context.Context, monitorI
 
 // GetGlobalHourlyUptime calculates hourly uptime across all monitors in a status page for the last 24 hours
 func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]HourlyUptime, error) {
+	monitorIDs, err := s.listStatusPageMonitorIDs(ctx, statusPageID)
+	if err != nil {
+		return nil, err
+	}
+	if len(monitorIDs) == 0 {
+		return []HourlyUptime{}, nil
+	}
+
 	query := `
 		WITH hours AS (
 			SELECT generate_series(
@@ -1316,16 +1498,13 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 				INTERVAL '1 hour'
 			) AS hour
 		),
-		monitor_ids AS (
-			SELECT monitor_id FROM status_page_monitors WHERE status_page_id = $1
-		),
 		hourly_stats AS (
 			SELECT 
 				date_trunc('hour', cr.created_at) AS hour,
 				COUNT(*) AS total,
 				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
 			FROM check_results cr
-			WHERE cr.monitor_id IN (SELECT monitor_id FROM monitor_ids)
+			WHERE cr.monitor_id = ANY($1)
 			  AND cr.tenant_id = $2
 			  AND cr.created_at >= NOW() - INTERVAL '24 hours'
 			GROUP BY date_trunc('hour', cr.created_at)
@@ -1339,7 +1518,7 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 		ORDER BY h.hour
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, statusPageID, tenantID)
+	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hourly uptime: %w", err)
 	}
@@ -1374,6 +1553,14 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 
 // GetGlobalDailyUptime calculates daily uptime across all monitors in a status page for N days
 func (s *Service) GetGlobalDailyUptime(ctx context.Context, statusPageID, tenantID uuid.UUID, days int) ([]DailyUptime, error) {
+	monitorIDs, err := s.listStatusPageMonitorIDs(ctx, statusPageID)
+	if err != nil {
+		return nil, err
+	}
+	if len(monitorIDs) == 0 {
+		return []DailyUptime{}, nil
+	}
+
 	query := `
 		WITH days AS (
 			SELECT generate_series(
@@ -1382,16 +1569,13 @@ func (s *Service) GetGlobalDailyUptime(ctx context.Context, statusPageID, tenant
 				INTERVAL '1 day'
 			) AS day
 		),
-		monitor_ids AS (
-			SELECT monitor_id FROM status_page_monitors WHERE status_page_id = $1
-		),
 		daily_stats AS (
 			SELECT 
 				date_trunc('day', cr.created_at) AS day,
 				COUNT(*) AS total,
 				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
 			FROM check_results cr
-			WHERE cr.monitor_id IN (SELECT monitor_id FROM monitor_ids)
+			WHERE cr.monitor_id = ANY($1)
 			  AND cr.tenant_id = $2
 			  AND cr.created_at >= NOW() - $3::INTERVAL
 			GROUP BY date_trunc('day', cr.created_at)
@@ -1406,7 +1590,7 @@ func (s *Service) GetGlobalDailyUptime(ctx context.Context, statusPageID, tenant
 	`
 
 	interval := fmt.Sprintf("%d days", days)
-	rows, err := s.db.QueryContext(ctx, query, statusPageID, tenantID, interval)
+	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID, interval)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query daily uptime: %w", err)
 	}

@@ -26,7 +26,9 @@ type groupCall struct {
 
 // MockMonitorService implements the MonitorService interface for testing
 type MockMonitorService struct {
-	monitors map[uuid.UUID]*models.Monitor
+	monitors            map[uuid.UUID]*models.Monitor
+	deleteHistoryErr    error
+	deletedHistoryCalls []uuid.UUID
 }
 
 func NewMockMonitorService() *MockMonitorService {
@@ -92,6 +94,17 @@ func (m *MockMonitorService) DeleteMonitor(ctx context.Context, tenantID, monito
 		return &mockNotFoundError{}
 	}
 	delete(m.monitors, monitorID)
+	return nil
+}
+
+func (m *MockMonitorService) DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error {
+	if m.deleteHistoryErr != nil {
+		return m.deleteHistoryErr
+	}
+	if _, ok := m.monitors[monitorID]; !ok {
+		return &mockNotFoundError{}
+	}
+	m.deletedHistoryCalls = append(m.deletedHistoryCalls, monitorID)
 	return nil
 }
 
@@ -276,6 +289,39 @@ func TestHandlers_GetMonitor(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+}
+
+func TestHandlers_DeleteMonitorHistory(t *testing.T) {
+	log := logger.New("test", "debug")
+	monitorSvc := NewMockMonitorService()
+	groupSvc := &MockGroupService{}
+	resultSvc := &MockResultsService{}
+	handlers := NewHandlers(monitorSvc, groupSvc, resultSvc, log, t.TempDir())
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	monitorSvc.monitors[monitorID] = &models.Monitor{
+		ID:       monitorID,
+		TenantID: tenantID,
+		Name:     "History Monitor",
+		Type:     models.MonitorTypeHTTP,
+	}
+
+	r := chi.NewRouter()
+	r.Delete("/{id}/history", handlers.DeleteMonitorHistory)
+
+	req := httptest.NewRequest(http.MethodDelete, "/"+monitorID.String()+"/history", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, w.Code, w.Body.String())
+	}
+	if len(monitorSvc.deletedHistoryCalls) != 1 || monitorSvc.deletedHistoryCalls[0] != monitorID {
+		t.Fatalf("deletedHistoryCalls = %v, want [%s]", monitorSvc.deletedHistoryCalls, monitorID)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
@@ -57,6 +58,22 @@ type Server struct {
 	http            *http.Server
 	alertSubscriber *alertservice.Subscriber
 	statusPublisher *statusupdates.Publisher
+}
+
+type monitorStatusNotifier struct {
+	publisher *statusupdates.Publisher
+}
+
+func (n monitorStatusNotifier) PublishStatusUpdate(_ context.Context, monitorID, tenantID uuid.UUID) {
+	if n.publisher == nil {
+		return
+	}
+	_ = n.publisher.Publish(statusupdates.Event{
+		Type:      "history_deleted",
+		MonitorID: monitorID.String(),
+		TenantID:  tenantID.String(),
+		Timestamp: time.Now().UTC(),
+	})
 }
 
 // NewServer creates a new API server
@@ -147,8 +164,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			dashboardHandlers := dashboardhandlers.NewHandlers(dashboardSvc, log)
 
 			// Monitor services
-			monitorService := monitorservice.NewService(monitorservice.NewPostgresRepository(dbClient))
 			groupSvc := groupservice.NewService(dbClient)
+			monitorService := monitorservice.NewService(monitorservice.NewPostgresRepository(dbClient))
+			monitorService.ConfigureHistoryDependencies(groupSvc, monitorStatusNotifier{publisher: statusPublisher})
 			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
@@ -167,6 +185,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
+				r.Delete("/{id}/history", monitorHandlers.DeleteMonitorHistory)
 				r.Post("/{id}/run", monitorHandlers.RunMonitorNow)
 				r.Get("/{id}/artifacts/screenshot", monitorHandlers.GetSyntheticBrowserScreenshot)
 				r.Patch("/{id}", monitorHandlers.UpdateMonitor)

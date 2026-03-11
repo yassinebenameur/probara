@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRenderPublicStatusPage_IncludesToolbarAndDarkThemeByDefault(t *testing.T) {
+func TestRenderPublicStatusPage_HidesToolbarForSingleMonitorAndUsesDarkThemeByDefault(t *testing.T) {
 	html, err := renderPublicStatusPage(&StatusPageData{
 		ID:                "page-1",
 		Slug:              "status",
@@ -35,17 +35,74 @@ func TestRenderPublicStatusPage_IncludesToolbarAndDarkThemeByDefault(t *testing.
 	}
 
 	for _, want := range []string{
-		`id="statusPageSearch"`,
-		`id="statusFilter"`,
-		`id="typeFilter"`,
-		`id="sortControl"`,
 		`data-default-theme="dark"`,
 		`id="themeToggleBtn"`,
 		`detail-footer`,
+		`No active incidents.`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("expected rendered HTML to contain %q", want)
 		}
+	}
+
+	for _, unwanted := range []string{
+		`id="statusPageSearch"`,
+		`id="statusFilter"`,
+		`id="typeFilter"`,
+		`id="sortControl"`,
+		`id="layoutControl"`,
+	} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("expected rendered HTML to omit %q for single-monitor pages", unwanted)
+		}
+	}
+}
+
+func TestRenderPublicStatusPage_IncludesToolbarForMultipleMonitors(t *testing.T) {
+	html, err := renderPublicStatusPage(&StatusPageData{
+		ID:                "page-1",
+		Slug:              "status",
+		Title:             "Example Status",
+		DefaultTheme:      "dark",
+		ShowMonitorUptime: true,
+		Sections: []StatusPageSectionData{
+			{
+				ID:    "section-core",
+				Title: "Core",
+				Monitors: []MonitorStatus{
+					{Name: "API", MonitorType: "http", Status: "up"},
+				},
+			},
+			{
+				ID:    "section-edge",
+				Title: "Edge",
+				Monitors: []MonitorStatus{
+					{Name: "Worker", MonitorType: "ping", Status: "degraded"},
+				},
+			},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("renderPublicStatusPage() error = %v", err)
+	}
+
+	for _, want := range []string{
+		`id="statusPageSearch"`,
+		`id="statusFilter"`,
+		`id="typeFilter"`,
+		`id="sortControl"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("expected rendered HTML to contain %q", want)
+		}
+	}
+	for _, want := range []string{`Core`, `Edge`, `data-section-id="section-core"`, `data-section-id="section-edge"`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("expected rendered HTML to contain section marker %q", want)
+		}
+	}
+	if strings.Contains(html, `<h2 class="section-title">Services</h2>`) {
+		t.Fatalf("expected grouped render to omit redundant outer Services heading")
 	}
 }
 

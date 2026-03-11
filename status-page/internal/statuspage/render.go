@@ -31,6 +31,9 @@ type statusPageRenderView struct {
 	ShowMonitorTags     bool
 	ShowMonitorTLS      bool
 	ShowAgentMetrics    bool
+	ShowToolbar         bool
+	ShowTypeFilter      bool
+	ShowLayoutControl   bool
 	OverallStatus       string
 	OverallStatusLabel  string
 	OverallSummary      string
@@ -40,6 +43,7 @@ type statusPageRenderView struct {
 	GlobalUptimePercent string
 	GlobalUptime90JSON  string
 	TypeOptions         []statusPageTypeOption
+	Sections            []statusPageSectionView
 	Monitors            []statusPageMonitorView
 	Incidents           []statusPageIncidentView
 }
@@ -54,6 +58,13 @@ type statusPageIncidentView struct {
 	Status      string
 	StatusLabel string
 	Summary     string
+}
+
+type statusPageSectionView struct {
+	ID           string
+	Title        string
+	MonitorCount int
+	Monitors     []statusPageMonitorView
 }
 
 type statusPageMonitorView struct {
@@ -142,23 +153,49 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		view.FooterText = fmt.Sprintf("© %d %s", time.Now().UTC().Year(), data.Title)
 	}
 
+	sections := data.Sections
+	if len(sections) == 0 && len(data.Monitors) > 0 {
+		sections = []StatusPageSectionData{{
+			Title:    "Services",
+			Position: 0,
+			Monitors: data.Monitors,
+		}}
+	}
+
 	typeSet := make(map[string]struct{})
-	for _, monitor := range data.Monitors {
-		if monitor.Status == "up" {
-			view.OperationalCount++
-		} else {
-			view.IssueCount++
-			view.Incidents = append(view.Incidents, statusPageIncidentView{
-				Name:        monitor.Name,
-				Status:      monitor.Status,
-				StatusLabel: monitorStatusLabel(monitor.Status),
-				Summary:     incidentSummary(monitor),
-			})
+	for _, section := range sections {
+		renderSection := statusPageSectionView{
+			ID:    section.ID,
+			Title: strings.TrimSpace(section.Title),
+		}
+		if renderSection.Title == "" {
+			renderSection.Title = "Services"
 		}
 
-		typeSet[monitor.MonitorType] = struct{}{}
-		view.Monitors = append(view.Monitors, buildStatusPageMonitorView(monitor))
+		for _, monitor := range section.Monitors {
+			renderMonitor := buildStatusPageMonitorView(monitor)
+			renderSection.Monitors = append(renderSection.Monitors, renderMonitor)
+			view.Monitors = append(view.Monitors, renderMonitor)
+			renderSection.MonitorCount++
+			if monitor.Status == "up" {
+				view.OperationalCount++
+			} else {
+				view.IssueCount++
+				view.Incidents = append(view.Incidents, statusPageIncidentView{
+					Name:        monitor.Name,
+					Status:      monitor.Status,
+					StatusLabel: monitorStatusLabel(monitor.Status),
+					Summary:     incidentSummary(monitor),
+				})
+			}
+
+			typeSet[monitor.MonitorType] = struct{}{}
+		}
+
+		view.Sections = append(view.Sections, renderSection)
 	}
+
+	view.MonitorCount = len(view.Monitors)
 
 	if view.IssueCount > 0 {
 		view.OverallStatus = "issues"
@@ -175,6 +212,9 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	}
 	view.GlobalUptime90JSON = mustJSON(sliceToBarPoints(data.UptimeHistory90))
 	view.TypeOptions = sortedTypeOptions(typeSet)
+	view.ShowToolbar = view.MonitorCount > 1
+	view.ShowTypeFilter = len(view.TypeOptions) > 1
+	view.ShowLayoutControl = view.MonitorCount > 4
 	sort.Slice(view.Incidents, func(i, j int) bool {
 		return monitorStatusRank(view.Incidents[i].Status) < monitorStatusRank(view.Incidents[j].Status)
 	})
@@ -205,12 +245,14 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 	}
 
 	detailLine := strings.TrimSpace(monitor.URL)
-	if detailLine == "" {
-		detailLine = typeLabel(monitor.MonitorType)
-	}
-
 	if monitor.MonitorType != "agent" && monitor.MonitorType != "push" && monitor.LastLatency != nil {
-		detailLine = fmt.Sprintf("%s • %s", typeLabel(monitor.MonitorType), latencyText)
+		detailLine = latencyText
+	}
+	if detailLine == "" && monitor.LastCheckTime != nil {
+		detailLine = lastCheckAgo
+	}
+	if detailLine == "" {
+		detailLine = "No detail available"
 	}
 
 	tlsDetail := ""
@@ -568,13 +610,13 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .page {
       position: relative;
       z-index: 1;
-      max-width: 1080px;
+      max-width: 1040px;
       margin: 0 auto;
-      padding: 24px 20px 48px;
+      padding: 24px 20px 40px;
     }
     .shell {
       display: grid;
-      gap: 12px;
+      gap: 20px;
     }
     .glass {
       border: 1px solid var(--border-subtle);
@@ -586,7 +628,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 8px 4px;
+      padding: 2px 0;
     }
     .brand {
       display: flex;
@@ -610,18 +652,6 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       color: white;
       font-size: 0.72rem;
       font-weight: 600;
-    }
-    .brand-copy {
-      min-width: 0;
-    }
-    .brand-title {
-      font-size: 0.82rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      line-height: 1.2;
-    }
-    .brand-subtitle {
-      display: none;
     }
     .topbar-actions {
       display: flex;
@@ -652,36 +682,40 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     }
     .hero {
       display: grid;
-      gap: 10px;
-      padding: 16px 0 8px;
+      gap: 12px;
+      padding: 0;
     }
     .hero-head {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
+      display: grid;
+      gap: 8px;
     }
     .hero-title {
-      font-size: clamp(1.1rem, 2.5vw, 1.5rem);
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
       line-height: 1.1;
       letter-spacing: -0.03em;
-      font-weight: 700;
+      font-weight: 650;
       margin: 0;
     }
     .hero-description {
       margin: 0;
-      color: var(--text-muted);
-      font-size: 0.8rem;
+      color: var(--text-secondary);
+      font-size: 0.95rem;
       line-height: 1.5;
+      max-width: 640px;
+    }
+    .hero-summary {
+      color: var(--text-secondary);
+      font-size: 0.92rem;
+      max-width: 640px;
     }
     .status-pill {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 3px 9px;
+      padding: 5px 10px;
       border-radius: 999px;
       width: fit-content;
-      font-size: 0.7rem;
+      font-size: 0.75rem;
       font-weight: 600;
       flex-shrink: 0;
     }
@@ -695,31 +729,36 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       border-radius: 999px;
       background: currentColor;
     }
-    .hero-counters {
+    .hero-meta {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 10px;
       flex-wrap: wrap;
     }
-    .hero-counter {
+    .hero-meta-item {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border-subtle);
-      background: var(--surface-soft);
-      font-size: 0.72rem;
+      gap: 8px;
+      font-size: 0.82rem;
       color: var(--text-secondary);
     }
-    .hero-counter strong {
-      font-weight: 700;
+    .hero-meta-item::before {
+      content: "";
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--border-strong);
+      flex-shrink: 0;
+    }
+    .hero-meta-item strong {
+      font-weight: 600;
       color: var(--text-primary);
-      font-size: 0.78rem;
+      font-size: 0.82rem;
     }
     .global-strip {
       display: grid;
-      gap: 6px;
+      gap: 8px;
+      padding-top: 2px;
     }
     .mini-strip-header {
       display: flex;
@@ -741,8 +780,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       gap: 8px;
       align-items: center;
       border-radius: var(--radius-lg);
-      padding: 8px 12px;
-      background: var(--toolbar-bg);
+      padding: 10px 12px;
+      background: var(--surface-soft);
       border: 1px solid var(--border-subtle);
       position: sticky;
       top: 12px;
@@ -750,9 +789,11 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       backdrop-filter: blur(12px);
     }
     .search-wrap {
-      position: relative;
       flex: 1;
       min-width: 0;
+    }
+    .search-field {
+      position: relative;
     }
     .search-icon {
       position: absolute;
@@ -768,6 +809,14 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       padding: 0 10px;
       outline: none;
       font-size: 0.78rem;
+    }
+    .toolbar-label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }
     .toolbar > label:not(.search-wrap) {
       width: 150px;
@@ -799,10 +848,33 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       color: var(--text-muted);
       font-size: 0.75rem;
     }
+    .monitor-section-group {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .monitor-section-group.hidden {
+      display: none;
+    }
+    .monitor-section-group:first-of-type {
+      margin-top: 0;
+    }
+    .monitor-subsection-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .monitor-subsection-title {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
     .monitor-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 10px;
+      gap: 12px;
     }
     .monitor-grid[data-layout="condensed"] {
       display: flex;
@@ -829,7 +901,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .monitor-card summary {
       list-style: none;
       cursor: pointer;
-      padding: 14px;
+      padding: 16px;
     }
     .monitor-grid[data-layout="condensed"] summary {
       padding: 6px 14px;
@@ -849,7 +921,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     }
     .monitor-title {
       margin: 0;
-      font-size: 0.88rem;
+      font-size: 0.98rem;
       font-weight: 600;
       letter-spacing: -0.02em;
       line-height: 1.2;
@@ -864,12 +936,17 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       max-width: 220px;
     }
     .monitor-meta {
-      margin-top: 4px;
-      font-size: 0.75rem;
+      margin-top: 6px;
+      font-size: 0.78rem;
       color: var(--text-muted);
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+    }
+    .monitor-meta span + span::before {
+      content: "•";
+      margin-right: 8px;
+      color: var(--border-strong);
     }
     .monitor-grid[data-layout="condensed"] .monitor-meta {
       display: none !important;
@@ -879,7 +956,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       flex-shrink: 0;
     }
     .monitor-summary-value {
-      font-size: 0.85rem;
+      font-size: 1rem;
       font-weight: 700;
       letter-spacing: -0.02em;
     }
@@ -920,7 +997,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       height: 8px;
     }
     .strip-wrap {
-      margin-top: 12px;
+      margin-top: 14px;
     }
     .monitor-grid[data-layout="condensed"] .strip-wrap,
     .monitor-grid[data-layout="condensed"] .monitor-detail {
@@ -963,7 +1040,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .monitor-detail {
       display: grid;
       gap: 12px;
-      padding: 0 14px 14px;
+      padding: 0 16px 16px;
       border-top: 1px solid var(--border-subtle);
       background: color-mix(in srgb, var(--surface-strong) 50%, transparent);
     }
@@ -1034,7 +1111,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .empty-state {
       display: grid;
       place-items: center;
-      padding: 28px 16px;
+      padding: 24px 16px;
       border-radius: var(--radius-lg);
       border: 1px dashed var(--border-strong);
       background: var(--surface-soft);
@@ -1047,6 +1124,11 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .incident-list {
       display: grid;
       gap: 8px;
+    }
+    .incident-empty {
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      padding-top: 2px;
     }
     .incident-item {
       display: flex;
@@ -1071,7 +1153,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       font-size: 0.78rem;
     }
     .footer {
-      padding-top: 4px;
+      padding-top: 2px;
       display: flex;
       justify-content: space-between;
       gap: 8px;
@@ -1198,15 +1280,15 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       .incident-item,
       .footer,
       .customize-footer { display: grid; grid-template-columns: 1fr; }
-      .hero-head { flex-direction: column; align-items: flex-start; gap: 6px; }
+      .hero-head { gap: 6px; }
       .topbar-actions { justify-content: flex-start; }
-      .hero-stats,
       .detail-grid,
       .customize-grid,
       .customize-toggle-grid { grid-template-columns: 1fr; }
       .monitor-summary { text-align: left; }
       .range-row { align-items: start; flex-direction: column; }
       .toolbar > label:not(.search-wrap) { width: 100%; }
+      .hero-title { font-size: 1.9rem; }
     }
   </style>
 </head>
@@ -1232,9 +1314,6 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           {{else}}
             <div class="brand-mark">{{printf "%.1s" .Title}}</div>
           {{end}}
-          <div class="brand-copy">
-            <div class="brand-title">{{.Title}}</div>
-          </div>
         </div>
         <div class="topbar-actions">
           {{if .AllowThemeToggle}}
@@ -1257,12 +1336,15 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         {{if .HasDescription}}
           <p class="hero-description">{{.Description}}</p>
         {{end}}
-        <div class="hero-counters">
-          <div class="hero-counter"><strong>{{.OperationalCount}}</strong> healthy</div>
-          <div class="hero-counter"><strong>{{.IssueCount}}</strong> issues</div>
-          <div class="hero-counter"><strong>{{.MonitorCount}}</strong> total</div>
+        <p class="hero-summary">{{.OverallSummary}}</p>
+        <div class="hero-meta">
+          <div class="hero-meta-item"><strong>{{.OperationalCount}}</strong> healthy</div>
+          <div class="hero-meta-item"><strong>{{.MonitorCount}}</strong> monitored</div>
+          {{if gt .IssueCount 0}}
+            <div class="hero-meta-item"><strong>{{.IssueCount}}</strong> active issues</div>
+          {{end}}
           {{if .GlobalUptimePercent}}
-            <div class="hero-counter"><strong>{{.GlobalUptimePercent}}</strong> 90d uptime</div>
+            <div class="hero-meta-item"><strong>{{.GlobalUptimePercent}}</strong> over 90 days</div>
           {{end}}
         </div>
         {{if .ShowGlobalUptime}}
@@ -1276,60 +1358,72 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         {{end}}
       </section>
 
-      <section class="toolbar">
-        <label class="search-wrap" for="statusPageSearch">
-          <span class="search-icon">⌕</span>
-          <span class="sr-only">Search services</span>
-          <input id="statusPageSearch" class="toolbar-control search-input" type="search" placeholder="Search services…" />
-        </label>
-        <label>
-          <span class="sr-only">Filter services</span>
-          <select id="statusFilter" class="toolbar-control">
-            <option value="all">Filter by status</option>
-            <option value="up">Healthy</option>
-            <option value="degraded">Degraded</option>
-            <option value="down">Down</option>
-            <option value="error">Error</option>
-            <option value="unknown">Unknown</option>
-          </select>
-        </label>
-        <label>
-          <span class="sr-only">Sort services</span>
-          <select id="sortControl" class="toolbar-control">
-            <option value="status">Sort by status</option>
-            <option value="name">Sort by name</option>
-            <option value="uptime">Sort by uptime</option>
-            <option value="latency">Sort by latency</option>
-            <option value="latest">Sort by latest check</option>
-          </select>
-        </label>
-        <label>
-          <span class="sr-only">Filter by type</span>
-          <select id="typeFilter" class="toolbar-control">
-            <option value="all">All monitor types</option>
-            {{range .TypeOptions}}
-              <option value="{{.Value}}">{{.Label}}</option>
-            {{end}}
-          </select>
-        </label>
-        <label>
-          <span class="sr-only">Layout</span>
-          <select id="layoutControl" class="toolbar-control">
-            <option value="detailed">Detailed view</option>
-            <option value="condensed">Condensed view</option>
-          </select>
-        </label>
-      </section>
+      {{if .ShowToolbar}}
+        <section class="toolbar">
+          <label class="search-wrap" for="statusPageSearch">
+            <span class="toolbar-label">Search</span>
+            <div class="search-field">
+              <span class="search-icon">⌕</span>
+              <span class="sr-only">Search services</span>
+              <input id="statusPageSearch" class="toolbar-control search-input" type="search" placeholder="Search services…" />
+            </div>
+          </label>
+          <label>
+            <span class="toolbar-label">Status</span>
+            <select id="statusFilter" class="toolbar-control">
+              <option value="all">All statuses</option>
+              <option value="up">Healthy</option>
+              <option value="degraded">Degraded</option>
+              <option value="down">Down</option>
+              <option value="error">Error</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+          <label>
+            <span class="toolbar-label">Sort</span>
+            <select id="sortControl" class="toolbar-control">
+              <option value="status">Status</option>
+              <option value="name">Name</option>
+              <option value="uptime">Uptime</option>
+              <option value="latency">Latency</option>
+              <option value="latest">Latest check</option>
+            </select>
+          </label>
+          {{if .ShowTypeFilter}}
+            <label>
+              <span class="toolbar-label">Type</span>
+              <select id="typeFilter" class="toolbar-control">
+                <option value="all">All types</option>
+                {{range .TypeOptions}}
+                  <option value="{{.Value}}">{{.Label}}</option>
+                {{end}}
+              </select>
+            </label>
+          {{end}}
+          {{if .ShowLayoutControl}}
+            <label>
+              <span class="toolbar-label">Layout</span>
+              <select id="layoutControl" class="toolbar-control">
+                <option value="detailed">Detailed</option>
+                <option value="condensed">Condensed</option>
+              </select>
+            </label>
+          {{end}}
+        </section>
+      {{end}}
 
       <section>
         <div class="monitor-section-header">
-          <div>
-            <h2 class="section-title">Services</h2>
-          </div>
           <div class="section-meta" id="resultsCounter">{{.MonitorCount}} services</div>
         </div>
-        <div class="monitor-grid" id="monitorGrid" data-layout="detailed">
-          {{range .Monitors}}
+        {{range .Sections}}
+          <div class="monitor-section-group" data-section-id="{{.ID}}">
+            <div class="monitor-subsection-header">
+              <h3 class="monitor-subsection-title">{{.Title}}</h3>
+              <div class="section-meta">{{.MonitorCount}} services</div>
+            </div>
+            <div class="monitor-grid section-monitor-grid" data-layout="detailed">
+              {{range .Monitors}}
             <details
               class="monitor-card"
               data-search="{{.SearchText}}"
@@ -1442,8 +1536,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
                 {{end}}
               </div>
             </details>
-          {{end}}
-        </div>
+              {{end}}
+            </div>
+          </div>
+        {{end}}
         <div class="empty-state hidden" id="emptyState">
           <div>
             <strong>No services match the current view.</strong>
@@ -1474,12 +1570,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
             {{end}}
           </div>
         {{else}}
-          <div class="empty-state">
-            <div>
-              <strong>No active incidents.</strong>
-              <div>Everything currently reports healthy.</div>
-            </div>
-          </div>
+          <p class="incident-empty">No active incidents.</p>
         {{end}}
       </section>
 
@@ -1552,7 +1643,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
   <script>
     (function () {
       const body = document.body;
-      const monitorGrid = document.getElementById("monitorGrid");
+      const sectionGroups = Array.from(document.querySelectorAll(".monitor-section-group"));
+      const monitorGrids = Array.from(document.querySelectorAll(".section-monitor-grid"));
       const emptyState = document.getElementById("emptyState");
       const resultsCounter = document.getElementById("resultsCounter");
       const searchInput = document.getElementById("statusPageSearch");
@@ -1645,13 +1737,13 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
 
       function hydrateControlsFromUrl() {
         const params = getParams();
-        searchInput.value = params.get("q") || "";
-        statusFilter.value = params.get("status") || "all";
-        typeFilter.value = params.get("type") || "all";
-        sortControl.value = params.get("sort") || "status";
+        if (searchInput) searchInput.value = params.get("q") || "";
+        if (statusFilter) statusFilter.value = params.get("status") || "all";
+        if (typeFilter) typeFilter.value = params.get("type") || "all";
+        if (sortControl) sortControl.value = params.get("sort") || "status";
         if (layoutControl) {
           layoutControl.value = params.get("layout") || "detailed";
-          monitorGrid.setAttribute("data-layout", layoutControl.value);
+          monitorGrids.forEach((grid) => grid.setAttribute("data-layout", layoutControl.value));
         }
 
         const urlTheme = params.get("theme");
@@ -1668,10 +1760,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       }
 
       function applyViewState() {
-        const query = (searchInput.value || "").trim().toLowerCase();
-        const activeStatus = statusFilter.value || "all";
-        const activeType = typeFilter.value || "all";
-        const sortKey = sortControl.value || "status";
+        const query = searchInput ? (searchInput.value || "").trim().toLowerCase() : "";
+        const activeStatus = statusFilter ? (statusFilter.value || "all") : "all";
+        const activeType = typeFilter ? (typeFilter.value || "all") : "all";
+        const sortKey = sortControl ? (sortControl.value || "status") : "status";
         const activeLayout = layoutControl ? (layoutControl.value || "detailed") : "detailed";
 
         setParam("q", query);
@@ -1681,7 +1773,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         setParam("layout", activeLayout);
 
         if (layoutControl) {
-          monitorGrid.setAttribute("data-layout", activeLayout);
+          monitorGrids.forEach((grid) => grid.setAttribute("data-layout", activeLayout));
         }
 
         const filtered = cards.filter((card) => {
@@ -1727,9 +1819,19 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           return nameA.localeCompare(nameB);
         });
 
-        filtered.forEach((card) => monitorGrid.appendChild(card));
-        emptyState.classList.toggle("hidden", filtered.length > 0);
-        resultsCounter.textContent = filtered.length + (filtered.length === 1 ? " service" : " services");
+        sectionGroups.forEach((section) => {
+          const grid = section.querySelector(".section-monitor-grid");
+          if (!grid) return;
+          const sectionCards = filtered.filter((card) => card.closest(".monitor-section-group") === section);
+          sectionCards.forEach((card) => grid.appendChild(card));
+          section.classList.toggle("hidden", sectionCards.length === 0);
+        });
+        if (emptyState) {
+          emptyState.classList.toggle("hidden", filtered.length > 0);
+        }
+        if (resultsCounter) {
+          resultsCounter.textContent = filtered.length + (filtered.length === 1 ? " service" : " services");
+        }
       }
 
       function setupRangeButtons() {

@@ -15,7 +15,17 @@ import (
 
 // Service handles monitor business logic
 type Service struct {
-	repo Repository
+	repo           Repository
+	groupResolver  GroupResolver
+	statusNotifier StatusNotifier
+}
+
+type GroupResolver interface {
+	GetGroupLeafMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error)
+}
+
+type StatusNotifier interface {
+	PublishStatusUpdate(ctx context.Context, monitorID, tenantID uuid.UUID)
 }
 
 // NewService creates a new monitor service
@@ -23,6 +33,12 @@ func NewService(database Repository) *Service {
 	return &Service{
 		repo: database,
 	}
+}
+
+// ConfigureHistoryDependencies wires optional collaborators used by history reset flows.
+func (s *Service) ConfigureHistoryDependencies(groupResolver GroupResolver, statusNotifier StatusNotifier) {
+	s.groupResolver = groupResolver
+	s.statusNotifier = statusNotifier
 }
 
 // CreateMonitor creates a new monitor
@@ -375,9 +391,63 @@ func (s *Service) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	return s.repo.Delete(ctx, tenantID, monitorID)
 }
 
+// DeleteMonitorHistory clears raw checks, alert events, and persisted analytics state.
+func (s *Service) DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error {
+	monitor, err := s.GetMonitor(ctx, tenantID, monitorID)
+	if err != nil {
+		return err
+	}
+
+	monitorIDs := []uuid.UUID{monitorID}
+	if monitor.Type == models.MonitorTypeGroup {
+		if s.groupResolver == nil {
+			return fmt.Errorf("group history deletion is not configured")
+		}
+		members, err := s.groupResolver.GetGroupLeafMembers(ctx, tenantID, monitorID)
+		if err != nil {
+			return err
+		}
+		for _, member := range members {
+			monitorIDs = append(monitorIDs, member.ID)
+		}
+	}
+
+	monitorIDs = dedupeMonitorIDs(monitorIDs)
+	if err := s.repo.DeleteHistory(ctx, tenantID, monitorIDs); err != nil {
+		return err
+	}
+
+	if s.statusNotifier != nil {
+		for _, id := range monitorIDs {
+			s.statusNotifier.PublishStatusUpdate(ctx, id, tenantID)
+		}
+	}
+
+	return nil
+}
+
 // generatePushToken generates a unique token for push monitors
 func generatePushToken() string {
 	bytes := make([]byte, 16)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
+}
+
+func dedupeMonitorIDs(ids []uuid.UUID) []uuid.UUID {
+	if len(ids) < 2 {
+		return ids
+	}
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	result := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
 }

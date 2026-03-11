@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build clean ps healthcheck migrate test test-cover lint fmt vet
+.PHONY: help up down restart logs build clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
 # Default target
 help:
@@ -16,6 +16,9 @@ help:
 	@echo "  make healthcheck - Check health of all services"
 	@echo "  make migrate     - Run database migrations"
 	@echo "  make scale-workers N=3 - Scale worker service to N instances"
+	@echo "  make start-all-local - Start infra in Docker and app services locally"
+	@echo "  make stop-all-local - Stop local app services, UI, and infra"
+	@echo "  make restart-all-local - Restart local app services, UI, and infra"
 	@echo ""
 	@echo "Testing and CI:"
 	@echo "  make test        - Run all tests with race detection and coverage"
@@ -127,6 +130,8 @@ dev-start:
 	docker compose up -d postgres nats
 	@echo "Waiting for services to be ready..."
 	@sleep 5
+	@echo "Bootstrapping local database access..."
+	@bash scripts/bootstrap-local-db.sh
 	@echo "Running migrations..."
 	docker compose run --rm migrations
 	@echo "✅ Infrastructure ready for local development"
@@ -137,7 +142,15 @@ dev-stop:
 # Start everything (backend + UI with nvm LTS)
 start-all:
 	@echo "Starting backend services..."
-	docker compose up -d
+	docker compose up -d postgres nats
+	@echo "Waiting for infrastructure to be ready..."
+	@sleep 5
+	@echo "Bootstrapping local database access..."
+	@bash scripts/bootstrap-local-db.sh
+	@echo "Running database migrations..."
+	docker compose run --rm migrations
+	@echo "Starting application services..."
+	docker compose up -d api scheduler worker status-page alerter
 	@echo "Waiting for services to be healthy..."
 	@sleep 10
 	@echo "Starting UI with nvm LTS..."
@@ -146,6 +159,34 @@ start-all:
 		echo $$! > /tmp/probara-ui.pid; \
 	}
 	@echo "UI started. Logs: tail -f /tmp/probara-ui.log"
+	@echo ""
+	@echo "Service URLs:"
+	@echo "  UI:           http://localhost:3000"
+	@echo "  API:          http://localhost:8080"
+	@echo "  Status Page:  http://localhost:8082"
+	@echo "  NATS Monitor: http://localhost:8222"
+
+# Start everything locally (Go services + UI, Docker only for infra)
+start-all-local:
+	@echo "Starting infrastructure (postgres + nats)..."
+	docker compose up -d postgres nats
+	@echo "Waiting for infrastructure to be ready..."
+	@sleep 5
+	@echo "Bootstrapping local database access..."
+	@bash scripts/bootstrap-local-db.sh
+	@echo "Validating local Go toolchain..."
+	@bash scripts/start-local-services.sh check-go
+	@echo "Running database migrations locally..."
+	@POSTGRES_URL='postgres://probara:probara@localhost:5432/probara?sslmode=disable' MIGRATIONS_PATH='./shared/db/migrations' go run ./cmd/migrate
+	@echo "Starting local Go services..."
+	@bash scripts/start-local-services.sh
+	@echo "Starting UI with nvm LTS..."
+	@cd "$(CURDIR)" && { \
+		nohup bash scripts/start-ui.sh > /tmp/probara-ui.log 2>&1 </dev/null & \
+		echo $$! > /tmp/probara-ui.pid; \
+	}
+	@echo "UI started. Logs: tail -f /tmp/probara-ui.log"
+	@echo "Local service logs: tail -f /tmp/probara-*.log"
 	@echo ""
 	@echo "Service URLs:"
 	@echo "  UI:           http://localhost:3000"
@@ -163,12 +204,34 @@ stop-all:
 		kill -9 "$$ui_pid" 2>/dev/null || true; \
 		rm -f /tmp/probara-ui.pid; \
 	else \
-		pkill -f "$(CURDIR)/web/node_modules/.bin/next dev" || true; \
-		pkill -f "next dev --hostname 0.0.0.0 --port 3000" || true; \
+		pkill -f "$(CURDIR)/web/node_modules/.bin/[n]ext dev" || true; \
+		pkill -f "[n]ext dev --hostname 0.0.0.0 --port 3000" || true; \
 	fi
 	@echo "Stopping backend services..."
 	docker compose down
 	@echo "All services stopped."
+
+# Stop local services, UI, and infrastructure
+stop-all-local:
+	@echo "Stopping local Go services..."
+	@bash scripts/stop-local-services.sh
+	@echo "Stopping UI..."
+	@if [ -f /tmp/probara-ui.pid ]; then \
+		ui_pid=$$(cat /tmp/probara-ui.pid); \
+		kill "$$ui_pid" 2>/dev/null || true; \
+		sleep 1; \
+		kill -9 "$$ui_pid" 2>/dev/null || true; \
+		rm -f /tmp/probara-ui.pid; \
+	else \
+		pkill -f "$(CURDIR)/web/node_modules/.bin/[n]ext dev" || true; \
+		pkill -f "[n]ext dev --hostname 0.0.0.0 --port 3000" || true; \
+	fi
+	@echo "Stopping infrastructure..."
+	docker compose stop postgres nats
+	@echo "Local stack stopped."
+
+# Restart local services, UI, and infrastructure
+restart-all-local: stop-all-local start-all-local
 
 # Testing and CI
 test:

@@ -13,9 +13,10 @@ import (
 
 // MockRepository implements Repository interface for testing
 type MockRepository struct {
-	monitors map[uuid.UUID]*models.Monitor
-	members  map[uuid.UUID][]uuid.UUID
-	policies map[uuid.UUID][]uuid.UUID
+	monitors          map[uuid.UUID]*models.Monitor
+	members           map[uuid.UUID][]uuid.UUID
+	policies          map[uuid.UUID][]uuid.UUID
+	deletedHistoryIDs []uuid.UUID
 }
 
 func NewMockRepository() *MockRepository {
@@ -60,6 +61,11 @@ func (m *MockRepository) Delete(ctx context.Context, tenantID, monitorID uuid.UU
 		return nil
 	}
 	return ErrMonitorNotFound
+}
+
+func (m *MockRepository) DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
+	m.deletedHistoryIDs = append([]uuid.UUID(nil), monitorIDs...)
+	return nil
 }
 
 func (m *MockRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error {
@@ -234,5 +240,98 @@ func TestService_DeleteMonitor(t *testing.T) {
 	_, err = service.GetMonitor(context.Background(), tenantID, monitorID)
 	if err == nil {
 		t.Error("Expected error after deletion, got nil")
+	}
+}
+
+type mockGroupResolver struct {
+	members []models.Monitor
+	err     error
+}
+
+func (m mockGroupResolver) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uuid.UUID) ([]models.Monitor, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return append([]models.Monitor(nil), m.members...), nil
+}
+
+type mockStatusNotifier struct {
+	published []uuid.UUID
+}
+
+func (m *mockStatusNotifier) PublishStatusUpdate(ctx context.Context, monitorID, tenantID uuid.UUID) {
+	m.published = append(m.published, monitorID)
+}
+
+func TestService_DeleteMonitorHistory_RegularMonitor(t *testing.T) {
+	repo := NewMockRepository()
+	service := &Service{repo: repo}
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	repo.monitors[monitorID] = &models.Monitor{ID: monitorID, TenantID: tenantID, Type: models.MonitorTypeHTTP}
+
+	notifier := &mockStatusNotifier{}
+	service.ConfigureHistoryDependencies(nil, notifier)
+
+	if err := service.DeleteMonitorHistory(context.Background(), tenantID, monitorID); err != nil {
+		t.Fatalf("DeleteMonitorHistory() error = %v", err)
+	}
+
+	if len(repo.deletedHistoryIDs) != 1 || repo.deletedHistoryIDs[0] != monitorID {
+		t.Fatalf("deletedHistoryIDs = %v, want [%s]", repo.deletedHistoryIDs, monitorID)
+	}
+	if len(notifier.published) != 1 || notifier.published[0] != monitorID {
+		t.Fatalf("published = %v, want [%s]", notifier.published, monitorID)
+	}
+}
+
+func TestService_DeleteMonitorHistory_GroupMonitorUsesLeafMembers(t *testing.T) {
+	repo := NewMockRepository()
+	service := &Service{repo: repo}
+
+	tenantID := uuid.New()
+	groupID := uuid.New()
+	memberA := uuid.New()
+	memberB := uuid.New()
+	repo.monitors[groupID] = &models.Monitor{ID: groupID, TenantID: tenantID, Type: models.MonitorTypeGroup}
+
+	notifier := &mockStatusNotifier{}
+	service.ConfigureHistoryDependencies(mockGroupResolver{
+		members: []models.Monitor{
+			{ID: memberA, TenantID: tenantID, Type: models.MonitorTypeHTTP},
+			{ID: memberB, TenantID: tenantID, Type: models.MonitorTypePing},
+		},
+	}, notifier)
+
+	if err := service.DeleteMonitorHistory(context.Background(), tenantID, groupID); err != nil {
+		t.Fatalf("DeleteMonitorHistory() error = %v", err)
+	}
+
+	if len(repo.deletedHistoryIDs) != 3 {
+		t.Fatalf("deletedHistoryIDs length = %d, want 3", len(repo.deletedHistoryIDs))
+	}
+	if repo.deletedHistoryIDs[0] != groupID || repo.deletedHistoryIDs[1] != memberA || repo.deletedHistoryIDs[2] != memberB {
+		t.Fatalf("deletedHistoryIDs = %v, want [%s %s %s]", repo.deletedHistoryIDs, groupID, memberA, memberB)
+	}
+	if len(notifier.published) != 3 {
+		t.Fatalf("published length = %d, want 3", len(notifier.published))
+	}
+}
+
+func TestService_DeleteMonitorHistory_GroupMonitorWithoutMembers(t *testing.T) {
+	repo := NewMockRepository()
+	service := &Service{repo: repo}
+
+	tenantID := uuid.New()
+	groupID := uuid.New()
+	repo.monitors[groupID] = &models.Monitor{ID: groupID, TenantID: tenantID, Type: models.MonitorTypeGroup}
+	service.ConfigureHistoryDependencies(mockGroupResolver{}, nil)
+
+	if err := service.DeleteMonitorHistory(context.Background(), tenantID, groupID); err != nil {
+		t.Fatalf("DeleteMonitorHistory() error = %v", err)
+	}
+	if len(repo.deletedHistoryIDs) != 1 || repo.deletedHistoryIDs[0] != groupID {
+		t.Fatalf("deletedHistoryIDs = %v, want [%s]", repo.deletedHistoryIDs, groupID)
 	}
 }

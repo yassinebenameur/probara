@@ -434,6 +434,52 @@ func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// DeleteMonitorHistory handles DELETE /api/v1/monitors/{id}/history
+func (h *Handlers) DeleteMonitorHistory(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+
+	monitorIDStr := chi.URLParam(r, "id")
+	monitorID, err := uuid.Parse(monitorIDStr)
+	if err != nil {
+		errors.WriteValidationError(w, "invalid monitor ID")
+		return
+	}
+
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	err = h.service.DeleteMonitorHistory(r.Context(), tenantUUID, monitorID)
+	if err != nil {
+		switch {
+		case err.Error() == "monitor not found":
+			errors.WriteNotFoundError(w, "monitor not found")
+			return
+		}
+
+		h.logger.WithFields(map[string]interface{}{
+			"error":      err.Error(),
+			"tenant_id":  tenantID,
+			"monitor_id": monitorID,
+		}).Error("Failed to delete monitor history")
+		errors.WriteInternalError(w, "failed to delete monitor history")
+		return
+	}
+
+	h.logger.WithFields(map[string]interface{}{
+		"tenant_id":  tenantID,
+		"monitor_id": monitorID,
+	}).Info("Monitor history deleted")
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // GetMonitorResults handles GET /api/v1/monitors/{id}/results
 func (h *Handlers) GetMonitorResults(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := middleware.GetTenantID(r.Context())

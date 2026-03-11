@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
-import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
+import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
@@ -90,6 +90,98 @@ function StatusBadge({ status }: { status: MonitorDisplayStatus }) {
   );
 }
 
+function ConfirmHistoryResetModal({
+  monitorName,
+  isGroup,
+  confirmationText,
+  onConfirmationTextChange,
+  onClose,
+  onConfirm,
+  loading,
+}: {
+  monitorName: string;
+  isGroup: boolean;
+  confirmationText: string;
+  onConfirmationTextChange: (value: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+  loading: boolean;
+}) {
+  const expectedText = 'CLEAR';
+  const canConfirm = confirmationText.trim().toUpperCase() === expectedText && !loading;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-2xl border border-rose-500/20 bg-slate-950 shadow-2xl">
+        <div className="border-b border-white/[0.06] px-6 py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-rose-400">Danger Zone</p>
+              <h2 className="mt-2 text-lg font-semibold text-white">Clear monitor history</h2>
+              <p className="mt-2 text-sm text-slate-400">
+                {isGroup
+                  ? `This will permanently remove checks, alerts, and SLA history for ${monitorName} and every monitor inside that group.`
+                  : `This will permanently remove checks, alerts, and SLA history for ${monitorName}, but keep the monitor itself.`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/[0.16] hover:text-white"
+              disabled={loading}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4 px-6 py-5">
+          <div className="rounded-xl border border-rose-500/15 bg-rose-500/5 px-4 py-3 text-sm text-slate-300">
+            <p className="font-medium text-rose-300">This cannot be undone.</p>
+            <p className="mt-1 text-slate-400">
+              Dashboard failures, monitor analytics, and public status page history will rebuild only from future checks.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+              Type {expectedText} to confirm
+            </label>
+            <input
+              type="text"
+              value={confirmationText}
+              onChange={(event) => onConfirmationTextChange(event.target.value)}
+              className="mt-2 w-full rounded-xl border border-white/[0.08] bg-slate-900 px-4 py-3 text-sm text-white outline-none transition-colors focus:border-rose-400/60"
+              placeholder={expectedText}
+              autoFocus
+              disabled={loading}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-white/[0.06] px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-white/[0.08] px-4 py-2 text-sm text-slate-300 transition-colors hover:border-white/[0.16] hover:text-white"
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={!canConfirm}
+            className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-300 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/[0.08] disabled:bg-slate-900 disabled:text-slate-500"
+          >
+            {loading ? 'Clearing…' : isGroup ? 'Clear Group History' : 'Clear History'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function EditMonitorPage() {
   const router = useRouter();
   const params = useParams();
@@ -105,6 +197,9 @@ export default function EditMonitorPage() {
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const [isHistoryResetModalOpen, setIsHistoryResetModalOpen] = useState(false);
+  const [historyResetConfirmation, setHistoryResetConfirmation] = useState('');
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [agentTimeRange, setAgentTimeRange] = useState<AgentTimeRange>('24h');
   const [overviewRange, setOverviewRange] = useState<OverviewTimeRange>('24h');
@@ -299,6 +394,41 @@ export default function EditMonitorPage() {
       setTimeout(() => router.push('/monitors'), 1000);
     } catch (err: any) {
       setToast({ message: err.message || 'Failed to delete', type: 'error' });
+    }
+  };
+
+  const openHistoryResetModal = () => {
+    setHistoryResetConfirmation('');
+    setIsHistoryResetModalOpen(true);
+  };
+
+  const closeHistoryResetModal = () => {
+    if (clearingHistory) return;
+    setHistoryResetConfirmation('');
+    setIsHistoryResetModalOpen(false);
+  };
+
+  const handleClearHistory = async () => {
+    if (!monitor) return;
+
+    try {
+      setClearingHistory(true);
+      await deleteMonitorHistory(id);
+      setResults((current) => current ? { ...current, results: [] } : current);
+      setAnalytics(null);
+      await Promise.all([loadMonitor(), loadResults(), loadAnalytics()]);
+      setToast({
+        message: monitor.type === 'group'
+          ? 'Group history cleared for all member monitors'
+          : 'Monitor history cleared',
+        type: 'success',
+      });
+      setIsHistoryResetModalOpen(false);
+      setHistoryResetConfirmation('');
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to clear monitor history', type: 'error' });
+    } finally {
+      setClearingHistory(false);
     }
   };
 
@@ -564,6 +694,15 @@ export default function EditMonitorPage() {
                   </svg>
                   View History
                 </button>
+                <button
+                  onClick={openHistoryResetModal}
+                  className="w-full flex items-center gap-3 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2.5 text-left text-sm text-rose-300 transition-colors hover:bg-rose-500/15"
+                >
+                  <svg className="h-4 w-4 text-rose-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-7 0h8" />
+                  </svg>
+                  {monitor.type === 'group' ? 'Clear Group History' : 'Clear History'}
+                </button>
               </div>
             </div>
 
@@ -639,6 +778,18 @@ export default function EditMonitorPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {monitor && isHistoryResetModalOpen && (
+        <ConfirmHistoryResetModal
+          monitorName={monitor.name}
+          isGroup={monitor.type === 'group'}
+          confirmationText={historyResetConfirmation}
+          onConfirmationTextChange={setHistoryResetConfirmation}
+          onClose={closeHistoryResetModal}
+          onConfirm={handleClearHistory}
+          loading={clearingHistory}
+        />
       )}
     </div>
   );
