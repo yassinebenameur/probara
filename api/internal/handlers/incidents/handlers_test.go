@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +70,16 @@ func (m *mockIncidentService) CreateIncidentTimelineEntry(ctx context.Context, t
 	return nil, nil
 }
 
+func withTenantID(req *http.Request) *http.Request {
+	return req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+}
+
+func withIncidentID(req *http.Request, incidentID uuid.UUID) *http.Request {
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", incidentID.String())
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+}
+
 func TestHandlers_CreateIncident(t *testing.T) {
 	log := logger.New("test", "debug")
 	svc := &mockIncidentService{
@@ -84,7 +96,7 @@ func TestHandlers_CreateIncident(t *testing.T) {
 	h := NewHandlers(svc, log)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents", bytes.NewBufferString(`{"title":"API outage","summary":"Requests are failing."}`))
-	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+	req = withTenantID(req)
 	w := httptest.NewRecorder()
 
 	h.CreateIncident(w, req)
@@ -99,6 +111,24 @@ func TestHandlers_CreateIncident(t *testing.T) {
 	}
 	if got.Title != "API outage" {
 		t.Fatalf("title = %q, want %q", got.Title, "API outage")
+	}
+}
+
+func TestHandlers_CreateIncident_ValidationError(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents", bytes.NewBufferString(`{"summary":"Requests are failing."}`))
+	req = withTenantID(req)
+	w := httptest.NewRecorder()
+
+	h.CreateIncident(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "title is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
 	}
 }
 
@@ -121,7 +151,7 @@ func TestHandlers_ListIncidents(t *testing.T) {
 	h := NewHandlers(svc, log)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents?page=2&page_size=50", nil)
-	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+	req = withTenantID(req)
 	w := httptest.NewRecorder()
 
 	h.ListIncidents(w, req)
@@ -131,6 +161,28 @@ func TestHandlers_ListIncidents(t *testing.T) {
 	}
 	if gotPage != 2 || gotPageSize != 50 {
 		t.Fatalf("page/page_size = %d/%d, want 2/50", gotPage, gotPageSize)
+	}
+}
+
+func TestHandlers_ListIncidents_InternalFailure(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{
+		listFn: func(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.IncidentListResponse, error) {
+			return nil, errors.New("database unavailable")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents", nil)
+	req = withTenantID(req)
+	w := httptest.NewRecorder()
+
+	h.ListIncidents(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "failed to list incidents") {
+		t.Fatalf("body = %s, want internal error", w.Body.String())
 	}
 }
 
@@ -154,16 +206,38 @@ func TestHandlers_GetIncident(t *testing.T) {
 	h := NewHandlers(svc, log)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents/"+incidentID.String(), nil)
-	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", incidentID.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
 	w := httptest.NewRecorder()
 
 	h.GetIncident(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestHandlers_GetIncident_NotFound(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{
+		getFn: func(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentDetail, error) {
+			return nil, errors.New("incident not found")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents/"+incidentID.String(), nil)
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.GetIncident(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "incident not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
 	}
 }
 
@@ -192,16 +266,39 @@ func TestHandlers_UpdateIncident(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/incidents/"+incidentID.String(), bytes.NewBufferString(`{"title":"Updated outage"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", incidentID.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
 	w := httptest.NewRecorder()
 
 	h.UpdateIncident(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestHandlers_UpdateIncident_InternalFailure(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.New()
+	h := NewHandlers(&mockIncidentService{
+		updateFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.UpdateIncidentRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("database write failed")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/incidents/"+incidentID.String(), bytes.NewBufferString(`{"title":"Updated outage"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.UpdateIncident(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "failed to process incident") {
+		t.Fatalf("body = %s, want internal error", w.Body.String())
 	}
 }
 
@@ -228,16 +325,49 @@ func TestHandlers_TransitionIncidentState(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/state", bytes.NewBufferString(`{"state":"resolved"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", incidentID.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
 	w := httptest.NewRecorder()
 
 	h.TransitionIncidentState(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestHandlers_TransitionIncidentState_InternalFailureLogsContext(t *testing.T) {
+	var logBuf bytes.Buffer
+	log := logger.New("test", "debug")
+	log.SetOutput(&logBuf)
+
+	incidentID := uuid.New()
+	tenantID := uuid.New()
+	h := NewHandlers(&mockIncidentService{
+		transitionFn: func(ctx context.Context, gotTenantID, gotIncidentID uuid.UUID, req *models.TransitionIncidentStateRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("state transition failed")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/state", bytes.NewBufferString(`{"state":"resolved"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.TransitionIncidentState(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	if !strings.Contains(logBuf.String(), "Failed to transition incident state") {
+		t.Fatalf("log = %s, want transition failure entry", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), tenantID.String()) {
+		t.Fatalf("log = %s, want tenant ID", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), incidentID.String()) {
+		t.Fatalf("log = %s, want incident ID", logBuf.String())
 	}
 }
 
@@ -267,16 +397,39 @@ func TestHandlers_CreateTimelineEntry(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/timeline", bytes.NewBufferString(`{"entry_type":"public_update","message":"We are investigating."}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", incidentID.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
 	w := httptest.NewRecorder()
 
 	h.CreateTimelineEntry(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusCreated, w.Body.String())
+	}
+}
+
+func TestHandlers_CreateTimelineEntry_NotFound(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.New()
+	h := NewHandlers(&mockIncidentService{
+		createTimelineFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("incident not found")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/timeline", bytes.NewBufferString(`{"entry_type":"public_update","message":"We are investigating."}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.CreateTimelineEntry(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "incident not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
 	}
 }
 

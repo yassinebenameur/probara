@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -79,6 +78,10 @@ func writeIncidentError(w http.ResponseWriter, err error) {
 	}
 }
 
+func isIncidentNotFoundError(err error) bool {
+	return err != nil && err.Error() == "incident not found"
+}
+
 // ListIncidents handles GET /api/v1/incidents
 func (h *Handlers) ListIncidents(w http.ResponseWriter, r *http.Request) {
 	tenantUUID, ok := tenantUUIDFromContext(w, r)
@@ -128,7 +131,7 @@ func (h *Handlers) GetIncident(w http.ResponseWriter, r *http.Request) {
 
 	incident, err := h.service.GetIncident(r.Context(), tenantUUID, incidentID)
 	if err != nil {
-		if err.Error() == "incident not found" {
+		if isIncidentNotFoundError(err) {
 			apierrors.WriteNotFoundError(w, "incident not found")
 			return
 		}
@@ -203,7 +206,7 @@ func (h *Handlers) UpdateIncident(w http.ResponseWriter, r *http.Request) {
 
 	incident, err := h.service.UpdateIncident(r.Context(), tenantUUID, incidentID, &req)
 	if err != nil {
-		if err.Error() == "incident not found" {
+		if isIncidentNotFoundError(err) {
 			apierrors.WriteNotFoundError(w, "incident not found")
 			return
 		}
@@ -245,6 +248,11 @@ func (h *Handlers) TransitionIncidentState(w http.ResponseWriter, r *http.Reques
 
 	incident, err := h.service.TransitionIncidentState(r.Context(), tenantUUID, incidentID, &req)
 	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":       err.Error(),
+			"tenant_id":   tenantUUID.String(),
+			"incident_id": incidentID.String(),
+		}).Error("Failed to transition incident state")
 		writeIncidentError(w, err)
 		return
 	}
@@ -278,7 +286,7 @@ func (h *Handlers) CreateTimelineEntry(w http.ResponseWriter, r *http.Request) {
 
 	incident, err := h.service.CreateIncidentTimelineEntry(r.Context(), tenantUUID, incidentID, &req)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if isIncidentNotFoundError(err) {
 			apierrors.WriteNotFoundError(w, "incident not found")
 			return
 		}
