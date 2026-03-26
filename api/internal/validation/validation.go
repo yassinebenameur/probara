@@ -63,6 +63,20 @@ func ValidateCreateIncidentTimelineEntry(req *models.CreateIncidentTimelineEntry
 	return nil
 }
 
+// ValidateUpdateIncident validates a partial incident update request.
+func ValidateUpdateIncident(req *models.UpdateIncidentRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
+		return fmt.Errorf("title is required")
+	}
+	if req.Summary != nil && strings.TrimSpace(*req.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	return nil
+}
+
 // activeCheckTypes are monitor types that require timeout validation
 var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeHTTP:             true,

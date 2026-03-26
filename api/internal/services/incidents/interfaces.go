@@ -8,11 +8,6 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 )
 
-// statusPublisher is a placeholder for incident-driven status fan-out wiring.
-// The MVP service does not publish updates yet, but the constructor keeps the
-// dependency shape for later iterations.
-type statusPublisher interface{}
-
 // IncidentService defines the incident service contract.
 type IncidentService interface {
 	// CreateIncident creates a new manual incident.

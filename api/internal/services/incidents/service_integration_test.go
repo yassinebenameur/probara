@@ -17,7 +17,7 @@ func TestServiceCreateManualIncident(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient, nil)
+	svc := NewService(dbClient)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -37,7 +37,7 @@ func TestServiceTransitionIncidentStateRejectsResolvedReopen(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient, nil)
+	svc := NewService(dbClient)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "DNS outage",
@@ -64,7 +64,7 @@ func TestServiceCreateIncidentTimelineEntryAppendsNonSystemEntry(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient, nil)
+	svc := NewService(dbClient)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Database latency",
@@ -73,6 +73,7 @@ func TestServiceCreateIncidentTimelineEntryAppendsNonSystemEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIncident() error = %v", err)
 	}
+	createdUpdatedAt := incident.UpdatedAt
 
 	if _, err := svc.CreateIncidentTimelineEntry(ctx, tenantID, incident.ID, &models.CreateIncidentTimelineEntryRequest{
 		EntryType: models.IncidentTimelineEntryTypeInternalNote,
@@ -90,6 +91,9 @@ func TestServiceCreateIncidentTimelineEntryAppendsNonSystemEntry(t *testing.T) {
 	detail, err := svc.GetIncident(ctx, tenantID, incident.ID)
 	if err != nil {
 		t.Fatalf("GetIncident() error = %v", err)
+	}
+	if !detail.UpdatedAt.After(createdUpdatedAt) {
+		t.Fatalf("updated_at = %v, want after %v", detail.UpdatedAt, createdUpdatedAt)
 	}
 	if len(detail.Timeline) != 3 {
 		t.Fatalf("timeline length = %d, want %d", len(detail.Timeline), 3)
@@ -111,7 +115,7 @@ func TestServiceCreateIncidentTimelineEntryRejectsSystemEntry(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient, nil)
+	svc := NewService(dbClient)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Queue backlog",
@@ -135,7 +139,7 @@ func TestServiceListIncidentsReturnsSummaryFields(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient, nil)
+	svc := NewService(dbClient)
 
 	manualIncident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Manual outage",
@@ -226,5 +230,94 @@ func TestServiceListIncidentsReturnsSummaryFields(t *testing.T) {
 	}
 	if list.Items[1].LinkedAlertCount != 0 || list.Items[1].LinkedMonitorCount != 0 || list.Items[1].PublicationCount != 0 {
 		t.Fatalf("list.Items[1] counts = (%d,%d,%d), want (0,0,0)", list.Items[1].LinkedAlertCount, list.Items[1].LinkedMonitorCount, list.Items[1].PublicationCount)
+	}
+}
+
+func TestServiceTransitionIncidentStateRejectsConcurrentResolvedReopen(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing across regions.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	tx, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE incidents
+		SET state = 'resolved', resolved_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2
+	`, incident.ID, tenantID); err != nil {
+		t.Fatalf("seed resolved incident in transaction: %v", err)
+	}
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := svc.TransitionIncidentState(ctx, tenantID, incident.ID, &models.TransitionIncidentStateRequest{
+			State: models.IncidentStateMonitoring,
+		})
+		resultCh <- err
+	}()
+
+	select {
+	case err := <-resultCh:
+		t.Fatalf("transition returned before concurrent transaction committed: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	select {
+	case err := <-resultCh:
+		if err == nil {
+			t.Fatalf("expected concurrent resolved reopen to fail")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timeout waiting for transition result")
+	}
+}
+
+func TestServiceUpdateIncidentRejectsBlankNarrativeFields(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "Storage degradation",
+		Summary: "Latency is increasing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	blankTitle := "   "
+	if _, err := svc.UpdateIncident(ctx, tenantID, incident.ID, &models.UpdateIncidentRequest{
+		Title: &blankTitle,
+	}); err == nil {
+		t.Fatalf("expected blank title update to fail")
+	}
+
+	blankSummary := "\t"
+	if _, err := svc.UpdateIncident(ctx, tenantID, incident.ID, &models.UpdateIncidentRequest{
+		Summary: &blankSummary,
+	}); err == nil {
+		t.Fatalf("expected blank summary update to fail")
 	}
 }

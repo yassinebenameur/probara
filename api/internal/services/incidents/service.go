@@ -24,13 +24,12 @@ type incidentExecutor interface {
 
 // Service handles incident business logic.
 type Service struct {
-	db              *db.Client
-	statusPublisher statusPublisher
+	db *db.Client
 }
 
 // NewService creates a new incident service.
-func NewService(dbClient *db.Client, publisher statusPublisher) *Service {
-	return &Service{db: dbClient, statusPublisher: publisher}
+func NewService(dbClient *db.Client) *Service {
+	return &Service{db: dbClient}
 }
 
 // CreateIncident creates a new manual incident.
@@ -199,6 +198,9 @@ func (s *Service) UpdateIncident(ctx context.Context, tenantID, incidentID uuid.
 	if req == nil {
 		return s.GetIncident(ctx, tenantID, incidentID)
 	}
+	if err := validation.ValidateUpdateIncident(req); err != nil {
+		return nil, err
+	}
 
 	setParts := make([]string, 0, 2)
 	args := make([]interface{}, 0, 3)
@@ -261,17 +263,6 @@ func (s *Service) TransitionIncidentState(ctx context.Context, tenantID, inciden
 		return nil, err
 	}
 
-	current, err := s.GetIncident(ctx, tenantID, incidentID)
-	if err != nil {
-		return nil, err
-	}
-	if current.State == models.IncidentStateResolved && req.State != models.IncidentStateResolved {
-		return nil, fmt.Errorf("resolved incidents cannot be reopened")
-	}
-	if current.State == req.State {
-		return current, nil
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin incident transaction: %w", err)
@@ -279,6 +270,29 @@ func (s *Service) TransitionIncidentState(ctx context.Context, tenantID, inciden
 	defer func() {
 		_ = tx.Rollback()
 	}()
+
+	var currentState models.IncidentState
+	if err := tx.QueryRowContext(ctx, `
+		SELECT state
+		FROM incidents
+		WHERE id = $1 AND tenant_id = $2
+		FOR UPDATE
+	`, incidentID, tenantID).Scan(&currentState); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("incident not found")
+		}
+		return nil, fmt.Errorf("load incident state: %w", err)
+	}
+
+	if currentState == req.State {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit incident transaction: %w", err)
+		}
+		return s.GetIncident(ctx, tenantID, incidentID)
+	}
+	if currentState == models.IncidentStateResolved && req.State != models.IncidentStateResolved {
+		return nil, fmt.Errorf("resolved incidents cannot be reopened")
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE incidents
@@ -334,10 +348,6 @@ func (s *Service) CreateIncidentTimelineEntry(ctx context.Context, tenantID, inc
 	return s.GetIncident(ctx, tenantID, incidentID)
 }
 
-func (s *Service) insertTimelineEntry(ctx context.Context, tenantID, incidentID uuid.UUID, entryType models.IncidentTimelineEntryType, message string, metadata map[string]interface{}) error {
-	return s.insertTimelineEntryTx(ctx, s.db, tenantID, incidentID, entryType, message, metadata)
-}
-
 func (s *Service) insertTimelineEntryTx(ctx context.Context, exec incidentExecutor, tenantID, incidentID uuid.UUID, entryType models.IncidentTimelineEntryType, message string, metadata map[string]interface{}) error {
 	if metadata == nil {
 		metadata = map[string]interface{}{}
@@ -353,6 +363,14 @@ func (s *Service) insertTimelineEntryTx(ctx context.Context, exec incidentExecut
 		) VALUES ($1, $2, $3, $4, $5, $6, NOW())
 	`, uuid.New(), tenantID, incidentID, entryType, message, metadataJSON); err != nil {
 		return fmt.Errorf("insert incident timeline entry: %w", err)
+	}
+
+	if _, err := exec.ExecContext(ctx, `
+		UPDATE incidents
+		SET updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2
+	`, incidentID, tenantID); err != nil {
+		return fmt.Errorf("touch incident updated_at: %w", err)
 	}
 
 	return nil
