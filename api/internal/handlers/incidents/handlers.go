@@ -88,13 +88,7 @@ func isIncidentExpectedTransitionError(err error) bool {
 	}
 
 	switch err.Error() {
-	case "request is required",
-		"title is required",
-		"summary is required",
-		"invalid incident state",
-		"invalid incident timeline entry type",
-		"message is required",
-		"incident not found",
+	case "incident not found",
 		"resolved incidents cannot be reopened":
 		return true
 	default:

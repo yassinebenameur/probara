@@ -132,6 +132,33 @@ func TestHandlers_CreateIncident_ValidationError(t *testing.T) {
 	}
 }
 
+func TestHandlers_CreateIncident_ServiceTitleRequired(t *testing.T) {
+	log := logger.New("test", "debug")
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		createFn: func(ctx context.Context, tenantID uuid.UUID, req *models.CreateIncidentRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("title is required")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents", bytes.NewBufferString(`{"title":"API outage","summary":"Requests are failing."}`))
+	req = withTenantID(req)
+	w := httptest.NewRecorder()
+
+	h.CreateIncident(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "title is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
 func TestHandlers_ListIncidents(t *testing.T) {
 	log := logger.New("test", "debug")
 	var gotPage, gotPageSize int
@@ -302,6 +329,36 @@ func TestHandlers_UpdateIncident_InternalFailure(t *testing.T) {
 	}
 }
 
+func TestHandlers_UpdateIncident_ServiceSummaryRequired(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.New()
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		updateFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.UpdateIncidentRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("summary is required")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/incidents/"+incidentID.String(), bytes.NewBufferString(`{"title":"Updated outage"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.UpdateIncident(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "summary is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
 func TestHandlers_UpdateIncident_NotFound(t *testing.T) {
 	log := logger.New("test", "debug")
 	incidentID := uuid.New()
@@ -358,6 +415,36 @@ func TestHandlers_TransitionIncidentState(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestHandlers_TransitionIncidentState_ServiceInvalidState(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.New()
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		transitionFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.TransitionIncidentStateRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("invalid incident state")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/state", bytes.NewBufferString(`{"state":"monitoring"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.TransitionIncidentState(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid incident state") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
 	}
 }
 
@@ -492,6 +579,66 @@ func TestHandlers_CreateTimelineEntry(t *testing.T) {
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusCreated, w.Body.String())
+	}
+}
+
+func TestHandlers_CreateTimelineEntry_ServiceInvalidType(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.New()
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		createTimelineFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("invalid incident timeline entry type")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/timeline", bytes.NewBufferString(`{"entry_type":"public_update","message":"We are investigating."}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.CreateTimelineEntry(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid incident timeline entry type") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_CreateTimelineEntry_ServiceMessageRequired(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.New()
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		createTimelineFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("message is required")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/timeline", bytes.NewBufferString(`{"entry_type":"public_update","message":"We are investigating."}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.CreateTimelineEntry(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "message is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
 	}
 }
 
