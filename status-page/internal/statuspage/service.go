@@ -42,6 +42,7 @@ type StatusPageData struct {
 	ShowLatencyCharts bool                    `json:"-"` // For template use only
 	ShowAgentMetrics  bool                    `json:"-"` // For template use only
 	// Uptime history for different time ranges
+	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
 	UptimeHistory1   []HourlyUptime `json:"-"` // Last 24 hours (hourly buckets)
 	UptimeHistory30  []DailyUptime  `json:"-"` // Last 30 days
@@ -89,6 +90,7 @@ type MonitorStatus struct {
 	DowntimePeriods90d  []DowntimePeriod `json:"-"` // Downtime periods in last 90d
 	DowntimePeriods365d []DowntimePeriod `json:"-"` // Downtime periods in last 1y
 	// Multi-range uptime history for each monitor
+	UptimeHistory7d   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h   []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
 	UptimeHistory24h  []HourlyUptime `json:"-"` // Last 24 hours (hourly buckets)
 	UptimeHistory30d  []DailyUptime  `json:"-"` // Last 30 days
@@ -360,8 +362,8 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.ShowLatencyCharts = settings.ShowLatencyCharts
 	page.ShowAgentMetrics = settings.ShowAgentMetrics
 
-	// Fetch only short-range global uptime to keep public page responses bounded.
-	// Long-range (30/90/365d) aggregates are expensive on large check_results tables.
+	// Fetch only short-range and rollup-backed global uptime to keep public page responses bounded.
+	// Rollup-backed ranges (7/30/90/365d) avoid large scans over check_results.
 	if uptimeHistory1h, err := s.GetGlobal5MinuteUptime(ctx, pageID, tenantID); err == nil {
 		page.UptimeHistory1h = uptimeHistory1h
 	}
@@ -377,7 +379,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 
 // GetGlobal5MinuteUptime calculates 5-minute bucket uptime across all monitors in a status page for the last 1 hour
 func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]MinuteUptime, error) {
-	monitorIDs, err := s.listStatusPageMonitorIDs(ctx, statusPageID)
+	monitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, statusPageID, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -808,7 +810,7 @@ func formatUptime(uptime *float64, err error) string {
 }
 
 func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *MonitorStatus, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
-	ranges := []sharedanalytics.Range{sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
+	ranges := []sharedanalytics.Range{sharedanalytics.Range7d, sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
 	now := s.now()
 	for _, rangeValue := range ranges {
 		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
@@ -819,6 +821,8 @@ func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *M
 		latencyHistory := mapLatencySeries(result.Series, rangeValue)
 		downtime := mapDowntimePeriods(result.Downtime)
 		switch rangeValue {
+		case sharedanalytics.Range7d:
+			monitor.UptimeHistory7d = uptimeHistory
 		case sharedanalytics.Range30d:
 			monitor.UptimeHistory30d = uptimeHistory
 			monitor.LatencyHistory30d = latencyHistory
@@ -836,7 +840,7 @@ func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *M
 }
 
 func (s *Service) applyGlobalLongRangeAnalytics(ctx context.Context, page *StatusPageData, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
-	ranges := []sharedanalytics.Range{sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
+	ranges := []sharedanalytics.Range{sharedanalytics.Range7d, sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
 	now := s.now()
 	for _, rangeValue := range ranges {
 		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
@@ -845,6 +849,8 @@ func (s *Service) applyGlobalLongRangeAnalytics(ctx context.Context, page *Statu
 		}
 		uptimeHistory := mapDailySeries(result.Series)
 		switch rangeValue {
+		case sharedanalytics.Range7d:
+			page.UptimeHistory7 = uptimeHistory
 		case sharedanalytics.Range30d:
 			page.UptimeHistory30 = uptimeHistory
 		case sharedanalytics.Range90d:
@@ -1482,7 +1488,7 @@ func (s *Service) GetMonitorLatencyHistoryForRange(ctx context.Context, monitorI
 
 // GetGlobalHourlyUptime calculates hourly uptime across all monitors in a status page for the last 24 hours
 func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]HourlyUptime, error) {
-	monitorIDs, err := s.listStatusPageMonitorIDs(ctx, statusPageID)
+	monitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, statusPageID, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -1553,7 +1559,7 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 
 // GetGlobalDailyUptime calculates daily uptime across all monitors in a status page for N days
 func (s *Service) GetGlobalDailyUptime(ctx context.Context, statusPageID, tenantID uuid.UUID, days int) ([]DailyUptime, error) {
-	monitorIDs, err := s.listStatusPageMonitorIDs(ctx, statusPageID)
+	monitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, statusPageID, tenantID)
 	if err != nil {
 		return nil, err
 	}

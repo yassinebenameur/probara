@@ -1,11 +1,12 @@
 package statuspage
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
 
-func TestRenderPublicStatusPage_HidesToolbarForSingleMonitorAndUsesDarkThemeByDefault(t *testing.T) {
+func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThemeByDefault(t *testing.T) {
 	html, err := renderPublicStatusPage(&StatusPageData{
 		ID:                "page-1",
 		Slug:              "status",
@@ -36,8 +37,18 @@ func TestRenderPublicStatusPage_HidesToolbarForSingleMonitorAndUsesDarkThemeByDe
 
 	for _, want := range []string{
 		`data-default-theme="dark"`,
+		`data-default-range="30d"`,
 		`id="themeToggleBtn"`,
-		`detail-footer`,
+		`data-mode="default"`,
+		`data-mode="compact"`,
+		`data-mode="kiosk"`,
+		`data-range-pill="24h"`,
+		`data-range-pill="7d"`,
+		`data-range-pill="30d"`,
+		`data-range-pill="90d"`,
+		`class="range-btn active" data-range-pill="30d" aria-pressed="true"`,
+		`data-range-7d=`,
+		`localStorage.setItem('status-page-mode'`,
 		`No active incidents.`,
 	} {
 		if !strings.Contains(html, want) {
@@ -48,12 +59,21 @@ func TestRenderPublicStatusPage_HidesToolbarForSingleMonitorAndUsesDarkThemeByDe
 	for _, unwanted := range []string{
 		`id="statusPageSearch"`,
 		`id="statusFilter"`,
+		`id="rangeFilter"`,
 		`id="typeFilter"`,
 		`id="sortControl"`,
 		`id="layoutControl"`,
 	} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("expected rendered HTML to omit %q for single-monitor pages", unwanted)
+		}
+	}
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`(?s)class="uptime-bars js-strip".*?data-cells="48"`),
+		regexp.MustCompile(`(?s)class="monitor-bar js-strip".*?data-cells="36"`),
+	} {
+		if !re.MatchString(html) {
+			t.Fatalf("expected rendered HTML to match %q", re.String())
 		}
 	}
 }
@@ -89,12 +109,30 @@ func TestRenderPublicStatusPage_IncludesToolbarForMultipleMonitors(t *testing.T)
 	for _, want := range []string{
 		`id="statusPageSearch"`,
 		`id="statusFilter"`,
-		`id="typeFilter"`,
-		`id="sortControl"`,
+		`data-range-pill="24h"`,
+		`data-range-pill="7d"`,
+		`data-range-pill="30d"`,
+		`data-range-pill="90d"`,
+		`data-range-7d=`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("expected rendered HTML to contain %q", want)
 		}
+	}
+	for _, unwanted := range []string{
+		`id="typeFilter"`,
+		`id="sortControl"`,
+		`id="layoutControl"`,
+		`id="rangeFilter"`,
+		`id="resultsCounter"`,
+		`customizeOpenBtn`,
+	} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("expected rendered HTML to omit obsolete control %q", unwanted)
+		}
+	}
+	if !regexp.MustCompile(`(?s)class="monitor-bar js-strip".*?data-cells="36"`).MatchString(html) {
+		t.Fatalf("expected monitor strips to render with 36 cells")
 	}
 	for _, want := range []string{`Core`, `Edge`, `data-section-id="section-core"`, `data-section-id="section-edge"`} {
 		if !strings.Contains(html, want) {

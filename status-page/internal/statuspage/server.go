@@ -36,7 +36,7 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	// Start NATS subscriber for live updates (optional)
 	var subscriber *Subscriber
 	if cfg.NATSURL != "" {
-		if sub, err := NewSubscriber(cfg.NATSURL, hub, log); err != nil {
+		if sub, err := NewSubscriber(cfg.NATSURL, hub, dbClient, log); err != nil {
 			log.WithError(err).Warn("Failed to initialize status update subscriber")
 		} else {
 			if err := sub.Start(); err != nil {

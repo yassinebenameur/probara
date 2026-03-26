@@ -49,6 +49,20 @@ func (h *Hub) Unregister(slug string, ch chan SSEEvent) {
 	}
 }
 
+// Broadcast sends an event to clients subscribed to a specific slug.
+func (h *Hub) Broadcast(slug string, event SSEEvent) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for ch := range h.clients[slug] {
+		select {
+		case ch <- event:
+		default:
+			// Drop if client is slow.
+		}
+	}
+}
+
 // BroadcastAll sends an event to all clients.
 func (h *Hub) BroadcastAll(event SSEEvent) {
 	h.mu.RLock()

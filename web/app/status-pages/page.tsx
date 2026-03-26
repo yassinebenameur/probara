@@ -77,15 +77,6 @@ export default function StatusPagesPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Link
-            href="/status-pages/builder"
-            className="inline-flex items-center gap-2 rounded-lg border border-white/[0.1] bg-slate-800/60 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M4 12h16M4 17h16" />
-            </svg>
-            Open Builder
-          </Link>
           <button
             onClick={() => router.push('/status-pages/new')}
             className="inline-flex items-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-400"
