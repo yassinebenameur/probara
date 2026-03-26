@@ -17,6 +17,14 @@ const (
 	IncidentStateResolved      IncidentState = "resolved"
 )
 
+// IncidentSource represents how an incident was created.
+type IncidentSource string
+
+const (
+	IncidentSourceManual IncidentSource = "manual"
+	IncidentSourceAuto   IncidentSource = "auto"
+)
+
 // IncidentTimelineEntryType represents the type of timeline entry.
 type IncidentTimelineEntryType string
 
@@ -60,10 +68,23 @@ type IncidentDetail struct {
 
 // IncidentListResponse represents a paginated list of incidents.
 type IncidentListResponse struct {
-	Items    []Incident `json:"items"`
-	Page     int        `json:"page"`
-	PageSize int        `json:"page_size"`
-	Total    int        `json:"total"`
+	Items    []IncidentListItem `json:"items"`
+	Page     int                `json:"page"`
+	PageSize int                `json:"page_size"`
+	Total    int                `json:"total"`
+}
+
+// IncidentListItem represents the incident list summary row.
+type IncidentListItem struct {
+	ID                 uuid.UUID      `json:"id"`
+	State              IncidentState  `json:"state"`
+	Source             IncidentSource `json:"source"`
+	Title              string         `json:"title"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	ResolvedAt         *time.Time     `json:"resolved_at,omitempty"`
+	LinkedAlertCount   int            `json:"linked_alert_count"`
+	LinkedMonitorCount int            `json:"linked_monitor_count"`
+	PublicationCount   int            `json:"publication_count"`
 }
 
 // CreateIncidentRequest represents a request to create an incident.

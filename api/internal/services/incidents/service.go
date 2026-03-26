@@ -139,11 +139,34 @@ func (s *Service) ListIncidents(ctx context.Context, tenantID uuid.UUID, page, p
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, tenant_id, title, summary, state, resolved_at, is_auto_created,
-			auto_monitor_id, auto_alert_policy_id, created_at, updated_at
-		FROM incidents
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC, id DESC
+		WITH alert_counts AS (
+			SELECT incident_id, COUNT(*)::int AS linked_alert_count
+			FROM incident_alerts
+			GROUP BY incident_id
+		),
+		monitor_counts AS (
+			SELECT incident_id, COUNT(*)::int AS linked_monitor_count
+			FROM incident_monitors
+			GROUP BY incident_id
+		),
+		publication_counts AS (
+			SELECT incident_id, COUNT(*)::int AS publication_count
+			FROM incident_status_page_publications
+			WHERE tenant_id = $1 AND unpublished_at IS NULL
+			GROUP BY incident_id
+		)
+		SELECT i.id, i.state,
+			CASE WHEN i.is_auto_created THEN 'auto' ELSE 'manual' END AS source,
+			i.title, i.updated_at, i.resolved_at,
+			COALESCE(ac.linked_alert_count, 0),
+			COALESCE(mc.linked_monitor_count, 0),
+			COALESCE(pc.publication_count, 0)
+		FROM incidents i
+		LEFT JOIN alert_counts ac ON ac.incident_id = i.id
+		LEFT JOIN monitor_counts mc ON mc.incident_id = i.id
+		LEFT JOIN publication_counts pc ON pc.incident_id = i.id
+		WHERE i.tenant_id = $1
+		ORDER BY i.updated_at DESC, i.id DESC
 		LIMIT $2 OFFSET $3
 	`, tenantID, pageSize, offset)
 	if err != nil {
@@ -151,9 +174,9 @@ func (s *Service) ListIncidents(ctx context.Context, tenantID uuid.UUID, page, p
 	}
 	defer rows.Close()
 
-	var items []models.Incident
+	var items []models.IncidentListItem
 	for rows.Next() {
-		incident, err := scanIncident(rows)
+		incident, err := scanIncidentListItem(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan incident: %w", err)
 		}
@@ -340,7 +363,7 @@ func (s *Service) loadIncidentTimeline(ctx context.Context, tenantID, incidentID
 		SELECT id, tenant_id, incident_id, entry_type, message, metadata, created_at
 		FROM incident_timeline_entries
 		WHERE tenant_id = $1 AND incident_id = $2
-		ORDER BY created_at ASC, id ASC
+		ORDER BY created_at DESC, id DESC
 	`, tenantID, incidentID)
 	if err != nil {
 		return nil, fmt.Errorf("load incident timeline: %w", err)
@@ -402,4 +425,22 @@ func scanIncident(scanner incidentRowScanner) (models.Incident, error) {
 	}
 
 	return incident, nil
+}
+
+func scanIncidentListItem(scanner incidentRowScanner) (models.IncidentListItem, error) {
+	var item models.IncidentListItem
+	var resolvedAt sql.NullTime
+
+	if err := scanner.Scan(
+		&item.ID, &item.State, &item.Source, &item.Title, &item.UpdatedAt, &resolvedAt,
+		&item.LinkedAlertCount, &item.LinkedMonitorCount, &item.PublicationCount,
+	); err != nil {
+		return models.IncidentListItem{}, err
+	}
+	if resolvedAt.Valid {
+		resolvedAtValue := resolvedAt.Time
+		item.ResolvedAt = &resolvedAtValue
+	}
+
+	return item, nil
 }

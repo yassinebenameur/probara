@@ -53,7 +53,7 @@ func ValidateCreateIncidentTimelineEntry(req *models.CreateIncidentTimelineEntry
 		return fmt.Errorf("request is required")
 	}
 	switch req.EntryType {
-	case models.IncidentTimelineEntryTypeSystem, models.IncidentTimelineEntryTypeInternalNote, models.IncidentTimelineEntryTypePublicUpdate:
+	case models.IncidentTimelineEntryTypeInternalNote, models.IncidentTimelineEntryTypePublicUpdate:
 	default:
 		return fmt.Errorf("invalid incident timeline entry type")
 	}
