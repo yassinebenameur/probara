@@ -18,6 +18,7 @@ import (
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
 	dashboardhandlers "github.com/yassinebenameur/probara/api/internal/handlers/dashboard"
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
+	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
@@ -34,6 +35,7 @@ import (
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
+	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
@@ -175,6 +177,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			importSvc := importservice.NewService(dbClient, monitorService)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
 
+			// Incident service and handlers
+			incidentService := incidentservice.NewService(dbClient)
+			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
+
 			r.Route("/monitors", func(r chi.Router) {
 				r.Post("/", monitorHandlers.CreateMonitor)
 				r.Get("/", monitorHandlers.ListMonitors)
@@ -219,6 +225,16 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", alertHandlers.GetAlert)
 				r.Post("/{id}/acknowledge", alertHandlers.AcknowledgeAlert)
 				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)
+			})
+
+			// Incidents
+			r.Route("/incidents", func(r chi.Router) {
+				r.Get("/", incidentHandlers.ListIncidents)
+				r.Post("/", incidentHandlers.CreateIncident)
+				r.Get("/{id}", incidentHandlers.GetIncident)
+				r.Patch("/{id}", incidentHandlers.UpdateIncident)
+				r.Post("/{id}/state", incidentHandlers.TransitionIncidentState)
+				r.Post("/{id}/timeline", incidentHandlers.CreateTimelineEntry)
 			})
 
 			// Alert policies
