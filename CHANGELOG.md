@@ -1,3 +1,15 @@
+# [1.0.0-alpha.36](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.35...v1.0.0-alpha.36) (2026-03-26)
+
+
+### Bug Fixes
+
+* **import:** sync portable monitor service test mock ([ddc368c](https://github.com/yassinebenameur/probara/commit/ddc368cb48af298cc6fb68ea9ae763d6871f7cb7))
+
+
+### Features
+
+* **status-page:** redesign public page rendering and scoped live updates ([b708ace](https://github.com/yassinebenameur/probara/commit/b708ace93ee5c515a8bd13beead0ef20ae86ecbf))
+
 # [1.0.0-alpha.35](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.34...v1.0.0-alpha.35) (2026-03-11)
 
 
