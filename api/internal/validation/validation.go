@@ -47,6 +47,22 @@ func ValidateIncidentStateTransition(req *models.TransitionIncidentStateRequest)
 	}
 }
 
+// ValidateCreateIncidentTimelineEntry validates a timeline entry request.
+func ValidateCreateIncidentTimelineEntry(req *models.CreateIncidentTimelineEntryRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	switch req.EntryType {
+	case models.IncidentTimelineEntryTypeSystem, models.IncidentTimelineEntryTypeInternalNote, models.IncidentTimelineEntryTypePublicUpdate:
+	default:
+		return fmt.Errorf("invalid incident timeline entry type")
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		return fmt.Errorf("message is required")
+	}
+	return nil
+}
+
 // activeCheckTypes are monitor types that require timeout validation
 var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeHTTP:             true,

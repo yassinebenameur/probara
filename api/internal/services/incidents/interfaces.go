@@ -29,6 +29,9 @@ type IncidentService interface {
 
 	// TransitionIncidentState moves an incident to another state.
 	TransitionIncidentState(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.TransitionIncidentStateRequest) (*models.IncidentDetail, error)
+
+	// CreateIncidentTimelineEntry appends a timeline entry to an incident.
+	CreateIncidentTimelineEntry(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error)
 }
 
 // Ensure Service implements IncidentService.

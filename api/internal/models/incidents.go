@@ -82,3 +82,10 @@ type UpdateIncidentRequest struct {
 type TransitionIncidentStateRequest struct {
 	State IncidentState `json:"state"`
 }
+
+// CreateIncidentTimelineEntryRequest represents a request to append an incident timeline entry.
+type CreateIncidentTimelineEntryRequest struct {
+	EntryType IncidentTimelineEntryType `json:"entry_type"`
+	Message   string                    `json:"message"`
+	Metadata  map[string]interface{}    `json:"metadata,omitempty"`
+}

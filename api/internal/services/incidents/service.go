@@ -282,6 +282,35 @@ func (s *Service) TransitionIncidentState(ctx context.Context, tenantID, inciden
 	return s.GetIncident(ctx, tenantID, incidentID)
 }
 
+// CreateIncidentTimelineEntry appends a timeline entry to an incident.
+func (s *Service) CreateIncidentTimelineEntry(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error) {
+	if err := validation.ValidateCreateIncidentTimelineEntry(req); err != nil {
+		return nil, err
+	}
+
+	if _, err := s.GetIncident(ctx, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, req.EntryType, strings.TrimSpace(req.Message), req.Metadata); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
 func (s *Service) insertTimelineEntry(ctx context.Context, tenantID, incidentID uuid.UUID, entryType models.IncidentTimelineEntryType, message string, metadata map[string]interface{}) error {
 	return s.insertTimelineEntryTx(ctx, s.db, tenantID, incidentID, entryType, message, metadata)
 }
