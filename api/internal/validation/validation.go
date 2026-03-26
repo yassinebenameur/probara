@@ -20,6 +20,33 @@ var (
 	slugRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 )
 
+// ValidateCreateIncident validates a manual incident creation request.
+func ValidateCreateIncident(req *models.CreateIncidentRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		return fmt.Errorf("title is required")
+	}
+	if strings.TrimSpace(req.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	return nil
+}
+
+// ValidateIncidentStateTransition validates an incident state transition request.
+func ValidateIncidentStateTransition(req *models.TransitionIncidentStateRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	switch req.State {
+	case models.IncidentStateInvestigating, models.IncidentStateIdentified, models.IncidentStateMonitoring, models.IncidentStateResolved:
+		return nil
+	default:
+		return fmt.Errorf("invalid incident state")
+	}
+}
+
 // activeCheckTypes are monitor types that require timeout validation
 var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeHTTP:             true,
