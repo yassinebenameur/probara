@@ -82,6 +82,26 @@ func isIncidentNotFoundError(err error) bool {
 	return err != nil && err.Error() == "incident not found"
 }
 
+func isIncidentExpectedTransitionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	switch err.Error() {
+	case "request is required",
+		"title is required",
+		"summary is required",
+		"invalid incident state",
+		"invalid incident timeline entry type",
+		"message is required",
+		"incident not found",
+		"resolved incidents cannot be reopened":
+		return true
+	default:
+		return false
+	}
+}
+
 // ListIncidents handles GET /api/v1/incidents
 func (h *Handlers) ListIncidents(w http.ResponseWriter, r *http.Request) {
 	tenantUUID, ok := tenantUUIDFromContext(w, r)
@@ -248,11 +268,13 @@ func (h *Handlers) TransitionIncidentState(w http.ResponseWriter, r *http.Reques
 
 	incident, err := h.service.TransitionIncidentState(r.Context(), tenantUUID, incidentID, &req)
 	if err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error":       err.Error(),
-			"tenant_id":   tenantUUID.String(),
-			"incident_id": incidentID.String(),
-		}).Error("Failed to transition incident state")
+		if !isIncidentExpectedTransitionError(err) {
+			h.logger.WithFields(map[string]interface{}{
+				"error":       err.Error(),
+				"tenant_id":   tenantUUID.String(),
+				"incident_id": incidentID.String(),
+			}).Error("Failed to transition incident state")
+		}
 		writeIncidentError(w, err)
 		return
 	}

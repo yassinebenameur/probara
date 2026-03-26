@@ -302,6 +302,31 @@ func TestHandlers_UpdateIncident_InternalFailure(t *testing.T) {
 	}
 }
 
+func TestHandlers_UpdateIncident_NotFound(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.New()
+	h := NewHandlers(&mockIncidentService{
+		updateFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.UpdateIncidentRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("incident not found")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/incidents/"+incidentID.String(), bytes.NewBufferString(`{"title":"Updated outage"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.UpdateIncident(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "incident not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
+	}
+}
+
 func TestHandlers_TransitionIncidentState(t *testing.T) {
 	log := logger.New("test", "debug")
 	incidentID := uuid.New()
@@ -333,6 +358,68 @@ func TestHandlers_TransitionIncidentState(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestHandlers_TransitionIncidentState_NotFound(t *testing.T) {
+	var logBuf bytes.Buffer
+	log := logger.New("test", "debug")
+	log.SetOutput(&logBuf)
+
+	incidentID := uuid.New()
+	h := NewHandlers(&mockIncidentService{
+		transitionFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.TransitionIncidentStateRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("incident not found")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/state", bytes.NewBufferString(`{"state":"resolved"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.TransitionIncidentState(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "incident not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
+	}
+	if strings.Contains(logBuf.String(), "Failed to transition incident state") {
+		t.Fatalf("log = %s, did not expect error-level transition log", logBuf.String())
+	}
+}
+
+func TestHandlers_TransitionIncidentState_ResolvedCannotReopen(t *testing.T) {
+	var logBuf bytes.Buffer
+	log := logger.New("test", "debug")
+	log.SetOutput(&logBuf)
+
+	incidentID := uuid.New()
+	h := NewHandlers(&mockIncidentService{
+		transitionFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID, req *models.TransitionIncidentStateRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("resolved incidents cannot be reopened")
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/state", bytes.NewBufferString(`{"state":"investigating"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.TransitionIncidentState(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "resolved incidents cannot be reopened") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+	if strings.Contains(logBuf.String(), "Failed to transition incident state") {
+		t.Fatalf("log = %s, did not expect error-level transition log", logBuf.String())
 	}
 }
 
