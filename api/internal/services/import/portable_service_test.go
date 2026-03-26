@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -22,6 +23,8 @@ type portableMonitorServiceMock struct {
 	createRequests  []*models.CreateMonitorRequest
 	createdMonitors []*models.Monitor
 }
+
+var _ monitorservice.MonitorService = (*portableMonitorServiceMock)(nil)
 
 func (m *portableMonitorServiceMock) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
 	monitorID := uuid.New()
@@ -81,6 +84,10 @@ func (m *portableMonitorServiceMock) UpdateMonitor(ctx context.Context, tenantID
 }
 
 func (m *portableMonitorServiceMock) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error {
+	return nil
+}
+
+func (m *portableMonitorServiceMock) DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error {
 	return nil
 }
 
