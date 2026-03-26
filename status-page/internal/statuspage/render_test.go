@@ -38,6 +38,9 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 	for _, want := range []string{
 		`data-default-theme="dark"`,
 		`data-default-range="30d"`,
+		`id="kioskStats"`,
+		`id="statusHero"`,
+		`id="incidentsSection"`,
 		`id="themeToggleBtn"`,
 		`data-mode="default"`,
 		`data-mode="compact"`,
@@ -48,7 +51,11 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		`data-range-pill="90d"`,
 		`class="range-btn active" data-range-pill="30d" aria-pressed="true"`,
 		`data-range-7d=`,
+		`data-monitor-id="monitor-1"`,
 		`localStorage.setItem('status-page-mode'`,
+		`status-page-live-refresh`,
+		`new DOMParser().parseFromString`,
+		`replaceLiveRegion('servicesList', nextDoc)`,
 		`No active incidents.`,
 	} {
 		if !strings.Contains(html, want) {
@@ -63,6 +70,7 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		`id="typeFilter"`,
 		`id="sortControl"`,
 		`id="layoutControl"`,
+		`window.location.reload()`,
 	} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("expected rendered HTML to omit %q for single-monitor pages", unwanted)
@@ -109,11 +117,15 @@ func TestRenderPublicStatusPage_IncludesToolbarForMultipleMonitors(t *testing.T)
 	for _, want := range []string{
 		`id="statusPageSearch"`,
 		`id="statusFilter"`,
+		`id="kioskStats"`,
+		`id="statusHero"`,
+		`id="incidentsSection"`,
 		`data-range-pill="24h"`,
 		`data-range-pill="7d"`,
 		`data-range-pill="30d"`,
 		`data-range-pill="90d"`,
 		`data-range-7d=`,
+		`data-monitor-id="`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("expected rendered HTML to contain %q", want)

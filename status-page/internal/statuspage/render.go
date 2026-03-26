@@ -1538,7 +1538,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         <span class="kiosk-brand-mark"></span>
         <span>{{.Title}}</span>
       </div>
-      <div class="kiosk-stats">
+      <div class="kiosk-stats" id="kioskStats">
         <div class="kiosk-stat k-ok"><span class="ks-dot"></span>{{.OperationalCount}} OK</div>
         <div class="kiosk-stat k-warn"><span class="ks-dot"></span>{{.DegradedCount}} WARN</div>
         <div class="kiosk-stat k-down"><span class="ks-dot"></span>{{.DownCount}} DOWN</div>
@@ -1609,7 +1609,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
   </header>
 
   <main class="container">
-    <section class="hero">
+    <section class="hero" id="statusHero">
       <div class="overall-badge {{.OverallTone}}" id="overallBadge">
         <div class="pulse-dot"></div>
         <span>{{.OverallStatusLabel}}</span>
@@ -1702,7 +1702,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         <div class="svc-group monitor-section-group" data-section-id="{{.ID}}">
           <div class="group-label">{{.Title}}</div>
           {{range .Monitors}}
-            <details class="svc-row monitor-card" data-search="{{.SearchText}}" data-status="{{.Status}}">
+            <details class="svc-row monitor-card" data-monitor-id="{{.ID}}" data-search="{{.SearchText}}" data-status="{{.Status}}">
               <summary class="svc-header">
                 <div class="svc-left">
                   <span class="svc-type">{{.TypeLabel}}</span>
@@ -1801,7 +1801,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       </div>
     </section>
 
-    <section class="incidents-section">
+    <section class="incidents-section" id="incidentsSection">
       <div class="group-label">System Logs</div>
       {{if .Incidents}}
         {{range .Incidents}}
@@ -1845,25 +1845,38 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
   <script>
     (function () {
       const body = document.body;
-      const sectionGroups = Array.from(document.querySelectorAll('.monitor-section-group'));
-      const rows = Array.from(document.querySelectorAll('.monitor-card'));
-      const kioskTiles = Array.from(document.querySelectorAll('.kiosk-tile'));
-      const emptyState = document.getElementById('emptyState');
-      const searchInput = document.getElementById('statusPageSearch');
-      const statusFilter = document.getElementById('statusFilter');
-      const rangeButtons = Array.from(document.querySelectorAll('[data-range-pill]'));
-      const modeButtons = Array.from(document.querySelectorAll('[data-mode]'));
-      const themeToggleBtn = document.getElementById('themeToggleBtn');
-      const kioskExitBtn = document.getElementById('kioskExitBtn');
-      const strips = Array.from(document.querySelectorAll('.js-strip[data-active-range]'));
-      const sharedRangeLabels = Array.from(document.querySelectorAll('[data-shared-range-label]'));
-      const globalUptimeValue = document.getElementById('globalUptimeValue');
-      const globalRangeStart = document.getElementById('globalRangeStart');
-      const kioskTime = document.getElementById('kioskTime');
       const defaultTheme = body.dataset.defaultTheme === 'light' ? 'light' : 'dark';
       const themeAllowed = body.dataset.allowThemeToggle === '1';
       const defaultRange = ['24h', '7d', '30d', '90d'].includes(body.dataset.defaultRange || '') ? body.dataset.defaultRange : '30d';
       const defaultMode = body.dataset.defaultMode || 'default';
+      let clockTimer = null;
+      let refreshTimer = null;
+      let refreshInFlight = false;
+      let refreshQueued = false;
+
+      function getDom() {
+        return {
+          sectionGroups: Array.from(document.querySelectorAll('.monitor-section-group')),
+          rows: Array.from(document.querySelectorAll('.monitor-card')),
+          kioskTiles: Array.from(document.querySelectorAll('.kiosk-tile')),
+          emptyState: document.getElementById('emptyState'),
+          searchInput: document.getElementById('statusPageSearch'),
+          statusFilter: document.getElementById('statusFilter'),
+          rangeButtons: Array.from(document.querySelectorAll('[data-range-pill]')),
+          modeButtons: Array.from(document.querySelectorAll('[data-mode]')),
+          themeToggleBtn: document.getElementById('themeToggleBtn'),
+          kioskExitBtn: document.getElementById('kioskExitBtn'),
+          strips: Array.from(document.querySelectorAll('.js-strip[data-active-range]')),
+          sharedRangeLabels: Array.from(document.querySelectorAll('[data-shared-range-label]')),
+          globalUptimeValue: document.getElementById('globalUptimeValue'),
+          globalRangeStart: document.getElementById('globalRangeStart'),
+          kioskTime: document.getElementById('kioskTime')
+        };
+      }
+
+      function isValidRange(range) {
+        return ['24h', '7d', '30d', '90d'].includes(range || '');
+      }
 
       function getParams() {
         return new URLSearchParams(window.location.search);
@@ -1931,22 +1944,23 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       }
 
       function applyRange(range, syncUrl) {
-        const nextRange = ['24h', '7d', '30d', '90d'].includes(range || '') ? range : defaultRange;
-        rangeButtons.forEach(function (btn) {
+        const dom = getDom();
+        const nextRange = isValidRange(range) ? range : defaultRange;
+        dom.rangeButtons.forEach(function (btn) {
           const active = btn.dataset.rangePill === nextRange;
           btn.classList.toggle('active', active);
           btn.setAttribute('aria-pressed', active ? 'true' : 'false');
         });
-        sharedRangeLabels.forEach(function (el) {
+        dom.sharedRangeLabels.forEach(function (el) {
           el.textContent = rangeLabel(nextRange);
         });
-        if (globalRangeStart) {
-          globalRangeStart.textContent = rangeLabel(nextRange);
+        if (dom.globalRangeStart) {
+          dom.globalRangeStart.textContent = rangeLabel(nextRange);
         }
-        if (globalUptimeValue) {
-          globalUptimeValue.textContent = globalUptimeValue.getAttribute('data-range-value-' + nextRange) || '—';
+        if (dom.globalUptimeValue) {
+          dom.globalUptimeValue.textContent = dom.globalUptimeValue.getAttribute('data-range-value-' + nextRange) || '—';
         }
-        strips.forEach(function (el) {
+        dom.strips.forEach(function (el) {
           el.dataset.activeRange = nextRange;
           renderStrip(el, el.getAttribute('data-range-' + nextRange));
         });
@@ -1956,10 +1970,11 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       }
 
       function applyTheme(theme, syncUrl) {
+        const dom = getDom();
         const nextTheme = theme === 'light' ? 'light' : 'dark';
         body.dataset.theme = nextTheme;
-        if (themeToggleBtn) {
-          themeToggleBtn.textContent = nextTheme === 'dark' ? 'Light' : 'Dark';
+        if (dom.themeToggleBtn) {
+          dom.themeToggleBtn.textContent = nextTheme === 'dark' ? 'Light' : 'Dark';
         }
         if (syncUrl) {
           setParam('theme', nextTheme);
@@ -1970,6 +1985,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       }
 
       function setMode(mode, syncUrl) {
+        const dom = getDom();
         const nextMode = ['default', 'compact', 'kiosk'].includes(mode || '') ? mode : defaultMode;
         body.classList.remove('compact', 'kiosk');
         if (nextMode === 'compact') {
@@ -1977,7 +1993,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         } else if (nextMode === 'kiosk') {
           body.classList.add('kiosk');
         }
-        modeButtons.forEach(function (btn) {
+        dom.modeButtons.forEach(function (btn) {
           btn.classList.toggle('active', btn.dataset.mode === nextMode);
         });
         if (syncUrl) {
@@ -1989,13 +2005,14 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       }
 
       function applyViewState() {
-        const query = searchInput ? (searchInput.value || '').trim().toLowerCase() : '';
-        const activeStatus = statusFilter ? (statusFilter.value || 'all') : 'all';
+        const dom = getDom();
+        const query = dom.searchInput ? (dom.searchInput.value || '').trim().toLowerCase() : '';
+        const activeStatus = dom.statusFilter ? (dom.statusFilter.value || 'all') : 'all';
 
         setParam('q', query);
         setParam('status', activeStatus);
 
-        const visibleRows = rows.filter(function (row) {
+        const visibleRows = dom.rows.filter(function (row) {
           const matchesQuery = !query || (row.dataset.search || '').includes(query);
           const matchesStatus = activeStatus === 'all' || row.dataset.status === activeStatus;
           const visible = matchesQuery && matchesStatus;
@@ -2003,31 +2020,32 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           return visible;
         });
 
-        kioskTiles.forEach(function (tile) {
+        dom.kioskTiles.forEach(function (tile) {
           const matchesQuery = !query || (tile.dataset.search || '').includes(query);
           const matchesStatus = activeStatus === 'all' || tile.dataset.status === activeStatus;
           tile.classList.toggle('hidden', !(matchesQuery && matchesStatus));
         });
 
-        sectionGroups.forEach(function (section) {
-          const visibleCount = rows.filter(function (row) {
+        dom.sectionGroups.forEach(function (section) {
+          const visibleCount = dom.rows.filter(function (row) {
             return row.closest('.monitor-section-group') === section && !row.classList.contains('hidden');
           }).length;
           section.classList.toggle('hidden', visibleCount === 0);
         });
 
-        if (emptyState) {
-          emptyState.classList.toggle('hidden', visibleRows.length > 0);
+        if (dom.emptyState) {
+          dom.emptyState.classList.toggle('hidden', visibleRows.length > 0);
         }
       }
 
       function hydrateControlsFromUrl() {
+        const dom = getDom();
         const params = getParams();
-        if (searchInput) searchInput.value = params.get('q') || '';
-        if (statusFilter) statusFilter.value = params.get('status') || 'all';
+        if (dom.searchInput) dom.searchInput.value = params.get('q') || '';
+        if (dom.statusFilter) dom.statusFilter.value = params.get('status') || 'all';
 
         const requestedRange = params.get('range');
-        const initialRange = ['24h', '7d', '30d', '90d'].includes(requestedRange || '') ? requestedRange : defaultRange;
+        const initialRange = isValidRange(requestedRange) ? requestedRange : defaultRange;
         applyRange(initialRange, false);
         if (requestedRange && requestedRange !== initialRange) {
           setParam('range', initialRange);
@@ -2053,41 +2071,96 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         setMode(mode || defaultMode, false);
       }
 
+      function currentRange() {
+        const requestedRange = getParams().get('range');
+        if (isValidRange(requestedRange)) {
+          return requestedRange;
+        }
+        const activeButton = getDom().rangeButtons.find(function (btn) {
+          return btn.classList.contains('active');
+        });
+        if (activeButton && isValidRange(activeButton.dataset.rangePill)) {
+          return activeButton.dataset.rangePill;
+        }
+        return defaultRange;
+      }
+
+      function currentMode() {
+        if (body.classList.contains('kiosk')) {
+          return 'kiosk';
+        }
+        if (body.classList.contains('compact')) {
+          return 'compact';
+        }
+        return 'default';
+      }
+
+      function openMonitorIds() {
+        return getDom().rows.filter(function (row) {
+          return row.open && row.dataset.monitorId;
+        }).map(function (row) {
+          return row.dataset.monitorId;
+        });
+      }
+
+      function restoreOpenMonitorIds(ids) {
+        const open = new Set(ids || []);
+        getDom().rows.forEach(function (row) {
+          row.open = open.has(row.dataset.monitorId || '');
+        });
+      }
+
+      function replaceLiveRegion(id, nextDoc) {
+        const current = document.getElementById(id);
+        const incoming = nextDoc.getElementById(id);
+        if (!current || !incoming || !current.parentNode) {
+          return;
+        }
+        current.parentNode.replaceChild(incoming, current);
+      }
+
       function setupControls() {
-        if (searchInput) {
-          searchInput.addEventListener('input', applyViewState);
-        }
-        if (statusFilter) {
-          statusFilter.addEventListener('change', applyViewState);
-        }
-        rangeButtons.forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            applyRange(btn.dataset.rangePill || defaultRange, true);
-          });
+        document.addEventListener('input', function (event) {
+          if (event.target && event.target.id === 'statusPageSearch') {
+            applyViewState();
+          }
         });
-        modeButtons.forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            setMode(btn.dataset.mode || defaultMode, true);
-          });
+        document.addEventListener('change', function (event) {
+          if (event.target && event.target.id === 'statusFilter') {
+            applyViewState();
+          }
         });
-        if (themeToggleBtn && themeAllowed) {
-          themeToggleBtn.addEventListener('click', function () {
+        document.addEventListener('click', function (event) {
+          const rangeBtn = event.target.closest('[data-range-pill]');
+          if (rangeBtn) {
+            applyRange(rangeBtn.dataset.rangePill || defaultRange, true);
+            return;
+          }
+
+          const modeBtn = event.target.closest('[data-mode]');
+          if (modeBtn) {
+            setMode(modeBtn.dataset.mode || defaultMode, true);
+            return;
+          }
+
+          if (themeAllowed && event.target.closest('#themeToggleBtn')) {
             applyTheme(body.dataset.theme === 'dark' ? 'light' : 'dark', true);
-          });
-        }
-        if (kioskExitBtn) {
-          kioskExitBtn.addEventListener('click', function () {
+            return;
+          }
+
+          if (event.target.closest('#kioskExitBtn')) {
             setMode('default', true);
-          });
-        }
+          }
+        });
       }
 
       function setupShortcuts() {
         document.addEventListener('keydown', function (event) {
+          const dom = getDom();
           if (event.key === '/') {
-            if (searchInput) {
+            if (dom.searchInput) {
               event.preventDefault();
-              searchInput.focus();
+              dom.searchInput.focus();
             }
             return;
           }
@@ -2103,8 +2176,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
             setMode('kiosk', true);
             return;
           }
-          if ((event.key === 't' || event.key === 'T') && themeToggleBtn && themeAllowed) {
-            themeToggleBtn.click();
+          if ((event.key === 't' || event.key === 'T') && dom.themeToggleBtn && themeAllowed) {
+            dom.themeToggleBtn.click();
             return;
           }
           if (event.key === 'Escape' && body.classList.contains('kiosk')) {
@@ -2113,13 +2186,65 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         });
       }
 
+      function updateClock() {
+        const dom = getDom();
+        if (!dom.kioskTime) return;
+        dom.kioskTime.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+
       function setupClock() {
-        if (!kioskTime) return;
-        function updateClock() {
-          kioskTime.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
         updateClock();
-        window.setInterval(updateClock, 30000);
+        if (clockTimer) {
+          return;
+        }
+        clockTimer = window.setInterval(updateClock, 30000);
+      }
+
+      async function refreshLiveContent() {
+        if (refreshInFlight) {
+          refreshQueued = true;
+          return;
+        }
+
+        refreshInFlight = true;
+        refreshQueued = false;
+
+        try {
+          const expandedMonitorIds = openMonitorIds();
+          const response = await fetch(window.location.pathname + window.location.search, {
+            cache: 'no-store',
+            headers: {
+              'X-Requested-With': 'status-page-live-refresh'
+            }
+          });
+          if (!response.ok) {
+            return;
+          }
+
+          const html = await response.text();
+          const nextDoc = new DOMParser().parseFromString(html, 'text/html');
+
+          document.title = nextDoc.title || document.title;
+          replaceLiveRegion('kioskStats', nextDoc);
+          replaceLiveRegion('kioskGrid', nextDoc);
+          replaceLiveRegion('statusHero', nextDoc);
+          replaceLiveRegion('servicesList', nextDoc);
+          replaceLiveRegion('incidentsSection', nextDoc);
+
+          restoreOpenMonitorIds(expandedMonitorIds);
+          applyTheme(body.dataset.theme || defaultTheme, false);
+          setMode(currentMode(), false);
+          applyRange(currentRange(), false);
+          applyViewState();
+          updateClock();
+        } catch (err) {
+        } finally {
+          refreshInFlight = false;
+          if (refreshQueued) {
+            refreshQueued = false;
+            void refreshLiveContent();
+          }
+        }
       }
 
       function setupLiveRefresh() {
@@ -2127,13 +2252,13 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         if (!slug || typeof EventSource === 'undefined') return;
         try {
           const source = new EventSource('/public/status/' + slug + '/stream');
-          let refreshTimer = null;
           function scheduleRefresh() {
             if (refreshTimer) {
               window.clearTimeout(refreshTimer);
             }
             refreshTimer = window.setTimeout(function () {
-              window.location.reload();
+              refreshTimer = null;
+              void refreshLiveContent();
             }, 900);
           }
           source.addEventListener('update', scheduleRefresh);
