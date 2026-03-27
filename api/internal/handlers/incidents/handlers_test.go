@@ -356,6 +356,26 @@ func TestHandlers_DetachIncidentAlert_InvalidAlertIDParam(t *testing.T) {
 	}
 }
 
+func TestHandlers_DetachIncidentAlert_AlertIDRequiredParam(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/incidents/"+incidentID.String()+"/alerts/", nil)
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{"id": incidentID.String(), "alertId": ""})
+	w := httptest.NewRecorder()
+
+	h.DetachIncidentAlert(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "alert ID is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
 func TestHandlers_AttachIncidentMonitor_InvalidMonitorID(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockIncidentService{}, log)
@@ -458,6 +478,26 @@ func TestHandlers_DetachIncidentMonitor_InvalidMonitorIDParam(t *testing.T) {
 	}
 }
 
+func TestHandlers_DetachIncidentMonitor_MonitorIDRequiredParam(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/incidents/"+incidentID.String()+"/monitors/", nil)
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{"id": incidentID.String(), "monitorId": ""})
+	w := httptest.NewRecorder()
+
+	h.DetachIncidentMonitor(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "monitor ID is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
 func TestHandlers_PublishIncidentToStatusPage_ServiceValidationError(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockIncidentService{
@@ -545,6 +585,120 @@ func TestHandlers_PublishIncidentToStatusPage_InvalidStatusPageIDParam(t *testin
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "invalid status page ID") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_PublishIncidentToStatusPage_StatusPageIDRequiredParam(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/incidents/"+incidentID.String()+"/status-pages/", bytes.NewBufferString(`{"monitor_ids":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{"id": incidentID.String(), "statusPageId": ""})
+	w := httptest.NewRecorder()
+
+	h.PublishIncidentToStatusPage(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "status page ID is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_PublishIncidentToStatusPage_ServiceRequestRequired(t *testing.T) {
+	log := logger.New("test", "debug")
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		publishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("request is required")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	statusPageID := uuid.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/incidents/"+incidentID.String()+"/status-pages/"+statusPageID.String(), bytes.NewBufferString(`{"monitor_ids":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{"id": incidentID.String(), "statusPageId": statusPageID.String()})
+	w := httptest.NewRecorder()
+
+	h.PublishIncidentToStatusPage(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "request is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_PublishIncidentToStatusPage_ServiceMonitorIDRequired(t *testing.T) {
+	log := logger.New("test", "debug")
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		publishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("monitor ID is required")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	statusPageID := uuid.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/incidents/"+incidentID.String()+"/status-pages/"+statusPageID.String(), bytes.NewBufferString(`{"monitor_ids":[""]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{"id": incidentID.String(), "statusPageId": statusPageID.String()})
+	w := httptest.NewRecorder()
+
+	h.PublishIncidentToStatusPage(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "monitor ID is required") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_PublishIncidentToStatusPage_ServiceInvalidMonitorID(t *testing.T) {
+	log := logger.New("test", "debug")
+	called := false
+	h := NewHandlers(&mockIncidentService{
+		publishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
+			called = true
+			return nil, errors.New("invalid monitor ID")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	statusPageID := uuid.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/incidents/"+incidentID.String()+"/status-pages/"+statusPageID.String(), bytes.NewBufferString(`{"monitor_ids":["not-a-uuid"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{"id": incidentID.String(), "statusPageId": statusPageID.String()})
+	w := httptest.NewRecorder()
+
+	h.PublishIncidentToStatusPage(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid monitor ID") {
 		t.Fatalf("body = %s, want validation message", w.Body.String())
 	}
 }
@@ -658,6 +812,26 @@ func TestHandlers_UnpublishIncidentFromStatusPage_InvalidStatusPageIDParam(t *te
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "invalid status page ID") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_UnpublishIncidentFromStatusPage_StatusPageIDRequiredParam(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/incidents/"+incidentID.String()+"/status-pages/", nil)
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{"id": incidentID.String(), "statusPageId": ""})
+	w := httptest.NewRecorder()
+
+	h.UnpublishIncidentFromStatusPage(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "status page ID is required") {
 		t.Fatalf("body = %s, want validation message", w.Body.String())
 	}
 }
