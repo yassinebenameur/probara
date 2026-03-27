@@ -365,17 +365,20 @@ func (s *Service) AttachAlert(ctx context.Context, tenantID, incidentID, alertID
 	if err := s.ensureAlertBelongsToTenant(ctx, tx, tenantID, alertID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
 		VALUES ($1, $2, NOW())
 		ON CONFLICT (incident_id, alert_id) DO NOTHING
-	`, incidentID, alertID); err != nil {
+	`, incidentID, alertID)
+	if err != nil {
 		return nil, fmt.Errorf("attach incident alert: %w", err)
 	}
-	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Alert attached", map[string]interface{}{
-		"alert_id": alertID.String(),
-	}); err != nil {
-		return nil, err
+	if mutationChanged(result) {
+		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Alert attached", map[string]interface{}{
+			"alert_id": alertID.String(),
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -401,16 +404,19 @@ func (s *Service) DetachAlert(ctx context.Context, tenantID, incidentID, alertID
 	if err := s.ensureAlertBelongsToTenant(ctx, tx, tenantID, alertID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		DELETE FROM incident_alerts
 		WHERE incident_id = $1 AND alert_id = $2
-	`, incidentID, alertID); err != nil {
+	`, incidentID, alertID)
+	if err != nil {
 		return nil, fmt.Errorf("detach incident alert: %w", err)
 	}
-	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Alert detached", map[string]interface{}{
-		"alert_id": alertID.String(),
-	}); err != nil {
-		return nil, err
+	if mutationChanged(result) {
+		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Alert detached", map[string]interface{}{
+			"alert_id": alertID.String(),
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -436,17 +442,20 @@ func (s *Service) AttachMonitor(ctx context.Context, tenantID, incidentID, monit
 	if err := s.ensureMonitorBelongsToTenant(ctx, tx, tenantID, monitorID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO incident_monitors (incident_id, monitor_id, created_at)
 		VALUES ($1, $2, NOW())
 		ON CONFLICT (incident_id, monitor_id) DO NOTHING
-	`, incidentID, monitorID); err != nil {
+	`, incidentID, monitorID)
+	if err != nil {
 		return nil, fmt.Errorf("attach incident monitor: %w", err)
 	}
-	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Monitor attached", map[string]interface{}{
-		"monitor_id": monitorID.String(),
-	}); err != nil {
-		return nil, err
+	if mutationChanged(result) {
+		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Monitor attached", map[string]interface{}{
+			"monitor_id": monitorID.String(),
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -472,16 +481,19 @@ func (s *Service) DetachMonitor(ctx context.Context, tenantID, incidentID, monit
 	if err := s.ensureMonitorBelongsToTenant(ctx, tx, tenantID, monitorID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		DELETE FROM incident_monitors
 		WHERE incident_id = $1 AND monitor_id = $2
-	`, incidentID, monitorID); err != nil {
+	`, incidentID, monitorID)
+	if err != nil {
 		return nil, fmt.Errorf("detach incident monitor: %w", err)
 	}
-	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Monitor detached", map[string]interface{}{
-		"monitor_id": monitorID.String(),
-	}); err != nil {
-		return nil, err
+	if mutationChanged(result) {
+		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Monitor detached", map[string]interface{}{
+			"monitor_id": monitorID.String(),
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -580,23 +592,26 @@ func (s *Service) UnpublishIncidentFromStatusPage(ctx context.Context, tenantID,
 		return nil, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM incident_status_page_monitors
-		WHERE incident_id = $1 AND status_page_id = $2
-	`, incidentID, statusPageID); err != nil {
-		return nil, fmt.Errorf("delete incident publication monitors: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE incident_status_page_publications
 		SET unpublished_at = NOW(), updated_at = NOW()
 		WHERE incident_id = $1 AND status_page_id = $2 AND tenant_id = $3 AND unpublished_at IS NULL
-	`, incidentID, statusPageID, tenantID); err != nil {
+	`, incidentID, statusPageID, tenantID)
+	if err != nil {
 		return nil, fmt.Errorf("unpublish incident from status page: %w", err)
 	}
-	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident unpublished from status page", map[string]interface{}{
-		"status_page_id": statusPageID.String(),
-	}); err != nil {
-		return nil, err
+	if mutationChanged(result) {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM incident_status_page_monitors
+			WHERE incident_id = $1 AND status_page_id = $2
+		`, incidentID, statusPageID); err != nil {
+			return nil, fmt.Errorf("delete incident publication monitors: %w", err)
+		}
+		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident unpublished from status page", map[string]interface{}{
+			"status_page_id": statusPageID.String(),
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -833,6 +848,15 @@ func uuidStrings(ids []uuid.UUID) []string {
 		values = append(values, id.String())
 	}
 	return values
+}
+
+func mutationChanged(result sql.Result) bool {
+	if result == nil {
+		return false
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	return err == nil && rowsAffected > 0
 }
 
 func scanIncident(scanner incidentRowScanner) (models.Incident, error) {

@@ -2,6 +2,7 @@ package incidents
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -347,4 +348,324 @@ func TestServicePublishIncidentToStatusPageRejectsUnlinkedMonitor(t *testing.T) 
 	if err == nil {
 		t.Fatalf("expected publish to reject unlinked incident monitor")
 	}
+}
+
+func TestServiceAttachAlertAndDetachFlowSkipsTimelineForNoOps(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	alertID := insertIncidentTestAlert(ctx, t, dbClient, tenantID, monitorID)
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	detail, err := svc.AttachAlert(ctx, tenantID, incident.ID, alertID)
+	if err != nil {
+		t.Fatalf("AttachAlert() error = %v", err)
+	}
+	if len(detail.Timeline) != 2 {
+		t.Fatalf("timeline length after first attach = %d, want %d", len(detail.Timeline), 2)
+	}
+	if count := countIncidentAlertLinks(ctx, t, dbClient, incident.ID); count != 1 {
+		t.Fatalf("incident alert count after first attach = %d, want %d", count, 1)
+	}
+
+	detail, err = svc.AttachAlert(ctx, tenantID, incident.ID, alertID)
+	if err != nil {
+		t.Fatalf("AttachAlert() duplicate error = %v", err)
+	}
+	if len(detail.Timeline) != 2 {
+		t.Fatalf("timeline length after duplicate attach = %d, want %d", len(detail.Timeline), 2)
+	}
+	if count := countIncidentAlertLinks(ctx, t, dbClient, incident.ID); count != 1 {
+		t.Fatalf("incident alert count after duplicate attach = %d, want %d", count, 1)
+	}
+
+	detail, err = svc.DetachAlert(ctx, tenantID, incident.ID, alertID)
+	if err != nil {
+		t.Fatalf("DetachAlert() error = %v", err)
+	}
+	if len(detail.Timeline) != 3 {
+		t.Fatalf("timeline length after first detach = %d, want %d", len(detail.Timeline), 3)
+	}
+	if count := countIncidentAlertLinks(ctx, t, dbClient, incident.ID); count != 0 {
+		t.Fatalf("incident alert count after first detach = %d, want %d", count, 0)
+	}
+
+	detail, err = svc.DetachAlert(ctx, tenantID, incident.ID, alertID)
+	if err != nil {
+		t.Fatalf("DetachAlert() duplicate error = %v", err)
+	}
+	if len(detail.Timeline) != 3 {
+		t.Fatalf("timeline length after duplicate detach = %d, want %d", len(detail.Timeline), 3)
+	}
+	if count := countIncidentAlertLinks(ctx, t, dbClient, incident.ID); count != 0 {
+		t.Fatalf("incident alert count after duplicate detach = %d, want %d", count, 0)
+	}
+}
+
+func TestServiceAttachMonitorSkipsTimelineForDuplicateAttach(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	detail, err := svc.AttachMonitor(ctx, tenantID, incident.ID, monitorID)
+	if err != nil {
+		t.Fatalf("AttachMonitor() error = %v", err)
+	}
+	if len(detail.Timeline) != 2 {
+		t.Fatalf("timeline length after first attach = %d, want %d", len(detail.Timeline), 2)
+	}
+	if count := countIncidentMonitorLinks(ctx, t, dbClient, incident.ID); count != 1 {
+		t.Fatalf("incident monitor count after first attach = %d, want %d", count, 1)
+	}
+
+	detail, err = svc.AttachMonitor(ctx, tenantID, incident.ID, monitorID)
+	if err != nil {
+		t.Fatalf("AttachMonitor() duplicate error = %v", err)
+	}
+	if len(detail.Timeline) != 2 {
+		t.Fatalf("timeline length after duplicate attach = %d, want %d", len(detail.Timeline), 2)
+	}
+	if count := countIncidentMonitorLinks(ctx, t, dbClient, incident.ID); count != 1 {
+		t.Fatalf("incident monitor count after duplicate attach = %d, want %d", count, 1)
+	}
+}
+
+func TestServicePublishIncidentToStatusPageWithEmptyMonitorList(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	detail, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{})
+	if err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+	if len(detail.Timeline) != 2 {
+		t.Fatalf("timeline length after publish = %d, want %d", len(detail.Timeline), 2)
+	}
+
+	publication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
+	if err != nil {
+		t.Fatalf("loadIncidentPublication() error = %v", err)
+	}
+	if publication.unpublishedAt.Valid {
+		t.Fatalf("publication unexpectedly unpublished at %v", publication.unpublishedAt.Time)
+	}
+	if count := countIncidentPublicationMonitors(ctx, t, dbClient, incident.ID, statusPageID); count != 0 {
+		t.Fatalf("publication monitor count = %d, want %d", count, 0)
+	}
+}
+
+func TestServicePublishIncidentToStatusPageWithValidMonitorSelection(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.AttachMonitor(ctx, tenantID, incident.ID, monitorID); err != nil {
+		t.Fatalf("AttachMonitor() error = %v", err)
+	}
+
+	detail, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{
+		MonitorIDs: []string{monitorID.String()},
+	})
+	if err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+	if len(detail.Timeline) != 3 {
+		t.Fatalf("timeline length after publish = %d, want %d", len(detail.Timeline), 3)
+	}
+	if count := countIncidentPublicationMonitors(ctx, t, dbClient, incident.ID, statusPageID); count != 1 {
+		t.Fatalf("publication monitor count = %d, want %d", count, 1)
+	}
+}
+
+func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.AttachMonitor(ctx, tenantID, incident.ID, monitorID); err != nil {
+		t.Fatalf("AttachMonitor() error = %v", err)
+	}
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{
+		MonitorIDs: []string{monitorID.String()},
+	}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+
+	detail, err := svc.UnpublishIncidentFromStatusPage(ctx, tenantID, incident.ID, statusPageID)
+	if err != nil {
+		t.Fatalf("UnpublishIncidentFromStatusPage() error = %v", err)
+	}
+	if len(detail.Timeline) != 4 {
+		t.Fatalf("timeline length after first unpublish = %d, want %d", len(detail.Timeline), 4)
+	}
+	publication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
+	if err != nil {
+		t.Fatalf("loadIncidentPublication() after first unpublish error = %v", err)
+	}
+	if !publication.unpublishedAt.Valid {
+		t.Fatalf("expected publication to be unpublished")
+	}
+	if count := countIncidentPublicationMonitors(ctx, t, dbClient, incident.ID, statusPageID); count != 0 {
+		t.Fatalf("publication monitor count after first unpublish = %d, want %d", count, 0)
+	}
+
+	detail, err = svc.UnpublishIncidentFromStatusPage(ctx, tenantID, incident.ID, statusPageID)
+	if err != nil {
+		t.Fatalf("UnpublishIncidentFromStatusPage() duplicate error = %v", err)
+	}
+	if len(detail.Timeline) != 4 {
+		t.Fatalf("timeline length after duplicate unpublish = %d, want %d", len(detail.Timeline), 4)
+	}
+}
+
+type incidentPublicationRecord struct {
+	unpublishedAt sql.NullTime
+}
+
+func insertIncidentTestAlert(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	policyID := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
+		VALUES ($1, $2, 'incident-policy', 1, 60, NOW(), NOW())
+	`, policyID, tenantID); err != nil {
+		t.Fatalf("insert alert policy: %v", err)
+	}
+
+	alertID := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', NOW(), 1, NOW(), NOW())
+	`, alertID, tenantID, monitorID, policyID); err != nil {
+		t.Fatalf("insert alert: %v", err)
+	}
+
+	return alertID
+}
+
+type testutilDBClient interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
+func countIncidentAlertLinks(ctx context.Context, t *testing.T, dbClient testutilDBClient, incidentID uuid.UUID) int {
+	t.Helper()
+
+	var count int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM incident_alerts
+		WHERE incident_id = $1
+	`, incidentID).Scan(&count); err != nil {
+		t.Fatalf("count incident_alerts: %v", err)
+	}
+
+	return count
+}
+
+func countIncidentMonitorLinks(ctx context.Context, t *testing.T, dbClient testutilDBClient, incidentID uuid.UUID) int {
+	t.Helper()
+
+	var count int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM incident_monitors
+		WHERE incident_id = $1
+	`, incidentID).Scan(&count); err != nil {
+		t.Fatalf("count incident_monitors: %v", err)
+	}
+
+	return count
+}
+
+func countIncidentPublicationMonitors(ctx context.Context, t *testing.T, dbClient testutilDBClient, incidentID, statusPageID uuid.UUID) int {
+	t.Helper()
+
+	var count int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM incident_status_page_monitors
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID).Scan(&count); err != nil {
+		t.Fatalf("count incident_status_page_monitors: %v", err)
+	}
+
+	return count
+}
+
+func loadIncidentPublication(ctx context.Context, dbClient testutilDBClient, incidentID, statusPageID uuid.UUID) (incidentPublicationRecord, error) {
+	var publication incidentPublicationRecord
+	err := dbClient.QueryRowContext(ctx, `
+		SELECT unpublished_at
+		FROM incident_status_page_publications
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID).Scan(&publication.unpublishedAt)
+	if err != nil {
+		return incidentPublicationRecord{}, err
+	}
+
+	return publication, nil
 }

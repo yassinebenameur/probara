@@ -123,8 +123,14 @@ func withTenantID(req *http.Request) *http.Request {
 }
 
 func withIncidentID(req *http.Request, incidentID uuid.UUID) *http.Request {
+	return withRouteParams(req, map[string]string{"id": incidentID.String()})
+}
+
+func withRouteParams(req *http.Request, params map[string]string) *http.Request {
 	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", incidentID.String())
+	for key, value := range params {
+		rctx.URLParams.Add(key, value)
+	}
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
@@ -245,6 +251,184 @@ func TestHandlers_AttachIncidentAlert(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestHandlers_AttachIncidentAlert_InvalidAlertID(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/alerts", bytes.NewBufferString(`{"alert_id":"bad-id"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.AttachIncidentAlert(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid alert ID") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_AttachIncidentAlert_NotFound(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{
+		attachAlertFn: func(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error) {
+			return nil, errors.New("alert not found")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/alerts", bytes.NewBufferString(`{"alert_id":"11111111-1111-1111-1111-111111111111"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.AttachIncidentAlert(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "alert not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
+	}
+}
+
+func TestHandlers_AttachIncidentMonitor_InvalidMonitorID(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/monitors", bytes.NewBufferString(`{"monitor_id":"bad-id"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.AttachIncidentMonitor(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "invalid monitor ID") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_AttachIncidentMonitor_NotFound(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{
+		attachMonitorFn: func(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error) {
+			return nil, errors.New("monitor not found")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/monitors", bytes.NewBufferString(`{"monitor_id":"11111111-1111-1111-1111-111111111111"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.AttachIncidentMonitor(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "monitor not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
+	}
+}
+
+func TestHandlers_PublishIncidentToStatusPage_ServiceValidationError(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{
+		publishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("selected monitors must be linked to the incident and status page")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	statusPageID := uuid.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/incidents/"+incidentID.String()+"/status-pages/"+statusPageID.String(), bytes.NewBufferString(`{"monitor_ids":["11111111-1111-1111-1111-111111111111"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{
+		"id":           incidentID.String(),
+		"statusPageId": statusPageID.String(),
+	})
+	w := httptest.NewRecorder()
+
+	h.PublishIncidentToStatusPage(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "selected monitors must be linked to the incident and status page") {
+		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_PublishIncidentToStatusPage_NotFound(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{
+		publishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
+			return nil, errors.New("status page not found")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	statusPageID := uuid.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/incidents/"+incidentID.String()+"/status-pages/"+statusPageID.String(), bytes.NewBufferString(`{"monitor_ids":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{
+		"id":           incidentID.String(),
+		"statusPageId": statusPageID.String(),
+	})
+	w := httptest.NewRecorder()
+
+	h.PublishIncidentToStatusPage(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "status page not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
+	}
+}
+
+func TestHandlers_UnpublishIncidentFromStatusPage_NotFound(t *testing.T) {
+	log := logger.New("test", "debug")
+	h := NewHandlers(&mockIncidentService{
+		unpublishFn: func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error) {
+			return nil, errors.New("status page not found")
+		},
+	}, log)
+
+	incidentID := uuid.New()
+	statusPageID := uuid.New()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/incidents/"+incidentID.String()+"/status-pages/"+statusPageID.String(), nil)
+	req = withTenantID(req)
+	req = withRouteParams(req, map[string]string{
+		"id":           incidentID.String(),
+		"statusPageId": statusPageID.String(),
+	})
+	w := httptest.NewRecorder()
+
+	h.UnpublishIncidentFromStatusPage(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "status page not found") {
+		t.Fatalf("body = %s, want not-found message", w.Body.String())
 	}
 }
 
