@@ -27,6 +27,7 @@ type StatusPageData struct {
 	SecondaryColor    *string                 `json:"secondary_color,omitempty"`
 	Sections          []StatusPageSectionData `json:"sections,omitempty"`
 	Monitors          []MonitorStatus         `json:"monitors"`
+	Incidents         []StatusPageIncident    `json:"incidents,omitempty"`
 	HasIssues         bool                    `json:"-"` // For template use only
 	ShowIncidents     bool                    `json:"-"` // For template use only
 	ShowUptimeHistory bool                    `json:"-"` // For template use only
@@ -55,6 +56,22 @@ type StatusPageSectionData struct {
 	Title    string          `json:"title"`
 	Position int             `json:"position"`
 	Monitors []MonitorStatus `json:"monitors"`
+}
+
+type StatusPageIncident struct {
+	ID                 string                     `json:"id"`
+	Title              string                     `json:"title"`
+	Summary            string                     `json:"summary"`
+	State              string                     `json:"state"`
+	PublishedAt        time.Time                  `json:"published_at"`
+	ResolvedAt         *time.Time                 `json:"resolved_at,omitempty"`
+	AffectedComponents []string                   `json:"affected_components,omitempty"`
+	Updates            []StatusPageIncidentUpdate `json:"updates,omitempty"`
+}
+
+type StatusPageIncidentUpdate struct {
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -336,6 +353,10 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	}
 	page.Sections = sections
 	page.Monitors = flattenStatusPageSections(sections)
+	page.Incidents, err = s.loadPublishedIncidents(ctx, pageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get incidents: %w", err)
+	}
 
 	// Determine if there are any issues
 	for _, monitor := range page.Monitors {
@@ -375,6 +396,111 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	}
 
 	return &page, nil
+}
+
+func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id, i.title, COALESCE(i.summary, ''), i.state, isp.published_at, i.resolved_at
+		FROM incident_status_page_publications isp
+		JOIN incidents i ON i.id = isp.incident_id AND i.tenant_id = isp.tenant_id
+		WHERE isp.status_page_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL
+		ORDER BY CASE WHEN i.state = 'resolved' THEN 1 ELSE 0 END, i.updated_at DESC, isp.published_at DESC
+	`, statusPageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query published incidents: %w", err)
+	}
+	defer rows.Close()
+
+	incidents := make([]StatusPageIncident, 0)
+	for rows.Next() {
+		var incident StatusPageIncident
+		var incidentID uuid.UUID
+		var resolvedAt sql.NullTime
+		if err := rows.Scan(&incidentID, &incident.Title, &incident.Summary, &incident.State, &incident.PublishedAt, &resolvedAt); err != nil {
+			return nil, fmt.Errorf("scan published incident: %w", err)
+		}
+		incident.ID = incidentID.String()
+		if resolvedAt.Valid {
+			resolvedTime := resolvedAt.Time.UTC()
+			incident.ResolvedAt = &resolvedTime
+		}
+
+		incident.AffectedComponents, err = s.loadIncidentAffectedComponents(ctx, incidentID, statusPageID)
+		if err != nil {
+			return nil, err
+		}
+		incident.Updates, err = s.loadIncidentPublicUpdates(ctx, tenantID, incidentID)
+		if err != nil {
+			return nil, err
+		}
+
+		incidents = append(incidents, incident)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate published incidents: %w", err)
+	}
+
+	return incidents, nil
+}
+
+func (s *Service) loadIncidentAffectedComponents(ctx context.Context, incidentID, statusPageID uuid.UUID) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.name
+		FROM incident_status_page_monitors ispm
+		JOIN monitors m ON m.id = ispm.monitor_id
+		WHERE ispm.incident_id = $1 AND ispm.status_page_id = $2
+		ORDER BY m.name ASC
+	`, incidentID, statusPageID)
+	if err != nil {
+		return nil, fmt.Errorf("query incident affected components: %w", err)
+	}
+	defer rows.Close()
+
+	components := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan incident affected component: %w", err)
+		}
+		if strings.TrimSpace(name) != "" {
+			components = append(components, strings.TrimSpace(name))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident affected components: %w", err)
+	}
+
+	return components, nil
+}
+
+func (s *Service) loadIncidentPublicUpdates(ctx context.Context, tenantID, incidentID uuid.UUID) ([]StatusPageIncidentUpdate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT message, created_at
+		FROM incident_timeline_entries
+		WHERE tenant_id = $1 AND incident_id = $2 AND entry_type = 'public_update'
+		ORDER BY created_at DESC, id DESC
+	`, tenantID, incidentID)
+	if err != nil {
+		return nil, fmt.Errorf("query incident public updates: %w", err)
+	}
+	defer rows.Close()
+
+	updates := make([]StatusPageIncidentUpdate, 0)
+	for rows.Next() {
+		var update StatusPageIncidentUpdate
+		if err := rows.Scan(&update.Message, &update.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan incident public update: %w", err)
+		}
+		update.Message = strings.TrimSpace(update.Message)
+		if update.Message != "" {
+			updates = append(updates, update)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident public updates: %w", err)
+	}
+
+	return updates, nil
 }
 
 // GetGlobal5MinuteUptime calculates 5-minute bucket uptime across all monitors in a status page for the last 1 hour

@@ -60,10 +60,50 @@ type IncidentTimelineEntry struct {
 	CreatedAt  time.Time                 `json:"created_at"`
 }
 
+// IncidentAlertSummary represents an alert linked to an incident.
+type IncidentAlertSummary struct {
+	ID            uuid.UUID `json:"id"`
+	MonitorID     uuid.UUID `json:"monitor_id"`
+	AlertPolicyID uuid.UUID `json:"alert_policy_id"`
+	Status        string    `json:"status"`
+	TriggeredAt   time.Time `json:"triggered_at"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
+	FailureCount  int       `json:"failure_count"`
+	LastError     *string   `json:"last_error,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	MonitorName   string    `json:"monitor_name"`
+	PolicyName    string    `json:"policy_name"`
+}
+
+// IncidentMonitorSummary represents a monitor linked to an incident.
+type IncidentMonitorSummary struct {
+	ID        uuid.UUID `json:"id"`
+	TenantID  uuid.UUID `json:"tenant_id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// IncidentPublication represents an active status-page publication for an incident.
+type IncidentPublication struct {
+	StatusPageID    uuid.UUID   `json:"status_page_id"`
+	StatusPageSlug  string      `json:"status_page_slug"`
+	StatusPageTitle string      `json:"status_page_title"`
+	PublishedAt     time.Time   `json:"published_at"`
+	UnpublishedAt   *time.Time  `json:"unpublished_at,omitempty"`
+	MonitorIDs      []uuid.UUID `json:"monitor_ids"`
+}
+
 // IncidentDetail represents an incident with its timeline.
 type IncidentDetail struct {
 	Incident
-	Timeline []IncidentTimelineEntry `json:"timeline,omitempty"`
+	Alerts       []IncidentAlertSummary   `json:"alerts"`
+	Monitors     []IncidentMonitorSummary `json:"monitors"`
+	Publications []IncidentPublication    `json:"publications"`
+	Timeline     []IncidentTimelineEntry  `json:"timeline,omitempty"`
 }
 
 // IncidentListResponse represents a paginated list of incidents.

@@ -178,3 +178,34 @@ func TestRenderPublicStatusPage_HidesThemeToggleWhenDisabled(t *testing.T) {
 		t.Fatalf("expected theme toggle button to be omitted")
 	}
 }
+
+func TestRenderPublicStatusPage_RendersPublishedIncidentCards(t *testing.T) {
+	html, err := renderPublicStatusPage(&StatusPageData{
+		ID:    "page-1",
+		Slug:  "status",
+		Title: "Example Status",
+		Incidents: []StatusPageIncident{
+			{
+				Title:              "API outage",
+				Summary:            "Requests are failing.",
+				State:              "investigating",
+				AffectedComponents: []string{"API"},
+				Updates: []StatusPageIncidentUpdate{
+					{Message: "We are investigating elevated API errors."},
+				},
+			},
+		},
+	}, true)
+	if err != nil {
+		t.Fatalf("renderPublicStatusPage() error = %v", err)
+	}
+	if !strings.Contains(html, "API outage") {
+		t.Fatalf("expected incident title in HTML")
+	}
+	if !strings.Contains(html, "We are investigating elevated API errors.") {
+		t.Fatalf("expected public incident update in HTML")
+	}
+	if strings.Contains(html, "Incident timeline coming later") {
+		t.Fatalf("expected placeholder copy to be removed")
+	}
+}

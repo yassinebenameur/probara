@@ -14,14 +14,20 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
+type incidentAutomation interface {
+	EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tenantID uuid.UUID, alert *models.AlertWithDetails) error
+	RecordAlertRecoveryIfNeededTx(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) error
+}
+
 // Service handles alert business logic
 type Service struct {
-	db *db.Client
+	db        *db.Client
+	incidents incidentAutomation
 }
 
 // NewService creates a new alert service
-func NewService(db *db.Client) *Service {
-	return &Service{db: db}
+func NewService(db *db.Client, incidents incidentAutomation) *Service {
+	return &Service{db: db, incidents: incidents}
 }
 
 // ListAlerts lists alerts with filtering and pagination
@@ -282,13 +288,30 @@ func (s *Service) ResolveAlert(ctx context.Context, tenantID, alertID uuid.UUID)
 		RETURNING id
 	`
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin alert transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
 	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
+	err = tx.QueryRowContext(ctx, query, now, alertID, tenantID).Scan(&id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("alert not found or already resolved")
 		}
 		return nil, fmt.Errorf("failed to resolve alert: %w", err)
+	}
+
+	if s.incidents != nil {
+		if err := s.incidents.RecordAlertRecoveryIfNeededTx(ctx, tx, tenantID, alertID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit alert transaction: %w", err)
 	}
 
 	return s.GetAlert(ctx, tenantID, alertID)
@@ -304,19 +327,63 @@ func (s *Service) CreateAlert(ctx context.Context, tenantID, monitorID, policyID
 			id, tenant_id, monitor_id, alert_policy_id, status,
 			triggered_at, failure_count, last_error, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $5, $5)
-		RETURNING id
 	`
 
-	var id uuid.UUID
-	err := s.db.QueryRowContext(ctx, query,
-		alertID, tenantID, monitorID, policyID, now, failureCount, lastError,
-	).Scan(&id)
-
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, fmt.Errorf("begin alert transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(ctx, query, alertID, tenantID, monitorID, policyID, now, failureCount, lastError); err != nil {
 		return nil, fmt.Errorf("failed to create alert: %w", err)
 	}
 
-	return s.GetAlert(ctx, tenantID, alertID)
+	alert, err := s.getAlertTx(ctx, tx, tenantID, alertID)
+	if err != nil {
+		return nil, err
+	}
+	if s.incidents != nil {
+		if err := s.incidents.EnsureIncidentForAlertTx(ctx, tx, tenantID, alert); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit alert transaction: %w", err)
+	}
+
+	return alert, nil
+}
+
+func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
+	query := `
+		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
+			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
+			a.last_error, a.created_at, a.updated_at,
+			m.name as monitor_name, ap.name as policy_name
+		FROM alerts a
+		JOIN monitors m ON a.monitor_id = m.id
+		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		WHERE a.id = $1 AND a.tenant_id = $2
+	`
+
+	var alert models.AlertWithDetails
+	err := tx.QueryRowContext(ctx, query, alertID, tenantID).Scan(
+		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
+		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
+		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+		&alert.MonitorName, &alert.PolicyName,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("alert not found")
+		}
+		return nil, fmt.Errorf("failed to get alert: %w", err)
+	}
+
+	return &alert, nil
 }
 
 // GetActiveAlertForMonitor gets the active alert for a monitor if one exists

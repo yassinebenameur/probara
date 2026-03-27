@@ -3,6 +3,7 @@ package incidents
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -118,6 +119,22 @@ func (m *mockIncidentService) UnpublishIncidentFromStatusPage(ctx context.Contex
 	return nil, nil
 }
 
+func (m *mockIncidentService) EnsureIncidentForAlert(context.Context, uuid.UUID, *models.AlertWithDetails) error {
+	return nil
+}
+
+func (m *mockIncidentService) RecordAlertRecoveryIfNeeded(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+
+func (m *mockIncidentService) EnsureIncidentForAlertTx(context.Context, *sql.Tx, uuid.UUID, *models.AlertWithDetails) error {
+	return nil
+}
+
+func (m *mockIncidentService) RecordAlertRecoveryIfNeededTx(context.Context, *sql.Tx, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+
 func withTenantID(req *http.Request) *http.Request {
 	return req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
 }
@@ -210,6 +227,46 @@ func TestHandlers_CreateIncident_ServiceTitleRequired(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "title is required") {
 		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_GetIncidentIncludesEmptyLinkedResourceArrays(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.MustParse("12345678-1234-1234-1234-123456789012")
+	h := NewHandlers(&mockIncidentService{
+		getFn: func(ctx context.Context, tenantID, gotIncidentID uuid.UUID) (*models.IncidentDetail, error) {
+			if gotIncidentID != incidentID {
+				t.Fatalf("incidentID = %s, want %s", gotIncidentID, incidentID)
+			}
+			return &models.IncidentDetail{
+				Incident: models.Incident{
+					ID:      incidentID,
+					Title:   "API outage",
+					Summary: "Requests are failing.",
+					State:   models.IncidentStateInvestigating,
+				},
+				Alerts:       []models.IncidentAlertSummary{},
+				Monitors:     []models.IncidentMonitorSummary{},
+				Publications: []models.IncidentPublication{},
+				Timeline:     []models.IncidentTimelineEntry{},
+			}, nil
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents/"+incidentID.String(), nil)
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.GetIncident(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+	for _, want := range []string{`"alerts":[]`, `"monitors":[]`, `"publications":[]`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("body = %s, want %s", w.Body.String(), want)
+		}
 	}
 }
 

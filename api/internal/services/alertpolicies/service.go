@@ -37,11 +37,11 @@ func (s *Service) CreateAlertPolicy(ctx context.Context, tenantID uuid.UUID, req
 	query := `
 		INSERT INTO alert_policies (
 			id, tenant_id, name, description, failure_threshold,
-			failure_window_seconds, email_subject_template, email_body_template,
+			failure_window_seconds, create_incident_on_fire, email_subject_template, email_body_template,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 		RETURNING id, tenant_id, name, description, failure_threshold,
-			failure_window_seconds, email_subject_template, email_body_template,
+			failure_window_seconds, create_incident_on_fire, email_subject_template, email_body_template,
 			created_at, updated_at
 	`
 
@@ -49,11 +49,13 @@ func (s *Service) CreateAlertPolicy(ctx context.Context, tenantID uuid.UUID, req
 	err = tx.QueryRowContext(ctx, query,
 		policyID, tenantID, req.Name, req.Description,
 		req.FailureThreshold, req.FailureWindowSeconds,
+		derefBool(req.CreateIncidentOnFire),
 		normalizeOptionalTemplatePointer(req.EmailSubjectTemplate),
 		normalizeOptionalTemplatePointer(req.EmailBodyTemplate),
 	).Scan(
 		&policy.ID, &policy.TenantID, &policy.Name, &policy.Description,
 		&policy.FailureThreshold, &policy.FailureWindowSeconds,
+		&policy.CreateIncidentOnFire,
 		&policy.EmailSubjectTemplate, &policy.EmailBodyTemplate,
 		&policy.CreatedAt, &policy.UpdatedAt,
 	)
@@ -88,7 +90,7 @@ func (s *Service) CreateAlertPolicy(ctx context.Context, tenantID uuid.UUID, req
 func (s *Service) GetAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) (*models.AlertPolicy, error) {
 	query := `
 		SELECT ap.id, ap.tenant_id, ap.name, ap.description, ap.failure_threshold,
-			ap.failure_window_seconds, ap.email_subject_template, ap.email_body_template,
+			ap.failure_window_seconds, ap.create_incident_on_fire, ap.email_subject_template, ap.email_body_template,
 			ap.created_at, ap.updated_at,
 			COALESCE(array_agg(apc.channel_id) FILTER (WHERE apc.channel_id IS NOT NULL), '{}') AS channel_ids
 		FROM alert_policies ap
@@ -102,6 +104,7 @@ func (s *Service) GetAlertPolicy(ctx context.Context, tenantID, policyID uuid.UU
 	err := s.db.QueryRowContext(ctx, query, policyID, tenantID).Scan(
 		&policy.ID, &policy.TenantID, &policy.Name, &policy.Description,
 		&policy.FailureThreshold, &policy.FailureWindowSeconds,
+		&policy.CreateIncidentOnFire,
 		&policy.EmailSubjectTemplate, &policy.EmailBodyTemplate,
 		&policy.CreatedAt, &policy.UpdatedAt, pq.Array(&channelIDs),
 	)
@@ -142,7 +145,7 @@ func (s *Service) ListAlertPolicies(ctx context.Context, tenantID uuid.UUID, pag
 	// Get policies
 	query := `
 		SELECT ap.id, ap.tenant_id, ap.name, ap.description, ap.failure_threshold,
-			ap.failure_window_seconds, ap.email_subject_template, ap.email_body_template,
+			ap.failure_window_seconds, ap.create_incident_on_fire, ap.email_subject_template, ap.email_body_template,
 			ap.created_at, ap.updated_at,
 			COALESCE(array_agg(apc.channel_id) FILTER (WHERE apc.channel_id IS NOT NULL), '{}') AS channel_ids
 		FROM alert_policies ap
@@ -166,6 +169,7 @@ func (s *Service) ListAlertPolicies(ctx context.Context, tenantID uuid.UUID, pag
 		err := rows.Scan(
 			&policy.ID, &policy.TenantID, &policy.Name, &policy.Description,
 			&policy.FailureThreshold, &policy.FailureWindowSeconds,
+			&policy.CreateIncidentOnFire,
 			&policy.EmailSubjectTemplate, &policy.EmailBodyTemplate,
 			&policy.CreatedAt, &policy.UpdatedAt, pq.Array(&channelIDs),
 		)
@@ -219,6 +223,12 @@ func (s *Service) UpdateAlertPolicy(ctx context.Context, tenantID, policyID uuid
 		argIndex++
 	}
 
+	if req.CreateIncidentOnFire != nil {
+		setParts = append(setParts, fmt.Sprintf("create_incident_on_fire = $%d", argIndex))
+		args = append(args, *req.CreateIncidentOnFire)
+		argIndex++
+	}
+
 	if req.EmailSubjectTemplate != nil {
 		setParts = append(setParts, fmt.Sprintf("email_subject_template = $%d", argIndex))
 		args = append(args, normalizeOptionalTemplate(*req.EmailSubjectTemplate))
@@ -259,13 +269,14 @@ func (s *Service) UpdateAlertPolicy(ctx context.Context, tenantID, policyID uuid
 			SET %s
 			WHERE id = $%d AND tenant_id = $%d
 			RETURNING id, tenant_id, name, description, failure_threshold,
-				failure_window_seconds, email_subject_template, email_body_template,
+				failure_window_seconds, create_incident_on_fire, email_subject_template, email_body_template,
 				created_at, updated_at
 		`, setClause, whereArgIndex, whereArgIndex+1)
 
 		err := tx.QueryRowContext(ctx, query, args...).Scan(
 			&policy.ID, &policy.TenantID, &policy.Name, &policy.Description,
 			&policy.FailureThreshold, &policy.FailureWindowSeconds,
+			&policy.CreateIncidentOnFire,
 			&policy.EmailSubjectTemplate, &policy.EmailBodyTemplate,
 			&policy.CreatedAt, &policy.UpdatedAt,
 		)
@@ -328,6 +339,13 @@ func normalizeOptionalTemplatePointer(value *string) interface{} {
 		return nil
 	}
 	return normalizeOptionalTemplate(*value)
+}
+
+func derefBool(value *bool) bool {
+	if value == nil {
+		return false
+	}
+	return *value
 }
 
 // DeleteAlertPolicy deletes an alert policy

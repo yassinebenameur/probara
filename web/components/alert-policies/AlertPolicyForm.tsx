@@ -25,6 +25,7 @@ export default function AlertPolicyForm({
     description: policy?.description || '',
     failure_threshold: policy?.failure_threshold || 3,
     failure_window_seconds: policy?.failure_window_seconds || 300,
+    create_incident_on_fire: policy?.create_incident_on_fire || false,
     channel_ids: policy?.channel_ids || [],
   });
 
@@ -56,6 +57,7 @@ export default function AlertPolicyForm({
       name: formData.name.trim(),
       failure_threshold: formData.failure_threshold,
       failure_window_seconds: formData.failure_window_seconds,
+      create_incident_on_fire: formData.create_incident_on_fire,
       channel_ids: formData.channel_ids,
     };
 
@@ -111,6 +113,25 @@ export default function AlertPolicyForm({
           </p>
         </FormField>
       </div>
+
+      <FormField
+        label="Incident Auto-Creation"
+        description="If enabled, the platform will automatically create an incident when this policy fires. Incidents are never auto-published."
+      >
+        <label className="flex items-start gap-3 rounded-lg border border-white/[0.08] bg-slate-800/40 px-3 py-3 text-sm text-slate-200">
+          <input
+            type="checkbox"
+            checked={formData.create_incident_on_fire}
+            onChange={(e) => setFormData({ ...formData, create_incident_on_fire: e.target.checked })}
+          />
+          <div className="flex flex-col gap-1">
+            <span className="font-medium">Create incident on fire</span>
+            <span className="text-xs text-slate-500">
+              Auto-created incidents start in <span className="font-mono">investigating</span> and require manual state changes and publication.
+            </span>
+          </div>
+        </label>
+      </FormField>
 
       <FormField label="Alert Channels" description="Select one or more channels to notify">
         {channels.length === 0 ? (

@@ -225,7 +225,7 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient), sharedanalytics.NewRepository(dbClient))
+	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient, nil), sharedanalytics.NewRepository(dbClient))
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-tags")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")

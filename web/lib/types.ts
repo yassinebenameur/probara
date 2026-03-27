@@ -471,6 +471,7 @@ export interface AlertPolicy {
   description?: string;
   failure_threshold: number;
   failure_window_seconds: number;
+  create_incident_on_fire: boolean;
   channel_ids?: string[];
   email_subject_template?: string;
   email_body_template?: string;
@@ -483,6 +484,7 @@ export interface CreateAlertPolicyRequest {
   description?: string;
   failure_threshold: number;
   failure_window_seconds: number;
+  create_incident_on_fire?: boolean;
   channel_ids?: string[];
   email_subject_template?: string;
   email_body_template?: string;
@@ -493,6 +495,7 @@ export interface UpdateAlertPolicyRequest {
   description?: string;
   failure_threshold?: number;
   failure_window_seconds?: number;
+  create_incident_on_fire?: boolean;
   channel_ids?: string[];
   email_subject_template?: string;
   email_body_template?: string;
@@ -503,6 +506,125 @@ export interface AlertPolicyListResponse {
   page: number;
   page_size: number;
   total: number;
+}
+
+// Incident types
+export type IncidentState = 'investigating' | 'identified' | 'monitoring' | 'resolved';
+export type IncidentSource = 'manual' | 'auto';
+
+export type IncidentTimelineEntryType = 'system' | 'internal_note' | 'public_update';
+
+export interface IncidentTimelineEntry {
+  id: string;
+  tenant_id: string;
+  incident_id: string;
+  entry_type: IncidentTimelineEntryType;
+  message: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface IncidentAlertSummary {
+  id: string;
+  monitor_id: string;
+  alert_policy_id: string;
+  status: AlertStatus;
+  triggered_at: string;
+  acknowledged_at?: string;
+  resolved_at?: string;
+  failure_count: number;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+  monitor_name: string;
+  policy_name: string;
+}
+
+export interface IncidentMonitorSummary {
+  id: string;
+  tenant_id: string;
+  name: string;
+  type: MonitorType;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentStatusPagePublication {
+  status_page_id: string;
+  status_page_slug: string;
+  status_page_title: string;
+  published_at: string;
+  unpublished_at?: string;
+  monitor_ids: string[];
+}
+
+export interface IncidentListItem {
+  id: string;
+  title: string;
+  state: IncidentState;
+  source: IncidentSource;
+  updated_at: string;
+  resolved_at?: string;
+  linked_alert_count: number;
+  linked_monitor_count: number;
+  publication_count: number;
+}
+
+export interface IncidentDetail {
+  id: string;
+  tenant_id: string;
+  title: string;
+  summary: string;
+  state: IncidentState;
+  resolved_at?: string;
+  is_auto_created: boolean;
+  auto_monitor_id?: string;
+  auto_alert_policy_id?: string;
+  created_at: string;
+  updated_at: string;
+  alerts: IncidentAlertSummary[];
+  monitors: IncidentMonitorSummary[];
+  publications: IncidentStatusPagePublication[];
+  timeline: IncidentTimelineEntry[];
+}
+
+export interface IncidentListResponse {
+  items: IncidentListItem[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface CreateIncidentRequest {
+  title: string;
+  summary?: string;
+}
+
+export interface UpdateIncidentRequest {
+  title?: string;
+  summary?: string;
+}
+
+export interface UpdateIncidentStateRequest {
+  state: IncidentState;
+}
+
+export interface AttachIncidentAlertsRequest {
+  alert_ids: string[];
+}
+
+export interface AttachIncidentMonitorsRequest {
+  monitor_ids: string[];
+}
+
+export interface CreateIncidentTimelineEntryRequest {
+  entry_type: 'internal_note' | 'public_update';
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PublishIncidentToStatusPageRequest {
+  monitor_ids: string[];
 }
 
 // Alert Channel types

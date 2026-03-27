@@ -45,6 +45,12 @@ type IncidentService interface {
 
 	// UnpublishIncidentFromStatusPage removes an incident publication from a status page.
 	UnpublishIncidentFromStatusPage(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error)
+
+	// EnsureIncidentForAlert auto-creates or reuses an incident for a firing alert when policy settings allow it.
+	EnsureIncidentForAlert(ctx context.Context, tenantID uuid.UUID, alert *models.AlertWithDetails) error
+
+	// RecordAlertRecoveryIfNeeded appends a recovery timeline entry when all linked alerts are resolved.
+	RecordAlertRecoveryIfNeeded(ctx context.Context, tenantID, alertID uuid.UUID) error
 }
 
 // Ensure Service implements IncidentService.

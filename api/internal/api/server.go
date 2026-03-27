@@ -156,8 +156,12 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
 			agentHandlers := agenthandlers.NewHandler(agentService, log)
 
+			// Incident service and handlers
+			incidentService := incidentservice.NewService(dbClient, statusPublisher)
+			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
+
 			// Alert service and handlers (shared across alerts + dashboard routes)
-			alertSvc := alertservice.NewService(dbClient)
+			alertSvc := alertservice.NewService(dbClient, incidentService)
 			analyticsRepo := sharedanalytics.NewRepository(dbClient)
 			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
 
@@ -176,10 +180,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Import service and handlers
 			importSvc := importservice.NewService(dbClient, monitorService)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
-
-			// Incident service and handlers
-			incidentService := incidentservice.NewService(dbClient, statusPublisher)
-			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
 
 			r.Route("/monitors", func(r chi.Router) {
 				r.Post("/", monitorHandlers.CreateMonitor)

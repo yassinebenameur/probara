@@ -34,6 +34,37 @@ func TestServiceCreateManualIncident(t *testing.T) {
 	}
 }
 
+func TestServiceGetIncidentReturnsEmptyLinkedResourceSlices(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	svc := NewService(dbClient, nil)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing for all regions.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	detail, err := svc.GetIncident(ctx, tenantID, incident.ID)
+	if err != nil {
+		t.Fatalf("GetIncident() error = %v", err)
+	}
+	if detail.Alerts == nil {
+		t.Fatalf("alerts = nil, want empty slice")
+	}
+	if detail.Monitors == nil {
+		t.Fatalf("monitors = nil, want empty slice")
+	}
+	if detail.Publications == nil {
+		t.Fatalf("publications = nil, want empty slice")
+	}
+}
+
 func TestServiceTransitionIncidentStateRejectsResolvedReopen(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -528,6 +559,67 @@ func TestServicePublishIncidentToStatusPageWithValidMonitorSelection(t *testing.
 	}
 }
 
+func TestServiceGetIncidentIncludesLinkedResources(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	alertID := insertIncidentTestAlert(ctx, t, dbClient, tenantID, monitorID)
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
+	svc := NewService(dbClient, nil)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.AttachAlert(ctx, tenantID, incident.ID, alertID); err != nil {
+		t.Fatalf("AttachAlert() error = %v", err)
+	}
+	if _, err := svc.AttachMonitor(ctx, tenantID, incident.ID, monitorID); err != nil {
+		t.Fatalf("AttachMonitor() error = %v", err)
+	}
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{
+		MonitorIDs: []string{monitorID.String()},
+	}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+
+	detail, err := svc.GetIncident(ctx, tenantID, incident.ID)
+	if err != nil {
+		t.Fatalf("GetIncident() error = %v", err)
+	}
+	if len(detail.Alerts) != 1 {
+		t.Fatalf("alerts len = %d, want 1", len(detail.Alerts))
+	}
+	if detail.Alerts[0].ID != alertID {
+		t.Fatalf("alert id = %s, want %s", detail.Alerts[0].ID, alertID)
+	}
+	if len(detail.Monitors) != 1 {
+		t.Fatalf("monitors len = %d, want 1", len(detail.Monitors))
+	}
+	if detail.Monitors[0].ID != monitorID {
+		t.Fatalf("monitor id = %s, want %s", detail.Monitors[0].ID, monitorID)
+	}
+	if len(detail.Publications) != 1 {
+		t.Fatalf("publications len = %d, want 1", len(detail.Publications))
+	}
+	if detail.Publications[0].StatusPageID != statusPageID {
+		t.Fatalf("status page id = %s, want %s", detail.Publications[0].StatusPageID, statusPageID)
+	}
+	if detail.Publications[0].StatusPageSlug != "status" {
+		t.Fatalf("status page slug = %q, want %q", detail.Publications[0].StatusPageSlug, "status")
+	}
+	if len(detail.Publications[0].MonitorIDs) != 1 || detail.Publications[0].MonitorIDs[0] != monitorID {
+		t.Fatalf("publication monitor ids = %v, want [%s]", detail.Publications[0].MonitorIDs, monitorID)
+	}
+}
+
 func TestServicePublishIncidentToStatusPageEmitsDirectRefreshEvent(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -790,6 +882,320 @@ func TestServiceCreateIncidentTimelineEntryPublicUpdateEmitsDirectRefreshEvents(
 	}
 }
 
+func TestServiceEnsureIncidentForAlertCreatesAndReusesAutoIncident(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
+	svc := NewService(dbClient, nil)
+
+	firstAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	firstAlert := &models.AlertWithDetails{
+		Alert: models.Alert{
+			ID:            firstAlertID,
+			TenantID:      tenantID,
+			MonitorID:     monitorID,
+			AlertPolicyID: policyID,
+			Status:        models.AlertStatusActive,
+		},
+		MonitorName: "API",
+		PolicyName:  "auto-policy",
+	}
+	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
+		t.Fatalf("EnsureIncidentForAlert(first) error = %v", err)
+	}
+
+	incidentID := loadAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+	detail, err := svc.GetIncident(ctx, tenantID, incidentID)
+	if err != nil {
+		t.Fatalf("GetIncident() error = %v", err)
+	}
+	if !detail.IsAutoCreated {
+		t.Fatalf("expected auto-created incident")
+	}
+	if count := countIncidentAlertLinks(ctx, t, dbClient, incidentID); count != 1 {
+		t.Fatalf("incident alert count after first ensure = %d, want 1", count)
+	}
+	if count := countIncidentMonitorLinks(ctx, t, dbClient, incidentID); count != 1 {
+		t.Fatalf("incident monitor count after first ensure = %d, want 1", count)
+	}
+	if len(detail.Timeline) != 1 || !hasTimelineMessage(detail.Timeline, autoIncidentCreatedMessage) {
+		t.Fatalf("unexpected first timeline = %#v", detail.Timeline)
+	}
+
+	secondAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	secondAlert := &models.AlertWithDetails{
+		Alert: models.Alert{
+			ID:            secondAlertID,
+			TenantID:      tenantID,
+			MonitorID:     monitorID,
+			AlertPolicyID: policyID,
+			Status:        models.AlertStatusActive,
+		},
+		MonitorName: "API",
+		PolicyName:  "auto-policy",
+	}
+	if err := svc.EnsureIncidentForAlert(ctx, tenantID, secondAlert); err != nil {
+		t.Fatalf("EnsureIncidentForAlert(second) error = %v", err)
+	}
+
+	reusedIncidentID := loadAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+	if reusedIncidentID != incidentID {
+		t.Fatalf("reused incident id = %s, want %s", reusedIncidentID, incidentID)
+	}
+	if count := countIncidentAlertLinks(ctx, t, dbClient, incidentID); count != 2 {
+		t.Fatalf("incident alert count after second ensure = %d, want 2", count)
+	}
+
+	detail, err = svc.GetIncident(ctx, tenantID, incidentID)
+	if err != nil {
+		t.Fatalf("GetIncident() second error = %v", err)
+	}
+	if len(detail.Timeline) != 2 || !hasTimelineMessage(detail.Timeline, autoIncidentLinkedMessage) {
+		t.Fatalf("unexpected second timeline = %#v", detail.Timeline)
+	}
+}
+
+func TestServiceEnsureIncidentForAlertRejectsTenantMismatch(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	otherTenantID := testutil.InsertTenant(ctx, t, dbClient, "other-incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
+	svc := NewService(dbClient, nil)
+
+	alert := &models.AlertWithDetails{
+		Alert: models.Alert{
+			ID:            uuid.New(),
+			TenantID:      otherTenantID,
+			MonitorID:     monitorID,
+			AlertPolicyID: policyID,
+			Status:        models.AlertStatusActive,
+		},
+		MonitorName: "API",
+		PolicyName:  "auto-policy",
+	}
+	if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err == nil {
+		t.Fatalf("expected EnsureIncidentForAlert() tenant mismatch error")
+	}
+}
+
+func TestServiceRecordAlertRecoveryIfNeededAppendsTimelineAfterFinalResolution(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
+	svc := NewService(dbClient, nil)
+
+	firstAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	secondAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	for _, alertID := range []uuid.UUID{firstAlertID, secondAlertID} {
+		alert := &models.AlertWithDetails{
+			Alert: models.Alert{
+				ID:            alertID,
+				TenantID:      tenantID,
+				MonitorID:     monitorID,
+				AlertPolicyID: policyID,
+				Status:        models.AlertStatusActive,
+			},
+			MonitorName: "API",
+			PolicyName:  "auto-policy",
+		}
+		if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err != nil {
+			t.Fatalf("EnsureIncidentForAlert(%s) error = %v", alertID, err)
+		}
+	}
+
+	incidentID := loadAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+	if _, err := dbClient.ExecContext(ctx, `UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1`, firstAlertID); err != nil {
+		t.Fatalf("resolve first alert: %v", err)
+	}
+	if err := svc.RecordAlertRecoveryIfNeeded(ctx, tenantID, firstAlertID); err != nil {
+		t.Fatalf("RecordAlertRecoveryIfNeeded(first) error = %v", err)
+	}
+
+	detail, err := svc.GetIncident(ctx, tenantID, incidentID)
+	if err != nil {
+		t.Fatalf("GetIncident() after first resolve error = %v", err)
+	}
+	if len(detail.Timeline) != 2 {
+		t.Fatalf("timeline length after first resolve = %d, want 2", len(detail.Timeline))
+	}
+
+	if _, err := dbClient.ExecContext(ctx, `UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1`, secondAlertID); err != nil {
+		t.Fatalf("resolve second alert: %v", err)
+	}
+	if err := svc.RecordAlertRecoveryIfNeeded(ctx, tenantID, secondAlertID); err != nil {
+		t.Fatalf("RecordAlertRecoveryIfNeeded(second) error = %v", err)
+	}
+
+	detail, err = svc.GetIncident(ctx, tenantID, incidentID)
+	if err != nil {
+		t.Fatalf("GetIncident() after second resolve error = %v", err)
+	}
+	if len(detail.Timeline) != 3 {
+		t.Fatalf("timeline length after second resolve = %d, want 3", len(detail.Timeline))
+	}
+	if !hasTimelineMessage(detail.Timeline, alertsRecoveredMessage) {
+		t.Fatalf("timeline missing recovery message: %#v", detail.Timeline)
+	}
+}
+
+func TestServiceRecordAlertRecoveryIfNeededSerializesConcurrentFinalResolutions(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
+	svc := NewService(dbClient, nil)
+
+	firstAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	secondAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	for _, alertID := range []uuid.UUID{firstAlertID, secondAlertID} {
+		alert := &models.AlertWithDetails{
+			Alert: models.Alert{
+				ID:            alertID,
+				TenantID:      tenantID,
+				MonitorID:     monitorID,
+				AlertPolicyID: policyID,
+				Status:        models.AlertStatusActive,
+			},
+			MonitorName: "API",
+			PolicyName:  "auto-policy",
+		}
+		if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err != nil {
+			t.Fatalf("EnsureIncidentForAlert(%s) error = %v", alertID, err)
+		}
+	}
+
+	incidentID := loadAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+
+	tx1, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx(tx1) error = %v", err)
+	}
+	defer func() {
+		_ = tx1.Rollback()
+	}()
+
+	tx2, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx(tx2) error = %v", err)
+	}
+
+	if _, err := tx1.ExecContext(ctx, `
+		UPDATE alerts
+		SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`, firstAlertID); err != nil {
+		t.Fatalf("resolve first alert in tx1: %v", err)
+	}
+	if _, err := tx2.ExecContext(ctx, `
+		UPDATE alerts
+		SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`, secondAlertID); err != nil {
+		t.Fatalf("resolve second alert in tx2: %v", err)
+	}
+
+	if err := svc.RecordAlertRecoveryIfNeededTx(ctx, tx1, tenantID, firstAlertID); err != nil {
+		t.Fatalf("RecordAlertRecoveryIfNeededTx(tx1) error = %v", err)
+	}
+	assertIncidentRecoveryLockHeld(ctx, t, dbClient, incidentID)
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := svc.RecordAlertRecoveryIfNeededTx(ctx, tx2, tenantID, secondAlertID); err != nil {
+			_ = tx2.Rollback()
+			errCh <- err
+			return
+		}
+		errCh <- tx2.Commit()
+	}()
+
+	if err := tx1.Commit(); err != nil {
+		t.Fatalf("Commit(tx1) error = %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("tx2 recovery/commit error = %v", err)
+	}
+
+	detail, err := svc.GetIncident(ctx, tenantID, incidentID)
+	if err != nil {
+		t.Fatalf("GetIncident() after concurrent resolve error = %v", err)
+	}
+	if got := countTimelineMessage(detail.Timeline, alertsRecoveredMessage); got != 1 {
+		t.Fatalf("recovery message count = %d, want 1", got)
+	}
+}
+
+func TestServiceRecordAlertRecoveryIfNeededSkipsDuplicateAfterLaterNonRecoveryEntry(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
+	svc := NewService(dbClient, nil)
+
+	alertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+	alert := &models.AlertWithDetails{
+		Alert: models.Alert{
+			ID:            alertID,
+			TenantID:      tenantID,
+			MonitorID:     monitorID,
+			AlertPolicyID: policyID,
+			Status:        models.AlertStatusActive,
+		},
+		MonitorName: "API",
+		PolicyName:  "auto-policy",
+	}
+	if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err != nil {
+		t.Fatalf("EnsureIncidentForAlert() error = %v", err)
+	}
+
+	incidentID := loadAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE alerts
+		SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`, alertID); err != nil {
+		t.Fatalf("resolve alert: %v", err)
+	}
+	if err := svc.RecordAlertRecoveryIfNeeded(ctx, tenantID, alertID); err != nil {
+		t.Fatalf("RecordAlertRecoveryIfNeeded(first) error = %v", err)
+	}
+	if _, err := svc.CreateIncidentTimelineEntry(ctx, tenantID, incidentID, &models.CreateIncidentTimelineEntryRequest{
+		EntryType: models.IncidentTimelineEntryTypeInternalNote,
+		Message:   "Operator note after recovery",
+	}); err != nil {
+		t.Fatalf("CreateIncidentTimelineEntry() error = %v", err)
+	}
+	if err := svc.RecordAlertRecoveryIfNeeded(ctx, tenantID, alertID); err != nil {
+		t.Fatalf("RecordAlertRecoveryIfNeeded(second) error = %v", err)
+	}
+
+	detail, err := svc.GetIncident(ctx, tenantID, incidentID)
+	if err != nil {
+		t.Fatalf("GetIncident() error = %v", err)
+	}
+	if got := countTimelineMessage(detail.Timeline, alertsRecoveredMessage); got != 1 {
+		t.Fatalf("recovery message count = %d, want 1", got)
+	}
+}
+
 func TestServicePublishIncidentStatusPageRefreshesIgnoresCanceledRequestContext(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -885,13 +1291,28 @@ type incidentPublicationRecord struct {
 func insertIncidentTestAlert(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID uuid.UUID) uuid.UUID {
 	t.Helper()
 
+	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "incident-policy", false)
+
+	return insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
+}
+
+func insertIncidentTestPolicy(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID uuid.UUID, name string, createIncidentOnFire bool) uuid.UUID {
+	t.Helper()
+
 	policyID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
-		VALUES ($1, $2, 'incident-policy', 1, 60, NOW(), NOW())
-	`, policyID, tenantID); err != nil {
+		INSERT INTO alert_policies (
+			id, tenant_id, name, failure_threshold, failure_window_seconds, create_incident_on_fire, created_at, updated_at
+		) VALUES ($1, $2, $3, 1, 60, $4, NOW(), NOW())
+	`, policyID, tenantID, name, createIncidentOnFire); err != nil {
 		t.Fatalf("insert alert policy: %v", err)
 	}
+
+	return policyID
+}
+
+func insertIncidentTestAlertWithPolicy(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID, policyID uuid.UUID) uuid.UUID {
+	t.Helper()
 
 	alertID := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
@@ -902,6 +1323,50 @@ func insertIncidentTestAlert(ctx context.Context, t *testing.T, dbClient testuti
 	}
 
 	return alertID
+}
+
+func loadAutoIncidentID(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID, policyID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	var incidentID uuid.UUID
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT id
+		FROM incidents
+		WHERE tenant_id = $1 AND is_auto_created = TRUE AND auto_monitor_id = $2 AND auto_alert_policy_id = $3
+	`, tenantID, monitorID, policyID).Scan(&incidentID); err != nil {
+		t.Fatalf("load auto incident: %v", err)
+	}
+
+	return incidentID
+}
+
+func hasTimelineMessage(timeline []models.IncidentTimelineEntry, message string) bool {
+	return countTimelineMessage(timeline, message) > 0
+}
+
+func countTimelineMessage(timeline []models.IncidentTimelineEntry, message string) int {
+	count := 0
+	for _, entry := range timeline {
+		if entry.Message == message {
+			count++
+		}
+	}
+	return count
+}
+
+func assertIncidentRecoveryLockHeld(ctx context.Context, t *testing.T, dbClient testutilDBClient, incidentID uuid.UUID) {
+	t.Helper()
+
+	lockKey := "incident-recovery:" + incidentID.String()
+	var acquired bool
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))
+	`, lockKey).Scan(&acquired); err != nil {
+		t.Fatalf("probe incident recovery lock: %v", err)
+	}
+	if acquired {
+		t.Fatalf("expected incident recovery lock to be held for %s", incidentID)
+	}
 }
 
 type testutilDBClient interface {

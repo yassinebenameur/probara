@@ -63,10 +63,14 @@ const (
 )
 
 type statusPageIncidentView struct {
-	Name        string
-	Status      string
-	StatusLabel string
-	Summary     string
+	Title                  string
+	State                  string
+	StateLabel             string
+	ToneClass              string
+	Summary                string
+	AffectedComponentsText string
+	LatestUpdate           string
+	ResolvedAtLabel        string
 }
 
 type statusPageSectionView struct {
@@ -200,6 +204,10 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		view.Sections = append(view.Sections, renderSection)
 	}
 
+	for _, incident := range data.Incidents {
+		view.Incidents = append(view.Incidents, buildStatusPageIncidentView(incident))
+	}
+
 	view.MonitorCount = len(view.Monitors)
 
 	if view.IssueCount > 0 {
@@ -236,10 +244,82 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	view.ShowToolbar = view.ShowSearchControls
 	view.ShowLayoutControl = true
 	sort.Slice(view.Incidents, func(i, j int) bool {
-		return monitorStatusRank(view.Incidents[i].Status) < monitorStatusRank(view.Incidents[j].Status)
+		return incidentStateRank(view.Incidents[i].State) < incidentStateRank(view.Incidents[j].State)
 	})
 
 	return view
+}
+
+func buildStatusPageIncidentView(incident StatusPageIncident) statusPageIncidentView {
+	summary := strings.TrimSpace(incident.Summary)
+	if summary == "" {
+		summary = "No public summary is available yet."
+	}
+
+	state := strings.TrimSpace(incident.State)
+	stateLabel := "Investigating"
+	toneClass := "down"
+	switch state {
+	case "identified":
+		stateLabel = "Identified"
+	case "monitoring":
+		stateLabel = "Monitoring"
+		toneClass = "warn"
+	case "resolved":
+		stateLabel = "Resolved"
+		toneClass = "ok"
+	case "investigating":
+		stateLabel = "Investigating"
+	default:
+		stateLabel = "Incident"
+		toneClass = "unknown"
+	}
+
+	components := make([]string, 0, len(incident.AffectedComponents))
+	for _, component := range incident.AffectedComponents {
+		component = strings.TrimSpace(component)
+		if component != "" {
+			components = append(components, component)
+		}
+	}
+	affectedComponentsText := "Affected components: platform-wide"
+	if len(components) > 0 {
+		affectedComponentsText = fmt.Sprintf("Affected components: %s", strings.Join(components, ", "))
+	}
+
+	latestUpdate := ""
+	if len(incident.Updates) > 0 {
+		latestUpdate = strings.TrimSpace(incident.Updates[0].Message)
+	}
+
+	resolvedAtLabel := ""
+	if incident.ResolvedAt != nil {
+		resolvedAtLabel = fmt.Sprintf("Resolved %s", relativeTime(*incident.ResolvedAt))
+	}
+
+	return statusPageIncidentView{
+		Title:                  strings.TrimSpace(incident.Title),
+		State:                  state,
+		StateLabel:             stateLabel,
+		ToneClass:              toneClass,
+		Summary:                summary,
+		AffectedComponentsText: affectedComponentsText,
+		LatestUpdate:           latestUpdate,
+		ResolvedAtLabel:        resolvedAtLabel,
+	}
+}
+
+func incidentStateRank(state string) int {
+	switch strings.TrimSpace(state) {
+	case "investigating", "identified":
+		return 0
+	case "monitoring":
+		return 1
+	case "resolved":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
@@ -1206,6 +1286,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       background: var(--yellow);
       box-shadow: 0 0 10px var(--yellow-glow);
     }
+    .inc-card.i-ok::before {
+      background: var(--green);
+      box-shadow: 0 0 10px var(--green-glow);
+    }
     .inc-card.i-down::before {
       background: var(--red);
       box-shadow: 0 0 10px var(--red-glow);
@@ -1805,12 +1889,18 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       <div class="group-label">System Logs</div>
       {{if .Incidents}}
         {{range .Incidents}}
-          <article class="inc-card {{if eq .Status "degraded"}}i-warn{{else if or (eq .Status "down") (eq .Status "error")}}i-down{{else}}i-unknown{{end}}">
+          <article class="inc-card {{if eq .ToneClass "warn"}}i-warn{{else if eq .ToneClass "ok"}}i-ok{{else if eq .ToneClass "down"}}i-down{{else}}i-unknown{{end}}">
             <div class="inc-head">
-              <h3 class="inc-title">{{.Name}}</h3>
-              <span class="inc-meta">{{.StatusLabel}}</span>
+              <h3 class="inc-title">{{.Title}}</h3>
+              <span class="inc-meta">{{.StateLabel}}</span>
             </div>
             <p class="inc-desc">{{.Summary}}</p>
+            <div class="inc-update">{{.AffectedComponentsText}}</div>
+            {{if .LatestUpdate}}
+              <div class="inc-update">{{.LatestUpdate}}</div>
+            {{else if .ResolvedAtLabel}}
+              <div class="inc-update">{{.ResolvedAtLabel}}</div>
+            {{end}}
           </article>
         {{end}}
       {{else}}

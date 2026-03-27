@@ -41,6 +41,13 @@ import type {
   ApiKey,
   ApiKeyListResponse,
   CreateApiKeyRequest,
+  IncidentListResponse,
+  IncidentDetail,
+  CreateIncidentRequest,
+  UpdateIncidentRequest,
+  CreateIncidentTimelineEntryRequest,
+  PublishIncidentToStatusPageRequest,
+  IncidentState,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -258,6 +265,71 @@ export async function updateMonitor(
 
 export async function deleteMonitor(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/monitors/${id}`);
+}
+
+// Incident API functions
+export async function getIncidents(params?: {
+  page?: number;
+  page_size?: number;
+}): Promise<IncidentListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/incidents${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<IncidentListResponse>('GET', path);
+}
+
+export async function getIncident(id: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('GET', `/v1/incidents/${id}`);
+}
+
+export async function createIncident(data: CreateIncidentRequest): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', '/v1/incidents', data);
+}
+
+export async function updateIncident(id: string, data: UpdateIncidentRequest): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('PATCH', `/v1/incidents/${id}`, data);
+}
+
+export async function transitionIncidentState(id: string, state: IncidentState): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/state`, { state });
+}
+
+export async function addIncidentTimelineEntry(
+  id: string,
+  data: CreateIncidentTimelineEntryRequest
+): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/timeline`, data);
+}
+
+export async function attachIncidentMonitor(id: string, monitorId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/monitors`, { monitor_id: monitorId });
+}
+
+export async function detachIncidentMonitor(id: string, monitorId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('DELETE', `/v1/incidents/${id}/monitors/${monitorId}`);
+}
+
+export async function attachIncidentAlert(id: string, alertId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/alerts`, { alert_id: alertId });
+}
+
+export async function detachIncidentAlert(id: string, alertId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('DELETE', `/v1/incidents/${id}/alerts/${alertId}`);
+}
+
+export async function publishIncidentToStatusPage(
+  id: string,
+  statusPageId: string,
+  data: PublishIncidentToStatusPageRequest
+): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('PUT', `/v1/incidents/${id}/status-pages/${statusPageId}`, data);
+}
+
+export async function unpublishIncidentFromStatusPage(id: string, statusPageId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('DELETE', `/v1/incidents/${id}/status-pages/${statusPageId}`);
 }
 
 export async function deleteMonitorHistory(id: string): Promise<void> {

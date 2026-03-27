@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,12 @@ type statusUpdatePublisher interface {
 
 const incidentPublicationUpdatedEventType = "incident.publication.updated"
 const incidentStatusPageRefreshLookupTimeout = 5 * time.Second
+
+const (
+	autoIncidentCreatedMessage = "Incident auto-created from firing alert"
+	autoIncidentLinkedMessage  = "Alert auto-linked to existing incident"
+	alertsRecoveredMessage     = "All linked alerts recovered"
+)
 
 // Service handles incident business logic.
 type Service struct {
@@ -124,6 +131,22 @@ func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
+	alerts, err := s.loadIncidentAlerts(ctx, tenantID, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	monitors, err := s.loadIncidentMonitors(ctx, tenantID, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	publications, err := s.loadIncidentPublications(ctx, tenantID, incidentID)
+	if err != nil {
+		return nil, err
+	}
+
+	detail.Alerts = alerts
+	detail.Monitors = monitors
+	detail.Publications = publications
 	detail.Timeline = timeline
 
 	return &detail, nil
@@ -656,6 +679,143 @@ func (s *Service) UnpublishIncidentFromStatusPage(ctx context.Context, tenantID,
 	return s.GetIncident(ctx, tenantID, incidentID)
 }
 
+// EnsureIncidentForAlert auto-creates or reuses an incident for a firing alert when policy settings allow it.
+func (s *Service) EnsureIncidentForAlert(ctx context.Context, tenantID uuid.UUID, alert *models.AlertWithDetails) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.EnsureIncidentForAlertTx(ctx, tx, tenantID, alert); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return nil
+}
+
+// EnsureIncidentForAlertTx auto-creates or reuses an incident for a firing alert inside an existing transaction.
+func (s *Service) EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tenantID uuid.UUID, alert *models.AlertWithDetails) error {
+	if alert == nil {
+		return fmt.Errorf("alert is required")
+	}
+	if tenantID == uuid.Nil {
+		return fmt.Errorf("tenant id is required")
+	}
+	if alert.TenantID == uuid.Nil || alert.ID == uuid.Nil || alert.MonitorID == uuid.Nil || alert.AlertPolicyID == uuid.Nil {
+		return fmt.Errorf("alert automation requires non-nil tenant, alert, monitor, and policy ids")
+	}
+	if alert.TenantID != tenantID {
+		return fmt.Errorf("alert tenant mismatch")
+	}
+
+	enabled, err := s.loadCreateIncidentOnFireFlagTx(ctx, tx, tenantID, alert.AlertPolicyID)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+
+	if err := s.lockAutoIncidentKeyTx(ctx, tx, tenantID, alert.MonitorID, alert.AlertPolicyID); err != nil {
+		return err
+	}
+
+	incidentID, created, err := s.findOrCreateAutoIncidentTx(ctx, tx, tenantID, alert)
+	if err != nil {
+		return err
+	}
+
+	alertAttached, err := s.ensureIncidentAlertLinkTx(ctx, tx, incidentID, alert.ID)
+	if err != nil {
+		return err
+	}
+	monitorAttached, err := s.ensureIncidentMonitorLinkTx(ctx, tx, incidentID, alert.MonitorID)
+	if err != nil {
+		return err
+	}
+
+	if created || alertAttached || monitorAttached {
+		message := autoIncidentLinkedMessage
+		if created {
+			message = autoIncidentCreatedMessage
+		}
+		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, message, map[string]interface{}{
+			"alert_id":        alert.ID.String(),
+			"monitor_id":      alert.MonitorID.String(),
+			"alert_policy_id": alert.AlertPolicyID.String(),
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// RecordAlertRecoveryIfNeeded appends a timeline entry when all alerts linked to an incident are resolved.
+func (s *Service) RecordAlertRecoveryIfNeeded(ctx context.Context, tenantID, alertID uuid.UUID) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.RecordAlertRecoveryIfNeededTx(ctx, tx, tenantID, alertID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return nil
+}
+
+// RecordAlertRecoveryIfNeededTx appends a timeline entry when all linked alerts are resolved inside an existing transaction.
+func (s *Service) RecordAlertRecoveryIfNeededTx(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) error {
+	incidentIDs, err := s.loadIncidentIDsForAlertTx(ctx, tx, tenantID, alertID)
+	if err != nil {
+		return err
+	}
+	sort.Slice(incidentIDs, func(i, j int) bool {
+		return incidentIDs[i].String() < incidentIDs[j].String()
+	})
+	for _, incidentID := range incidentIDs {
+		if err := s.lockIncidentRecoveryKeyTx(ctx, tx, incidentID); err != nil {
+			return err
+		}
+		allResolved, resolvedAfter, err := s.loadLinkedAlertRecoveryStateTx(ctx, tx, incidentID)
+		if err != nil {
+			return err
+		}
+		if !allResolved {
+			continue
+		}
+		resolvedAfterMarker := recoveryResolutionMarker(resolvedAfter)
+		alreadyRecorded, err := s.recoveryTimelineExistsTx(ctx, tx, incidentID, models.IncidentTimelineEntryTypeSystem, alertsRecoveredMessage, resolvedAfterMarker)
+		if err != nil {
+			return err
+		}
+		if alreadyRecorded {
+			continue
+		}
+		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, alertsRecoveredMessage, map[string]interface{}{
+			"alert_id":       alertID.String(),
+			"resolved_after": resolvedAfterMarker,
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *Service) publishStatusPageRefresh(tenantID, statusPageID uuid.UUID) {
 	if s.statusPublisher == nil || tenantID == uuid.Nil || statusPageID == uuid.Nil {
 		return
@@ -712,6 +872,167 @@ func (s *Service) loadActiveStatusPageIDsForIncident(ctx context.Context, tenant
 	return statusPageIDs, nil
 }
 
+func (s *Service) loadCreateIncidentOnFireFlagTx(ctx context.Context, tx *sql.Tx, tenantID, policyID uuid.UUID) (bool, error) {
+	var enabled bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT create_incident_on_fire
+		FROM alert_policies
+		WHERE id = $1 AND tenant_id = $2
+	`, policyID, tenantID).Scan(&enabled); err != nil {
+		if err == sql.ErrNoRows {
+			return false, fmt.Errorf("alert policy not found")
+		}
+		return false, fmt.Errorf("load alert policy: %w", err)
+	}
+	return enabled, nil
+}
+
+func (s *Service) lockAutoIncidentKeyTx(ctx context.Context, tx *sql.Tx, tenantID, monitorID, policyID uuid.UUID) error {
+	lockKey := fmt.Sprintf("%s:%s:%s", tenantID, monitorID, policyID)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return fmt.Errorf("lock auto incident key: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) lockIncidentRecoveryKeyTx(ctx context.Context, tx *sql.Tx, incidentID uuid.UUID) error {
+	lockKey := fmt.Sprintf("incident-recovery:%s", incidentID)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return fmt.Errorf("lock incident recovery key: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, tenantID uuid.UUID, alert *models.AlertWithDetails) (uuid.UUID, bool, error) {
+	var incidentID uuid.UUID
+	err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM incidents
+		WHERE tenant_id = $1
+			AND is_auto_created = TRUE
+			AND auto_monitor_id = $2
+			AND auto_alert_policy_id = $3
+			AND state <> 'resolved'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+		FOR UPDATE
+	`, tenantID, alert.MonitorID, alert.AlertPolicyID).Scan(&incidentID)
+	if err == nil {
+		return incidentID, false, nil
+	}
+	if err != sql.ErrNoRows {
+		return uuid.Nil, false, fmt.Errorf("load auto incident: %w", err)
+	}
+
+	incidentID = uuid.New()
+	title, summary := buildAutoIncidentNarrative(alert.MonitorName, alert.PolicyName)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO incidents (
+			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 'investigating', TRUE, $5, $6, NOW(), NOW())
+	`, incidentID, tenantID, title, summary, alert.MonitorID, alert.AlertPolicyID); err != nil {
+		return uuid.Nil, false, fmt.Errorf("create auto incident: %w", err)
+	}
+
+	return incidentID, true, nil
+}
+
+func (s *Service) ensureIncidentAlertLinkTx(ctx context.Context, tx *sql.Tx, incidentID, alertID uuid.UUID) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (incident_id, alert_id) DO NOTHING
+	`, incidentID, alertID)
+	if err != nil {
+		return false, fmt.Errorf("attach incident alert: %w", err)
+	}
+	return mutationChanged(result), nil
+}
+
+func (s *Service) ensureIncidentMonitorLinkTx(ctx context.Context, tx *sql.Tx, incidentID, monitorID uuid.UUID) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO incident_monitors (incident_id, monitor_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (incident_id, monitor_id) DO NOTHING
+	`, incidentID, monitorID)
+	if err != nil {
+		return false, fmt.Errorf("attach incident monitor: %w", err)
+	}
+	return mutationChanged(result), nil
+}
+
+func (s *Service) loadIncidentIDsForAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT i.id
+		FROM incidents i
+		JOIN incident_alerts ia ON ia.incident_id = i.id
+		JOIN alerts a ON a.id = ia.alert_id AND a.tenant_id = i.tenant_id
+		WHERE i.tenant_id = $1 AND ia.alert_id = $2
+	`, tenantID, alertID)
+	if err != nil {
+		return nil, fmt.Errorf("load incidents for alert: %w", err)
+	}
+	defer rows.Close()
+
+	incidentIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var incidentID uuid.UUID
+		if err := rows.Scan(&incidentID); err != nil {
+			return nil, fmt.Errorf("scan incident for alert: %w", err)
+		}
+		incidentIDs = append(incidentIDs, incidentID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incidents for alert: %w", err)
+	}
+
+	return incidentIDs, nil
+}
+
+func (s *Service) loadLinkedAlertRecoveryStateTx(ctx context.Context, tx *sql.Tx, incidentID uuid.UUID) (bool, time.Time, error) {
+	var totalCount int
+	var unresolvedCount int
+	var resolvedAfter sql.NullTime
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*),
+			COUNT(*) FILTER (WHERE a.status IN ('active', 'acknowledged')),
+			MAX(COALESCE(a.resolved_at, a.updated_at))
+		FROM incident_alerts ia
+		JOIN alerts a ON a.id = ia.alert_id
+		WHERE ia.incident_id = $1
+	`, incidentID).Scan(&totalCount, &unresolvedCount, &resolvedAfter); err != nil {
+		return false, time.Time{}, fmt.Errorf("load linked alert statuses: %w", err)
+	}
+
+	if totalCount == 0 || unresolvedCount != 0 || !resolvedAfter.Valid {
+		return false, time.Time{}, nil
+	}
+
+	return true, resolvedAfter.Time.UTC(), nil
+}
+
+func (s *Service) recoveryTimelineExistsTx(ctx context.Context, tx *sql.Tx, incidentID uuid.UUID, entryType models.IncidentTimelineEntryType, message, resolvedAfter string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM incident_timeline_entries
+			WHERE incident_id = $1
+				AND entry_type = $2
+				AND message = $3
+				AND metadata->>'resolved_after' = $4
+		)
+	`, incidentID, entryType, message, resolvedAfter).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check incident recovery timeline entry: %w", err)
+	}
+
+	return exists, nil
+}
+
+func recoveryResolutionMarker(resolvedAfter time.Time) string {
+	return resolvedAfter.UTC().Format(time.RFC3339Nano)
+}
+
 func (s *Service) insertTimelineEntryTx(ctx context.Context, exec incidentExecutor, tenantID, incidentID uuid.UUID, entryType models.IncidentTimelineEntryType, message string, metadata map[string]interface{}) error {
 	if metadata == nil {
 		metadata = map[string]interface{}{}
@@ -724,7 +1045,7 @@ func (s *Service) insertTimelineEntryTx(ctx context.Context, exec incidentExecut
 	if _, err := exec.ExecContext(ctx, `
 		INSERT INTO incident_timeline_entries (
 			id, tenant_id, incident_id, entry_type, message, metadata, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())
 	`, uuid.New(), tenantID, incidentID, entryType, message, metadataJSON); err != nil {
 		return fmt.Errorf("insert incident timeline entry: %w", err)
 	}
@@ -774,6 +1095,131 @@ func (s *Service) loadIncidentTimeline(ctx context.Context, tenantID, incidentID
 	}
 
 	return timeline, nil
+}
+
+func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID uuid.UUID) ([]models.IncidentAlertSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT a.id, a.monitor_id, a.alert_policy_id, a.status, a.triggered_at,
+			a.acknowledged_at, a.resolved_at, a.failure_count, a.last_error, a.created_at, a.updated_at,
+			m.name, ap.name
+		FROM incident_alerts ia
+		JOIN alerts a ON a.id = ia.alert_id
+		JOIN monitors m ON m.id = a.monitor_id
+		JOIN alert_policies ap ON ap.id = a.alert_policy_id
+		WHERE ia.incident_id = $1 AND a.tenant_id = $2
+		ORDER BY a.triggered_at DESC, a.id DESC
+	`, incidentID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load incident alerts: %w", err)
+	}
+	defer rows.Close()
+
+	alerts := make([]models.IncidentAlertSummary, 0)
+	for rows.Next() {
+		var item models.IncidentAlertSummary
+		var acknowledgedAt sql.NullTime
+		var resolvedAt sql.NullTime
+		var lastError sql.NullString
+		if err := rows.Scan(
+			&item.ID, &item.MonitorID, &item.AlertPolicyID, &item.Status, &item.TriggeredAt,
+			&acknowledgedAt, &resolvedAt, &item.FailureCount, &lastError, &item.CreatedAt, &item.UpdatedAt,
+			&item.MonitorName, &item.PolicyName,
+		); err != nil {
+			return nil, fmt.Errorf("scan incident alert: %w", err)
+		}
+		if acknowledgedAt.Valid {
+			value := acknowledgedAt.Time
+			item.AcknowledgedAt = &value
+		}
+		if resolvedAt.Valid {
+			value := resolvedAt.Time
+			item.ResolvedAt = &value
+		}
+		if lastError.Valid {
+			value := lastError.String
+			item.LastError = &value
+		}
+		alerts = append(alerts, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident alerts: %w", err)
+	}
+
+	return alerts, nil
+}
+
+func (s *Service) loadIncidentMonitors(ctx context.Context, tenantID, incidentID uuid.UUID) ([]models.IncidentMonitorSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.id, m.tenant_id, m.name, m.type, m.created_at, m.updated_at
+		FROM incident_monitors im
+		JOIN monitors m ON m.id = im.monitor_id
+		WHERE im.incident_id = $1 AND m.tenant_id = $2
+		ORDER BY m.name ASC, m.id ASC
+	`, incidentID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load incident monitors: %w", err)
+	}
+	defer rows.Close()
+
+	monitors := make([]models.IncidentMonitorSummary, 0)
+	for rows.Next() {
+		var item models.IncidentMonitorSummary
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.Name, &item.Type, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan incident monitor: %w", err)
+		}
+		monitors = append(monitors, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident monitors: %w", err)
+	}
+
+	return monitors, nil
+}
+
+func (s *Service) loadIncidentPublications(ctx context.Context, tenantID, incidentID uuid.UUID) ([]models.IncidentPublication, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT isp.status_page_id, sp.slug, sp.title, isp.published_at, isp.unpublished_at,
+			COALESCE(
+				array_agg(ispm.monitor_id ORDER BY ispm.monitor_id) FILTER (WHERE ispm.monitor_id IS NOT NULL),
+				'{}'
+			) AS monitor_ids
+		FROM incident_status_page_publications isp
+		JOIN status_pages sp ON sp.id = isp.status_page_id AND sp.tenant_id = isp.tenant_id
+		LEFT JOIN incident_status_page_monitors ispm
+			ON ispm.incident_id = isp.incident_id AND ispm.status_page_id = isp.status_page_id
+		WHERE isp.incident_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL
+		GROUP BY isp.status_page_id, sp.slug, sp.title, isp.published_at, isp.unpublished_at
+		ORDER BY isp.published_at DESC, isp.status_page_id
+	`, incidentID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load incident publications: %w", err)
+	}
+	defer rows.Close()
+
+	publications := make([]models.IncidentPublication, 0)
+	for rows.Next() {
+		var item models.IncidentPublication
+		var unpublishedAt sql.NullTime
+		monitorIDs := make([]uuid.UUID, 0)
+		if err := rows.Scan(
+			&item.StatusPageID, &item.StatusPageSlug, &item.StatusPageTitle, &item.PublishedAt, &unpublishedAt, pq.Array(&monitorIDs),
+		); err != nil {
+			return nil, fmt.Errorf("scan incident publication: %w", err)
+		}
+		if unpublishedAt.Valid {
+			value := unpublishedAt.Time
+			item.UnpublishedAt = &value
+		}
+		item.MonitorIDs = monitorIDs
+		publications = append(publications, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident publications: %w", err)
+	}
+
+	return publications, nil
 }
 
 func (s *Service) ensureIncidentBelongsToTenant(ctx context.Context, tx *sql.Tx, tenantID, incidentID uuid.UUID) error {
@@ -1006,6 +1452,23 @@ func sameUUIDSet(left, right []uuid.UUID) bool {
 	}
 
 	return true
+}
+
+func buildAutoIncidentNarrative(monitorName, policyName string) (string, string) {
+	monitorName = strings.TrimSpace(monitorName)
+	policyName = strings.TrimSpace(policyName)
+
+	title := "Auto-created incident"
+	if monitorName != "" {
+		title = fmt.Sprintf("%s incident", monitorName)
+	}
+
+	summary := "Automatically created from a firing alert policy."
+	if policyName != "" {
+		summary = fmt.Sprintf("Automatically created from alert policy %s.", policyName)
+	}
+
+	return title, summary
 }
 
 func scanIncident(scanner incidentRowScanner) (models.Incident, error) {
