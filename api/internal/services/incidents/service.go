@@ -531,6 +531,14 @@ func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, inc
 	if err := s.validatePublicationMonitorSelection(ctx, tx, tenantID, incidentID, statusPageID, monitorIDs); err != nil {
 		return nil, err
 	}
+	if isNoOp, err := s.isNoOpIncidentPublicationUpdate(ctx, tx, tenantID, incidentID, statusPageID, monitorIDs); err != nil {
+		return nil, err
+	} else if isNoOp {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit incident transaction: %w", err)
+		}
+		return s.GetIncident(ctx, tenantID, incidentID)
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO incident_status_page_publications (
@@ -857,6 +865,64 @@ func mutationChanged(result sql.Result) bool {
 
 	rowsAffected, err := result.RowsAffected()
 	return err == nil && rowsAffected > 0
+}
+
+func (s *Service) isNoOpIncidentPublicationUpdate(ctx context.Context, tx *sql.Tx, tenantID, incidentID, statusPageID uuid.UUID, requestedMonitorIDs []uuid.UUID) (bool, error) {
+	var activePublicationExists bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM incident_status_page_publications
+			WHERE incident_id = $1 AND status_page_id = $2 AND tenant_id = $3 AND unpublished_at IS NULL
+		)
+	`, incidentID, statusPageID, tenantID).Scan(&activePublicationExists); err != nil {
+		return false, fmt.Errorf("load incident publication: %w", err)
+	}
+	if !activePublicationExists {
+		return false, nil
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT monitor_id
+		FROM incident_status_page_monitors
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID)
+	if err != nil {
+		return false, fmt.Errorf("load incident publication monitors: %w", err)
+	}
+	defer rows.Close()
+
+	currentMonitorIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var monitorID uuid.UUID
+		if err := rows.Scan(&monitorID); err != nil {
+			return false, fmt.Errorf("scan incident publication monitor: %w", err)
+		}
+		currentMonitorIDs = append(currentMonitorIDs, monitorID)
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate incident publication monitors: %w", err)
+	}
+
+	return sameUUIDSet(currentMonitorIDs, requestedMonitorIDs), nil
+}
+
+func sameUUIDSet(left, right []uuid.UUID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	leftSet := make(map[uuid.UUID]struct{}, len(left))
+	for _, id := range left {
+		leftSet[id] = struct{}{}
+	}
+	for _, id := range right {
+		if _, ok := leftSet[id]; !ok {
+			return false
+		}
+	}
+
+	return true
 }
 
 func scanIncident(scanner incidentRowScanner) (models.Incident, error) {

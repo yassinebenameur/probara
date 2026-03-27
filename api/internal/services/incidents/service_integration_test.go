@@ -526,6 +526,69 @@ func TestServicePublishIncidentToStatusPageWithValidMonitorSelection(t *testing.
 	}
 }
 
+func TestServicePublishIncidentToStatusPageSkipsNoOpIdenticalPut(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.AttachMonitor(ctx, tenantID, incident.ID, monitorID); err != nil {
+		t.Fatalf("AttachMonitor() error = %v", err)
+	}
+
+	req := &models.UpsertIncidentPublicationRequest{
+		MonitorIDs: []string{monitorID.String()},
+	}
+	detail, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, req)
+	if err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() first call error = %v", err)
+	}
+	if len(detail.Timeline) != 3 {
+		t.Fatalf("timeline length after first publish = %d, want %d", len(detail.Timeline), 3)
+	}
+
+	firstPublication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
+	if err != nil {
+		t.Fatalf("loadIncidentPublication() after first publish error = %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	detail, err = svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, req)
+	if err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() second call error = %v", err)
+	}
+	if len(detail.Timeline) != 3 {
+		t.Fatalf("timeline length after identical publish = %d, want %d", len(detail.Timeline), 3)
+	}
+
+	secondPublication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
+	if err != nil {
+		t.Fatalf("loadIncidentPublication() after second publish error = %v", err)
+	}
+	if !secondPublication.publishedAt.Equal(firstPublication.publishedAt) {
+		t.Fatalf("published_at changed on no-op publish: got %v want %v", secondPublication.publishedAt, firstPublication.publishedAt)
+	}
+	if !secondPublication.updatedAt.Equal(firstPublication.updatedAt) {
+		t.Fatalf("updated_at changed on no-op publish: got %v want %v", secondPublication.updatedAt, firstPublication.updatedAt)
+	}
+	if count := countIncidentPublicationMonitors(ctx, t, dbClient, incident.ID, statusPageID); count != 1 {
+		t.Fatalf("publication monitor count after identical publish = %d, want %d", count, 1)
+	}
+}
+
 func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -581,7 +644,9 @@ func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T
 }
 
 type incidentPublicationRecord struct {
+	publishedAt   time.Time
 	unpublishedAt sql.NullTime
+	updatedAt     time.Time
 }
 
 func insertIncidentTestAlert(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID uuid.UUID) uuid.UUID {
@@ -659,10 +724,10 @@ func countIncidentPublicationMonitors(ctx context.Context, t *testing.T, dbClien
 func loadIncidentPublication(ctx context.Context, dbClient testutilDBClient, incidentID, statusPageID uuid.UUID) (incidentPublicationRecord, error) {
 	var publication incidentPublicationRecord
 	err := dbClient.QueryRowContext(ctx, `
-		SELECT unpublished_at
+		SELECT published_at, unpublished_at, updated_at
 		FROM incident_status_page_publications
 		WHERE incident_id = $1 AND status_page_id = $2
-	`, incidentID, statusPageID).Scan(&publication.unpublishedAt)
+	`, incidentID, statusPageID).Scan(&publication.publishedAt, &publication.unpublishedAt, &publication.updatedAt)
 	if err != nil {
 		return incidentPublicationRecord{}, err
 	}
