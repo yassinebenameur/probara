@@ -15,10 +15,11 @@ const (
 
 // Event represents a status page update signal.
 type Event struct {
-	Type      string    `json:"type"`
-	MonitorID string    `json:"monitor_id,omitempty"`
-	TenantID  string    `json:"tenant_id,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Type         string    `json:"type"`
+	MonitorID    string    `json:"monitor_id,omitempty"`
+	StatusPageID string    `json:"status_page_id,omitempty"`
+	TenantID     string    `json:"tenant_id,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // SubjectFromEnv returns the configured subject or the default.

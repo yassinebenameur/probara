@@ -178,7 +178,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
 
 			// Incident service and handlers
-			incidentService := incidentservice.NewService(dbClient)
+			incidentService := incidentservice.NewService(dbClient, statusPublisher)
 			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
 
 			r.Route("/monitors", func(r chi.Router) {

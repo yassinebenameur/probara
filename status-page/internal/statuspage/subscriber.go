@@ -40,6 +40,18 @@ const statusPageSlugQuery = `
 	ORDER BY 1
 `
 
+const statusPageSlugByIDQuery = `
+	SELECT slug
+	FROM status_pages
+	WHERE id = $1
+`
+
+const statusPageSlugByIDAndTenantQuery = `
+	SELECT slug
+	FROM status_pages
+	WHERE id = $1 AND tenant_id = $2
+`
+
 const statusPageSlugResolveTimeout = 5 * time.Second
 
 type slugResolver func(context.Context, statusupdates.Event) ([]string, error)
@@ -111,19 +123,42 @@ func (r statusPageSlugResolver) Resolve(ctx context.Context, event statusupdates
 		return nil, nil
 	}
 
+	statusPageID, err := parseEventUUID(event.StatusPageID)
+	if err != nil {
+		return nil, err
+	}
+	if statusPageID != uuid.Nil {
+		tenantID, err := parseEventUUID(event.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		if tenantID != uuid.Nil {
+			return r.resolveSlugs(ctx, statusPageSlugByIDAndTenantQuery, statusPageID, tenantID)
+		}
+		return r.resolveSlugs(ctx, statusPageSlugByIDQuery, statusPageID)
+	}
+
 	tenantID, err := parseEventUUID(event.TenantID)
 	if err != nil {
 		return nil, err
 	}
+	if tenantID == uuid.Nil {
+		return nil, nil
+	}
+
 	monitorID, err := parseEventUUID(event.MonitorID)
 	if err != nil {
 		return nil, err
 	}
-	if tenantID == uuid.Nil || monitorID == uuid.Nil {
+	if monitorID == uuid.Nil {
 		return nil, nil
 	}
 
-	rows, err := r.db.QueryContext(ctx, statusPageSlugQuery, tenantID, monitorID)
+	return r.resolveSlugs(ctx, statusPageSlugQuery, tenantID, monitorID)
+}
+
+func (r statusPageSlugResolver) resolveSlugs(ctx context.Context, query string, args ...interface{}) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -159,9 +194,10 @@ func (s *Subscriber) handleEvent(event statusupdates.Event) {
 	slugs, err := s.resolveAffectedSlugs(event)
 	if err != nil {
 		s.warn(err, "Failed to resolve status page slugs for update", map[string]interface{}{
-			"tenant_id":  event.TenantID,
-			"monitor_id": event.MonitorID,
-			"type":       event.Type,
+			"tenant_id":      event.TenantID,
+			"monitor_id":     event.MonitorID,
+			"status_page_id": event.StatusPageID,
+			"type":           event.Type,
 		})
 		return
 	}

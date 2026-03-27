@@ -3,12 +3,14 @@ package incidents
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/statusupdates"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -18,7 +20,7 @@ func TestServiceCreateManualIncident(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -38,7 +40,7 @@ func TestServiceTransitionIncidentStateRejectsResolvedReopen(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "DNS outage",
@@ -65,7 +67,7 @@ func TestServiceCreateIncidentTimelineEntryAppendsNonSystemEntry(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Database latency",
@@ -116,7 +118,7 @@ func TestServiceCreateIncidentTimelineEntryRejectsSystemEntry(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Queue backlog",
@@ -140,7 +142,7 @@ func TestServiceListIncidentsReturnsSummaryFields(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	manualIncident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Manual outage",
@@ -240,7 +242,7 @@ func TestServiceTransitionIncidentStateRejectsConcurrentResolvedReopen(t *testin
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -298,7 +300,7 @@ func TestServiceUpdateIncidentRejectsBlankNarrativeFields(t *testing.T) {
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "Storage degradation",
@@ -333,7 +335,7 @@ func TestServicePublishIncidentToStatusPageRejectsUnlinkedMonitor(t *testing.T) 
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
 	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
 
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
 		Summary: "Down",
@@ -358,7 +360,7 @@ func TestServiceAttachAlertAndDetachFlowSkipsTimelineForNoOps(t *testing.T) {
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	alertID := insertIncidentTestAlert(ctx, t, dbClient, tenantID, monitorID)
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -420,7 +422,7 @@ func TestServiceAttachMonitorSkipsTimelineForDuplicateAttach(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -460,7 +462,7 @@ func TestServicePublishIncidentToStatusPageWithEmptyMonitorList(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -499,7 +501,7 @@ func TestServicePublishIncidentToStatusPageWithValidMonitorSelection(t *testing.
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
 	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -526,6 +528,43 @@ func TestServicePublishIncidentToStatusPageWithValidMonitorSelection(t *testing.
 	}
 }
 
+func TestServicePublishIncidentToStatusPageEmitsDirectRefreshEvent(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	publisher := &fakeIncidentStatusUpdatePublisher{}
+	svc := NewService(dbClient, publisher)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+
+	events := publisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("published events = %d, want %d", len(events), 1)
+	}
+	if events[0].Type != "incident.publication.updated" {
+		t.Fatalf("event type = %q, want %q", events[0].Type, "incident.publication.updated")
+	}
+	if events[0].TenantID != tenantID.String() {
+		t.Fatalf("event tenant_id = %q, want %q", events[0].TenantID, tenantID.String())
+	}
+	if events[0].StatusPageID != statusPageID.String() {
+		t.Fatalf("event status_page_id = %q, want %q", events[0].StatusPageID, statusPageID.String())
+	}
+}
+
 func TestServicePublishIncidentToStatusPageSkipsNoOpIdenticalPut(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
@@ -535,7 +574,8 @@ func TestServicePublishIncidentToStatusPageSkipsNoOpIdenticalPut(t *testing.T) {
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
 	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
-	svc := NewService(dbClient)
+	publisher := &fakeIncidentStatusUpdatePublisher{}
+	svc := NewService(dbClient, publisher)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -558,6 +598,9 @@ func TestServicePublishIncidentToStatusPageSkipsNoOpIdenticalPut(t *testing.T) {
 	if len(detail.Timeline) != 3 {
 		t.Fatalf("timeline length after first publish = %d, want %d", len(detail.Timeline), 3)
 	}
+	if got := len(publisher.Events()); got != 1 {
+		t.Fatalf("event count after first publish = %d, want %d", got, 1)
+	}
 
 	firstPublication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
 	if err != nil {
@@ -572,6 +615,9 @@ func TestServicePublishIncidentToStatusPageSkipsNoOpIdenticalPut(t *testing.T) {
 	}
 	if len(detail.Timeline) != 3 {
 		t.Fatalf("timeline length after identical publish = %d, want %d", len(detail.Timeline), 3)
+	}
+	if got := len(publisher.Events()); got != 1 {
+		t.Fatalf("event count after no-op publish = %d, want %d", got, 1)
 	}
 
 	secondPublication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
@@ -598,7 +644,8 @@ func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
 	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
-	svc := NewService(dbClient)
+	publisher := &fakeIncidentStatusUpdatePublisher{}
+	svc := NewService(dbClient, publisher)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -615,6 +662,7 @@ func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T
 	}); err != nil {
 		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
 	}
+	publisher.Reset()
 
 	detail, err := svc.UnpublishIncidentFromStatusPage(ctx, tenantID, incident.ID, statusPageID)
 	if err != nil {
@@ -622,6 +670,9 @@ func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T
 	}
 	if len(detail.Timeline) != 4 {
 		t.Fatalf("timeline length after first unpublish = %d, want %d", len(detail.Timeline), 4)
+	}
+	if got := len(publisher.Events()); got != 1 {
+		t.Fatalf("event count after first unpublish = %d, want %d", got, 1)
 	}
 	publication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
 	if err != nil {
@@ -641,6 +692,138 @@ func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T
 	if len(detail.Timeline) != 4 {
 		t.Fatalf("timeline length after duplicate unpublish = %d, want %d", len(detail.Timeline), 4)
 	}
+	if got := len(publisher.Events()); got != 1 {
+		t.Fatalf("event count after no-op unpublish = %d, want %d", got, 1)
+	}
+}
+
+func TestServiceUnpublishIncidentFromStatusPageEmitsDirectRefreshEvent(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	publisher := &fakeIncidentStatusUpdatePublisher{}
+	svc := NewService(dbClient, publisher)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+	publisher.Reset()
+
+	if _, err := svc.UnpublishIncidentFromStatusPage(ctx, tenantID, incident.ID, statusPageID); err != nil {
+		t.Fatalf("UnpublishIncidentFromStatusPage() error = %v", err)
+	}
+
+	events := publisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("published events = %d, want %d", len(events), 1)
+	}
+	if events[0].Type != "incident.publication.updated" {
+		t.Fatalf("event type = %q, want %q", events[0].Type, "incident.publication.updated")
+	}
+	if events[0].StatusPageID != statusPageID.String() {
+		t.Fatalf("event status_page_id = %q, want %q", events[0].StatusPageID, statusPageID.String())
+	}
+}
+
+func TestServiceCreateIncidentTimelineEntryPublicUpdateEmitsDirectRefreshEvents(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	statusPageIDOne := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status-one", "Status One")
+	statusPageIDTwo := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status-two", "Status Two")
+	publisher := &fakeIncidentStatusUpdatePublisher{}
+	svc := NewService(dbClient, publisher)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageIDOne, &models.UpsertIncidentPublicationRequest{}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage(statusPageIDOne) error = %v", err)
+	}
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageIDTwo, &models.UpsertIncidentPublicationRequest{}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage(statusPageIDTwo) error = %v", err)
+	}
+	publisher.Reset()
+
+	if _, err := svc.CreateIncidentTimelineEntry(ctx, tenantID, incident.ID, &models.CreateIncidentTimelineEntryRequest{
+		EntryType: models.IncidentTimelineEntryTypePublicUpdate,
+		Message:   "Investigating mitigation.",
+	}); err != nil {
+		t.Fatalf("CreateIncidentTimelineEntry(public update) error = %v", err)
+	}
+
+	events := publisher.Events()
+	if len(events) != 2 {
+		t.Fatalf("published events = %d, want %d", len(events), 2)
+	}
+	gotStatusPageIDs := map[string]struct{}{}
+	for _, event := range events {
+		if event.Type != "incident.publication.updated" {
+			t.Fatalf("event type = %q, want %q", event.Type, "incident.publication.updated")
+		}
+		if event.TenantID != tenantID.String() {
+			t.Fatalf("event tenant_id = %q, want %q", event.TenantID, tenantID.String())
+		}
+		gotStatusPageIDs[event.StatusPageID] = struct{}{}
+	}
+	if _, ok := gotStatusPageIDs[statusPageIDOne.String()]; !ok {
+		t.Fatalf("missing status page refresh for %s", statusPageIDOne)
+	}
+	if _, ok := gotStatusPageIDs[statusPageIDTwo.String()]; !ok {
+		t.Fatalf("missing status page refresh for %s", statusPageIDTwo)
+	}
+}
+
+func TestServicePublishIncidentStatusPageRefreshesIgnoresCanceledRequestContext(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	publisher := &fakeIncidentStatusUpdatePublisher{}
+	svc := NewService(dbClient, publisher)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+	publisher.Reset()
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	svc.publishIncidentStatusPageRefreshes(canceledCtx, tenantID, incident.ID)
+
+	events := publisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("published events = %d, want %d", len(events), 1)
+	}
+	if events[0].StatusPageID != statusPageID.String() {
+		t.Fatalf("event status_page_id = %q, want %q", events[0].StatusPageID, statusPageID.String())
+	}
 }
 
 func TestServiceDetachMonitorRemovesPublishedMonitorSelection(t *testing.T) {
@@ -652,7 +835,7 @@ func TestServiceDetachMonitorRemovesPublishedMonitorSelection(t *testing.T) {
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
 	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
 	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 
 	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
 		Title:   "API outage",
@@ -783,4 +966,33 @@ func loadIncidentPublication(ctx context.Context, dbClient testutilDBClient, inc
 	}
 
 	return publication, nil
+}
+
+type fakeIncidentStatusUpdatePublisher struct {
+	mu     sync.Mutex
+	events []statusupdates.Event
+}
+
+func (p *fakeIncidentStatusUpdatePublisher) Publish(event statusupdates.Event) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.events = append(p.events, event)
+	return nil
+}
+
+func (p *fakeIncidentStatusUpdatePublisher) Events() []statusupdates.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make([]statusupdates.Event, len(p.events))
+	copy(out, p.events)
+	return out
+}
+
+func (p *fakeIncidentStatusUpdatePublisher) Reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.events = nil
 }

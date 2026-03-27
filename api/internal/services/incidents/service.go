@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -13,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
 type incidentRowScanner interface {
@@ -23,14 +25,22 @@ type incidentExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }
 
+type statusUpdatePublisher interface {
+	Publish(event statusupdates.Event) error
+}
+
+const incidentPublicationUpdatedEventType = "incident.publication.updated"
+const incidentStatusPageRefreshLookupTimeout = 5 * time.Second
+
 // Service handles incident business logic.
 type Service struct {
-	db *db.Client
+	db              *db.Client
+	statusPublisher statusUpdatePublisher
 }
 
 // NewService creates a new incident service.
-func NewService(dbClient *db.Client) *Service {
-	return &Service{db: dbClient}
+func NewService(dbClient *db.Client, statusPublisher statusUpdatePublisher) *Service {
+	return &Service{db: dbClient, statusPublisher: statusPublisher}
 }
 
 // CreateIncident creates a new manual incident.
@@ -346,6 +356,10 @@ func (s *Service) CreateIncidentTimelineEntry(ctx context.Context, tenantID, inc
 		return nil, fmt.Errorf("commit incident transaction: %w", err)
 	}
 
+	if req.EntryType == models.IncidentTimelineEntryTypePublicUpdate {
+		s.publishIncidentStatusPageRefreshes(ctx, tenantID, incidentID)
+	}
+
 	return s.GetIncident(ctx, tenantID, incidentID)
 }
 
@@ -586,6 +600,8 @@ func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, inc
 		return nil, fmt.Errorf("commit incident transaction: %w", err)
 	}
 
+	s.publishStatusPageRefresh(tenantID, statusPageID)
+
 	return s.GetIncident(ctx, tenantID, incidentID)
 }
 
@@ -614,7 +630,8 @@ func (s *Service) UnpublishIncidentFromStatusPage(ctx context.Context, tenantID,
 	if err != nil {
 		return nil, fmt.Errorf("unpublish incident from status page: %w", err)
 	}
-	if mutationChanged(result) {
+	changed := mutationChanged(result)
+	if changed {
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM incident_status_page_monitors
 			WHERE incident_id = $1 AND status_page_id = $2
@@ -632,7 +649,67 @@ func (s *Service) UnpublishIncidentFromStatusPage(ctx context.Context, tenantID,
 		return nil, fmt.Errorf("commit incident transaction: %w", err)
 	}
 
+	if changed {
+		s.publishStatusPageRefresh(tenantID, statusPageID)
+	}
+
 	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+func (s *Service) publishStatusPageRefresh(tenantID, statusPageID uuid.UUID) {
+	if s.statusPublisher == nil || tenantID == uuid.Nil || statusPageID == uuid.Nil {
+		return
+	}
+
+	_ = s.statusPublisher.Publish(statusupdates.Event{
+		Type:         incidentPublicationUpdatedEventType,
+		StatusPageID: statusPageID.String(),
+		TenantID:     tenantID.String(),
+		Timestamp:    time.Now().UTC(),
+	})
+}
+
+func (s *Service) publishIncidentStatusPageRefreshes(_ context.Context, tenantID, incidentID uuid.UUID) {
+	if s.statusPublisher == nil {
+		return
+	}
+
+	refreshCtx, cancel := context.WithTimeout(context.Background(), incidentStatusPageRefreshLookupTimeout)
+	defer cancel()
+
+	statusPageIDs, err := s.loadActiveStatusPageIDsForIncident(refreshCtx, tenantID, incidentID)
+	if err != nil {
+		return
+	}
+	for _, statusPageID := range statusPageIDs {
+		s.publishStatusPageRefresh(tenantID, statusPageID)
+	}
+}
+
+func (s *Service) loadActiveStatusPageIDsForIncident(ctx context.Context, tenantID, incidentID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT status_page_id
+		FROM incident_status_page_publications
+		WHERE tenant_id = $1 AND incident_id = $2 AND unpublished_at IS NULL
+	`, tenantID, incidentID)
+	if err != nil {
+		return nil, fmt.Errorf("load incident status page publications: %w", err)
+	}
+	defer rows.Close()
+
+	statusPageIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var statusPageID uuid.UUID
+		if err := rows.Scan(&statusPageID); err != nil {
+			return nil, fmt.Errorf("scan incident status page publication: %w", err)
+		}
+		statusPageIDs = append(statusPageIDs, statusPageID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident status page publications: %w", err)
+	}
+
+	return statusPageIDs, nil
 }
 
 func (s *Service) insertTimelineEntryTx(ctx context.Context, exec incidentExecutor, tenantID, incidentID uuid.UUID, entryType models.IncidentTimelineEntryType, message string, metadata map[string]interface{}) error {
