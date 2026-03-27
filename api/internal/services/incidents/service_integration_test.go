@@ -643,6 +643,56 @@ func TestServiceUnpublishIncidentFromStatusPageSkipsTimelineForNoOp(t *testing.T
 	}
 }
 
+func TestServiceDetachMonitorRemovesPublishedMonitorSelection(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
+	svc := NewService(dbClient)
+
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Requests are failing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+	if _, err := svc.AttachMonitor(ctx, tenantID, incident.ID, monitorID); err != nil {
+		t.Fatalf("AttachMonitor() error = %v", err)
+	}
+	if _, err := svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{
+		MonitorIDs: []string{monitorID.String()},
+	}); err != nil {
+		t.Fatalf("PublishIncidentToStatusPage() error = %v", err)
+	}
+
+	detail, err := svc.DetachMonitor(ctx, tenantID, incident.ID, monitorID)
+	if err != nil {
+		t.Fatalf("DetachMonitor() error = %v", err)
+	}
+	if len(detail.Timeline) != 4 {
+		t.Fatalf("timeline length after detach = %d, want %d", len(detail.Timeline), 4)
+	}
+	if count := countIncidentMonitorLinks(ctx, t, dbClient, incident.ID); count != 0 {
+		t.Fatalf("incident monitor count after detach = %d, want %d", count, 0)
+	}
+	if count := countIncidentPublicationMonitors(ctx, t, dbClient, incident.ID, statusPageID); count != 0 {
+		t.Fatalf("publication monitor count after detach = %d, want %d", count, 0)
+	}
+
+	publication, err := loadIncidentPublication(ctx, dbClient, incident.ID, statusPageID)
+	if err != nil {
+		t.Fatalf("loadIncidentPublication() after detach error = %v", err)
+	}
+	if publication.unpublishedAt.Valid {
+		t.Fatalf("publication should remain active, got unpublished_at = %v", publication.unpublishedAt.Time)
+	}
+}
+
 type incidentPublicationRecord struct {
 	publishedAt   time.Time
 	unpublishedAt sql.NullTime

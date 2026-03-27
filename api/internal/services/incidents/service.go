@@ -489,6 +489,12 @@ func (s *Service) DetachMonitor(ctx context.Context, tenantID, incidentID, monit
 		return nil, fmt.Errorf("detach incident monitor: %w", err)
 	}
 	if mutationChanged(result) {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM incident_status_page_monitors
+			WHERE incident_id = $1 AND monitor_id = $2
+		`, incidentID, monitorID); err != nil {
+			return nil, fmt.Errorf("delete incident publication monitor selections: %w", err)
+		}
 		if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Monitor detached", map[string]interface{}{
 			"monitor_id": monitorID.String(),
 		}); err != nil {
