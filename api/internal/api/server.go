@@ -235,6 +235,12 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Patch("/{id}", incidentHandlers.UpdateIncident)
 				r.Post("/{id}/state", incidentHandlers.TransitionIncidentState)
 				r.Post("/{id}/timeline", incidentHandlers.CreateTimelineEntry)
+				r.Post("/{id}/alerts", incidentHandlers.AttachIncidentAlert)
+				r.Delete("/{id}/alerts/{alertId}", incidentHandlers.DetachIncidentAlert)
+				r.Post("/{id}/monitors", incidentHandlers.AttachIncidentMonitor)
+				r.Delete("/{id}/monitors/{monitorId}", incidentHandlers.DetachIncidentMonitor)
+				r.Put("/{id}/status-pages/{statusPageId}", incidentHandlers.PublishIncidentToStatusPage)
+				r.Delete("/{id}/status-pages/{statusPageId}", incidentHandlers.UnpublishIncidentFromStatusPage)
 			})
 
 			// Alert policies

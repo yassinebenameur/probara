@@ -321,3 +321,30 @@ func TestServiceUpdateIncidentRejectsBlankNarrativeFields(t *testing.T) {
 		t.Fatalf("expected blank summary update to fail")
 	}
 }
+
+func TestServicePublishIncidentToStatusPageRejectsUnlinkedMonitor(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "tenant")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "status", "Status")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, monitorID, 0)
+
+	svc := NewService(dbClient)
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "API outage",
+		Summary: "Down",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	_, err = svc.PublishIncidentToStatusPage(ctx, tenantID, incident.ID, statusPageID, &models.UpsertIncidentPublicationRequest{
+		MonitorIDs: []string{monitorID.String()},
+	})
+	if err == nil {
+		t.Fatalf("expected publish to reject unlinked incident monitor")
+	}
+}

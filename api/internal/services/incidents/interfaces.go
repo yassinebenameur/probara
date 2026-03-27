@@ -27,6 +27,24 @@ type IncidentService interface {
 
 	// CreateIncidentTimelineEntry appends a timeline entry to an incident.
 	CreateIncidentTimelineEntry(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error)
+
+	// AttachAlert links an alert to an incident.
+	AttachAlert(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error)
+
+	// DetachAlert removes an alert link from an incident.
+	DetachAlert(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error)
+
+	// AttachMonitor links a monitor to an incident.
+	AttachMonitor(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error)
+
+	// DetachMonitor removes a monitor link from an incident.
+	DetachMonitor(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error)
+
+	// PublishIncidentToStatusPage publishes an incident to a status page.
+	PublishIncidentToStatusPage(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error)
+
+	// UnpublishIncidentFromStatusPage removes an incident publication from a status page.
+	UnpublishIncidentFromStatusPage(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error)
 }
 
 // Ensure Service implements IncidentService.

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/validation"
@@ -348,6 +349,263 @@ func (s *Service) CreateIncidentTimelineEntry(ctx context.Context, tenantID, inc
 	return s.GetIncident(ctx, tenantID, incidentID)
 }
 
+// AttachAlert links an alert to an incident.
+func (s *Service) AttachAlert(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.ensureIncidentBelongsToTenant(ctx, tx, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureAlertBelongsToTenant(ctx, tx, tenantID, alertID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (incident_id, alert_id) DO NOTHING
+	`, incidentID, alertID); err != nil {
+		return nil, fmt.Errorf("attach incident alert: %w", err)
+	}
+	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Alert attached", map[string]interface{}{
+		"alert_id": alertID.String(),
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+// DetachAlert removes an alert link from an incident.
+func (s *Service) DetachAlert(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.ensureIncidentBelongsToTenant(ctx, tx, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureAlertBelongsToTenant(ctx, tx, tenantID, alertID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM incident_alerts
+		WHERE incident_id = $1 AND alert_id = $2
+	`, incidentID, alertID); err != nil {
+		return nil, fmt.Errorf("detach incident alert: %w", err)
+	}
+	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Alert detached", map[string]interface{}{
+		"alert_id": alertID.String(),
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+// AttachMonitor links a monitor to an incident.
+func (s *Service) AttachMonitor(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.ensureIncidentBelongsToTenant(ctx, tx, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMonitorBelongsToTenant(ctx, tx, tenantID, monitorID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO incident_monitors (incident_id, monitor_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (incident_id, monitor_id) DO NOTHING
+	`, incidentID, monitorID); err != nil {
+		return nil, fmt.Errorf("attach incident monitor: %w", err)
+	}
+	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Monitor attached", map[string]interface{}{
+		"monitor_id": monitorID.String(),
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+// DetachMonitor removes a monitor link from an incident.
+func (s *Service) DetachMonitor(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.ensureIncidentBelongsToTenant(ctx, tx, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureMonitorBelongsToTenant(ctx, tx, tenantID, monitorID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM incident_monitors
+		WHERE incident_id = $1 AND monitor_id = $2
+	`, incidentID, monitorID); err != nil {
+		return nil, fmt.Errorf("detach incident monitor: %w", err)
+	}
+	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Monitor detached", map[string]interface{}{
+		"monitor_id": monitorID.String(),
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+// PublishIncidentToStatusPage publishes an incident to a status page.
+func (s *Service) PublishIncidentToStatusPage(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+
+	monitorIDs, err := parseIncidentPublicationMonitorIDs(req.MonitorIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.ensureIncidentBelongsToTenant(ctx, tx, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureStatusPageBelongsToTenant(ctx, tx, tenantID, statusPageID); err != nil {
+		return nil, err
+	}
+	if err := s.validatePublicationMonitorSelection(ctx, tx, tenantID, incidentID, statusPageID, monitorIDs); err != nil {
+		return nil, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO incident_status_page_publications (
+			incident_id, status_page_id, tenant_id, published_at, unpublished_at, created_at, updated_at
+		) VALUES ($1, $2, $3, NOW(), NULL, NOW(), NOW())
+		ON CONFLICT (incident_id, status_page_id) DO UPDATE
+		SET tenant_id = EXCLUDED.tenant_id,
+			published_at = NOW(),
+			unpublished_at = NULL,
+			updated_at = NOW()
+	`, incidentID, statusPageID, tenantID); err != nil {
+		return nil, fmt.Errorf("upsert incident publication: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM incident_status_page_monitors
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID); err != nil {
+		return nil, fmt.Errorf("replace incident publication monitors: %w", err)
+	}
+
+	for _, monitorID := range monitorIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO incident_status_page_monitors (incident_id, status_page_id, monitor_id, created_at)
+			VALUES ($1, $2, $3, NOW())
+		`, incidentID, statusPageID, monitorID); err != nil {
+			return nil, fmt.Errorf("insert incident publication monitor: %w", err)
+		}
+	}
+
+	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident published to status page", map[string]interface{}{
+		"status_page_id": statusPageID.String(),
+		"monitor_ids":    uuidStrings(monitorIDs),
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
+// UnpublishIncidentFromStatusPage removes an incident publication from a status page.
+func (s *Service) UnpublishIncidentFromStatusPage(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin incident transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := s.ensureIncidentBelongsToTenant(ctx, tx, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureStatusPageBelongsToTenant(ctx, tx, tenantID, statusPageID); err != nil {
+		return nil, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM incident_status_page_monitors
+		WHERE incident_id = $1 AND status_page_id = $2
+	`, incidentID, statusPageID); err != nil {
+		return nil, fmt.Errorf("delete incident publication monitors: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE incident_status_page_publications
+		SET unpublished_at = NOW(), updated_at = NOW()
+		WHERE incident_id = $1 AND status_page_id = $2 AND tenant_id = $3 AND unpublished_at IS NULL
+	`, incidentID, statusPageID, tenantID); err != nil {
+		return nil, fmt.Errorf("unpublish incident from status page: %w", err)
+	}
+	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident unpublished from status page", map[string]interface{}{
+		"status_page_id": statusPageID.String(),
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit incident transaction: %w", err)
+	}
+
+	return s.GetIncident(ctx, tenantID, incidentID)
+}
+
 func (s *Service) insertTimelineEntryTx(ctx context.Context, exec incidentExecutor, tenantID, incidentID uuid.UUID, entryType models.IncidentTimelineEntryType, message string, metadata map[string]interface{}) error {
 	if metadata == nil {
 		metadata = map[string]interface{}{}
@@ -410,6 +668,171 @@ func (s *Service) loadIncidentTimeline(ctx context.Context, tenantID, incidentID
 	}
 
 	return timeline, nil
+}
+
+func (s *Service) ensureIncidentBelongsToTenant(ctx context.Context, tx *sql.Tx, tenantID, incidentID uuid.UUID) error {
+	if err := tx.QueryRowContext(ctx, `
+		SELECT 1
+		FROM incidents
+		WHERE id = $1 AND tenant_id = $2
+		FOR UPDATE
+	`, incidentID, tenantID).Scan(new(int)); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("incident not found")
+		}
+		return fmt.Errorf("load incident: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) ensureAlertBelongsToTenant(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) error {
+	if err := tx.QueryRowContext(ctx, `
+		SELECT 1
+		FROM alerts
+		WHERE id = $1 AND tenant_id = $2
+	`, alertID, tenantID).Scan(new(int)); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("alert not found")
+		}
+		return fmt.Errorf("load alert: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) ensureMonitorBelongsToTenant(ctx context.Context, tx *sql.Tx, tenantID, monitorID uuid.UUID) error {
+	if err := tx.QueryRowContext(ctx, `
+		SELECT 1
+		FROM monitors
+		WHERE id = $1 AND tenant_id = $2
+	`, monitorID, tenantID).Scan(new(int)); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("monitor not found")
+		}
+		return fmt.Errorf("load monitor: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) ensureStatusPageBelongsToTenant(ctx context.Context, tx *sql.Tx, tenantID, statusPageID uuid.UUID) error {
+	if err := tx.QueryRowContext(ctx, `
+		SELECT 1
+		FROM status_pages
+		WHERE id = $1 AND tenant_id = $2
+	`, statusPageID, tenantID).Scan(new(int)); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("status page not found")
+		}
+		return fmt.Errorf("load status page: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Service) validatePublicationMonitorSelection(ctx context.Context, tx *sql.Tx, tenantID, incidentID, statusPageID uuid.UUID, monitorIDs []uuid.UUID) error {
+	if len(monitorIDs) == 0 {
+		return nil
+	}
+
+	tenantMonitorIDs, err := loadUUIDSet(ctx, tx, `
+		SELECT id
+		FROM monitors
+		WHERE tenant_id = $1 AND id = ANY($2)
+	`, tenantID, pq.Array(monitorIDs))
+	if err != nil {
+		return fmt.Errorf("validate publication monitors: %w", err)
+	}
+
+	incidentMonitorIDs, err := loadUUIDSet(ctx, tx, `
+		SELECT monitor_id
+		FROM incident_monitors
+		WHERE incident_id = $1 AND monitor_id = ANY($2)
+	`, incidentID, pq.Array(monitorIDs))
+	if err != nil {
+		return fmt.Errorf("validate incident publication monitors: %w", err)
+	}
+
+	statusPageMonitorIDs, err := loadUUIDSet(ctx, tx, `
+		SELECT monitor_id
+		FROM status_page_monitors
+		WHERE status_page_id = $1 AND monitor_id = ANY($2)
+	`, statusPageID, pq.Array(monitorIDs))
+	if err != nil {
+		return fmt.Errorf("validate status page publication monitors: %w", err)
+	}
+
+	for _, monitorID := range monitorIDs {
+		if _, ok := tenantMonitorIDs[monitorID]; !ok {
+			return fmt.Errorf("selected monitors must be linked to the incident and status page")
+		}
+		if _, ok := incidentMonitorIDs[monitorID]; !ok {
+			return fmt.Errorf("selected monitors must be linked to the incident and status page")
+		}
+		if _, ok := statusPageMonitorIDs[monitorID]; !ok {
+			return fmt.Errorf("selected monitors must be linked to the incident and status page")
+		}
+	}
+
+	return nil
+}
+
+func loadUUIDSet(ctx context.Context, tx *sql.Tx, query string, args ...interface{}) (map[uuid.UUID]struct{}, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make(map[uuid.UUID]struct{})
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return ids, nil
+}
+
+func parseIncidentPublicationMonitorIDs(rawMonitorIDs []string) ([]uuid.UUID, error) {
+	if len(rawMonitorIDs) == 0 {
+		return []uuid.UUID{}, nil
+	}
+
+	monitorIDs := make([]uuid.UUID, 0, len(rawMonitorIDs))
+	seen := make(map[uuid.UUID]struct{}, len(rawMonitorIDs))
+	for _, rawMonitorID := range rawMonitorIDs {
+		trimmedMonitorID := strings.TrimSpace(rawMonitorID)
+		if trimmedMonitorID == "" {
+			return nil, fmt.Errorf("monitor ID is required")
+		}
+
+		monitorID, err := uuid.Parse(trimmedMonitorID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid monitor ID")
+		}
+		if _, ok := seen[monitorID]; ok {
+			continue
+		}
+		seen[monitorID] = struct{}{}
+		monitorIDs = append(monitorIDs, monitorID)
+	}
+
+	return monitorIDs, nil
+}
+
+func uuidStrings(ids []uuid.UUID) []string {
+	values := make([]string, 0, len(ids))
+	for _, id := range ids {
+		values = append(values, id.String())
+	}
+	return values
 }
 
 func scanIncident(scanner incidentRowScanner) (models.Incident, error) {

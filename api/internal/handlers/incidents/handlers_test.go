@@ -26,6 +26,12 @@ type mockIncidentService struct {
 	updateFn         func(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.UpdateIncidentRequest) (*models.IncidentDetail, error)
 	transitionFn     func(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.TransitionIncidentStateRequest) (*models.IncidentDetail, error)
 	createTimelineFn func(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error)
+	attachAlertFn    func(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error)
+	detachAlertFn    func(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error)
+	attachMonitorFn  func(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error)
+	detachMonitorFn  func(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error)
+	publishFn        func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error)
+	unpublishFn      func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error)
 }
 
 func (m *mockIncidentService) CreateIncident(ctx context.Context, tenantID uuid.UUID, req *models.CreateIncidentRequest) (*models.IncidentDetail, error) {
@@ -66,6 +72,48 @@ func (m *mockIncidentService) TransitionIncidentState(ctx context.Context, tenan
 func (m *mockIncidentService) CreateIncidentTimelineEntry(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.CreateIncidentTimelineEntryRequest) (*models.IncidentDetail, error) {
 	if m.createTimelineFn != nil {
 		return m.createTimelineFn(ctx, tenantID, incidentID, req)
+	}
+	return nil, nil
+}
+
+func (m *mockIncidentService) AttachAlert(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error) {
+	if m.attachAlertFn != nil {
+		return m.attachAlertFn(ctx, tenantID, incidentID, alertID)
+	}
+	return nil, nil
+}
+
+func (m *mockIncidentService) DetachAlert(ctx context.Context, tenantID, incidentID, alertID uuid.UUID) (*models.IncidentDetail, error) {
+	if m.detachAlertFn != nil {
+		return m.detachAlertFn(ctx, tenantID, incidentID, alertID)
+	}
+	return nil, nil
+}
+
+func (m *mockIncidentService) AttachMonitor(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error) {
+	if m.attachMonitorFn != nil {
+		return m.attachMonitorFn(ctx, tenantID, incidentID, monitorID)
+	}
+	return nil, nil
+}
+
+func (m *mockIncidentService) DetachMonitor(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error) {
+	if m.detachMonitorFn != nil {
+		return m.detachMonitorFn(ctx, tenantID, incidentID, monitorID)
+	}
+	return nil, nil
+}
+
+func (m *mockIncidentService) PublishIncidentToStatusPage(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error) {
+	if m.publishFn != nil {
+		return m.publishFn(ctx, tenantID, incidentID, statusPageID, req)
+	}
+	return nil, nil
+}
+
+func (m *mockIncidentService) UnpublishIncidentFromStatusPage(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error) {
+	if m.unpublishFn != nil {
+		return m.unpublishFn(ctx, tenantID, incidentID, statusPageID)
 	}
 	return nil, nil
 }
@@ -156,6 +204,47 @@ func TestHandlers_CreateIncident_ServiceTitleRequired(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "title is required") {
 		t.Fatalf("body = %s, want validation message", w.Body.String())
+	}
+}
+
+func TestHandlers_AttachIncidentAlert(t *testing.T) {
+	log := logger.New("test", "debug")
+	incidentID := uuid.MustParse("12345678-1234-1234-1234-123456789012")
+	alertID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	called := false
+
+	h := NewHandlers(&mockIncidentService{
+		attachAlertFn: func(ctx context.Context, tenantID, gotIncidentID, gotAlertID uuid.UUID) (*models.IncidentDetail, error) {
+			called = true
+			if gotIncidentID != incidentID {
+				t.Fatalf("incidentID = %s, want %s", gotIncidentID, incidentID)
+			}
+			if gotAlertID != alertID {
+				t.Fatalf("alertID = %s, want %s", gotAlertID, alertID)
+			}
+			return &models.IncidentDetail{
+				Incident: models.Incident{
+					ID:    incidentID,
+					Title: "API outage",
+					State: models.IncidentStateInvestigating,
+				},
+			}, nil
+		},
+	}, log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+incidentID.String()+"/alerts", bytes.NewBufferString(`{"alert_id":"11111111-1111-1111-1111-111111111111"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = withTenantID(req)
+	req = withIncidentID(req, incidentID)
+	w := httptest.NewRecorder()
+
+	h.AttachIncidentAlert(w, req)
+
+	if !called {
+		t.Fatal("expected service to be called")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", w.Code, http.StatusOK, w.Body.String())
 	}
 }
 

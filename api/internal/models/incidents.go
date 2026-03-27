@@ -110,3 +110,18 @@ type CreateIncidentTimelineEntryRequest struct {
 	Message   string                    `json:"message"`
 	Metadata  map[string]interface{}    `json:"metadata,omitempty"`
 }
+
+// AttachIncidentAlertRequest represents a request to attach an alert to an incident.
+type AttachIncidentAlertRequest struct {
+	AlertID string `json:"alert_id"`
+}
+
+// AttachIncidentMonitorRequest represents a request to attach a monitor to an incident.
+type AttachIncidentMonitorRequest struct {
+	MonitorID string `json:"monitor_id"`
+}
+
+// UpsertIncidentPublicationRequest represents a request to publish an incident to a status page.
+type UpsertIncidentPublicationRequest struct {
+	MonitorIDs []string `json:"monitor_ids"`
+}
