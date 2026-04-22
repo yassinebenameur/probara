@@ -43,6 +43,7 @@ type statusPageRenderView struct {
 	UnknownCount        int
 	IssueCount          int
 	MonitorCount        int
+	MaintenanceCount    int
 	GlobalUptimePercent string
 	GlobalUptime24JSON  string
 	GlobalUptime7JSON   string
@@ -58,8 +59,12 @@ type statusPageRenderView struct {
 }
 
 const (
-	globalUptimeStripCells  = 48
-	monitorUptimeStripCells = 36
+	defaultStatusPageRange      = "30d"
+	globalUptimeStripCells      = 48
+	globalUptime7dStripCells    = 70
+	monitorUptimeStripCells     = 36
+	longRangeMonitorStripCells  = 60
+	longRangeExpandedStripCells = 90
 )
 
 type statusPageIncidentView struct {
@@ -81,40 +86,106 @@ type statusPageSectionView struct {
 }
 
 type statusPageMonitorView struct {
-	ID                string
-	Name              string
-	URL               string
-	Type              string
-	TypeLabel         string
-	Status            string
-	ToneClass         string
-	StatusLabel       string
-	StatusRank        int
-	SearchText        string
-	SummaryMetric     string
-	SummaryCaption    string
-	LastCheckAgo      string
-	LastCheckUnix     int64
-	LatencyText       string
-	LatencySort       int
-	UptimeText        string
-	UptimeSort        float64
-	TagsText          string
-	Tags              []string
-	MonitorDetailLine string
-	TLSDetail         string
-	History1hJSON     string
-	History24hJSON    string
-	History7dJSON     string
-	History30dJSON    string
-	History90dJSON    string
-	History1yJSON     string
+	ID                     string
+	Name                   string
+	URL                    string
+	Type                   string
+	TypeLabel              string
+	Status                 string
+	ToneClass              string
+	StatusLabel            string
+	StatusRank             int
+	SearchText             string
+	SummaryMetric          string
+	SummaryCaption         string
+	LastCheckAgo           string
+	LastCheckUnix          int64
+	LatencyText            string
+	LatencySort            int
+	UptimeText             string
+	Uptime24Value          string
+	Uptime7Value           string
+	Uptime30Value          string
+	Uptime90Value          string
+	UptimeSort             float64
+	TagsText               string
+	Tags                   []string
+	MonitorDetailLine      string
+	TLSDetail              string
+	History1hJSON          string
+	History24hJSON         string
+	History7dJSON          string
+	History30dJSON         string
+	History90dJSON         string
+	ExpandedHistory30dJSON string
+	ExpandedHistory90dJSON string
+	History1yJSON          string
+}
+
+func typeIcon(kind string) string {
+	switch kind {
+	case "http":
+		return "globe"
+	case "ping":
+		return "wifi"
+	case "dns":
+		return "search"
+	case "grpc":
+		return "cpu"
+	case "group":
+		return "layers"
+	case "agent":
+		return "monitor"
+	case "push":
+		return "upload-cloud"
+	case "sip":
+		return "phone"
+	case "synthetic_api":
+		return "code"
+	case "synthetic_browser":
+		return "monitor-check"
+	default:
+		return "activity"
+	}
+}
+
+func globalStripCellCount(rangeName string) int {
+	switch rangeName {
+	case "7d":
+		return globalUptime7dStripCells
+	case "30d", "90d":
+		return longRangeExpandedStripCells
+	default:
+		return globalUptimeStripCells
+	}
+}
+
+func monitorStripCellCount(rangeName string) int {
+	switch rangeName {
+	case "30d", "90d":
+		return longRangeMonitorStripCells
+	default:
+		return monitorUptimeStripCells
+	}
+}
+
+func expandedStripCellCount(rangeName string) int {
+	switch rangeName {
+	case "30d", "90d":
+		return longRangeExpandedStripCells
+	default:
+		return monitorUptimeStripCells
+	}
 }
 
 func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, error) {
 	view := buildStatusPageRenderView(data, apiEnabled)
 	tmpl, err := template.New("public_status_page").Funcs(template.FuncMap{
-		"join": strings.Join,
+		"expandedStripCells": expandedStripCellCount,
+		"globalStripCells":   globalStripCellCount,
+		"join":               strings.Join,
+		"monitorStripCells":  monitorStripCellCount,
+		"typeIcon":           typeIcon,
 	}).Parse(publicStatusPageTemplate)
 	if err != nil {
 		return "", err
@@ -153,7 +224,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		FooterText:        strings.TrimSpace(derefString(data.CustomFooterText)),
 		ShowGlobalUptime:  data.ShowGlobalUptime,
 		ShowMonitorUptime: data.ShowMonitorUptime,
-		DefaultRange:      "30d",
+		DefaultRange:      defaultStatusPageRange,
 		GlobalStripCells:  globalUptimeStripCells,
 		MonitorStripCells: monitorUptimeStripCells,
 		MonitorCount:      len(data.Monitors),
@@ -195,6 +266,9 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 			case "down":
 				view.DownCount++
 				view.IssueCount++
+			case "maint":
+				view.MaintenanceCount++
+				view.IssueCount++
 			default:
 				view.UnknownCount++
 				view.IssueCount++
@@ -226,10 +300,10 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	global7Raw := sliceToBarPoints(trimDailyHistory(data.UptimeHistory7, data.UptimeHistory30, 7))
 	global30Raw := sliceToBarPoints(trimDailyHistory(data.UptimeHistory30, data.UptimeHistory90, 30))
 	global90Raw := sliceToBarPoints(trimDailyHistory(data.UptimeHistory90, data.UptimeHistory365, 90))
-	global24 := fixedStripPoints(global24Raw, globalUptimeStripCells)
-	global7 := fixedStripPoints(global7Raw, globalUptimeStripCells)
-	global30 := fixedStripPoints(global30Raw, globalUptimeStripCells)
-	global90 := fixedStripPoints(global90Raw, globalUptimeStripCells)
+	global24 := fixedStripPoints(global24Raw, globalStripCellCount("24h"))
+	global7 := fixedStripPoints(global7Raw, globalStripCellCount("7d"))
+	global30 := fixedStripPoints(global30Raw, globalStripCellCount("30d"))
+	global90 := fixedStripPoints(global90Raw, globalStripCellCount("90d"))
 	view.GlobalUptime24JSON = mustJSON(global24)
 	view.GlobalUptime7JSON = mustJSON(global7)
 	view.GlobalUptime30JSON = mustJSON(global30)
@@ -282,9 +356,9 @@ func buildStatusPageIncidentView(incident StatusPageIncident) statusPageIncident
 			components = append(components, component)
 		}
 	}
-	affectedComponentsText := "Affected components: platform-wide"
+	affectedComponentsText := "Affected services: platform-wide"
 	if len(components) > 0 {
-		affectedComponentsText = fmt.Sprintf("Affected components: %s", strings.Join(components, ", "))
+		affectedComponentsText = fmt.Sprintf("Affected services: %s", strings.Join(components, ", "))
 	}
 
 	latestUpdate := ""
@@ -369,40 +443,56 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		}
 	}
 
-	history24 := fixedStripPoints(sliceToBarPoints(monitor.UptimeHistory24h), monitorUptimeStripCells)
-	history7 := fixedStripPoints(sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory7d, monitor.UptimeHistory30d, 7)), monitorUptimeStripCells)
-	history30 := fixedStripPoints(sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory30d, monitor.UptimeHistory90d, 30)), monitorUptimeStripCells)
-	history90 := fixedStripPoints(sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory90d, monitor.UptimeHistory365d, 90)), monitorUptimeStripCells)
+	history24Raw := sliceToBarPoints(monitor.UptimeHistory24h)
+	history7Raw := sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory7d, monitor.UptimeHistory30d, 7))
+	history30Raw := sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory30d, monitor.UptimeHistory90d, 30))
+	history90Raw := sliceToBarPoints(trimDailyHistory(monitor.UptimeHistory90d, monitor.UptimeHistory365d, 90))
+	history24 := fixedStripPoints(history24Raw, monitorStripCellCount("24h"))
+	history7 := fixedStripPoints(history7Raw, monitorStripCellCount("7d"))
+	history30Monitor := fixedStripPoints(history30Raw, monitorStripCellCount("30d"))
+	history90Monitor := fixedStripPoints(history90Raw, monitorStripCellCount("90d"))
+	history30Expanded := fixedStripPoints(history30Raw, expandedStripCellCount("30d"))
+	history90Expanded := fixedStripPoints(history90Raw, expandedStripCellCount("90d"))
+	uptime24Value := uptimeValue(averageBarPoints(history24Raw))
+	uptime7Value := uptimeValue(averageBarPoints(history7Raw))
+	uptime30Value := uptimeValue(averageBarPoints(history30Raw))
+	uptime90Value := uptimeValue(averageBarPoints(history90Raw))
 
 	return statusPageMonitorView{
-		ID:                monitor.ID,
-		Name:              monitor.Name,
-		URL:               monitor.URL,
-		Type:              monitor.MonitorType,
-		TypeLabel:         typeLabel(monitor.MonitorType),
-		Status:            monitor.Status,
-		ToneClass:         statusTone(monitor.Status),
-		StatusLabel:       monitorStatusLabel(monitor.Status),
-		StatusRank:        monitorStatusRank(monitor.Status),
-		SearchText:        strings.ToLower(strings.Join(searchParts, " ")),
-		SummaryMetric:     summaryMetric(monitor),
-		SummaryCaption:    summaryCaption(monitor),
-		LastCheckAgo:      lastCheckAgo,
-		LastCheckUnix:     lastCheckUnix,
-		LatencyText:       latencyText,
-		LatencySort:       latencySort,
-		UptimeText:        uptimeText,
-		UptimeSort:        uptimeSort,
-		TagsText:          strings.Join(monitor.Tags, ", "),
-		Tags:              monitor.Tags,
-		MonitorDetailLine: detailLine,
-		TLSDetail:         tlsDetail,
-		History1hJSON:     mustJSON(sliceToBarPoints(monitor.UptimeHistory1h)),
-		History24hJSON:    mustJSON(history24),
-		History7dJSON:     mustJSON(history7),
-		History30dJSON:    mustJSON(history30),
-		History90dJSON:    mustJSON(history90),
-		History1yJSON:     mustJSON(sliceToBarPoints(monitor.UptimeHistory365d)),
+		ID:                     monitor.ID,
+		Name:                   monitor.Name,
+		URL:                    monitor.URL,
+		Type:                   monitor.MonitorType,
+		TypeLabel:              typeLabel(monitor.MonitorType),
+		Status:                 monitor.Status,
+		ToneClass:              statusTone(monitor.Status),
+		StatusLabel:            monitorStatusLabel(monitor.Status),
+		StatusRank:             monitorStatusRank(monitor.Status),
+		SearchText:             strings.ToLower(strings.Join(searchParts, " ")),
+		SummaryMetric:          uptime30Value,
+		SummaryCaption:         monitorUptimeLabel(defaultStatusPageRange),
+		LastCheckAgo:           lastCheckAgo,
+		LastCheckUnix:          lastCheckUnix,
+		LatencyText:            latencyText,
+		LatencySort:            latencySort,
+		UptimeText:             uptime30Value,
+		Uptime24Value:          uptime24Value,
+		Uptime7Value:           uptime7Value,
+		Uptime30Value:          uptime30Value,
+		Uptime90Value:          uptime90Value,
+		UptimeSort:             uptimeSort,
+		TagsText:               strings.Join(monitor.Tags, ", "),
+		Tags:                   monitor.Tags,
+		MonitorDetailLine:      detailLine,
+		TLSDetail:              tlsDetail,
+		History1hJSON:          mustJSON(sliceToBarPoints(monitor.UptimeHistory1h)),
+		History24hJSON:         mustJSON(history24),
+		History7dJSON:          mustJSON(history7),
+		History30dJSON:         mustJSON(history30Monitor),
+		History90dJSON:         mustJSON(history90Monitor),
+		ExpandedHistory30dJSON: mustJSON(history30Expanded),
+		ExpandedHistory90dJSON: mustJSON(history90Expanded),
+		History1yJSON:          mustJSON(sliceToBarPoints(monitor.UptimeHistory365d)),
 	}
 }
 
@@ -465,6 +555,19 @@ func summaryCaption(monitor MonitorStatus) string {
 	}
 }
 
+func monitorUptimeLabel(rangeName string) string {
+	switch rangeName {
+	case "24h":
+		return "24h uptime"
+	case "7d":
+		return "7d uptime"
+	case "90d":
+		return "90d uptime"
+	default:
+		return "30d uptime"
+	}
+}
+
 func monitorStatusLabel(status string) string {
 	switch status {
 	case "up":
@@ -475,6 +578,8 @@ func monitorStatusLabel(status string) string {
 		return "Down"
 	case "error":
 		return "Error"
+	case "maintenance":
+		return "Maintenance"
 	default:
 		return "Unknown"
 	}
@@ -488,12 +593,14 @@ func monitorStatusRank(status string) int {
 		return 1
 	case "degraded":
 		return 2
-	case "unknown":
+	case "maintenance":
 		return 3
-	case "up":
+	case "unknown":
 		return 4
-	default:
+	case "up":
 		return 5
+	default:
+		return 6
 	}
 }
 
@@ -505,6 +612,8 @@ func statusTone(status string) string {
 		return "warn"
 	case "down", "error":
 		return "down"
+	case "maintenance":
+		return "maint"
 	default:
 		return "unknown"
 	}
@@ -675,14 +784,15 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
   <style>
     :root {
       --bg: #050505;
-      --bg-glow: radial-gradient(ellipse at 50% 0%, rgba(0, 229, 255, .05), transparent 60%);
-      --surface: rgba(255, 255, 255, .02);
+      --bg-glow: radial-gradient(ellipse at 50% 0%, rgba(0, 229, 255, .04), transparent 60%);
+      --surface: rgba(255, 255, 255, .025);
       --surface-hover: rgba(255, 255, 255, .05);
-      --surface-strong: rgba(255, 255, 255, .075);
+      --surface-card: #0d0d0d;
       --text: #f0f0f0;
-      --text-muted: #7f8796;
-      --text-dim: #4d5565;
+      --text-muted: #777;
+      --text-dim: #444;
       --border: rgba(255, 255, 255, .08);
+      --border-hover: rgba(255, 255, 255, .15);
       --green: #00ff9d;
       --yellow: #ffb800;
       --red: #ff2e93;
@@ -698,9 +808,12 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       --red-glow: rgba(255, 46, 147, .28);
       --blue-glow: rgba(0, 229, 255, .24);
       --gray-glow: rgba(170, 180, 200, .18);
-      --radius: 4px;
-      --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 22px;
+      --radius-pill: 9999px;
+      --font: "Segoe UI", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
       --ease: cubic-bezier(.25, .8, .25, 1);
       --brand-primary: {{.PrimaryColor}};
       --brand-secondary: {{.SecondaryColor}};
@@ -709,13 +822,14 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     body[data-theme="light"] {
       --bg: #fafafa;
       --bg-glow: radial-gradient(ellipse at 50% 0%, rgba(0, 0, 0, .03), transparent 60%);
-      --surface: rgba(0, 0, 0, .02);
-      --surface-hover: rgba(0, 0, 0, .04);
-      --surface-strong: rgba(0, 0, 0, .06);
+      --surface: rgba(0, 0, 0, .03);
+      --surface-hover: rgba(0, 0, 0, .06);
+      --surface-card: #ffffff;
       --text: #111827;
-      --text-muted: #5c6470;
-      --text-dim: #a3aab7;
-      --border: rgba(0, 0, 0, .08);
+      --text-muted: #666;
+      --text-dim: #bbb;
+      --border: rgba(0, 0, 0, .09);
+      --border-hover: rgba(0, 0, 0, .18);
       --green: #00c875;
       --yellow: #d38d00;
       --red: #da1b69;
@@ -748,22 +862,34 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     }
     button, input, select { font: inherit; }
     .hidden { display: none !important; }
-    .container { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+    .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
     .header {
       position: sticky;
-      top: 0;
+      top: 16px;
       z-index: 100;
-      border-bottom: 1px solid var(--border);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      background: color-mix(in srgb, var(--bg) 84%, transparent);
+      padding: 0 24px;
+      pointer-events: none;
     }
     .header-inner {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      min-height: 64px;
+      min-height: 58px;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 20px;
       gap: 12px;
+      background: rgba(10, 10, 10, .75);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, .25);
+      pointer-events: all;
+    }
+    body[data-theme="light"] .header-inner {
+      background: rgba(255, 255, 255, .8);
+      box-shadow: 0 4px 24px rgba(0, 0, 0, .08);
     }
     .brand {
       display: flex;
@@ -777,7 +903,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .brand-mark {
       width: 32px;
       height: 32px;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       flex-shrink: 0;
     }
     .brand-logo { object-fit: cover; }
@@ -814,7 +940,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       display: flex;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: var(--radius);
+      border-radius: var(--radius-pill);
       overflow: hidden;
     }
     .mode-btn,
@@ -845,8 +971,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       background: transparent;
       border: 1px solid var(--border);
       color: var(--text);
-      min-height: 36px;
-      border-radius: var(--radius);
+      min-height: 34px;
+      border-radius: var(--radius-md);
       padding: 0 12px;
       cursor: pointer;
       font-size: .78rem;
@@ -856,19 +982,26 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       background: var(--surface-hover);
       border-color: color-mix(in srgb, var(--brand-primary) 24%, var(--border));
     }
-    .hero { padding: 80px 0 48px; }
+    .hero {
+      padding: 96px 0 52px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
     .overall-badge {
       display: inline-flex;
       align-items: center;
       gap: 10px;
       padding: 6px 14px 6px 8px;
       border-radius: 999px;
-      background: var(--surface);
-      border: 1px solid var(--border);
+      background: var(--green-a);
+      border: 1px solid rgba(0, 255, 157, .2);
       font: .75rem var(--mono);
       text-transform: uppercase;
       letter-spacing: .05em;
       margin-bottom: 28px;
+      color: var(--green);
     }
     .pulse-dot {
       width: 8px;
@@ -880,53 +1013,79 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: .42; transform: scale(.72); }
     }
-    .overall-badge.ok { color: var(--green); }
     .overall-badge.ok .pulse-dot {
       background: var(--green);
       box-shadow: 0 0 12px var(--green-glow);
     }
-    .overall-badge.warn { color: var(--yellow); }
+    .overall-badge.warn {
+      background: var(--yellow-a);
+      border-color: rgba(255, 184, 0, .2);
+      color: var(--yellow);
+    }
     .overall-badge.warn .pulse-dot {
       background: var(--yellow);
       box-shadow: 0 0 12px var(--yellow-glow);
     }
+    .overall-badge.down {
+      background: var(--red-a);
+      border-color: rgba(255, 46, 147, .2);
+      color: var(--red);
+    }
+    .overall-badge.down .pulse-dot {
+      background: var(--red);
+      box-shadow: 0 0 12px var(--red-glow);
+    }
     .hero h1 {
       font-size: clamp(2.4rem, 5vw, 3.3rem);
-      font-weight: 300;
+      font-weight: 600;
       letter-spacing: -.045em;
       line-height: 1.05;
       margin-bottom: 14px;
+      background: linear-gradient(180deg, var(--text) 0%, var(--text-muted) 120%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
     }
     .tagline {
       color: var(--text-muted);
       font-size: 1.05rem;
-      font-weight: 300;
-      max-width: 640px;
+      font-weight: 400;
+      max-width: 520px;
       margin-bottom: 12px;
     }
     .hero-summary {
       color: var(--text-muted);
-      max-width: 680px;
+      max-width: 600px;
       margin-bottom: 14px;
       font-size: .95rem;
     }
     .meta-line {
-      font: .7rem var(--mono);
+      font: .75rem var(--mono);
       color: var(--text-dim);
       text-transform: uppercase;
-      letter-spacing: .05em;
+      letter-spacing: .08em;
       display: flex;
       gap: 20px;
       flex-wrap: wrap;
-      margin-bottom: 40px;
+      justify-content: center;
+      margin-bottom: 56px;
     }
     .meta-line b {
-      color: var(--text-muted);
       font-weight: 500;
     }
+    .meta-line .count { color: var(--text-muted); }
+    .meta-line .count-ok { color: var(--green); }
+    .meta-line .count-warn { color: var(--yellow); }
+    .meta-line .count-down { color: var(--red); }
+    .meta-line .count-maint { color: var(--blue); }
     .uptime-section,
     .range-section {
-      margin-bottom: 56px;
+      width: 100%;
+      margin-bottom: 48px;
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px 28px;
     }
     .uptime-head {
       display: flex;
@@ -948,7 +1107,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     }
     .range-group {
       display: flex;
-      gap: 2px;
+      gap: 4px;
       margin-top: 8px;
       flex-wrap: wrap;
     }
@@ -960,8 +1119,9 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       font: 500 .65rem var(--mono);
       text-transform: uppercase;
       letter-spacing: .05em;
-      padding: 4px 10px;
+      padding: 3px 10px;
       cursor: pointer;
+      border-radius: var(--radius-sm);
     }
     .range-btn:hover { color: var(--text-muted); }
     .range-btn.active,
@@ -973,7 +1133,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .uptime-bars {
       display: flex;
       gap: 1.5px;
-      height: 48px;
+      height: 44px;
       align-items: flex-end;
     }
     .uptime-foot {
@@ -988,11 +1148,14 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 20px;
+      width: 100%;
+      margin-bottom: 24px;
+      padding: 10px 16px;
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
       flex-wrap: wrap;
-      gap: 14px;
+      gap: 12px;
     }
     .search-wrap {
       display: flex;
@@ -1000,7 +1163,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       gap: 10px;
       color: var(--text-muted);
       flex: 1;
-      min-width: 220px;
+      min-width: 140px;
+      border-right: 1px solid var(--border);
+      padding-right: 16px;
+      margin-right: 4px;
     }
     .search-icon {
       font: .85rem var(--mono);
@@ -1015,7 +1181,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       outline: none;
     }
     .search-input::placeholder { color: var(--text-dim); }
-    .filters { display: flex; gap: 14px; }
+    .filters { display: flex; gap: 12px; }
     .filter-sel {
       appearance: none;
       background: transparent;
@@ -1028,28 +1194,33 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       padding-right: 16px;
     }
     .filter-sel:hover { color: var(--text); }
-    .svc-group { margin-bottom: 48px; }
+    .svc-group { margin-bottom: 36px; }
     .svc-group.hidden { display: none; }
     .group-label {
       font: .75rem var(--mono);
       text-transform: uppercase;
       letter-spacing: .1em;
       color: var(--text-dim);
-      margin-bottom: 8px;
+      margin-bottom: 10px;
+      padding-left: 4px;
     }
+    .group-cards { display: flex; flex-direction: column; gap: 8px; }
     .svc-row {
-      border-bottom: 1px solid var(--border);
-      transition: background .2s;
+      background: var(--surface-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      transition: border-color .2s, background .2s;
     }
-    .svc-row:first-of-type { border-top: 1px solid var(--border); }
-    .svc-row:hover { background: var(--surface); }
+    .svc-row:hover { border-color: var(--border-hover); }
+    .svc-row[open] { border-color: var(--border-hover); }
     .svc-row > summary {
       list-style: none;
       cursor: pointer;
     }
     .svc-row > summary::-webkit-details-marker { display: none; }
     .svc-header {
-      padding: 20px 12px 6px;
+      padding: 16px 20px 8px;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -1059,7 +1230,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .svc-left {
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
       min-width: 0;
       flex: 1;
     }
@@ -1067,8 +1238,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       min-width: 0;
     }
     .svc-name {
-      font-size: 1rem;
-      font-weight: 400;
+      font-size: .95rem;
+      font-weight: 500;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1089,11 +1260,11 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       color: var(--text-dim);
     }
     .svc-type {
-      font: .65rem var(--mono);
+      font: .62rem var(--mono);
       color: var(--text-dim);
       border: 1px solid var(--border);
-      padding: 1px 6px;
-      border-radius: 3px;
+      padding: 2px 7px;
+      border-radius: var(--radius-sm);
       text-transform: uppercase;
       letter-spacing: .04em;
       flex-shrink: 0;
@@ -1125,7 +1296,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       font: .7rem var(--mono);
       text-transform: uppercase;
       letter-spacing: .03em;
-      min-width: 104px;
+      min-width: 96px;
     }
     .status-dot {
       width: 6px;
@@ -1153,17 +1324,22 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       background: var(--gray);
       box-shadow: 0 0 8px var(--gray-glow);
     }
+    .status-badge.s-maint { color: var(--blue); }
+    .status-badge.s-maint .status-dot {
+      background: var(--blue);
+      box-shadow: 0 0 8px var(--blue-glow);
+    }
     .chevron {
       color: var(--text-dim);
       transition: transform .35s var(--ease);
-      font: 500 .95rem var(--mono);
+      font: 500 .9rem var(--mono);
     }
     .svc-row[open] .chevron { transform: rotate(180deg); }
     .monitor-bar {
       display: flex;
       gap: 1px;
       height: 3px;
-      margin: 8px 12px 10px;
+      margin: 0 20px 10px;
       border-radius: 2px;
       overflow: hidden;
     }
@@ -1175,10 +1351,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .svc-row[open] .svc-details { grid-template-rows: 1fr; }
     .details-inner { overflow: hidden; }
     .details-content {
-      padding: 0 12px 24px;
-      border-top: 1px dashed var(--border);
+      padding: 0 20px 22px;
+      border-top: 1px solid var(--border);
       margin-top: 4px;
-      padding-top: 20px;
+      padding-top: 18px;
     }
     .expanded-bar-section { margin-bottom: 20px; }
     .expanded-bar-head {
@@ -1210,7 +1386,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .details-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 20px;
+      gap: 18px;
     }
     .dp {
       display: flex;
@@ -1230,7 +1406,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .bar {
       flex: 1;
       min-width: 1px;
-      border-radius: 1px;
+      border-radius: 999px;
       transition: all .18s;
       cursor: crosshair;
     }
@@ -1264,99 +1440,102 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       filter: brightness(1.25);
       transform: scaleY(1.12);
     }
-    .incidents-section { margin-bottom: 80px; }
+    .incidents-section { margin-bottom: 48px; }
     .inc-card {
-      padding: 28px;
-      background: var(--surface);
+      padding: 24px;
+      background: var(--surface-card);
       border: 1px solid var(--border);
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       position: relative;
       overflow: hidden;
-      margin-bottom: 8px;
+      margin-bottom: 10px;
     }
+    .inc-card.i-warn { border-left: 3px solid var(--yellow); }
+    .inc-card.i-ok { border-left: 3px solid var(--green); }
+    .inc-card.i-down { border-left: 3px solid var(--red); }
+    .inc-card.i-unknown,
+    .inc-card.i-empty { border-left: 3px solid var(--blue); }
     .inc-card::before {
       content: "";
       position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 2px;
+      inset: 0;
+      opacity: .04;
+      pointer-events: none;
     }
-    .inc-card.i-warn::before {
-      background: var(--yellow);
-      box-shadow: 0 0 10px var(--yellow-glow);
-    }
-    .inc-card.i-ok::before {
-      background: var(--green);
-      box-shadow: 0 0 10px var(--green-glow);
-    }
-    .inc-card.i-down::before {
-      background: var(--red);
-      box-shadow: 0 0 10px var(--red-glow);
-    }
-    .inc-card.i-unknown::before {
-      background: var(--gray);
-      box-shadow: 0 0 10px var(--gray-glow);
-    }
-    .inc-card.i-empty::before {
-      background: var(--blue);
-      box-shadow: 0 0 10px var(--blue-glow);
-    }
+    .inc-card.i-warn::before { background: var(--yellow); }
+    .inc-card.i-ok::before { background: var(--green); }
+    .inc-card.i-down::before { background: var(--red); }
+    .inc-card.i-unknown::before,
+    .inc-card.i-empty::before { background: var(--blue); }
     .inc-head {
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
+      align-items: center;
       gap: 16px;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
     .inc-title {
-      font-size: 1.05rem;
-      font-weight: 400;
+      font-size: 1rem;
+      font-weight: 500;
     }
     .inc-meta {
-      font: .7rem var(--mono);
+      font: 500 .7rem var(--mono);
+      background: var(--surface);
+      padding: 3px 10px;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border);
       text-transform: uppercase;
       letter-spacing: .05em;
       white-space: nowrap;
-      color: var(--text-dim);
+      color: var(--text-muted);
     }
     .inc-desc {
       color: var(--text-muted);
-      font-size: .9rem;
-      max-width: 85%;
+      font-size: .92rem;
+      line-height: 1.65;
+      max-width: 100%;
     }
     .inc-update {
-      margin-top: 14px;
-      padding-top: 14px;
-      border-top: 1px dashed var(--border);
+      margin-top: 12px;
+      padding: 10px 14px;
       font: .75rem var(--mono);
       color: var(--text-dim);
+      background: var(--surface);
+      border-radius: var(--radius-sm);
+      border-left: 2px solid var(--yellow);
     }
     .empty-state {
       display: grid;
       place-items: center;
       padding: 28px 18px;
       border: 1px dashed var(--border);
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       background: var(--surface);
       text-align: center;
       color: var(--text-muted);
     }
-    .footer {
-      border-top: 1px solid var(--border);
-      padding: 40px 0;
-      text-align: center;
-      font: .7rem var(--mono);
+    .footer { border-top: 1px solid var(--border); padding: 40px 0; margin-top: 20px; }
+    .footer-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      font: .8rem var(--mono);
       color: var(--text-dim);
       text-transform: uppercase;
-      letter-spacing: .05em;
+      letter-spacing: .04em;
     }
-    .footer .shortcuts {
-      margin-top: 12px;
+    .footer-text {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .footer-shortcuts {
       font-size: .65rem;
       opacity: .68;
     }
-    .footer kbd {
+    .footer-shortcuts kbd {
       display: inline-block;
       padding: 1px 6px;
       border: 1px solid var(--border);
@@ -1370,11 +1549,11 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     body.compact .tagline { font-size: .92rem; margin-bottom: 8px; }
     body.compact .uptime-bars { height: 28px; }
     body.compact .uptime-section { margin-bottom: 32px; }
-    body.compact .svc-header { padding: 12px 12px 4px; }
+    body.compact .svc-header { padding: 12px 16px 4px; }
     body.compact .svc-name { font-size: .85rem; }
     body.compact .svc-right { gap: 16px; }
     body.compact .svc-group { margin-bottom: 28px; }
-    body.compact .monitor-bar { height: 2px; margin: 4px 12px 6px; }
+    body.compact .monitor-bar { height: 2px; margin: 4px 16px 6px; }
     body.compact .details-content { padding-bottom: 16px; }
     body.compact .group-label { margin-bottom: 4px; }
     body.compact .meta-line { margin-bottom: 28px; }
@@ -1459,6 +1638,11 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       background: var(--gray);
       box-shadow: 0 0 6px var(--gray-glow);
     }
+    .kiosk-stat.k-maint { color: var(--blue); }
+    .kiosk-stat.k-maint .ks-dot {
+      background: var(--blue);
+      box-shadow: 0 0 6px var(--blue-glow);
+    }
     .kiosk-clock {
       display: flex;
       align-items: center;
@@ -1491,9 +1675,9 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       gap: 6px;
     }
     .k-tile {
-      background: var(--surface);
+      background: var(--surface-card);
       border: 1px solid var(--border);
-      border-radius: var(--radius);
+      border-radius: var(--radius-md);
       padding: 12px 14px 8px;
       position: relative;
       border-left: 3px solid transparent;
@@ -1511,6 +1695,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .k-tile.t-down {
       border-left-color: var(--red);
       background: var(--red-a);
+    }
+    .k-tile.t-maint {
+      border-left-color: var(--blue);
+      background: var(--blue-a);
     }
     .k-tile.t-unknown {
       border-left-color: var(--gray);
@@ -1549,6 +1737,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       background: var(--red);
       box-shadow: 0 0 8px var(--red-glow);
     }
+    .t-maint .k-tile-dot {
+      background: var(--blue);
+      box-shadow: 0 0 6px var(--blue-glow);
+    }
     .t-unknown .k-tile-dot {
       background: var(--gray);
       box-shadow: 0 0 6px var(--gray-glow);
@@ -1586,7 +1778,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       .status-badge span { display: none; }
       .status-badge { min-width: auto; }
       .mode-btn span { display: none; }
-      .toolbar { flex-direction: column; align-items: stretch; }
+      .toolbar { border-radius: var(--radius-md); padding: 8px 14px; flex-direction: column; align-items: stretch; }
+      .search-wrap { border-right: none; padding-right: 0; margin-right: 0; }
       .filters { justify-content: space-between; }
       .kiosk-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
       .kiosk-stats { gap: 10px; }
@@ -1626,7 +1819,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         <div class="kiosk-stat k-ok"><span class="ks-dot"></span>{{.OperationalCount}} OK</div>
         <div class="kiosk-stat k-warn"><span class="ks-dot"></span>{{.DegradedCount}} WARN</div>
         <div class="kiosk-stat k-down"><span class="ks-dot"></span>{{.DownCount}} DOWN</div>
-        <div class="kiosk-stat k-unknown"><span class="ks-dot"></span>{{.UnknownCount}} UNKNOWN</div>
+        <div class="kiosk-stat k-maint"><span class="ks-dot"></span>{{.MaintenanceCount}} MAINT</div>
+        {{if gt .UnknownCount 0}}
+          <div class="kiosk-stat k-unknown"><span class="ks-dot"></span>{{.UnknownCount}} UNKNOWN</div>
+        {{end}}
       </div>
       <div class="kiosk-clock">
         <span id="kioskTime"></span>
@@ -1665,7 +1861,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
   </div>
 
   <header class="header">
-    <div class="container header-inner">
+    <div class="header-inner">
       <div class="brand">
         {{if .HasLogo}}
           <img class="brand-logo" src="{{.LogoURL}}" alt="{{.Title}}" />
@@ -1704,9 +1900,11 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       {{end}}
       <p class="hero-summary">{{.OverallSummary}}</p>
       <div class="meta-line">
-        <span><b>{{.MonitorCount}}</b> monitored services</span>
-        <span><b>{{.OperationalCount}}</b> healthy</span>
-        <span><b>{{.IssueCount}}</b> needing attention</span>
+        <span class="count"><b>{{.MonitorCount}}</b> monitors</span>
+        <span class="count-ok"><b>{{.OperationalCount}}</b> operational</span>
+        <span class="count-warn"><b>{{.DegradedCount}}</b> degraded</span>
+        <span class="count-down"><b>{{.DownCount}}</b> outage</span>
+        <span class="count-maint"><b>{{.MaintenanceCount}}</b> maintenance</span>
       </div>
 
       {{if .ShowGlobalUptime}}
@@ -1737,6 +1935,9 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
             data-strip-kind="global"
             data-active-range="{{.DefaultRange}}"
             data-cells="{{.GlobalStripCells}}"
+            data-cells-7d="{{globalStripCells "7d"}}"
+            data-cells-30d="{{globalStripCells "30d"}}"
+            data-cells-90d="{{globalStripCells "90d"}}"
             data-range-24h="{{.GlobalUptime24JSON}}"
             data-range-7d="{{.GlobalUptime7JSON}}"
             data-range-30d="{{.GlobalUptime30JSON}}"
@@ -1774,6 +1975,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
               <option value="degraded">Degraded</option>
               <option value="down">Outage</option>
               <option value="error">Error</option>
+              <option value="maintenance">Maintenance</option>
               <option value="unknown">Unknown</option>
             </select>
           </div>
@@ -1785,96 +1987,123 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       {{range .Sections}}
         <div class="svc-group monitor-section-group" data-section-id="{{.ID}}">
           <div class="group-label">{{.Title}}</div>
-          {{range .Monitors}}
-            <details class="svc-row monitor-card" data-monitor-id="{{.ID}}" data-search="{{.SearchText}}" data-status="{{.Status}}">
-              <summary class="svc-header">
-                <div class="svc-left">
-                  <span class="svc-type">{{.TypeLabel}}</span>
-                  <div class="svc-main">
-                    <div class="svc-name">{{.Name}}</div>
-                    <div class="svc-meta">
-                      <span>{{.SummaryCaption}}</span>
-                      <span>{{.MonitorDetailLine}}</span>
-                      <span>{{.LastCheckAgo}}</span>
-                    </div>
-                  </div>
-                </div>
-                <div class="svc-right">
-                  <div class="svc-metric">
-                    <div class="svc-metric-value">{{.LatencyText}}</div>
-                    <div class="svc-metric-label">Latency</div>
-                  </div>
-                  <div class="svc-metric">
-                    <div class="svc-metric-value">{{.SummaryMetric}}</div>
-                    <div class="svc-metric-label">{{.SummaryCaption}}</div>
-                  </div>
-                  <div class="status-badge s-{{.ToneClass}}">
-                    <span class="status-dot"></span>
-                    <span>{{.StatusLabel}}</span>
-                  </div>
-                  <span class="chevron">⌄</span>
-                </div>
-              </summary>
-              {{if $.ShowMonitorUptime}}
-                <div
-                  class="monitor-bar js-strip"
-                  data-strip-kind="monitor"
-                  data-active-range="{{$.DefaultRange}}"
-                  data-cells="{{$.MonitorStripCells}}"
-                  data-range-24h="{{.History24hJSON}}"
-                  data-range-7d="{{.History7dJSON}}"
-                  data-range-30d="{{.History30dJSON}}"
-                  data-range-90d="{{.History90dJSON}}"
-                ></div>
-              {{end}}
-              <div class="svc-details">
-                <div class="details-inner">
-                  <div class="details-content">
-                    {{if $.ShowMonitorUptime}}
-                      <div class="expanded-bar-section">
-                        <div class="expanded-bar-head">
-                          <span class="expanded-bar-label" data-shared-range-label>Last 30 days</span>
-                          <span class="expanded-bar-label">{{.UptimeText}}</span>
-                        </div>
-                        <div
-                          class="expanded-bars js-strip"
-                          data-strip-kind="expanded"
-                          data-active-range="{{$.DefaultRange}}"
-                          data-cells="{{$.MonitorStripCells}}"
-                          data-range-24h="{{.History24hJSON}}"
-                          data-range-7d="{{.History7dJSON}}"
-                          data-range-30d="{{.History30dJSON}}"
-                          data-range-90d="{{.History90dJSON}}"
-                        ></div>
-                        <div class="expanded-bar-foot">
-                          <span>{{.TypeLabel}}</span>
-                          <span>{{.LastCheckAgo}}</span>
-                        </div>
-                      </div>
-                    {{end}}
-                    <div class="details-grid">
-                      <div class="dp">
-                        <span class="dp-label">Last check</span>
-                        <span class="dp-value">{{.LastCheckAgo}}</span>
-                      </div>
-                      <div class="dp">
-                        <span class="dp-label">Latest latency</span>
-                        <span class="dp-value">{{.LatencyText}}</span>
-                      </div>
-                      <div class="dp">
-                        <span class="dp-label">24h uptime</span>
-                        <span class="dp-value">{{.UptimeText}}</span>
-                      </div>
-                      <div class="dp">
-                        <span class="dp-label">Monitor type</span>
-                        <span class="dp-value">{{.TypeLabel}}</span>
+          <div class="group-cards">
+            {{range .Monitors}}
+              <details class="svc-row monitor-card" data-monitor-id="{{.ID}}" data-search="{{.SearchText}}" data-status="{{.Status}}">
+                <summary class="svc-header">
+                  <div class="svc-left">
+                    <span class="svc-type">{{.TypeLabel}}</span>
+                    <div class="svc-main">
+                      <div class="svc-name">{{.Name}}</div>
+                      <div class="svc-meta">
+                        <span data-monitor-uptime-label>{{.SummaryCaption}}</span>
+                        <span>{{.MonitorDetailLine}}</span>
+                        <span>{{.LastCheckAgo}}</span>
                       </div>
                     </div>
                   </div>
+                  <div class="svc-right">
+                    <div class="svc-metric">
+                      <div class="svc-metric-value">{{.LatencyText}}</div>
+                      <div class="svc-metric-label">Latency</div>
+                    </div>
+                    <div class="svc-metric">
+                      <div
+                        class="svc-metric-value"
+                        data-monitor-uptime-value
+                        data-range-value-24h="{{.Uptime24Value}}"
+                        data-range-value-7d="{{.Uptime7Value}}"
+                        data-range-value-30d="{{.Uptime30Value}}"
+                        data-range-value-90d="{{.Uptime90Value}}"
+                      >{{.SummaryMetric}}</div>
+                      <div class="svc-metric-label" data-monitor-uptime-label>{{.SummaryCaption}}</div>
+                    </div>
+                    <div class="status-badge s-{{.ToneClass}}">
+                      <span class="status-dot"></span>
+                      <span>{{.StatusLabel}}</span>
+                    </div>
+                    <span class="chevron">⌄</span>
+                  </div>
+                </summary>
+                {{if $.ShowMonitorUptime}}
+                  <div
+                    class="monitor-bar js-strip"
+                    data-strip-kind="monitor"
+                    data-active-range="{{$.DefaultRange}}"
+                    data-cells="{{$.MonitorStripCells}}"
+                    data-cells-30d="{{monitorStripCells "30d"}}"
+                    data-cells-90d="{{monitorStripCells "90d"}}"
+                    data-range-24h="{{.History24hJSON}}"
+                    data-range-7d="{{.History7dJSON}}"
+                    data-range-30d="{{.History30dJSON}}"
+                    data-range-90d="{{.History90dJSON}}"
+                  ></div>
+                {{end}}
+                <div class="svc-details">
+                  <div class="details-inner">
+                    <div class="details-content">
+                      {{if $.ShowMonitorUptime}}
+                        <div class="expanded-bar-section">
+                          <div class="expanded-bar-head">
+                            <span class="expanded-bar-label" data-shared-range-label>Last 30 days</span>
+                            <span
+                              class="expanded-bar-label"
+                              data-monitor-uptime-value
+                              data-range-value-24h="{{.Uptime24Value}}"
+                              data-range-value-7d="{{.Uptime7Value}}"
+                              data-range-value-30d="{{.Uptime30Value}}"
+                              data-range-value-90d="{{.Uptime90Value}}"
+                            >{{.UptimeText}}</span>
+                          </div>
+                          <div
+                            class="expanded-bars js-strip"
+                            data-strip-kind="expanded"
+                            data-active-range="{{$.DefaultRange}}"
+                            data-cells="{{$.MonitorStripCells}}"
+                            data-cells-30d="{{expandedStripCells "30d"}}"
+                            data-cells-90d="{{expandedStripCells "90d"}}"
+                            data-range-24h="{{.History24hJSON}}"
+                            data-range-7d="{{.History7dJSON}}"
+                            data-range-30d="{{.ExpandedHistory30dJSON}}"
+                            data-range-90d="{{.ExpandedHistory90dJSON}}"
+                          ></div>
+                          <div class="expanded-bar-foot">
+                            <span>{{.TypeLabel}}</span>
+                            <span>{{.LastCheckAgo}}</span>
+                          </div>
+                        </div>
+                      {{end}}
+                      <div class="details-grid">
+                        <div class="dp">
+                          <span class="dp-label">Last check</span>
+                          <span class="dp-value">{{.LastCheckAgo}}</span>
+                        </div>
+                        <div class="dp">
+                          <span class="dp-label">Latest latency</span>
+                          <span class="dp-value">{{.LatencyText}}</span>
+                        </div>
+                        <div class="dp">
+                          <span class="dp-label" data-monitor-uptime-label>{{.SummaryCaption}}</span>
+                          <span
+                            class="dp-value"
+                            data-monitor-uptime-value
+                            data-range-value-24h="{{.Uptime24Value}}"
+                            data-range-value-7d="{{.Uptime7Value}}"
+                            data-range-value-30d="{{.Uptime30Value}}"
+                            data-range-value-90d="{{.Uptime90Value}}"
+                          >{{.UptimeText}}</span>
+                        </div>
+                        <div class="dp">
+                          <span class="dp-label">Monitor type</span>
+                          <span class="dp-value">{{.TypeLabel}}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </details>
-          {{end}}
+              </details>
+            {{end}}
+          </div>
         </div>
       {{end}}
       <div class="empty-state hidden" id="emptyState">
@@ -1886,7 +2115,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     </section>
 
     <section class="incidents-section" id="incidentsSection">
-      <div class="group-label">System Logs</div>
+      <div class="group-label">Status Updates</div>
       {{if .Incidents}}
         {{range .Incidents}}
           <article class="inc-card {{if eq .ToneClass "warn"}}i-warn{{else if eq .ToneClass "ok"}}i-ok{{else if eq .ToneClass "down"}}i-down{{else}}i-unknown{{end}}">
@@ -1897,7 +2126,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
             <p class="inc-desc">{{.Summary}}</p>
             <div class="inc-update">{{.AffectedComponentsText}}</div>
             {{if .LatestUpdate}}
-              <div class="inc-update">{{.LatestUpdate}}</div>
+              <div class="inc-update">Latest update: {{.LatestUpdate}}</div>
             {{else if .ResolvedAtLabel}}
               <div class="inc-update">{{.ResolvedAtLabel}}</div>
             {{end}}
@@ -1906,10 +2135,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       {{else}}
         <article class="inc-card i-empty">
           <div class="inc-head">
-            <h3 class="inc-title">Incident timeline coming later</h3>
-            <span class="inc-meta">Future feature</span>
+            <h3 class="inc-title">No active incidents</h3>
+            <span class="inc-meta">Stable</span>
           </div>
-          <p class="inc-desc">This layout is ready for richer incident history, maintenance windows, and status updates once the incident model is introduced.</p>
+          <p class="inc-desc">We are not currently tracking any active public incidents.</p>
           <div class="inc-update">No active incidents.</div>
         </article>
       {{end}}
@@ -1919,14 +2148,16 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
   {{if .ShowFooter}}
     <footer class="footer">
       <div class="container">
-        <div>{{.FooterText}}</div>
-        <div class="shortcuts">
-          <kbd>1</kbd> List
-          <kbd>2</kbd> Compact
-          <kbd>K</kbd> Kiosk
-          <kbd>T</kbd> Theme
-          <kbd>/</kbd> Search
-          <kbd>Esc</kbd> Exit
+        <div class="footer-inner">
+          <div class="footer-text">{{.FooterText}}</div>
+          <div class="footer-shortcuts">
+            <kbd>1</kbd> List
+            <kbd>2</kbd> Compact
+            <kbd>K</kbd> Kiosk
+            <kbd>T</kbd> Theme
+            <kbd>/</kbd> Search
+            <kbd>Esc</kbd> Exit
+          </div>
         </div>
       </div>
     </footer>
@@ -1957,6 +2188,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           themeToggleBtn: document.getElementById('themeToggleBtn'),
           kioskExitBtn: document.getElementById('kioskExitBtn'),
           strips: Array.from(document.querySelectorAll('.js-strip[data-active-range]')),
+          monitorUptimeValues: Array.from(document.querySelectorAll('[data-monitor-uptime-value]')),
+          monitorUptimeLabels: Array.from(document.querySelectorAll('[data-monitor-uptime-label]')),
           sharedRangeLabels: Array.from(document.querySelectorAll('[data-shared-range-label]')),
           globalUptimeValue: document.getElementById('globalUptimeValue'),
           globalRangeStart: document.getElementById('globalRangeStart'),
@@ -2017,9 +2250,26 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         }
       }
 
-      function renderStrip(el, raw) {
+      function monitorUptimeLabel(range) {
+        switch (range) {
+          case '24h': return '24h uptime';
+          case '7d': return '7d uptime';
+          case '90d': return '90d uptime';
+          default: return '30d uptime';
+        }
+      }
+
+      function stripCells(el, range) {
+        const rangeCells = parseInt(el.getAttribute('data-cells-' + range) || '', 10);
+        if (rangeCells > 0) {
+          return rangeCells;
+        }
+        return Math.max(1, parseInt(el.dataset.cells || '24', 10) || 24);
+      }
+
+      function renderStrip(el, raw, range) {
         const points = parseStripData(raw);
-        const cells = Math.max(1, parseInt(el.dataset.cells || '24', 10) || 24);
+        const cells = stripCells(el, range);
         const filled = points.slice(0, cells);
         while (filled.length < cells) {
           filled.push({ uptime: -1 });
@@ -2050,9 +2300,15 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         if (dom.globalUptimeValue) {
           dom.globalUptimeValue.textContent = dom.globalUptimeValue.getAttribute('data-range-value-' + nextRange) || '—';
         }
+        dom.monitorUptimeValues.forEach(function (el) {
+          el.textContent = el.getAttribute('data-range-value-' + nextRange) || '—';
+        });
+        dom.monitorUptimeLabels.forEach(function (el) {
+          el.textContent = monitorUptimeLabel(nextRange);
+        });
         dom.strips.forEach(function (el) {
           el.dataset.activeRange = nextRange;
-          renderStrip(el, el.getAttribute('data-range-' + nextRange));
+          renderStrip(el, el.getAttribute('data-range-' + nextRange), nextRange);
         });
         if (syncUrl) {
           setParam('range', nextRange);
