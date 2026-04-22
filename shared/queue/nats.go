@@ -159,8 +159,53 @@ func (c *Client) CreateConsumer(ctx context.Context, streamName string, consumer
 		}
 	}
 
+	if err := c.resetStaleConsumer(ctx, stream, consumerName, consumer); err != nil {
+		return nil, err
+	}
+
+	consumer, err = stream.Consumer(ctx, consumerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load consumer after validation: %w", err)
+	}
+
 	c.consumers[key] = consumer
 	return consumer, nil
+}
+
+func (c *Client) resetStaleConsumer(ctx context.Context, stream jetstream.Stream, consumerName string, consumer jetstream.Consumer) error {
+	streamInfo, err := stream.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load stream info: %w", err)
+	}
+
+	consumerInfo, err := consumer.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load consumer info: %w", err)
+	}
+
+	if !consumerStateRequiresReset(streamInfo, consumerInfo) {
+		return nil
+	}
+
+	if err := stream.DeleteConsumer(ctx, consumerName); err != nil {
+		return fmt.Errorf("failed to delete stale consumer: %w", err)
+	}
+
+	cfg := consumerInfo.Config
+	if _, err := stream.CreateConsumer(ctx, cfg); err != nil {
+		return fmt.Errorf("failed to recreate consumer: %w", err)
+	}
+
+	return nil
+}
+
+func consumerStateRequiresReset(streamInfo *jetstream.StreamInfo, consumerInfo *jetstream.ConsumerInfo) bool {
+	if streamInfo == nil || consumerInfo == nil {
+		return false
+	}
+
+	lastSeq := streamInfo.State.LastSeq
+	return consumerInfo.Delivered.Stream > lastSeq || consumerInfo.AckFloor.Stream > lastSeq
 }
 
 // DeleteConsumer deletes a consumer for the given stream.
