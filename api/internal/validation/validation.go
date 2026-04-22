@@ -31,6 +31,18 @@ func ValidateCreateIncident(req *models.CreateIncidentRequest) error {
 	if strings.TrimSpace(req.Summary) == "" {
 		return fmt.Errorf("summary is required")
 	}
+	if err := validateIncidentSeverity(req.Severity, true); err != nil {
+		return err
+	}
+	if err := validateUUIDString("owner user id", req.OwnerUserID, true); err != nil {
+		return err
+	}
+	if err := validateUUIDString("alert id", req.AlertID, true); err != nil {
+		return err
+	}
+	if err := validateUUIDString("monitor id", req.MonitorID, true); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -73,6 +85,54 @@ func ValidateUpdateIncident(req *models.UpdateIncidentRequest) error {
 	}
 	if req.Summary != nil && strings.TrimSpace(*req.Summary) == "" {
 		return fmt.Errorf("summary is required")
+	}
+	if req.Severity != nil {
+		if err := validateIncidentSeverity(*req.Severity, false); err != nil {
+			return err
+		}
+	}
+	if req.OwnerUserID != nil {
+		if err := validateUUIDString("owner user id", *req.OwnerUserID, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateIncidentSeverity(severity models.IncidentSeverity, allowEmpty bool) error {
+	value := string(severity)
+	if value == "" {
+		if allowEmpty {
+			return nil
+		}
+		return fmt.Errorf("invalid incident severity")
+	}
+
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("invalid incident severity")
+	}
+
+	switch severity {
+	case models.IncidentSeverityCritical, models.IncidentSeverityHigh, models.IncidentSeverityMedium, models.IncidentSeverityLow:
+		return nil
+	default:
+		return fmt.Errorf("invalid incident severity")
+	}
+}
+
+func validateUUIDString(fieldName, value string, allowEmpty bool) error {
+	if value == "" {
+		if allowEmpty {
+			return nil
+		}
+		return fmt.Errorf("invalid %s", fieldName)
+	}
+
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("invalid %s", fieldName)
+	}
+	if _, err := uuid.Parse(value); err != nil {
+		return fmt.Errorf("invalid %s", fieldName)
 	}
 	return nil
 }

@@ -83,6 +83,8 @@ func writeIncidentError(w http.ResponseWriter, err error) {
 	case "request is required",
 		"title is required",
 		"summary is required",
+		"invalid incident severity",
+		"invalid owner user id",
 		"alert ID is required",
 		"monitor ID is required",
 		"invalid incident state",
@@ -134,6 +136,8 @@ func isIncidentExpectedMutationError(err error) bool {
 		"status page not found",
 		"monitor ID is required",
 		"invalid monitor ID",
+		"invalid incident severity",
+		"invalid owner user id",
 		"selected monitors must be linked to the incident and status page":
 		return true
 	default:

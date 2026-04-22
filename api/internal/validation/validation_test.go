@@ -4,12 +4,91 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
 )
 
 // ptr returns a pointer to the given value
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func TestValidateCreateIncidentAcceptsSeverityOwnerAndContext(t *testing.T) {
+	req := &models.CreateIncidentRequest{
+		Title:       "Database outage",
+		Summary:     "Customers cannot reach the primary database cluster.",
+		Severity:    models.IncidentSeverityCritical,
+		OwnerUserID: uuid.NewString(),
+		AlertID:     uuid.NewString(),
+		MonitorID:   uuid.NewString(),
+	}
+
+	if err := ValidateCreateIncident(req); err != nil {
+		t.Fatalf("ValidateCreateIncident() error = %v, want nil", err)
+	}
+}
+
+func TestValidateCreateIncidentRejectsInvalidSeverity(t *testing.T) {
+	req := &models.CreateIncidentRequest{
+		Title:    "Database outage",
+		Summary:  "Customers cannot reach the primary database cluster.",
+		Severity: models.IncidentSeverity("urgent"),
+	}
+
+	err := ValidateCreateIncident(req)
+	if err == nil {
+		t.Fatal("ValidateCreateIncident() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "invalid incident severity") {
+		t.Fatalf("ValidateCreateIncident() error = %v, want error containing %q", err, "invalid incident severity")
+	}
+}
+
+func TestValidateUpdateIncidentRejectsInvalidOwnerUserID(t *testing.T) {
+	req := &models.UpdateIncidentRequest{
+		OwnerUserID: ptr("not-a-uuid"),
+	}
+
+	err := ValidateUpdateIncident(req)
+	if err == nil {
+		t.Fatal("ValidateUpdateIncident() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "invalid owner user id") {
+		t.Fatalf("ValidateUpdateIncident() error = %v, want error containing %q", err, "invalid owner user id")
+	}
+}
+
+func TestValidateCreateIncidentRejectsPaddedSeverityAndOwnerUserID(t *testing.T) {
+	req := &models.CreateIncidentRequest{
+		Title:       "Database outage",
+		Summary:     "Customers cannot reach the primary database cluster.",
+		Severity:    models.IncidentSeverity(" high "),
+		OwnerUserID: " " + uuid.NewString() + " ",
+	}
+
+	err := ValidateCreateIncident(req)
+	if err == nil {
+		t.Fatal("ValidateCreateIncident() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "invalid incident severity") {
+		t.Fatalf("ValidateCreateIncident() error = %v, want error containing %q", err, "invalid incident severity")
+	}
+}
+
+func TestValidateCreateIncidentRejectsPaddedOwnerUserID(t *testing.T) {
+	req := &models.CreateIncidentRequest{
+		Title:       "Database outage",
+		Summary:     "Customers cannot reach the primary database cluster.",
+		OwnerUserID: " " + uuid.NewString() + " ",
+	}
+
+	err := ValidateCreateIncident(req)
+	if err == nil {
+		t.Fatal("ValidateCreateIncident() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "invalid owner user id") {
+		t.Fatalf("ValidateCreateIncident() error = %v, want error containing %q", err, "invalid owner user id")
+	}
 }
 
 // TestValidateAlertPolicy tests alert policy creation validation

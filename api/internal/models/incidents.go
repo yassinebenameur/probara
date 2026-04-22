@@ -34,19 +34,32 @@ const (
 	IncidentTimelineEntryTypePublicUpdate IncidentTimelineEntryType = "public_update"
 )
 
+// IncidentSeverity represents the severity assigned to an incident.
+type IncidentSeverity string
+
+const (
+	IncidentSeverityCritical IncidentSeverity = "critical"
+	IncidentSeverityHigh     IncidentSeverity = "high"
+	IncidentSeverityMedium   IncidentSeverity = "medium"
+	IncidentSeverityLow      IncidentSeverity = "low"
+)
+
 // Incident represents the core incident record.
 type Incident struct {
-	ID                uuid.UUID     `json:"id"`
-	TenantID          uuid.UUID     `json:"tenant_id"`
-	Title             string        `json:"title"`
-	Summary           string        `json:"summary"`
-	State             IncidentState `json:"state"`
-	ResolvedAt        *time.Time    `json:"resolved_at,omitempty"`
-	IsAutoCreated     bool          `json:"is_auto_created"`
-	AutoMonitorID     *uuid.UUID    `json:"auto_monitor_id,omitempty"`
-	AutoAlertPolicyID *uuid.UUID    `json:"auto_alert_policy_id,omitempty"`
-	CreatedAt         time.Time     `json:"created_at"`
-	UpdatedAt         time.Time     `json:"updated_at"`
+	ID                uuid.UUID        `json:"id"`
+	TenantID          uuid.UUID        `json:"tenant_id"`
+	Title             string           `json:"title"`
+	Summary           string           `json:"summary"`
+	State             IncidentState    `json:"state"`
+	Severity          IncidentSeverity `json:"severity"`
+	OwnerUserID       *uuid.UUID       `json:"owner_user_id,omitempty"`
+	OwnerUsername     string           `json:"owner_username,omitempty"`
+	ResolvedAt        *time.Time       `json:"resolved_at,omitempty"`
+	IsAutoCreated     bool             `json:"is_auto_created"`
+	AutoMonitorID     *uuid.UUID       `json:"auto_monitor_id,omitempty"`
+	AutoAlertPolicyID *uuid.UUID       `json:"auto_alert_policy_id,omitempty"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
 }
 
 // IncidentTimelineEntry represents a single timeline event for an incident.
@@ -62,19 +75,19 @@ type IncidentTimelineEntry struct {
 
 // IncidentAlertSummary represents an alert linked to an incident.
 type IncidentAlertSummary struct {
-	ID            uuid.UUID `json:"id"`
-	MonitorID     uuid.UUID `json:"monitor_id"`
-	AlertPolicyID uuid.UUID `json:"alert_policy_id"`
-	Status        string    `json:"status"`
-	TriggeredAt   time.Time `json:"triggered_at"`
+	ID             uuid.UUID  `json:"id"`
+	MonitorID      uuid.UUID  `json:"monitor_id"`
+	AlertPolicyID  uuid.UUID  `json:"alert_policy_id"`
+	Status         string     `json:"status"`
+	TriggeredAt    time.Time  `json:"triggered_at"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
-	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
-	FailureCount  int       `json:"failure_count"`
-	LastError     *string   `json:"last_error,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	MonitorName   string    `json:"monitor_name"`
-	PolicyName    string    `json:"policy_name"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	FailureCount   int        `json:"failure_count"`
+	LastError      *string    `json:"last_error,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	MonitorName    string     `json:"monitor_name"`
+	PolicyName     string     `json:"policy_name"`
 }
 
 // IncidentMonitorSummary represents a monitor linked to an incident.
@@ -116,27 +129,36 @@ type IncidentListResponse struct {
 
 // IncidentListItem represents the incident list summary row.
 type IncidentListItem struct {
-	ID                 uuid.UUID      `json:"id"`
-	State              IncidentState  `json:"state"`
-	Source             IncidentSource `json:"source"`
-	Title              string         `json:"title"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	ResolvedAt         *time.Time     `json:"resolved_at,omitempty"`
-	LinkedAlertCount   int            `json:"linked_alert_count"`
-	LinkedMonitorCount int            `json:"linked_monitor_count"`
-	PublicationCount   int            `json:"publication_count"`
+	ID                 uuid.UUID        `json:"id"`
+	State              IncidentState    `json:"state"`
+	Source             IncidentSource   `json:"source"`
+	Title              string           `json:"title"`
+	Severity           IncidentSeverity `json:"severity"`
+	OwnerUserID        *uuid.UUID       `json:"owner_user_id,omitempty"`
+	OwnerUsername      string           `json:"owner_username,omitempty"`
+	UpdatedAt          time.Time        `json:"updated_at"`
+	ResolvedAt         *time.Time       `json:"resolved_at,omitempty"`
+	LinkedAlertCount   int              `json:"linked_alert_count"`
+	LinkedMonitorCount int              `json:"linked_monitor_count"`
+	PublicationCount   int              `json:"publication_count"`
 }
 
 // CreateIncidentRequest represents a request to create an incident.
 type CreateIncidentRequest struct {
-	Title   string `json:"title"`
-	Summary string `json:"summary"`
+	Title       string           `json:"title"`
+	Summary     string           `json:"summary"`
+	Severity    IncidentSeverity `json:"severity,omitempty"`
+	OwnerUserID string           `json:"owner_user_id,omitempty"`
+	AlertID     string           `json:"alert_id,omitempty"`
+	MonitorID   string           `json:"monitor_id,omitempty"`
 }
 
 // UpdateIncidentRequest represents a partial incident update.
 type UpdateIncidentRequest struct {
-	Title   *string `json:"title,omitempty"`
-	Summary *string `json:"summary,omitempty"`
+	Title       *string           `json:"title,omitempty"`
+	Summary     *string           `json:"summary,omitempty"`
+	Severity    *IncidentSeverity `json:"severity,omitempty"`
+	OwnerUserID *string           `json:"owner_user_id,omitempty"`
 }
 
 // TransitionIncidentStateRequest represents a request to transition incident state.

@@ -153,20 +153,38 @@ func withRouteParams(req *http.Request, params map[string]string) *http.Request 
 
 func TestHandlers_CreateIncident(t *testing.T) {
 	log := logger.New("test", "debug")
+	ownerID := uuid.New()
+	alertID := uuid.New()
+	monitorID := uuid.New()
 	svc := &mockIncidentService{
 		createFn: func(ctx context.Context, tenantID uuid.UUID, req *models.CreateIncidentRequest) (*models.IncidentDetail, error) {
+			if req.Severity != models.IncidentSeverityCritical {
+				t.Fatalf("severity = %q, want %q", req.Severity, models.IncidentSeverityCritical)
+			}
+			if req.OwnerUserID != ownerID.String() {
+				t.Fatalf("owner_user_id = %q, want %q", req.OwnerUserID, ownerID.String())
+			}
+			if req.AlertID != alertID.String() {
+				t.Fatalf("alert_id = %q, want %q", req.AlertID, alertID.String())
+			}
+			if req.MonitorID != monitorID.String() {
+				t.Fatalf("monitor_id = %q, want %q", req.MonitorID, monitorID.String())
+			}
 			return &models.IncidentDetail{
 				Incident: models.Incident{
-					ID:    uuid.New(),
-					Title: req.Title,
-					State: models.IncidentStateInvestigating,
+					ID:            uuid.New(),
+					Title:         req.Title,
+					State:         models.IncidentStateInvestigating,
+					Severity:      req.Severity,
+					OwnerUserID:   &ownerID,
+					OwnerUsername: "incident-owner",
 				},
 			}, nil
 		},
 	}
 	h := NewHandlers(svc, log)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents", bytes.NewBufferString(`{"title":"API outage","summary":"Requests are failing."}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents", bytes.NewBufferString(`{"title":"API outage","summary":"Requests are failing.","severity":"critical","owner_user_id":"`+ownerID.String()+`","alert_id":"`+alertID.String()+`","monitor_id":"`+monitorID.String()+`"}`))
 	req = withTenantID(req)
 	w := httptest.NewRecorder()
 
@@ -182,6 +200,15 @@ func TestHandlers_CreateIncident(t *testing.T) {
 	}
 	if got.Title != "API outage" {
 		t.Fatalf("title = %q, want %q", got.Title, "API outage")
+	}
+	if got.Severity != models.IncidentSeverityCritical {
+		t.Fatalf("severity = %q, want %q", got.Severity, models.IncidentSeverityCritical)
+	}
+	if got.OwnerUserID == nil || *got.OwnerUserID != ownerID {
+		t.Fatalf("owner_user_id = %v, want %s", got.OwnerUserID, ownerID)
+	}
+	if got.OwnerUsername != "incident-owner" {
+		t.Fatalf("owner_username = %q, want %q", got.OwnerUsername, "incident-owner")
 	}
 }
 

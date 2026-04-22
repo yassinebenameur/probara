@@ -2,17 +2,19 @@
 
 import { useEffect, useState } from 'react';
 
-import { getIncidents } from '@/lib/api';
-import type { IncidentDetail, IncidentListItem } from '@/lib/types';
-import IncidentCreateDialog from '@/components/incidents/IncidentCreateDialog';
+import { getIncidents, getUsers } from '@/lib/api';
+import type { AdminUser, IncidentDetail, IncidentListItem } from '@/lib/types';
+import IncidentQuickCreateButton from '@/components/incidents/IncidentQuickCreateButton';
 import IncidentList from '@/components/incidents/IncidentList';
 import Toast from '@/components/ui/Toast';
 
 export default function IncidentsPage() {
   const [incidents, setIncidents] = useState<IncidentListItem[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(true);
   const [error, setError] = useState('');
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [usersError, setUsersError] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const loadIncidents = async () => {
@@ -29,8 +31,23 @@ export default function IncidentsPage() {
     }
   };
 
+  const loadUsers = async () => {
+    try {
+      setUsersLoading(true);
+      setUsersError('');
+      const response = await getUsers({ page_size: 1000 });
+      setUsers(response.items || []);
+    } catch (err) {
+      setUsersError(err instanceof Error ? err.message : 'Failed to load users');
+      setUsers([]);
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
   useEffect(() => {
-    loadIncidents();
+    void loadIncidents();
+    void loadUsers();
   }, []);
 
   const handleCreated = async (_incident: IncidentDetail) => {
@@ -47,13 +64,29 @@ export default function IncidentsPage() {
             Coordinate customer-impacting issues and publish updates deliberately.
           </p>
         </div>
-        <button onClick={() => setDialogOpen(true)} className="btn btn-primary btn-sm">
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Create Incident
-        </button>
+        <IncidentQuickCreateButton
+          users={users}
+          onCreated={handleCreated}
+          disabled={usersLoading || Boolean(usersError) || users.length === 0}
+        />
       </div>
+
+      {usersLoading ? (
+        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 px-4 py-3 text-sm text-slate-500">
+          Loading users for incident ownership...
+        </div>
+      ) : usersError ? (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {usersError}
+          <button onClick={loadUsers} className="ml-2 underline hover:no-underline">
+            Retry
+          </button>
+        </div>
+      ) : users.length === 0 ? (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          No users are available to assign as incident owners.
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6 text-sm text-slate-500">
@@ -69,12 +102,6 @@ export default function IncidentsPage() {
       ) : (
         <IncidentList incidents={incidents} />
       )}
-
-      <IncidentCreateDialog
-        open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-        onCreated={handleCreated}
-      />
 
       {toast ? (
         <Toast

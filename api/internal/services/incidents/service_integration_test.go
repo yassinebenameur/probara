@@ -32,6 +32,12 @@ func TestServiceCreateManualIncident(t *testing.T) {
 	if incident.State != models.IncidentStateInvestigating {
 		t.Fatalf("state = %q, want %q", incident.State, models.IncidentStateInvestigating)
 	}
+	if incident.Severity != models.IncidentSeverityHigh {
+		t.Fatalf("severity = %q, want %q", incident.Severity, models.IncidentSeverityHigh)
+	}
+	if incident.OwnerUserID != nil {
+		t.Fatalf("owner_user_id = %v, want nil", incident.OwnerUserID)
+	}
 }
 
 func TestServiceGetIncidentReturnsEmptyLinkedResourceSlices(t *testing.T) {
@@ -62,6 +68,9 @@ func TestServiceGetIncidentReturnsEmptyLinkedResourceSlices(t *testing.T) {
 	}
 	if detail.Publications == nil {
 		t.Fatalf("publications = nil, want empty slice")
+	}
+	if detail.Severity != models.IncidentSeverityHigh {
+		t.Fatalf("severity = %q, want %q", detail.Severity, models.IncidentSeverityHigh)
 	}
 }
 
@@ -252,6 +261,12 @@ func TestServiceListIncidentsReturnsSummaryFields(t *testing.T) {
 	}
 	if list.Items[0].Source != models.IncidentSourceManual {
 		t.Fatalf("list.Items[0].Source = %q, want %q", list.Items[0].Source, models.IncidentSourceManual)
+	}
+	if list.Items[0].Severity != models.IncidentSeverityHigh {
+		t.Fatalf("list.Items[0].Severity = %q, want %q", list.Items[0].Severity, models.IncidentSeverityHigh)
+	}
+	if list.Items[0].OwnerUserID != nil {
+		t.Fatalf("list.Items[0].OwnerUserID = %v, want nil", list.Items[0].OwnerUserID)
 	}
 	if list.Items[0].LinkedAlertCount != 1 || list.Items[0].LinkedMonitorCount != 1 || list.Items[0].PublicationCount != 1 {
 		t.Fatalf("list.Items[0] counts = (%d,%d,%d), want (1,1,1)", list.Items[0].LinkedAlertCount, list.Items[0].LinkedMonitorCount, list.Items[0].PublicationCount)

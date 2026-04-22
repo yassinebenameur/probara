@@ -511,6 +511,7 @@ export interface AlertPolicyListResponse {
 // Incident types
 export type IncidentState = 'investigating' | 'identified' | 'monitoring' | 'resolved';
 export type IncidentSource = 'manual' | 'auto';
+export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low';
 
 export type IncidentTimelineEntryType = 'system' | 'internal_note' | 'public_update';
 
@@ -575,6 +576,9 @@ export interface IncidentDetail {
   tenant_id: string;
   title: string;
   summary: string;
+  severity: IncidentSeverity;
+  owner_user_id?: string;
+  owner_username?: string;
   state: IncidentState;
   resolved_at?: string;
   is_auto_created: boolean;
@@ -598,11 +602,17 @@ export interface IncidentListResponse {
 export interface CreateIncidentRequest {
   title: string;
   summary?: string;
+  severity: IncidentSeverity;
+  owner_user_id: string;
+  alert_id?: string;
+  monitor_id?: string;
 }
 
 export interface UpdateIncidentRequest {
   title?: string;
   summary?: string;
+  severity?: IncidentSeverity;
+  owner_user_id?: string;
 }
 
 export interface UpdateIncidentStateRequest {

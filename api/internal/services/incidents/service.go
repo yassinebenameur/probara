@@ -58,6 +58,34 @@ func (s *Service) CreateIncident(ctx context.Context, tenantID uuid.UUID, req *m
 
 	title := strings.TrimSpace(req.Title)
 	summary := strings.TrimSpace(req.Summary)
+	severity := models.IncidentSeverityHigh
+	if req.Severity != "" {
+		severity = req.Severity
+	}
+	var ownerUserID *uuid.UUID
+	if req.OwnerUserID != "" {
+		parsedOwnerUserID, err := uuid.Parse(req.OwnerUserID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid owner user id")
+		}
+		ownerUserID = &parsedOwnerUserID
+	}
+	var alertID *uuid.UUID
+	if req.AlertID != "" {
+		parsedAlertID, err := uuid.Parse(req.AlertID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid alert id")
+		}
+		alertID = &parsedAlertID
+	}
+	var monitorID *uuid.UUID
+	if req.MonitorID != "" {
+		parsedMonitorID, err := uuid.Parse(req.MonitorID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid monitor id")
+		}
+		monitorID = &parsedMonitorID
+	}
 	incidentID := uuid.New()
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -70,10 +98,36 @@ func (s *Service) CreateIncident(ctx context.Context, tenantID uuid.UUID, req *m
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO incidents (
-			id, tenant_id, title, summary, state, is_auto_created, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, 'investigating', FALSE, NOW(), NOW())
-	`, incidentID, tenantID, title, summary); err != nil {
+			id, tenant_id, title, summary, severity, owner_user_id, state, is_auto_created, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'investigating', FALSE, NOW(), NOW())
+	`, incidentID, tenantID, title, summary, severity, ownerUserID); err != nil {
 		return nil, fmt.Errorf("create incident: %w", err)
+	}
+
+	if alertID != nil {
+		if err := s.ensureAlertBelongsToTenant(ctx, tx, tenantID, *alertID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO incident_alerts (incident_id, alert_id, created_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (incident_id, alert_id) DO NOTHING
+		`, incidentID, *alertID); err != nil {
+			return nil, fmt.Errorf("attach incident alert: %w", err)
+		}
+	}
+
+	if monitorID != nil {
+		if err := s.ensureMonitorBelongsToTenant(ctx, tx, tenantID, *monitorID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO incident_monitors (incident_id, monitor_id, created_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (incident_id, monitor_id) DO NOTHING
+		`, incidentID, *monitorID); err != nil {
+			return nil, fmt.Errorf("attach incident monitor: %w", err)
+		}
 	}
 
 	if err := s.insertTimelineEntryTx(ctx, tx, tenantID, incidentID, models.IncidentTimelineEntryTypeSystem, "Incident created", nil); err != nil {
@@ -90,20 +144,24 @@ func (s *Service) CreateIncident(ctx context.Context, tenantID uuid.UUID, req *m
 // GetIncident retrieves an incident by ID.
 func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentDetail, error) {
 	query := `
-		SELECT id, tenant_id, title, summary, state, resolved_at, is_auto_created,
-			auto_monitor_id, auto_alert_policy_id, created_at, updated_at
-		FROM incidents
-		WHERE id = $1 AND tenant_id = $2
+		SELECT i.id, i.tenant_id, i.title, i.summary, i.state, i.severity, i.owner_user_id, au.username,
+			i.resolved_at, i.is_auto_created, i.auto_monitor_id, i.auto_alert_policy_id, i.created_at, i.updated_at
+		FROM incidents i
+		LEFT JOIN admin_users au ON au.id = i.owner_user_id
+		WHERE i.id = $1 AND i.tenant_id = $2
 	`
 
 	var detail models.IncidentDetail
 	var summary sql.NullString
+	var severity string
+	var ownerUserID uuid.NullUUID
+	var ownerUsername sql.NullString
 	var resolvedAt sql.NullTime
 	var autoMonitorID uuid.NullUUID
 	var autoAlertPolicyID uuid.NullUUID
 	if err := s.db.QueryRowContext(ctx, query, incidentID, tenantID).Scan(
-		&detail.ID, &detail.TenantID, &detail.Title, &summary, &detail.State, &resolvedAt,
-		&detail.IsAutoCreated, &autoMonitorID, &autoAlertPolicyID, &detail.CreatedAt, &detail.UpdatedAt,
+		&detail.ID, &detail.TenantID, &detail.Title, &summary, &detail.State, &severity, &ownerUserID, &ownerUsername,
+		&resolvedAt, &detail.IsAutoCreated, &autoMonitorID, &autoAlertPolicyID, &detail.CreatedAt, &detail.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("incident not found")
@@ -113,6 +171,14 @@ func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUI
 
 	if summary.Valid {
 		detail.Summary = summary.String
+	}
+	detail.Severity = models.IncidentSeverity(severity)
+	if ownerUserID.Valid {
+		ownerID := ownerUserID.UUID
+		detail.OwnerUserID = &ownerID
+	}
+	if ownerUsername.Valid {
+		detail.OwnerUsername = ownerUsername.String
 	}
 	if resolvedAt.Valid {
 		resolvedAtValue := resolvedAt.Time
@@ -190,7 +256,7 @@ func (s *Service) ListIncidents(ctx context.Context, tenantID uuid.UUID, page, p
 		)
 		SELECT i.id, i.state,
 			CASE WHEN i.is_auto_created THEN 'auto' ELSE 'manual' END AS source,
-			i.title, i.updated_at, i.resolved_at,
+			i.title, i.severity, i.owner_user_id, au.username, i.updated_at, i.resolved_at,
 			COALESCE(ac.linked_alert_count, 0),
 			COALESCE(mc.linked_monitor_count, 0),
 			COALESCE(pc.publication_count, 0)
@@ -198,6 +264,7 @@ func (s *Service) ListIncidents(ctx context.Context, tenantID uuid.UUID, page, p
 		LEFT JOIN alert_counts ac ON ac.incident_id = i.id
 		LEFT JOIN monitor_counts mc ON mc.incident_id = i.id
 		LEFT JOIN publication_counts pc ON pc.incident_id = i.id
+		LEFT JOIN admin_users au ON au.id = i.owner_user_id
 		WHERE i.tenant_id = $1
 		ORDER BY i.updated_at DESC, i.id DESC
 		LIMIT $2 OFFSET $3
@@ -249,6 +316,24 @@ func (s *Service) UpdateIncident(ctx context.Context, tenantID, incidentID uuid.
 		setParts = append(setParts, fmt.Sprintf("summary = $%d", argIndex))
 		args = append(args, strings.TrimSpace(*req.Summary))
 		argIndex++
+	}
+	if req.Severity != nil {
+		setParts = append(setParts, fmt.Sprintf("severity = $%d", argIndex))
+		args = append(args, *req.Severity)
+		argIndex++
+	}
+	if req.OwnerUserID != nil {
+		if *req.OwnerUserID == "" {
+			setParts = append(setParts, "owner_user_id = NULL")
+		} else {
+			ownerUserID, err := uuid.Parse(*req.OwnerUserID)
+			if err != nil {
+				return nil, fmt.Errorf("invalid owner user id")
+			}
+			setParts = append(setParts, fmt.Sprintf("owner_user_id = $%d", argIndex))
+			args = append(args, ownerUserID)
+			argIndex++
+		}
 	}
 
 	if len(setParts) == 0 {
@@ -1474,12 +1559,15 @@ func buildAutoIncidentNarrative(monitorName, policyName string) (string, string)
 func scanIncident(scanner incidentRowScanner) (models.Incident, error) {
 	var incident models.Incident
 	var summary sql.NullString
+	var severity string
+	var ownerUserID uuid.NullUUID
+	var ownerUsername sql.NullString
 	var resolvedAt sql.NullTime
 	var autoMonitorID uuid.NullUUID
 	var autoAlertPolicyID uuid.NullUUID
 
 	if err := scanner.Scan(
-		&incident.ID, &incident.TenantID, &incident.Title, &summary, &incident.State, &resolvedAt,
+		&incident.ID, &incident.TenantID, &incident.Title, &summary, &incident.State, &severity, &ownerUserID, &ownerUsername, &resolvedAt,
 		&incident.IsAutoCreated, &autoMonitorID, &autoAlertPolicyID, &incident.CreatedAt, &incident.UpdatedAt,
 	); err != nil {
 		return models.Incident{}, err
@@ -1487,6 +1575,14 @@ func scanIncident(scanner incidentRowScanner) (models.Incident, error) {
 
 	if summary.Valid {
 		incident.Summary = summary.String
+	}
+	incident.Severity = models.IncidentSeverity(severity)
+	if ownerUserID.Valid {
+		ownerID := ownerUserID.UUID
+		incident.OwnerUserID = &ownerID
+	}
+	if ownerUsername.Valid {
+		incident.OwnerUsername = ownerUsername.String
 	}
 	if resolvedAt.Valid {
 		resolvedAtValue := resolvedAt.Time
@@ -1506,13 +1602,24 @@ func scanIncident(scanner incidentRowScanner) (models.Incident, error) {
 
 func scanIncidentListItem(scanner incidentRowScanner) (models.IncidentListItem, error) {
 	var item models.IncidentListItem
+	var severity string
+	var ownerUserID uuid.NullUUID
+	var ownerUsername sql.NullString
 	var resolvedAt sql.NullTime
 
 	if err := scanner.Scan(
-		&item.ID, &item.State, &item.Source, &item.Title, &item.UpdatedAt, &resolvedAt,
+		&item.ID, &item.State, &item.Source, &item.Title, &severity, &ownerUserID, &ownerUsername, &item.UpdatedAt, &resolvedAt,
 		&item.LinkedAlertCount, &item.LinkedMonitorCount, &item.PublicationCount,
 	); err != nil {
 		return models.IncidentListItem{}, err
+	}
+	item.Severity = models.IncidentSeverity(severity)
+	if ownerUserID.Valid {
+		ownerID := ownerUserID.UUID
+		item.OwnerUserID = &ownerID
+	}
+	if ownerUsername.Valid {
+		item.OwnerUsername = ownerUsername.String
 	}
 	if resolvedAt.Valid {
 		resolvedAtValue := resolvedAt.Time

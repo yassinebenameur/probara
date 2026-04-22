@@ -494,6 +494,11 @@ export async function getStatusPage(id: string): Promise<StatusPage> {
 }
 
 // Tenant API functions (admin only)
+export interface GetUsersParams {
+  page?: number;
+  page_size?: number;
+}
+
 export async function getTenants(): Promise<TenantListResponse> {
   return apiRequest<TenantListResponse>('GET', '/v1/tenants');
 }
@@ -509,10 +514,7 @@ export async function updateTenantSettings(
 }
 
 // Admin users API functions (admin only)
-export async function getUsers(params?: {
-  page?: number;
-  page_size?: number;
-}): Promise<AdminUserListResponse> {
+export async function getUsers(params?: GetUsersParams): Promise<AdminUserListResponse> {
   const queryParams = new URLSearchParams();
   if (params?.page) queryParams.append('page', String(params.page));
   if (params?.page_size) queryParams.append('page_size', String(params.page_size));

@@ -10,7 +10,7 @@ import (
 
 // IncidentService defines the incident service contract.
 type IncidentService interface {
-	// CreateIncident creates a new manual incident.
+	// CreateIncident creates a new manual incident with optional metadata and initial links.
 	CreateIncident(ctx context.Context, tenantID uuid.UUID, req *models.CreateIncidentRequest) (*models.IncidentDetail, error)
 
 	// GetIncident retrieves an incident by ID.
@@ -19,7 +19,7 @@ type IncidentService interface {
 	// ListIncidents lists incidents with pagination.
 	ListIncidents(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.IncidentListResponse, error)
 
-	// UpdateIncident updates an incident.
+	// UpdateIncident updates an incident, including metadata.
 	UpdateIncident(ctx context.Context, tenantID, incidentID uuid.UUID, req *models.UpdateIncidentRequest) (*models.IncidentDetail, error)
 
 	// TransitionIncidentState moves an incident to another state.
