@@ -1,3 +1,31 @@
+# [1.0.0-alpha.37](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.36...v1.0.0-alpha.37) (2026-04-23)
+
+
+### Bug Fixes
+
+* **api:** align incident list and timeline shape ([143cae6](https://github.com/yassinebenameur/probara/commit/143cae6e7a200507e04e47d7070cdce4fd1d6b91))
+* **api:** avoid incident no-op audit entries ([d400d64](https://github.com/yassinebenameur/probara/commit/d400d64fc8b5c1b052092ecb8ecb820fed6b2803))
+* **api:** clean incident publication monitor links ([36ac286](https://github.com/yassinebenameur/probara/commit/36ac28645f7a1b93bf49c425c481bccd15dcb35b))
+* **api:** cover incident service error mapping ([74aa04d](https://github.com/yassinebenameur/probara/commit/74aa04db4922a655f8b10cf97ff2d100a08723db))
+* **api:** expose incident timeline entry writes ([58046a2](https://github.com/yassinebenameur/probara/commit/58046a26ce5990c7458f9e7b7e494499b360801b))
+* **api:** harden incident transitions and updates ([4407be6](https://github.com/yassinebenameur/probara/commit/4407be612ca1821a4f91b6b2758b83f37c419d1b))
+* **api:** make incident publish idempotent ([08e58b6](https://github.com/yassinebenameur/probara/commit/08e58b68d7193bf796105db0c6e581cbe412e34d))
+* **api:** narrow incident transition logging ([f3c01cf](https://github.com/yassinebenameur/probara/commit/f3c01cf41fd9e4d681ef622a1c3a20f49a579088))
+* **api:** tighten incident handler error paths ([6d4ccec](https://github.com/yassinebenameur/probara/commit/6d4ccecce773590195e069bb35bc63b465adb824))
+* **queue:** recreate stale check job consumers ([af31269](https://github.com/yassinebenameur/probara/commit/af312691036a9e7f36b1122d5cd0b7f3ce643a6b))
+* **status-page:** preserve public page state on live refresh ([30c7386](https://github.com/yassinebenameur/probara/commit/30c7386f3b0138f692c2eb568d6124ab7dab6b28))
+* **status-page:** sync uptime ranges and status copy ([b9ad538](https://github.com/yassinebenameur/probara/commit/b9ad538715343bdc64f2bc0c28b7bacb59d356a6))
+
+
+### Features
+
+* **api:** add core incident domain service ([48354d0](https://github.com/yassinebenameur/probara/commit/48354d0b513b8273d7ee084af8c10f9ef41810a8))
+* **api:** add incident linking and publication flows ([bf2a9d9](https://github.com/yassinebenameur/probara/commit/bf2a9d947f9e83fc958fd26623d81b231693acff))
+* **api:** expose core incident endpoints ([d5d2196](https://github.com/yassinebenameur/probara/commit/d5d2196e9e51d0d55fcd1f7f162e3553ec8c2913))
+* **incidents:** add metadata and contextual creation ([9fa3b8a](https://github.com/yassinebenameur/probara/commit/9fa3b8a798c63039a44a6b998e0f2e5a5ee23895))
+* **incidents:** finish MVP implementation ([0ad08c8](https://github.com/yassinebenameur/probara/commit/0ad08c8fe5bc27c3dfda0fc0a75ed3238d235f8a))
+* **status-page:** support incident-only refresh events ([03065cf](https://github.com/yassinebenameur/probara/commit/03065cf9881098d39f33f5d8a34699053efad92a))
+
 # [1.0.0-alpha.36](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.35...v1.0.0-alpha.36) (2026-03-26)
 
 
