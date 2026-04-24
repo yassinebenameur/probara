@@ -10,6 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -91,6 +92,42 @@ func TestStatusPageSlugResolverResolveIncludesAncestorGroupPages(t *testing.T) {
 
 	if !reflect.DeepEqual(slugs, []string{"group-page"}) {
 		t.Fatalf("Resolve() slugs = %v, want %v", slugs, []string{"group-page"})
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestStatusPageSlugResolverResolveFallsBackToLegacyQueryWhenSectionMonitorTableMissing(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	rows := sqlmock.NewRows([]string{"slug"}).
+		AddRow("legacy-page")
+
+	mock.ExpectQuery(regexp.QuoteMeta(statusPageSlugQuery)).
+		WithArgs(tenantID, monitorID).
+		WillReturnError(&pq.Error{Code: "42P01"})
+	mock.ExpectQuery(regexp.QuoteMeta(legacyStatusPageSlugQuery)).
+		WithArgs(tenantID, monitorID).
+		WillReturnRows(rows)
+
+	resolver := statusPageSlugResolver{db: &shareddb.Client{DB: sqlDB}}
+	slugs, err := resolver.Resolve(context.Background(), statusupdates.Event{
+		TenantID:  tenantID.String(),
+		MonitorID: monitorID.String(),
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(slugs, []string{"legacy-page"}) {
+		t.Fatalf("Resolve() slugs = %v, want %v", slugs, []string{"legacy-page"})
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

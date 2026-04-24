@@ -40,6 +40,26 @@ const statusPageSlugQuery = `
 	ORDER BY 1
 `
 
+const legacyStatusPageSlugQuery = `
+	WITH RECURSIVE monitor_targets AS (
+		SELECT id
+		FROM monitors
+		WHERE tenant_id = $1 AND id = $2
+		UNION
+		SELECT mg.group_id
+		FROM monitor_groups mg
+		JOIN monitor_targets mt ON mt.id = mg.monitor_id
+		JOIN monitors m ON m.id = mg.group_id
+		WHERE m.tenant_id = $1 AND m.type = 'group'
+	)
+	SELECT DISTINCT sp.slug
+	FROM status_pages sp
+	JOIN status_page_monitors spm ON spm.status_page_id = sp.id
+	JOIN monitor_targets mt ON mt.id = spm.monitor_id
+	WHERE sp.tenant_id = $1
+	ORDER BY 1
+`
+
 const statusPageSlugByIDQuery = `
 	SELECT slug
 	FROM status_pages
@@ -154,7 +174,11 @@ func (r statusPageSlugResolver) Resolve(ctx context.Context, event statusupdates
 		return nil, nil
 	}
 
-	return r.resolveSlugs(ctx, statusPageSlugQuery, tenantID, monitorID)
+	slugs, err := r.resolveSlugs(ctx, statusPageSlugQuery, tenantID, monitorID)
+	if err != nil && isUndefinedTableError(err) {
+		return r.resolveSlugs(ctx, legacyStatusPageSlugQuery, tenantID, monitorID)
+	}
+	return slugs, err
 }
 
 func (r statusPageSlugResolver) resolveSlugs(ctx context.Context, query string, args ...interface{}) ([]string, error) {

@@ -512,6 +512,9 @@ func (s *Service) loadStatusPageSections(ctx context.Context, pageID uuid.UUID) 
 		section.UpdatedAt = &updatedAt
 		monitors, err := s.loadStatusPageSectionMonitors(ctx, sectionID)
 		if err != nil {
+			if isUndefinedTableError(err) {
+				return s.loadLegacyStatusPageSections(ctx, pageID)
+			}
 			return nil, err
 		}
 		section.Monitors = monitors

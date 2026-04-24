@@ -463,6 +463,35 @@ export interface DashboardOverviewResponse {
   recent_alerts: Alert[];
 }
 
+export interface DashboardSummaryResponse {
+  range: DashboardRange;
+  generated_at: string;
+  available_tags: string[];
+  stats: DashboardStats;
+  trend: DashboardTrendPoint[];
+  activity_24h: DashboardActivityPoint[];
+  ops_summary: DashboardOpsSummary;
+  monitor_health: DashboardMonitorHealth[];
+}
+
+export interface DashboardProblemMonitorsResponse {
+  range: DashboardRange;
+  generated_at: string;
+  problem_monitors: DashboardProblemMonitor[];
+}
+
+export interface DashboardRecentFailuresResponse {
+  range: DashboardRange;
+  generated_at: string;
+  recent_failures: DashboardFailureEvent[];
+}
+
+export interface DashboardRecentAlertsResponse {
+  range: DashboardRange;
+  generated_at: string;
+  recent_alerts: Alert[];
+}
+
 // Alert Policy types
 export interface AlertPolicy {
   id: string;

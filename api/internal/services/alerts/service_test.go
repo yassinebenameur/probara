@@ -1,9 +1,15 @@
 package alerts
 
 import (
+	"context"
+	"regexp"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
+
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/db"
 )
 
 // TestAlertListParams_Normalization tests the parameter clamping logic
@@ -114,6 +120,92 @@ func normalizeRecentAlertsLimit(limit int) int {
 		limit = 50
 	}
 	return limit
+}
+
+func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
+			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
+			a.last_error, a.created_at, a.updated_at,
+			m.name as monitor_name, ap.name as policy_name
+		FROM alerts a
+		JOIN monitors m ON a.monitor_id = m.id
+		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		WHERE a.tenant_id = $1
+		ORDER BY a.triggered_at DESC
+		LIMIT $2
+	`)).
+		WithArgs(uuid.Nil, 10).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
+			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
+			"last_error", "created_at", "updated_at", "monitor_name", "policy_name",
+		}))
+
+	svc := NewService(&db.Client{DB: sqlDB}, nil)
+	alerts, err := svc.GetRecentAlerts(context.Background(), uuid.Nil, 10)
+	if err != nil {
+		t.Fatalf("GetRecentAlerts() error = %v", err)
+	}
+	if alerts == nil {
+		t.Fatalf("GetRecentAlerts() returned nil slice, want empty slice")
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("len(alerts) = %d, want 0", len(alerts))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
+			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
+			a.last_error, a.created_at, a.updated_at,
+			m.name as monitor_name, ap.name as policy_name
+		FROM alerts a
+		JOIN monitors m ON a.monitor_id = m.id
+		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		WHERE a.tenant_id = $1
+		  AND m.tenant_id = $1
+		  AND m.tags @> $2::text[]
+		ORDER BY a.triggered_at DESC
+		LIMIT $3
+	`)).
+		WithArgs(uuid.Nil, sqlmock.AnyArg(), 10).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
+			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
+			"last_error", "created_at", "updated_at", "monitor_name", "policy_name",
+		}))
+
+	svc := NewService(&db.Client{DB: sqlDB}, nil)
+	alerts, err := svc.GetRecentAlertsForTags(context.Background(), uuid.Nil, []string{"prod"}, 10)
+	if err != nil {
+		t.Fatalf("GetRecentAlertsForTags() error = %v", err)
+	}
+	if alerts == nil {
+		t.Fatalf("GetRecentAlertsForTags() returned nil slice, want empty slice")
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("len(alerts) = %d, want 0", len(alerts))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
 }
 
 // TestAlertsByPolicyLimit_Normalization tests the limit clamping for GetAlertsByPolicy

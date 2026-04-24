@@ -213,6 +213,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Dashboard
 			r.Route("/dashboard", func(r chi.Router) {
 				r.Get("/overview", dashboardHandlers.GetOverview)
+				r.Get("/summary", dashboardHandlers.GetSummary)
+				r.Get("/problem-monitors", dashboardHandlers.GetProblemMonitors)
+				r.Get("/recent-failures", dashboardHandlers.GetRecentFailures)
+				r.Get("/recent-alerts", dashboardHandlers.GetRecentAlerts)
 			})
 
 			// Alerts

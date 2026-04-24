@@ -35,6 +35,7 @@ const OVERVIEW_RANGE_MS: Record<OverviewTimeRange, number> = {
 };
 
 const NON_AGENT_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const NON_AGENT_OVERVIEW_RESULTS_LIMIT = 50;
 const MIN_CLIENT_RESULTS = 500;
 const MAX_CLIENT_RESULTS = 100000;
 const LIMIT_PADDING = 120;
@@ -193,6 +194,7 @@ export default function EditMonitorPage() {
   const [error, setError] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [results, setResults] = useState<MonitorResultsResponse | null>(null);
+  const [historyResults, setHistoryResults] = useState<MonitorResultsResponse | null>(null);
   const [analytics, setAnalytics] = useState<MonitorAnalyticsResponse | null>(null);
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
@@ -211,6 +213,10 @@ export default function EditMonitorPage() {
   useEffect(() => {
     resultsRef.current = results;
   }, [results]);
+
+  useEffect(() => {
+    setHistoryResults(null);
+  }, [id]);
 
   const loadMonitor = useCallback(async () => {
     try {
@@ -236,32 +242,41 @@ export default function EditMonitorPage() {
       const nowMs = Date.now();
       const currentResults = resultsRef.current;
       const latestKnownCreatedAt = currentResults?.results?.[0]?.created_at;
+      let maxResults = NON_AGENT_OVERVIEW_RESULTS_LIMIT;
+      let cutoffMs: number | null = null;
+      let requestParams: { limit?: number; since?: string };
 
-      const selectedWindowMs = isAgentMonitor
-        ? AGENT_RANGE_MS[range]
-        : NON_AGENT_HISTORY_WINDOW_MS;
-      const cutoffMs = nowMs - selectedWindowMs;
-      const cutoffISO = new Date(cutoffMs).toISOString();
-      const maxResults = estimateResultsLimit(
-        selectedWindowMs,
-        monitor?.interval_seconds,
-        isAgentMonitor ? 30 : 60
-      );
-
-      const requestParams =
-        opts?.silent && latestKnownCreatedAt
-          ? { since: latestKnownCreatedAt }
-          : { since: cutoffISO };
+      if (isAgentMonitor) {
+        const selectedWindowMs = AGENT_RANGE_MS[range];
+        cutoffMs = nowMs - selectedWindowMs;
+        const cutoffISO = new Date(cutoffMs).toISOString();
+        maxResults = estimateResultsLimit(
+          selectedWindowMs,
+          monitor?.interval_seconds,
+          30
+        );
+        requestParams =
+          opts?.silent && latestKnownCreatedAt
+            ? { since: latestKnownCreatedAt }
+            : { since: cutoffISO };
+      } else {
+        requestParams =
+          opts?.silent && latestKnownCreatedAt
+            ? { since: latestKnownCreatedAt }
+            : { limit: NON_AGENT_OVERVIEW_RESULTS_LIMIT };
+      }
 
       const data = await getMonitorResults(id, requestParams);
 
       if (opts?.silent && currentResults?.results?.length) {
-        const mergedResults = mergeAndSortResults(data.results, currentResults.results)
-          .filter((result) => {
+        let mergedResults = mergeAndSortResults(data.results, currentResults.results);
+        if (cutoffMs !== null) {
+          mergedResults = mergedResults.filter((result) => {
             const ts = Date.parse(result.created_at);
             return Number.isFinite(ts) && ts >= cutoffMs;
-          })
-          .slice(0, maxResults);
+          });
+        }
+        mergedResults = mergedResults.slice(0, maxResults);
 
         const mergedPayload: MonitorResultsResponse = {
           monitor_id: currentResults.monitor_id || data.monitor_id,
@@ -270,8 +285,12 @@ export default function EditMonitorPage() {
         resultsRef.current = mergedPayload;
         setResults(mergedPayload);
       } else {
-        resultsRef.current = data;
-        setResults(data);
+        const nextPayload: MonitorResultsResponse = {
+          monitor_id: data.monitor_id,
+          results: isAgentMonitor ? data.results : data.results.slice(0, NON_AGENT_OVERVIEW_RESULTS_LIMIT),
+        };
+        resultsRef.current = nextPayload;
+        setResults(nextPayload);
       }
     } catch (err: any) {
       console.error('Failed to load monitor results:', err);
@@ -281,6 +300,25 @@ export default function EditMonitorPage() {
       }
     }
   }, [id, monitor?.type, monitor?.interval_seconds, agentTimeRange]);
+
+  const loadHistoryResults = useCallback(async () => {
+    if (monitor?.type === 'agent') {
+      await loadResults();
+      return;
+    }
+
+    try {
+      setResultsLoading(true);
+      const cutoffISO = new Date(Date.now() - NON_AGENT_HISTORY_WINDOW_MS).toISOString();
+      const data = await getMonitorResults(id, { since: cutoffISO });
+      setHistoryResults(data);
+    } catch (err: any) {
+      console.error('Failed to load monitor history results:', err);
+      setHistoryResults(null);
+    } finally {
+      setResultsLoading(false);
+    }
+  }, [id, loadResults, monitor?.type]);
 
   const loadAnalytics = useCallback(async (range?: OverviewTimeRange) => {
     if (monitor?.type === 'agent') {
@@ -332,7 +370,7 @@ export default function EditMonitorPage() {
   }, [loadAnalytics]);
 
   useEffect(() => {
-    if (activeTab !== 'overview' && activeTab !== 'history') {
+    if (activeTab !== 'overview') {
       return;
     }
 
@@ -370,6 +408,13 @@ export default function EditMonitorPage() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [activeTab, loadResults, monitor?.type]);
+
+  useEffect(() => {
+    if (activeTab !== 'history') {
+      return;
+    }
+    void loadHistoryResults();
+  }, [activeTab, loadHistoryResults]);
 
   const handleSubmit = async (data: UpdateMonitorRequest) => {
     try {
@@ -415,8 +460,14 @@ export default function EditMonitorPage() {
       setClearingHistory(true);
       await deleteMonitorHistory(id);
       setResults((current) => current ? { ...current, results: [] } : current);
+      setHistoryResults((current) => current ? { ...current, results: [] } : current);
       setAnalytics(null);
-      await Promise.all([loadMonitor(), loadResults(), loadAnalytics()]);
+      await Promise.all([
+        loadMonitor(),
+        loadResults(),
+        loadAnalytics(),
+        activeTab === 'history' ? loadHistoryResults() : Promise.resolve(),
+      ]);
       setToast({
         message: monitor.type === 'group'
           ? 'Group history cleared for all member monitors'
@@ -549,7 +600,9 @@ export default function EditMonitorPage() {
   const selectedWindowMs =
     monitor.type === 'agent'
       ? AGENT_RANGE_MS[agentTimeRange]
-      : OVERVIEW_RANGE_MS[overviewRange];
+      : activeTab === 'history'
+        ? NON_AGENT_HISTORY_WINDOW_MS
+        : OVERVIEW_RANGE_MS[overviewRange];
   const boundedRetentionDays =
     tenantRetentionDays && tenantRetentionDays > 0 ? tenantRetentionDays : null;
   const retentionWindowMs =
@@ -649,7 +702,7 @@ export default function EditMonitorPage() {
           )}
           {activeTab === 'history' && (
             <MonitorDetailHistory
-              results={results?.results || []}
+              results={monitor.type === 'agent' ? (results?.results || []) : (historyResults?.results || [])}
               loading={resultsLoading}
             />
           )}

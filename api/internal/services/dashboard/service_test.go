@@ -101,3 +101,38 @@ func TestResolveFailureState(t *testing.T) {
 		t.Fatalf("resolveFailureState(non-nil) = %s, want %s", got, models.DashboardFailureStateResolved)
 	}
 }
+
+func TestNormalizeListParams_Defaults(t *testing.T) {
+	got := normalizeListParams(nil, problemMonitorLimit)
+
+	if got.Range != models.DashboardRange24h {
+		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange24h)
+	}
+	if got.Limit != problemMonitorLimit {
+		t.Fatalf("Limit = %d, want %d", got.Limit, problemMonitorLimit)
+	}
+}
+
+func TestNormalizeListParams_ClampsAndNormalizesTags(t *testing.T) {
+	got := normalizeListParams(&models.DashboardListQuery{
+		Range: models.DashboardRange365d,
+		Limit: 500,
+		Tags:  []string{" prod ", "", "api", "prod"},
+	}, defaultFailuresLimit)
+
+	if got.Range != models.DashboardRange365d {
+		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange365d)
+	}
+	if got.Limit != maxListLimit {
+		t.Fatalf("Limit = %d, want %d", got.Limit, maxListLimit)
+	}
+	wantTags := []string{"api", "prod"}
+	if len(got.Tags) != len(wantTags) {
+		t.Fatalf("Tags length = %d, want %d", len(got.Tags), len(wantTags))
+	}
+	for i := range wantTags {
+		if got.Tags[i] != wantTags[i] {
+			t.Fatalf("Tags[%d] = %q, want %q", i, got.Tags[i], wantTags[i])
+		}
+	}
+}

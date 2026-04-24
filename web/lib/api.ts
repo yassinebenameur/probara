@@ -22,6 +22,10 @@ import type {
   MonitorResultsResponse,
   MonitorAnalyticsResponse,
   DashboardOverviewResponse,
+  DashboardSummaryResponse,
+  DashboardProblemMonitorsResponse,
+  DashboardRecentFailuresResponse,
+  DashboardRecentAlertsResponse,
   RunMonitorNowResponse,
   AddMonitorsToGroupRequest,
   RemoveMonitorsFromGroupRequest,
@@ -598,6 +602,64 @@ export async function getDashboardOverview(params?: {
   const queryString = queryParams.toString();
   const path = `/v1/dashboard/overview${queryString ? `?${queryString}` : ''}`;
   return apiRequest<DashboardOverviewResponse>('GET', path);
+}
+
+export async function getDashboardSummary(params?: {
+  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  tags?: string[];
+}): Promise<DashboardSummaryResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/summary${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardSummaryResponse>('GET', path);
+}
+
+export async function getDashboardProblemMonitors(params?: {
+  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  limit?: number;
+  tags?: string[];
+}): Promise<DashboardProblemMonitorsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/problem-monitors${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardProblemMonitorsResponse>('GET', path);
+}
+
+export async function getDashboardRecentFailures(params?: {
+  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  limit?: number;
+  tags?: string[];
+}): Promise<DashboardRecentFailuresResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/recent-failures${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardRecentFailuresResponse>('GET', path);
+}
+
+export async function getDashboardRecentAlerts(params?: {
+  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  limit?: number;
+  tags?: string[];
+}): Promise<DashboardRecentAlertsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/recent-alerts${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardRecentAlertsResponse>('GET', path);
 }
 
 // Group API functions

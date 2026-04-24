@@ -33,6 +33,13 @@ type DashboardOverviewQuery struct {
 	Tags          []string       `json:"tags"`
 }
 
+// DashboardListQuery represents query params for dashboard list endpoints.
+type DashboardListQuery struct {
+	Range DashboardRange `json:"range"`
+	Limit int            `json:"limit"`
+	Tags  []string       `json:"tags"`
+}
+
 // DashboardOverviewResponse is the aggregated dashboard payload.
 type DashboardOverviewResponse struct {
 	Range           DashboardRange            `json:"range"`
@@ -46,6 +53,39 @@ type DashboardOverviewResponse struct {
 	ProblemMonitors []DashboardProblemMonitor `json:"problem_monitors"`
 	RecentFailures  []DashboardFailureEvent   `json:"recent_failures"`
 	RecentAlerts    []AlertWithDetails        `json:"recent_alerts"`
+}
+
+// DashboardSummaryResponse is the lightweight dashboard payload used for first paint.
+type DashboardSummaryResponse struct {
+	Range         DashboardRange           `json:"range"`
+	GeneratedAt   time.Time                `json:"generated_at"`
+	AvailableTags []string                 `json:"available_tags"`
+	Stats         DashboardStats           `json:"stats"`
+	Trend         []DashboardTrendPoint    `json:"trend"`
+	Activity24h   []DashboardActivityHour  `json:"activity_24h"`
+	OpsSummary    DashboardOpsSummary      `json:"ops_summary"`
+	MonitorHealth []DashboardMonitorHealth `json:"monitor_health"`
+}
+
+// DashboardProblemMonitorsResponse contains the heavy problem monitors section payload.
+type DashboardProblemMonitorsResponse struct {
+	Range           DashboardRange            `json:"range"`
+	GeneratedAt     time.Time                 `json:"generated_at"`
+	ProblemMonitors []DashboardProblemMonitor `json:"problem_monitors"`
+}
+
+// DashboardRecentFailuresResponse contains the recent failures section payload.
+type DashboardRecentFailuresResponse struct {
+	Range          DashboardRange          `json:"range"`
+	GeneratedAt    time.Time               `json:"generated_at"`
+	RecentFailures []DashboardFailureEvent `json:"recent_failures"`
+}
+
+// DashboardRecentAlertsResponse contains the recent alerts section payload.
+type DashboardRecentAlertsResponse struct {
+	Range        DashboardRange     `json:"range"`
+	GeneratedAt  time.Time          `json:"generated_at"`
+	RecentAlerts []AlertWithDetails `json:"recent_alerts"`
 }
 
 // DashboardStats contains KPI counters and summary values.

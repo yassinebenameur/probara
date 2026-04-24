@@ -30,48 +30,12 @@ func NewHandlers(service dashboardservice.DashboardService, log *logger.Logger) 
 
 // GetOverview handles GET /api/v1/dashboard/overview.
 func (h *Handlers) GetOverview(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := middleware.GetTenantID(r.Context())
-	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	if !ok {
 		return
 	}
 
-	tenantUUID, err := uuid.Parse(tenantID)
-	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
-		return
-	}
-
-	params := &models.DashboardOverviewQuery{
-		Range:         models.DashboardRange24h,
-		FailuresLimit: 10,
-		AlertsLimit:   10,
-		Tags:          r.URL.Query()["tag"],
-	}
-
-	switch models.DashboardRange(r.URL.Query().Get("range")) {
-	case models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange30d, models.DashboardRange90d, models.DashboardRange365d:
-		params.Range = models.DashboardRange(r.URL.Query().Get("range"))
-	}
-
-	if failuresLimitStr := r.URL.Query().Get("failures_limit"); failuresLimitStr != "" {
-		if v, err := strconv.Atoi(failuresLimitStr); err == nil && v > 0 {
-			params.FailuresLimit = v
-		}
-	}
-	if params.FailuresLimit > 50 {
-		params.FailuresLimit = 50
-	}
-
-	if alertsLimitStr := r.URL.Query().Get("alerts_limit"); alertsLimitStr != "" {
-		if v, err := strconv.Atoi(alertsLimitStr); err == nil && v > 0 {
-			params.AlertsLimit = v
-		}
-	}
-	if params.AlertsLimit > 50 {
-		params.AlertsLimit = 50
-	}
-
+	params := parseOverviewParams(r)
 	overview, err := h.service.GetOverview(r.Context(), tenantUUID, params)
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
@@ -84,4 +48,148 @@ func (h *Handlers) GetOverview(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(overview)
+}
+
+// GetSummary handles GET /api/v1/dashboard/summary.
+func (h *Handlers) GetSummary(w http.ResponseWriter, r *http.Request) {
+	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	summary, err := h.service.GetSummary(r.Context(), tenantUUID, parseSummaryParams(r))
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to get dashboard summary")
+		errors.WriteInternalError(w, "failed to get dashboard summary")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summary)
+}
+
+// GetProblemMonitors handles GET /api/v1/dashboard/problem-monitors.
+func (h *Handlers) GetProblemMonitors(w http.ResponseWriter, r *http.Request) {
+	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	response, err := h.service.GetProblemMonitors(r.Context(), tenantUUID, parseListParams(r, 5))
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to get dashboard problem monitors")
+		errors.WriteInternalError(w, "failed to get dashboard problem monitors")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetRecentFailures handles GET /api/v1/dashboard/recent-failures.
+func (h *Handlers) GetRecentFailures(w http.ResponseWriter, r *http.Request) {
+	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	response, err := h.service.GetRecentFailures(r.Context(), tenantUUID, parseListParams(r, 10))
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to get dashboard recent failures")
+		errors.WriteInternalError(w, "failed to get dashboard recent failures")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetRecentAlerts handles GET /api/v1/dashboard/recent-alerts.
+func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
+	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	response, err := h.service.GetRecentAlerts(r.Context(), tenantUUID, parseListParams(r, 10))
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to get dashboard recent alerts")
+		errors.WriteInternalError(w, "failed to get dashboard recent alerts")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func tenantFromRequest(w http.ResponseWriter, r *http.Request) (string, uuid.UUID, bool) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return "", uuid.UUID{}, false
+	}
+
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return "", uuid.UUID{}, false
+	}
+
+	return tenantID, tenantUUID, true
+}
+
+func parseSummaryParams(r *http.Request) *models.DashboardOverviewQuery {
+	return &models.DashboardOverviewQuery{
+		Range: parseRange(r),
+		Tags:  r.URL.Query()["tag"],
+	}
+}
+
+func parseOverviewParams(r *http.Request) *models.DashboardOverviewQuery {
+	params := parseSummaryParams(r)
+	params.FailuresLimit = parsePositiveLimit(r.URL.Query().Get("failures_limit"), 10)
+	params.AlertsLimit = parsePositiveLimit(r.URL.Query().Get("alerts_limit"), 10)
+	return params
+}
+
+func parseListParams(r *http.Request, defaultLimit int) *models.DashboardListQuery {
+	return &models.DashboardListQuery{
+		Range: parseRange(r),
+		Limit: parsePositiveLimit(r.URL.Query().Get("limit"), defaultLimit),
+		Tags:  r.URL.Query()["tag"],
+	}
+}
+
+func parseRange(r *http.Request) models.DashboardRange {
+	switch models.DashboardRange(r.URL.Query().Get("range")) {
+	case models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange30d, models.DashboardRange90d, models.DashboardRange365d:
+		return models.DashboardRange(r.URL.Query().Get("range"))
+	default:
+		return models.DashboardRange24h
+	}
+}
+
+func parsePositiveLimit(raw string, defaultValue int) int {
+	limit := defaultValue
+	if raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if limit > 50 {
+		return 50
+	}
+	return limit
 }

@@ -184,7 +184,7 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 	}
 	defer rows.Close()
 
-	var alerts []models.AlertWithDetails
+	alerts := []models.AlertWithDetails{}
 	for rows.Next() {
 		var alert models.AlertWithDetails
 		err := rows.Scan(
@@ -235,7 +235,7 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	}
 	defer rows.Close()
 
-	var alerts []models.AlertWithDetails
+	alerts := []models.AlertWithDetails{}
 	for rows.Next() {
 		var alert models.AlertWithDetails
 		err := rows.Scan(

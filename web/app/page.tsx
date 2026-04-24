@@ -2,11 +2,17 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { getDashboardOverview, getTenantSettings } from '@/lib/api';
+import {
+  getDashboardProblemMonitors,
+  getDashboardRecentAlerts,
+  getDashboardRecentFailures,
+  getDashboardSummary,
+  getTenantSettings,
+} from '@/lib/api';
 import {
   Alert,
   DashboardFailureEvent,
-  DashboardOverviewResponse,
+  DashboardSummaryResponse,
   DashboardProblemMonitor,
 } from '@/lib/types';
 import Link from 'next/link';
@@ -340,6 +346,14 @@ function StatCard({
   );
 }
 
+function SectionLoadingState({ message }: { message: string }) {
+  return (
+    <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
+      <p className="text-sm text-slate-500">{message}</p>
+    </div>
+  );
+}
+
 // ─── Fleet Status Bar ──────────────────────────────────────────────────────────
 
 function FleetStatusBar({
@@ -623,35 +637,94 @@ function SectionCard({
 // ─── Dashboard Page ────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [dashboard, setDashboard] = useState<DashboardOverviewResponse | null>(null);
+  const [dashboard, setDashboard] = useState<DashboardSummaryResponse | null>(null);
+  const [problemMonitorsData, setProblemMonitorsData] = useState<DashboardProblemMonitor[] | null>(null);
+  const [recentFailuresData, setRecentFailuresData] = useState<DashboardFailureEvent[] | null>(null);
+  const [recentAlertsData, setRecentAlertsData] = useState<Alert[] | null>(null);
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | '90d' | '365d'>('24h');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const requestSequenceRef = useRef(0);
+
+  const loadSecondarySections = useCallback(async (
+    requestID: number,
+    range: '24h' | '7d' | '30d' | '90d' | '365d',
+    tags: string[]
+  ) => {
+    try {
+      const [problemResponse, failuresResponse, alertsResponse] = await Promise.all([
+        getDashboardProblemMonitors({ range, tags }),
+        getDashboardRecentFailures({ range, limit: DASHBOARD_LIST_LIMIT[range], tags }),
+        getDashboardRecentAlerts({ range, limit: DASHBOARD_LIST_LIMIT[range], tags }),
+      ]);
+
+      if (requestSequenceRef.current !== requestID) {
+        return;
+      }
+
+      setProblemMonitorsData(problemResponse.problem_monitors);
+      setRecentFailuresData(failuresResponse.recent_failures);
+      setRecentAlertsData(alertsResponse.recent_alerts);
+    } catch (err) {
+      console.error('Failed to load dashboard secondary sections:', err);
+      if (requestSequenceRef.current !== requestID) {
+        return;
+      }
+      setProblemMonitorsData([]);
+      setRecentFailuresData([]);
+      setRecentAlertsData([]);
+    }
+  }, []);
 
   const loadData = useCallback(async () => {
+    const requestID = requestSequenceRef.current + 1;
+    requestSequenceRef.current = requestID;
+
     try {
       setLoading(true);
       setError(null);
+      setProblemMonitorsData(null);
+      setRecentFailuresData(null);
+      setRecentAlertsData(null);
+
       const [response, settings] = await Promise.all([
-        getDashboardOverview({
+        getDashboardSummary({
           range: timeRange,
-          failures_limit: DASHBOARD_LIST_LIMIT[timeRange],
-          alerts_limit: DASHBOARD_LIST_LIMIT[timeRange],
           tags: selectedTags,
         }),
         getTenantSettings().catch(() => null),
       ]);
+
+      if (requestSequenceRef.current !== requestID) {
+        return;
+      }
+
       setDashboard(response);
       if (settings) setTenantRetentionDays(settings.data_retention_days);
+
+      if (typeof window !== 'undefined') {
+        window.requestAnimationFrame(() => {
+          void loadSecondarySections(requestID, timeRange, selectedTags);
+        });
+      } else {
+        void loadSecondarySections(requestID, timeRange, selectedTags);
+      }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
-      setError('Failed to load dashboard data');
+      if (requestSequenceRef.current === requestID) {
+        setError('Failed to load dashboard data');
+        setProblemMonitorsData([]);
+        setRecentFailuresData([]);
+        setRecentAlertsData([]);
+      }
     } finally {
-      setLoading(false);
+      if (requestSequenceRef.current === requestID) {
+        setLoading(false);
+      }
     }
-  }, [timeRange, selectedTags]);
+  }, [loadSecondarySections, selectedTags, timeRange]);
 
   useEffect(() => {
     loadData();
@@ -696,9 +769,9 @@ export default function DashboardPage() {
   const responseTrend = useMemo(() => computeResponseTrend(trendData), [trendData]);
 
   const opsSummary = dashboard?.ops_summary;
-  const problemMonitors = dashboard?.problem_monitors || [];
-  const recentFailures = dashboard?.recent_failures || [];
-  const recentAlerts = dashboard?.recent_alerts || [];
+  const problemMonitors = problemMonitorsData || [];
+  const recentFailures = recentFailuresData || [];
+  const recentAlerts = recentAlertsData || [];
 
   const stats = dashboard?.stats;
   const totalMonitors = stats?.total_monitors || 0;
@@ -953,7 +1026,9 @@ export default function DashboardPage() {
             </Link>
           }
         >
-          {problemMonitors.length > 0 ? (
+          {problemMonitorsData === null ? (
+            <SectionLoadingState message="Loading problem monitors..." />
+          ) : problemMonitors.length > 0 ? (
             <div className="dashboard-scroll max-h-80 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
               {problemMonitors.map((monitor) => (
                 <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
@@ -978,7 +1053,9 @@ export default function DashboardPage() {
               ) : undefined
             }
           >
-            {recentFailures.length > 0 ? (
+            {recentFailuresData === null ? (
+              <SectionLoadingState message="Loading recent failures..." />
+            ) : recentFailures.length > 0 ? (
               <div className="dashboard-scroll max-h-64 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
                 {recentFailures.map((event) => (
                   <FailureItem key={event.check_result_id} event={event} />
@@ -1001,7 +1078,9 @@ export default function DashboardPage() {
               </Link>
             }
           >
-            {recentAlerts.length > 0 ? (
+            {recentAlertsData === null ? (
+              <SectionLoadingState message="Loading recent alerts..." />
+            ) : recentAlerts.length > 0 ? (
               <div className="dashboard-scroll max-h-52 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
                 {recentAlerts.map((alert) => (
                   <AlertItem key={alert.id} alert={alert} />

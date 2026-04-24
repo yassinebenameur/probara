@@ -603,6 +603,9 @@ func (s *Service) GetStatusPageSections(ctx context.Context, statusPageID, tenan
 		}
 		monitors, err := s.getStatusPageSectionMonitors(ctx, row.ID, tenantID)
 		if err != nil {
+			if isUndefinedTableError(err) {
+				return s.loadLegacyStatusPageSections(ctx, statusPageID, tenantID)
+			}
 			return nil, err
 		}
 		sections = append(sections, StatusPageSectionData{
