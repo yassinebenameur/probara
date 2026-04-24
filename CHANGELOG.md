@@ -1,3 +1,10 @@
+# [1.0.0-alpha.38](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.37...v1.0.0-alpha.38) (2026-04-24)
+
+
+### Features
+
+* **dashboard:** split heavy overview loading ([99e68cc](https://github.com/yassinebenameur/probara/commit/99e68cc3a55ef70e78bfef5cb65cdc363901a34c))
+
 # [1.0.0-alpha.37](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.36...v1.0.0-alpha.37) (2026-04-23)
 
 
