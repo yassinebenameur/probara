@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all start-all-local stop-all-local restart-all-local dev-start dev-stop
+.PHONY: help up down restart logs build clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
 # Default target
 help:
@@ -19,6 +19,9 @@ help:
 	@echo "  make start-all-local - Start infra in Docker and app services locally"
 	@echo "  make stop-all-local - Stop local app services, UI, and infra"
 	@echo "  make restart-all-local - Restart local app services, UI, and infra"
+	@echo "  make start-all   - Start infra, Docker app services, and UI"
+	@echo "  make stop-all    - Stop Docker app services and UI"
+	@echo "  make restart-all - Restart Docker app services and UI"
 	@echo ""
 	@echo "Testing and CI:"
 	@echo "  make test        - Run all tests with race detection and coverage"
@@ -210,6 +213,9 @@ stop-all:
 	@echo "Stopping backend services..."
 	docker compose down
 	@echo "All services stopped."
+
+# Restart everything (backend + UI)
+restart-all: stop-all start-all
 
 # Stop local services, UI, and infrastructure
 stop-all-local:
