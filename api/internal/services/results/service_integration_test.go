@@ -79,8 +79,10 @@ func TestService_GetMonitorAnalytics_GroupRollupParityMatchesLeafMonitorAverage(
 	testutil.AddMonitorToGroup(ctx, t, dbClient, monitorA, groupID)
 	testutil.AddMonitorToGroup(ctx, t, dbClient, monitorB, groupID)
 
-	day1 := time.Date(2026, time.March, 5, 0, 0, 0, 0, time.UTC)
-	day2 := time.Date(2026, time.March, 6, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	day1 := today.AddDate(0, 0, -2)
+	day2 := today.AddDate(0, 0, -1)
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, day1, 10, 8, 1000, 10, "failure", day1.Add(22*time.Hour))
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, day2, 10, 10, 2000, 10, "success", day2.Add(11*time.Hour))
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorB, day1, 10, 5, 3000, 10, "failure", day1.Add(21*time.Hour))
