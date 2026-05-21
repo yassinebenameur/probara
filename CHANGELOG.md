@@ -1,3 +1,11 @@
+# [1.0.0-alpha.40](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.39...v1.0.0-alpha.40) (2026-05-21)
+
+
+### Bug Fixes
+
+* **import:** skip already imported monitors ([34a5128](https://github.com/yassinebenameur/probara/commit/34a51280a4a42c9d34415bd452a9d096de5b2839))
+* **monitors:** sort grouped monitor lists alphabetically ([afb3276](https://github.com/yassinebenameur/probara/commit/afb3276777e80faa4b2ca89a004c599174513a63))
+
 # [1.0.0-alpha.39](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.38...v1.0.0-alpha.39) (2026-05-21)
 
 
