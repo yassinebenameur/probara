@@ -3,7 +3,6 @@ import test from 'node:test';
 import {
   buildActivityTimeline,
   buildOperationalSummary,
-  buildServiceGroups,
   sortNeedsAttention,
 } from './dashboard-view-model';
 
@@ -120,27 +119,5 @@ test('buildActivityTimeline merges failures and alerts chronologically with clea
   assert.deepEqual(
     items.map((item) => item.label),
     ['Alert triggered', 'Failure resolved'],
-  );
-});
-
-test('buildServiceGroups falls back to monitor type groups without backend changes', () => {
-  const groups = buildServiceGroups({
-    stats: {
-      total_monitors: 6,
-      active_monitors: 6,
-      http_monitors: 4,
-      agent_monitors: 2,
-      overall_uptime: 99.7,
-      avg_response_ms: 241,
-    },
-    problemMonitorsCount: 1,
-  });
-
-  assert.deepEqual(
-    groups.map((group) => [group.name, group.monitorCount, group.attentionCount]),
-    [
-      ['HTTP checks', 4, 1],
-      ['Agent checks', 2, 0],
-    ],
   );
 });

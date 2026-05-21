@@ -23,15 +23,6 @@ export type OperationalSummary = {
   }>;
 };
 
-export type ServiceGroup = {
-  name: string;
-  description: string;
-  monitorCount: number;
-  uptime: number;
-  attentionCount: number;
-  status: 'healthy' | 'attention' | 'idle';
-};
-
 export type ActivityTimelineItem = {
   id: string;
   label: string;
@@ -145,68 +136,6 @@ export function sortNeedsAttention(monitors: DashboardProblemMonitor[]): Dashboa
     const bLatest = b.latest_failure_at ? new Date(b.latest_failure_at).getTime() : 0;
     return bLatest - aLatest;
   });
-}
-
-type BuildServiceGroupsInput = {
-  stats?: DashboardStats | null;
-  problemMonitorsCount: number;
-};
-
-export function buildServiceGroups(input: BuildServiceGroupsInput): ServiceGroup[] {
-  const stats = input.stats;
-  if (!stats || stats.total_monitors === 0) {
-    return [];
-  }
-
-  const groups: ServiceGroup[] = [];
-  const totalTyped = (stats.http_monitors || 0) + (stats.agent_monitors || 0);
-  const otherMonitors = Math.max(0, stats.total_monitors - totalTyped);
-
-  if (stats.http_monitors > 0) {
-    groups.push({
-      name: 'HTTP checks',
-      description: `${stats.http_monitors} monitor${stats.http_monitors === 1 ? '' : 's'}`,
-      monitorCount: stats.http_monitors,
-      uptime: stats.overall_uptime,
-      attentionCount: input.problemMonitorsCount,
-      status: input.problemMonitorsCount > 0 ? 'attention' : 'healthy',
-    });
-  }
-
-  if (stats.agent_monitors > 0) {
-    groups.push({
-      name: 'Agent checks',
-      description: `${stats.agent_monitors} monitor${stats.agent_monitors === 1 ? '' : 's'}`,
-      monitorCount: stats.agent_monitors,
-      uptime: stats.overall_uptime,
-      attentionCount: stats.http_monitors > 0 ? 0 : input.problemMonitorsCount,
-      status: stats.http_monitors > 0 || input.problemMonitorsCount === 0 ? 'healthy' : 'attention',
-    });
-  }
-
-  if (otherMonitors > 0) {
-    groups.push({
-      name: 'Other checks',
-      description: `${otherMonitors} monitor${otherMonitors === 1 ? '' : 's'}`,
-      monitorCount: otherMonitors,
-      uptime: stats.overall_uptime,
-      attentionCount: groups.length === 0 ? input.problemMonitorsCount : 0,
-      status: groups.length === 0 && input.problemMonitorsCount > 0 ? 'attention' : 'healthy',
-    });
-  }
-
-  if (groups.length === 0) {
-    groups.push({
-      name: 'All monitors',
-      description: `${stats.total_monitors} monitor${stats.total_monitors === 1 ? '' : 's'}`,
-      monitorCount: stats.total_monitors,
-      uptime: stats.overall_uptime,
-      attentionCount: input.problemMonitorsCount,
-      status: input.problemMonitorsCount > 0 ? 'attention' : 'healthy',
-    });
-  }
-
-  return groups;
 }
 
 type BuildActivityTimelineInput = {
