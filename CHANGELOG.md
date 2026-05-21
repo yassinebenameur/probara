@@ -1,3 +1,28 @@
+# [1.0.0-alpha.39](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.38...v1.0.0-alpha.39) (2026-05-21)
+
+
+### Bug Fixes
+
+* **status-page:** default public range to 24h ([340c60a](https://github.com/yassinebenameur/probara/commit/340c60ac5be38417b68f1aec06e054f696add4ab))
+* **web:** repair auth proxy and settings tag menu ([8ee5173](https://github.com/yassinebenameur/probara/commit/8ee517395b993c5000d128e78661bbd3556dcf69))
+
+
+### Features
+
+* **dashboard:** add DashboardGroup model and extend summary response ([6acc155](https://github.com/yassinebenameur/probara/commit/6acc1557e517c86405731498d57844dbf0ef29a3))
+* **dashboard:** aggregate tag-based groups in summary response ([fbd3e55](https://github.com/yassinebenameur/probara/commit/fbd3e55f57f1985b031769d624dab53632584b47))
+* **dashboard:** expandable group rows with lazy sparkline ([38fa079](https://github.com/yassinebenameur/probara/commit/38fa07906854e35f371dbefb84d36a44ba567772))
+* **dashboard:** GET /dashboard/group-sparkline route ([36857e3](https://github.com/yassinebenameur/probara/commit/36857e3a3696799a2653a047432a9e4e8860c35a))
+* **dashboard:** per-group sparkline service method ([76b0839](https://github.com/yassinebenameur/probara/commit/76b08392e9d981a2f77c46356dd8d6b615fa54f7))
+* **dashboard:** real service-groups panel with empty-state CTA ([39df544](https://github.com/yassinebenameur/probara/commit/39df544fbeb86fd4c3ba39b95a884def1e29768c))
+* **db:** add dashboard_group_tags column to tenants ([50e8445](https://github.com/yassinebenameur/probara/commit/50e8445b1368470c5fedbdfbc12493a95a6415ab))
+* **models:** add dashboard_group_tags to tenant settings ([025a222](https://github.com/yassinebenameur/probara/commit/025a2222f1f1924caa0994ed1c33154a320ac624))
+* **settings:** add dashboard groups tag picker ([11d6619](https://github.com/yassinebenameur/probara/commit/11d66192918504e858536b5b7f4b420b09a1938d))
+* **tenants:** accept dashboard_group_tags in PATCH settings ([8fc5ea8](https://github.com/yassinebenameur/probara/commit/8fc5ea83cc226ae99bb8af0b5e3ca425e0474be7))
+* **tenants:** persist dashboard_group_tags ([8bc9362](https://github.com/yassinebenameur/probara/commit/8bc936260c084d7799e447fd9560da16565f2c15))
+* **validation:** validate dashboard_group_tags shape ([d11c5b4](https://github.com/yassinebenameur/probara/commit/d11c5b4145fa9bbcaed47591399660ebb76d1f35))
+* **web:** dashboard group types + sparkline api client ([3b4d7a8](https://github.com/yassinebenameur/probara/commit/3b4d7a87ab48a22208a4648ed4bd90076a4df296))
+
 # [1.0.0-alpha.38](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.37...v1.0.0-alpha.38) (2026-04-24)
 
 
