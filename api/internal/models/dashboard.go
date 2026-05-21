@@ -60,11 +60,13 @@ type DashboardSummaryResponse struct {
 	Range         DashboardRange           `json:"range"`
 	GeneratedAt   time.Time                `json:"generated_at"`
 	AvailableTags []string                 `json:"available_tags"`
+	GroupTags     []string                 `json:"group_tags"`
 	Stats         DashboardStats           `json:"stats"`
 	Trend         []DashboardTrendPoint    `json:"trend"`
 	Activity24h   []DashboardActivityHour  `json:"activity_24h"`
 	OpsSummary    DashboardOpsSummary      `json:"ops_summary"`
 	MonitorHealth []DashboardMonitorHealth `json:"monitor_health"`
+	Groups        []DashboardGroup         `json:"groups"`
 }
 
 // DashboardProblemMonitorsResponse contains the heavy problem monitors section payload.
@@ -156,4 +158,37 @@ type DashboardFailureEvent struct {
 	OccurredAt    time.Time             `json:"occurred_at"`
 	State         DashboardFailureState `json:"state"`
 	ResolvedAt    *time.Time            `json:"resolved_at"`
+}
+
+// DashboardGroupMember is a preview row inside a group: top members sorted worst-uptime-first.
+type DashboardGroupMember struct {
+	MonitorID     uuid.UUID `json:"monitor_id"`
+	MonitorName   string    `json:"monitor_name"`
+	Uptime        float64   `json:"uptime"`
+	CurrentStatus *string   `json:"current_status"`
+}
+
+// DashboardGroup is a single tag-derived service group.
+// Tag is *string so the sentinel for the ungrouped row can be nil (rendered as `"tag": null` in JSON).
+type DashboardGroup struct {
+	Tag            *string                `json:"tag"`
+	MonitorCount   int                    `json:"monitor_count"`
+	Uptime         float64                `json:"uptime"`
+	AttentionCount int                    `json:"attention_count"`
+	WorstMember    *DashboardGroupMember  `json:"worst_member"`
+	Members        []DashboardGroupMember `json:"members"`
+}
+
+// DashboardGroupSparklineQuery represents query params for the per-group sparkline endpoint.
+type DashboardGroupSparklineQuery struct {
+	Tag   *string        // nil = ungrouped sentinel
+	Range DashboardRange
+	Tags  []string       // top-level dashboard tag filter
+}
+
+// DashboardGroupSparklineResponse is the lazy per-group uptime sparkline.
+type DashboardGroupSparklineResponse struct {
+	Tag     *string        `json:"tag"`
+	Range   DashboardRange `json:"range"`
+	Buckets []float64      `json:"buckets"`
 }
