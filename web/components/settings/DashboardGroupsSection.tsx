@@ -47,6 +47,7 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
     <Panel
       title="Dashboard groups"
       subtitle="Pick the tags that should appear as service groups on the dashboard. Other tags stay available for filtering and search."
+      allowOverflow
     >
       <div className="flex flex-wrap items-center gap-2">
         {selected.length === 0 && (
