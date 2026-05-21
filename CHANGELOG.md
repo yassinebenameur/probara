@@ -1,3 +1,10 @@
+# [1.0.0-alpha.41](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.40...v1.0.0-alpha.41) (2026-05-21)
+
+
+### Bug Fixes
+
+* **dashboard:** handle null group attention state ([16b2807](https://github.com/yassinebenameur/probara/commit/16b280765e37e2e4623520581c0b12283dca1acc))
+
 # [1.0.0-alpha.40](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.39...v1.0.0-alpha.40) (2026-05-21)
 
 
