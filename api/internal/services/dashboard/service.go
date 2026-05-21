@@ -25,19 +25,27 @@ const (
 	problemCandidateMult = 4
 )
 
+// tenantSettingsReader is the minimal slice of the tenant service used by the dashboard
+// service for resolving the curated dashboard_group_tags list.
+type tenantSettingsReader interface {
+	GetTenantSettings(ctx context.Context, tenantID uuid.UUID) (*models.TenantSettings, error)
+}
+
 // Service handles dashboard aggregation logic.
 type Service struct {
 	db           db.DB
 	alertService alertservice.AlertService
 	analytics    sharedanalytics.Reader
+	tenants      tenantSettingsReader
 }
 
 // NewService creates a new dashboard service.
-func NewService(database db.DB, alerts alertservice.AlertService, analytics sharedanalytics.Reader) *Service {
+func NewService(database db.DB, alerts alertservice.AlertService, analytics sharedanalytics.Reader, tenants tenantSettingsReader) *Service {
 	return &Service{
 		db:           database,
 		alertService: alerts,
 		analytics:    analytics,
+		tenants:      tenants,
 	}
 }
 
@@ -137,15 +145,31 @@ func (s *Service) GetSummary(ctx context.Context, tenantID uuid.UUID, params *mo
 		return nil, err
 	}
 
+	settings, err := s.tenants.GetTenantSettings(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load tenant settings for groups: %w", err)
+	}
+	groupTags := settings.DashboardGroupTags
+	if groupTags == nil {
+		groupTags = []string{}
+	}
+
+	groups, err := s.loadGroups(ctx, tenantID, rangeStart, rangeEndExclusive, normalized.Tags, groupTags)
+	if err != nil {
+		return nil, err
+	}
+
 	return &models.DashboardSummaryResponse{
 		Range:         normalized.Range,
 		GeneratedAt:   time.Now().UTC(),
 		AvailableTags: availableTags,
+		GroupTags:     groupTags,
 		Stats:         stats,
 		Trend:         trend,
 		Activity24h:   activity,
 		OpsSummary:    opsSummary,
 		MonitorHealth: monitorHealth,
+		Groups:        groups,
 	}, nil
 }
 

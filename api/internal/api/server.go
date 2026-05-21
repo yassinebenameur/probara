@@ -165,8 +165,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			analyticsRepo := sharedanalytics.NewRepository(dbClient)
 			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
 
+			// Tenant service (constructed early so dashboardSvc can read group tags)
+			tenantSvc := tenantservice.NewService(dbClient)
+
 			// Dashboard service and handlers
-			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc, analyticsRepo)
+			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc, analyticsRepo, tenantSvc)
 			dashboardHandlers := dashboardhandlers.NewHandlers(dashboardSvc, log)
 
 			// Monitor services
@@ -293,7 +296,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			})
 
 			// Tenants (admin only)
-			tenantSvc := tenantservice.NewService(dbClient)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
 			r.Route("/tenant-settings", func(r chi.Router) {
 				r.Get("/", tenantHandlers.GetTenantSettings)

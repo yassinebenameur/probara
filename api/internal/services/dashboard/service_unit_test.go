@@ -15,6 +15,12 @@ import (
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 )
 
+type fakeTenantSettingsReader struct{}
+
+func (f *fakeTenantSettingsReader) GetTenantSettings(_ context.Context, _ uuid.UUID) (*models.TenantSettings, error) {
+	return &models.TenantSettings{DashboardGroupTags: []string{}}, nil
+}
+
 type fakeAnalyticsReader struct {
 	calls int
 }
@@ -69,7 +75,7 @@ func TestService_GetStats_LongRangeUsesInjectedAnalyticsReader(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(firstMonitorID))
 
 	analytics := &fakeAnalyticsReader{}
-	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, analytics)
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, analytics, &fakeTenantSettingsReader{})
 
 	stats, err := svc.getStats(context.Background(), tenantID, models.DashboardRange30d, now.AddDate(0, 0, -29), now, nil)
 	if err != nil {
@@ -167,7 +173,7 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 			"monitor_id", "failure_count", "error_count", "latest_failure_at",
 		}).AddRow(monitorID, 2, 1, rangeEnd.Add(-time.Hour)))
 
-	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{})
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
 
 	monitors, err := svc.getProblemMonitors(context.Background(), tenantID, models.DashboardRange30d, rangeStart, rangeEnd, problemMonitorLimit, nil)
 	if err != nil {

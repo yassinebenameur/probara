@@ -27,7 +27,7 @@ func TestService_GetOverview_LongRangeParityMatchesMonitorAnalytics(t *testing.T
 	defer cleanup()
 
 	analyticsRepo := sharedanalytics.NewRepository(dbClient)
-	dashboardSvc := NewService(dbClient, nil, analyticsRepo)
+	dashboardSvc := NewService(dbClient, nil, analyticsRepo, &fakeTenantSettingsReader{})
 	groupSvc := groupservice.NewService(dbClient)
 	resultsSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-rollup")
@@ -98,7 +98,7 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient))
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-action")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
@@ -194,7 +194,7 @@ func TestService_GetOverview_ActionSummaryEmptyTenant(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient))
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-empty")
 
 	overview, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
@@ -225,7 +225,7 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient, nil), sharedanalytics.NewRepository(dbClient))
+	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient, nil), sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-tags")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
