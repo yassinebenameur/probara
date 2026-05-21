@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
-  getMonitors,
   deleteMonitor,
   getMonitorResults,
   getGroupMembers,
@@ -15,6 +14,7 @@ import {
   toggleMonitorEnabled,
   exportMonitors,
 } from '@/lib/api';
+import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 import { getApiKey } from '@/lib/auth';
 import {
   calculateUptime,
@@ -1050,14 +1050,14 @@ export default function MonitorsPage() {
       // #region agent log
       const getMonitorsStart = Date.now();
       // #endregion
-      const response = await getMonitors({ page_size: 100 });
+      const monitorsList = await getAllMonitors();
       // #region agent log
       debugIngest({
         location: 'page.tsx:loadMonitors:getMonitors',
         message: 'getMonitors API call completed',
         data: {
           durationMs: Date.now() - getMonitorsStart,
-          monitorCount: response?.items?.length || 0,
+          monitorCount: monitorsList.length,
         },
         timestamp: Date.now(),
         sessionId: 'debug-session',
@@ -1065,7 +1065,6 @@ export default function MonitorsPage() {
         hypothesisId: 'A',
       });
       // #endregion
-      const monitorsList = response?.items || [];
       setMonitors(monitorsList);
 
       if (monitorsList.length > 0 && !selectedMonitorId) {
@@ -1120,7 +1119,7 @@ export default function MonitorsPage() {
                   apiCallCount++;
                   const membersStart = Date.now();
                   // #endregion
-                  const members = await getGroupMembers(monitor.id);
+                  const members = sortMonitorsByName(await getGroupMembers(monitor.id));
                   // #region agent log
                   debugIngest({
                     location: 'page.tsx:loadMonitors:getGroupMembers',

@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { Monitor, CheckResult } from '@/lib/types';
-import { getMonitors, getMonitorResults, getGroupMembers } from '@/lib/api';
+import { getMonitorResults, getGroupMembers } from '@/lib/api';
 import StatusPill from '@/components/ui/StatusPill';
 import { calculateUptime, countOperationalResults, getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
+import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 
 export default function GroupedChecksView() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -21,8 +22,7 @@ export default function GroupedChecksView() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const response = await getMonitors({ page_size: 100 });
-      const allMonitors = response?.items || [];
+      const allMonitors = await getAllMonitors();
       
       // Separate groups from regular monitors
       const groupMonitors = allMonitors.filter(m => m.type === 'group');
@@ -63,7 +63,7 @@ export default function GroupedChecksView() {
       // Load group members if not already loaded
       if (!groupMembers[groupId]) {
         try {
-          const members = await getGroupMembers(groupId);
+          const members = sortMonitorsByName(await getGroupMembers(groupId));
           setGroupMembers({ ...groupMembers, [groupId]: members });
         } catch (error) {
           console.error(`Failed to load group members for ${groupId}:`, error);
