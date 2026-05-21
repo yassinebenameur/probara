@@ -23,10 +23,12 @@ export interface TenantListResponse {
 
 export interface TenantSettings {
   data_retention_days: number;
+  dashboard_group_tags: string[];
 }
 
 export interface UpdateTenantSettingsRequest {
   data_retention_days?: number;
+  dashboard_group_tags?: string[];
 }
 
 // Admin user types
@@ -467,11 +469,35 @@ export interface DashboardSummaryResponse {
   range: DashboardRange;
   generated_at: string;
   available_tags: string[];
+  group_tags: string[];
   stats: DashboardStats;
   trend: DashboardTrendPoint[];
   activity_24h: DashboardActivityPoint[];
   ops_summary: DashboardOpsSummary;
   monitor_health: DashboardMonitorHealth[];
+  groups: DashboardGroup[];
+}
+
+export interface DashboardGroupMember {
+  monitor_id: string;
+  monitor_name: string;
+  uptime: number;
+  current_status: string | null;
+}
+
+export interface DashboardGroup {
+  tag: string | null;
+  monitor_count: number;
+  uptime: number;
+  attention_count: number;
+  worst_member: DashboardGroupMember | null;
+  members: DashboardGroupMember[];
+}
+
+export interface DashboardGroupSparklineResponse {
+  tag: string | null;
+  range: DashboardRange;
+  buckets: number[];
 }
 
 export interface DashboardProblemMonitorsResponse {

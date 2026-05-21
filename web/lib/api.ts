@@ -23,6 +23,7 @@ import type {
   MonitorAnalyticsResponse,
   DashboardOverviewResponse,
   DashboardSummaryResponse,
+  DashboardGroupSparklineResponse,
   DashboardProblemMonitorsResponse,
   DashboardRecentFailuresResponse,
   DashboardRecentAlertsResponse,
@@ -615,6 +616,22 @@ export async function getDashboardSummary(params?: {
   const queryString = queryParams.toString();
   const path = `/v1/dashboard/summary${queryString ? `?${queryString}` : ''}`;
   return apiRequest<DashboardSummaryResponse>('GET', path);
+}
+
+export async function getDashboardGroupSparkline(params: {
+  group: string | null;
+  range: '24h' | '7d' | '30d' | '90d' | '365d';
+  tags?: string[];
+}): Promise<DashboardGroupSparklineResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.group) queryParams.append('group', params.group);
+  queryParams.append('range', params.range);
+  params.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  return apiRequest<DashboardGroupSparklineResponse>(
+    'GET',
+    `/v1/dashboard/group-sparkline?${queryParams.toString()}`
+  );
 }
 
 export async function getDashboardProblemMonitors(params?: {
