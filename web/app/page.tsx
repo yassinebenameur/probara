@@ -30,7 +30,6 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
-  CheckCircle2,
   Clock3,
   Plus,
   RefreshCw,
@@ -38,12 +37,11 @@ import {
 import {
   ActivityTimelineItem,
   OperationalSummary,
-  ServiceGroup,
   buildActivityTimeline,
   buildOperationalSummary,
-  buildServiceGroups,
   sortNeedsAttention,
 } from '@/lib/dashboard-view-model';
+import ServiceGroupsPanel from '@/components/dashboard/ServiceGroupsPanel';
 
 type TrendPoint = { date: string; uptime: number | null; responseTime: number | null; total: number };
 
@@ -643,70 +641,6 @@ function NeedsAttentionPanel({
   );
 }
 
-function healthBars(group: ServiceGroup) {
-  const bars = 24;
-  const amberBars = group.attentionCount > 0 ? Math.min(3, group.attentionCount) : 0;
-  return Array.from({ length: bars }, (_, index) => {
-    const isAttention = index >= bars - amberBars;
-    return (
-      <span
-        key={index}
-        className={`h-5 w-1 rounded-full ${isAttention ? 'bg-amber-400' : group.status === 'idle' ? 'bg-slate-700' : 'bg-emerald-400'}`}
-      />
-    );
-  });
-}
-
-function ServiceGroupsPanel({ groups }: { groups: ServiceGroup[] }) {
-  return (
-    <SectionCard
-      title="Service groups"
-      action={
-        <Link href="/monitors" className="inline-flex items-center gap-1.5 text-cyan-400 transition-colors hover:text-cyan-300">
-          View all monitors <ArrowRight className="h-3.5 w-3.5" />
-        </Link>
-      }
-    >
-      {groups.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.04] text-[11px] uppercase tracking-wider text-slate-500">
-                <th className="py-3 pr-4 font-medium">Status</th>
-                <th className="py-3 pr-4 font-medium">Group</th>
-                <th className="py-3 pr-4 font-medium">Health</th>
-                <th className="py-3 pr-4 font-medium">Uptime</th>
-                <th className="py-3 font-medium">Attention</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
-              {groups.map((group) => (
-                <tr key={group.name}>
-                  <td className="py-3 pr-4">
-                    <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full ${group.status === 'attention' ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
-                      {group.status === 'attention' ? <AlertTriangle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                    </span>
-                  </td>
-                  <td className="py-3 pr-4">
-                    <p className="font-medium text-white">{group.name}</p>
-                    <p className="text-xs text-slate-500">{group.description}</p>
-                  </td>
-                  <td className="py-3 pr-4">
-                    <div className="flex gap-1">{healthBars(group)}</div>
-                  </td>
-                  <td className="py-3 pr-4 text-white tabular-nums">{group.uptime.toFixed(2)}%</td>
-                  <td className={`py-3 tabular-nums ${group.attentionCount > 0 ? 'text-amber-300' : 'text-slate-500'}`}>{group.attentionCount}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <EmptyState message="No service groups yet" sub="Create monitors to populate dashboard groups." />
-      )}
-    </SectionCard>
-  );
-}
 
 function timelineIcon(item: ActivityTimelineItem) {
   const classes =
@@ -933,10 +867,6 @@ export default function DashboardPage() {
     [opsSummary, problemMonitors.length, recentFailures.length, stats?.avg_response_ms, stats?.overall_uptime],
   );
   const needsAttention = useMemo(() => sortNeedsAttention(problemMonitors), [problemMonitors]);
-  const serviceGroups = useMemo(
-    () => buildServiceGroups({ stats, problemMonitorsCount: problemMonitors.length }),
-    [stats, problemMonitors.length],
-  );
   const timelineItems = useMemo(
     () => buildActivityTimeline({ failures: recentFailures, alerts: recentAlerts }).slice(0, 8),
     [recentAlerts, recentFailures],
@@ -1041,7 +971,12 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
-        <ServiceGroupsPanel groups={serviceGroups} />
+        <ServiceGroupsPanel
+          groupTags={dashboard?.group_tags ?? []}
+          groups={dashboard?.groups ?? []}
+          range={timeRange}
+          filterTags={selectedTags}
+        />
         <WhatChangedTimeline
           items={timelineItems}
           loading={recentFailuresData === null || recentAlertsData === null}
