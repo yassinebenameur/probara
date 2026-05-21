@@ -129,3 +129,35 @@ func TestAggregateGroups_NoAttention_NoWorstMember(t *testing.T) {
 		t.Fatalf("expected no WorstMember when AttentionCount == 0")
 	}
 }
+
+func TestResampleTo_SameLengthCopies(t *testing.T) {
+	out := resampleTo([]float64{1, 2, 3}, 3)
+	if len(out) != 3 || out[0] != 1 || out[1] != 2 || out[2] != 3 {
+		t.Fatalf("expected [1 2 3], got %v", out)
+	}
+}
+
+func TestResampleTo_Downsamples(t *testing.T) {
+	out := resampleTo([]float64{10, 20, 30, 40, 50, 60}, 3)
+	if len(out) != 3 {
+		t.Fatalf("expected length 3, got %d", len(out))
+	}
+}
+
+func TestResampleTo_UpsamplesPreservingShape(t *testing.T) {
+	out := resampleTo([]float64{100, 50}, 6)
+	if len(out) != 6 {
+		t.Fatalf("expected length 6, got %d", len(out))
+	}
+	// First half should reflect first source bucket; second half the second.
+	if out[0] != 100 || out[5] != 50 {
+		t.Fatalf("expected endpoints 100 and 50, got %v", out)
+	}
+}
+
+func TestResampleTo_EmptyInput(t *testing.T) {
+	out := resampleTo(nil, 12)
+	if len(out) != 0 {
+		t.Fatalf("expected empty, got %v", out)
+	}
+}

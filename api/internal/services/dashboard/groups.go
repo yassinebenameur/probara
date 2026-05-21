@@ -10,6 +10,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 )
 
 const membersPreviewLimit = 10
@@ -235,4 +236,225 @@ func (s *Service) loadGroups(
 		return []models.DashboardGroup{}, nil
 	}
 	return out, nil
+}
+
+const sparklineBucketCount = 12
+
+// GetGroupSparkline returns a 12-bucket uptime series for a single group over the range.
+// params.Tag == nil means the ungrouped sentinel (monitors with no curated group tag).
+func (s *Service) GetGroupSparkline(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	params *models.DashboardGroupSparklineQuery,
+) (*models.DashboardGroupSparklineResponse, error) {
+	if params == nil {
+		return nil, fmt.Errorf("missing params")
+	}
+
+	rng := normalizeDashboardRange(params.Range)
+	rangeStart, rangeEnd, bucketDuration, err := rangeBounds(rng)
+	if err != nil {
+		return nil, err
+	}
+	rangeEndExclusive := rangeEnd.Add(bucketDuration)
+
+	monitorIDs, err := s.monitorIDsForGroup(ctx, tenantID, params.Tag, params.Tags)
+	if err != nil {
+		return nil, err
+	}
+
+	buckets := make([]float64, 0, sparklineBucketCount)
+	if len(monitorIDs) == 0 {
+		return &models.DashboardGroupSparklineResponse{
+			Tag:     params.Tag,
+			Range:   rng,
+			Buckets: buckets,
+		}, nil
+	}
+
+	series, err := s.groupUptimeSeries(ctx, tenantID, monitorIDs, rng, rangeStart, rangeEnd, rangeEndExclusive)
+	if err != nil {
+		return nil, err
+	}
+
+	// Down-/up-sample to 12 buckets so the frontend always renders consistently.
+	buckets = resampleTo(series, sparklineBucketCount)
+
+	return &models.DashboardGroupSparklineResponse{
+		Tag:     params.Tag,
+		Range:   rng,
+		Buckets: buckets,
+	}, nil
+}
+
+// monitorIDsForGroup returns the IDs of enabled non-group monitors that:
+//   - have `tag` in m.tags (if tag != nil), OR
+//   - have none of the tenant's curated dashboard_group_tags (if tag == nil — ungrouped),
+//   - AND match the top-level filterTags filter (m.tags @> filterTags).
+func (s *Service) monitorIDsForGroup(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	tag *string,
+	filterTags []string,
+) ([]uuid.UUID, error) {
+	var query string
+	args := []interface{}{tenantID}
+
+	if tag != nil {
+		// monitors that have THIS tag, plus optional filter
+		query = `
+            SELECT id FROM monitors
+            WHERE tenant_id = $1
+              AND enabled = TRUE
+              AND type <> 'group'
+              AND $2 = ANY(tags)
+        `
+		args = append(args, *tag)
+		if len(filterTags) > 0 {
+			query += ` AND tags @> $3::text[]`
+			args = append(args, pq.Array(filterTags))
+		}
+	} else {
+		// ungrouped: monitors with none of the curated group tags
+		settings, err := s.tenants.GetTenantSettings(ctx, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load tenant settings for ungrouped sparkline: %w", err)
+		}
+		curated := settings.DashboardGroupTags
+		if curated == nil {
+			curated = []string{}
+		}
+		query = `
+            SELECT id FROM monitors
+            WHERE tenant_id = $1
+              AND enabled = TRUE
+              AND type <> 'group'
+              AND NOT (tags && $2::text[])
+        `
+		args = append(args, pq.Array(curated))
+		if len(filterTags) > 0 {
+			query += ` AND tags @> $3::text[]`
+			args = append(args, pq.Array(filterTags))
+		}
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve group monitors: %w", err)
+	}
+	defer rows.Close()
+
+	out := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan monitor id: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate monitor ids: %w", err)
+	}
+	return out, nil
+}
+
+// groupUptimeSeries returns a per-bucket uptime % series for the given monitor set,
+// using the analytics rollup for long ranges and live SQL for 24h.
+func (s *Service) groupUptimeSeries(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	monitorIDs []uuid.UUID,
+	rng models.DashboardRange,
+	rangeStart, rangeEnd, rangeEndExclusive time.Time,
+) ([]float64, error) {
+	if rng != models.DashboardRange24h {
+		analyticsResult, err := s.analytics.GetScopeAnalytics(
+			ctx,
+			tenantID,
+			monitorIDs,
+			sharedanalytics.Range(rng),
+			time.Now().UTC(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query rollup-backed sparkline: %w", err)
+		}
+		out := make([]float64, 0, len(analyticsResult.Series))
+		for _, p := range analyticsResult.Series {
+			out = append(out, p.UptimePct)
+		}
+		return out, nil
+	}
+
+	// 24h: hourly buckets via generate_series, mirroring getTrend's live path.
+	query := `
+        WITH buckets AS (
+            SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '1 hour') AS bucket_start
+        ),
+        per_bucket AS (
+            SELECT
+                date_trunc('hour', cr.created_at) AS bucket_start,
+                COUNT(*) AS total_checks,
+                COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks
+            FROM check_results cr
+            WHERE cr.tenant_id = $1
+              AND cr.result_source <> 'platform'
+              AND cr.monitor_id = ANY($4::uuid[])
+              AND cr.created_at >= $2
+              AND cr.created_at < $5
+            GROUP BY 1
+        )
+        SELECT
+            COALESCE(
+                CASE WHEN pb.total_checks > 0
+                    THEN (pb.success_checks::float / pb.total_checks::float) * 100.0
+                    ELSE 100.0
+                END,
+                100.0
+            ) AS uptime
+        FROM buckets b
+        LEFT JOIN per_bucket pb ON pb.bucket_start = b.bucket_start
+        ORDER BY b.bucket_start
+    `
+
+	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEnd, pq.Array(monitorIDs), rangeEndExclusive)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query 24h sparkline: %w", err)
+	}
+	defer rows.Close()
+
+	out := []float64{}
+	for rows.Next() {
+		var v float64
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("failed to scan bucket: %w", err)
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate buckets: %w", err)
+	}
+	return out, nil
+}
+
+// resampleTo down-/up-samples a series to exactly n buckets by linear index mapping.
+// For empty input, returns an empty slice.
+func resampleTo(in []float64, n int) []float64 {
+	if len(in) == 0 || n <= 0 {
+		return []float64{}
+	}
+	if len(in) == n {
+		out := make([]float64, n)
+		copy(out, in)
+		return out
+	}
+	out := make([]float64, n)
+	for i := 0; i < n; i++ {
+		// Take the bucket at the proportional position in the source.
+		srcIdx := i * len(in) / n
+		if srcIdx >= len(in) {
+			srcIdx = len(in) - 1
+		}
+		out[i] = in[srcIdx]
+	}
+	return out
 }

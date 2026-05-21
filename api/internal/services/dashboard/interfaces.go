@@ -20,6 +20,8 @@ type DashboardService interface {
 	GetRecentFailures(ctx context.Context, tenantID uuid.UUID, params *models.DashboardListQuery) (*models.DashboardRecentFailuresResponse, error)
 	// GetRecentAlerts returns the recent alerts dashboard section.
 	GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, params *models.DashboardListQuery) (*models.DashboardRecentAlertsResponse, error)
+	// GetGroupSparkline returns a 12-bucket uptime series for a single group.
+	GetGroupSparkline(ctx context.Context, tenantID uuid.UUID, params *models.DashboardGroupSparklineQuery) (*models.DashboardGroupSparklineResponse, error)
 }
 
 // Ensure Service implements DashboardService.
