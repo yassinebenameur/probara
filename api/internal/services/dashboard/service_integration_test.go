@@ -220,6 +220,31 @@ func TestService_GetOverview_ActionSummaryEmptyTenant(t *testing.T) {
 	}
 }
 
+func TestService_QueryMonitorsForGroups_NoCheckDataDoesNotScanNullAttention(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-groups-no-data")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-no-data")
+	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
+
+	now := time.Now().UTC()
+	rows, err := dashboardSvc.queryMonitorsForGroups(ctx, tenantID, now.Add(-24*time.Hour), now, nil)
+	if err != nil {
+		t.Fatalf("queryMonitorsForGroups() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows length = %d, want 1", len(rows))
+	}
+	if rows[0].AttentionCount != 0 {
+		t.Fatalf("AttentionCount = %d, want 0", rows[0].AttentionCount)
+	}
+}
+
 func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 

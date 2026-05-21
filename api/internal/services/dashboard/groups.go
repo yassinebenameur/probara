@@ -164,7 +164,7 @@ func (s *Service) queryMonitorsForGroups(
 				END,
 				100.0
 			) AS uptime,
-			COALESCE(pm.bad_checks, 0) > 0 OR cs.current_status IN ('failure','error') AS needs_attention
+			COALESCE(pm.bad_checks, 0) > 0 OR COALESCE(cs.current_status IN ('failure','error'), FALSE) AS needs_attention
 		FROM monitors m
 		LEFT JOIN per_monitor pm ON pm.monitor_id = m.id
 		LEFT JOIN LATERAL (
