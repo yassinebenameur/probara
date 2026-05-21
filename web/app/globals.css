@@ -38,6 +38,28 @@
   --radius-2xl: 24px;
 }
 
+/*
+ * Canonical design tokens (consumed by primitives in components/ui/).
+ *
+ *   Radii:     --radius-sm (8px)  → xs controls, tag chips
+ *              --radius-md (12px) → inputs, buttons
+ *              --radius-xl (20px) → panels, cards, form containers
+ *
+ *   Borders:   --border-subtle  → panel chrome
+ *              --border-default → inputs, buttons
+ *              --border-strong  → hover
+ *
+ *   Surfaces:  bg-slate-900/50  → panels
+ *              bg-slate-900/80  → inputs
+ *
+ *   Text:      --text-primary   (#f8fafc) → titles
+ *              --text-secondary (#94a3b8) → body
+ *              --text-muted     (#64748b) → hints
+ *
+ * Do NOT add new `.btn-*`, `.badge-*`, or `.status-pill` classes here.
+ * Use the React primitives in components/ui/ (Button, Pill, FilterChip, ...).
+ */
+
 * {
   box-sizing: border-box;
 }
