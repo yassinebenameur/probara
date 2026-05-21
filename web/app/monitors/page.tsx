@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity } from 'lucide-react';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
+import FilterChip from '@/components/ui/FilterChip';
+import PageHeader from '@/components/ui/PageHeader';
+import SharedEmptyState from '@/components/ui/EmptyState';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
   deleteMonitor,
@@ -92,29 +98,32 @@ function getTagColor(tag: string) {
   return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
 }
 
-// Tag pill component
-function TagPill({ tag, size = 'sm', onClick, selected = false }: { 
-  tag: string; 
-  size?: 'xs' | 'sm'; 
+// Tag pill — renders a colored Pill using the per-tag color palette. When onClick
+// is provided, the wrapping span becomes a focusable button with a selected ring.
+function TagPill({ tag, size = 'sm', onClick, selected = false }: {
+  tag: string;
+  size?: 'xs' | 'sm';
   onClick?: () => void;
   selected?: boolean;
 }) {
   const color = getTagColor(tag);
-  const sizeClasses = size === 'xs' 
-    ? 'text-[9px] px-1.5 py-0.5' 
-    : 'text-[10px] px-2 py-0.5';
-  
-  return (
-    <span
-      onClick={onClick}
-      className={`inline-flex items-center rounded-full border ${sizeClasses} font-medium transition-all ${
-        selected 
-          ? `${color.bg} ${color.text} ${color.border} ring-1 ring-offset-1 ring-offset-slate-900 ring-white/20` 
-          : `${color.bg} ${color.text} ${color.border}`
-      } ${onClick ? 'cursor-pointer hover:brightness-125' : ''}`}
-    >
+  const pill = (
+    <Pill tone="tag" size={size} color={color}>
       {tag}
-    </span>
+    </Pill>
+  );
+  if (!onClick) return pill;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={`inline-flex rounded-full transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 ${
+        selected ? 'ring-1 ring-offset-1 ring-offset-slate-900 ring-white/20' : 'hover:brightness-125'
+      }`}
+    >
+      {pill}
+    </button>
   );
 }
 
@@ -966,11 +975,9 @@ function DetailPanel({
 
       {/* View Details */}
       <div className="p-3 border-t border-white/[0.06]">
-        <Link href={`/monitors/${monitor.id}`}>
-          <button className="w-full rounded-lg bg-cyan-500 py-2 text-xs font-medium text-white hover:bg-cyan-400 transition-colors">
-            View Details
-          </button>
-        </Link>
+        <Button variant="ghost" size="sm" className="w-full" asChild>
+          <Link href={`/monitors/${monitor.id}`}>View details</Link>
+        </Button>
       </div>
     </div>
   );
@@ -990,21 +997,16 @@ function LoadingSkeleton() {
 // Empty state
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.1] py-12">
-      <svg className="h-10 w-10 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-      </svg>
-      <h3 className="mt-3 text-sm font-medium text-white">No monitors yet</h3>
-      <p className="mt-1 text-xs text-slate-500">Create your first monitor to start tracking</p>
-      <Link href="/monitors/new">
-        <button className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-400">
-          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Create Monitor
-        </button>
-      </Link>
-    </div>
+    <SharedEmptyState
+      icon={<Activity strokeWidth={1.5} />}
+      title="No monitors yet"
+      description="Create your first monitor to start tracking."
+      action={
+        <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+          <Link href="/monitors/new">Add monitor</Link>
+        </Button>
+      }
+    />
   );
 }
 
@@ -1495,67 +1497,51 @@ export default function MonitorsPage() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Monitors</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {monitors.length} monitors · {totalUp} up · {totalDown} down · {totalPaused} paused
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleExport}
-            disabled={exporting}
-            className="btn btn-secondary btn-sm disabled:opacity-60"
-          >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            {exporting ? 'Exporting...' : 'Export'}
-          </button>
-          <Link href="/monitors/import">
-            <button className="btn btn-secondary btn-sm">
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              Import
-            </button>
-          </Link>
-          <Link href="/monitors/new">
-            <button className="btn btn-primary btn-sm">
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Monitor
-            </button>
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title="Monitors"
+        subtitle={`${monitors.length} monitors · ${totalUp} up · ${totalDown} down · ${totalPaused} paused`}
+        action={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Download strokeWidth={1.75} />}
+              onClick={handleExport}
+              disabled={exporting}
+              loading={exporting}
+            >
+              {exporting ? 'Exporting…' : 'Export'}
+            </Button>
+            <Button variant="ghost" size="sm" icon={<Upload strokeWidth={1.75} />} asChild>
+              <Link href="/monitors/import">Import</Link>
+            </Button>
+            <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+              <Link href="/monitors/new">Add monitor</Link>
+            </Button>
+          </div>
+        }
+      />
 
       {/* Filters */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 max-w-xs">
-            <svg className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
             <input
               type="text"
-              placeholder="Search..."
+              placeholder="Search…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full rounded-lg border border-white/[0.06] bg-slate-900/50 py-1.5 pl-8 pr-3 text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500/50"
+              className="input input-sm pl-8"
             />
           </div>
 
-          <div className="flex items-center gap-0.5 rounded-lg border border-white/[0.06] bg-slate-900/50 p-0.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {['all', 'http', 'ping', 'dns', 'grpc', 'agent', 'group', 'push', 'sip', 'synthetic_api', 'synthetic_browser'].map((type) => (
-              <button
+              <FilterChip
                 key={type}
+                selected={typeFilter === type}
                 onClick={() => setTypeFilter(type)}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                  typeFilter === type ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white'
-                }`}
               >
                 {type === 'all'
                   ? 'All'
@@ -1564,47 +1550,39 @@ export default function MonitorsPage() {
                     : type === 'synthetic_browser'
                       ? 'SYN BROWSER'
                       : type.toUpperCase()}
-              </button>
+              </FilterChip>
             ))}
           </div>
 
-          <div className="flex items-center gap-0.5 rounded-lg border border-white/[0.06] bg-slate-900/50 p-0.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {['all', 'up', 'down', 'paused'].map((status) => (
-              <button
+              <FilterChip
                 key={status}
+                selected={statusFilter === status}
                 onClick={() => setStatusFilter(status)}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                  statusFilter === status ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white'
-                }`}
               >
                 {status === 'all' ? 'All' : status === 'up' ? 'Up' : status === 'down' ? 'Down' : 'Paused'}
-              </button>
+              </FilterChip>
             ))}
           </div>
 
           {/* Tag Filter Toggle */}
           {allTags.length > 0 && (
-            <button
+            <FilterChip
+              selected={selectedTags.size > 0}
+              count={selectedTags.size > 0 ? selectedTags.size : undefined}
+              icon={<Tag strokeWidth={1.75} />}
               onClick={() => setShowTagFilter(!showTagFilter)}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-medium transition-all ${
-                selectedTags.size > 0 
-                  ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400' 
-                  : 'border-white/[0.06] bg-slate-900/50 text-slate-400 hover:text-white'
-              }`}
+              aria-expanded={showTagFilter}
             >
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-              </svg>
-              Tags
-              {selectedTags.size > 0 && (
-                <span className="rounded-full bg-cyan-500/20 px-1.5 py-0.5 text-[9px]">
-                  {selectedTags.size}
-                </span>
-              )}
-              <svg className={`h-3 w-3 transition-transform ${showTagFilter ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
+              <span className="inline-flex items-center gap-1">
+                Tags
+                <ChevronDown
+                  className={`h-3 w-3 transition-transform ${showTagFilter ? 'rotate-180' : ''}`}
+                  strokeWidth={1.75}
+                />
+              </span>
+            </FilterChip>
           )}
         </div>
 
