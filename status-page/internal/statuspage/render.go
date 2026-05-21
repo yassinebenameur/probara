@@ -59,7 +59,7 @@ type statusPageRenderView struct {
 }
 
 const (
-	defaultStatusPageRange      = "30d"
+	defaultStatusPageRange      = "24h"
 	globalUptimeStripCells      = 48
 	globalUptime7dStripCells    = 70
 	monitorUptimeStripCells     = 36
@@ -312,7 +312,7 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	view.GlobalUptime7Value = uptimeValue(averageBarPoints(global7Raw))
 	view.GlobalUptime30Value = uptimeValue(averageBarPoints(global30Raw))
 	view.GlobalUptime90Value = uptimeValue(averageBarPoints(global90Raw))
-	view.GlobalUptimePercent = view.GlobalUptime30Value
+	view.GlobalUptimePercent = view.GlobalUptime24Value
 	view.ShowSearchControls = view.MonitorCount > 1
 	view.ShowRangeSelector = view.ShowGlobalUptime || view.ShowMonitorUptime
 	view.ShowToolbar = view.ShowSearchControls
@@ -469,13 +469,13 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		StatusLabel:            monitorStatusLabel(monitor.Status),
 		StatusRank:             monitorStatusRank(monitor.Status),
 		SearchText:             strings.ToLower(strings.Join(searchParts, " ")),
-		SummaryMetric:          uptime30Value,
+		SummaryMetric:          uptime24Value,
 		SummaryCaption:         monitorUptimeLabel(defaultStatusPageRange),
 		LastCheckAgo:           lastCheckAgo,
 		LastCheckUnix:          lastCheckUnix,
 		LatencyText:            latencyText,
 		LatencySort:            latencySort,
-		UptimeText:             uptime30Value,
+		UptimeText:             uptime24Value,
 		Uptime24Value:          uptime24Value,
 		Uptime7Value:           uptime7Value,
 		Uptime30Value:          uptime30Value,
@@ -1914,9 +1914,9 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
               <div class="uptime-label">Network uptime</div>
               {{if .ShowRangeSelector}}
                 <div class="range-group" role="group" aria-label="Select uptime range">
-                  <button type="button" class="range-btn" data-range-pill="24h" aria-pressed="false">24h</button>
+                  <button type="button" class="range-btn active" data-range-pill="24h" aria-pressed="true">24h</button>
                   <button type="button" class="range-btn" data-range-pill="7d" aria-pressed="false">7d</button>
-                  <button type="button" class="range-btn active" data-range-pill="30d" aria-pressed="true">30d</button>
+                  <button type="button" class="range-btn" data-range-pill="30d" aria-pressed="false">30d</button>
                   <button type="button" class="range-btn" data-range-pill="90d" aria-pressed="false">90d</button>
                 </div>
               {{end}}
@@ -1928,7 +1928,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
               data-range-value-7d="{{.GlobalUptime7Value}}"
               data-range-value-30d="{{.GlobalUptime30Value}}"
               data-range-value-90d="{{.GlobalUptime90Value}}"
-            >{{.GlobalUptime30Value}}</div>
+            >{{.GlobalUptime24Value}}</div>
           </div>
           <div
             class="uptime-bars js-strip"
@@ -1944,7 +1944,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
             data-range-90d="{{.GlobalUptime90JSON}}"
           ></div>
           <div class="uptime-foot">
-            <span id="globalRangeStart">Last 30 days</span>
+            <span id="globalRangeStart">Last 24 hours</span>
             <span>Today</span>
           </div>
         </div>
@@ -1952,9 +1952,9 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         <div class="range-section">
           <div class="uptime-label">Uptime range</div>
           <div class="range-group" role="group" aria-label="Select uptime range">
-            <button type="button" class="range-btn" data-range-pill="24h" aria-pressed="false">24h</button>
+            <button type="button" class="range-btn active" data-range-pill="24h" aria-pressed="true">24h</button>
             <button type="button" class="range-btn" data-range-pill="7d" aria-pressed="false">7d</button>
-            <button type="button" class="range-btn active" data-range-pill="30d" aria-pressed="true">30d</button>
+            <button type="button" class="range-btn" data-range-pill="30d" aria-pressed="false">30d</button>
             <button type="button" class="range-btn" data-range-pill="90d" aria-pressed="false">90d</button>
           </div>
         </div>
@@ -2045,7 +2045,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
                       {{if $.ShowMonitorUptime}}
                         <div class="expanded-bar-section">
                           <div class="expanded-bar-head">
-                            <span class="expanded-bar-label" data-shared-range-label>Last 30 days</span>
+                            <span class="expanded-bar-label" data-shared-range-label>Last 24 hours</span>
                             <span
                               class="expanded-bar-label"
                               data-monitor-uptime-value
@@ -2168,7 +2168,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       const body = document.body;
       const defaultTheme = body.dataset.defaultTheme === 'light' ? 'light' : 'dark';
       const themeAllowed = body.dataset.allowThemeToggle === '1';
-      const defaultRange = ['24h', '7d', '30d', '90d'].includes(body.dataset.defaultRange || '') ? body.dataset.defaultRange : '30d';
+      const defaultRange = ['24h', '7d', '30d', '90d'].includes(body.dataset.defaultRange || '') ? body.dataset.defaultRange : '24h';
       const defaultMode = body.dataset.defaultMode || 'default';
       let clockTimer = null;
       let refreshTimer = null;

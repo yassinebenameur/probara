@@ -67,7 +67,7 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 
 	for _, want := range []string{
 		`data-default-theme="dark"`,
-		`data-default-range="30d"`,
+		`data-default-range="24h"`,
 		`id="kioskStats"`,
 		`id="statusHero"`,
 		`id="incidentsSection"`,
@@ -80,7 +80,7 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		`data-range-pill="7d"`,
 		`data-range-pill="30d"`,
 		`data-range-pill="90d"`,
-		`class="range-btn active" data-range-pill="30d" aria-pressed="true"`,
+		`class="range-btn active" data-range-pill="24h" aria-pressed="true"`,
 		`data-range-7d=`,
 		`data-monitor-id="monitor-1"`,
 		`localStorage.setItem('status-page-mode'`,
@@ -140,8 +140,8 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		`data-range-value-30d="95.00%"`,
 		`data-range-value-90d="91.00%"`,
 		`data-monitor-uptime-label`,
-		`>30d uptime<`,
-		`>95.00%<`,
+		`>24h uptime<`,
+		`>99.50%<`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("expected rendered HTML to contain %q", want)
