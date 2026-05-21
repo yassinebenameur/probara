@@ -220,6 +220,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/problem-monitors", dashboardHandlers.GetProblemMonitors)
 				r.Get("/recent-failures", dashboardHandlers.GetRecentFailures)
 				r.Get("/recent-alerts", dashboardHandlers.GetRecentAlerts)
+				r.Get("/group-sparkline", dashboardHandlers.GetGroupSparkline)
 			})
 
 			// Alerts

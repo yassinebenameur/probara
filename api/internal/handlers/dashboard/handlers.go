@@ -134,6 +134,44 @@ func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// GetGroupSparkline handles GET /api/v1/dashboard/group-sparkline.
+//
+//	?group=<tagName>  omit or empty = ungrouped row
+//	&range=<24h|7d|30d|90d|365d>
+//	&tag=<a>&tag=<b>  top-level dashboard tag filter (repeated query param, like other dashboard endpoints)
+func (h *Handlers) GetGroupSparkline(w http.ResponseWriter, r *http.Request) {
+	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	q := r.URL.Query()
+	var tagPtr *string
+	if raw := q.Get("group"); raw != "" {
+		t := raw
+		tagPtr = &t
+	}
+
+	params := &models.DashboardGroupSparklineQuery{
+		Tag:   tagPtr,
+		Range: parseRange(r),
+		Tags:  q["tag"],
+	}
+
+	resp, err := h.service.GetGroupSparkline(r.Context(), tenantUUID, params)
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to get dashboard group sparkline")
+		errors.WriteInternalError(w, "failed to get dashboard group sparkline")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 func tenantFromRequest(w http.ResponseWriter, r *http.Request) (string, uuid.UUID, bool) {
 	tenantID, err := middleware.GetTenantID(r.Context())
 	if err != nil {

@@ -16,11 +16,12 @@ import (
 )
 
 type mockDashboardService struct {
-	lastOverviewParams        *models.DashboardOverviewQuery
-	lastSummaryParams         *models.DashboardOverviewQuery
-	lastProblemMonitorsParams *models.DashboardListQuery
-	lastRecentFailuresParams  *models.DashboardListQuery
-	lastRecentAlertsParams    *models.DashboardListQuery
+	lastOverviewParams           *models.DashboardOverviewQuery
+	lastSummaryParams            *models.DashboardOverviewQuery
+	lastProblemMonitorsParams    *models.DashboardListQuery
+	lastRecentFailuresParams     *models.DashboardListQuery
+	lastRecentAlertsParams       *models.DashboardListQuery
+	lastGroupSparklineParams     *models.DashboardGroupSparklineQuery
 }
 
 func (m *mockDashboardService) GetOverview(ctx context.Context, tenantID uuid.UUID, params *models.DashboardOverviewQuery) (*models.DashboardOverviewResponse, error) {
@@ -74,6 +75,20 @@ func (m *mockDashboardService) GetRecentAlerts(ctx context.Context, tenantID uui
 		Range:        params.Range,
 		GeneratedAt:  time.Now().UTC(),
 		RecentAlerts: []models.AlertWithDetails{},
+	}, nil
+}
+
+func (m *mockDashboardService) GetGroupSparkline(ctx context.Context, tenantID uuid.UUID, params *models.DashboardGroupSparklineQuery) (*models.DashboardGroupSparklineResponse, error) {
+	copied := *params
+	m.lastGroupSparklineParams = &copied
+	buckets := make([]float64, 12)
+	for i := range buckets {
+		buckets[i] = 100.0
+	}
+	return &models.DashboardGroupSparklineResponse{
+		Tag:     params.Tag,
+		Range:   params.Range,
+		Buckets: buckets,
 	}, nil
 }
 
@@ -320,5 +335,90 @@ func TestHandlers_GetRecentAlerts_UsesLimitAndTags(t *testing.T) {
 	}
 	if len(mockSvc.lastRecentAlertsParams.Tags) != 1 || mockSvc.lastRecentAlertsParams.Tags[0] != "prod" {
 		t.Fatalf("tags = %#v, want [prod]", mockSvc.lastRecentAlertsParams.Tags)
+	}
+}
+
+func TestHandlers_GetGroupSparkline_HappyPathWithTag(t *testing.T) {
+	log := logger.New("test", "debug")
+	mockSvc := &mockDashboardService{}
+	handlers := NewHandlers(mockSvc, log)
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/group-sparkline?group=api&range=7d&tag=prod", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+
+	w := httptest.NewRecorder()
+	handlers.GetGroupSparkline(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if mockSvc.lastGroupSparklineParams == nil {
+		t.Fatalf("expected group sparkline params to be passed to service")
+	}
+	if mockSvc.lastGroupSparklineParams.Tag == nil {
+		t.Fatalf("expected Tag to be non-nil")
+	}
+	if *mockSvc.lastGroupSparklineParams.Tag != "api" {
+		t.Fatalf("Tag = %q, want %q", *mockSvc.lastGroupSparklineParams.Tag, "api")
+	}
+	if mockSvc.lastGroupSparklineParams.Range != models.DashboardRange7d {
+		t.Fatalf("Range = %s, want %s", mockSvc.lastGroupSparklineParams.Range, models.DashboardRange7d)
+	}
+	if len(mockSvc.lastGroupSparklineParams.Tags) != 1 || mockSvc.lastGroupSparklineParams.Tags[0] != "prod" {
+		t.Fatalf("Tags = %#v, want [prod]", mockSvc.lastGroupSparklineParams.Tags)
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body["tag"] != "api" {
+		t.Fatalf("response tag = %v, want %q", body["tag"], "api")
+	}
+	if body["range"] != "7d" {
+		t.Fatalf("response range = %v, want %q", body["range"], "7d")
+	}
+	buckets, ok := body["buckets"].([]interface{})
+	if !ok {
+		t.Fatalf("expected buckets array in response, got %T", body["buckets"])
+	}
+	if len(buckets) != 12 {
+		t.Fatalf("buckets length = %d, want 12", len(buckets))
+	}
+}
+
+func TestHandlers_GetGroupSparkline_UngroupedSentinel(t *testing.T) {
+	log := logger.New("test", "debug")
+	mockSvc := &mockDashboardService{}
+	handlers := NewHandlers(mockSvc, log)
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/group-sparkline?range=30d", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+
+	w := httptest.NewRecorder()
+	handlers.GetGroupSparkline(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if mockSvc.lastGroupSparklineParams == nil {
+		t.Fatalf("expected group sparkline params to be passed to service")
+	}
+	if mockSvc.lastGroupSparklineParams.Tag != nil {
+		t.Fatalf("expected Tag to be nil (ungrouped), got %q", *mockSvc.lastGroupSparklineParams.Tag)
+	}
+	if mockSvc.lastGroupSparklineParams.Range != models.DashboardRange30d {
+		t.Fatalf("Range = %s, want %s", mockSvc.lastGroupSparklineParams.Range, models.DashboardRange30d)
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if _, hasTag := body["tag"]; !hasTag {
+		t.Fatalf("expected tag field in response (even if null)")
+	}
+	if body["tag"] != nil {
+		t.Fatalf("response tag = %v, want null", body["tag"])
 	}
 }
