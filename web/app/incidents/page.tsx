@@ -7,6 +7,7 @@ import type { AdminUser, IncidentDetail, IncidentListItem } from '@/lib/types';
 import IncidentQuickCreateButton from '@/components/incidents/IncidentQuickCreateButton';
 import IncidentList from '@/components/incidents/IncidentList';
 import Toast from '@/components/ui/Toast';
+import PageHeader from '@/components/ui/PageHeader';
 
 export default function IncidentsPage() {
   const [incidents, setIncidents] = useState<IncidentListItem[]>([]);
@@ -57,19 +58,17 @@ export default function IncidentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Incidents</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Coordinate customer-impacting issues and publish updates deliberately.
-          </p>
-        </div>
-        <IncidentQuickCreateButton
-          users={users}
-          onCreated={handleCreated}
-          disabled={usersLoading || Boolean(usersError) || users.length === 0}
-        />
-      </div>
+      <PageHeader
+        title="Incidents"
+        subtitle="Coordinate customer-impacting issues."
+        action={
+          <IncidentQuickCreateButton
+            users={users}
+            onCreated={handleCreated}
+            disabled={usersLoading || Boolean(usersError) || users.length === 0}
+          />
+        }
+      />
 
       {usersLoading ? (
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 px-4 py-3 text-sm text-slate-500">
