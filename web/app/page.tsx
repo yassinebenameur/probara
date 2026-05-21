@@ -17,21 +17,35 @@ import {
 } from '@/lib/types';
 import Link from 'next/link';
 import {
-  AreaChart,
+  ComposedChart,
   Area,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  Clock3,
+  Plus,
+  RefreshCw,
+} from 'lucide-react';
+import {
+  ActivityTimelineItem,
+  OperationalSummary,
+  ServiceGroup,
+  buildActivityTimeline,
+  buildOperationalSummary,
+  buildServiceGroups,
+  sortNeedsAttention,
+} from '@/lib/dashboard-view-model';
 
 type TrendPoint = { date: string; uptime: number | null; responseTime: number | null; total: number };
-
-type TrendDelta = {
-  value: number;       // absolute delta (e.g. +0.3 or -12)
-  direction: 'up' | 'down' | 'neutral';
-  label: string;       // e.g. "0.3% vs prior period"
-};
 
 const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d' | '90d' | '365d', number> = {
   '24h': 10,
@@ -41,6 +55,8 @@ const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d' | '90d' | '365d', number
   '365d': 50,
 };
 
+type DashboardRange = keyof typeof DASHBOARD_LIST_LIMIT;
+
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
   const now = new Date();
@@ -49,38 +65,6 @@ function formatRelativeTime(dateString: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-/** Compute a trend delta by comparing the second half vs first half of the series. */
-function computeUptimeTrend(data: TrendPoint[]): TrendDelta | null {
-  const active = data.filter((d) => d.total > 0 && d.uptime !== null);
-  if (active.length < 4) return null;
-  const mid = Math.floor(active.length / 2);
-  const first = active.slice(0, mid);
-  const second = active.slice(mid);
-  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + (d.uptime ?? 0), 0) / arr.length;
-  const delta = avg(second) - avg(first);
-  return {
-    value: Math.abs(delta),
-    direction: delta > 0.05 ? 'up' : delta < -0.05 ? 'down' : 'neutral',
-    label: `${Math.abs(delta).toFixed(2)}% vs prior period`,
-  };
-}
-
-function computeResponseTrend(data: TrendPoint[]): TrendDelta | null {
-  const active = data.filter((d) => d.total > 0 && d.responseTime !== null && d.responseTime > 0);
-  if (active.length < 4) return null;
-  const mid = Math.floor(active.length / 2);
-  const first = active.slice(0, mid);
-  const second = active.slice(mid);
-  const avg = (arr: TrendPoint[]) => arr.reduce((s, d) => s + (d.responseTime ?? 0), 0) / arr.length;
-  const delta = avg(second) - avg(first);
-  // For response time, going down is good
-  return {
-    value: Math.abs(delta),
-    direction: delta < -5 ? 'up' : delta > 5 ? 'down' : 'neutral',
-    label: `${Math.abs(Math.round(delta))}ms vs prior period`,
-  };
 }
 
 // ─── Info Popover ──────────────────────────────────────────────────────────────
@@ -285,115 +269,10 @@ function TagFilterPicker({
   );
 }
 
-// ─── Stat Card ─────────────────────────────────────────────────────────────────
-
-function StatCard({
-  label,
-  value,
-  unit,
-  trend,
-  higherIsBetter = true,
-  icon,
-  subtitle,
-  infoEntries,
-}: {
-  label: string;
-  value: string | number;
-  unit?: string;
-  trend?: TrendDelta | null;
-  higherIsBetter?: boolean;
-  icon: React.ReactNode;
-  subtitle?: string;
-  infoEntries?: PopoverEntry[];
-}) {
-  const trendPositive =
-    trend && trend.direction !== 'neutral'
-      ? (trend.direction === 'up') === higherIsBetter
-      : null;
-
-  return (
-    <div className="relative overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-      <div className="flex items-start justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</p>
-            {infoEntries && <InfoPopover entries={infoEntries} title={label} />}
-          </div>
-          <div className="mt-2 flex items-baseline gap-1">
-            <span className="text-3xl font-semibold tracking-tight text-white">{value}</span>
-            {unit && <span className="text-lg text-slate-500">{unit}</span>}
-          </div>
-          <div className="mt-2 h-5">
-            {trend && trend.direction !== 'neutral' ? (
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${trendPositive
-                    ? 'bg-emerald-500/10 text-emerald-400'
-                    : 'bg-rose-500/10 text-rose-400'
-                  }`}
-              >
-                {trend.direction === 'up' ? '↑' : '↓'} {trend.label}
-              </span>
-            ) : subtitle ? (
-              <span className="text-xs text-slate-500">{subtitle}</span>
-            ) : null}
-          </div>
-        </div>
-        <div className="ml-3 shrink-0 rounded-lg bg-slate-800/60 p-2.5 text-slate-400">
-          {icon}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function SectionLoadingState({ message }: { message: string }) {
   return (
     <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
       <p className="text-sm text-slate-500">{message}</p>
-    </div>
-  );
-}
-
-// ─── Fleet Status Bar ──────────────────────────────────────────────────────────
-
-function FleetStatusBar({
-  up,
-  down,
-  paused,
-  activeAlerts,
-  acknowledgedAlerts,
-}: {
-  up: number;
-  down: number;
-  paused: number;
-  activeAlerts: number;
-  acknowledgedAlerts: number;
-}) {
-  const items = [
-    { label: 'Up', value: up, dot: 'bg-emerald-400', text: 'text-emerald-400' },
-    { label: 'Down', value: down, dot: 'bg-rose-400', text: 'text-rose-400' },
-    { label: 'Paused', value: paused, dot: 'bg-slate-500', text: 'text-slate-400' },
-    { label: 'Alerts', value: activeAlerts, dot: 'bg-amber-400', text: 'text-amber-400', info: acknowledgedAlerts > 0 ? `${acknowledgedAlerts} acknowledged` : undefined },
-  ];
-
-  return (
-    <div className="flex items-center gap-5 rounded-xl border border-white/[0.06] bg-slate-900/50 px-5 py-3">
-      <p className="text-xs font-medium uppercase tracking-wider text-slate-500 shrink-0">Fleet</p>
-      <div className="h-4 w-px bg-white/[0.06]" />
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        {items.map((item) => (
-          <div key={item.label} className="flex items-center gap-2">
-            <span className={`h-2 w-2 rounded-full ${item.dot} ${item.value === 0 ? 'opacity-30' : ''}`} />
-            <span className={`text-sm font-semibold ${item.value > 0 ? item.text : 'text-slate-600'}`}>
-              {item.value}
-            </span>
-            <span className="text-xs text-slate-500">{item.label}</span>
-            {item.info && item.value > 0 && (
-              <InfoPopover entries={[{ label: 'Acknowledged', value: acknowledgedAlerts }]} />
-            )}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -480,87 +359,6 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
   );
 }
 
-// ─── Failure Item ──────────────────────────────────────────────────────────────
-
-function FailureItem({ event }: { event: DashboardFailureEvent }) {
-  const isPlatformEvent = event.result_source === 'platform';
-  const dotColor = isPlatformEvent ? 'bg-slate-500' : event.status === 'error' ? 'bg-amber-400' : 'bg-rose-400';
-  const resolved = event.state === 'resolved';
-
-  const infoEntries: PopoverEntry[] = [
-    { label: 'Status', value: event.status },
-    { label: 'Source', value: event.result_source },
-    ...(typeof event.latency_ms === 'number' ? [{ label: 'Latency', value: `${event.latency_ms}ms` }] : []),
-    ...(event.error_message ? [{ label: 'Error', value: event.error_message }] : []),
-  ];
-
-  return (
-    <div className="flex items-start gap-3 py-2.5">
-      <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor} ${resolved ? 'opacity-40' : ''}`} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex min-w-0 flex-1 items-start gap-1.5">
-            <p className="min-w-0 whitespace-normal break-all text-sm text-white">{event.monitor_name}</p>
-            <InfoPopover entries={infoEntries} title="Check Details" />
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {isPlatformEvent && (
-              <span className="rounded border border-slate-500/30 bg-slate-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-slate-400">
-                Platform
-              </span>
-            )}
-            <span
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${resolved
-                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
-                  : 'border-rose-500/20 bg-rose-500/10 text-rose-400'
-                }`}
-            >
-              {event.state}
-            </span>
-          </div>
-        </div>
-        <p className="mt-0.5 text-xs text-slate-500">
-          {formatRelativeTime(event.occurred_at)}
-          {typeof event.latency_ms === 'number' ? ` · ${event.latency_ms}ms` : ''}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-// ─── Alert Item ────────────────────────────────────────────────────────────────
-
-function AlertItem({ alert }: { alert: Alert }) {
-  const colors = {
-    active: { dot: 'bg-rose-400', badge: 'border-rose-500/20 bg-rose-500/10 text-rose-400' },
-    acknowledged: { dot: 'bg-amber-400', badge: 'border-amber-500/20 bg-amber-500/10 text-amber-400' },
-    resolved: { dot: 'bg-emerald-400', badge: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' },
-  };
-  const c = colors[alert.status] ?? colors.resolved;
-
-  return (
-    <div className="flex items-start gap-3 py-2.5">
-      <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${c.dot} ${alert.status === 'resolved' ? 'opacity-40' : ''}`} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <p className="min-w-0 flex-1 whitespace-normal break-all text-sm text-white">{alert.monitor_name || 'Unknown monitor'}</p>
-          <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${c.badge}`}>
-            {alert.status}
-          </span>
-        </div>
-        <p className="mt-0.5 text-xs text-slate-500">
-          {formatRelativeTime(alert.triggered_at)} · {alert.failure_count} failure{alert.failure_count !== 1 ? 's' : ''}
-        </p>
-        {alert.last_error && (
-          <p className="mt-0.5 whitespace-normal break-all text-xs text-slate-600" title={alert.last_error}>
-            {alert.last_error}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ─── Chart Tooltip ─────────────────────────────────────────────────────────────
 
 function CustomTooltip({ active, payload, label }: any) {
@@ -634,6 +432,354 @@ function SectionCard({
   );
 }
 
+function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
+  const toneStyles: Record<OperationalSummary['tone'], { ring: string; icon: string; text: string; iconBg: string }> = {
+    critical: {
+      ring: 'border-rose-500/20',
+      icon: 'text-rose-300',
+      text: 'text-rose-300',
+      iconBg: 'bg-rose-500/10',
+    },
+    attention: {
+      ring: 'border-amber-500/20',
+      icon: 'text-amber-300',
+      text: 'text-amber-300',
+      iconBg: 'bg-amber-500/10',
+    },
+    stable: {
+      ring: 'border-emerald-500/20',
+      icon: 'text-emerald-300',
+      text: 'text-emerald-300',
+      iconBg: 'bg-emerald-500/10',
+    },
+    clean: {
+      ring: 'border-emerald-500/20',
+      icon: 'text-emerald-300',
+      text: 'text-emerald-300',
+      iconBg: 'bg-emerald-500/10',
+    },
+  };
+  const tone = toneStyles[summary.tone];
+
+  return (
+    <section className={`overflow-hidden rounded-2xl border ${tone.ring} bg-slate-900/55`}>
+      <div className="grid gap-5 p-5 lg:grid-cols-[1.4fr_2fr] lg:p-6">
+        <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
+          <div className={`flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-current/30 ${tone.iconBg} ${tone.icon}`}>
+            {summary.tone === 'critical' ? (
+              <AlertTriangle className="h-9 w-9" strokeWidth={1.8} />
+            ) : (
+              <Check className="h-10 w-10" strokeWidth={2.3} />
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${summary.tone === 'critical' ? 'bg-rose-400' : summary.tone === 'attention' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+              <h2 className={`text-lg font-semibold tracking-tight ${tone.text}`}>{summary.label}</h2>
+            </div>
+            <p className="mt-2 max-w-xl text-sm text-slate-400">{summary.description}</p>
+            <p className={`mt-2 text-sm font-medium ${summary.attentionCount > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
+              {summary.attentionCount > 0
+                ? `${summary.attentionCount} monitor${summary.attentionCount === 1 ? '' : 's'} need attention.`
+                : 'No monitors need attention.'}
+            </p>
+            <Link
+              href={summary.primaryActionHref}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-white/[0.08]"
+            >
+              {summary.primaryActionLabel}
+              <ArrowRight className="h-4 w-4" strokeWidth={1.8} />
+            </Link>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {summary.metrics.map((metric) => {
+            const metricTone =
+              metric.tone === 'critical'
+                ? 'text-rose-300'
+                : metric.tone === 'attention'
+                  ? 'text-amber-300'
+                  : metric.tone === 'clean'
+                    ? 'text-emerald-300'
+                    : 'text-white';
+            return (
+              <div key={metric.label} className="rounded-xl border border-white/[0.06] bg-slate-950/35 p-4">
+                <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{metric.label}</p>
+                <p className={`mt-2 text-2xl font-semibold tabular-nums ${metricTone}`}>{metric.value}</p>
+                {metric.detail && <p className="mt-1 text-xs text-slate-500">{metric.detail}</p>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RangeControls({
+  timeRange,
+  setTimeRange,
+}: {
+  timeRange: DashboardRange;
+  setTimeRange: (range: DashboardRange) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {(['24h', '7d', '30d', '90d', '365d'] as DashboardRange[]).map((range) => (
+        <button
+          key={range}
+          onClick={() => setTimeRange(range)}
+          className={`btn-filter ${timeRange === range ? 'is-active' : ''}`}
+        >
+          {range}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function UptimeResponseChart({
+  trendData,
+  hasEnoughTrendData,
+  timeRange,
+  setTimeRange,
+  noMatchingMonitors,
+}: {
+  trendData: TrendPoint[];
+  hasEnoughTrendData: boolean;
+  timeRange: DashboardRange;
+  setTimeRange: (range: DashboardRange) => void;
+  noMatchingMonitors: boolean;
+}) {
+  return (
+    <section className="rounded-2xl border border-white/[0.06] bg-slate-900/50 p-5">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-semibold text-white">Uptime & response time</h3>
+            <InfoPopover
+              entries={[{ label: 'Metric', value: 'Uptime and average HTTP latency for the selected range' }]}
+              title="Uptime & response time"
+            />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs">
+            <span className="flex items-center gap-1.5 text-emerald-300">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" /> Uptime (%)
+            </span>
+            <span className="flex items-center gap-1.5 text-sky-300">
+              <span className="h-2 w-2 rounded-full bg-sky-400" /> Response time (ms)
+            </span>
+          </div>
+        </div>
+        <RangeControls timeRange={timeRange} setTimeRange={setTimeRange} />
+      </div>
+
+      {hasEnoughTrendData ? (
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={trendData} margin={{ top: 10, right: 6, bottom: 0, left: 4 }}>
+              <defs>
+                <linearGradient id="combinedUptimeGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.22} />
+                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+              <YAxis yAxisId="uptime" domain={[98.5, 100]} width={58} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+              <YAxis yAxisId="latency" orientation="right" width={48} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}ms`} />
+              <Tooltip content={<CustomTooltip />} />
+              <Area yAxisId="uptime" type="monotone" dataKey="uptime" stroke="#34d399" strokeWidth={2} fill="url(#combinedUptimeGradient)" name="uptime" />
+              <Line yAxisId="latency" type="monotone" dataKey="responseTime" stroke="#60a5fa" strokeWidth={2} dot={false} name="responseTime" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-white/[0.06] bg-slate-950/25 px-4 text-center">
+          <div>
+            <p className="text-sm font-medium text-slate-300">
+              {noMatchingMonitors ? 'No monitors match these tags' : 'Not enough trend data yet'}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Trend lines will appear after at least two populated buckets.'}
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function NeedsAttentionPanel({
+  monitors,
+  loading,
+  noMatchingMonitors,
+}: {
+  monitors: DashboardProblemMonitor[];
+  loading: boolean;
+  noMatchingMonitors: boolean;
+}) {
+  return (
+    <SectionCard
+      className="min-w-0"
+      title="Needs attention"
+      action={monitors.length > 0 ? <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-rose-300">{monitors.length}</span> : undefined}
+    >
+      {loading ? (
+        <SectionLoadingState message="Loading monitors needing attention..." />
+      ) : monitors.length > 0 ? (
+        <div className="dashboard-scroll max-h-72 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
+          {monitors.map((monitor) => (
+            <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          message={noMatchingMonitors ? 'No monitors match these tags' : 'No monitors need immediate action'}
+          sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Resolved history appears in What changed.'}
+        />
+      )}
+    </SectionCard>
+  );
+}
+
+function healthBars(group: ServiceGroup) {
+  const bars = 24;
+  const amberBars = group.attentionCount > 0 ? Math.min(3, group.attentionCount) : 0;
+  return Array.from({ length: bars }, (_, index) => {
+    const isAttention = index >= bars - amberBars;
+    return (
+      <span
+        key={index}
+        className={`h-5 w-1 rounded-full ${isAttention ? 'bg-amber-400' : group.status === 'idle' ? 'bg-slate-700' : 'bg-emerald-400'}`}
+      />
+    );
+  });
+}
+
+function ServiceGroupsPanel({ groups }: { groups: ServiceGroup[] }) {
+  return (
+    <SectionCard
+      title="Service groups"
+      action={
+        <Link href="/monitors" className="inline-flex items-center gap-1.5 text-cyan-400 transition-colors hover:text-cyan-300">
+          View all monitors <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      }
+    >
+      {groups.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-white/[0.04] text-[11px] uppercase tracking-wider text-slate-500">
+                <th className="py-3 pr-4 font-medium">Status</th>
+                <th className="py-3 pr-4 font-medium">Group</th>
+                <th className="py-3 pr-4 font-medium">Health</th>
+                <th className="py-3 pr-4 font-medium">Uptime</th>
+                <th className="py-3 font-medium">Attention</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/[0.04]">
+              {groups.map((group) => (
+                <tr key={group.name}>
+                  <td className="py-3 pr-4">
+                    <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full ${group.status === 'attention' ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                      {group.status === 'attention' ? <AlertTriangle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                    </span>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <p className="font-medium text-white">{group.name}</p>
+                    <p className="text-xs text-slate-500">{group.description}</p>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <div className="flex gap-1">{healthBars(group)}</div>
+                  </td>
+                  <td className="py-3 pr-4 text-white tabular-nums">{group.uptime.toFixed(2)}%</td>
+                  <td className={`py-3 tabular-nums ${group.attentionCount > 0 ? 'text-amber-300' : 'text-slate-500'}`}>{group.attentionCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState message="No service groups yet" sub="Create monitors to populate dashboard groups." />
+      )}
+    </SectionCard>
+  );
+}
+
+function timelineIcon(item: ActivityTimelineItem) {
+  const classes =
+    item.tone === 'danger'
+      ? 'bg-rose-500 text-white'
+      : item.tone === 'warning'
+        ? 'bg-amber-500 text-white'
+        : item.tone === 'success'
+          ? 'bg-emerald-500 text-white'
+          : 'bg-sky-500 text-white';
+
+  const Icon =
+    item.tone === 'danger'
+      ? AlertTriangle
+      : item.tone === 'warning'
+        ? Activity
+        : item.tone === 'success'
+          ? Check
+          : Clock3;
+
+  return (
+    <span className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${classes}`}>
+      <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+    </span>
+  );
+}
+
+function WhatChangedTimeline({
+  items,
+  loading,
+}: {
+  items: ActivityTimelineItem[];
+  loading: boolean;
+}) {
+  return (
+    <SectionCard
+      title="What changed"
+      action={
+        <Link href="/alerts" className="inline-flex items-center gap-1.5 text-cyan-400 transition-colors hover:text-cyan-300">
+          View all <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      }
+    >
+      {loading ? (
+        <SectionLoadingState message="Loading recent activity..." />
+      ) : items.length > 0 ? (
+        <div className="dashboard-scroll max-h-80 overflow-y-auto py-3 pr-1">
+          <div className="relative space-y-4">
+            <div className="absolute bottom-3 left-3.5 top-3 w-px bg-white/[0.08]" />
+            {items.map((item) => (
+              <div key={item.id} className="relative flex gap-3">
+                {timelineIcon(item)}
+                <div className="min-w-0 flex-1 border-b border-white/[0.04] pb-4">
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-white">{item.label}</p>
+                      <p className="mt-0.5 break-words text-sm text-slate-300">{item.title}</p>
+                      {item.detail && <p className="mt-0.5 text-xs text-slate-500">{item.detail}</p>}
+                    </div>
+                    <span className="shrink-0 text-xs text-slate-500">{item.relativeTime}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <EmptyState message="No recent activity" sub="Failures and alerts will appear here when checks change state." />
+      )}
+    </SectionCard>
+  );
+}
+
 // ─── Dashboard Page ────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -644,13 +790,13 @@ export default function DashboardPage() {
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d' | '90d' | '365d'>('24h');
+  const [timeRange, setTimeRange] = useState<DashboardRange>('24h');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const requestSequenceRef = useRef(0);
 
   const loadSecondarySections = useCallback(async (
     requestID: number,
-    range: '24h' | '7d' | '30d' | '90d' | '365d',
+    range: DashboardRange,
     tags: string[]
   ) => {
     try {
@@ -764,30 +910,37 @@ export default function DashboardPage() {
     }));
   }, [dashboard]);
 
-  const hasTrendData = useMemo(() => trendData.some((d) => d.total > 0), [trendData]);
-  const uptimeTrend = useMemo(() => computeUptimeTrend(trendData), [trendData]);
-  const responseTrend = useMemo(() => computeResponseTrend(trendData), [trendData]);
+  const populatedTrendPoints = useMemo(() => trendData.filter((d) => d.total > 0).length, [trendData]);
+  const hasEnoughTrendData = populatedTrendPoints >= 2;
 
   const opsSummary = dashboard?.ops_summary;
-  const problemMonitors = problemMonitorsData || [];
-  const recentFailures = recentFailuresData || [];
-  const recentAlerts = recentAlertsData || [];
+  const problemMonitors = useMemo(() => problemMonitorsData || [], [problemMonitorsData]);
+  const recentFailures = useMemo(() => recentFailuresData || [], [recentFailuresData]);
+  const recentAlerts = useMemo(() => recentAlertsData || [], [recentAlertsData]);
 
   const stats = dashboard?.stats;
   const totalMonitors = stats?.total_monitors || 0;
-  const activeMonitors = stats?.active_monitors || 0;
-  const httpMonitors = stats?.http_monitors || 0;
-  const agentMonitors = stats?.agent_monitors || 0;
-  const avgUptime = (stats?.overall_uptime || 0).toFixed(2);
-  const avgResponseTime = Math.round(stats?.avg_response_ms || 0);
   const hasTagFilter = selectedTags.length > 0;
   const noMatchingMonitors = hasTagFilter && totalMonitors === 0;
-
-  const minUptime = useMemo(() => {
-    if (!hasTrendData) return 95;
-    return Math.min(...trendData.map((d) => (d.total > 0 ? d.uptime ?? 100 : 100)));
-  }, [trendData, hasTrendData]);
-  const uptimeDomain: [number, number] = minUptime < 95 ? [0, 100] : [95, 100];
+  const operationalSummary = useMemo(
+    () => buildOperationalSummary({
+      opsSummary,
+      problemMonitorsCount: problemMonitors.length,
+      recentFailuresCount: recentFailures.length,
+      overallUptime: stats?.overall_uptime || 0,
+      avgResponseMs: stats?.avg_response_ms || 0,
+    }),
+    [opsSummary, problemMonitors.length, recentFailures.length, stats?.avg_response_ms, stats?.overall_uptime],
+  );
+  const needsAttention = useMemo(() => sortNeedsAttention(problemMonitors), [problemMonitors]);
+  const serviceGroups = useMemo(
+    () => buildServiceGroups({ stats, problemMonitorsCount: problemMonitors.length }),
+    [stats, problemMonitors.length],
+  );
+  const timelineItems = useMemo(
+    () => buildActivityTimeline({ failures: recentFailures, alerts: recentAlerts }).slice(0, 8),
+    [recentAlerts, recentFailures],
+  );
 
   const selectedRangeDays = useMemo(() => {
     if (timeRange === '24h') return 1;
@@ -811,11 +964,10 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Header */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-white">Dashboard</h1>
-          <p className="mt-0.5 text-sm text-slate-500">Overview of your monitoring infrastructure</p>
+          <p className="mt-0.5 text-sm text-slate-500">Real-time overview of your monitoring environment</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <TagFilterPicker
@@ -824,15 +976,20 @@ export default function DashboardPage() {
             onToggleTag={toggleTag}
             onClear={clearTags}
           />
-          {(['24h', '7d', '30d', '90d', '365d'] as const).map((range) => (
-            <button
-              key={range}
-              onClick={() => setTimeRange(range)}
-              className={`btn-filter ${timeRange === range ? 'is-active' : ''}`}
-            >
-              {range}
-            </button>
-          ))}
+          <Link
+            href="/monitors/new"
+            className="inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white"
+          >
+            <Plus className="h-4 w-4" strokeWidth={1.8} />
+            Add monitor
+          </Link>
+          <button
+            onClick={loadData}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.04] text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white"
+            aria-label="Refresh dashboard"
+          >
+            <RefreshCw className="h-4 w-4" strokeWidth={1.8} />
+          </button>
         </div>
       </div>
 
@@ -866,234 +1023,29 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Stat Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Overall Uptime"
-          value={avgUptime}
-          unit="%"
-          trend={uptimeTrend}
-          higherIsBetter={true}
-          infoEntries={[
-            { label: 'Period', value: timeRange },
-            { label: 'Monitors', value: `${activeMonitors} active` },
-          ]}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          }
+      <OperationalSummaryCard summary={operationalSummary} />
+
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
+        <UptimeResponseChart
+          trendData={trendData}
+          hasEnoughTrendData={hasEnoughTrendData}
+          timeRange={timeRange}
+          setTimeRange={setTimeRange}
+          noMatchingMonitors={noMatchingMonitors}
         />
-        <StatCard
-          label="Avg Response"
-          value={avgResponseTime}
-          unit="ms"
-          trend={responseTrend}
-          higherIsBetter={false}
-          infoEntries={[
-            { label: 'Period', value: timeRange },
-            { label: 'Scope', value: 'HTTP monitors' },
-          ]}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Total Monitors"
-          value={totalMonitors}
-          subtitle={`${httpMonitors} HTTP · ${agentMonitors} Agent`}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Active"
-          value={activeMonitors}
-          subtitle={
-            totalMonitors > 0
-              ? `${((activeMonitors / totalMonitors) * 100).toFixed(0)}% enabled`
-              : 'No monitors configured'
-          }
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.829a5 5 0 010-7.07m7.072 0a5 5 0 010 7.07M13 12a1 1 0 11-2 0 1 1 0 012 0z" />
-            </svg>
-          }
+        <NeedsAttentionPanel
+          monitors={needsAttention}
+          loading={problemMonitorsData === null}
+          noMatchingMonitors={noMatchingMonitors}
         />
       </div>
 
-      {/* Fleet Status Bar */}
-      <FleetStatusBar
-        up={opsSummary?.up_monitors ?? 0}
-        down={opsSummary?.down_monitors ?? 0}
-        paused={opsSummary?.paused_monitors ?? 0}
-        activeAlerts={opsSummary?.active_alerts ?? 0}
-        acknowledgedAlerts={opsSummary?.acknowledged_alerts ?? 0}
-      />
-
-      {/* Charts */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Uptime Trend */}
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-medium text-white">Uptime Trend</h3>
-              <InfoPopover
-                entries={[{ label: 'Metric', value: 'Monitor-weighted average uptime across all enabled services for the selected period' }]}
-                title="Uptime Trend"
-              />
-            </div>
-            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" /> Uptime
-            </span>
-          </div>
-          {hasTrendData ? (
-            <div className="h-44">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trendData}>
-                  <defs>
-                    <linearGradient id="uptimeGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <YAxis domain={uptimeDomain} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Area type="monotone" dataKey="uptime" stroke="#10b981" strokeWidth={2} fill="url(#uptimeGradient)" name="uptime" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <div className="flex h-44 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
-              <p className="text-sm text-slate-500">{noMatchingMonitors ? 'No monitors match these tags' : 'No uptime data yet'}</p>
-            </div>
-          )}
-        </div>
-
-        {/* Response Time */}
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-medium text-white">Response Time</h3>
-              <InfoPopover
-                entries={[{ label: 'Metric', value: 'Average HTTP response latency across all active monitors for the selected period' }]}
-                title="Response Time"
-              />
-            </div>
-            <span className="flex items-center gap-1.5 text-xs text-cyan-400">
-              <span className="h-2 w-2 rounded-full bg-cyan-400" /> Latency
-            </span>
-          </div>
-          {hasTrendData ? (
-            <div className="h-44">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trendData}>
-                  <defs>
-                    <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.25} />
-                      <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}ms`} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Area type="monotone" dataKey="responseTime" stroke="#06b6d4" strokeWidth={2} fill="url(#latencyGradient)" name="responseTime" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <div className="flex h-44 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
-              <p className="text-sm text-slate-500">{noMatchingMonitors ? 'No monitors match these tags' : 'No response time data yet'}</p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Bottom Grid: Problems | Failures + Alerts */}
-      <div className="grid items-start gap-4 lg:grid-cols-2">
-        {/* Problem Monitors */}
-        <SectionCard
-          className="min-w-0"
-          title="Problem Monitors"
-          action={
-            <Link href="/monitors" className="text-cyan-400 hover:text-cyan-300 transition-colors">
-              View all →
-            </Link>
-          }
-        >
-          {problemMonitorsData === null ? (
-            <SectionLoadingState message="Loading problem monitors..." />
-          ) : problemMonitors.length > 0 ? (
-            <div className="dashboard-scroll max-h-80 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
-              {problemMonitors.map((monitor) => (
-                <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              message={noMatchingMonitors ? 'No monitors match these tags' : 'No problem monitors'}
-              sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'All monitors are running cleanly in this range.'}
-            />
-          )}
-        </SectionCard>
-
-        {/* Right Column: Failures + Alerts */}
-        <div className="grid min-w-0 gap-4">
-          <SectionCard
-            className="min-w-0"
-            title="Recent Failures"
-            action={
-              recentFailures.length > 0 ? (
-                <span className="text-slate-500">{recentFailures.length} event{recentFailures.length !== 1 ? 's' : ''}</span>
-              ) : undefined
-            }
-          >
-            {recentFailuresData === null ? (
-              <SectionLoadingState message="Loading recent failures..." />
-            ) : recentFailures.length > 0 ? (
-              <div className="dashboard-scroll max-h-64 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
-                {recentFailures.map((event) => (
-                  <FailureItem key={event.check_result_id} event={event} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                message={noMatchingMonitors ? 'No monitors match these tags' : 'No recent failures'}
-                sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Failure events will appear here when checks fail.'}
-              />
-            )}
-          </SectionCard>
-
-          <SectionCard
-            className="min-w-0"
-            title="Recent Alerts"
-            action={
-              <Link href="/alerts" className="text-cyan-400 hover:text-cyan-300 transition-colors">
-                View all →
-              </Link>
-            }
-          >
-            {recentAlertsData === null ? (
-              <SectionLoadingState message="Loading recent alerts..." />
-            ) : recentAlerts.length > 0 ? (
-              <div className="dashboard-scroll max-h-52 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
-                {recentAlerts.map((alert) => (
-                  <AlertItem key={alert.id} alert={alert} />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                message={noMatchingMonitors ? 'No monitors match these tags' : 'No recent alerts'}
-                sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Alerts appear when failures trigger your policies.'}
-              />
-            )}
-          </SectionCard>
-        </div>
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
+        <ServiceGroupsPanel groups={serviceGroups} />
+        <WhatChangedTimeline
+          items={timelineItems}
+          loading={recentFailuresData === null || recentAlertsData === null}
+        />
       </div>
     </div>
   );
