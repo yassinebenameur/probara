@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import {
   getDashboardProblemMonitors,
   getDashboardRecentAlerts,
@@ -9,6 +8,10 @@ import {
   getDashboardSummary,
   getTenantSettings,
 } from '@/lib/api';
+import Button from '@/components/ui/Button';
+import Pill, { PillTone } from '@/components/ui/Pill';
+import FilterChip from '@/components/ui/FilterChip';
+import InfoTip, { InfoTipEntry } from '@/components/ui/InfoTip';
 import {
   Alert,
   DashboardFailureEvent,
@@ -66,115 +69,9 @@ function formatRelativeTime(dateString: string): string {
 }
 
 // ─── Info Popover ──────────────────────────────────────────────────────────────
+// Now provided by <InfoTip> from components/ui/InfoTip.
 
-type PopoverEntry = { label: string; value: string | number };
-
-function InfoPopover({ entries, title }: { entries: PopoverEntry[]; title?: string }) {
-  const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState({
-    left: 0,
-    top: 0,
-    placement: 'top' as 'top' | 'bottom',
-    ready: false,
-  });
-  const ref = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
-
-  const updatePosition = useCallback(() => {
-    const trigger = buttonRef.current;
-    if (!trigger) return;
-
-    const rect = trigger.getBoundingClientRect();
-    const popoverWidth = popoverRef.current?.offsetWidth ?? 208;
-    const popoverHeight = popoverRef.current?.offsetHeight ?? 0;
-    const viewportPadding = 12;
-    const offset = 8;
-    const canPlaceAbove = rect.top >= popoverHeight + offset + viewportPadding;
-    const left = Math.min(
-      window.innerWidth - viewportPadding - popoverWidth / 2,
-      Math.max(viewportPadding + popoverWidth / 2, rect.left + rect.width / 2)
-    );
-
-    setPosition({
-      left,
-      top: canPlaceAbove ? rect.top - offset : rect.bottom + offset,
-      placement: canPlaceAbove ? 'top' : 'bottom',
-      ready: true,
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const frame = window.requestAnimationFrame(updatePosition);
-
-    function onClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (ref.current?.contains(target) || popoverRef.current?.contains(target)) return;
-      setOpen(false);
-    }
-
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-
-    document.addEventListener('mousedown', onClickOutside);
-    document.addEventListener('keydown', onKey);
-    window.addEventListener('resize', updatePosition);
-    document.addEventListener('scroll', updatePosition, true);
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener('mousedown', onClickOutside);
-      document.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', updatePosition);
-      document.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [open, updatePosition]);
-
-  return (
-    <div className="relative inline-flex" ref={ref}>
-      <button
-        ref={buttonRef}
-        onClick={() => setOpen((v) => !v)}
-        className="flex h-4 w-4 items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-300 focus:outline-none"
-        aria-label="Show details"
-      >
-        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      </button>
-      {open && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={popoverRef}
-          className="fixed left-0 top-0 z-[100] w-52 rounded-lg border border-white/10 bg-slate-800 shadow-xl"
-          style={{
-            left: position.left,
-            top: position.top,
-            opacity: position.ready ? 1 : 0,
-            transform: position.placement === 'top' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
-          }}
-        >
-          {title && (
-            <div className="border-b border-white/[0.06] px-3 py-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{title}</p>
-            </div>
-          )}
-          <div className="divide-y divide-white/[0.04] px-3 py-1">
-            {entries.map((e, i) => (
-              <div key={i} className="flex items-center justify-between py-1.5">
-                <span className="text-xs text-slate-500">{e.label}</span>
-                <span className="text-xs font-medium text-slate-200">{e.value}</span>
-              </div>
-            ))}
-          </div>
-        </div>,
-        document.body
-      )}
-    </div>
-  );
-}
+type PopoverEntry = InfoTipEntry;
 
 function TagFilterPicker({
   availableTags,
@@ -244,22 +141,15 @@ function TagFilterPicker({
             )}
           </div>
           <div className="flex max-h-56 flex-wrap gap-2 overflow-y-auto pr-1">
-            {availableTags.map((tag) => {
-              const selected = selectedTags.includes(tag);
-              return (
-                <button
-                  key={tag}
-                  onClick={() => onToggleTag(tag)}
-                  className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                    selected
-                      ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200'
-                      : 'border-white/[0.08] bg-slate-900 text-slate-300 hover:text-white'
-                  }`}
-                >
-                  {tag}
-                </button>
-              );
-            })}
+            {availableTags.map((tag) => (
+              <FilterChip
+                key={tag}
+                selected={selectedTags.includes(tag)}
+                onClick={() => onToggleTag(tag)}
+              >
+                {tag}
+              </FilterChip>
+            ))}
           </div>
         </div>
       )}
@@ -277,21 +167,19 @@ function SectionLoadingState({ message }: { message: string }) {
 
 // ─── Status Pill ───────────────────────────────────────────────────────────────
 
+const STATUS_TONE: Record<string, PillTone> = {
+  success: 'success',
+  error: 'warning',
+  failure: 'danger',
+};
+
 function StatusPill({ status }: { status: string | null | undefined }) {
   const normalized = status || 'paused';
-  const classes =
-    normalized === 'success'
-      ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
-      : normalized === 'error'
-        ? 'border-amber-500/20 bg-amber-500/10 text-amber-400'
-        : normalized === 'failure'
-          ? 'border-rose-500/20 bg-rose-500/10 text-rose-400'
-          : 'border-slate-500/20 bg-slate-500/10 text-slate-400';
-
+  const tone = STATUS_TONE[normalized] ?? 'neutral';
   return (
-    <span className={`rounded border px-2 py-0.5 text-[10px] font-medium uppercase ${classes}`}>
+    <Pill tone={tone} size="xs" className="uppercase tracking-wider">
       {normalized}
-    </span>
+    </Pill>
   );
 }
 
@@ -332,7 +220,7 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
             >
               {monitor.monitor_name}
             </Link>
-            <InfoPopover entries={infoEntries} title={monitor.monitor_name} />
+            <InfoTip entries={infoEntries} title={monitor.monitor_name} />
           </div>
           <div className="mt-2 flex items-center gap-3">
             {/* Uptime bar */}
@@ -525,13 +413,13 @@ function RangeControls({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {(['24h', '7d', '30d', '90d', '365d'] as DashboardRange[]).map((range) => (
-        <button
+        <FilterChip
           key={range}
+          selected={timeRange === range}
           onClick={() => setTimeRange(range)}
-          className={`btn-filter ${timeRange === range ? 'is-active' : ''}`}
         >
           {range}
-        </button>
+        </FilterChip>
       ))}
     </div>
   );
@@ -556,7 +444,7 @@ function UptimeResponseChart({
         <div>
           <div className="flex items-center gap-2">
             <h3 className="text-base font-semibold text-white">Uptime & response time</h3>
-            <InfoPopover
+            <InfoTip
               entries={[{ label: 'Metric', value: 'Uptime and average HTTP latency for the selected range' }]}
               title="Uptime & response time"
             />
@@ -906,19 +794,16 @@ export default function DashboardPage() {
             onToggleTag={toggleTag}
             onClear={clearTags}
           />
-          <Link
-            href="/monitors/new"
-            className="inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white"
-          >
-            <Plus className="h-4 w-4" strokeWidth={1.8} />
-            Add monitor
-          </Link>
+          <Button variant="ghost" icon={<Plus strokeWidth={1.75} />} asChild>
+            <Link href="/monitors/new">Add monitor</Link>
+          </Button>
           <button
+            type="button"
             onClick={loadData}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.04] text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-[12px] border border-white/10 bg-white/[0.04] text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
             aria-label="Refresh dashboard"
           >
-            <RefreshCw className="h-4 w-4" strokeWidth={1.8} />
+            <RefreshCw className="h-4 w-4" strokeWidth={1.75} />
           </button>
         </div>
       </div>
