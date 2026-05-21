@@ -14,7 +14,6 @@ import {
   Settings,
   LogOut,
   Zap,
-  CheckCircle2,
   Siren,
 } from 'lucide-react';
 import { getMonitors, getAlertChannels, getAlertPolicies, getStatusPages, getIncidents } from '@/lib/api';
@@ -141,7 +140,7 @@ export default function Sidebar() {
     .filter((group) => group.items.length > 0);
 
   return (
-    <aside className="sticky top-0 flex h-screen w-60 flex-col border-r border-white/[0.06] bg-slate-950/50 backdrop-blur-xl">
+    <aside className="sticky top-0 hidden h-screen w-60 flex-col border-r border-white/[0.06] bg-slate-950/50 backdrop-blur-xl md:flex">
       {/* Logo */}
       <div className="flex h-14 items-center gap-3 border-b border-white/[0.06] px-4">
         <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-400 to-violet-500">
@@ -208,11 +207,10 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-white/[0.06] px-4 py-3">
-        {/* System status */}
         <div className="mb-3 flex items-center gap-2">
-          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-emerald-400" strokeWidth={2} />
+          <Activity className="h-3.5 w-3.5 flex-shrink-0 text-cyan-400" strokeWidth={2} />
           <div className="min-w-0">
-            <p className="truncate text-[0.72rem] font-medium text-emerald-400">All systems operational</p>
+            <p className="truncate text-[0.72rem] font-medium text-slate-300">Monitoring workspace</p>
             <p className="text-[0.68rem] text-slate-600">{counts.monitors} monitor{counts.monitors !== 1 ? 's' : ''} active</p>
           </div>
         </div>
