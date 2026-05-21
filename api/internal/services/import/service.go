@@ -637,7 +637,21 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 	// First pass: create non-group monitors and collect references for group resolution.
 	monitorNameToID := make(map[string]uuid.UUID)
 	monitorNameToIDs := make(map[string][]uuid.UUID)
+	importedKeys := make(map[string]struct{})
 	groupRows := make([]int, 0)
+
+	existingMonitors, err := s.loadAllMonitors(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, monitor := range existingMonitors {
+		key := importDuplicateKey(monitor.Name, string(monitor.Type))
+		if key != "" {
+			importedKeys[key] = struct{}{}
+		}
+		monitorNameToID[monitor.Name] = monitor.ID
+		monitorNameToIDs[monitor.Name] = append(monitorNameToIDs[monitor.Name], monitor.ID)
+	}
 
 	for i, row := range req.Rows {
 		result := models.ImportRowResult{
@@ -678,6 +692,15 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 			continue
 		}
 
+		duplicateKey := importDuplicateKey(name, monitorType)
+		if _, exists := importedKeys[duplicateKey]; exists {
+			result.Status = "skipped"
+			result.SkipReason = fmt.Sprintf("Monitor '%s' (%s) already exists", name, monitorType)
+			skippedCount++
+			results[i] = result
+			continue
+		}
+
 		// Defer group monitors to second pass
 		if monitorType == "group" {
 			groupRows = append(groupRows, i)
@@ -709,6 +732,7 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		results[i] = result
 
 		// Store name->ID mapping for group resolution
+		importedKeys[duplicateKey] = struct{}{}
 		monitorNameToID[name] = monitor.ID
 		monitorNameToIDs[name] = append(monitorNameToIDs[name], monitor.ID)
 	}
@@ -717,6 +741,15 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 	for _, i := range groupRows {
 		row := req.Rows[i]
 		result := results[i]
+
+		duplicateKey := importDuplicateKey(result.Name, result.Type)
+		if _, exists := importedKeys[duplicateKey]; exists {
+			result.Status = "skipped"
+			result.SkipReason = fmt.Sprintf("Monitor '%s' (%s) already exists", result.Name, result.Type)
+			skippedCount++
+			results[i] = result
+			continue
+		}
 
 		var (
 			monitor *models.Monitor
@@ -740,6 +773,7 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		result.MonitorID = &monitorID
 		successCount++
 		results[i] = result
+		importedKeys[duplicateKey] = struct{}{}
 		monitorNameToID[result.Name] = monitor.ID
 		monitorNameToIDs[result.Name] = append(monitorNameToIDs[result.Name], monitor.ID)
 	}
@@ -1258,6 +1292,15 @@ func isSupportedMonitorType(monitorType string) bool {
 	default:
 		return false
 	}
+}
+
+func importDuplicateKey(name, monitorType string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	monitorType = strings.ToLower(strings.TrimSpace(monitorType))
+	if name == "" || monitorType == "" {
+		return ""
+	}
+	return monitorType + "\x00" + name
 }
 
 func activeCheckType(monitorType models.MonitorType) bool {

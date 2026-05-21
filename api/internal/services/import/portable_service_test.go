@@ -322,6 +322,61 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 	}
 }
 
+func TestExecuteImport_SkipsAlreadyImportedMonitors(t *testing.T) {
+	tenantID := uuid.New()
+	existingAPIID := uuid.New()
+	monitorSvc := &portableMonitorServiceMock{
+		listMonitors: []models.Monitor{
+			{
+				ID:       existingAPIID,
+				TenantID: tenantID,
+				Name:     "API",
+				Type:     models.MonitorTypeHTTP,
+			},
+		},
+	}
+
+	svc := NewService(nil, monitorSvc)
+	result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
+		Rows: []models.ImportRow{
+			rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com/health", "method": "GET"}, nil, nil, 60, 30),
+			rowWithConfig(1, "Ping", "ping", map[string]interface{}{"host": "example.com"}, nil, nil, 60, 30),
+			rowWithConfig(2, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"API", "Ping"}, 60, 0),
+		},
+		Mapping: models.FieldMapping{
+			Name:            "name",
+			Type:            "type",
+			Config:          "config",
+			IntervalSeconds: "interval_seconds",
+			TimeoutSeconds:  "timeout_seconds",
+			Enabled:         "enabled",
+			GroupMembers:    "group_members",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteImport() error = %v", err)
+	}
+
+	if result.SuccessCount != 2 || result.SkippedCount != 1 || result.FailedCount != 0 {
+		t.Fatalf("unexpected import counts: %+v", result)
+	}
+	if result.Results[0].Status != "skipped" || !strings.Contains(result.Results[0].SkipReason, "already exists") {
+		t.Fatalf("unexpected duplicate result: %+v", result.Results[0])
+	}
+	if len(monitorSvc.createRequests) != 2 {
+		t.Fatalf("len(createRequests) = %d, want 2", len(monitorSvc.createRequests))
+	}
+
+	groupConfig := decodeConfig(t, monitorSvc.createRequests[1].Config)
+	memberIDs, ok := groupConfig["monitor_ids"].([]interface{})
+	if !ok || len(memberIDs) != 2 {
+		t.Fatalf("group monitor_ids = %#v, want two member IDs", groupConfig["monitor_ids"])
+	}
+	if memberIDs[0] != existingAPIID.String() {
+		t.Fatalf("first group member ID = %v, want existing API ID %s", memberIDs[0], existingAPIID)
+	}
+}
+
 func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
 	t.Run("missing alert policy fails row", func(t *testing.T) {
 		tenantID := uuid.New()
