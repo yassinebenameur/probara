@@ -1,21 +1,23 @@
+import { ReactNode } from 'react';
+import Pill, { PillTone } from './Pill';
+
 interface TagPillProps {
-  children: React.ReactNode;
+  children: ReactNode;
   variant?: 'default' | 'latency';
 }
 
-export default function TagPill({ children, variant = 'default' }: TagPillProps) {
-  if (variant === 'latency') {
-    return (
-      <span className="rounded-full border border-[rgba(56,189,248,0.6)] bg-[rgba(15,23,42,0.95)] px-1.5 py-0.5 text-[0.72rem] text-[#e0f2fe]">
-        {children}
-      </span>
-    );
-  }
+const TONE: Record<NonNullable<TagPillProps['variant']>, PillTone> = {
+  default: 'neutral',
+  latency: 'info',
+};
 
+/**
+ * @deprecated Use `<Pill tone="neutral|info" size="xs" />` directly.
+ */
+export default function TagPill({ children, variant = 'default' }: TagPillProps) {
   return (
-    <span className="rounded-full border border-[rgba(148,163,184,0.6)] bg-[rgba(15,23,42,0.95)] px-1.5 py-0.5 text-[0.7rem] text-gray-200">
+    <Pill tone={TONE[variant]} size="xs">
       {children}
-    </span>
+    </Pill>
   );
 }
-
