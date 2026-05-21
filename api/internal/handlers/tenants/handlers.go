@@ -100,6 +100,13 @@ func (h *Handlers) UpdateTenantSettings(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	if req.DashboardGroupTags != nil {
+		if err := validation.ValidateDashboardGroupTags(*req.DashboardGroupTags); err != nil {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
+	}
+
 	settings, err := h.service.UpdateTenantSettings(r.Context(), tenantUUID, &req)
 	if err != nil {
 		if err.Error() == "tenant not found" {
