@@ -7,6 +7,7 @@ import { ApiKey } from '@/lib/types';
 import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
+import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection';
 
 type ToastState = { message: string; type: 'success' | 'error' } | null;
 
@@ -35,6 +36,7 @@ export default function SettingsPage() {
   const [copiedField, setCopiedField] = useState('');
   const [toast, setToast] = useState<ToastState>(null);
   const [browserKeyPresent, setBrowserKeyPresent] = useState(false);
+  const [groupTags, setGroupTags] = useState<string[]>([]);
 
   useEffect(() => {
     setBrowserKeyPresent(Boolean(getApiKey()));
@@ -62,6 +64,7 @@ export default function SettingsPage() {
       const value = settings.data_retention_days || 0;
       setRetentionDays(value);
       setRetentionInput(value === 0 ? '' : String(value));
+      setGroupTags(settings.dashboard_group_tags || []);
     } catch (err: any) {
       setRetentionError(err.message || 'Failed to load data retention settings');
     } finally {
@@ -261,6 +264,11 @@ export default function SettingsPage() {
           </div>
         )}
       </Panel>
+
+      <DashboardGroupsSection
+        initialTags={groupTags}
+        onSaved={(next) => setGroupTags(next)}
+      />
 
       <Panel
         title="API Keys"
