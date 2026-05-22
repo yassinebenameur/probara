@@ -53,6 +53,8 @@ import type {
   CreateIncidentTimelineEntryRequest,
   PublishIncidentToStatusPageRequest,
   IncidentState,
+  BulkAlertPolicyOp,
+  BulkUpdateMonitorAlertPolicyResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -698,6 +700,22 @@ export async function removeMonitorsFromGroup(
 
 export async function getGroupMembers(groupId: string): Promise<Monitor[]> {
   return apiRequest<Monitor[]>('GET', `/v1/monitors/${groupId}/members`);
+}
+
+export async function bulkUpdateMonitorAlertPolicy(
+  monitorIds: string[],
+  policyId: string,
+  op: BulkAlertPolicyOp,
+): Promise<BulkUpdateMonitorAlertPolicyResponse> {
+  return apiRequest<BulkUpdateMonitorAlertPolicyResponse>(
+    'POST',
+    '/v1/monitors/bulk/alert-policy',
+    {
+      monitor_ids: monitorIds,
+      policy_id: policyId,
+      op,
+    },
+  );
 }
 
 // Agent API functions

@@ -993,6 +993,21 @@ export interface RemoveMonitorsFromGroupRequest {
   monitor_ids: string[];
 }
 
+// Bulk alert policy types
+export type BulkAlertPolicyOp = 'attach' | 'detach';
+
+export interface BulkUpdateMonitorAlertPolicyRequest {
+  monitor_ids: string[];
+  policy_id: string;
+  op: BulkAlertPolicyOp;
+}
+
+export interface BulkUpdateMonitorAlertPolicyResponse {
+  updated: number;
+  unchanged: number;
+  monitor_ids_updated: string[];
+}
+
 // Import types
 export type ImportFormat = 'json' | 'yaml' | 'csv';
 
