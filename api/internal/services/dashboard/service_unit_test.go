@@ -189,3 +189,73 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+
+func TestService_LoadGroups_LongRangeUsesRollups(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	rangeStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	rangeEnd := time.Date(2026, time.April, 30, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("monitor_daily_rollups").
+		WithArgs(tenantID, rangeStart, rangeEnd).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "tags", "current_status", "uptime", "needs_attention",
+		}).AddRow(monitorID, "api", "{api}", "success", 99.5, false))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
+
+	groups, err := svc.loadGroups(context.Background(), tenantID, models.DashboardRange30d, rangeStart, rangeEnd, nil, []string{"api"})
+	if err != nil {
+		t.Fatalf("loadGroups() error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	}
+	if groups[0].MonitorCount != 1 {
+		t.Fatalf("MonitorCount = %d, want 1", groups[0].MonitorCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestService_LoadGroups_24hUsesHourlyRollups(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	rangeStart := time.Date(2026, time.April, 1, 18, 0, 0, 0, time.UTC)
+	rangeEnd := time.Date(2026, time.April, 2, 18, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("monitor_hourly_rollups").
+		WithArgs(tenantID, rangeStart, rangeEnd).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "tags", "current_status", "uptime", "needs_attention",
+		}).AddRow(monitorID, "api", "{api}", "failure", 97.5, true))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
+
+	groups, err := svc.loadGroups(context.Background(), tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
+	if err != nil {
+		t.Fatalf("loadGroups() error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	}
+	if groups[0].AttentionCount != 1 {
+		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}

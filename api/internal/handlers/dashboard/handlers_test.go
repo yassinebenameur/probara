@@ -16,12 +16,12 @@ import (
 )
 
 type mockDashboardService struct {
-	lastOverviewParams           *models.DashboardOverviewQuery
-	lastSummaryParams            *models.DashboardOverviewQuery
-	lastProblemMonitorsParams    *models.DashboardListQuery
-	lastRecentFailuresParams     *models.DashboardListQuery
-	lastRecentAlertsParams       *models.DashboardListQuery
-	lastGroupSparklineParams     *models.DashboardGroupSparklineQuery
+	lastOverviewParams        *models.DashboardOverviewQuery
+	lastSummaryParams         *models.DashboardOverviewQuery
+	lastProblemMonitorsParams *models.DashboardListQuery
+	lastRecentFailuresParams  *models.DashboardListQuery
+	lastRecentAlertsParams    *models.DashboardListQuery
+	lastGroupSparklineParams  *models.DashboardGroupSparklineQuery
 }
 
 func (m *mockDashboardService) GetOverview(ctx context.Context, tenantID uuid.UUID, params *models.DashboardOverviewQuery) (*models.DashboardOverviewResponse, error) {
@@ -254,6 +254,28 @@ func TestHandlers_GetSummary_DefaultParams(t *testing.T) {
 	}
 	if _, ok := body["problem_monitors"]; ok {
 		t.Fatalf("did not expect problem_monitors field in summary response")
+	}
+}
+
+func TestHandlers_GetSummary_OneHourRangeAccepted(t *testing.T) {
+	log := logger.New("test", "debug")
+	mockSvc := &mockDashboardService{}
+	handlers := NewHandlers(mockSvc, log)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/summary?range=1h", nil)
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+
+	w := httptest.NewRecorder()
+	handlers.GetSummary(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+	if mockSvc.lastSummaryParams == nil {
+		t.Fatalf("expected summary params to be passed to service")
+	}
+	if mockSvc.lastSummaryParams.Range != models.DashboardRange("1h") {
+		t.Fatalf("range = %s, want 1h", mockSvc.lastSummaryParams.Range)
 	}
 }
 

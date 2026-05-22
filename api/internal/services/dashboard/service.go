@@ -154,7 +154,7 @@ func (s *Service) GetSummary(ctx context.Context, tenantID uuid.UUID, params *mo
 		groupTags = []string{}
 	}
 
-	groups, err := s.loadGroups(ctx, tenantID, rangeStart, rangeEndExclusive, normalized.Tags, groupTags)
+	groups, err := s.loadGroups(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags, groupTags)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		return stats, fmt.Errorf("failed to query dashboard stats: %w", err)
 	}
 
-	if dashboardRange != models.DashboardRange24h {
+	if isDashboardRollupRange(dashboardRange) {
 		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 		if err != nil {
 			return stats, err
@@ -343,7 +343,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 }
 
 func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string) ([]models.DashboardTrendPoint, error) {
-	if dashboardRange != models.DashboardRange24h {
+	if isDashboardRollupRange(dashboardRange) {
 		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 		if err != nil {
 			return nil, err
@@ -369,16 +369,16 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		return trend, nil
 	}
 
-	unit := "day"
-	interval := "1 day"
+	interval := "1 hour"
 	if dashboardRange == models.DashboardRange24h {
-		unit = "hour"
 		interval = "1 hour"
+	} else if dashboardRange == models.DashboardRange1h {
+		interval = "5 minutes"
 	}
 
-	endExclusive := rangeEnd.Add(24 * time.Hour)
-	if dashboardRange == models.DashboardRange24h {
-		endExclusive = rangeEnd.Add(time.Hour)
+	endExclusive := rangeEnd.Add(time.Hour)
+	if dashboardRange == models.DashboardRange1h {
+		endExclusive = rangeEnd.Add(5 * time.Minute)
 	}
 
 	tagClause := ""
@@ -394,7 +394,7 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		),
 		per_monitor_bucket AS (
 			SELECT
-				date_trunc('%s', cr.created_at) AS bucket_start,
+				date_bin(INTERVAL '%s', cr.created_at, $2::timestamptz) AS bucket_start,
 				cr.monitor_id,
 				COUNT(*) AS total_checks,
 				COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks,
@@ -427,7 +427,7 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		FROM buckets b
 		LEFT JOIN bucket_agg ba ON ba.bucket_start = b.bucket_start
 		ORDER BY b.bucket_start
-	`, interval, unit, tagClause)
+	`, interval, interval, tagClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -544,7 +544,7 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 		%s
 		ORDER BY m.name
 	`, whereClause)
-	if dashboardRange != models.DashboardRange24h {
+	if isDashboardRollupRange(dashboardRange) {
 		query = fmt.Sprintf(`
 			SELECT
 				m.id,
@@ -656,7 +656,7 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 		limit = problemMonitorLimit
 	}
 
-	if dashboardRange == models.DashboardRange24h {
+	if !isDashboardRollupRange(dashboardRange) {
 		return s.getProblemMonitors24h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
 	}
 
@@ -1193,10 +1193,19 @@ func normalizeListParams(params *models.DashboardListQuery, defaultLimit int) mo
 
 func normalizeDashboardRange(rangeValue models.DashboardRange) models.DashboardRange {
 	switch rangeValue {
-	case models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange30d, models.DashboardRange90d, models.DashboardRange365d:
+	case models.DashboardRange1h, models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange30d, models.DashboardRange90d, models.DashboardRange365d:
 		return rangeValue
 	default:
 		return models.DashboardRange24h
+	}
+}
+
+func isDashboardRollupRange(rangeValue models.DashboardRange) bool {
+	switch rangeValue {
+	case models.DashboardRange7d, models.DashboardRange30d, models.DashboardRange90d, models.DashboardRange365d:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1235,6 +1244,9 @@ func resolveFailureState(resolvedAt *time.Time) models.DashboardFailureState {
 func rangeBounds(rangeValue models.DashboardRange) (time.Time, time.Time, time.Duration, error) {
 	now := time.Now().UTC()
 	switch rangeValue {
+	case models.DashboardRange1h:
+		end := now.Truncate(5 * time.Minute)
+		return end.Add(-55 * time.Minute), end, 5 * time.Minute, nil
 	case models.DashboardRange24h:
 		end := now.Truncate(time.Hour)
 		return end.Add(-23 * time.Hour), end, time.Hour, nil
@@ -1261,6 +1273,8 @@ func truncateDayUTC(t time.Time) time.Time {
 
 func formatTrendLabel(bucketStart time.Time, rangeValue models.DashboardRange) string {
 	switch rangeValue {
+	case models.DashboardRange1h:
+		return bucketStart.UTC().Format("15:04")
 	case models.DashboardRange24h:
 		return bucketStart.UTC().Format("15")
 	case models.DashboardRange7d:

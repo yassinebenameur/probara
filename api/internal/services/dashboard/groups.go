@@ -123,6 +123,22 @@ func appendGroupMember(members []models.DashboardGroupMember, row groupAggregati
 func (s *Service) queryMonitorsForGroups(
 	ctx context.Context,
 	tenantID uuid.UUID,
+	dashboardRange models.DashboardRange,
+	rangeStart, rangeEndExclusive time.Time,
+	filterTags []string,
+) ([]groupAggregationRow, error) {
+	if isDashboardRollupRange(dashboardRange) {
+		return s.queryMonitorsForGroupsRollup(ctx, tenantID, rangeStart, rangeEndExclusive, filterTags)
+	}
+	if dashboardRange == models.DashboardRange24h {
+		return s.queryMonitorsForGroups24hHourlyRollup(ctx, tenantID, rangeStart, rangeEndExclusive, filterTags)
+	}
+	return s.queryMonitorsForGroupsRaw(ctx, tenantID, rangeStart, rangeEndExclusive, filterTags)
+}
+
+func (s *Service) queryMonitorsForGroupsRaw(
+	ctx context.Context,
+	tenantID uuid.UUID,
 	rangeStart, rangeEndExclusive time.Time,
 	filterTags []string,
 ) ([]groupAggregationRow, error) {
@@ -215,10 +231,230 @@ func (s *Service) queryMonitorsForGroups(
 	return out, nil
 }
 
+func (s *Service) queryMonitorsForGroups24hHourlyRollup(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	rangeStart, rangeEndExclusive time.Time,
+	filterTags []string,
+) ([]groupAggregationRow, error) {
+	tagClause := ""
+	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
+	if len(filterTags) > 0 {
+		tagClause = "AND m.tags @> $4::text[]"
+		args = append(args, pq.Array(filterTags))
+	}
+
+	query := fmt.Sprintf(`
+		WITH active_monitors AS (
+			SELECT m.id, m.name, COALESCE(m.tags, '{}'::text[]) AS tags
+			FROM monitors m
+			WHERE m.tenant_id = $1
+			  AND m.enabled = TRUE
+			  AND m.type <> 'group'
+			  %s
+		),
+		rollup_state AS (
+			SELECT last_created_at, last_check_result_id
+			FROM rollup_job_state
+			WHERE job_name = 'monitor_daily_rollups'
+		),
+		rollup_totals AS (
+			SELECT
+				mhr.monitor_id,
+				COALESCE(SUM(mhr.total_checks), 0) AS total_checks,
+				COALESCE(SUM(mhr.success_checks), 0) AS success_checks,
+				COALESCE(SUM(mhr.total_checks - mhr.success_checks), 0) AS bad_checks
+			FROM monitor_hourly_rollups mhr
+			JOIN active_monitors am ON am.id = mhr.monitor_id
+			CROSS JOIN rollup_state rs
+			WHERE mhr.tenant_id = $1
+			  AND mhr.bucket_hour >= $2
+			  AND mhr.bucket_hour < $3
+			  AND rs.last_created_at IS NOT NULL
+			GROUP BY mhr.monitor_id
+		),
+		raw_tail AS (
+			SELECT
+				cr.monitor_id,
+				COUNT(*) AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks,
+				COUNT(*) FILTER (WHERE cr.status IN ('failure', 'error')) AS bad_checks
+			FROM check_results cr
+			JOIN active_monitors am ON am.id = cr.monitor_id
+			LEFT JOIN rollup_state rs ON TRUE
+			WHERE cr.tenant_id = $1
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			  AND (
+				rs.last_created_at IS NULL
+				OR (cr.created_at, cr.id) > (
+					rs.last_created_at,
+					COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid)
+				)
+			  )
+			GROUP BY cr.monitor_id
+		),
+		per_monitor AS (
+			SELECT
+				am.id,
+				am.name,
+				am.tags,
+				COALESCE(rt.total_checks, 0) + COALESCE(raw.total_checks, 0) AS total_checks,
+				COALESCE(rt.success_checks, 0) + COALESCE(raw.success_checks, 0) AS success_checks,
+				COALESCE(rt.bad_checks, 0) + COALESCE(raw.bad_checks, 0) AS bad_checks
+			FROM active_monitors am
+			LEFT JOIN rollup_totals rt ON rt.monitor_id = am.id
+			LEFT JOIN raw_tail raw ON raw.monitor_id = am.id
+		)
+		SELECT
+			pm.id,
+			pm.name,
+			pm.tags,
+			latest.current_status,
+			CASE WHEN pm.total_checks > 0
+				THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
+				ELSE 100.0
+			END AS uptime,
+			pm.bad_checks > 0 OR COALESCE(latest.current_status IN ('failure','error'), FALSE) AS needs_attention
+		FROM per_monitor pm
+		LEFT JOIN LATERAL (
+			SELECT cr.status AS current_status
+			FROM check_results cr
+			WHERE cr.monitor_id = pm.id
+			  AND cr.tenant_id = $1
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) latest ON TRUE
+	`, tagClause)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query 24h hourly rollup monitors for groups: %w", err)
+	}
+	defer rows.Close()
+
+	out := []groupAggregationRow{}
+	for rows.Next() {
+		var r groupAggregationRow
+		var needsAttention bool
+		if err := rows.Scan(
+			&r.MonitorID,
+			&r.Name,
+			pq.Array(&r.Tags),
+			&r.CurrentStatus,
+			&r.Uptime,
+			&needsAttention,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan 24h hourly rollup group row: %w", err)
+		}
+		if needsAttention {
+			r.AttentionCount = 1
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate 24h hourly rollup group rows: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Service) queryMonitorsForGroupsRollup(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	rangeStart, rangeEndExclusive time.Time,
+	filterTags []string,
+) ([]groupAggregationRow, error) {
+	tagClause := ""
+	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
+	if len(filterTags) > 0 {
+		tagClause = "AND m.tags @> $4::text[]"
+		args = append(args, pq.Array(filterTags))
+	}
+
+	query := fmt.Sprintf(`
+		WITH per_monitor AS (
+			SELECT
+				mdr.monitor_id,
+				COALESCE(SUM(mdr.total_checks), 0) AS total_checks,
+				COALESCE(SUM(mdr.success_checks), 0) AS success_checks,
+				COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) AS bad_checks
+			FROM monitor_daily_rollups mdr
+			WHERE mdr.tenant_id = $1
+			  AND mdr.bucket_day >= $2::date
+			  AND mdr.bucket_day < $3::date
+			GROUP BY mdr.monitor_id
+		)
+		SELECT
+			m.id,
+			m.name,
+			COALESCE(m.tags, '{}'::text[]) AS tags,
+			latest.current_status,
+			COALESCE(
+				CASE WHEN pm.total_checks > 0
+					THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
+					ELSE 100.0
+				END,
+				100.0
+			) AS uptime,
+			COALESCE(pm.bad_checks, 0) > 0 OR COALESCE(latest.current_status IN ('failure','error'), FALSE) AS needs_attention
+		FROM monitors m
+		LEFT JOIN per_monitor pm ON pm.monitor_id = m.id
+		LEFT JOIN LATERAL (
+			SELECT mdr.latest_status AS current_status
+			FROM monitor_daily_rollups mdr
+			WHERE mdr.monitor_id = m.id
+			  AND mdr.tenant_id = m.tenant_id
+			  AND mdr.bucket_day >= $2::date
+			  AND mdr.bucket_day < $3::date
+			ORDER BY mdr.bucket_day DESC
+			LIMIT 1
+		) latest ON TRUE
+		WHERE m.tenant_id = $1
+		  AND m.enabled = TRUE
+		  AND m.type <> 'group'
+		  %s
+	`, tagClause)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query rollup monitors for groups: %w", err)
+	}
+	defer rows.Close()
+
+	out := []groupAggregationRow{}
+	for rows.Next() {
+		var r groupAggregationRow
+		var needsAttention bool
+		if err := rows.Scan(
+			&r.MonitorID,
+			&r.Name,
+			pq.Array(&r.Tags),
+			&r.CurrentStatus,
+			&r.Uptime,
+			&needsAttention,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan rollup group row: %w", err)
+		}
+		if needsAttention {
+			r.AttentionCount = 1
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate rollup group rows: %w", err)
+	}
+	return out, nil
+}
+
 // loadGroups runs the per-monitor aggregation query and shapes it into DashboardGroup rows.
 func (s *Service) loadGroups(
 	ctx context.Context,
 	tenantID uuid.UUID,
+	dashboardRange models.DashboardRange,
 	rangeStart, rangeEndExclusive time.Time,
 	filterTags []string,
 	groupTags []string,
@@ -227,7 +463,7 @@ func (s *Service) loadGroups(
 		return []models.DashboardGroup{}, nil
 	}
 
-	rows, err := s.queryMonitorsForGroups(ctx, tenantID, rangeStart, rangeEndExclusive, filterTags)
+	rows, err := s.queryMonitorsForGroups(ctx, tenantID, dashboardRange, rangeStart, rangeEndExclusive, filterTags)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +595,7 @@ func (s *Service) monitorIDsForGroup(
 }
 
 // groupUptimeSeries returns a per-bucket uptime % series for the given monitor set,
-// using the analytics rollup for long ranges and live SQL for 24h.
+// using the analytics rollup for long ranges and live SQL for short ranges.
 func (s *Service) groupUptimeSeries(
 	ctx context.Context,
 	tenantID uuid.UUID,
@@ -367,7 +603,7 @@ func (s *Service) groupUptimeSeries(
 	rng models.DashboardRange,
 	rangeStart, rangeEnd, rangeEndExclusive time.Time,
 ) ([]float64, error) {
-	if rng != models.DashboardRange24h {
+	if isDashboardRollupRange(rng) {
 		analyticsResult, err := s.analytics.GetScopeAnalytics(
 			ctx,
 			tenantID,
@@ -385,14 +621,18 @@ func (s *Service) groupUptimeSeries(
 		return out, nil
 	}
 
-	// 24h: hourly buckets via generate_series, mirroring getTrend's live path.
-	query := `
+	interval := "1 hour"
+	if rng == models.DashboardRange1h {
+		interval = "5 minutes"
+	}
+
+	query := fmt.Sprintf(`
         WITH buckets AS (
-            SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '1 hour') AS bucket_start
+            SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '%s') AS bucket_start
         ),
         per_bucket AS (
             SELECT
-                date_trunc('hour', cr.created_at) AS bucket_start,
+                date_bin(INTERVAL '%s', cr.created_at, $2::timestamptz) AS bucket_start,
                 COUNT(*) AS total_checks,
                 COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks
             FROM check_results cr
@@ -414,7 +654,7 @@ func (s *Service) groupUptimeSeries(
         FROM buckets b
         LEFT JOIN per_bucket pb ON pb.bucket_start = b.bucket_start
         ORDER BY b.bucket_start
-    `
+    `, interval, interval)
 
 	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEnd, pq.Array(monitorIDs), rangeEndExclusive)
 	if err != nil {

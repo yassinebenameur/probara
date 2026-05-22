@@ -10,6 +10,7 @@ import (
 type DashboardRange string
 
 const (
+	DashboardRange1h   DashboardRange = "1h"
 	DashboardRange24h  DashboardRange = "24h"
 	DashboardRange7d   DashboardRange = "7d"
 	DashboardRange30d  DashboardRange = "30d"
@@ -181,9 +182,9 @@ type DashboardGroup struct {
 
 // DashboardGroupSparklineQuery represents query params for the per-group sparkline endpoint.
 type DashboardGroupSparklineQuery struct {
-	Tag   *string        // nil = ungrouped sentinel
+	Tag   *string // nil = ungrouped sentinel
 	Range DashboardRange
-	Tags  []string       // top-level dashboard tag filter
+	Tags  []string // top-level dashboard tag filter
 }
 
 // DashboardGroupSparklineResponse is the lazy per-group uptime sparkline.

@@ -385,7 +385,7 @@ export interface AlertStreamEvent {
   received_at: string;
 }
 
-export type DashboardRange = '24h' | '7d' | '30d' | '90d' | '365d';
+export type DashboardRange = '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
 export type DashboardFailureState = 'firing' | 'resolved';
 
 export interface DashboardStats {

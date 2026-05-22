@@ -3,11 +3,9 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { ChevronDown, AlertTriangle, CheckCircle2, MinusCircle } from 'lucide-react';
-import type { DashboardGroup } from '@/lib/types';
+import type { DashboardGroup, DashboardRange } from '@/lib/types';
 import { getDashboardGroupSparkline } from '@/lib/api';
 import GroupSparkline from './GroupSparkline';
-
-type DashboardRange = '24h' | '7d' | '30d' | '90d' | '365d';
 
 interface Props {
   group: DashboardGroup;

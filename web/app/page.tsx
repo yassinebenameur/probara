@@ -14,6 +14,7 @@ import FilterChip from '@/components/ui/FilterChip';
 import InfoTip, { InfoTipEntry } from '@/components/ui/InfoTip';
 import {
   Alert,
+  DashboardRange,
   DashboardFailureEvent,
   DashboardSummaryResponse,
   DashboardProblemMonitor,
@@ -48,15 +49,16 @@ import ServiceGroupsPanel from '@/components/dashboard/ServiceGroupsPanel';
 
 type TrendPoint = { date: string; uptime: number | null; responseTime: number | null; total: number };
 
-const DASHBOARD_LIST_LIMIT: Record<'24h' | '7d' | '30d' | '90d' | '365d', number> = {
+const DASHBOARD_RANGE_OPTIONS = ['1h', '24h', '7d', '30d', '90d'] as const;
+type DashboardPageRange = (typeof DASHBOARD_RANGE_OPTIONS)[number];
+
+const DASHBOARD_LIST_LIMIT: Record<DashboardPageRange, number> = {
+  '1h': 10,
   '24h': 10,
   '7d': 25,
   '30d': 50,
   '90d': 50,
-  '365d': 50,
 };
-
-type DashboardRange = keyof typeof DASHBOARD_LIST_LIMIT;
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -407,12 +409,12 @@ function RangeControls({
   timeRange,
   setTimeRange,
 }: {
-  timeRange: DashboardRange;
-  setTimeRange: (range: DashboardRange) => void;
+  timeRange: DashboardPageRange;
+  setTimeRange: (range: DashboardPageRange) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {(['24h', '7d', '30d', '90d', '365d'] as DashboardRange[]).map((range) => (
+      {DASHBOARD_RANGE_OPTIONS.map((range) => (
         <FilterChip
           key={range}
           selected={timeRange === range}
@@ -434,8 +436,8 @@ function UptimeResponseChart({
 }: {
   trendData: TrendPoint[];
   hasEnoughTrendData: boolean;
-  timeRange: DashboardRange;
-  setTimeRange: (range: DashboardRange) => void;
+  timeRange: DashboardPageRange;
+  setTimeRange: (range: DashboardPageRange) => void;
   noMatchingMonitors: boolean;
 }) {
   return (
@@ -612,13 +614,13 @@ export default function DashboardPage() {
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [timeRange, setTimeRange] = useState<DashboardRange>('24h');
+  const [timeRange, setTimeRange] = useState<DashboardPageRange>('1h');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const requestSequenceRef = useRef(0);
 
   const loadSecondarySections = useCallback(async (
     requestID: number,
-    range: DashboardRange,
+    range: DashboardPageRange,
     tags: string[]
   ) => {
     try {
@@ -761,11 +763,11 @@ export default function DashboardPage() {
   );
 
   const selectedRangeDays = useMemo(() => {
+    if (timeRange === '1h') return 0;
     if (timeRange === '24h') return 1;
     if (timeRange === '7d') return 7;
     if (timeRange === '30d') return 30;
-    if (timeRange === '90d') return 90;
-    return 365;
+    return 90;
   }, [timeRange]);
   const showRetentionWarning =
     tenantRetentionDays !== null && tenantRetentionDays > 0 && selectedRangeDays > tenantRetentionDays;
@@ -859,7 +861,7 @@ export default function DashboardPage() {
         <ServiceGroupsPanel
           groupTags={dashboard?.group_tags ?? []}
           groups={dashboard?.groups ?? []}
-          range={timeRange}
+          range={timeRange as DashboardRange}
           filterTags={selectedTags}
         />
         <WhatChangedTimeline

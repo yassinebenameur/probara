@@ -589,7 +589,7 @@ export async function getMonitorAnalytics(
 }
 
 export async function getDashboardOverview(params?: {
-  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   failures_limit?: number;
   alerts_limit?: number;
   tags?: string[];
@@ -606,7 +606,7 @@ export async function getDashboardOverview(params?: {
 }
 
 export async function getDashboardSummary(params?: {
-  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   tags?: string[];
 }): Promise<DashboardSummaryResponse> {
   const queryParams = new URLSearchParams();
@@ -620,7 +620,7 @@ export async function getDashboardSummary(params?: {
 
 export async function getDashboardGroupSparkline(params: {
   group: string | null;
-  range: '24h' | '7d' | '30d' | '90d' | '365d';
+  range: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   tags?: string[];
 }): Promise<DashboardGroupSparklineResponse> {
   const queryParams = new URLSearchParams();
@@ -635,7 +635,7 @@ export async function getDashboardGroupSparkline(params: {
 }
 
 export async function getDashboardProblemMonitors(params?: {
-  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   limit?: number;
   tags?: string[];
 }): Promise<DashboardProblemMonitorsResponse> {
@@ -650,7 +650,7 @@ export async function getDashboardProblemMonitors(params?: {
 }
 
 export async function getDashboardRecentFailures(params?: {
-  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   limit?: number;
   tags?: string[];
 }): Promise<DashboardRecentFailuresResponse> {
@@ -665,7 +665,7 @@ export async function getDashboardRecentFailures(params?: {
 }
 
 export async function getDashboardRecentAlerts(params?: {
-  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   limit?: number;
   tags?: string[];
 }): Promise<DashboardRecentAlertsResponse> {

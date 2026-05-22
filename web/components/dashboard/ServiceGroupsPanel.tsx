@@ -2,10 +2,8 @@
 
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
-import type { DashboardGroup } from '@/lib/types';
+import type { DashboardGroup, DashboardRange } from '@/lib/types';
 import GroupRow from './GroupRow';
-
-type DashboardRange = '24h' | '7d' | '30d' | '90d' | '365d';
 
 interface Props {
   groupTags: string[];

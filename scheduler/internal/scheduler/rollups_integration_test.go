@@ -66,6 +66,30 @@ func TestRollupMaintenance_BackfillExcludesPlatformAndClosesDowntime(t *testing.
 		t.Fatalf("latency_success_sum_ms = %v, want 200", latencySum)
 	}
 
+	var hourlyTotalChecks, hourlySuccessChecks, hourlyLatencyCount int
+	var hourlyLatencySum float64
+	hourBucket := base.Truncate(time.Hour)
+	err = dbClient.QueryRowContext(ctx, `
+		SELECT total_checks, success_checks, latency_success_sum_ms, latency_success_count
+		FROM monitor_hourly_rollups
+		WHERE tenant_id = $1 AND monitor_id = $2 AND bucket_hour = $3
+	`, tenantID, monitorID, hourBucket).Scan(&hourlyTotalChecks, &hourlySuccessChecks, &hourlyLatencySum, &hourlyLatencyCount)
+	if err != nil {
+		t.Fatalf("query hourly rollup row: %v", err)
+	}
+	if hourlyTotalChecks != 3 {
+		t.Fatalf("hourly total_checks = %d, want 3", hourlyTotalChecks)
+	}
+	if hourlySuccessChecks != 2 {
+		t.Fatalf("hourly success_checks = %d, want 2", hourlySuccessChecks)
+	}
+	if hourlyLatencyCount != 2 {
+		t.Fatalf("hourly latency_success_count = %d, want 2", hourlyLatencyCount)
+	}
+	if hourlyLatencySum != 200 {
+		t.Fatalf("hourly latency_success_sum_ms = %v, want 200", hourlyLatencySum)
+	}
+
 	var downtimeCount int
 	err = dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM monitor_downtime_periods WHERE monitor_id = $1`, monitorID).Scan(&downtimeCount)
 	if err != nil {

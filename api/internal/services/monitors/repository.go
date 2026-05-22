@@ -270,6 +270,7 @@ func (r *PostgresRepository) DeleteHistory(ctx context.Context, tenantID uuid.UU
 		`DELETE FROM alerts WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_downtime_open WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_downtime_periods WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		`DELETE FROM monitor_hourly_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_daily_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM check_results WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 	}

@@ -233,7 +233,7 @@ func TestService_QueryMonitorsForGroups_NoCheckDataDoesNotScanNullAttention(t *t
 	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
 
 	now := time.Now().UTC()
-	rows, err := dashboardSvc.queryMonitorsForGroups(ctx, tenantID, now.Add(-24*time.Hour), now, nil)
+	rows, err := dashboardSvc.queryMonitorsForGroups(ctx, tenantID, models.DashboardRange24h, now.Add(-24*time.Hour), now, nil)
 	if err != nil {
 		t.Fatalf("queryMonitorsForGroups() error = %v", err)
 	}
@@ -242,6 +242,113 @@ func TestService_QueryMonitorsForGroups_NoCheckDataDoesNotScanNullAttention(t *t
 	}
 	if rows[0].AttentionCount != 0 {
 		t.Fatalf("AttentionCount = %d, want 0", rows[0].AttentionCount)
+	}
+}
+
+func TestService_LoadGroups_24hHourlyRollupIgnoresOutsideWindowRawRows(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-groups-24h-hybrid")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api-monitor")
+	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
+
+	rangeStart := time.Date(2026, time.April, 1, 18, 0, 0, 0, time.UTC)
+	rangeEnd := time.Date(2026, time.April, 2, 18, 0, 0, 0, time.UTC)
+	day1 := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, time.April, 2, 0, 0, 0, 0, time.UTC)
+
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitor_hourly_rollups (
+			tenant_id, monitor_id, bucket_hour, total_checks, success_checks,
+			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 16, 15, 1500, 15, 'failure', $4, NOW(), NOW())
+	`, tenantID, monitorID, rangeStart, day2.Add(16*time.Hour)); err != nil {
+		t.Fatalf("insert hourly rollup: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO rollup_job_state (job_name, last_created_at, last_check_result_id, last_run_at, updated_at)
+		VALUES ('monitor_daily_rollups', $1, $2, NOW(), NOW())
+	`, rangeEnd, uuid.New()); err != nil {
+		t.Fatalf("insert rollup state: %v", err)
+	}
+
+	for i := 0; i < 4; i++ {
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, day1.Add(time.Duration(i+1)*time.Hour), "failure", "monitor", nil)
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, day2.Add(time.Duration(19+i)*time.Hour), "failure", "monitor", nil)
+	}
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, day2.Add(17*time.Hour), "success", "monitor", testutil.IntPtr(100))
+
+	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
+	if err != nil {
+		t.Fatalf("loadGroups() error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	}
+	assertDashboardClose(t, groups[0].Uptime, 93.75)
+	if groups[0].AttentionCount != 1 {
+		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
+	}
+	if len(groups[0].Members) != 1 {
+		t.Fatalf("Members length = %d, want 1", len(groups[0].Members))
+	}
+	if groups[0].Members[0].CurrentStatus == nil || *groups[0].Members[0].CurrentStatus != "success" {
+		t.Fatalf("CurrentStatus = %v, want success", groups[0].Members[0].CurrentStatus)
+	}
+}
+
+func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-groups-24h-hourly-lag")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api-monitor")
+	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
+
+	rangeStart := time.Date(2026, time.April, 1, 18, 0, 0, 0, time.UTC)
+	rangeEnd := time.Date(2026, time.April, 2, 18, 0, 0, 0, time.UTC)
+	cursorAt := time.Date(2026, time.April, 2, 17, 0, 0, 0, time.UTC)
+
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitor_hourly_rollups (
+			tenant_id, monitor_id, bucket_hour, total_checks, success_checks,
+			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 23, 23, 2300, 23, 'success', $3, NOW(), NOW())
+	`, tenantID, monitorID, rangeStart); err != nil {
+		t.Fatalf("insert hourly rollup: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO rollup_job_state (job_name, last_created_at, last_check_result_id, last_run_at, updated_at)
+		VALUES ('monitor_daily_rollups', $1, $2, NOW(), NOW())
+	`, cursorAt, uuid.New()); err != nil {
+		t.Fatalf("insert rollup state: %v", err)
+	}
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, cursorAt.Add(30*time.Minute), "failure", "monitor", nil)
+
+	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
+	if err != nil {
+		t.Fatalf("loadGroups() error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	}
+	assertDashboardClose(t, groups[0].Uptime, 95.8333333333)
+	if groups[0].AttentionCount != 1 {
+		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
+	}
+	if groups[0].Members[0].CurrentStatus == nil || *groups[0].Members[0].CurrentStatus != "failure" {
+		t.Fatalf("CurrentStatus = %v, want failure", groups[0].Members[0].CurrentStatus)
 	}
 }
 

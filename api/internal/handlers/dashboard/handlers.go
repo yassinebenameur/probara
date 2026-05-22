@@ -137,7 +137,7 @@ func (h *Handlers) GetRecentAlerts(w http.ResponseWriter, r *http.Request) {
 // GetGroupSparkline handles GET /api/v1/dashboard/group-sparkline.
 //
 //	?group=<tagName>  omit or empty = ungrouped row
-//	&range=<24h|7d|30d|90d|365d>
+//	&range=<1h|24h|7d|30d|90d|365d>
 //	&tag=<a>&tag=<b>  top-level dashboard tag filter (repeated query param, like other dashboard endpoints)
 func (h *Handlers) GetGroupSparkline(w http.ResponseWriter, r *http.Request) {
 	tenantID, tenantUUID, ok := tenantFromRequest(w, r)
@@ -212,7 +212,7 @@ func parseListParams(r *http.Request, defaultLimit int) *models.DashboardListQue
 
 func parseRange(r *http.Request) models.DashboardRange {
 	switch models.DashboardRange(r.URL.Query().Get("range")) {
-	case models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange30d, models.DashboardRange90d, models.DashboardRange365d:
+	case models.DashboardRange1h, models.DashboardRange24h, models.DashboardRange7d, models.DashboardRange30d, models.DashboardRange90d, models.DashboardRange365d:
 		return models.DashboardRange(r.URL.Query().Get("range"))
 	default:
 		return models.DashboardRange24h

@@ -274,6 +274,7 @@ func applyRollupRow(ctx context.Context, tx *sql.Tx, row rollupCheckResult) erro
 		return nil
 	}
 	day := time.Date(row.CreatedAt.Year(), row.CreatedAt.Month(), row.CreatedAt.Day(), 0, 0, 0, 0, time.UTC)
+	hour := row.CreatedAt.Truncate(time.Hour)
 	latencySum := 0.0
 	latencyCount := 0
 	if row.Status == string(sharedmodels.ResultStatusSuccess) && row.LatencyMS.Valid {
@@ -302,6 +303,30 @@ func applyRollupRow(ctx context.Context, tx *sql.Tx, row rollupCheckResult) erro
 	`, row.TenantID, row.MonitorID, day, boolToInt(row.Status == string(sharedmodels.ResultStatusSuccess)), latencySum, latencyCount, row.Status, row.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to upsert daily rollup: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO monitor_hourly_rollups (
+			tenant_id, monitor_id, bucket_hour, total_checks, success_checks,
+			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, NOW(), NOW())
+		ON CONFLICT (monitor_id, bucket_hour) DO UPDATE SET
+			tenant_id = EXCLUDED.tenant_id,
+			total_checks = monitor_hourly_rollups.total_checks + 1,
+			success_checks = monitor_hourly_rollups.success_checks + EXCLUDED.success_checks,
+			latency_success_sum_ms = monitor_hourly_rollups.latency_success_sum_ms + EXCLUDED.latency_success_sum_ms,
+			latency_success_count = monitor_hourly_rollups.latency_success_count + EXCLUDED.latency_success_count,
+			latest_status = CASE
+				WHEN monitor_hourly_rollups.latest_check_at IS NULL OR EXCLUDED.latest_check_at >= monitor_hourly_rollups.latest_check_at
+				THEN EXCLUDED.latest_status
+				ELSE monitor_hourly_rollups.latest_status
+			END,
+			latest_check_at = GREATEST(COALESCE(monitor_hourly_rollups.latest_check_at, EXCLUDED.latest_check_at), EXCLUDED.latest_check_at),
+			updated_at = NOW()
+	`, row.TenantID, row.MonitorID, hour, boolToInt(row.Status == string(sharedmodels.ResultStatusSuccess)), latencySum, latencyCount, row.Status, row.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to upsert hourly rollup: %w", err)
 	}
 
 	if row.Status == string(sharedmodels.ResultStatusSuccess) {
@@ -370,6 +395,9 @@ func pruneRollupTablesTx(ctx context.Context, tx *sql.Tx) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -rollupRetentionDays)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_daily_rollups WHERE bucket_day < $1::date`, cutoff); err != nil {
 		return fmt.Errorf("failed to prune daily rollups: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_hourly_rollups WHERE bucket_hour < $1`, cutoff); err != nil {
+		return fmt.Errorf("failed to prune hourly rollups: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_downtime_periods WHERE end_time < $1`, cutoff); err != nil {
 		return fmt.Errorf("failed to prune downtime periods: %w", err)
