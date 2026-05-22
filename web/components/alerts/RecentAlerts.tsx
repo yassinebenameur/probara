@@ -6,6 +6,7 @@ import { Alert, AlertStatus } from '@/lib/types';
 import { getRecentAlerts, acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
 
 interface RecentAlertsProps {
   limit?: number;
@@ -168,9 +169,7 @@ export default function RecentAlerts({
           <div className="flex items-center gap-2">
             <h3 className="font-medium text-white">Recent Alerts</h3>
             {activeCount > 0 && (
-              <span className="badge badge-danger min-w-[20px] justify-center">
-                {activeCount}
-              </span>
+              <Pill tone="danger" size="xs">{activeCount}</Pill>
             )}
           </div>
           <p className="text-xs text-slate-500">
