@@ -3,7 +3,6 @@ package monitors
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 
@@ -59,10 +58,14 @@ func (h *Handlers) BulkUpdateAlertPolicy(w http.ResponseWriter, r *http.Request)
 	resp, err := h.service.BulkUpdateAlertPolicy(r.Context(), tenantUUID, monitorIDs, policyID, req.Op)
 	if err != nil {
 		msg := err.Error()
-		// VerifyAlertPolicy and VerifyMonitorsBelongToTenant return "not found
-		// or do not belong to tenant" — surface those as 404 to avoid leaking
-		// existence across tenants.
-		if strings.Contains(msg, "not found") || strings.Contains(msg, "do not belong to tenant") {
+		// VerifyAlertPolicy returns "alert policy not found or does not belong to tenant"
+		// and VerifyMonitorsBelongToTenant returns "one or more monitors not found or do
+		// not belong to tenant". Match these exact sentinel strings (not substrings) so
+		// that unrelated database errors that happen to contain "not found" are not
+		// misclassified as 404.
+		switch msg {
+		case "alert policy not found or does not belong to tenant",
+			"one or more monitors not found or do not belong to tenant":
 			errors.WriteNotFoundError(w, "one or more resources not found")
 			return
 		}

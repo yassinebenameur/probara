@@ -40,15 +40,14 @@ func (f *fakeBulkSvc) BulkUpdateAlertPolicy(
 	return f.bulkResp, f.bulkErr
 }
 
-func tenantCtx(t *testing.T) (context.Context, uuid.UUID) {
+func tenantCtx(t *testing.T) context.Context {
 	t.Helper()
 	tenantID := uuid.New()
-	ctx := ctxpkg.WithTenantID(context.Background(), tenantID.String())
-	return ctx, tenantID
+	return ctxpkg.WithTenantID(context.Background(), tenantID.String())
 }
 
 func TestBulkUpdateAlertPolicy_HappyAttach(t *testing.T) {
-	ctx, _ := tenantCtx(t)
+	ctx := tenantCtx(t)
 	m1, m2 := uuid.New(), uuid.New()
 	policy := uuid.New()
 
@@ -86,7 +85,7 @@ func TestBulkUpdateAlertPolicy_HappyAttach(t *testing.T) {
 }
 
 func TestBulkUpdateAlertPolicy_EmptyMonitorIDs(t *testing.T) {
-	ctx, _ := tenantCtx(t)
+	ctx := tenantCtx(t)
 	svc := &fakeBulkSvc{MockMonitorService: MockMonitorService{monitors: make(map[uuid.UUID]*models.Monitor)}}
 	h := &Handlers{service: svc}
 
@@ -106,7 +105,7 @@ func TestBulkUpdateAlertPolicy_EmptyMonitorIDs(t *testing.T) {
 }
 
 func TestBulkUpdateAlertPolicy_UnknownOp(t *testing.T) {
-	ctx, _ := tenantCtx(t)
+	ctx := tenantCtx(t)
 	svc := &fakeBulkSvc{MockMonitorService: MockMonitorService{monitors: make(map[uuid.UUID]*models.Monitor)}}
 	h := &Handlers{service: svc}
 
@@ -122,10 +121,71 @@ func TestBulkUpdateAlertPolicy_UnknownOp(t *testing.T) {
 }
 
 func TestBulkUpdateAlertPolicy_CrossTenantMonitor(t *testing.T) {
-	ctx, _ := tenantCtx(t)
+	ctx := tenantCtx(t)
 	svc := &fakeBulkSvc{
 		MockMonitorService: MockMonitorService{monitors: make(map[uuid.UUID]*models.Monitor)},
 		bulkErr:            fmt.Errorf("one or more monitors not found or do not belong to tenant"),
+	}
+	h := &Handlers{service: svc}
+
+	body, _ := json.Marshal(models.BulkUpdateAlertPolicyRequest{
+		MonitorIDs: []string{uuid.New().String()},
+		PolicyID:   uuid.New().String(),
+		Op:         models.BulkAlertPolicyOpAttach,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/monitors/bulk/alert-policy", bytes.NewReader(body)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.BulkUpdateAlertPolicy(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBulkUpdateAlertPolicy_HappyDetach(t *testing.T) {
+	ctx := tenantCtx(t)
+	m1, m2 := uuid.New(), uuid.New()
+	policy := uuid.New()
+
+	svc := &fakeBulkSvc{
+		MockMonitorService: MockMonitorService{monitors: make(map[uuid.UUID]*models.Monitor)},
+		bulkResp: &models.BulkUpdateAlertPolicyResponse{
+			Updated:           2,
+			Unchanged:         0,
+			MonitorIDsUpdated: []uuid.UUID{m1, m2},
+		},
+	}
+	h := &Handlers{service: svc}
+
+	body, _ := json.Marshal(models.BulkUpdateAlertPolicyRequest{
+		MonitorIDs: []string{m1.String(), m2.String()},
+		PolicyID:   policy.String(),
+		Op:         models.BulkAlertPolicyOpDetach,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/monitors/bulk/alert-policy", bytes.NewReader(body)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	h.BulkUpdateAlertPolicy(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp models.BulkUpdateAlertPolicyResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Updated != 2 {
+		t.Errorf("expected updated=2, got %d", resp.Updated)
+	}
+	if svc.gotOp != models.BulkAlertPolicyOpDetach {
+		t.Errorf("expected detach op, got %v", svc.gotOp)
+	}
+}
+
+func TestBulkUpdateAlertPolicy_PolicyNotFound(t *testing.T) {
+	ctx := tenantCtx(t)
+	svc := &fakeBulkSvc{
+		MockMonitorService: MockMonitorService{monitors: make(map[uuid.UUID]*models.Monitor)},
+		bulkErr:            fmt.Errorf("alert policy not found or does not belong to tenant"),
 	}
 	h := &Handlers{service: svc}
 
