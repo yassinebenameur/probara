@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -22,6 +21,9 @@ import IncidentPublicationEditor from '@/components/incidents/IncidentPublicatio
 import IncidentTimeline from '@/components/incidents/IncidentTimeline';
 import Panel from '@/components/ui/Panel';
 import Toast from '@/components/ui/Toast';
+import PageHeader from '@/components/ui/PageHeader';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
 
 function formatTimestamp(value?: string): string {
   if (!value) {
@@ -194,7 +196,7 @@ export default function IncidentDetailPage() {
   if (loading) {
     return (
       <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6 text-sm text-slate-500">
-        Loading incident...
+        Loading incident…
       </div>
     );
   }
@@ -205,9 +207,7 @@ export default function IncidentDetailPage() {
         <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
           {error || 'Incident not found'}
         </div>
-        <button onClick={loadIncident} className="btn btn-primary btn-sm">
-          Retry
-        </button>
+        <Button variant="ghost" size="sm" onClick={loadIncident}>Retry</Button>
       </div>
     );
   }
@@ -222,67 +222,66 @@ export default function IncidentDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-xs text-slate-500">
-        <Link href="/incidents" className="hover:text-slate-400">Incidents</Link>
-        <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-        <span className="text-slate-400">{incident.title}</span>
-      </div>
-
-      <Panel
+      <PageHeader
+        breadcrumb={[{ label: 'Incidents', href: '/incidents' }, { label: incident.title }]}
         title={incident.title}
         subtitle={incident.is_auto_created ? 'Auto-created incident' : 'Manual incident'}
-        dotColor="var(--danger)"
+      />
+
+      <Panel
+        title="Status"
         actions={(
-          <>
-            <button
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => handleStateTransition('identified')}
-              className="btn btn-secondary btn-xs"
               disabled={incident.state === 'identified' || incident.state === 'resolved'}
             >
               Identify
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => handleStateTransition('monitoring')}
-              className="btn btn-secondary btn-xs"
               disabled={incident.state === 'monitoring' || incident.state === 'resolved'}
             >
               Monitor
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="accent"
+              size="xs"
               onClick={() => handleStateTransition('resolved')}
-              className="btn btn-success btn-xs"
               disabled={incident.state === 'resolved'}
             >
               Resolve
-            </button>
-          </>
+            </Button>
+          </div>
         )}
       >
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,1fr)]">
           <div className="space-y-3">
             <p className="text-sm text-slate-300">{incident.summary || 'No summary provided.'}</p>
-            <div className="flex flex-wrap gap-2">
-              <span className="badge badge-danger">{incident.state}</span>
-              <span className={`badge ${incident.is_auto_created ? 'badge-warning' : 'badge-default'}`}>
+            <div className="flex flex-wrap gap-1.5">
+              <Pill tone="danger" size="xs" dot>{incident.state}</Pill>
+              <Pill tone={incident.is_auto_created ? 'warning' : 'neutral'} size="xs">
                 {incident.is_auto_created ? 'Auto' : 'Manual'}
-              </span>
+              </Pill>
             </div>
           </div>
 
           <div className="grid gap-3 rounded-xl border border-white/[0.06] bg-slate-950/40 p-4 text-sm">
             <div>
               <div className="text-xs uppercase tracking-wide text-slate-500">Created</div>
-              <div className="mt-1 text-slate-200">{formatTimestamp(incident.created_at)}</div>
+              <div className="mt-1 text-slate-300">{formatTimestamp(incident.created_at)}</div>
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-slate-500">Last updated</div>
-              <div className="mt-1 text-slate-200">{formatTimestamp(incident.updated_at)}</div>
+              <div className="mt-1 text-slate-300">{formatTimestamp(incident.updated_at)}</div>
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-slate-500">Resolved</div>
-              <div className="mt-1 text-slate-200">{formatTimestamp(incident.resolved_at)}</div>
+              <div className="mt-1 text-slate-300">{formatTimestamp(incident.resolved_at)}</div>
             </div>
           </div>
         </div>
@@ -290,9 +289,8 @@ export default function IncidentDetailPage() {
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Panel
-          title="Linked Alerts"
+          title="Linked alerts"
           subtitle={`${incidentAlerts.length} linked alert${incidentAlerts.length === 1 ? '' : 's'}`}
-          dotColor="var(--warning)"
           actions={(
             <div className="flex items-center gap-2">
               <select
@@ -307,13 +305,14 @@ export default function IncidentDetailPage() {
                   </option>
                 ))}
               </select>
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={handleAttachAlert}
-                className="btn btn-secondary btn-xs"
                 disabled={!selectedAlertId}
               >
                 Attach
-              </button>
+              </Button>
             </div>
           )}
         >
@@ -329,9 +328,9 @@ export default function IncidentDetailPage() {
                       {alert.policy_name || 'Unknown policy'} · {alert.status} · {alert.failure_count} failures
                     </div>
                   </div>
-                  <button onClick={() => handleDetachAlert(alert.id)} className="btn btn-secondary btn-xs">
+                  <Button variant="ghost" size="xs" onClick={() => handleDetachAlert(alert.id)}>
                     Detach
-                  </button>
+                  </Button>
                 </div>
               ))
             )}
@@ -339,9 +338,8 @@ export default function IncidentDetailPage() {
         </Panel>
 
         <Panel
-          title="Linked Monitors"
+          title="Linked monitors"
           subtitle={`${incidentMonitors.length} linked monitor${incidentMonitors.length === 1 ? '' : 's'}`}
-          dotColor="var(--info)"
           actions={(
             <div className="flex items-center gap-2">
               <select
@@ -356,13 +354,14 @@ export default function IncidentDetailPage() {
                   </option>
                 ))}
               </select>
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={handleAttachMonitor}
-                className="btn btn-secondary btn-xs"
                 disabled={!selectedMonitorId}
               >
                 Attach
-              </button>
+              </Button>
             </div>
           )}
         >
@@ -376,9 +375,9 @@ export default function IncidentDetailPage() {
                     <div className="text-sm font-medium text-white">{monitor.name}</div>
                     <div className="mt-1 text-xs uppercase tracking-wide text-slate-500">{monitor.type}</div>
                   </div>
-                  <button onClick={() => handleDetachMonitor(monitor.id)} className="btn btn-secondary btn-xs">
+                  <Button variant="ghost" size="xs" onClick={() => handleDetachMonitor(monitor.id)}>
                     Detach
-                  </button>
+                  </Button>
                 </div>
               ))
             )}
