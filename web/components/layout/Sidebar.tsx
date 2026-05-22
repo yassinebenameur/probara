@@ -19,6 +19,8 @@ import {
 import { getMonitors, getAlertChannels, getAlertPolicies, getStatusPages, getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { clearSelectedTenantId } from '@/lib/tenant';
+import Pill from '@/components/ui/Pill';
+import Button from '@/components/ui/Button';
 
 type NavItem = {
   name: string;
@@ -187,15 +189,9 @@ export default function Sidebar() {
                       <span className="font-medium">{item.name}</span>
                     </div>
                     {count !== null && count > 0 && (
-                      <span
-                        className={`min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[0.65rem] tabular-nums ${
-                          isActive
-                            ? 'bg-cyan-500/20 text-cyan-400'
-                            : 'bg-slate-800 text-slate-500'
-                        }`}
-                      >
+                      <Pill tone={isActive ? 'info' : 'neutral'} size="xs" className="tabular-nums">
                         {count}
-                      </span>
+                      </Pill>
                     )}
                   </Link>
                 );
@@ -215,14 +211,15 @@ export default function Sidebar() {
           </div>
         </div>
 
-        {/* Logout */}
-        <button
+        <Button
+          variant="subtle"
+          size="sm"
+          icon={<LogOut strokeWidth={1.75} />}
           onClick={handleLogout}
-          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm text-slate-500 transition-all hover:bg-white/[0.04] hover:text-slate-300"
+          className="w-full justify-start"
         >
-          <LogOut className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
-          <span className="font-medium">Logout</span>
-        </button>
+          Logout
+        </Button>
       </div>
     </aside>
   );
