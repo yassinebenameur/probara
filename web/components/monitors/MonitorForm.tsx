@@ -27,6 +27,7 @@ import {
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserStepConfig,
 } from '@/lib/types';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2 } from 'lucide-react';
 import { getAlertPolicies, getMonitorResults, runMonitorNow } from '@/lib/api';
 import GroupForm from './GroupForm';
 import AgentForm from './AgentForm';
@@ -35,6 +36,9 @@ import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
 import HttpRequestFlowPreview from './HttpRequestFlowPreview';
+
+const BTN_GHOST_SM = 'inline-flex items-center justify-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed';
+const BTN_ACCENT_SM = 'inline-flex items-center justify-center gap-2 rounded-[12px] bg-cyan-500 px-3 py-2 text-xs font-medium text-white shadow-[0_4px_20px_rgba(6,182,212,0.18)] transition-colors hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -1840,18 +1844,18 @@ export default function MonitorForm({
     await onSubmit(requestData);
   };
 
-  // Type icons
-    const typeIcons = {
-      http: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>,
-      ping: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" /></svg>,
-      dns: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5a7 7 0 105.196 11.95l3.427 3.428a1 1 0 001.414-1.414l-3.428-3.427A7 7 0 0011 5z" /></svg>,
-      group: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>,
-      agent: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>,
-      push: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>,
-      sip: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>,
-      grpc: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h10M7 16h6M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2h-2l-4 0H5a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
-      synthetic_api: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
-      synthetic_browser: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l6-3m-7-9h8m-8 4h6m-7-8h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
+  const iconCls = 'h-4 w-4';
+  const typeIcons = {
+    http: <Globe className={iconCls} strokeWidth={1.75} />,
+    ping: <Radio className={iconCls} strokeWidth={1.75} />,
+    dns: <Search className={iconCls} strokeWidth={1.75} />,
+    group: <Folder className={iconCls} strokeWidth={1.75} />,
+    agent: <Server className={iconCls} strokeWidth={1.75} />,
+    push: <Webhook className={iconCls} strokeWidth={1.75} />,
+    sip: <Phone className={iconCls} strokeWidth={1.75} />,
+    grpc: <Network className={iconCls} strokeWidth={1.75} />,
+    synthetic_api: <Code className={iconCls} strokeWidth={1.75} />,
+    synthetic_browser: <MousePointer2 className={iconCls} strokeWidth={1.75} />,
     };
 
     const monitorTypes: MonitorType[] = ['http', 'ping', 'dns', 'grpc', 'group', 'agent', 'push', 'sip', 'synthetic_api', 'synthetic_browser'];
@@ -2140,14 +2144,14 @@ export default function MonitorForm({
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticAPITemplate('single_health')}
                   >
                     Health Check
                   </button>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticAPITemplate('health_auth')}
                   >
                     Health + Auth Flow
@@ -2200,7 +2204,7 @@ export default function MonitorForm({
                 </div>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
+                  className={BTN_GHOST_SM}
                   onClick={startSyntheticLiveTest}
                   disabled={!isSavedMonitor || isTestRunning}
                 >
@@ -2276,7 +2280,7 @@ export default function MonitorForm({
                     />
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm col-span-1"
+                      className={`${BTN_GHOST_SM} col-span-1`}
                       onClick={() => {
                         const next = [...formData.synthetic_api_variables];
                         if (next.length === 1) {
@@ -2295,7 +2299,7 @@ export default function MonitorForm({
               <div className="mt-2">
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -2315,7 +2319,7 @@ export default function MonitorForm({
                 <label className="block text-xs font-medium text-slate-400">Steps</label>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -2337,7 +2341,7 @@ export default function MonitorForm({
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         disabled={stepIdx === 0}
                         onClick={() => {
                           if (stepIdx === 0) return;
@@ -2350,7 +2354,7 @@ export default function MonitorForm({
                       </button>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         disabled={stepIdx === formData.synthetic_api_steps.length - 1}
                         onClick={() => {
                           if (stepIdx === formData.synthetic_api_steps.length - 1) return;
@@ -2363,7 +2367,7 @@ export default function MonitorForm({
                       </button>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           if (next.length === 1) {
@@ -2475,14 +2479,14 @@ export default function MonitorForm({
                                 next[stepIdx] = { ...next[stepIdx], headers };
                                 setFormData({ ...formData, synthetic_api_steps: next });
                               }}
-                              className="btn btn-secondary btn-sm col-span-1 disabled:opacity-50"
+                              className={`${BTN_GHOST_SM} col-span-1`}
                               title={showToggle ? (h.reveal ? 'Hide value' : 'Show value') : 'Add a value to show/hide'}
                             >
                               {h.reveal ? 'Hide' : 'Show'}
                             </button>
                             <button
                               type="button"
-                              className="btn btn-secondary btn-sm col-span-1"
+                              className={`${BTN_GHOST_SM} col-span-1`}
                               onClick={() => {
                                 const next = [...formData.synthetic_api_steps];
                                 const headers = [...next[stepIdx].headers];
@@ -2504,7 +2508,7 @@ export default function MonitorForm({
                     <div className="mt-2">
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           next[stepIdx] = { ...next[stepIdx], headers: [...next[stepIdx].headers, { key: '', value: '', reveal: false }] };
@@ -2573,7 +2577,7 @@ export default function MonitorForm({
                       <label className="block text-xs font-medium text-slate-400">Assertions (optional)</label>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           next[stepIdx] = { ...next[stepIdx], assertions: [...next[stepIdx].assertions, defaultSyntheticAPIAssertion()] };
@@ -2663,7 +2667,7 @@ export default function MonitorForm({
 
                             <button
                               type="button"
-                              className="btn btn-secondary btn-sm col-span-1"
+                              className={`${BTN_GHOST_SM} col-span-1`}
                               onClick={() => {
                                 const next = [...formData.synthetic_api_steps];
                                 const assertions = [...next[stepIdx].assertions];
@@ -2688,7 +2692,7 @@ export default function MonitorForm({
                       <label className="block text-xs font-medium text-slate-400">Extracts (optional)</label>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           next[stepIdx] = { ...next[stepIdx], extracts: [...next[stepIdx].extracts, defaultSyntheticAPIExtract()] };
@@ -2756,7 +2760,7 @@ export default function MonitorForm({
                           </label>
                           <button
                             type="button"
-                            className="btn btn-secondary btn-sm col-span-1"
+                            className={`${BTN_GHOST_SM} col-span-1`}
                             onClick={() => {
                               const next = [...formData.synthetic_api_steps];
                               const extracts = [...next[stepIdx].extracts];
@@ -3008,7 +3012,7 @@ export default function MonitorForm({
                   <div className="mt-4 flex items-center justify-between border-t border-white/[0.08] pt-3">
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm"
+                      className={BTN_GHOST_SM}
                       onClick={() => setSyntheticBrowserGuidedStep((prev) => (prev > 1 ? ((prev - 1) as SyntheticBrowserGuidedStep) : prev))}
                       disabled={syntheticBrowserGuidedStep === 1}
                     >
@@ -3016,7 +3020,7 @@ export default function MonitorForm({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm"
+                      className={BTN_GHOST_SM}
                       onClick={() =>
                         setSyntheticBrowserGuidedStep((prev) => (prev < 3 ? ((prev + 1) as SyntheticBrowserGuidedStep) : prev))
                       }
@@ -3040,14 +3044,14 @@ export default function MonitorForm({
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticBrowserTemplate('homepage_smoke')}
                   >
                     Homepage Smoke
                   </button>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticBrowserTemplate('login_flow')}
                   >
                     Login Flow
@@ -3100,7 +3104,7 @@ export default function MonitorForm({
                 </div>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
+                  className={BTN_GHOST_SM}
                   onClick={startSyntheticLiveTest}
                   disabled={!isSavedMonitor || isTestRunning}
                 >
@@ -3214,7 +3218,7 @@ export default function MonitorForm({
                     />
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm col-span-1"
+                      className={`${BTN_GHOST_SM} col-span-1`}
                       onClick={() => {
                         const next = [...formData.synthetic_browser_variables];
                         if (next.length === 1) {
@@ -3233,7 +3237,7 @@ export default function MonitorForm({
               <div className="mt-2">
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -3253,7 +3257,7 @@ export default function MonitorForm({
                 <label className="block text-xs font-medium text-slate-400">Steps</label>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -3292,7 +3296,7 @@ export default function MonitorForm({
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="btn btn-secondary btn-sm"
+                          className={BTN_GHOST_SM}
                           disabled={stepIdx === 0}
                           onClick={() => {
                             if (stepIdx === 0) return;
@@ -3305,7 +3309,7 @@ export default function MonitorForm({
                         </button>
                         <button
                           type="button"
-                          className="btn btn-secondary btn-sm"
+                          className={BTN_GHOST_SM}
                           disabled={stepIdx === formData.synthetic_browser_steps.length - 1}
                           onClick={() => {
                             if (stepIdx === formData.synthetic_browser_steps.length - 1) return;
@@ -3318,7 +3322,7 @@ export default function MonitorForm({
                         </button>
                         <button
                           type="button"
-                          className="btn btn-secondary btn-sm"
+                          className={BTN_GHOST_SM}
                           onClick={() => {
                             const next = [...formData.synthetic_browser_steps];
                             if (next.length === 1) {
@@ -3545,7 +3549,7 @@ export default function MonitorForm({
             type="button"
             onClick={onCancel}
             disabled={loading}
-            className="btn btn-secondary btn-sm disabled:opacity-50"
+            className={BTN_GHOST_SM}
           >
             Cancel
           </button>
@@ -3553,7 +3557,7 @@ export default function MonitorForm({
         <button
           type="submit"
           disabled={loading}
-          className="btn btn-primary btn-sm disabled:opacity-50"
+          className={BTN_ACCENT_SM}
         >
           {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Monitor'}
         </button>
