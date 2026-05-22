@@ -25,7 +25,7 @@ import {
   calculateLatencyStats,
   getOperationalResults,
 } from '@/lib/monitor-utils';
-import TagPill from '@/components/ui/TagPill';
+import Pill from '@/components/ui/Pill';
 
 interface MonitorDetailPanelProps {
   monitor: Monitor | null;
@@ -279,9 +279,9 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
               {monitor.type.toUpperCase()} · {monitor.enabled ? 'Active' : 'Disabled'}
             </span>
           </div>
-          <span className={monitor.enabled ? 'badge badge-success' : 'badge badge-default'}>
+          <Pill tone={monitor.enabled ? 'success' : 'neutral'} size="xs" dot>
             {monitor.enabled ? 'Alerts enabled' : 'Alerts disabled'}
-          </span>
+          </Pill>
         </div>
         <div className="text-xs text-muted">
           {monitor.tags && monitor.tags.length > 0
@@ -540,7 +540,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   <span className="text-muted">Tags</span>
                   <span className="flex flex-wrap gap-1">
                     {monitor.tags.map((tag) => (
-                      <TagPill key={tag}>{tag}</TagPill>
+                      <Pill key={tag} tone="neutral" size="xs">{tag}</Pill>
                     ))}
                   </span>
                 </li>

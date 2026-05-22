@@ -4,6 +4,7 @@ import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { CheckResult, Monitor, HTTPMetricsEnvelope, HTTPTimingInfo, HTTPTLSInfo } from '@/lib/types';
 import { calculateUptime, calculateLatencyStats, getOperationalResults } from '@/lib/monitor-utils';
 import { UptimeHeroGauge, SLA_TARGET } from './UptimeHeroGauge';
+import Pill from '@/components/ui/Pill';
 
 export type TimeRange = '1h' | '6h' | '24h' | '7d';
 
@@ -987,9 +988,7 @@ export default function HttpMonitorOverview({
           <span className="text-xs text-slate-500">Tags:</span>
           <div className="flex flex-wrap gap-1.5">
             {monitor.tags.map((tag) => (
-              <span key={tag} className="badge badge-default text-xs">
-                {tag}
-              </span>
+              <Pill key={tag} tone="neutral" size="xs">{tag}</Pill>
             ))}
           </div>
         </div>

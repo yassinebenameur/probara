@@ -4,8 +4,8 @@ import InfoTip, { InfoTipEntry } from './InfoTip';
 
 interface PageHeaderProps {
   breadcrumb?: BreadcrumbItem[];
-  title: string;
-  subtitle?: string;
+  title: ReactNode;
+  subtitle?: ReactNode;
   titleInfoTip?: ReactNode | { title?: string; entries?: InfoTipEntry[] };
   action?: ReactNode;
 }

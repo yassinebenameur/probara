@@ -3,7 +3,17 @@
 import { useState, useEffect } from 'react';
 import { Monitor, CheckResult } from '@/lib/types';
 import { getMonitorResults, getGroupMembers } from '@/lib/api';
-import StatusPill from '@/components/ui/StatusPill';
+import Pill, { PillTone } from '@/components/ui/Pill';
+
+type StatusKey = 'up' | 'down' | 'degraded' | 'unknown' | 'paused';
+
+const STATUS_TONE: Record<StatusKey, PillTone> = {
+  up: 'success',
+  down: 'danger',
+  degraded: 'warning',
+  unknown: 'neutral',
+  paused: 'neutral',
+};
 import { calculateUptime, countOperationalResults, getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 
@@ -139,12 +149,9 @@ export default function GroupedChecksView() {
                     <div className="text-sm text-muted">
                       {operationalCount > 0 ? `${uptime.toFixed(2)}% uptime` : 'No data'}
                     </div>
-                    <StatusPill
-                      status={status}
-                      label={
-                        status === 'up' ? 'All Up' : status === 'down' ? 'All Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'
-                      }
-                    />
+                    <Pill tone={STATUS_TONE[status as StatusKey]} size="sm" dot>
+                      {status === 'up' ? 'All up' : status === 'down' ? 'All down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'}
+                    </Pill>
                   </div>
                 </div>
 
@@ -170,20 +177,9 @@ export default function GroupedChecksView() {
                             <div className="text-xs text-muted">
                               {memberOperationalCount > 0 ? `${memberUptime.toFixed(2)}%` : 'N/A'}
                             </div>
-                            <StatusPill
-                              status={memberStatus}
-                              label={
-                                memberStatus === 'up'
-                                  ? 'Up'
-                                  : memberStatus === 'down'
-                                  ? 'Down'
-                                  : memberStatus === 'paused'
-                                  ? 'Paused'
-                                  : memberStatus === 'unknown'
-                                  ? 'Unknown'
-                                  : 'Degraded'
-                              }
-                            />
+                            <Pill tone={STATUS_TONE[memberStatus as StatusKey]} size="sm" dot>
+                              {memberStatus === 'up' ? 'Up' : memberStatus === 'down' ? 'Down' : memberStatus === 'paused' ? 'Paused' : memberStatus === 'unknown' ? 'Unknown' : 'Degraded'}
+                            </Pill>
                           </div>
                         </div>
                       );
@@ -224,12 +220,9 @@ export default function GroupedChecksView() {
                     <div className="text-xs text-muted">
                       {operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}
                     </div>
-                    <StatusPill
-                      status={status}
-                      label={
-                        status === 'up' ? 'Up' : status === 'down' ? 'Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'
-                      }
-                    />
+                    <Pill tone={STATUS_TONE[status as StatusKey]} size="sm" dot>
+                      {status === 'up' ? 'Up' : status === 'down' ? 'Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'}
+                    </Pill>
                   </div>
                 </div>
               );

@@ -2,8 +2,8 @@
 
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
 import Image from 'next/image';
+import { Clock, Settings as SettingsIcon, Trash2, X } from 'lucide-react';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
@@ -11,6 +11,9 @@ import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
+import PageHeader from '@/components/ui/PageHeader';
+import FormCard from '@/components/ui/FormCard';
+import Button from '@/components/ui/Button';
 import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
@@ -580,13 +583,11 @@ export default function EditMonitorPage() {
 
   if (error || !monitor) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-center">
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
         <p className="text-rose-400">{error || 'Monitor not found'}</p>
-        <Link href="/monitors">
-          <button className="mt-4 text-sm text-slate-400 hover:text-white">
-            ← Back to Monitors
-          </button>
-        </Link>
+        <Button variant="ghost" size="sm" onClick={() => router.push('/monitors')}>
+          ← Back to monitors
+        </Button>
       </div>
     );
   }
@@ -616,41 +617,31 @@ export default function EditMonitorPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          {/* Breadcrumb */}
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-3">
-            <Link href="/monitors" className="hover:text-slate-400">Monitors</Link>
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            <span className="text-slate-400">{monitor.name}</span>
-          </div>
-
-          {/* Title & Status */}
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold text-white">{monitor.name}</h1>
+      <PageHeader
+        breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: monitor.name }]}
+        title={
+          <span className="flex items-center gap-3">
+            <span>{monitor.name}</span>
             <StatusBadge status={status} />
-          </div>
-
-          {/* Subtitle */}
-          <p className="mt-1 text-sm text-slate-500">
+          </span>
+        }
+        subtitle={
+          <span>
             <span className="uppercase">{monitor.type}</span>
             {getUrl() && <span> · {getUrl()}</span>}
-          </p>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          <button
+          </span>
+        }
+        action={
+          <Button
+            variant="danger"
+            size="sm"
+            icon={<Trash2 strokeWidth={1.75} />}
             onClick={handleDelete}
-            className="rounded-lg border border-rose-500/30 px-3 py-1.5 text-xs text-rose-400 transition-colors hover:bg-rose-500/10"
           >
             Delete
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       {/* Tabs */}
       <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-slate-900/50 p-1 w-fit">
@@ -707,14 +698,14 @@ export default function EditMonitorPage() {
             />
           )}
           {activeTab === 'settings' && (
-            <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+            <FormCard>
               <MonitorForm
                 monitor={monitor}
                 onSubmit={handleSubmit}
                 onCancel={() => router.push('/monitors')}
                 loading={saving}
               />
-            </div>
+            </FormCard>
           )}
           {activeTab === 'json' && (
             <MonitorDetailJson monitor={monitor} />
@@ -724,44 +715,41 @@ export default function EditMonitorPage() {
         {/* Sidebar - Quick Stats (visible on overview) */}
         {activeTab === 'overview' && (
           <div className="space-y-4">
-            {/* Quick Actions */}
-            <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-3">Quick Actions</h3>
+            <FormCard className="p-4">
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Quick actions</h3>
               <div className="space-y-2">
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<SettingsIcon strokeWidth={1.75} />}
+                  className="w-full justify-start"
                   onClick={() => setActiveTab('settings')}
-                  className="w-full flex items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
                 >
-                  <svg className="h-4 w-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  Edit Settings
-                </button>
-                <button
+                  Edit settings
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Clock strokeWidth={1.75} />}
+                  className="w-full justify-start"
                   onClick={() => setActiveTab('history')}
-                  className="w-full flex items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
                 >
-                  <svg className="h-4 w-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  View History
-                </button>
-                <button
+                  View history
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon={<Trash2 strokeWidth={1.75} />}
+                  className="w-full justify-start"
                   onClick={openHistoryResetModal}
-                  className="w-full flex items-center gap-3 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2.5 text-left text-sm text-rose-300 transition-colors hover:bg-rose-500/15"
                 >
-                  <svg className="h-4 w-4 text-rose-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-7 0h8" />
-                  </svg>
-                  {monitor.type === 'group' ? 'Clear Group History' : 'Clear History'}
-                </button>
+                  {monitor.type === 'group' ? 'Clear group history' : 'Clear history'}
+                </Button>
               </div>
-            </div>
+            </FormCard>
 
-            {/* Config Summary */}
-            <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-3">Configuration</h3>
+            <FormCard className="p-4">
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Configuration</h3>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-slate-500">Type</span>
@@ -782,11 +770,11 @@ export default function EditMonitorPage() {
                   </span>
                 </div>
               </div>
-            </div>
+            </FormCard>
 
             {monitor.type === 'synthetic_browser' && (
-              <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-                <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-3">Latest failure screenshot</h3>
+              <FormCard className="p-4">
+                <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Latest failure screenshot</h3>
                 {screenshotLoading ? (
                   <p className="text-xs text-slate-500">Loading screenshot...</p>
                 ) : screenshotBlobURL ? (
@@ -811,7 +799,7 @@ export default function EditMonitorPage() {
                     No screenshot available yet. A failed run with screenshot capture enabled is required.
                   </p>
                 )}
-              </div>
+              </FormCard>
             )}
           </div>
         )}
@@ -824,10 +812,8 @@ export default function EditMonitorPage() {
         }`}>
           <div className="flex items-center gap-3">
             <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white">
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white" aria-label="Dismiss">
+              <X className="h-4 w-4" strokeWidth={1.75} />
             </button>
           </div>
         </div>
