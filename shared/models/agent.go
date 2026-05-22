@@ -40,11 +40,13 @@ type AgentMetricsPayload struct {
 
 // AgentInstallCommand represents the installation instructions for an agent
 type AgentInstallCommand struct {
-	AgentID              string `json:"agent_id"`
-	BackendURL           string `json:"backend_url"`
-	InstallScript        string `json:"install_script"`
-	WindowsInstallScript string `json:"windows_install_script"`
-	ConfigTemplate       string `json:"config_template"`
-	DownloadURL          string `json:"download_url"`
-	IntervalSeconds      int    `json:"interval_seconds"`
+	AgentID                string `json:"agent_id"`
+	BackendURL             string `json:"backend_url"`
+	InstallScript          string `json:"install_script"`
+	WindowsInstallScript   string `json:"windows_install_script"`
+	UninstallScript        string `json:"uninstall_script"`
+	WindowsUninstallScript string `json:"windows_uninstall_script"`
+	ConfigTemplate         string `json:"config_template"`
+	DownloadURL            string `json:"download_url"`
+	IntervalSeconds        int    `json:"interval_seconds"`
 }

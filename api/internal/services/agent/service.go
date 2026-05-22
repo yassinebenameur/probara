@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+)
+
+var (
+	ErrAgentUnavailable = errors.New("agent monitor not found")
+	ErrAgentDisabled    = errors.New("agent monitor disabled")
 )
 
 // Service handles agent-related business logic
@@ -29,16 +35,20 @@ func (s *Service) ProcessMetrics(ctx context.Context, payload models.AgentMetric
 	// Verify that the agent exists and belongs to the tenant
 	var monitorID uuid.UUID
 	var monitorName string
+	var enabled bool
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name FROM monitors 
-		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND enabled = true`,
+		`SELECT id, name, enabled FROM monitors
+		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent'`,
 		payload.AgentID, tenantID,
-	).Scan(&monitorID, &monitorName)
+	).Scan(&monitorID, &monitorName, &enabled)
 	if err == sql.ErrNoRows {
-		return fmt.Errorf("agent not found or disabled: %s", payload.AgentID)
+		return fmt.Errorf("%w: %s", ErrAgentUnavailable, payload.AgentID)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to lookup agent: %w", err)
+	}
+	if !enabled {
+		return fmt.Errorf("%w: %s", ErrAgentDisabled, payload.AgentID)
 	}
 
 	// Determine status based on metrics
@@ -116,7 +126,7 @@ func (s *Service) GetMonitorByAgentID(ctx context.Context, agentID string, tenan
 }
 
 // GenerateInstallCommand generates installation instructions for an agent
-func (s *Service) GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string) (*models.AgentInstallCommand, error) {
+func (s *Service) GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string, allowRemoteDisable bool) (*models.AgentInstallCommand, error) {
 	// Get monitor details
 	var agentID sql.NullString
 	var intervalSeconds int
@@ -133,8 +143,10 @@ func (s *Service) GenerateInstallCommand(ctx context.Context, monitorID, tenantI
 		return nil, fmt.Errorf("monitor does not have an agent_id")
 	}
 
-	installScript := buildUnixInstallScript(backendURL, agentID.String, apiKey, intervalSeconds)
-	windowsInstallScript := buildWindowsInstallScript(backendURL, agentID.String, apiKey, intervalSeconds)
+	installScript := buildUnixInstallScript(backendURL, agentID.String, apiKey, intervalSeconds, allowRemoteDisable)
+	windowsInstallScript := buildWindowsInstallScript(backendURL, agentID.String, apiKey, intervalSeconds, allowRemoteDisable)
+	uninstallScript := buildUnixUninstallScript()
+	windowsUninstallScript := buildWindowsUninstallScript()
 
 	// Generate config template
 	configTemplate := fmt.Sprintf(`# Probara Agent Configuration
@@ -146,17 +158,19 @@ DISK_PATH=/
 `, backendURL, agentID.String, apiKey, intervalSeconds)
 
 	return &models.AgentInstallCommand{
-		AgentID:              agentID.String,
-		BackendURL:           backendURL,
-		InstallScript:        installScript,
-		WindowsInstallScript: windowsInstallScript,
-		ConfigTemplate:       configTemplate,
-		DownloadURL:          fmt.Sprintf("%s/static/agent/", backendURL),
-		IntervalSeconds:      intervalSeconds,
+		AgentID:                agentID.String,
+		BackendURL:             backendURL,
+		InstallScript:          installScript,
+		WindowsInstallScript:   windowsInstallScript,
+		UninstallScript:        uninstallScript,
+		WindowsUninstallScript: windowsUninstallScript,
+		ConfigTemplate:         configTemplate,
+		DownloadURL:            fmt.Sprintf("%s/static/agent/", backendURL),
+		IntervalSeconds:        intervalSeconds,
 	}, nil
 }
 
-func buildUnixInstallScript(backendURL, agentID, apiKey string, intervalSeconds int) string {
+func buildUnixInstallScript(backendURL, agentID, apiKey string, intervalSeconds int, allowRemoteDisable bool) string {
 	template := `#!/bin/bash
 set -euo pipefail
 
@@ -166,6 +180,7 @@ BACKEND_URL="__BACKEND_URL__"
 AGENT_ID="__AGENT_ID__"
 API_KEY="__API_KEY__"
 INTERVAL="__INTERVAL__"
+ALLOW_REMOTE_DISABLE="__ALLOW_REMOTE_DISABLE__"
 DISK_PATH="/"
 
 echo "Installing Probara Agent..."
@@ -190,6 +205,7 @@ CONFIG_DIR="$HOME/.config/probara-agent"
 STATE_DIR="$HOME/.local/state/probara-agent"
 RUNNER_DIR="$HOME/.local/lib/probara-agent"
 RUNNER="$RUNNER_DIR/run-agent.sh"
+UNINSTALL_SCRIPT="$RUNNER_DIR/uninstall-agent.sh"
 CONFIG_FILE="$CONFIG_DIR/agent.env"
 
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR" "$RUNNER_DIR"
@@ -204,8 +220,15 @@ AGENT_ID=$AGENT_ID
 API_KEY=$API_KEY
 INTERVAL=$INTERVAL
 DISK_PATH=$DISK_PATH
+ALLOW_REMOTE_DISABLE=$ALLOW_REMOTE_DISABLE
+REMOTE_DISABLE_COMMAND=$UNINSTALL_SCRIPT
 PROBARA_ENV
 chmod 600 "$CONFIG_FILE"
+
+cat > "$UNINSTALL_SCRIPT" <<'PROBARA_UNINSTALL'
+__UNIX_UNINSTALL_SCRIPT__
+PROBARA_UNINSTALL
+chmod +x "$UNINSTALL_SCRIPT"
 
 cat > "$RUNNER" <<'PROBARA_RUNNER'
 #!/bin/sh
@@ -216,7 +239,9 @@ exec "$HOME/.local/bin/probara-agent" \
   -agent-id "$AGENT_ID" \
   -api-key "$API_KEY" \
   -interval "$INTERVAL" \
-  -disk-path "$DISK_PATH"
+  -disk-path "$DISK_PATH" \
+  -allow-remote-disable="$ALLOW_REMOTE_DISABLE" \
+  -remote-disable-command "$REMOTE_DISABLE_COMMAND"
 PROBARA_RUNNER
 chmod +x "$RUNNER"
 
@@ -307,10 +332,12 @@ echo "Installation complete. Probara Agent will restart automatically if it exit
 		"__AGENT_ID__", agentID,
 		"__API_KEY__", apiKey,
 		"__INTERVAL__", fmt.Sprintf("%d", intervalSeconds),
+		"__ALLOW_REMOTE_DISABLE__", fmt.Sprintf("%t", allowRemoteDisable),
+		"__UNIX_UNINSTALL_SCRIPT__", buildUnixUninstallScript(),
 	).Replace(template)
 }
 
-func buildWindowsInstallScript(backendURL, agentID, apiKey string, intervalSeconds int) string {
+func buildWindowsInstallScript(backendURL, agentID, apiKey string, intervalSeconds int, allowRemoteDisable bool) string {
 	template := `#Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
 
@@ -325,10 +352,12 @@ $BackendURL = "__BACKEND_URL__"
 $AgentID = "__AGENT_ID__"
 $ApiKey = "__API_KEY__"
 $Interval = "__INTERVAL__"
+$AllowRemoteDisable = "__ALLOW_REMOTE_DISABLE__"
 $InstallDir = Join-Path $env:ProgramFiles "ProbaraAgent"
 $LogDir = Join-Path $env:ProgramData "ProbaraAgent\logs"
 $AgentPath = Join-Path $InstallDir "probara-agent.exe"
 $NssmPath = Join-Path $InstallDir "nssm.exe"
+$UninstallScript = Join-Path $InstallDir "uninstall-probara-agent.ps1"
 $AgentDownloadURL = "$BackendURL/static/agent/probara-agent-windows-amd64.exe"
 $NssmURL = "https://nssm.cc/release/nssm-2.24.zip"
 
@@ -338,6 +367,10 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 Write-Host "Downloading agent..."
 Invoke-WebRequest -UseBasicParsing -Uri $AgentDownloadURL -OutFile $AgentPath
+
+@'
+__WINDOWS_UNINSTALL_SCRIPT__
+'@ | Set-Content -Path $UninstallScript -Encoding UTF8
 
 if (-not (Test-Path $NssmPath)) {
   $NssmZip = Join-Path $env:TEMP "nssm-2.24.zip"
@@ -356,7 +389,7 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
   & $NssmPath remove $ServiceName confirm 2>$null | Out-Null
 }
 
-$AppParameters = '-backend-url "' + $BackendURL + '" -agent-id "' + $AgentID + '" -api-key "' + $ApiKey + '" -interval ' + $Interval
+$AppParameters = '-backend-url "' + $BackendURL + '" -agent-id "' + $AgentID + '" -api-key "' + $ApiKey + '" -interval ' + $Interval + ' -allow-remote-disable=' + $AllowRemoteDisable + ' -remote-disable-command "' + $UninstallScript + '"'
 
 & $NssmPath install $ServiceName $AgentPath
 & $NssmPath set $ServiceName AppDirectory $InstallDir
@@ -378,5 +411,71 @@ Write-Host "Logs: $LogDir"
 		"__AGENT_ID__", agentID,
 		"__API_KEY__", apiKey,
 		"__INTERVAL__", fmt.Sprintf("%d", intervalSeconds),
+		"__ALLOW_REMOTE_DISABLE__", fmt.Sprintf("%t", allowRemoteDisable),
+		"__WINDOWS_UNINSTALL_SCRIPT__", buildWindowsUninstallScript(),
 	).Replace(template)
+}
+
+func buildUnixUninstallScript() string {
+	return `#!/bin/sh
+set -eu
+
+SERVICE_NAME="probara-agent"
+LABEL="com.probara.agent"
+BOOTOUT_TARGET=""
+SYSTEMD_STOP=0
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user disable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  rm -f "$HOME/.config/systemd/user/${SERVICE_NAME}.service"
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  SYSTEMD_STOP=1
+fi
+
+PLIST_FILE="$HOME/Library/LaunchAgents/${LABEL}.plist"
+if command -v launchctl >/dev/null 2>&1 && [ -f "$PLIST_FILE" ]; then
+  rm -f "$PLIST_FILE"
+  BOOTOUT_TARGET="gui/$(id -u)/${LABEL}"
+fi
+
+rm -f "$HOME/.local/bin/probara-agent"
+rm -rf "$HOME/.local/lib/probara-agent" \
+       "$HOME/.config/probara-agent" \
+       "$HOME/.local/state/probara-agent" \
+       "$HOME/Library/Logs/ProbaraAgent"
+
+if [ "$SYSTEMD_STOP" -eq 1 ]; then
+  systemctl --user stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+fi
+
+if [ -n "$BOOTOUT_TARGET" ]; then
+  launchctl bootout "$BOOTOUT_TARGET" >/dev/null 2>&1 || launchctl remove "$LABEL" >/dev/null 2>&1 || true
+fi
+
+echo "Probara Agent uninstalled."
+`
+}
+
+func buildWindowsUninstallScript() string {
+	return `$ErrorActionPreference = "SilentlyContinue"
+
+$ServiceName = "ProbaraAgent"
+$InstallDir = Join-Path $env:ProgramFiles "ProbaraAgent"
+$LogDir = Join-Path $env:ProgramData "ProbaraAgent\logs"
+$NssmPath = Join-Path $InstallDir "nssm.exe"
+
+if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+  if (Test-Path $NssmPath) {
+    & $NssmPath stop $ServiceName | Out-Null
+    & $NssmPath remove $ServiceName confirm | Out-Null
+  } else {
+    Stop-Service -Name $ServiceName -Force
+    sc.exe delete $ServiceName | Out-Null
+  }
+}
+
+Remove-Item -Recurse -Force $InstallDir
+Remove-Item -Recurse -Force $LogDir
+Write-Host "Probara Agent uninstalled."
+`
 }

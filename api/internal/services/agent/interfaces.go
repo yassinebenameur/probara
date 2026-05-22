@@ -17,7 +17,7 @@ type AgentService interface {
 	GetMonitorByAgentID(ctx context.Context, agentID string, tenantID uuid.UUID) (uuid.UUID, error)
 
 	// GenerateInstallCommand generates installation instructions for an agent
-	GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string) (*models.AgentInstallCommand, error)
+	GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string, allowRemoteDisable bool) (*models.AgentInstallCommand, error)
 }
 
 // Ensure Service implements AgentService

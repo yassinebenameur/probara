@@ -15,12 +15,27 @@ A lightweight system metrics collector that reports CPU, memory, disk, network, 
 
 ```bash
 # Download and run the service installer from your Probara dashboard
-curl -fsSL https://your-backend-url/api/v1/monitors/{id}/agent/install | bash
+curl -fsSL -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://your-backend-url/api/v1/monitors/{id}/agent/install/script.sh" | bash
 ```
 
 The installer configures the agent as a supervised service: `systemd --user` on
 Linux and `launchd` on macOS. The service restarts automatically if the agent
 exits and reconnects when the backend is available again.
+
+Enable "Allow remote disable" in the install UI only when this machine should
+remove the local service automatically after the monitor is deleted in Probara.
+
+### Uninstall
+
+The dashboard provides a matching uninstall command for Linux, macOS, and
+Windows. On Linux/macOS it stops the local service and removes the installed
+binary, config, runner, state, and logs:
+
+```bash
+curl -fsSL -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://your-backend-url/api/v1/monitors/{id}/agent/uninstall/script.sh" | bash
+```
 
 ### Manual Installation
 
@@ -52,6 +67,10 @@ exits and reconnects when the backend is available again.
 - `-api-key` (required): API key for authentication
 - `-interval` (optional): Reporting interval in seconds (default: 60)
 - `-disk-path` (optional): Disk path to monitor (default: `/`)
+- `-allow-remote-disable` (optional): Allow the agent to run its configured
+  disable command when the backend returns `410 Gone`
+- `-remote-disable-command` (optional): Local uninstall script path to run when
+  remote disable is allowed
 
 ### Environment Variables
 

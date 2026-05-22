@@ -62,6 +62,7 @@ export default function AgentForm({
   const [apiKey, setApiKeyState] = useState<string>('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [serverType, setServerType] = useState<ServerType>(DEFAULT_SERVER_TYPE);
+  const [allowRemoteDisable, setAllowRemoteDisable] = useState(false);
   const [apiKeyOptions, setApiKeyOptions] = useState<ApiKeyOption[]>([]);
   const [selectedApiKeyId, setSelectedApiKeyId] = useState<string>('');
   const [loadingApiKeys, setLoadingApiKeys] = useState(false);
@@ -266,27 +267,50 @@ export default function AgentForm({
     const isWindows = selectedServer.family === 'windows';
     const activeApiKey = apiKeyOptions.find((option) => option.id === selectedApiKeyId)?.key || apiKey || '';
     const resolvedApiKey = activeApiKey || 'YOUR_API_KEY';
+    const installQuery = allowRemoteDisable ? '?allow_remote_disable=true' : '';
     const installScriptUrl = installCommand
-      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.sh`
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.sh${installQuery}`
       : '';
     const windowsInstallScriptUrl = installCommand
-      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.ps1`
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.ps1${installQuery}`
+      : '';
+    const uninstallScriptUrl = installCommand
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/uninstall/script.sh`
+      : '';
+    const windowsUninstallScriptUrl = installCommand
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/uninstall/script.ps1`
       : '';
     const linuxQuickInstallCommand = installCommand
       ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
-  ${installScriptUrl} | bash`
+  "${installScriptUrl}" | bash`
       : '';
     const linuxQuickInstallCopy = installCommand
-      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" ${installScriptUrl} | bash`
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${installScriptUrl}" | bash`
       : '';
     const windowsQuickInstallCommand = installCommand
       ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Headers @{Authorization='Bearer ${resolvedApiKey}'} -Uri '${windowsInstallScriptUrl}').Content"`
+      : '';
+    const linuxQuickUninstallCommand = installCommand
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
+  "${uninstallScriptUrl}" | bash`
+      : '';
+    const linuxQuickUninstallCopy = installCommand
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${uninstallScriptUrl}" | bash`
+      : '';
+    const windowsQuickUninstallCommand = installCommand
+      ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Headers @{Authorization='Bearer ${resolvedApiKey}'} -Uri '${windowsUninstallScriptUrl}').Content"`
       : '';
     const quickInstallCommand = installCommand
       ? (isWindows ? windowsQuickInstallCommand : linuxQuickInstallCommand)
       : '';
     const quickInstallCopy = installCommand
       ? (isWindows ? windowsQuickInstallCommand : linuxQuickInstallCopy)
+      : '';
+    const quickUninstallCommand = installCommand
+      ? (isWindows ? windowsQuickUninstallCommand : linuxQuickUninstallCommand)
+      : '';
+    const quickUninstallCopy = installCommand
+      ? (isWindows ? windowsQuickUninstallCommand : linuxQuickUninstallCopy)
       : '';
 
     return (
@@ -361,6 +385,26 @@ export default function AgentForm({
                 </select>
               </FormField>
 
+              <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-white">Allow remote disable</p>
+                  <p className="text-xs text-slate-500">Let this agent remove its local service when the monitor is deleted</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAllowRemoteDisable((enabled) => !enabled)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${
+                    allowRemoteDisable ? 'bg-cyan-500' : 'bg-slate-700'
+                  }`}
+                  aria-pressed={allowRemoteDisable}
+                  aria-label="Toggle remote disable"
+                >
+                  <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                    allowRemoteDisable ? 'translate-x-4' : ''
+                  }`} />
+                </button>
+              </div>
+
               <FormField label={isWindows ? 'Install service (Windows)' : 'Install service (Linux/macOS)'}>
                 <div className="flex gap-2">
                   <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickInstallCommand}</pre>
@@ -372,6 +416,21 @@ export default function AgentForm({
                     onClick={() => copyToClipboard(quickInstallCopy, 'install')}
                   >
                     {copiedField === 'install' ? 'Copied' : 'Copy'}
+                  </Button>
+                </div>
+              </FormField>
+
+              <FormField label={isWindows ? 'Uninstall service (Windows)' : 'Uninstall service (Linux/macOS)'}>
+                <div className="flex gap-2">
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickUninstallCommand}</pre>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    className="self-start"
+                    onClick={() => copyToClipboard(quickUninstallCopy, 'uninstall')}
+                  >
+                    {copiedField === 'uninstall' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
               </FormField>

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/yassinebenameur/probara/agent/internal/models"
 )
+
+var ErrRemoteDisabled = errors.New("agent monitor remote disabled")
 
 // Reporter sends metrics to the backend
 type Reporter struct {
@@ -58,6 +61,9 @@ func (r *Reporter) Report(ctx context.Context, metrics *models.AgentMetrics) err
 		if err == nil {
 			return nil
 		}
+		if errors.Is(err, ErrRemoteDisabled) {
+			return err
+		}
 		lastErr = err
 	}
 
@@ -85,6 +91,10 @@ func (r *Reporter) send(ctx context.Context, payload models.AgentMetricsPayload)
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusGone {
+		return ErrRemoteDisabled
+	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)

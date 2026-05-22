@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -20,6 +23,8 @@ func main() {
 	apiKey := flag.String("api-key", "", "API Key for authentication (required)")
 	interval := flag.Int("interval", 60, "Reporting interval in seconds")
 	diskPath := flag.String("disk-path", "/", "Disk path to monitor")
+	allowRemoteDisable := flag.Bool("allow-remote-disable", false, "Allow the backend to disable and uninstall this service when the monitor is deleted")
+	remoteDisableCommand := flag.String("remote-disable-command", "", "Command or script path to run when remote disable is allowed")
 	flag.Parse()
 
 	// Validate required flags
@@ -31,6 +36,7 @@ func main() {
 	log.Printf("Agent ID: %s", *agentID)
 	log.Printf("Backend URL: %s", *backendURL)
 	log.Printf("Reporting interval: %d seconds", *interval)
+	log.Printf("Remote disable: %t", *allowRemoteDisable)
 
 	// Create collector and reporter
 	col := collector.NewCollector(*diskPath)
@@ -50,6 +56,9 @@ func main() {
 
 	// Collect and report immediately on startup
 	if err := collectAndReport(ctx, col, rep); err != nil {
+		if handleReportError(err, *allowRemoteDisable, *remoteDisableCommand) {
+			return
+		}
 		log.Printf("Warning: initial metrics collection failed: %v", err)
 	}
 
@@ -60,6 +69,9 @@ func main() {
 		select {
 		case <-ticker.C:
 			if err := collectAndReport(ctx, col, rep); err != nil {
+				if handleReportError(err, *allowRemoteDisable, *remoteDisableCommand) {
+					return
+				}
 				log.Printf("Error: %v", err)
 			}
 		case sig := <-sigChan:
@@ -94,4 +106,38 @@ func collectAndReport(ctx context.Context, col *collector.Collector, rep *report
 
 	log.Println("Metrics reported successfully")
 	return nil
+}
+
+func handleReportError(err error, allowRemoteDisable bool, remoteDisableCommand string) bool {
+	if !errors.Is(err, reporter.ErrRemoteDisabled) {
+		return false
+	}
+
+	if !allowRemoteDisable {
+		log.Printf("Server says this agent monitor is deleted, but remote disable is not enabled.")
+		return false
+	}
+
+	if remoteDisableCommand == "" {
+		log.Printf("Server says this agent monitor is deleted, but no remote disable command is configured.")
+		return false
+	}
+
+	log.Printf("Server says this agent monitor is deleted. Running remote disable command and exiting.")
+	if err := startRemoteDisable(remoteDisableCommand); err != nil {
+		log.Printf("Failed to start remote disable command: %v", err)
+		return false
+	}
+	return true
+}
+
+func startRemoteDisable(command string) error {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd.exe", "/C", "start", "", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", command)
+		return cmd.Start()
+	} else {
+		cmd = exec.Command("sh", command)
+	}
+	return cmd.Run()
 }

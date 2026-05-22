@@ -211,6 +211,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}/agent/install", agentHandlers.HandleGetInstallCommand)
 				r.Get("/{id}/agent/install/script.sh", agentHandlers.HandleGetInstallScript)
 				r.Get("/{id}/agent/install/script.ps1", agentHandlers.HandleGetWindowsInstallScript)
+				r.Get("/{id}/agent/uninstall/script.sh", agentHandlers.HandleGetUninstallScript)
+				r.Get("/{id}/agent/uninstall/script.ps1", agentHandlers.HandleGetWindowsUninstallScript)
 				// Push info endpoint
 				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
 			})
