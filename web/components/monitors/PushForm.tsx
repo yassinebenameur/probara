@@ -1,9 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Link2 } from 'lucide-react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AlertPolicy, PushMonitorConfig, PushInfo } from '@/lib/types';
 import { getAlertPolicies, getPushInfo } from '@/lib/api';
-import { getApiKey } from '@/lib/auth';
+import FormField from '@/components/ui/FormField';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
+import Button from '@/components/ui/Button';
+import FilterChip from '@/components/ui/FilterChip';
 
 interface PushFormProps {
   monitor?: Monitor;
@@ -12,6 +17,8 @@ interface PushFormProps {
   onCancel?: () => void;
   loading?: boolean;
 }
+
+const INTERVAL_PRESETS = [15, 30, 60, 300];
 
 export default function PushForm({
   monitor,
@@ -31,11 +38,11 @@ export default function PushForm({
 
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
-    expected_interval_seconds: monitor && monitor.type === 'push' 
-      ? (monitor.config as PushMonitorConfig)?.expected_interval_seconds || 60 
+    expected_interval_seconds: monitor && monitor.type === 'push'
+      ? (monitor.config as PushMonitorConfig)?.expected_interval_seconds || 60
       : initialPushConfig?.expected_interval_seconds || 60,
-    grace_period_seconds: monitor && monitor.type === 'push' 
-      ? (monitor.config as PushMonitorConfig)?.grace_period_seconds || 120 
+    grace_period_seconds: monitor && monitor.type === 'push'
+      ? (monitor.config as PushMonitorConfig)?.grace_period_seconds || 120
       : initialPushConfig?.grace_period_seconds || 120,
     alert_policy_ids:
       monitor?.alert_policy_ids ||
@@ -50,7 +57,6 @@ export default function PushForm({
     loadAlertPolicies();
   }, []);
 
-  // Auto-calculate grace period when interval changes (default to 2x interval)
   useEffect(() => {
     if (!isEditMode && !initialPushConfig) {
       setFormData(prev => ({
@@ -94,7 +100,7 @@ export default function PushForm({
       type: 'push',
       config,
       interval_seconds: formData.expected_interval_seconds,
-      timeout_seconds: formData.expected_interval_seconds, // For push monitors, timeout equals interval
+      timeout_seconds: formData.expected_interval_seconds,
       enabled: formData.enabled,
     };
 
@@ -130,117 +136,94 @@ export default function PushForm({
     setTimeout(() => setCopiedField(null), 2000);
   };
 
-  // Webhook info view (shown after creation or when viewing existing)
   if (isEditMode && monitor && showWebhookInfo) {
     if (!pushInfo && !loadingPushInfo) loadPushInfo();
 
     return (
       <div className="space-y-5">
-        <div className="rounded-xl border border-white/[0.06] bg-slate-800/30 p-5">
-          <h3 className="text-sm font-medium text-white mb-4">Webhook Information</h3>
-
+        <FormSection title="Webhook information">
           {loadingPushInfo ? (
-            <div className="text-sm text-slate-500">Loading webhook details...</div>
+            <div className="text-sm text-slate-500">Loading webhook details…</div>
           ) : pushInfo ? (
-            <div className="space-y-4">
-              {/* Webhook URL */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Webhook URL</label>
+            <>
+              <FormField label="Webhook URL">
                 <div className="flex gap-2">
-                  <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-cyan-400 font-mono overflow-x-auto">
+                  <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
                     {pushInfo.webhook_url}
                   </code>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
                     onClick={() => copyToClipboard(pushInfo.webhook_url, 'webhook_url')}
-                    className="btn btn-xs btn-outline"
                   >
-                    {copiedField === 'webhook_url' ? 'OK' : 'Copy'}
-                  </button>
+                    {copiedField === 'webhook_url' ? 'Copied' : 'Copy'}
+                  </Button>
                 </div>
-              </div>
+              </FormField>
 
-              {/* Token */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Push Token</label>
+              <FormField label="Push token">
                 <div className="flex gap-2">
-                  <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-cyan-400 font-mono overflow-x-auto">
+                  <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
                     {pushInfo.push_token}
                   </code>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
                     onClick={() => copyToClipboard(pushInfo.push_token, 'push_token')}
-                    className="btn btn-xs btn-outline"
                   >
-                    {copiedField === 'push_token' ? 'OK' : 'Copy'}
-                  </button>
+                    {copiedField === 'push_token' ? 'Copied' : 'Copy'}
+                  </Button>
                 </div>
-              </div>
+              </FormField>
 
-              {/* Example Commands */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Example Usage</label>
-                <pre className="rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
+              <FormField label="Example usage">
+                <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">
                   {pushInfo.example_curl}
                 </pre>
-                <button
-                  onClick={() => copyToClipboard(pushInfo.example_curl, 'example')}
-                  className="btn btn-xs btn-outline mt-2"
-                >
-                  {copiedField === 'example' ? 'Copied' : 'Copy Examples'}
-                </button>
-              </div>
+                <div className="mt-2">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    onClick={() => copyToClipboard(pushInfo.example_curl, 'example')}
+                  >
+                    {copiedField === 'example' ? 'Copied' : 'Copy examples'}
+                  </Button>
+                </div>
+              </FormField>
 
-              {/* Info Box */}
               <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                <div className="flex items-start gap-3">
-                  <span className="text-emerald-400">OK</span>
-                  <div>
-                    <p className="text-xs font-medium text-white mb-1">Auto-Detected Metrics</p>
-                    <p className="text-xs text-slate-400">
-                      Any additional parameters you send (besides &quot;status&quot; and &quot;error&quot;) will be 
-                      automatically captured and displayed as metrics. Send latency, CPU, memory, 
-                      or any custom metrics you need!
-                    </p>
-                  </div>
-                </div>
+                <p className="text-xs font-medium text-white">Auto-detected metrics</p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Any additional parameters you send (besides &quot;status&quot; and &quot;error&quot;) will be
+                  captured and displayed as metrics. Send latency, CPU, memory, or any custom metrics.
+                </p>
               </div>
 
-              {/* Timing Info */}
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-                <div className="flex items-start gap-3">
-                  <span className="text-amber-400">Timer</span>
-                  <div>
-                    <p className="text-xs font-medium text-white mb-1">Expected Timing</p>
-                    <p className="text-xs text-slate-400">
-                      Push every <strong>{pushInfo.interval_seconds}s</strong>. 
-                      Grace period: <strong>{pushInfo.grace_period_seconds}s</strong>. 
-                      Monitor will be marked as down if no push is received within {pushInfo.interval_seconds + pushInfo.grace_period_seconds}s.
-                    </p>
-                  </div>
-                </div>
+                <p className="text-xs font-medium text-white">Expected timing</p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Push every <strong>{pushInfo.interval_seconds}s</strong>. Grace period:{' '}
+                  <strong>{pushInfo.grace_period_seconds}s</strong>. Monitor goes down if no push within{' '}
+                  {pushInfo.interval_seconds + pushInfo.grace_period_seconds}s.
+                </p>
               </div>
-            </div>
+            </>
           ) : (
             <p className="text-sm text-rose-400">Failed to load webhook details</p>
           )}
-        </div>
+        </FormSection>
 
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={() => setShowWebhookInfo(false)}
-            className="btn btn-secondary"
-          >
-            Back to Settings
-          </button>
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" type="button" onClick={() => setShowWebhookInfo(false)}>
+            Back to settings
+          </Button>
           {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="btn btn-primary"
-            >
+            <Button variant="accent" size="sm" type="button" onClick={onCancel}>
               Done
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -249,72 +232,68 @@ export default function PushForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Name */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Monitor Name</label>
-        <input
-          type="text"
-          value={formData.name}
-          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          placeholder="My Service Health"
-          className="input"
-        />
-        {errors.name && <p className="mt-1 text-xs text-rose-400">{errors.name}</p>}
-        <p className="mt-1 text-xs text-slate-500">Descriptive name for this push monitor</p>
-      </div>
+      <FormSection title="Monitor">
+        <FormField label="Monitor name" required error={errors.name}>
+          <input
+            type="text"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            placeholder="My service health"
+            className="input"
+          />
+        </FormField>
+      </FormSection>
 
-      {/* Expected Interval */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Expected Interval (seconds)</label>
-        <div className="flex gap-2 mb-2">
-          {[15, 30, 60, 300].map((preset) => (
-            <button
-              key={preset}
-              type="button"
-              onClick={() => setFormData({ ...formData, expected_interval_seconds: preset })}
-              className={`btn btn-filter ${formData.expected_interval_seconds === preset ? 'is-active' : ''}`}
-            >
-              {preset >= 60 ? `${preset / 60}m` : `${preset}s`}
-            </button>
-          ))}
-        </div>
-        <input
-          type="number"
-          value={formData.expected_interval_seconds}
-          onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
-          min={5}
-          step={5}
-          className="input"
-        />
-        {errors.expected_interval_seconds && <p className="mt-1 text-xs text-rose-400">{errors.expected_interval_seconds}</p>}
-        <p className="mt-1 text-xs text-slate-500">How often your service will send a push</p>
-      </div>
+      <FormSection title="Timing">
+        <FormField
+          label="Expected interval (seconds)"
+          required
+          error={errors.expected_interval_seconds}
+          description="How often your service sends a push"
+        >
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {INTERVAL_PRESETS.map((preset) => (
+              <FilterChip
+                key={preset}
+                selected={formData.expected_interval_seconds === preset}
+                onClick={() => setFormData({ ...formData, expected_interval_seconds: preset })}
+              >
+                {preset >= 60 ? `${preset / 60}m` : `${preset}s`}
+              </FilterChip>
+            ))}
+          </div>
+          <input
+            type="number"
+            value={formData.expected_interval_seconds}
+            onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
+            min={5}
+            step={5}
+            className="input"
+          />
+        </FormField>
 
-      {/* Grace Period */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Grace Period (seconds)</label>
-        <input
-          type="number"
-          value={formData.grace_period_seconds}
-          onChange={(e) => setFormData({ ...formData, grace_period_seconds: parseInt(e.target.value) || 0 })}
-          min={0}
-          step={5}
-          className="input"
-        />
-        {errors.grace_period_seconds && <p className="mt-1 text-xs text-rose-400">{errors.grace_period_seconds}</p>}
-        <p className="mt-1 text-xs text-slate-500">
-          Extra buffer before marking as down (debounce). Total window: {formData.expected_interval_seconds + formData.grace_period_seconds}s
-        </p>
-      </div>
+        <FormField
+          label="Grace period (seconds)"
+          error={errors.grace_period_seconds}
+          description={`Buffer before marking down. Total window: ${formData.expected_interval_seconds + formData.grace_period_seconds}s`}
+        >
+          <input
+            type="number"
+            value={formData.grace_period_seconds}
+            onChange={(e) => setFormData({ ...formData, grace_period_seconds: parseInt(e.target.value) || 0 })}
+            min={0}
+            step={5}
+            className="input"
+          />
+        </FormField>
+      </FormSection>
 
-      {/* Alert Policies */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Alert Policies</label>
-        <div className="space-y-2">
-          {alertPolicies.length === 0 ? (
-            <div className="text-sm text-slate-500">No alert policies configured.</div>
-          ) : (
-            alertPolicies.map((policy) => {
+      <FormSection title="Alert policies">
+        {alertPolicies.length === 0 ? (
+          <div className="text-sm text-slate-500">No alert policies configured.</div>
+        ) : (
+          <div className="space-y-2">
+            {alertPolicies.map((policy) => {
               const checked = formData.alert_policy_ids.includes(policy.id);
               return (
                 <label key={policy.id} className="flex items-center gap-2 text-sm text-slate-300">
@@ -331,76 +310,65 @@ export default function PushForm({
                   {policy.name}
                 </label>
               );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Tags */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Tags</label>
-        <input
-          type="text"
-          value={formData.tags}
-          onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-          placeholder="production, backend, critical (comma-separated)"
-          className="input"
-        />
-      </div>
-
-      {/* Enabled Toggle */}
-      <div className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
-        <div>
-          <p className="text-sm font-medium text-white">Monitor Enabled</p>
-          <p className="text-xs text-slate-500">Accept pushes and track uptime</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-          className={`relative h-5 w-9 rounded-full transition-colors ${
-            formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-          }`}
-        >
-          <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            formData.enabled ? 'translate-x-4' : ''
-          }`} />
-        </button>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-white/[0.06]">
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Cancel
-          </button>
+            })}
+          </div>
         )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Push Monitor'}
-        </button>
-      </div>
+      </FormSection>
 
-      {/* Webhook Link for existing monitors */}
-      {isEditMode && monitor && (
-        <div className="pt-4 border-t border-white/[0.06]">
+      <FormSection title="Meta">
+        <FormField label="Tags" description="Comma-separated, e.g. production, backend, critical">
+          <input
+            type="text"
+            value={formData.tags}
+            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+            placeholder="production, backend, critical"
+            className="input"
+          />
+        </FormField>
+
+        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-white">Monitor enabled</p>
+            <p className="text-xs text-slate-500">Accept pushes and track uptime</p>
+          </div>
           <button
             type="button"
-            onClick={() => setShowWebhookInfo(true)}
-            className="btn btn-secondary w-full"
+            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
+            }`}
+            aria-pressed={formData.enabled}
+            aria-label="Toggle monitor enabled"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-            </svg>
-            View Webhook URL &amp; Instructions
+            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+              formData.enabled ? 'translate-x-4' : ''
+            }`} />
           </button>
+        </div>
+      </FormSection>
+
+      <FormActions
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create push monitor',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+      />
+
+      {isEditMode && monitor && (
+        <div className="border-t border-white/[0.06] pt-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            icon={<Link2 strokeWidth={1.75} />}
+            className="w-full justify-center"
+            onClick={() => setShowWebhookInfo(true)}
+          >
+            View webhook URL &amp; instructions
+          </Button>
         </div>
       )}
     </form>

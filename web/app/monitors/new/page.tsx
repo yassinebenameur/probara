@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
+import { X } from 'lucide-react';
 import { CreateMonitorRequest, UpdateMonitorRequest } from '@/lib/types';
 import { createMonitor, getMonitor } from '@/lib/api';
 import { buildClonedMonitorInitialData } from '@/lib/monitor-clone';
 import MonitorForm from '@/components/monitors/MonitorForm';
+import PageHeader from '@/components/ui/PageHeader';
+import FormCard from '@/components/ui/FormCard';
 
 export default function NewMonitorPage() {
   const router = useRouter();
@@ -71,31 +73,26 @@ export default function NewMonitorPage() {
   };
 
   return (
-    <div className="max-w-6xl">
-      {/* Breadcrumb */}
-      <div className="mb-6">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <Link href="/monitors" className="hover:text-slate-400">Monitors</Link>
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          <span className="text-slate-400">{isCloneMode ? 'Clone Monitor' : 'New Monitor'}</span>
-        </div>
-        <h1 className="mt-3 text-xl font-semibold text-white">{isCloneMode ? 'Clone Monitor' : 'Create Monitor'}</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {isCloneMode
+    <div className="max-w-6xl space-y-6">
+      <PageHeader
+        breadcrumb={[
+          { label: 'Monitors', href: '/monitors' },
+          { label: isCloneMode ? 'Clone monitor' : 'New' },
+        ]}
+        title={isCloneMode ? 'Clone monitor' : 'Create monitor'}
+        subtitle={
+          isCloneMode
             ? cloneSourceName
               ? `Cloning "${cloneSourceName}". Update anything before creating the new monitor.`
-              : 'Loading monitor details to clone...'
-            : 'Set up a new monitor to track your service availability'}
-        </p>
-      </div>
+              : 'Loading monitor details to clone…'
+            : 'Set up a new monitor to track your service availability.'
+        }
+      />
 
-      {/* Form Card */}
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+      <FormCard>
         {isCloneMode && cloneLoading ? (
           <div className="flex h-40 items-center justify-center text-sm text-slate-500">
-            Loading clone form...
+            Loading clone form…
           </div>
         ) : (
           <MonitorForm
@@ -105,19 +102,18 @@ export default function NewMonitorPage() {
             loading={loading}
           />
         )}
-      </div>
+      </FormCard>
 
-      {/* Toast */}
       {toast && (
-        <div className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-          toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-        }`}>
+        <div
+          className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
+            toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
+          }`}
+        >
           <div className="flex items-center gap-3">
             <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white">
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white" aria-label="Dismiss">
+              <X className="h-4 w-4" strokeWidth={1.75} />
             </button>
           </div>
         </div>
