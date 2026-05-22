@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Search } from 'lucide-react';
 import { hasApiKey, clearApiKey } from '@/lib/auth';
 import { clearSelectedTenantId, getSelectedTenantId, setSelectedTenantId } from '@/lib/tenant';
 import { getTenants } from '@/lib/api';
 import type { Tenant } from '@/lib/types';
 import { useRouter, usePathname } from 'next/navigation';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
 
 export default function TopBar() {
   const router = useRouter();
@@ -110,9 +113,9 @@ export default function TopBar() {
         <div className="flex items-center gap-2 text-xl font-semibold">
           {getPageTitle()}
           {pathname === '/' && (
-            <span className="badge badge-success text-[0.72rem] uppercase tracking-wider">
+            <Pill tone="success" size="xs" dot>
               Production
-            </span>
+            </Pill>
           )}
         </div>
         {getPageSubtitle() && (
@@ -154,9 +157,7 @@ export default function TopBar() {
         {/* Search */}
         <div className="relative min-w-[220px]">
           <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500">
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            <Search className="h-3.5 w-3.5" strokeWidth={1.75} />
           </span>
           <input
             type="text"
@@ -178,14 +179,10 @@ export default function TopBar() {
           <div className={`h-[7px] w-[7px] rounded-full ${mounted && connected ? 'bg-success' : 'bg-danger'}`} />
         </div>
 
-        {/* Disconnect button (if connected) */}
         {mounted && connected && (
-          <button
-            onClick={handleDisconnect}
-            className="btn btn-secondary btn-xs"
-          >
+          <Button variant="ghost" size="xs" onClick={handleDisconnect}>
             Disconnect
-          </button>
+          </Button>
         )}
       </div>
     </header>
