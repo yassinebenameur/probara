@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { AlertChannel, AlertPolicy, CreateAlertPolicyRequest, UpdateAlertPolicyRequest } from '@/lib/types';
 import FormField from '@/components/ui/FormField';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
 import Input from '@/components/ui/Input';
 
 interface AlertPolicyFormProps {
@@ -35,7 +37,6 @@ export default function AlertPolicyForm({
     e.preventDefault();
     setErrors({});
 
-    // Validation
     const newErrors: Record<string, string> = {};
     if (!formData.name.trim()) {
       newErrors.name = 'Name is required';
@@ -52,7 +53,6 @@ export default function AlertPolicyForm({
       return;
     }
 
-    // Prepare request data
     const requestData: CreateAlertPolicyRequest | UpdateAlertPolicyRequest = {
       name: formData.name.trim(),
       failure_threshold: formData.failure_threshold,
@@ -70,70 +70,79 @@ export default function AlertPolicyForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <FormField label="Name" required error={errors.name}>
-        <Input
-          value={formData.name}
-          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          placeholder="Critical Alert Policy"
-        />
-      </FormField>
-
-      <FormField label="Description" description="Optional description for this alert policy">
-        <textarea
-          className="input min-h-[96px] resize-y"
-          rows={3}
-          value={formData.description}
-          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-          placeholder="This policy triggers when..."
-        />
-      </FormField>
-
-      <div className="grid grid-cols-2 gap-4">
-        <FormField label="Failure Threshold" required error={errors.failure_threshold}>
+      <FormSection title="Policy">
+        <FormField label="Name" required error={errors.name}>
           <Input
-            type="number"
-            min="1"
-            value={formData.failure_threshold}
-            onChange={(e) => setFormData({ ...formData, failure_threshold: parseInt(e.target.value) || 1 })}
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            placeholder="Critical alert policy"
           />
-          <p className="mt-1 text-xs text-slate-500">
-            Number of failures required to trigger alert
-          </p>
         </FormField>
 
-        <FormField label="Failure Window (seconds)" required error={errors.failure_window_seconds}>
-          <Input
-            type="number"
-            min="1"
-            value={formData.failure_window_seconds}
-            onChange={(e) => setFormData({ ...formData, failure_window_seconds: parseInt(e.target.value) || 1 })}
+        <FormField label="Description">
+          <textarea
+            className="input min-h-[96px] resize-y"
+            rows={3}
+            value={formData.description}
+            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            placeholder="This policy triggers when..."
           />
-          <p className="mt-1 text-xs text-slate-500">
-            Time window in which failures are counted
-          </p>
         </FormField>
-      </div>
+      </FormSection>
 
-      <FormField
-        label="Incident Auto-Creation"
-        description="If enabled, the platform will automatically create an incident when this policy fires. Incidents are never auto-published."
+      <FormSection title="Trigger window">
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            label="Failure threshold"
+            required
+            error={errors.failure_threshold}
+            description="Failures required to trigger"
+          >
+            <Input
+              type="number"
+              min="1"
+              value={formData.failure_threshold}
+              onChange={(e) => setFormData({ ...formData, failure_threshold: parseInt(e.target.value) || 1 })}
+            />
+          </FormField>
+
+          <FormField
+            label="Failure window (s)"
+            required
+            error={errors.failure_window_seconds}
+            description="Time window for counting"
+          >
+            <Input
+              type="number"
+              min="1"
+              value={formData.failure_window_seconds}
+              onChange={(e) => setFormData({ ...formData, failure_window_seconds: parseInt(e.target.value) || 1 })}
+            />
+          </FormField>
+        </div>
+
+        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
+          <p className="text-xs text-cyan-200">
+            <strong>Example:</strong> alert triggers when {formData.failure_threshold} failures occur within {formData.failure_window_seconds} seconds.
+          </p>
+        </div>
+      </FormSection>
+
+      <FormSection
+        title="Incident auto-creation"
+        infoTip="When enabled, the platform creates an incident in 'investigating' state when this policy fires. Incidents are never auto-published — they require manual state changes and publication."
       >
-        <label className="flex items-start gap-3 rounded-lg border border-white/[0.08] bg-slate-800/40 px-3 py-3 text-sm text-slate-200">
+        <label className="flex items-start gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-3 py-3 text-sm text-slate-200">
           <input
             type="checkbox"
             checked={formData.create_incident_on_fire}
             onChange={(e) => setFormData({ ...formData, create_incident_on_fire: e.target.checked })}
           />
-          <div className="flex flex-col gap-1">
-            <span className="font-medium">Create incident on fire</span>
-            <span className="text-xs text-slate-500">
-              Auto-created incidents start in <span className="font-mono">investigating</span> and require manual state changes and publication.
-            </span>
-          </div>
+          <span className="font-medium">Create incident on fire</span>
         </label>
-      </FormField>
+      </FormSection>
 
-      <FormField label="Alert Channels" description="Select one or more channels to notify">
+      <FormSection title="Alert channels" summary="Channels notified when this policy fires">
         {channels.length === 0 ? (
           <div className="text-sm text-slate-500">No alert channels configured yet.</div>
         ) : (
@@ -143,7 +152,7 @@ export default function AlertPolicyForm({
               return (
                 <label
                   key={channel.id}
-                  className="flex items-center gap-3 rounded-lg border border-white/[0.08] bg-slate-800/40 px-3 py-2 text-sm text-slate-200"
+                  className="flex items-center gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-3 py-2 text-sm text-slate-200"
                 >
                   <input
                     type="checkbox"
@@ -158,7 +167,7 @@ export default function AlertPolicyForm({
                   <div className="flex flex-col">
                     <span className="font-medium">{channel.name}</span>
                     <span className="text-xs text-slate-500">
-                      {channel.type.toUpperCase()} - {channel.is_active ? 'Active' : 'Inactive'}
+                      {channel.type.toUpperCase()} · {channel.is_active ? 'Active' : 'Inactive'}
                     </span>
                   </div>
                 </label>
@@ -166,34 +175,17 @@ export default function AlertPolicyForm({
             })}
           </div>
         )}
-      </FormField>
+      </FormSection>
 
-      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
-        <p className="text-sm text-cyan-200">
-          <strong>Example:</strong> With a threshold of {formData.failure_threshold} and a window of {formData.failure_window_seconds} seconds,
-          an alert will trigger when {formData.failure_threshold} failures occur within {formData.failure_window_seconds} seconds.
-        </p>
-      </div>
-
-      <div className="flex justify-end gap-4">
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className="btn btn-secondary btn-sm disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Cancel
-          </button>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary btn-sm disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {loading ? 'Saving...' : policy ? 'Update Policy' : 'Create Policy'}
-        </button>
-      </div>
+      <FormActions
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : policy ? 'Update policy' : 'Create policy',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+      />
     </form>
   );
 }
