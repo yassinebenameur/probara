@@ -1,7 +1,13 @@
 'use client';
 
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { Mail, MessageSquare } from 'lucide-react';
 import { AlertChannel, AlertChannelType, CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
+import FormField from '@/components/ui/FormField';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
 
 interface AlertChannelFormProps {
   channel?: AlertChannel;
@@ -20,21 +26,13 @@ const channelTypes: {
     value: 'teams',
     label: 'Microsoft Teams',
     description: 'Send alerts to a Teams incoming webhook',
-    icon: (
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9h8m-8 4h5m-6 5h10a2 2 0 002-2V8a2 2 0 00-2-2H9l-4 4v8a2 2 0 002 2z" />
-      </svg>
-    ),
+    icon: <MessageSquare className="h-4 w-4" strokeWidth={1.75} />,
   },
   {
     value: 'email',
     label: 'Email',
     description: 'Send alerts via SMTP to one or more recipients',
-    icon: (
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8m-18 8h18a2 2 0 002-2V8a2 2 0 00-2-2H3a2 2 0 00-2 2v6a2 2 0 002 2z" />
-      </svg>
-    ),
+    icon: <Mail className="h-4 w-4" strokeWidth={1.75} />,
   },
 ];
 
@@ -95,133 +93,6 @@ function normalizeEmails(emails: string[]): string[] {
   return normalized;
 }
 
-function FormField({
-  label,
-  error,
-  hint,
-  children,
-}: {
-  label: string;
-  error?: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1.5">{label}</label>
-      {children}
-      {error && <p className="mt-1 text-xs text-rose-400">{error}</p>}
-      {hint && !error && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
-    </div>
-  );
-}
-
-function FormInput({
-  label,
-  type = 'text',
-  value,
-  onChange,
-  placeholder,
-  error,
-  hint,
-  ...props
-}: {
-  label: string;
-  type?: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  error?: string;
-  hint?: string;
-  [key: string]: any;
-}) {
-  return (
-    <FormField label={label} error={error} hint={hint}>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="input"
-        {...props}
-      />
-    </FormField>
-  );
-}
-
-function FormTextArea({
-  label,
-  value,
-  onChange,
-  placeholder,
-  rows = 4,
-  error,
-  hint,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  rows?: number;
-  error?: string;
-  hint?: string;
-}) {
-  return (
-    <FormField label={label} error={error} hint={hint}>
-      <textarea
-        className="input min-h-[120px] resize-y"
-        rows={rows}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-      />
-    </FormField>
-  );
-}
-
-function FormToggle({
-  label,
-  description,
-  checked,
-  onChange,
-}: {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
-      <div>
-        <p className="text-sm font-medium text-white">{label}</p>
-        {description && <p className="text-xs text-slate-500">{description}</p>}
-      </div>
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 rounded-full transition-colors ${
-          checked ? 'bg-cyan-500' : 'bg-slate-700'
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-4' : ''
-          }`}
-        />
-      </button>
-    </div>
-  );
-}
-
-function SectionHeader({ title, description }: { title: string; description?: string }) {
-  return (
-    <div className="mb-4">
-      <h3 className="text-sm font-medium text-white">{title}</h3>
-      {description && <p className="text-xs text-slate-500 mt-0.5">{description}</p>}
-    </div>
-  );
-}
-
 function TypeCard({
   icon,
   label,
@@ -245,15 +116,15 @@ function TypeCard({
       className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-all ${
         selected
           ? 'border-cyan-500/50 bg-cyan-500/10'
-          : 'border-white/[0.06] bg-slate-800/30 hover:border-white/[0.1] hover:bg-slate-800/50'
+          : 'border-white/[0.06] bg-slate-900/40 hover:border-white/[0.1] hover:bg-slate-900/60'
       } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
     >
-      <div className={`rounded-lg p-2 ${selected ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400'}`}>
+      <div className={`rounded-lg p-2 ${selected ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800/60 text-slate-400'}`}>
         {icon}
       </div>
       <div>
         <p className={`text-sm font-medium ${selected ? 'text-white' : 'text-slate-300'}`}>{label}</p>
-        <p className="text-xs text-slate-500 mt-0.5">{description}</p>
+        <p className="mt-0.5 text-xs text-slate-500">{description}</p>
       </div>
     </button>
   );
@@ -345,8 +216,7 @@ export default function AlertChannelForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <div>
-        <SectionHeader title="Channel Type" description="Choose how alerts should be delivered" />
+      <FormSection title="Channel type" summary="How alerts are delivered">
         <div className="grid grid-cols-2 gap-3">
           {channelTypes.map((opt) => (
             <TypeCard
@@ -360,30 +230,27 @@ export default function AlertChannelForm({
             />
           ))}
         </div>
-      </div>
+      </FormSection>
 
-      <div>
-        <SectionHeader title="Basic Information" />
-        <div className="space-y-4">
-          <FormInput
-            label="Channel Name"
+      <FormSection title="Basics">
+        <FormField label="Channel name" required error={errors.name}>
+          <input
+            type="text"
             value={formData.name}
-            onChange={(v) => setFormData({ ...formData, name: v })}
-            placeholder="Primary Teams Channel"
-            error={errors.name}
-            hint="A descriptive name for this channel"
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            placeholder="Primary Teams channel"
+            className="input"
           />
-        </div>
-      </div>
+        </FormField>
+      </FormSection>
 
-      <div>
-        <SectionHeader title="Configuration" description="Provide the details for the selected channel" />
-
+      <FormSection title="Configuration">
         {formData.type === 'teams' && (
           <FormField
             label="Webhook URL"
+            required
             error={errors.webhook_url}
-            hint="Paste the Teams incoming webhook URL for this channel"
+            infoTip="Paste the Teams incoming webhook URL for this channel. Click Show to reveal the value."
           >
             <div className="flex items-center gap-2">
               <input
@@ -393,129 +260,135 @@ export default function AlertChannelForm({
                 placeholder="https://outlook.office.com/webhook/..."
                 className="input"
               />
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 type="button"
                 onClick={() => setShowWebhook(!showWebhook)}
-                className="btn btn-secondary btn-sm"
               >
                 {showWebhook ? 'Hide' : 'Show'}
-              </button>
+              </Button>
             </div>
           </FormField>
         )}
 
         {formData.type === 'email' && (
-          <div className="space-y-4">
-            <FormInput
+          <>
+            <FormField
               label="Recipients"
-              value={formData.email_to}
-              onChange={(v) => setFormData({ ...formData, email_to: v })}
-              placeholder="oncall@example.com, team@example.com"
+              required
               error={errors.email_to}
-              hint="Separate multiple emails with commas, semicolons, or new lines"
-            />
-            <div className="space-y-4 rounded-xl border border-white/[0.08] bg-slate-800/30 p-4">
+              description="Separate emails with commas, semicolons, or new lines"
+            >
+              <input
+                type="text"
+                value={formData.email_to}
+                onChange={(e) => setFormData({ ...formData, email_to: e.target.value })}
+                placeholder="oncall@example.com, team@example.com"
+                className="input"
+              />
+            </FormField>
+
+            <div className="space-y-4 rounded-lg border border-white/[0.06] bg-slate-900/40 p-4">
               <div>
-                <h3 className="text-sm font-semibold text-white">Email Body Template (Optional)</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Customize the email content for this channel. Leave empty to use the default template.
+                <h4 className="text-sm font-medium text-white">Email body template</h4>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Optional. Leave empty to use the default.
                 </p>
               </div>
 
-              <div className="flex flex-wrap gap-2 text-xs">
+              <div className="flex flex-wrap gap-1.5">
                 {emailTemplateTokens.map((token) => (
-                  <span
-                    key={token}
-                    className="badge badge-default"
-                  >
-                    {`{{${token}}}`}
-                  </span>
+                  <Pill key={token} tone="neutral" size="xs">{`{{${token}}}`}</Pill>
                 ))}
               </div>
 
-              <FormTextArea
-                label="Email Body"
-                value={formData.email_body}
-                onChange={(v) => setFormData({ ...formData, email_body: v })}
-                placeholder="Monitor: {{monitor_name}}"
-                rows={6}
-                hint="Use the variables below to include alert details."
-              />
+              <FormField label="Email body">
+                <textarea
+                  className="input min-h-[120px] resize-y"
+                  rows={6}
+                  value={formData.email_body}
+                  onChange={(e) => setFormData({ ...formData, email_body: e.target.value })}
+                  placeholder="Monitor: {{monitor_name}}"
+                />
+              </FormField>
 
-              <div className="flex flex-wrap gap-2 text-xs">
-                {emailTemplateTokens.map((token) => (
-                  <button
-                    key={token}
-                    type="button"
-                    onClick={() => appendEmailToken(token)}
-                    className="btn btn-outline btn-xs"
-                    aria-label={`Insert {{${token}}} into email body`}
-                  >
-                    {`{{${token}}}`}
-                  </button>
-                ))}
+              <div>
+                <p className="mb-1.5 text-xs text-slate-500">Insert variable</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {emailTemplateTokens.map((token) => (
+                    <Button
+                      key={token}
+                      variant="ghost"
+                      size="xs"
+                      type="button"
+                      onClick={() => appendEmailToken(token)}
+                      aria-label={`Insert {{${token}}} into email body`}
+                    >
+                      {`{{${token}}}`}
+                    </Button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   type="button"
                   onClick={() =>
-                    setFormData({
-                      ...formData,
-                      email_body: defaultEmailBodyTemplate,
-                    })
+                    setFormData({ ...formData, email_body: defaultEmailBodyTemplate })
                   }
-                  className="btn btn-secondary btn-sm"
                 >
-                  Use Default Template
-                </button>
-                <button
+                  Use default template
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   type="button"
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      email_body: '',
-                    })
-                  }
-                  className="btn btn-secondary btn-sm"
+                  onClick={() => setFormData({ ...formData, email_body: '' })}
                 >
-                  Clear Template
-                </button>
+                  Clear template
+                </Button>
               </div>
             </div>
-          </div>
+          </>
         )}
-      </div>
+      </FormSection>
 
-      <div>
-        <SectionHeader title="Status" />
-        <FormToggle
-          label="Channel Active"
-          description="Deliver alerts using this channel"
-          checked={formData.is_active}
-          onChange={(v) => setFormData({ ...formData, is_active: v })}
-        />
-      </div>
-
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-white/[0.06]">
-        {onCancel && (
+      <FormSection title="Status">
+        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-white">Channel active</p>
+            <p className="text-xs text-slate-500">Deliver alerts using this channel</p>
+          </div>
           <button
             type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className="btn btn-secondary btn-sm disabled:opacity-50"
+            onClick={() => setFormData({ ...formData, is_active: !formData.is_active })}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              formData.is_active ? 'bg-cyan-500' : 'bg-slate-700'
+            }`}
+            aria-pressed={formData.is_active}
+            aria-label="Toggle channel active"
           >
-            Cancel
+            <span
+              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                formData.is_active ? 'translate-x-4' : ''
+              }`}
+            />
           </button>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary btn-sm disabled:opacity-50"
-        >
-          {loading ? 'Saving...' : channel ? 'Update Channel' : 'Create Channel'}
-        </button>
-      </div>
+        </div>
+      </FormSection>
+
+      <FormActions
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : channel ? 'Update channel' : 'Create channel',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+      />
     </form>
   );
 }
