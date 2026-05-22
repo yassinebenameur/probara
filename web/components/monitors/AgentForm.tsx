@@ -21,24 +21,18 @@ type ServerType =
 type ServerTypeOption = {
   value: ServerType;
   label: string;
-  os: 'linux' | 'darwin' | 'windows';
-  arch: 'amd64' | 'arm64';
-  binaryExt: string;
   family: 'unix' | 'windows';
 };
 
 const SERVER_TYPE_OPTIONS: ServerTypeOption[] = [
-  { value: 'linux-amd64', label: 'Linux (x86_64)', os: 'linux', arch: 'amd64', binaryExt: '', family: 'unix' },
-  { value: 'linux-arm64', label: 'Linux (ARM64)', os: 'linux', arch: 'arm64', binaryExt: '', family: 'unix' },
-  { value: 'macos-amd64', label: 'macOS (Intel)', os: 'darwin', arch: 'amd64', binaryExt: '', family: 'unix' },
-  { value: 'macos-arm64', label: 'macOS (Apple Silicon)', os: 'darwin', arch: 'arm64', binaryExt: '', family: 'unix' },
-  { value: 'windows-amd64', label: 'Windows (x86_64)', os: 'windows', arch: 'amd64', binaryExt: '.exe', family: 'windows' },
+  { value: 'linux-amd64', label: 'Linux (x86_64)', family: 'unix' },
+  { value: 'linux-arm64', label: 'Linux (ARM64)', family: 'unix' },
+  { value: 'macos-amd64', label: 'macOS (Intel)', family: 'unix' },
+  { value: 'macos-arm64', label: 'macOS (Apple Silicon)', family: 'unix' },
+  { value: 'windows-amd64', label: 'Windows (x86_64)', family: 'windows' },
 ];
 
 const DEFAULT_SERVER_TYPE: ServerType = 'linux-amd64';
-const UNIX_INSTALL_PATH = '/usr/local/bin/probara-agent';
-const WINDOWS_INSTALL_DIR = 'C:\\\\Program Files\\\\ProbaraAgent';
-const WINDOWS_INSTALL_PATH = `${WINDOWS_INSTALL_DIR}\\\\probara-agent.exe`;
 
 type ApiKeyOption = {
   id: string;
@@ -272,38 +266,27 @@ export default function AgentForm({
     const isWindows = selectedServer.family === 'windows';
     const activeApiKey = apiKeyOptions.find((option) => option.id === selectedApiKeyId)?.key || apiKey || '';
     const resolvedApiKey = activeApiKey || 'YOUR_API_KEY';
-    const binaryName = `probara-agent-${selectedServer.os}-${selectedServer.arch}${selectedServer.binaryExt}`;
-    const downloadUrl = installCommand ? `${installCommand.download_url}${binaryName}` : '';
     const installScriptUrl = installCommand
       ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.sh`
       : '';
+    const windowsInstallScriptUrl = installCommand
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.ps1`
+      : '';
     const linuxQuickInstallCommand = installCommand
-      ? `curl -sSL -H "Authorization: Bearer ${resolvedApiKey}" \
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
   ${installScriptUrl} | bash`
       : '';
     const linuxQuickInstallCopy = installCommand
-      ? `curl -sSL -H "Authorization: Bearer ${resolvedApiKey}" ${installScriptUrl} | bash`
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" ${installScriptUrl} | bash`
       : '';
     const windowsQuickInstallCommand = installCommand
-      ? `powershell -Command "$p='${WINDOWS_INSTALL_DIR}'; New-Item -ItemType Directory -Force -Path $p | Out-Null; $exe=Join-Path $p 'probara-agent.exe'; Invoke-WebRequest -Uri '${downloadUrl}' -OutFile $exe; Start-Process -FilePath $exe -ArgumentList '-backend-url','${installCommand.backend_url}','-agent-id','${installCommand.agent_id}','-api-key','${resolvedApiKey}','-interval','${installCommand.interval_seconds}'"`
+      ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Headers @{Authorization='Bearer ${resolvedApiKey}'} -Uri '${windowsInstallScriptUrl}').Content"`
       : '';
     const quickInstallCommand = installCommand
       ? (isWindows ? windowsQuickInstallCommand : linuxQuickInstallCommand)
       : '';
     const quickInstallCopy = installCommand
       ? (isWindows ? windowsQuickInstallCommand : linuxQuickInstallCopy)
-      : '';
-    const downloadCommand = installCommand
-      ? isWindows
-        ? `powershell -Command "New-Item -ItemType Directory -Force -Path '${WINDOWS_INSTALL_DIR}' | Out-Null; Invoke-WebRequest -Uri '${downloadUrl}' -OutFile '${WINDOWS_INSTALL_PATH}'"`
-        : `curl -sSL -o ${UNIX_INSTALL_PATH} \
-  ${downloadUrl}
-chmod +x ${UNIX_INSTALL_PATH}`
-      : '';
-    const runCommand = installCommand
-      ? isWindows
-        ? `"${WINDOWS_INSTALL_PATH}" -backend-url ${installCommand.backend_url} -agent-id ${installCommand.agent_id} -api-key ${resolvedApiKey} -interval ${installCommand.interval_seconds}`
-        : `${UNIX_INSTALL_PATH} -backend-url ${installCommand.backend_url} -agent-id ${installCommand.agent_id} -api-key ${resolvedApiKey} -interval ${installCommand.interval_seconds}`
       : '';
 
     return (
@@ -378,7 +361,7 @@ chmod +x ${UNIX_INSTALL_PATH}`
                 </select>
               </FormField>
 
-              <FormField label={isWindows ? 'Quick install (Windows)' : 'Quick install (Linux/macOS)'}>
+              <FormField label={isWindows ? 'Install service (Windows)' : 'Install service (Linux/macOS)'}>
                 <div className="flex gap-2">
                   <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickInstallCommand}</pre>
                   <Button
@@ -389,38 +372,6 @@ chmod +x ${UNIX_INSTALL_PATH}`
                     onClick={() => copyToClipboard(quickInstallCopy, 'install')}
                   >
                     {copiedField === 'install' ? 'Copied' : 'Copy'}
-                  </Button>
-                </div>
-              </FormField>
-
-              <FormField label="Download binary">
-                <div className="flex gap-2">
-                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{downloadCommand}</pre>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    type="button"
-                    className="self-start"
-                    onClick={() => copyToClipboard(downloadCommand, 'download')}
-                  >
-                    {copiedField === 'download' ? 'Copied' : 'Copy'}
-                  </Button>
-                </div>
-              </FormField>
-
-              <FormField label="Run agent">
-                <div className="flex gap-2">
-                  <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">
-                    {runCommand}
-                  </code>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    type="button"
-                    className="self-start"
-                    onClick={() => copyToClipboard(runCommand, 'manual')}
-                  >
-                    {copiedField === 'manual' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
               </FormField>

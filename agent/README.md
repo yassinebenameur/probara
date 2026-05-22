@@ -14,9 +14,13 @@ A lightweight system metrics collector that reports CPU, memory, disk, network, 
 ### Quick Install (Linux/macOS)
 
 ```bash
-# Download and run the installation script from your Probara dashboard
-curl -sSL https://your-backend-url/api/v1/monitors/{id}/agent/install | bash
+# Download and run the service installer from your Probara dashboard
+curl -fsSL https://your-backend-url/api/v1/monitors/{id}/agent/install | bash
 ```
+
+The installer configures the agent as a supervised service: `systemd --user` on
+Linux and `launchd` on macOS. The service restarts automatically if the agent
+exits and reconnects when the backend is available again.
 
 ### Manual Installation
 
@@ -202,4 +206,3 @@ GOOS=windows GOARCH=amd64 go build -o probara-agent-windows-amd64.exe ./cmd/agen
 ## License
 
 See main project LICENSE file.
-

@@ -52,14 +52,16 @@ import (
 
 // Server represents the API HTTP server
 type Server struct {
-	config          *config.APIConfig
-	logger          *logger.Logger
-	metrics         *metrics.Registry
-	db              *db.Client
-	queue           *queue.Client
-	http            *http.Server
-	alertSubscriber *alertservice.Subscriber
-	statusPublisher *statusupdates.Publisher
+	config           *config.APIConfig
+	logger           *logger.Logger
+	metrics          *metrics.Registry
+	db               *db.Client
+	queue            *queue.Client
+	http             *http.Server
+	alertSubscriber  *alertservice.Subscriber
+	statusPublisher  *statusupdates.Publisher
+	pushStaleWorker  *pushservice.StaleWorker
+	agentStaleWorker *agentservice.StaleWorker
 }
 
 type monitorStatusNotifier struct {
@@ -121,6 +123,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Push service and handlers (created here to use in both public and authenticated routes)
 	pushSvc := pushservice.NewService(dbClient.DB, statusPublisher)
 	pushHandlers := pushhandlers.NewHandler(pushSvc, log)
+	pushStaleWorker := pushservice.NewStaleWorker(dbClient.DB, log)
+	agentStaleWorker := agentservice.NewStaleWorker(dbClient.DB, log, statusPublisher)
 	alertHub := alertservice.NewHub()
 	alertSubscriber := alertservice.NewSubscriber(checkJobQueue, alertHub, cfg, log)
 
@@ -206,6 +210,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				// Agent install endpoints
 				r.Get("/{id}/agent/install", agentHandlers.HandleGetInstallCommand)
 				r.Get("/{id}/agent/install/script.sh", agentHandlers.HandleGetInstallScript)
+				r.Get("/{id}/agent/install/script.ps1", agentHandlers.HandleGetWindowsInstallScript)
 				// Push info endpoint
 				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
 			})
@@ -328,14 +333,16 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	}
 
 	return &Server{
-		config:          cfg,
-		logger:          log,
-		metrics:         metricsRegistry,
-		db:              dbClient,
-		queue:           checkJobQueue,
-		http:            httpServer,
-		alertSubscriber: alertSubscriber,
-		statusPublisher: statusPublisher,
+		config:           cfg,
+		logger:           log,
+		metrics:          metricsRegistry,
+		db:               dbClient,
+		queue:            checkJobQueue,
+		http:             httpServer,
+		alertSubscriber:  alertSubscriber,
+		statusPublisher:  statusPublisher,
+		pushStaleWorker:  pushStaleWorker,
+		agentStaleWorker: agentStaleWorker,
 	}
 }
 
@@ -350,6 +357,12 @@ func (s *Server) Start() error {
 			return fmt.Errorf("start alert subscriber: %w", err)
 		}
 	}
+	if s.pushStaleWorker != nil {
+		s.pushStaleWorker.Start()
+	}
+	if s.agentStaleWorker != nil {
+		s.agentStaleWorker.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -359,6 +372,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down HTTP server")
 	if s.alertSubscriber != nil {
 		s.alertSubscriber.Stop()
+	}
+	if s.pushStaleWorker != nil {
+		s.pushStaleWorker.Stop()
+	}
+	if s.agentStaleWorker != nil {
+		s.agentStaleWorker.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

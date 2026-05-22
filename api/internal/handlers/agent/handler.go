@@ -193,3 +193,55 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Disposition", "inline; filename=install-probara-agent.sh")
 	w.Write([]byte(installCmd.InstallScript))
 }
+
+// HandleGetWindowsInstallScript handles GET /api/v1/monitors/{id}/agent/install/script.ps1
+func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	tenantIDStr, ok := context.GetTenantID(ctx)
+	if !ok {
+		h.log.Warn("tenant_id not found in context")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, err := uuid.Parse(tenantIDStr)
+	if err != nil {
+		h.log.WithError(err).Error("invalid tenant_id in context")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	monitorIDStr := chi.URLParam(r, "id")
+	monitorID, err := uuid.Parse(monitorIDStr)
+	if err != nil {
+		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		return
+	}
+
+	backendURL := r.URL.Query().Get("backend_url")
+	if backendURL == "" {
+		scheme := "https"
+		if r.TLS == nil {
+			scheme = "http"
+		}
+		backendURL = scheme + "://" + r.Host
+	}
+
+	apiKey := ""
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+
+	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
+	if err != nil {
+		h.log.WithError(err).Error("failed to generate install command")
+		http.Error(w, "failed to generate install command", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=install-probara-agent.ps1")
+	w.Write([]byte(installCmd.WindowsInstallScript))
+}

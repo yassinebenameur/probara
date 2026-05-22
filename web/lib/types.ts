@@ -828,6 +828,7 @@ export interface AgentInstallCommand {
   agent_id: string;
   backend_url: string;
   install_script: string;
+  windows_install_script: string;
   config_template: string;
   download_url: string;
   interval_seconds: number;
