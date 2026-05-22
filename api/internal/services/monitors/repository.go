@@ -22,6 +22,7 @@ type Repository interface {
 	Delete(ctx context.Context, tenantID, monitorID uuid.UUID) error
 	DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
 	VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error
+	VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
 	SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error
 	GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
 	GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
@@ -298,6 +299,24 @@ func (r *PostgresRepository) VerifyAlertPolicy(ctx context.Context, tenantID, po
 			return fmt.Errorf("alert policy not found or does not belong to tenant")
 		}
 		return fmt.Errorf("failed to verify alert policy: %w", err)
+	}
+	return nil
+}
+
+// VerifyMonitorsBelongToTenant returns nil only if every provided monitor ID
+// exists and belongs to the tenant. Otherwise it returns a descriptive error
+// whose message contains "not found or do not belong to tenant".
+func (r *PostgresRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
+	if len(monitorIDs) == 0 {
+		return fmt.Errorf("monitor IDs cannot be empty")
+	}
+	var count int
+	query := `SELECT COUNT(*) FROM monitors WHERE id = ANY($1) AND tenant_id = $2`
+	if err := r.db.QueryRowContext(ctx, query, pq.Array(monitorIDs), tenantID).Scan(&count); err != nil {
+		return fmt.Errorf("failed to verify monitors: %w", err)
+	}
+	if count != len(monitorIDs) {
+		return fmt.Errorf("one or more monitors not found or do not belong to tenant")
 	}
 	return nil
 }
