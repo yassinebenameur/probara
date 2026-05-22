@@ -1,6 +1,8 @@
 'use client';
 
+import { Plus, X } from 'lucide-react';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
+import Button from '@/components/ui/Button';
 import {
   HTTPBodyAssertion,
   HTTPBodyAssertionOp,
@@ -156,20 +158,25 @@ function HeadersEditor({
                 }}
               />
               {showToggle && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => {
                     const next = [...headers];
                     next[idx] = { ...next[idx], reveal: !next[idx].reveal };
                     onChange(next);
                   }}
-                  className="btn btn-secondary btn-sm"
                 >
                   {h.reveal ? 'Hide' : 'Show'}
-                </button>
+                </Button>
               )}
-              <button
+              <Button
                 type="button"
+                variant="subtle"
+                size="sm"
+                aria-label="Remove header"
+                icon={<X strokeWidth={1.75} />}
                 onClick={() => {
                   const next = [...headers];
                   if (next.length === 1) {
@@ -179,21 +186,24 @@ function HeadersEditor({
                   }
                   onChange(next);
                 }}
-                className="btn btn-secondary btn-sm text-slate-500 hover:text-rose-400"
               >
-                ×
-              </button>
+                <span className="sr-only">Remove</span>
+              </Button>
             </div>
           );
         })}
       </div>
-      <button
-        type="button"
-        className="mt-2 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
-        onClick={() => onChange([...headers, { key: '', value: '', reveal: false }])}
-      >
-        + Add header
-      </button>
+      <div className="mt-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          icon={<Plus strokeWidth={1.75} />}
+          onClick={() => onChange([...headers, { key: '', value: '', reveal: false }])}
+        >
+          Add header
+        </Button>
+      </div>
       <p className="mt-1.5 text-xs text-slate-600">Authorization / API key headers are masked by default.</p>
     </div>
   );
@@ -332,34 +342,41 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                   />
                   CI
                 </label>
-                <button
+                <Button
                   type="button"
-                  className="btn btn-secondary btn-sm text-slate-500 hover:text-rose-400"
+                  variant="subtle"
+                  size="sm"
+                  aria-label="Remove body assertion"
+                  icon={<X strokeWidth={1.75} />}
                   onClick={() => {
                     const next = [...data.body_assertions];
                     next.splice(idx, 1);
                     onChange({ body_assertions: next });
                   }}
                 >
-                  ×
-                </button>
+                  <span className="sr-only">Remove</span>
+                </Button>
               </div>
             ))}
           </div>
-          <button
-            type="button"
-            className="mt-2 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
-            onClick={() =>
-              onChange({
-                body_assertions: [
-                  ...(data.body_assertions || []),
-                  { op: 'contains', value: '', case_insensitive: false },
-                ],
-              })
-            }
-          >
-            + Add body assertion
-          </button>
+          <div className="mt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              icon={<Plus strokeWidth={1.75} />}
+              onClick={() =>
+                onChange({
+                  body_assertions: [
+                    ...(data.body_assertions || []),
+                    { op: 'contains', value: '', case_insensitive: false },
+                  ],
+                })
+              }
+            >
+              Add body assertion
+            </Button>
+          </div>
         </div>
 
         {/* Response Header Assertions */}
@@ -424,35 +441,42 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     />
                     CI
                   </label>
-                  <button
+                  <Button
                     type="button"
-                    className="btn btn-secondary btn-sm text-slate-500 hover:text-rose-400"
+                    variant="subtle"
+                    size="sm"
+                    aria-label="Remove header assertion"
+                    icon={<X strokeWidth={1.75} />}
                     onClick={() => {
                       const next = [...data.response_header_assertions];
                       next.splice(idx, 1);
                       onChange({ response_header_assertions: next });
                     }}
                   >
-                    ×
-                  </button>
+                    <span className="sr-only">Remove</span>
+                  </Button>
                 </div>
               );
             })}
           </div>
-          <button
-            type="button"
-            className="mt-2 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
-            onClick={() =>
-              onChange({
-                response_header_assertions: [
-                  ...(data.response_header_assertions || []),
-                  { name: '', op: 'exists', value: '', case_insensitive: false },
-                ],
-              })
-            }
-          >
-            + Add header assertion
-          </button>
+          <div className="mt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              icon={<Plus strokeWidth={1.75} />}
+              onClick={() =>
+                onChange({
+                  response_header_assertions: [
+                    ...(data.response_header_assertions || []),
+                    { name: '', op: 'exists', value: '', case_insensitive: false },
+                  ],
+                })
+              }
+            >
+              Add header assertion
+            </Button>
+          </div>
         </div>
 
         {/* JSON Assertions */}
@@ -521,35 +545,42 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     />
                     CI
                   </label>
-                  <button
+                  <Button
                     type="button"
-                    className="btn btn-secondary btn-sm text-slate-500 hover:text-rose-400"
+                    variant="subtle"
+                    size="sm"
+                    aria-label="Remove JSON assertion"
+                    icon={<X strokeWidth={1.75} />}
                     onClick={() => {
                       const next = [...data.json_assertions];
                       next.splice(idx, 1);
                       onChange({ json_assertions: next });
                     }}
                   >
-                    ×
-                  </button>
+                    <span className="sr-only">Remove</span>
+                  </Button>
                 </div>
               );
             })}
           </div>
-          <button
-            type="button"
-            className="mt-2 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
-            onClick={() =>
-              onChange({
-                json_assertions: [
-                  ...(data.json_assertions || []),
-                  { path: '', op: 'exists', value: '', case_insensitive: false },
-                ],
-              })
-            }
-          >
-            + Add JSON assertion
-          </button>
+          <div className="mt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              icon={<Plus strokeWidth={1.75} />}
+              onClick={() =>
+                onChange({
+                  json_assertions: [
+                    ...(data.json_assertions || []),
+                    { path: '', op: 'exists', value: '', case_insensitive: false },
+                  ],
+                })
+              }
+            >
+              Add JSON assertion
+            </Button>
+          </div>
           <p className="mt-1.5 text-xs text-slate-600">
             Uses gjson syntax — e.g. <code className="text-slate-400">data.items.#.id</code>
           </p>
