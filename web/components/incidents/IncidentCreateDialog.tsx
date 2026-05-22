@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { createIncident } from '@/lib/api';
 import type { AdminUser, IncidentDetail, IncidentSeverity } from '@/lib/types';
 import Input from '@/components/ui/Input';
+import Button from '@/components/ui/Button';
 
 export interface IncidentCreateDialogInitialContext {
   alert_id?: string;
@@ -219,22 +220,25 @@ export default function IncidentCreateDialog({
             </div>
           ) : null}
 
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <button
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={onClose}
-              className="btn btn-secondary btn-sm"
               disabled={saving}
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className="btn btn-primary btn-sm"
+              variant="accent"
+              size="sm"
               disabled={saving || users.length === 0}
+              loading={saving}
             >
-              {saving ? 'Creating...' : 'Create Incident'}
-            </button>
+              {saving ? 'Creating…' : 'Create incident'}
+            </Button>
           </div>
         </form>
       </div>

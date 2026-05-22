@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
+import Button from '@/components/ui/Button';
 
 interface AlertTableProps {
   alerts: Alert[];
@@ -176,22 +177,26 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td className="text-right">
                 <div className="flex items-center justify-end gap-1">
                   {alert.status === 'active' && (
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => handleAcknowledge(alert.id)}
                       disabled={processingId === alert.id}
-                      className="btn btn-warning btn-xs disabled:opacity-50"
+                      loading={processingId === alert.id}
                     >
-                      {processingId === alert.id ? '...' : 'Acknowledge'}
-                    </button>
+                      {processingId === alert.id ? '…' : 'Acknowledge'}
+                    </Button>
                   )}
                   {(alert.status === 'active' || alert.status === 'acknowledged') && (
-                    <button
+                    <Button
+                      variant="accent"
+                      size="xs"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}
-                      className="btn btn-success btn-xs disabled:opacity-50"
+                      loading={processingId === alert.id}
                     >
-                      {processingId === alert.id ? '...' : 'Resolve'}
-                    </button>
+                      {processingId === alert.id ? '…' : 'Resolve'}
+                    </Button>
                   )}
                   {alert.status === 'resolved' && (
                     <span className="text-[10px] text-slate-500">

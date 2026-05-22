@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getRecentAlerts, acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
+import Button from '@/components/ui/Button';
 
 interface RecentAlertsProps {
   limit?: number;
@@ -229,21 +230,25 @@ export default function RecentAlerts({
                 {showActions && alert.status !== 'resolved' && (
                   <div className="flex gap-1">
                     {alert.status === 'active' && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         onClick={() => handleAcknowledge(alert.id)}
                         disabled={processingId === alert.id}
-                        className="btn btn-xs btn-warning disabled:opacity-50 disabled:cursor-not-allowed"
+                        loading={processingId === alert.id}
                       >
-                        {processingId === alert.id ? '...' : 'Ack'}
-                      </button>
+                        {processingId === alert.id ? '…' : 'Ack'}
+                      </Button>
                     )}
-                    <button
+                    <Button
+                      variant="accent"
+                      size="xs"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}
-                      className="btn btn-xs btn-success disabled:opacity-50 disabled:cursor-not-allowed"
+                      loading={processingId === alert.id}
                     >
-                      {processingId === alert.id ? '...' : 'Resolve'}
-                    </button>
+                      {processingId === alert.id ? '…' : 'Resolve'}
+                    </Button>
                   </div>
                 )}
               </div>

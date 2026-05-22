@@ -778,7 +778,7 @@ export default function DashboardPage() {
       {error && (
         <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
           <p className="text-sm text-rose-400">{error}</p>
-          <button onClick={loadData} className="btn btn-danger btn-sm">Retry</button>
+          <Button variant="danger" size="sm" onClick={loadData}>Retry</Button>
         </div>
       )}
 

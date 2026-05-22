@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Monitor, MonitorType } from '@/lib/types';
 import SelectCheckbox from '@/components/ui/SelectCheckbox';
+import Button from '@/components/ui/Button';
 import type {
   DerivedState,
   EditableSection,
@@ -356,16 +357,15 @@ export function AddToMenu({
 
   return (
     <div ref={containerRef} className="relative">
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size={compact ? 'xs' : 'sm'}
         disabled={disabled}
         onClick={() => setOpen((value) => !value)}
-        className={`btn btn-outline ${compact ? 'btn-xs' : 'btn-sm'} ${
-          disabled ? 'cursor-not-allowed opacity-40' : ''
-        }`}
       >
         {label}
-      </button>
+      </Button>
       {open && (
         <div className="absolute right-0 z-30 mt-1 w-56 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-2xl backdrop-blur">
           <div className="max-h-48 overflow-y-auto">
@@ -415,14 +415,15 @@ export function AddToMenu({
                   placeholder="Section name"
                   className="input input-xs flex-1"
                 />
-                <button
+                <Button
                   type="button"
+                  variant="accent"
+                  size="xs"
                   onClick={commitCreate}
-                  className="btn btn-primary btn-xs"
                   disabled={!draft.trim()}
                 >
                   Add
-                </button>
+                </Button>
               </div>
             ) : (
               <button

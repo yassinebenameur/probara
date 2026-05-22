@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Monitor } from '@/lib/types';
 import SectionCard from './SectionCard';
 import type { DerivedState, EditableSection } from './useStatusPageFormState';
+import Button from '@/components/ui/Button';
+import { Plus } from 'lucide-react';
 
 interface SectionsEditorProps {
   sections: EditableSection[];
@@ -114,9 +116,15 @@ export default function SectionsEditor({
             {derived.membershipCount === 1 ? '' : 's'} assigned.
           </p>
         </div>
-        <button type="button" onClick={onAddSection} className="btn btn-secondary btn-xs">
-          + New section
-        </button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          icon={<Plus strokeWidth={1.75} />}
+          onClick={onAddSection}
+        >
+          New section
+        </Button>
       </div>
 
       {sections.length === 0 ? (
@@ -126,9 +134,16 @@ export default function SectionsEditor({
             <p className="mt-1 text-xs text-slate-500">
               Create a section to start grouping monitors on the public page.
             </p>
-            <button type="button" onClick={onAddSection} className="btn btn-primary btn-xs mt-3">
-              + Create your first section
-            </button>
+            <Button
+              type="button"
+              variant="accent"
+              size="xs"
+              icon={<Plus strokeWidth={1.75} />}
+              onClick={onAddSection}
+              className="mt-3"
+            >
+              Create your first section
+            </Button>
           </div>
         </div>
       ) : (

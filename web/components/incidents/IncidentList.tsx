@@ -4,6 +4,7 @@ import Link from 'next/link';
 
 import type { IncidentListItem } from '@/lib/types';
 import Panel from '@/components/ui/Panel';
+import Button from '@/components/ui/Button';
 
 interface IncidentListProps {
   incidents: IncidentListItem[];
@@ -87,11 +88,9 @@ export default function IncidentList({ incidents }: IncidentListProps) {
                     {formatDate(incident.updated_at)}
                   </td>
                   <td className="text-right">
-                    <Link href={`/incidents/${incident.id}`} className="inline-flex">
-                      <button className="btn btn-secondary btn-xs">
-                        Open
-                      </button>
-                    </Link>
+                    <Button variant="ghost" size="xs" asChild>
+                      <Link href={`/incidents/${incident.id}`}>Open</Link>
+                    </Button>
                   </td>
                 </tr>
               ))}

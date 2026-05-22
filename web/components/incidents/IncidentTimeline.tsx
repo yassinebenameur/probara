@@ -4,6 +4,7 @@ import { FormEvent, useState } from 'react';
 
 import type { IncidentTimelineEntry } from '@/lib/types';
 import Panel from '@/components/ui/Panel';
+import Button from '@/components/ui/Button';
 
 interface IncidentTimelineProps {
   entries: IncidentTimelineEntry[];
@@ -102,9 +103,9 @@ export default function IncidentTimeline({
               disabled={savingInternal}
             />
             <div className="mt-3 flex justify-end">
-              <button type="submit" className="btn btn-secondary btn-sm" disabled={savingInternal}>
-                {savingInternal ? 'Saving...' : 'Add Note'}
-              </button>
+              <Button type="submit" variant="ghost" size="sm" disabled={savingInternal} loading={savingInternal}>
+                {savingInternal ? 'Saving…' : 'Add note'}
+              </Button>
             </div>
           </form>
 
@@ -118,9 +119,9 @@ export default function IncidentTimeline({
               disabled={savingPublic}
             />
             <div className="mt-3 flex justify-end">
-              <button type="submit" className="btn btn-primary btn-sm" disabled={savingPublic}>
-                {savingPublic ? 'Saving...' : 'Add Update'}
-              </button>
+              <Button type="submit" variant="accent" size="sm" disabled={savingPublic} loading={savingPublic}>
+                {savingPublic ? 'Saving…' : 'Add update'}
+              </Button>
             </div>
           </form>
         </div>

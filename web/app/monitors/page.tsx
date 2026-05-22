@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity } from 'lucide-react';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
@@ -1621,7 +1621,7 @@ export default function MonitorsPage() {
       {error && (
         <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2">
           <p className="text-xs text-rose-400">{error}</p>
-          <button onClick={loadMonitors} className="btn btn-danger btn-xs">Retry</button>
+          <Button variant="danger" size="xs" onClick={loadMonitors}>Retry</Button>
         </div>
       )}
 
@@ -1638,7 +1638,9 @@ export default function MonitorsPage() {
             {filteredMonitors.length > 0 && (
               <div className="flex items-center gap-3">
                 {/* Selection mode toggle */}
-                <button
+                <FilterChip
+                  selected={selectionMode}
+                  icon={<CheckSquare strokeWidth={1.75} />}
                   onClick={() => {
                     if (selectionMode) {
                       clearSelection();
@@ -1646,30 +1648,18 @@ export default function MonitorsPage() {
                       setSelectionMode(true);
                     }
                   }}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-medium transition-all ${
-                    selectionMode
-                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400'
-                      : 'border-white/[0.06] bg-slate-900/50 text-slate-400 hover:text-white'
-                  }`}
                 >
-                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                  </svg>
                   {selectionMode ? 'Exit select' : 'Select'}
-                </button>
+                </FilterChip>
 
                 {/* Selection actions - only show when in selection mode */}
                 {selectionMode && (
                   <>
                     <div className="h-4 w-px bg-white/[0.08]" />
                     
-                    {/* Select all toggle */}
-                    <button
-                      onClick={toggleSelectAllFiltered}
-                      className="btn btn-outline btn-xs"
-                    >
+                    <Button variant="ghost" size="xs" onClick={toggleSelectAllFiltered}>
                       {allFilteredSelected ? 'Deselect all' : 'Select all'}
-                    </button>
+                    </Button>
 
                     {selectedMonitorIds.size > 0 && (
                       <>
@@ -1688,16 +1678,15 @@ export default function MonitorsPage() {
                             onChange={(e) => setGroupNameInput(e.target.value)}
                             className="input input-xs h-6 w-32 text-[10px]"
                           />
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            icon={<FolderPlus strokeWidth={1.75} />}
                             onClick={handleCreateGroup}
                             disabled={!canCreateGroup}
-                            className={`btn btn-secondary btn-xs ${canCreateGroup ? '' : 'cursor-not-allowed opacity-60'}`}
                           >
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                            </svg>
                             Group
-                          </button>
+                          </Button>
                         </div>
 
                         <div className="h-4 w-px bg-white/[0.08]" />
@@ -1717,27 +1706,27 @@ export default function MonitorsPage() {
                               </option>
                             ))}
                           </select>
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            icon={<Move strokeWidth={1.75} />}
                             onClick={handleMoveToGroup}
                             disabled={!canMoveToGroup}
-                            className={`btn btn-secondary btn-xs ${canMoveToGroup ? '' : 'cursor-not-allowed opacity-60'}`}
                           >
                             Move
-                          </button>
+                          </Button>
                         </div>
 
                         <div className="h-4 w-px bg-white/[0.08]" />
 
-                        {/* Delete */}
-                        <button
+                        <Button
+                          variant="danger"
+                          size="xs"
+                          icon={<Trash2 strokeWidth={1.75} />}
                           onClick={handleBulkDelete}
-                          className="btn btn-danger btn-xs"
                         >
-                          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
                           Delete
-                        </button>
+                        </Button>
                       </>
                     )}
                   </>

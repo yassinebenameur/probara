@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Monitor } from '@/lib/types';
 import { AddToMenu } from './MonitorLibrary';
 import type { DerivedState, EditableSection } from './useStatusPageFormState';
+import Button from '@/components/ui/Button';
+import { Plus } from 'lucide-react';
 
 interface SectionCardProps {
   section: EditableSection;
@@ -350,13 +352,15 @@ function AddMonitorsComboBox({ monitors, derived, onPick }: AddMonitorsComboBoxP
           </div>
         </div>
       ) : (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
+          icon={<Plus strokeWidth={1.75} />}
           onClick={() => setOpen(true)}
-          className="btn btn-outline btn-xs"
         >
-          + Add monitors
-        </button>
+          Add monitors
+        </Button>
       )}
     </div>
   );

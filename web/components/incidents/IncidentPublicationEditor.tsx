@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getStatusPages } from '@/lib/api';
 import type { IncidentDetail, StatusPage } from '@/lib/types';
 import Panel from '@/components/ui/Panel';
+import Button from '@/components/ui/Button';
 
 interface IncidentPublicationEditorProps {
   incident: IncidentDetail;
@@ -127,14 +128,15 @@ export default function IncidentPublicationEditor({
                           /{publication.status_page_slug} · {publicationComponentNames(publication.monitor_ids)}
                         </div>
                       </div>
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="xs"
                         onClick={() => onUnpublish(publication.status_page_id)}
-                        className="btn btn-secondary btn-xs"
                         disabled={saving}
                       >
                         Unpublish
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -186,23 +188,26 @@ export default function IncidentPublicationEditor({
               )}
             </div>
 
-            <div className="flex flex-wrap gap-3">
-              <button
+            <div className="flex flex-wrap gap-2">
+              <Button
                 type="button"
+                variant="accent"
+                size="sm"
                 onClick={handlePublish}
-                className="btn btn-primary btn-sm"
                 disabled={saving || !selectedStatusPageId}
+                loading={saving}
               >
-                {saving ? 'Saving...' : 'Publish Incident'}
-              </button>
-              <button
+                {saving ? 'Saving…' : 'Publish incident'}
+              </Button>
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={handleUnpublish}
-                className="btn btn-secondary btn-sm"
                 disabled={saving || !selectedStatusPageId}
               >
-                {saving ? 'Saving...' : 'Unpublish Incident'}
-              </button>
+                {saving ? 'Saving…' : 'Unpublish incident'}
+              </Button>
             </div>
           </>
         )}
