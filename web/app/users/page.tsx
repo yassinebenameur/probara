@@ -3,8 +3,12 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import { Pencil, Plus, RefreshCw, Trash2, Users as UsersIcon } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Toast from '@/components/ui/Toast';
+import Button from '@/components/ui/Button';
+import PageHeader from '@/components/ui/PageHeader';
+import EmptyState from '@/components/ui/EmptyState';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { deleteUser, getUsers } from '@/lib/api';
 import type { AdminUser } from '@/lib/types';
@@ -63,7 +67,6 @@ export default function UsersPage() {
     if (!confirm(`Delete user "${user.username}"? This action cannot be undone.`)) {
       return;
     }
-
     try {
       setDeletingId(user.id);
       await deleteUser(user.id);
@@ -81,21 +84,42 @@ export default function UsersPage() {
     router.push('/login');
   };
 
+  const header = (
+    <PageHeader
+      title="Users"
+      subtitle="Manage platform admin accounts."
+      action={
+        !apiKeyMode ? (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RefreshCw strokeWidth={1.75} />}
+              onClick={() => loadUsers(page)}
+            >
+              Refresh
+            </Button>
+            <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+              <Link href="/users/new">Add user</Link>
+            </Button>
+          </div>
+        ) : undefined
+      }
+    />
+  );
+
   if (apiKeyMode) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Users</h1>
-          <p className="text-sm text-muted">Manage platform admin accounts.</p>
-        </div>
-        <Panel title="Admin Session Required" subtitle="User management is available only for admin login mode.">
+        {header}
+        <Panel title="Admin session required" subtitle="User management is available only for admin login mode.">
           <div className="space-y-3">
             <p className="text-sm text-slate-300">
               You are currently connected with an API key. Switch to admin login to manage users.
             </p>
-            <button type="button" onClick={handleSwitchToAdmin} className="btn btn-primary btn-sm">
-              Go to Admin Login
-            </button>
+            <Button variant="ghost" size="sm" onClick={handleSwitchToAdmin}>
+              Go to admin login
+            </Button>
           </div>
         </Panel>
       </div>
@@ -104,36 +128,30 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-white">Users</h1>
-        <p className="text-sm text-muted">Manage platform admin accounts.</p>
-      </div>
+      {header}
 
       <Panel
-        title="Admin Users"
+        title="Admin users"
         subtitle="Create, update, and remove admin accounts."
-        actions={(
-          <div className="flex items-center gap-2">
-            <button onClick={() => loadUsers(page)} className="btn btn-secondary btn-sm">
-              Refresh
-            </button>
-            <Link href="/users/new" className="btn btn-primary btn-sm">
-              Add User
-            </Link>
-          </div>
-        )}
       >
         {loading ? (
-          <p className="text-sm text-muted">Loading users...</p>
+          <p className="text-sm text-slate-500">Loading users…</p>
         ) : error ? (
           <div className="space-y-3">
             <p className="text-sm text-rose-400">{error}</p>
-            <button onClick={() => loadUsers(page)} className="btn btn-danger btn-sm">
-              Retry
-            </button>
+            <Button variant="ghost" size="sm" onClick={() => loadUsers(page)}>Retry</Button>
           </div>
         ) : users.length === 0 ? (
-          <p className="text-sm text-muted">No users found.</p>
+          <EmptyState
+            icon={<UsersIcon strokeWidth={1.5} />}
+            title="No users yet"
+            description="Add admin accounts to allow more team members to log in."
+            action={
+              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                <Link href="/users/new">Add user</Link>
+              </Button>
+            }
+          />
         ) : (
           <div className="space-y-3">
             <div className="overflow-x-auto">
@@ -143,7 +161,7 @@ export default function UsersPage() {
                     <th className="px-3 py-2">Username</th>
                     <th className="px-3 py-2">Created</th>
                     <th className="px-3 py-2">Updated</th>
-                    <th className="px-3 py-2">Last Login</th>
+                    <th className="px-3 py-2">Last login</th>
                     <th className="px-3 py-2">Actions</th>
                   </tr>
                 </thead>
@@ -155,18 +173,20 @@ export default function UsersPage() {
                       <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.updated_at)}</td>
                       <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.last_login_at)}</td>
                       <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          <Link href={`/users/${user.id}`} className="btn btn-secondary btn-sm">
-                            Edit
-                          </Link>
-                          <button
-                            type="button"
-                            className="btn btn-danger btn-sm disabled:opacity-50"
+                        <div className="flex items-center gap-1.5">
+                          <Button variant="ghost" size="xs" icon={<Pencil strokeWidth={1.75} />} asChild>
+                            <Link href={`/users/${user.id}`}>Edit</Link>
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="xs"
+                            icon={<Trash2 strokeWidth={1.75} />}
                             onClick={() => handleDelete(user)}
                             disabled={deletingId === user.id}
+                            loading={deletingId === user.id}
                           >
-                            {deletingId === user.id ? 'Deleting...' : 'Delete'}
-                          </button>
+                            {deletingId === user.id ? 'Deleting…' : 'Delete'}
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -180,22 +200,22 @@ export default function UsersPage() {
                 Page {page} of {totalPages} ({total} users)
               </span>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   disabled={page <= 1}
                   onClick={() => loadUsers(page - 1)}
                 >
                   Previous
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   disabled={page >= totalPages}
                   onClick={() => loadUsers(page + 1)}
                 >
                   Next
-                </button>
+                </Button>
               </div>
             </div>
           </div>
