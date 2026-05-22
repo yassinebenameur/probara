@@ -285,3 +285,25 @@ type AddMonitorsToGroupRequest struct {
 type RemoveMonitorsFromGroupRequest struct {
 	MonitorIDs []string `json:"monitor_ids"`
 }
+
+// BulkAlertPolicyOp is the operation type for BulkUpdateAlertPolicyRequest.
+type BulkAlertPolicyOp string
+
+const (
+	BulkAlertPolicyOpAttach BulkAlertPolicyOp = "attach"
+	BulkAlertPolicyOpDetach BulkAlertPolicyOp = "detach"
+)
+
+// BulkUpdateAlertPolicyRequest is the body for POST /v1/monitors/bulk/alert-policy.
+type BulkUpdateAlertPolicyRequest struct {
+	MonitorIDs []string          `json:"monitor_ids"`
+	PolicyID   string            `json:"policy_id"`
+	Op         BulkAlertPolicyOp `json:"op"`
+}
+
+// BulkUpdateAlertPolicyResponse is the response for POST /v1/monitors/bulk/alert-policy.
+type BulkUpdateAlertPolicyResponse struct {
+	Updated           int         `json:"updated"`
+	Unchanged         int         `json:"unchanged"`
+	MonitorIDsUpdated []uuid.UUID `json:"monitor_ids_updated"`
+}
