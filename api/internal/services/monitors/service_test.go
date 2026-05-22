@@ -3,6 +3,7 @@ package monitors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,14 @@ type MockRepository struct {
 	members           map[uuid.UUID][]uuid.UUID
 	policies          map[uuid.UUID][]uuid.UUID
 	deletedHistoryIDs []uuid.UUID
+
+	// Controllable error/return fields for bulk alert policy tests.
+	verifyAlertPolicyErr error
+	verifyMonitorsErr    error
+	bulkAttachChanged    []uuid.UUID
+	bulkAttachErr        error
+	bulkDetachChanged    []uuid.UUID
+	bulkDetachErr        error
 }
 
 func NewMockRepository() *MockRepository {
@@ -69,7 +78,19 @@ func (m *MockRepository) DeleteHistory(ctx context.Context, tenantID uuid.UUID, 
 }
 
 func (m *MockRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error {
-	return nil
+	return m.verifyAlertPolicyErr
+}
+
+func (m *MockRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
+	return m.verifyMonitorsErr
+}
+
+func (m *MockRepository) BulkAttachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error) {
+	return m.bulkAttachChanged, m.bulkAttachErr
+}
+
+func (m *MockRepository) BulkDetachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error) {
+	return m.bulkDetachChanged, m.bulkDetachErr
 }
 
 func (m *MockRepository) SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error {
@@ -333,5 +354,81 @@ func TestService_DeleteMonitorHistory_GroupMonitorWithoutMembers(t *testing.T) {
 	}
 	if len(repo.deletedHistoryIDs) != 1 || repo.deletedHistoryIDs[0] != groupID {
 		t.Fatalf("deletedHistoryIDs = %v, want [%s]", repo.deletedHistoryIDs, groupID)
+	}
+}
+
+func TestService_BulkUpdateAlertPolicy_Attach(t *testing.T) {
+	tenantID := uuid.New()
+	policyID := uuid.New()
+	m1, m2, m3 := uuid.New(), uuid.New(), uuid.New()
+
+	repo := NewMockRepository()
+	// Pre-configure mock: VerifyAlertPolicy succeeds, VerifyMonitorsBelongToTenant
+	// succeeds, BulkAttachAlertPolicy reports m1 and m2 changed (m3 already had it).
+	repo.verifyAlertPolicyErr = nil
+	repo.verifyMonitorsErr = nil
+	repo.bulkAttachChanged = []uuid.UUID{m1, m2}
+
+	svc := NewService(repo)
+	resp, err := svc.BulkUpdateAlertPolicy(
+		context.Background(),
+		tenantID,
+		[]uuid.UUID{m1, m2, m3},
+		policyID,
+		models.BulkAlertPolicyOpAttach,
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Updated != 2 {
+		t.Errorf("expected updated=2, got %d", resp.Updated)
+	}
+	if resp.Unchanged != 1 {
+		t.Errorf("expected unchanged=1, got %d", resp.Unchanged)
+	}
+	if len(resp.MonitorIDsUpdated) != 2 {
+		t.Errorf("expected 2 IDs in MonitorIDsUpdated, got %d", len(resp.MonitorIDsUpdated))
+	}
+}
+
+func TestService_BulkUpdateAlertPolicy_CrossTenantMonitor(t *testing.T) {
+	tenantID := uuid.New()
+	policyID := uuid.New()
+	m1 := uuid.New()
+
+	repo := NewMockRepository()
+	repo.verifyAlertPolicyErr = nil
+	repo.verifyMonitorsErr = fmt.Errorf("one or more monitors not found or do not belong to tenant")
+
+	svc := NewService(repo)
+	_, err := svc.BulkUpdateAlertPolicy(
+		context.Background(),
+		tenantID,
+		[]uuid.UUID{m1},
+		policyID,
+		models.BulkAlertPolicyOpAttach,
+	)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestService_BulkUpdateAlertPolicy_UnknownOp(t *testing.T) {
+	tenantID := uuid.New()
+	policyID := uuid.New()
+	m1 := uuid.New()
+
+	repo := NewMockRepository()
+	svc := NewService(repo)
+	_, err := svc.BulkUpdateAlertPolicy(
+		context.Background(),
+		tenantID,
+		[]uuid.UUID{m1},
+		policyID,
+		models.BulkAlertPolicyOp("explode"),
+	)
+	if err == nil {
+		t.Fatalf("expected error for unknown op")
 	}
 }
