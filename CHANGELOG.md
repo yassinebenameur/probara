@@ -1,3 +1,22 @@
+# [1.0.0-alpha.42](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.41...v1.0.0-alpha.42) (2026-05-22)
+
+
+### Features
+
+* **agent:** supervise installs and mark stale agents down ([c1dc4d1](https://github.com/yassinebenameur/probara/commit/c1dc4d1f80cd602e4ec46f0206cd2053d20b6b7a))
+* **agent:** support remote service uninstall ([08c0a66](https://github.com/yassinebenameur/probara/commit/08c0a667bd3b659442fe46a8513855561c4d4350))
+* **dashboard:** add hourly rollups for short ranges ([d65b587](https://github.com/yassinebenameur/probara/commit/d65b5872587927a6f8011fd533d3aa1705a545cb))
+* **web/ui:** add FilterChip with selected state and count slot ([ea7c47b](https://github.com/yassinebenameur/probara/commit/ea7c47b9a4a6ebd6778d540863b17ac2e95451c5))
+* **web/ui:** add FormActions bar with optional sticky mode ([f6aae5c](https://github.com/yassinebenameur/probara/commit/f6aae5c0678c2a325c13694b3916d613415a657e))
+* **web/ui:** add FormCard outer container ([8d7ad54](https://github.com/yassinebenameur/probara/commit/8d7ad54b27868354b57866bad4c47706f0ce8353))
+* **web/ui:** add FormSection container ([2b46662](https://github.com/yassinebenameur/probara/commit/2b46662f1e9a3a4640e4879cc4c0dcf56a72f07f))
+* **web/ui:** add infoTip prop to FormField ([94c1fe9](https://github.com/yassinebenameur/probara/commit/94c1fe9370bac953ee9ff2a358a2f9eb8e2fd08d))
+* **web/ui:** add PageHeader and Breadcrumb primitives ([88a2f89](https://github.com/yassinebenameur/probara/commit/88a2f89c8af185a7bad8257271508fa1f71d8fda))
+* **web/ui:** add Pill primitive with success/danger/warning/info/neutral/tag tones ([6e43e94](https://github.com/yassinebenameur/probara/commit/6e43e94084405830d4440108b838479d0251776f))
+* **web/ui:** extract InfoTip popover primitive with portal positioning ([c70b9fc](https://github.com/yassinebenameur/probara/commit/c70b9fcd9d95640410359c4d1f937cfa53be6622))
+* **web/ui:** rewrite Button as ghost/accent/danger/subtle primitive ([ae3d2cc](https://github.com/yassinebenameur/probara/commit/ae3d2ccfd3f08a278c3f38178e9be28442b9473e))
+* **web/ui:** rewrite EmptyState for dark theme ([90a1d0b](https://github.com/yassinebenameur/probara/commit/90a1d0bd843178fe8287722b57db36e3f89af384))
+
 # [1.0.0-alpha.41](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.40...v1.0.0-alpha.41) (2026-05-21)
 
 
