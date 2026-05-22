@@ -9,6 +9,9 @@ import type {
   UpdateStatusPageRequest,
 } from '@/lib/types';
 import { getMonitors } from '@/lib/api';
+import CollapsibleSection from '@/components/ui/CollapsibleSection';
+import FormField from '@/components/ui/FormField';
+import FormActions from '@/components/ui/FormActions';
 import MonitorLibrary from './MonitorLibrary';
 import SectionsEditor from './SectionsEditor';
 import {
@@ -48,7 +51,6 @@ export default function StatusPageForm({
   const derived = useDerived(state, monitors);
   const filteredMonitors = useFilteredMonitors(monitors, state.filters);
 
-  // Reset state when editing a different status page
   useEffect(() => {
     dispatch({ type: 'reset', statusPage });
     setBasicsOpen(!statusPage);
@@ -70,7 +72,7 @@ export default function StatusPageForm({
           total = response.total ?? all.length;
           if (items.length < MONITOR_PAGE_SIZE || all.length >= total) break;
           page += 1;
-          if (page > 100) break; // safety
+          if (page > 100) break;
         }
         if (!cancelled) {
           setMonitors(all);
@@ -225,14 +227,72 @@ export default function StatusPageForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      <BasicsAndBranding
-        basics={state.basics}
-        open={basicsOpen}
-        onToggle={() => setBasicsOpen((value) => !value)}
+      <CollapsibleSection
+        title="Page details & branding"
         summary={summaryParts.join(' · ')}
-        errors={errors}
-        onChange={setBasic}
-      />
+        isOpen={basicsOpen}
+        onToggle={setBasicsOpen}
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <FormField
+            label="URL slug"
+            required
+            error={errors.slug}
+            description="Lowercase letters, numbers, and hyphens only"
+          >
+            <input
+              type="text"
+              value={state.basics.slug}
+              onChange={(event) => setBasic('slug', event.target.value.toLowerCase())}
+              placeholder="my-status-page"
+              className="input"
+            />
+          </FormField>
+          <FormField label="Title" required error={errors.title}>
+            <input
+              type="text"
+              value={state.basics.title}
+              onChange={(event) => setBasic('title', event.target.value)}
+              placeholder="My service status"
+              className="input"
+            />
+          </FormField>
+        </div>
+
+        <FormField label="Description">
+          <textarea
+            value={state.basics.description}
+            onChange={(event) => setBasic('description', event.target.value)}
+            placeholder="Describe your service status page…"
+            rows={2}
+            className="input min-h-[72px] resize-none"
+          />
+        </FormField>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <FormField label="Logo URL">
+            <input
+              type="url"
+              value={state.basics.logo_url}
+              onChange={(event) => setBasic('logo_url', event.target.value)}
+              placeholder="https://example.com/logo.png"
+              className="input"
+            />
+          </FormField>
+          <div className="grid grid-cols-2 gap-3">
+            <ColorField
+              label="Primary"
+              value={state.basics.primary_color}
+              onChange={(value) => setBasic('primary_color', value)}
+            />
+            <ColorField
+              label="Secondary"
+              value={state.basics.secondary_color}
+              onChange={(value) => setBasic('secondary_color', value)}
+            />
+          </div>
+        </div>
+      </CollapsibleSection>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
         <div className="lg:sticky lg:top-4 lg:self-start">
@@ -292,165 +352,21 @@ export default function StatusPageForm({
         />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] pt-4">
-        <p className="text-[11px] text-slate-500">
-          {state.sections.length === 0
+      <FormActions
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : statusPage ? 'Save changes' : 'Create status page',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+        middle={
+          state.sections.length === 0
             ? 'Add at least one section to publish.'
-            : `${state.sections.length} section${state.sections.length === 1 ? '' : 's'} · ${derived.membershipCount} monitor${derived.membershipCount === 1 ? '' : 's'} assigned`}
-        </p>
-        <div className="flex items-center gap-2">
-          {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={loading}
-              className="btn btn-secondary btn-sm disabled:opacity-50"
-            >
-              Cancel
-            </button>
-          )}
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn btn-primary btn-sm disabled:opacity-50"
-          >
-            {loading ? 'Saving…' : statusPage ? 'Save Changes' : 'Create Status Page'}
-          </button>
-        </div>
-      </div>
+            : `${state.sections.length} section${state.sections.length === 1 ? '' : 's'} · ${derived.membershipCount} monitor${derived.membershipCount === 1 ? '' : 's'} assigned`
+        }
+      />
     </form>
-  );
-}
-
-interface BasicsAndBrandingProps {
-  basics: Basics;
-  open: boolean;
-  summary: string;
-  errors: Record<string, string>;
-  onToggle: () => void;
-  onChange: (key: keyof Basics, value: string) => void;
-}
-
-function BasicsAndBranding({
-  basics,
-  open,
-  summary,
-  errors,
-  onToggle,
-  onChange,
-}: BasicsAndBrandingProps) {
-  return (
-    <section className="overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/40">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="group flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.02]"
-        aria-expanded={open}
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <span
-            aria-hidden="true"
-            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md border border-white/[0.08] bg-slate-950/60 text-slate-400 transition-colors group-hover:border-cyan-500/30 group-hover:text-cyan-300"
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
-              <path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h9A2.5 2.5 0 0 1 17 5.5v2A2.5 2.5 0 0 1 14.5 10h-9A2.5 2.5 0 0 1 3 7.5v-2Zm0 7A2.5 2.5 0 0 1 5.5 10h4A2.5 2.5 0 0 1 12 12.5v2A2.5 2.5 0 0 1 9.5 17h-4A2.5 2.5 0 0 1 3 14.5v-2Zm11-2.5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2h-1Z" />
-            </svg>
-          </span>
-          <div className="min-w-0">
-            <h3 className="text-sm font-medium text-white">Page details &amp; branding</h3>
-            {!open && summary && (
-              <p className="mt-0.5 truncate text-xs text-slate-500">{summary}</p>
-            )}
-          </div>
-        </div>
-        <svg
-          viewBox="0 0 20 20"
-          fill="currentColor"
-          aria-hidden="true"
-          className={`h-4 w-4 flex-shrink-0 text-slate-500 transition-transform duration-200 ${
-            open ? 'rotate-180' : ''
-          }`}
-        >
-          <path d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.06l3.71-3.83a.75.75 0 1 1 1.08 1.04l-4.25 4.4a.75.75 0 0 1-1.08 0L5.21 8.27a.75.75 0 0 1 .02-1.06Z" />
-        </svg>
-      </button>
-
-      {open && (
-        <div className="space-y-4 border-t border-white/[0.06] px-4 py-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">
-                URL slug
-              </label>
-              <input
-                type="text"
-                value={basics.slug}
-                onChange={(event) => onChange('slug', event.target.value.toLowerCase())}
-                placeholder="my-status-page"
-                className="input"
-              />
-              {errors.slug && <p className="mt-1 text-xs text-rose-400">{errors.slug}</p>}
-              <p className="mt-1 text-xs text-slate-500">
-                Lowercase letters, numbers, and hyphens only.
-              </p>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">
-                Title
-              </label>
-              <input
-                type="text"
-                value={basics.title}
-                onChange={(event) => onChange('title', event.target.value)}
-                placeholder="My Service Status"
-                className="input"
-              />
-              {errors.title && <p className="mt-1 text-xs text-rose-400">{errors.title}</p>}
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">
-              Description
-            </label>
-            <textarea
-              value={basics.description}
-              onChange={(event) => onChange('description', event.target.value)}
-              placeholder="Describe your service status page…"
-              rows={2}
-              className="input min-h-[72px] resize-none"
-            />
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">
-                Logo URL
-              </label>
-              <input
-                type="url"
-                value={basics.logo_url}
-                onChange={(event) => onChange('logo_url', event.target.value)}
-                placeholder="https://example.com/logo.png"
-                className="input"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <ColorField
-                label="Primary"
-                value={basics.primary_color}
-                onChange={(value) => onChange('primary_color', value)}
-              />
-              <ColorField
-                label="Secondary"
-                value={basics.secondary_color}
-                onChange={(value) => onChange('secondary_color', value)}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -463,13 +379,10 @@ interface ColorFieldProps {
 function ColorField({ label, value, onChange }: ColorFieldProps) {
   const safeValue = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) ? value : '#000000';
   return (
-    <div>
-      <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.1em] text-slate-400">
-        {label}
-      </label>
-      <div className="flex items-center gap-2 rounded-md border border-white/[0.08] bg-slate-950/60 p-1 pl-1.5 transition-colors focus-within:border-cyan-500/40 focus-within:shadow-[0_0_0_3px_rgba(6,182,212,0.12)]">
+    <FormField label={label}>
+      <div className="flex items-center gap-2 rounded-md border border-white/[0.06] bg-slate-900/60 p-1 pl-1.5 transition-colors focus-within:border-cyan-500/40 focus-within:shadow-[0_0_0_3px_rgba(6,182,212,0.12)]">
         <label
-          className="relative h-7 w-7 flex-shrink-0 cursor-pointer overflow-hidden rounded border border-white/[0.08]"
+          className="relative h-7 w-7 flex-shrink-0 cursor-pointer overflow-hidden rounded border border-white/[0.06]"
           style={{ backgroundColor: safeValue }}
           aria-label={`${label} color picker`}
           title={`Pick ${label.toLowerCase()} color`}
@@ -491,6 +404,6 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
           spellCheck={false}
         />
       </div>
-    </div>
+    </FormField>
   );
 }
