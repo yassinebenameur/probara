@@ -1,15 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { AlertChannel } from '@/lib/types';
 import { deleteAlertChannel, getAlertChannels, testAlertChannel } from '@/lib/api';
 import Panel from '@/components/ui/Panel';
 import Toast from '@/components/ui/Toast';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
+import PageHeader from '@/components/ui/PageHeader';
+import EmptyState from '@/components/ui/EmptyState';
 
 export default function AlertChannelsPage() {
-  const router = useRouter();
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -34,10 +37,7 @@ export default function AlertChannelsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this alert channel?')) {
-      return;
-    }
-
+    if (!confirm('Are you sure you want to delete this alert channel?')) return;
     try {
       await deleteAlertChannel(id);
       setChannels((channels || []).filter((c) => c.id !== id));
@@ -56,117 +56,105 @@ export default function AlertChannelsPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="text-muted">Loading alert channels...</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <Panel title="Error" subtitle="Failed to load alert channels">
-        <div className="text-danger">{error}</div>
-        <button
-          onClick={loadChannels}
-          className="btn btn-secondary btn-sm mt-4"
-        >
-          Retry
-        </button>
-      </Panel>
-    );
-  }
+  const header = (
+    <PageHeader
+      title="Alert channels"
+      subtitle="Deliver alerts to your team."
+      action={
+        <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+          <Link href="/alert-channels/new">Create alert channel</Link>
+        </Button>
+      }
+    />
+  );
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div />
-        <button
-          onClick={() => router.push('/alert-channels/new')}
-          className="btn btn-primary btn-sm"
-        >
-          + Create Alert Channel
-        </button>
-      </div>
+      {header}
 
-      <Panel
-        title="Alert Channels"
-        subtitle={`${channels.length} channel${channels.length !== 1 ? 's' : ''} configured`}
-      >
-        <div className="table-card mt-1">
-          {channels.length === 0 ? (
-            <div className="py-12 text-center">
-              <div className="text-4xl mb-3">📣</div>
-              <div className="text-lg font-medium mb-1">No alert channels yet</div>
-              <div className="text-sm text-muted mb-4">
-                Create your first channel to deliver alerts to your team.
-              </div>
-              <button
-                onClick={() => router.push('/alert-channels/new')}
-                className="btn btn-primary btn-sm"
-              >
-                Create Alert Channel
-              </button>
-            </div>
-          ) : (
-            <table className="data-table text-xs">
-              <thead>
-                <tr>
-                  <th>
-                    Name
-                  </th>
-                  <th>
-                    Type
-                  </th>
-                  <th>
-                    Status
-                  </th>
-                  <th className="text-right">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {channels.map((channel, idx) => (
-                  <tr key={channel.id} className={idx % 2 === 1 ? 'bg-[rgba(15,23,42,0.35)]' : ''}>
-                    <td>
-                      <div className="font-medium text-sm">{channel.name}</div>
-                    </td>
-                    <td className="text-muted">
-                      {channel.type.toUpperCase()}
-                    </td>
-                    <td>
-                      <span className={channel.is_active ? 'badge badge-success' : 'badge badge-default'}>
-                        {channel.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="text-right">
-                      <button
-                        onClick={() => handleTest(channel.id)}
-                        className="btn btn-outline btn-xs"
-                      >
-                        Test
-                      </button>
-                      <Link href={`/alert-channels/${channel.id}`}>
-                        <button className="ml-1 btn btn-secondary btn-xs">
-                          Edit
-                        </button>
-                      </Link>
-                      <button
-                        onClick={() => handleDelete(channel.id)}
-                        className="ml-1 btn btn-danger btn-xs"
-                      >
-                        Delete
-                      </button>
-                    </td>
+      {loading ? (
+        <Panel title="Alert channels" subtitle="Loading channels">
+          <div className="text-sm text-slate-500">Loading alert channels…</div>
+        </Panel>
+      ) : error ? (
+        <Panel title="Error" subtitle="Failed to load alert channels">
+          <div className="text-sm text-rose-400">{error}</div>
+          <div className="mt-3">
+            <Button variant="ghost" size="sm" onClick={loadChannels}>Retry</Button>
+          </div>
+        </Panel>
+      ) : (
+        <Panel
+          title="Alert channels"
+          subtitle={`${channels.length} channel${channels.length !== 1 ? 's' : ''} configured`}
+        >
+          <div className="table-card mt-1">
+            {channels.length === 0 ? (
+              <EmptyState
+                icon={<Send strokeWidth={1.5} />}
+                title="No alert channels yet"
+                description="Create your first channel to deliver alerts to your team."
+                action={
+                  <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                    <Link href="/alert-channels/new">Create alert channel</Link>
+                  </Button>
+                }
+              />
+            ) : (
+              <table className="data-table text-xs">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th className="text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </Panel>
+                </thead>
+                <tbody>
+                  {channels.map((channel, idx) => (
+                    <tr key={channel.id} className={idx % 2 === 1 ? 'bg-[rgba(15,23,42,0.35)]' : ''}>
+                      <td>
+                        <div className="font-medium text-sm">{channel.name}</div>
+                      </td>
+                      <td className="text-slate-400">
+                        {channel.type.toUpperCase()}
+                      </td>
+                      <td>
+                        <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
+                          {channel.is_active ? 'Active' : 'Inactive'}
+                        </Pill>
+                      </td>
+                      <td className="text-right">
+                        <div className="inline-flex items-center gap-1.5">
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            icon={<Send strokeWidth={1.75} />}
+                            onClick={() => handleTest(channel.id)}
+                          >
+                            Test
+                          </Button>
+                          <Button variant="ghost" size="xs" icon={<Pencil strokeWidth={1.75} />} asChild>
+                            <Link href={`/alert-channels/${channel.id}`}>Edit</Link>
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="xs"
+                            icon={<Trash2 strokeWidth={1.75} />}
+                            onClick={() => handleDelete(channel.id)}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </Panel>
+      )}
 
       {toast && (
         <Toast
