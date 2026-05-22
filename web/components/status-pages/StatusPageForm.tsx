@@ -12,7 +12,7 @@ import { getMonitors } from '@/lib/api';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import FormField from '@/components/ui/FormField';
 import FormActions from '@/components/ui/FormActions';
-import MonitorLibrary from './MonitorLibrary';
+import MonitorLibrary, { AddToMenu } from './MonitorLibrary';
 import SectionsEditor from './SectionsEditor';
 import {
   DEFAULT_PRIMARY,
@@ -304,17 +304,33 @@ export default function StatusPageForm({
             filteredMonitors={filteredMonitors}
             selection={state.selection}
             derived={derived}
-            sections={state.sections}
             onFilterChange={(key, value) => dispatch({ type: 'set_filter', key, value })}
             onToggleSelect={(monitorId) => dispatch({ type: 'toggle_selection', monitorId })}
             onClearSelection={() => dispatch({ type: 'clear_selection' })}
             onSelectAllFiltered={() =>
               dispatch({ type: 'set_selection', ids: filteredMonitors.map((m) => m.id) })
             }
-            onAddToSection={handleAddToSection}
-            onAddNewSection={handleAddNewSectionFromLibrary}
             onRevealSection={(sectionId) => setRevealSectionId(sectionId)}
             onDragStartMonitor={handleDragStartMonitor}
+            bulkAction={
+              <AddToMenu
+                label="Add to ▾"
+                disabled={state.selection.length === 0}
+                sections={state.sections}
+                onPickSection={(sectionId) => handleAddToSection(state.selection, sectionId)}
+                onCreateSection={(title) => handleAddNewSectionFromLibrary(state.selection, title)}
+              />
+            }
+            rowAction={(monitor, { placement }) => (
+              <AddToMenu
+                label={placement ? 'Move ▾' : 'Add ▾'}
+                sections={state.sections}
+                currentSectionId={placement?.sectionId}
+                onPickSection={(sectionId) => handleAddToSection([monitor.id], sectionId)}
+                onCreateSection={(title) => handleAddNewSectionFromLibrary([monitor.id], title)}
+                compact
+              />
+            )}
           />
         </div>
 

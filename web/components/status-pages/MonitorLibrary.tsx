@@ -20,15 +20,18 @@ interface MonitorLibraryProps {
   filteredMonitors: Monitor[];
   selection: string[];
   derived: DerivedState;
-  sections: EditableSection[];
   onFilterChange: (key: keyof Filters, value: string | null) => void;
   onToggleSelect: (monitorId: string) => void;
   onClearSelection: () => void;
   onSelectAllFiltered: () => void;
-  onAddToSection: (monitorIds: string[], targetSectionId: string) => void;
-  onAddNewSection: (monitorIds: string[], title: string) => void;
-  onRevealSection: (sectionId: string) => void;
-  onDragStartMonitor: (event: React.DragEvent, monitorId: string) => void;
+  /** Optional drag start handler — only used by status-page editor. */
+  onDragStartMonitor?: (event: React.DragEvent, monitorId: string) => void;
+  /** Optional render slot for the per-row action (right-side button). */
+  rowAction?: (monitor: Monitor, ctx: { placement?: MonitorPlacement }) => React.ReactNode;
+  /** Optional render slot for the top "bulk action" area (right of the select-all toggle). */
+  bulkAction?: React.ReactNode;
+  /** Optional reveal handler — only meaningful in the status-page editor. */
+  onRevealSection?: (sectionId: string) => void;
 }
 
 export default function MonitorLibrary({
@@ -39,15 +42,14 @@ export default function MonitorLibrary({
   filteredMonitors,
   selection,
   derived,
-  sections,
   onFilterChange,
   onToggleSelect,
   onClearSelection,
   onSelectAllFiltered,
-  onAddToSection,
-  onAddNewSection,
-  onRevealSection,
   onDragStartMonitor,
+  rowAction,
+  bulkAction,
+  onRevealSection,
 }: MonitorLibraryProps) {
   const selectionSet = useMemo(() => new Set(selection), [selection]);
   const selectedInView = filteredMonitors.filter((m) => selectionSet.has(m.id)).length;
@@ -137,17 +139,7 @@ export default function MonitorLibrary({
           </button>
         </div>
         <div className="flex items-center gap-2">
-          <AddToMenu
-            label="Add to ▾"
-            disabled={selection.length === 0}
-            sections={sections}
-            onPickSection={(sectionId) => {
-              onAddToSection(selection, sectionId);
-            }}
-            onCreateSection={(title) => {
-              onAddNewSection(selection, title);
-            }}
-          />
+          {bulkAction}
           {selection.length > 0 && (
             <button
               type="button"
@@ -167,20 +159,21 @@ export default function MonitorLibrary({
           <p className="p-6 text-center text-sm text-slate-500">No monitors match these filters.</p>
         ) : (
           <ul className="space-y-1">
-            {filteredMonitors.map((monitor) => (
-              <MonitorRow
-                key={monitor.id}
-                monitor={monitor}
-                checked={selectionSet.has(monitor.id)}
-                placement={derived.monitorIdToSection.get(monitor.id)}
-                sections={sections}
-                onToggleSelect={() => onToggleSelect(monitor.id)}
-                onAddToSection={(sectionId) => onAddToSection([monitor.id], sectionId)}
-                onAddNewSection={(title) => onAddNewSection([monitor.id], title)}
-                onRevealSection={onRevealSection}
-                onDragStart={(event) => onDragStartMonitor(event, monitor.id)}
-              />
-            ))}
+            {filteredMonitors.map((monitor) => {
+              const placement = derived.monitorIdToSection.get(monitor.id);
+              return (
+                <MonitorRow
+                  key={monitor.id}
+                  monitor={monitor}
+                  checked={selectionSet.has(monitor.id)}
+                  placement={placement}
+                  onToggleSelect={() => onToggleSelect(monitor.id)}
+                  onRevealSection={onRevealSection}
+                  onDragStart={onDragStartMonitor ? (event) => onDragStartMonitor(event, monitor.id) : undefined}
+                  rowAction={rowAction ? () => rowAction(monitor, { placement }) : undefined}
+                />
+              );
+            })}
           </ul>
         )}
       </div>
@@ -192,28 +185,24 @@ interface MonitorRowProps {
   monitor: Monitor;
   checked: boolean;
   placement?: MonitorPlacement;
-  sections: EditableSection[];
   onToggleSelect: () => void;
-  onAddToSection: (sectionId: string) => void;
-  onAddNewSection: (title: string) => void;
-  onRevealSection: (sectionId: string) => void;
-  onDragStart: (event: React.DragEvent) => void;
+  onRevealSection?: (sectionId: string) => void;
+  onDragStart?: (event: React.DragEvent) => void;
+  rowAction?: () => React.ReactNode;
 }
 
 function MonitorRow({
   monitor,
   checked,
   placement,
-  sections,
   onToggleSelect,
-  onAddToSection,
-  onAddNewSection,
   onRevealSection,
   onDragStart,
+  rowAction,
 }: MonitorRowProps) {
   return (
     <li
-      draggable
+      draggable={!!onDragStart}
       onDragStart={onDragStart}
       className={`group flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors ${
         checked
@@ -239,7 +228,7 @@ function MonitorRow({
           {monitor.url ? ` · ${monitor.url}` : ''}
         </p>
       </div>
-      {placement ? (
+      {placement && onRevealSection ? (
         <button
           type="button"
           onClick={() => onRevealSection(placement.sectionId)}
@@ -250,14 +239,7 @@ function MonitorRow({
           <span className="truncate">{placement.sectionTitle}</span>
         </button>
       ) : null}
-      <AddToMenu
-        label={placement ? 'Move ▾' : 'Add ▾'}
-        sections={sections}
-        currentSectionId={placement?.sectionId}
-        onPickSection={(sectionId) => onAddToSection(sectionId)}
-        onCreateSection={(title) => onAddNewSection(title)}
-        compact
-      />
+      {rowAction ? rowAction() : null}
     </li>
   );
 }
