@@ -1,9 +1,12 @@
 'use client';
 
-import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Toast from '@/components/ui/Toast';
+import PageHeader from '@/components/ui/PageHeader';
+import FormCard from '@/components/ui/FormCard';
+import FormField from '@/components/ui/FormField';
+import FormActions from '@/components/ui/FormActions';
 import { getUser, updateUser } from '@/lib/api';
 import type { AdminUser } from '@/lib/types';
 
@@ -72,97 +75,82 @@ export default function EditUserPage() {
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-500">Loading user...</div>
+        <div className="text-slate-500">Loading user…</div>
       </div>
     );
   }
 
   if (error || !user) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+      <FormCard>
         <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
           {error || 'User not found'}
         </div>
-      </div>
+      </FormCard>
     );
   }
 
   return (
-    <div className="max-w-4xl">
-      <div className="mb-6">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <Link href="/users" className="hover:text-slate-400">Users</Link>
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          <span className="text-slate-400">Edit</span>
-        </div>
-        <h1 className="mt-3 text-xl font-semibold text-white">Edit User</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Update username and reset password for this admin account.
-        </p>
-      </div>
+    <div className="max-w-4xl space-y-6">
+      <PageHeader
+        breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'Edit' }]}
+        title="Edit user"
+        subtitle="Update username and reset password for this admin account."
+      />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+        <FormCard>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">Username</label>
+            <FormField label="Username">
               <input
                 type="text"
                 className="input"
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
               />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">New Password</label>
+            </FormField>
+            <FormField label="New password" description="Leave empty to keep current password">
               <input
                 type="password"
                 className="input"
-                placeholder="Leave empty to keep current password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
-            </div>
+            </FormField>
 
-            <div className="flex items-center gap-2 pt-2">
-              <button type="submit" className="btn btn-primary btn-sm disabled:opacity-50" disabled={saving}>
-                {saving ? 'Saving...' : 'Save Changes'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => router.push('/users')}
-                disabled={saving}
-              >
-                Back
-              </button>
-            </div>
+            <FormActions
+              cancel={{ label: 'Back', onClick: () => router.push('/users'), disabled: saving }}
+              submit={{
+                label: saving ? 'Saving…' : 'Save changes',
+                loading: saving,
+                disabled: saving,
+                type: 'submit',
+              }}
+            />
           </form>
-        </div>
+        </FormCard>
 
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
-          <h3 className="text-sm font-medium text-white">User Details</h3>
+        <FormCard>
+          <h3 className="text-sm font-medium text-white">User details</h3>
           <dl className="mt-4 space-y-4">
             <div>
               <dt className="text-xs font-medium text-slate-500">User ID</dt>
-              <dd className="mt-1 text-xs font-mono text-slate-300 break-all">{user.id}</dd>
+              <dd className="mt-1 break-all font-mono text-xs text-slate-300">{user.id}</dd>
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">Created</dt>
               <dd className="mt-1 text-sm text-slate-300">{formatDate(user.created_at)}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Last Updated</dt>
+              <dt className="text-xs font-medium text-slate-500">Last updated</dt>
               <dd className="mt-1 text-sm text-slate-300">{formatDate(user.updated_at)}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Last Login</dt>
+              <dt className="text-xs font-medium text-slate-500">Last login</dt>
               <dd className="mt-1 text-sm text-slate-300">{formatDate(user.last_login_at)}</dd>
             </div>
           </dl>
-        </div>
+        </FormCard>
       </div>
 
       {toast && (

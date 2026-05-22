@@ -1,9 +1,12 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import Toast from '@/components/ui/Toast';
+import PageHeader from '@/components/ui/PageHeader';
+import FormCard from '@/components/ui/FormCard';
+import FormField from '@/components/ui/FormField';
+import FormActions from '@/components/ui/FormActions';
 import { createUser } from '@/lib/api';
 
 type ToastState = { message: string; type: 'success' | 'error' } | null;
@@ -39,25 +42,16 @@ export default function NewUserPage() {
   };
 
   return (
-    <div className="max-w-2xl">
-      <div className="mb-6">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <Link href="/users" className="hover:text-slate-400">Users</Link>
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          <span className="text-slate-400">New User</span>
-        </div>
-        <h1 className="mt-3 text-xl font-semibold text-white">Create User</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Add a new platform admin account.
-        </p>
-      </div>
+    <div className="max-w-2xl space-y-6">
+      <PageHeader
+        breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'New user' }]}
+        title="Create user"
+        subtitle="Add a new platform admin account."
+      />
 
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+      <FormCard>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Username</label>
+          <FormField label="Username" required>
             <input
               type="text"
               className="input"
@@ -65,33 +59,27 @@ export default function NewUserPage() {
               value={username}
               onChange={(event) => setUsername(event.target.value)}
             />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Password</label>
+          </FormField>
+          <FormField label="Password" required description="Minimum 12 characters">
             <input
               type="password"
               className="input"
-              placeholder="Minimum 12 characters"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
-          </div>
+          </FormField>
 
-          <div className="flex items-center gap-2 pt-2">
-            <button type="submit" className="btn btn-primary btn-sm disabled:opacity-50" disabled={loading}>
-              {loading ? 'Creating...' : 'Create User'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => router.push('/users')}
-              disabled={loading}
-            >
-              Cancel
-            </button>
-          </div>
+          <FormActions
+            cancel={{ label: 'Cancel', onClick: () => router.push('/users'), disabled: loading }}
+            submit={{
+              label: loading ? 'Creating…' : 'Create user',
+              loading,
+              disabled: loading,
+              type: 'submit',
+            }}
+          />
         </form>
-      </div>
+      </FormCard>
 
       {toast && (
         <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
