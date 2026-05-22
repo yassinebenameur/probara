@@ -1,12 +1,13 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { useState } from 'react';
 import { CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
 import { createAlertChannel } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
 import Toast from '@/components/ui/Toast';
+import PageHeader from '@/components/ui/PageHeader';
+import FormCard from '@/components/ui/FormCard';
 
 export default function NewAlertChannelPage() {
   const router = useRouter();
@@ -33,28 +34,20 @@ export default function NewAlertChannelPage() {
   };
 
   return (
-    <div className="max-w-2xl">
-      <div className="mb-6">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <Link href="/alert-channels" className="hover:text-slate-400">Alert Channels</Link>
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          <span className="text-slate-400">New Alert Channel</span>
-        </div>
-        <h1 className="mt-3 text-xl font-semibold text-white">Create Alert Channel</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Configure where alerts should be delivered for your team.
-        </p>
-      </div>
+    <div className="max-w-2xl space-y-6">
+      <PageHeader
+        breadcrumb={[{ label: 'Alert channels', href: '/alert-channels' }, { label: 'New' }]}
+        title="Create alert channel"
+        subtitle="Configure where alerts should be delivered."
+      />
 
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+      <FormCard>
         <AlertChannelForm
           onSubmit={handleSubmit}
           onCancel={() => router.push('/alert-channels')}
           loading={loading}
         />
-      </div>
+      </FormCard>
 
       {toast && (
         <Toast

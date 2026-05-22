@@ -5,8 +5,9 @@ import { AlertChannel, CreateAlertPolicyRequest, UpdateAlertPolicyRequest } from
 import { createAlertPolicy, getAlertChannels } from '@/lib/api';
 import AlertPolicyForm from '@/components/alert-policies/AlertPolicyForm';
 import Toast from '@/components/ui/Toast';
+import PageHeader from '@/components/ui/PageHeader';
+import FormCard from '@/components/ui/FormCard';
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 
 export default function NewAlertPolicyPage() {
   const router = useRouter();
@@ -59,22 +60,14 @@ export default function NewAlertPolicyPage() {
   };
 
   return (
-    <div className="max-w-2xl">
-      <div className="mb-6">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <Link href="/alert-policies" className="hover:text-slate-400">Alert Policies</Link>
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          <span className="text-slate-400">New Alert Policy</span>
-        </div>
-        <h1 className="mt-3 text-xl font-semibold text-white">Create Alert Policy</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Define alert conditions and choose notification channels.
-        </p>
-      </div>
+    <div className="max-w-2xl space-y-6">
+      <PageHeader
+        breadcrumb={[{ label: 'Alert policies', href: '/alert-policies' }, { label: 'New' }]}
+        title="Create alert policy"
+        subtitle="Define alert conditions and choose notification channels."
+      />
 
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+      <FormCard>
         <AlertPolicyForm
           onSubmit={handleSubmit}
           onCancel={() => router.push('/alert-policies')}
@@ -84,7 +77,7 @@ export default function NewAlertPolicyPage() {
         {channelsError && (
           <div className="mt-4 text-sm text-rose-500">{channelsError}</div>
         )}
-      </div>
+      </FormCard>
 
       {toast && (
         <Toast
