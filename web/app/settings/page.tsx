@@ -1,8 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Copy, KeyRound, Plus, RefreshCw, X } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Toast from '@/components/ui/Toast';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
+import PageHeader from '@/components/ui/PageHeader';
+import EmptyState from '@/components/ui/EmptyState';
 import { ApiKey } from '@/lib/types';
 import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
@@ -160,85 +165,68 @@ export default function SettingsPage() {
     }
   };
 
+  const presets: Array<{ label: string; value: string }> = [
+    { label: 'Unlimited', value: '' },
+    { label: '30 days', value: '30' },
+    { label: '90 days', value: '90' },
+    { label: '365 days', value: '365' },
+  ];
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-white">Settings</h1>
-        <p className="text-sm text-muted">Manage retention, API access, and integrations.</p>
-      </div>
+      <PageHeader title="Settings" subtitle="Manage retention, API access, and integrations." />
 
       <Panel
-        title="Data Retention"
+        title="Data retention"
         subtitle="Control how long check result history is kept for this tenant."
         actions={(
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<RefreshCw strokeWidth={1.75} />}
             onClick={loadRetentionSettings}
-            className="btn btn-secondary btn-sm"
           >
             Refresh
-          </button>
+          </Button>
         )}
       >
         {retentionLoading ? (
-          <div className="text-sm text-muted">Loading retention settings...</div>
+          <div className="text-sm text-slate-500">Loading retention settings…</div>
         ) : retentionError ? (
           <div className="space-y-3">
             <p className="text-sm text-rose-400">{retentionError}</p>
-            <button
-              onClick={loadRetentionSettings}
-              className="btn btn-danger btn-sm"
-            >
-              Retry
-            </button>
+            <Button variant="ghost" size="sm" onClick={loadRetentionSettings}>Retry</Button>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
+            <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
               <p className="text-sm font-medium text-white">
                 Current retention: {retentionDays === 0 ? 'Unlimited' : `${retentionDays} days`}
               </p>
-              <p className="text-xs text-muted mt-1">
+              <p className="mt-1 text-xs text-slate-400">
                 0 means unlimited history. Any value from 30 to 3650 deletes older check data during daily cleanup.
               </p>
             </div>
 
             <div className="space-y-2">
               <span className="block text-xs font-medium text-slate-400">Presets</span>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setRetentionInput('')}
-                  className="btn btn-secondary btn-sm"
-                >
-                  Unlimited
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRetentionInput('30')}
-                  className="btn btn-secondary btn-sm"
-                >
-                  30 days
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRetentionInput('90')}
-                  className="btn btn-secondary btn-sm"
-                >
-                  90 days
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRetentionInput('365')}
-                  className="btn btn-secondary btn-sm"
-                >
-                  365 days
-                </button>
+              <div className="flex flex-wrap gap-1.5">
+                {presets.map((preset) => (
+                  <Button
+                    key={preset.label}
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setRetentionInput(preset.value)}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
               </div>
             </div>
 
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
               <div className="flex-1">
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">Retention Days</label>
+                <label className="mb-1.5 block text-xs font-medium text-slate-400">Retention days</label>
                 <input
                   type="number"
                   min={0}
@@ -252,14 +240,15 @@ export default function SettingsPage() {
                   Leave empty to store 0 (Unlimited), or enter a value between 30 and 3650.
                 </p>
               </div>
-              <button
-                type="button"
+              <Button
+                variant="accent"
+                size="sm"
                 onClick={handleSaveRetention}
                 disabled={savingRetention}
-                className="btn btn-primary btn-sm disabled:opacity-50"
+                loading={savingRetention}
               >
-                {savingRetention ? 'Saving...' : 'Save Retention'}
-              </button>
+                {savingRetention ? 'Saving…' : 'Save retention'}
+              </Button>
             </div>
           </div>
         )}
@@ -271,52 +260,47 @@ export default function SettingsPage() {
       />
 
       <Panel
-        title="API Keys"
+        title="API keys"
         subtitle="Create and revoke keys used by agents, scripts, and integrations."
         actions={(
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<RefreshCw strokeWidth={1.75} />}
             onClick={loadKeys}
-            className="btn btn-secondary btn-sm"
           >
             Refresh
-          </button>
+          </Button>
         )}
       >
         {loading ? (
-          <div className="text-sm text-muted">Loading API keys...</div>
+          <div className="text-sm text-slate-500">Loading API keys…</div>
         ) : error ? (
           <div className="space-y-3">
             <p className="text-sm text-rose-400">{error}</p>
-            <button
-              onClick={loadKeys}
-              className="btn btn-danger btn-sm"
-            >
-              Retry
-            </button>
+            <Button variant="ghost" size="sm" onClick={loadKeys}>Retry</Button>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
+            <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-white">Connected API Key</p>
-                  <p className="text-xs text-muted">
+                  <p className="text-sm font-medium text-white">Connected API key</p>
+                  <p className="text-xs text-slate-400">
                     {browserKeyPresent
                       ? 'A key is stored in this browser for API key mode.'
                       : 'No key stored in this browser. Use /connect to add one.'}
                   </p>
                 </div>
-                <span
-                  className={browserKeyPresent ? 'badge badge-success' : 'badge badge-default'}
-                >
+                <Pill tone={browserKeyPresent ? 'success' : 'neutral'} size="xs" dot>
                   {browserKeyPresent ? 'Connected' : 'Not set'}
-                </span>
+                </Pill>
               </div>
             </div>
 
             <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
               <div className="flex-1">
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">API Key Name</label>
+                <label className="mb-1.5 block text-xs font-medium text-slate-400">API key name</label>
                 <input
                   type="text"
                   value={newKeyName}
@@ -325,13 +309,16 @@ export default function SettingsPage() {
                   className="input"
                 />
               </div>
-              <button
+              <Button
                 type="submit"
+                variant="accent"
+                size="sm"
+                icon={<Plus strokeWidth={1.75} />}
                 disabled={creating}
-                className="btn btn-primary btn-sm disabled:opacity-50"
+                loading={creating}
               >
-                {creating ? 'Creating...' : 'Create API Key'}
-              </button>
+                {creating ? 'Creating…' : 'Create API key'}
+              </Button>
             </form>
 
             {createdKey?.key && (
@@ -340,33 +327,38 @@ export default function SettingsPage() {
                   New API key created. Copy it now, this is the only time it will be shown.
                 </p>
                 <div className="mt-2 flex gap-2">
-                  <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-800/50 px-3 py-2 text-xs text-emerald-200 font-mono overflow-x-auto">
+                  <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-emerald-200">
                     {createdKey.key}
                   </code>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Copy strokeWidth={1.75} />}
                     onClick={() => copyToClipboard(createdKey.key || '', 'new-key')}
-                    className="btn btn-secondary btn-sm"
                   >
                     {copiedField === 'new-key' ? 'Copied' : 'Copy'}
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
 
-            <div className="space-y-2">
-              {apiKeys.length === 0 ? (
-                <p className="text-sm text-muted">No API keys created yet.</p>
-              ) : (
-                apiKeys.map((key) => (
+            {apiKeys.length === 0 ? (
+              <EmptyState
+                icon={<KeyRound strokeWidth={1.5} />}
+                title="No API keys yet"
+                description="Create your first key above to grant agents and integrations access."
+              />
+            ) : (
+              <div className="space-y-2">
+                {apiKeys.map((key) => (
                   <div
                     key={key.id}
-                    className="flex flex-col gap-3 rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-col gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div>
                       <p className="text-sm font-medium text-white">{key.name}</p>
-                      <p className="text-xs text-muted">
-                        ID {key.id.slice(0, 8)} | Fingerprint {formatFingerprint(key.key_prefix)} | Created {formatDate(key.created_at)}
+                      <p className="text-xs text-slate-400">
+                        ID {key.id.slice(0, 8)} · Fingerprint {formatFingerprint(key.key_prefix)} · Created {formatDate(key.created_at)}
                       </p>
                       {key.revoked_at && (
                         <p className="text-xs text-rose-300">
@@ -375,25 +367,24 @@ export default function SettingsPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span
-                        className={key.revoked_at ? 'badge badge-danger' : 'badge badge-success'}
-                      >
+                      <Pill tone={key.revoked_at ? 'danger' : 'success'} size="xs" dot>
                         {key.revoked_at ? 'Revoked' : 'Active'}
-                      </span>
+                      </Pill>
                       {!key.revoked_at && (
-                        <button
-                          type="button"
+                        <Button
+                          variant="danger"
+                          size="xs"
+                          icon={<X strokeWidth={1.75} />}
                           onClick={() => handleRevoke(key)}
-                          className="btn btn-danger btn-sm"
                         >
                           Revoke
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </Panel>
