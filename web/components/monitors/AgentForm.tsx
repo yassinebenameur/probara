@@ -1,10 +1,15 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Download } from 'lucide-react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AlertPolicy, AgentMonitorConfig, AgentInstallCommand, ApiKey } from '@/lib/types';
 import { getAlertPolicies, getAgentInstallCommand, getApiKeys } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
+import FormField from '@/components/ui/FormField';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
+import Button from '@/components/ui/Button';
 
 type ServerType =
   | 'linux-amd64'
@@ -259,7 +264,6 @@ export default function AgentForm({
     }
   };
 
-  // Installation instructions view
   if (isEditMode && monitor && showInstallInstructions) {
     if (!installCommand && !loadingInstallCmd) loadInstallCommand();
     if (!loadingApiKeys && !apiKeysLoaded) loadApiKeyOptions();
@@ -304,34 +308,31 @@ chmod +x ${UNIX_INSTALL_PATH}`
 
     return (
       <div className="space-y-5">
-        <div className="rounded-xl border border-white/[0.06] bg-slate-800/30 p-5">
-          <h3 className="text-sm font-medium text-white mb-4">Agent Installation</h3>
-
+        <FormSection title="Agent installation">
           {loadingInstallCmd ? (
-            <div className="text-sm text-slate-500">Loading installation details...</div>
+            <div className="text-sm text-slate-500">Loading installation details…</div>
           ) : installCommand ? (
-            <div className="space-y-4">
-              {/* Credentials */}
+            <>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Agent ID</label>
+                <FormField label="Agent ID">
                   <div className="flex gap-2">
-                    <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-cyan-400 font-mono overflow-x-auto">
+                    <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
                       {installCommand.agent_id}
                     </code>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      type="button"
                       onClick={() => copyToClipboard(installCommand.agent_id, 'agent_id')}
-                      className="btn btn-xs btn-outline"
                     >
                       {copiedField === 'agent_id' ? 'Copied' : 'Copy'}
-                    </button>
+                    </Button>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">API Key</label>
+                </FormField>
+                <FormField label="API key">
                   <div className="space-y-2">
                     {loadingApiKeys ? (
-                      <p className="text-xs text-slate-500">Loading API keys...</p>
+                      <p className="text-xs text-slate-500">Loading API keys…</p>
                     ) : apiKeyOptions.length > 1 ? (
                       <select
                         value={selectedApiKeyId}
@@ -344,28 +345,28 @@ chmod +x ${UNIX_INSTALL_PATH}`
                       </select>
                     ) : null}
                     <div className="flex gap-2">
-                      <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-cyan-400 font-mono overflow-x-auto">
+                      <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
                         {activeApiKey || 'YOUR_API_KEY'}
                       </code>
-                      <button
-                        onClick={() => copyToClipboard(activeApiKey, 'api_key')}
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        type="button"
                         disabled={!activeApiKey}
-                        className="btn btn-xs btn-outline disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => copyToClipboard(activeApiKey, 'api_key')}
                       >
                         {copiedField === 'api_key' ? 'Copied' : 'Copy'}
-                      </button>
+                      </Button>
                     </div>
                     {apiKeyError && <p className="text-xs text-amber-300">{apiKeyError}</p>}
                     {!apiKeyError && apiKeyOptions.length === 0 && (
                       <p className="text-xs text-slate-500">No stored API keys. Create one in Settings to auto-fill.</p>
                     )}
                   </div>
-                </div>
+                </FormField>
               </div>
 
-              {/* Server Type */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Server Type</label>
+              <FormField label="Server type" description="Where the agent will run">
                 <select
                   value={serverType}
                   onChange={(e) => setServerType(e.target.value as ServerType)}
@@ -375,94 +376,75 @@ chmod +x ${UNIX_INSTALL_PATH}`
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-                <p className="mt-1 text-xs text-slate-500">Choose the machine type where the agent will run.</p>
-              </div>
+              </FormField>
 
-              {/* Quick Install */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">
-                  {isWindows ? 'Quick Install (Windows)' : 'Quick Install (Linux/macOS)'}
-                </label>
+              <FormField label={isWindows ? 'Quick install (Windows)' : 'Quick install (Linux/macOS)'}>
                 <div className="flex gap-2">
-                  <pre className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
-{quickInstallCommand}
-                  </pre>
-                  <button
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickInstallCommand}</pre>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    className="self-start"
                     onClick={() => copyToClipboard(quickInstallCopy, 'install')}
-                    className="btn btn-xs btn-outline self-start"
                   >
                     {copiedField === 'install' ? 'Copied' : 'Copy'}
-                  </button>
+                  </Button>
                 </div>
-              </div>
+              </FormField>
 
-              {/* Download Binary */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Download Binary</label>
+              <FormField label="Download binary">
                 <div className="flex gap-2">
-                  <pre className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
-{downloadCommand}
-                  </pre>
-                  <button
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{downloadCommand}</pre>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    className="self-start"
                     onClick={() => copyToClipboard(downloadCommand, 'download')}
-                    className="btn btn-xs btn-outline self-start"
                   >
                     {copiedField === 'download' ? 'Copied' : 'Copy'}
-                  </button>
+                  </Button>
                 </div>
-              </div>
+              </FormField>
 
-              {/* Manual Run */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Run Agent</label>
+              <FormField label="Run agent">
                 <div className="flex gap-2">
-                  <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-slate-300 font-mono overflow-x-auto">
+                  <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">
                     {runCommand}
                   </code>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    className="self-start"
                     onClick={() => copyToClipboard(runCommand, 'manual')}
-                    className="btn btn-xs btn-outline self-start"
                   >
                     {copiedField === 'manual' ? 'Copied' : 'Copy'}
-                  </button>
+                  </Button>
                 </div>
-              </div>
+              </FormField>
 
-              {/* Info Box */}
               <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                <div className="flex items-start gap-3">
-                  <span className="text-emerald-400">OK</span>
-                  <div>
-                    <p className="text-xs font-medium text-white mb-1">Collected Metrics</p>
-                    <p className="text-xs text-slate-400">
-                      CPU, Memory, Disk, Network I/O, System Load, Process Count
-                    </p>
-                  </div>
-                </div>
+                <p className="text-xs font-medium text-white">Collected metrics</p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  CPU, memory, disk, network I/O, system load, process count
+                </p>
               </div>
-            </div>
+            </>
           ) : (
             <p className="text-sm text-rose-400">Failed to load installation details</p>
           )}
-        </div>
+        </FormSection>
 
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={() => setShowInstallInstructions(false)}
-            className="btn btn-secondary"
-          >
-            Back to Settings
-          </button>
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" type="button" onClick={() => setShowInstallInstructions(false)}>
+            Back to settings
+          </Button>
           {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="btn btn-primary"
-            >
+            <Button variant="accent" size="sm" type="button" onClick={onCancel}>
               Done
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -471,43 +453,55 @@ chmod +x ${UNIX_INSTALL_PATH}`
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Name */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Agent Name</label>
-        <input
-          type="text"
-          value={formData.name}
-          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          placeholder="Production Server"
-          className="input"
-        />
-        {errors.name && <p className="mt-1 text-xs text-rose-400">{errors.name}</p>}
-        <p className="mt-1 text-xs text-slate-500">Identifier for this monitored server</p>
-      </div>
+      <FormSection title="Agent">
+        <FormField
+          label="Agent name"
+          required
+          error={errors.name}
+          description="Identifier for this monitored server"
+        >
+          <input
+            type="text"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            placeholder="Production server"
+            className="input"
+          />
+        </FormField>
 
-      {/* Reporting Interval */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Reporting Interval (seconds)</label>
-        <input
-          type="number"
-          value={formData.expected_interval_seconds}
-          onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
-          min={10}
-          step={10}
-          className="input"
-        />
-        {errors.expected_interval_seconds && <p className="mt-1 text-xs text-rose-400">{errors.expected_interval_seconds}</p>}
-        <p className="mt-1 text-xs text-slate-500">Agent marked stale if no report within 2x this interval</p>
-      </div>
+        <FormField
+          label="Reporting interval (seconds)"
+          required
+          error={errors.expected_interval_seconds}
+          infoTip="Agent is marked stale if no report arrives within twice this interval."
+        >
+          <input
+            type="number"
+            value={formData.expected_interval_seconds}
+            onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
+            min={10}
+            step={10}
+            className="input"
+          />
+        </FormField>
 
-      {/* Alert Policies */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Alert Policies</label>
-        <div className="space-y-2">
-          {alertPolicies.length === 0 ? (
-            <div className="text-sm text-slate-500">No alert policies configured.</div>
-          ) : (
-            alertPolicies.map((policy) => {
+        <FormField label="Tags" description="Comma-separated, e.g. production, us-east-1">
+          <input
+            type="text"
+            value={formData.tags}
+            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+            placeholder="production, us-east-1"
+            className="input"
+          />
+        </FormField>
+      </FormSection>
+
+      <FormSection title="Alert policies">
+        {alertPolicies.length === 0 ? (
+          <div className="text-sm text-slate-500">No alert policies configured.</div>
+        ) : (
+          <div className="space-y-2">
+            {alertPolicies.map((policy) => {
               const checked = formData.alert_policy_ids.includes(policy.id);
               return (
                 <label key={policy.id} className="flex items-center gap-2 text-sm text-slate-300">
@@ -524,76 +518,55 @@ chmod +x ${UNIX_INSTALL_PATH}`
                   {policy.name}
                 </label>
               );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Tags */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Tags</label>
-        <input
-          type="text"
-          value={formData.tags}
-          onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-          placeholder="production, us-east-1 (comma-separated)"
-          className="input"
-        />
-      </div>
-
-      {/* Enabled Toggle */}
-      <div className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
-        <div>
-          <p className="text-sm font-medium text-white">Agent Enabled</p>
-          <p className="text-xs text-slate-500">Accept metrics from this agent</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-          className={`relative h-5 w-9 rounded-full transition-colors ${
-            formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-          }`}
-        >
-          <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            formData.enabled ? 'translate-x-4' : ''
-          }`} />
-        </button>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-white/[0.06]">
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Cancel
-          </button>
+            })}
+          </div>
         )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Agent Monitor'}
-        </button>
-      </div>
+      </FormSection>
 
-      {/* Installation Link for existing monitors */}
-      {isEditMode && monitor && (
-        <div className="pt-4 border-t border-white/[0.06]">
+      <FormSection title="Status">
+        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-white">Agent enabled</p>
+            <p className="text-xs text-slate-500">Accept metrics from this agent</p>
+          </div>
           <button
             type="button"
-            onClick={() => setShowInstallInstructions(true)}
-            className="btn btn-secondary w-full"
+            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
+            }`}
+            aria-pressed={formData.enabled}
+            aria-label="Toggle agent enabled"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            View Installation Instructions
+            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+              formData.enabled ? 'translate-x-4' : ''
+            }`} />
           </button>
+        </div>
+      </FormSection>
+
+      <FormActions
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create agent monitor',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+      />
+
+      {isEditMode && monitor && (
+        <div className="border-t border-white/[0.06] pt-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            icon={<Download strokeWidth={1.75} />}
+            className="w-full justify-center"
+            onClick={() => setShowInstallInstructions(true)}
+          >
+            View installation instructions
+          </Button>
         </div>
       )}
     </form>
