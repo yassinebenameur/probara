@@ -1,3 +1,27 @@
+# [1.0.0-alpha.43](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.42...v1.0.0-alpha.43) (2026-05-23)
+
+
+### Bug Fixes
+
+* **monitors:** always return [] for empty MonitorIDsUpdated ([6a61fb1](https://github.com/yassinebenameur/probara/commit/6a61fb1531cc3bb40a44b8f2a09b95eefbea8998))
+* **monitors:** exact-string error matching in bulk handler + add tests ([825748e](https://github.com/yassinebenameur/probara/commit/825748e07abde29663a1c562a48f350423f440d5))
+* **status-page:** improve dark-mode contrast ([4367680](https://github.com/yassinebenameur/probara/commit/4367680fc663f06d3611df56581a0e3d2ef8918a))
+* **web:** replace removed btn-* classes with Button component in bulk policy UI ([edf476e](https://github.com/yassinebenameur/probara/commit/edf476ea1d49fb92b953f7855c7aac41c2eba3b4))
+
+
+### Features
+
+* **monitors:** add bulk alert policy request/response types ([971154f](https://github.com/yassinebenameur/probara/commit/971154fdfd18ffd874f8bcd4ff15b7bd3bfdf432))
+* **monitors:** add BulkAttachAlertPolicy and BulkDetachAlertPolicy repo methods ([6f46356](https://github.com/yassinebenameur/probara/commit/6f4635678b6b006a405d04c77a0685a37879839f))
+* **monitors:** add BulkUpdateAlertPolicy HTTP handler ([99d05c1](https://github.com/yassinebenameur/probara/commit/99d05c1391ab6405a024a987d05f727d02e1f378))
+* **monitors:** add BulkUpdateAlertPolicy service method ([45fe5b5](https://github.com/yassinebenameur/probara/commit/45fe5b527fa50062ffa2ea2e24a6ef8c0d9fd6bc))
+* **monitors:** add VerifyMonitorsBelongToTenant repository method ([873bfe8](https://github.com/yassinebenameur/probara/commit/873bfe8b1431aa897a0671b8148215fa4d28c665))
+* **monitors:** wire POST /v1/monitors/bulk/alert-policy route ([09ae9cb](https://github.com/yassinebenameur/probara/commit/09ae9cb648ccb9419d92e06a6a3f07596dc8c4fe))
+* **web:** add BulkAttachPolicyDialog component ([4e03c42](https://github.com/yassinebenameur/probara/commit/4e03c420e80c6f2fd983755d57f6801cf23aa41e))
+* **web:** add bulkUpdateMonitorAlertPolicy API client ([67d72fc](https://github.com/yassinebenameur/probara/commit/67d72fcf150a709c940462c58af1824004549b0d))
+* **web:** wire BulkAttachPolicyDialog into alert policy detail page ([8febd56](https://github.com/yassinebenameur/probara/commit/8febd563dd03cf719b775bd48b7c35a531181aca))
+* **web:** wire BulkAttachPolicyDialog into monitors list page ([5338fd4](https://github.com/yassinebenameur/probara/commit/5338fd4e304121ba93af79808815e9d0dd084a9b))
+
 # [1.0.0-alpha.42](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.41...v1.0.0-alpha.42) (2026-05-22)
 
 
