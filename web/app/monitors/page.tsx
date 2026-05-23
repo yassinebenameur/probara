@@ -1638,10 +1638,11 @@ export default function MonitorsPage() {
           <div className="space-y-2">
             {/* Selection Mode Toggle & Actions Bar */}
             {filteredMonitors.length > 0 && (
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
                 {/* Selection mode toggle */}
-                <FilterChip
-                  selected={selectionMode}
+                <Button
+                  variant={selectionMode ? 'accent' : 'ghost'}
+                  size="xs"
                   icon={<CheckSquare strokeWidth={1.75} />}
                   onClick={() => {
                     if (selectionMode) {
@@ -1652,23 +1653,21 @@ export default function MonitorsPage() {
                   }}
                 >
                   {selectionMode ? 'Exit select' : 'Select'}
-                </FilterChip>
+                </Button>
 
                 {/* Selection actions - only show when in selection mode */}
                 {selectionMode && (
                   <>
                     <div className="h-4 w-px bg-white/[0.08]" />
-                    
+
                     <Button variant="ghost" size="xs" onClick={toggleSelectAllFiltered}>
                       {allFilteredSelected ? 'Deselect all' : 'Select all'}
                     </Button>
 
                     {selectedMonitorIds.size > 0 && (
                       <>
-                        <span className="text-[10px] text-slate-500">
-                          {selectedMonitorIds.size} selected
-                        </span>
-                        
+                        <Pill tone="info" size="xs">{selectedMonitorIds.size} selected</Pill>
+
                         <div className="h-4 w-px bg-white/[0.08]" />
 
                         {/* Group creation */}
@@ -1678,7 +1677,7 @@ export default function MonitorsPage() {
                             placeholder="New group name..."
                             value={groupNameInput}
                             onChange={(e) => setGroupNameInput(e.target.value)}
-                            className="input input-xs h-6 w-32 text-[10px]"
+                            className="input input-xs h-7 w-32 text-[10px]"
                           />
                           <Button
                             variant="ghost"
@@ -1691,14 +1690,12 @@ export default function MonitorsPage() {
                           </Button>
                         </div>
 
-                        <div className="h-4 w-px bg-white/[0.08]" />
-
                         {/* Move to existing group */}
                         <div className="flex items-center gap-1.5">
                           <select
                             value={targetGroupId}
                             onChange={(e) => setTargetGroupId(e.target.value)}
-                            className="input input-xs h-6 w-36 text-[10px]"
+                            className="input input-xs h-7 w-36 text-[10px]"
                           >
                             <option value="">Move to group...</option>
                             <option value={NO_GROUP_VALUE}>No group</option>
@@ -1729,8 +1726,6 @@ export default function MonitorsPage() {
                         >
                           Attach policy
                         </Button>
-
-                        <div className="h-4 w-px bg-white/[0.08]" />
 
                         <Button
                           variant="danger"
