@@ -460,6 +460,9 @@ func (s *Service) BulkUpdateAlertPolicy(
 		return nil, err
 	}
 
+	if changed == nil {
+		changed = []uuid.UUID{}
+	}
 	return &models.BulkUpdateAlertPolicyResponse{
 		Updated:           len(changed),
 		Unchanged:         len(monitorIDs) - len(changed),
