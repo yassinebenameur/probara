@@ -122,7 +122,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	// Push service and handlers (created here to use in both public and authenticated routes)
 	pushSvc := pushservice.NewService(dbClient.DB, statusPublisher)
-	pushHandlers := pushhandlers.NewHandler(pushSvc, log)
+	pushHandlers := pushhandlers.NewHandler(pushSvc, log, cfg.PublicBaseURL)
 	pushStaleWorker := pushservice.NewStaleWorker(dbClient.DB, log)
 	agentStaleWorker := agentservice.NewStaleWorker(dbClient.DB, log, statusPublisher)
 	alertHub := alertservice.NewHub()
@@ -158,7 +158,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// Agent service and handlers (needed by monitors route)
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
-			agentHandlers := agenthandlers.NewHandler(agentService, log)
+			agentHandlers := agenthandlers.NewHandler(agentService, log, cfg.PublicBaseURL)
 
 			// Incident service and handlers
 			incidentService := incidentservice.NewService(dbClient, statusPublisher)

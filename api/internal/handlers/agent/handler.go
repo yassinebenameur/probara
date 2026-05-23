@@ -16,16 +16,37 @@ import (
 
 // Handler handles agent-related HTTP requests
 type Handler struct {
-	service agent.AgentService
-	log     *logger.Logger
+	service       agent.AgentService
+	log           *logger.Logger
+	publicBaseURL string
 }
 
-// NewHandler creates a new agent handler
-func NewHandler(service agent.AgentService, log *logger.Logger) *Handler {
+// NewHandler creates a new agent handler. publicBaseURL is the externally
+// reachable URL of the API (e.g. "https://probara.example.com"); when set,
+// it is used as the BACKEND_URL in install scripts instead of the request's
+// Host header, which is unreliable behind reverse proxies.
+func NewHandler(service agent.AgentService, log *logger.Logger, publicBaseURL string) *Handler {
 	return &Handler{
-		service: service,
-		log:     log,
+		service:       service,
+		log:           log,
+		publicBaseURL: publicBaseURL,
 	}
+}
+
+// resolveBackendURL returns the URL to bake into agent install scripts.
+// Precedence: ?backend_url= query override → configured PublicBaseURL → r.Host fallback.
+func (h *Handler) resolveBackendURL(r *http.Request) string {
+	if q := r.URL.Query().Get("backend_url"); q != "" {
+		return q
+	}
+	if h.publicBaseURL != "" {
+		return h.publicBaseURL
+	}
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	return scheme + "://" + r.Host
 }
 
 // HandleReceiveMetrics handles POST /api/v1/agent/metrics
@@ -112,16 +133,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get backend URL from request or config
-	backendURL := r.URL.Query().Get("backend_url")
-	if backendURL == "" {
-		// Default to the host from the request
-		scheme := "https"
-		if r.TLS == nil {
-			scheme = "http"
-		}
-		backendURL = scheme + "://" + r.Host
-	}
+	backendURL := h.resolveBackendURL(r)
 
 	// Extract API key from Authorization header
 	apiKey := ""
@@ -171,16 +183,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get backend URL from request or config
-	backendURL := r.URL.Query().Get("backend_url")
-	if backendURL == "" {
-		// Default to the host from the request
-		scheme := "https"
-		if r.TLS == nil {
-			scheme = "http"
-		}
-		backendURL = scheme + "://" + r.Host
-	}
+	backendURL := h.resolveBackendURL(r)
 
 	// Extract API key from Authorization header
 	apiKey := ""
@@ -228,14 +231,7 @@ func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	backendURL := r.URL.Query().Get("backend_url")
-	if backendURL == "" {
-		scheme := "https"
-		if r.TLS == nil {
-			scheme = "http"
-		}
-		backendURL = scheme + "://" + r.Host
-	}
+	backendURL := h.resolveBackendURL(r)
 
 	apiKey := ""
 	authHeader := r.Header.Get("Authorization")
@@ -280,14 +276,7 @@ func (h *Handler) HandleGetUninstallScript(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	backendURL := r.URL.Query().Get("backend_url")
-	if backendURL == "" {
-		scheme := "https"
-		if r.TLS == nil {
-			scheme = "http"
-		}
-		backendURL = scheme + "://" + r.Host
-	}
+	backendURL := h.resolveBackendURL(r)
 
 	apiKey := ""
 	authHeader := r.Header.Get("Authorization")
@@ -332,14 +321,7 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 		return
 	}
 
-	backendURL := r.URL.Query().Get("backend_url")
-	if backendURL == "" {
-		scheme := "https"
-		if r.TLS == nil {
-			scheme = "http"
-		}
-		backendURL = scheme + "://" + r.Host
-	}
+	backendURL := h.resolveBackendURL(r)
 
 	apiKey := ""
 	authHeader := r.Header.Get("Authorization")

@@ -32,6 +32,11 @@ type APIConfig struct {
 	AdminCookieSecure     bool
 	AdminBcryptCost       int
 	SyntheticArtifactsDir string
+	// PublicBaseURL is the externally-reachable URL of this API (e.g.
+	// "https://probara.example.com"). When set, it is used as the BACKEND_URL
+	// baked into agent install scripts and push webhook URLs, bypassing
+	// Host-header inspection which is unreliable behind reverse proxies.
+	PublicBaseURL string
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -236,6 +241,10 @@ func LoadAPIConfig() (*APIConfig, error) {
 		artifactsDir = filepath.Join(os.TempDir(), "probara", "synthetic-browser-artifacts")
 	}
 	cfg.SyntheticArtifactsDir = artifactsDir
+
+	// PUBLIC_BASE_URL: externally-reachable URL of the API, used for
+	// agent install scripts and push webhook URLs. Trailing slash is stripped.
+	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/")
 
 	return cfg, nil
 }

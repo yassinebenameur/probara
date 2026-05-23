@@ -16,7 +16,7 @@ import (
 
 func TestHandleReceiveMetricsReturnsGoneWhenAgentUnavailable(t *testing.T) {
 	tenantID := uuid.New()
-	handler := NewHandler(agentUnavailableService{}, logger.New("agent-handler-test", "fatal"))
+	handler := NewHandler(agentUnavailableService{}, logger.New("agent-handler-test", "fatal"), "")
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/metrics", bytes.NewBufferString(`{
 		"agent_id": "deleted-agent",
 		"metrics": {

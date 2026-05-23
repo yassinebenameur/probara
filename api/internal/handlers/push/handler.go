@@ -15,16 +15,36 @@ import (
 
 // Handler handles push monitor HTTP requests
 type Handler struct {
-	service push.PushService
-	log     *logger.Logger
+	service       push.PushService
+	log           *logger.Logger
+	publicBaseURL string
 }
 
-// NewHandler creates a new push handler
-func NewHandler(service push.PushService, log *logger.Logger) *Handler {
+// NewHandler creates a new push handler. publicBaseURL is the externally
+// reachable URL of the API; when set, it is used in webhook URLs returned
+// by HandleGetPushInfo instead of the request's Host header.
+func NewHandler(service push.PushService, log *logger.Logger, publicBaseURL string) *Handler {
 	return &Handler{
-		service: service,
-		log:     log,
+		service:       service,
+		log:           log,
+		publicBaseURL: publicBaseURL,
 	}
+}
+
+// resolveBackendURL returns the URL to embed in push webhook responses.
+// Precedence: ?backend_url= query override → configured PublicBaseURL → r.Host fallback.
+func (h *Handler) resolveBackendURL(r *http.Request) string {
+	if q := r.URL.Query().Get("backend_url"); q != "" {
+		return q
+	}
+	if h.publicBaseURL != "" {
+		return h.publicBaseURL
+	}
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	return scheme + "://" + r.Host
 }
 
 // HandlePushGet handles GET /api/v1/push/{token}
@@ -154,15 +174,7 @@ func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get backend URL from request or config
-	backendURL := r.URL.Query().Get("backend_url")
-	if backendURL == "" {
-		scheme := "https"
-		if r.TLS == nil {
-			scheme = "http"
-		}
-		backendURL = scheme + "://" + r.Host
-	}
+	backendURL := h.resolveBackendURL(r)
 
 	// Get push info
 	info, err := h.service.GetPushInfo(ctx, monitorID, tenantID, backendURL)
