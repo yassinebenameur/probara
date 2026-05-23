@@ -8,6 +8,7 @@ import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
 import PageHeader from '@/components/ui/PageHeader';
 import SharedEmptyState from '@/components/ui/EmptyState';
+import BulkAttachPolicyDialog from '@/components/alert-policies/BulkAttachPolicyDialog';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
   deleteMonitor,
@@ -1028,6 +1029,7 @@ export default function MonitorsPage() {
   const [groupNameInput, setGroupNameInput] = useState('');
   const [targetGroupId, setTargetGroupId] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [showAttachPolicy, setShowAttachPolicy] = useState(false);
 
   useEffect(() => {
     loadMonitors();
@@ -1719,6 +1721,19 @@ export default function MonitorsPage() {
 
                         <div className="h-4 w-px bg-white/[0.08]" />
 
+                        <button
+                          onClick={() => setShowAttachPolicy(true)}
+                          className="btn btn-secondary btn-xs"
+                        >
+                          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                              d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                          </svg>
+                          Attach policy
+                        </button>
+
+                        <div className="h-4 w-px bg-white/[0.08]" />
+
                         <Button
                           variant="danger"
                           size="xs"
@@ -1789,6 +1804,25 @@ export default function MonitorsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {showAttachPolicy && (
+        <BulkAttachPolicyDialog
+          open={showAttachPolicy}
+          kind="pick-policy"
+          monitors={selectedMonitors}
+          onClose={() => setShowAttachPolicy(false)}
+          onDone={(result) => {
+            setShowAttachPolicy(false);
+            setSelectedMonitorIds(new Set());
+            const verb = result.op === 'attach' ? 'Attached' : 'Detached';
+            setToast({
+              message: `${verb} ${result.policyName} · ${result.updated} updated, ${result.unchanged} unchanged`,
+              type: 'success',
+            });
+            loadMonitors();
+          }}
+        />
       )}
 
       {/* Toast */}
