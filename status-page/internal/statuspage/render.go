@@ -789,8 +789,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       --surface-hover: rgba(255, 255, 255, .05);
       --surface-card: #0d0d0d;
       --text: #f0f0f0;
-      --text-muted: #777;
-      --text-dim: #444;
+      --text-muted: #a1a1aa;
+      --text-dim: #81818b;
       --border: rgba(255, 255, 255, .08);
       --border-hover: rgba(255, 255, 255, .15);
       --green: #00ff9d;
@@ -826,8 +826,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       --surface-hover: rgba(0, 0, 0, .06);
       --surface-card: #ffffff;
       --text: #111827;
-      --text-muted: #666;
-      --text-dim: #bbb;
+      --text-muted: #4b5563;
+      --text-dim: #71717a;
       --border: rgba(0, 0, 0, .09);
       --border-hover: rgba(0, 0, 0, .18);
       --green: #00c875;
@@ -1041,10 +1041,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       letter-spacing: -.045em;
       line-height: 1.05;
       margin-bottom: 14px;
-      background: linear-gradient(180deg, var(--text) 0%, var(--text-muted) 120%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      color: var(--text);
     }
     .tagline {
       color: var(--text-muted);
@@ -1061,7 +1058,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     }
     .meta-line {
       font: .75rem var(--mono);
-      color: var(--text-dim);
+      color: var(--text-muted);
       text-transform: uppercase;
       letter-spacing: .08em;
       display: flex;
@@ -1071,13 +1068,33 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       margin-bottom: 56px;
     }
     .meta-line b {
-      font-weight: 500;
+      color: var(--text);
+      font-weight: 600;
     }
     .meta-line .count { color: var(--text-muted); }
-    .meta-line .count-ok { color: var(--green); }
-    .meta-line .count-warn { color: var(--yellow); }
-    .meta-line .count-down { color: var(--red); }
-    .meta-line .count-maint { color: var(--blue); }
+    .meta-line .count-ok,
+    .meta-line .count-warn,
+    .meta-line .count-down,
+    .meta-line .count-maint {
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .meta-line .count-ok::before,
+    .meta-line .count-warn::before,
+    .meta-line .count-down::before,
+    .meta-line .count-maint::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .meta-line .count-ok::before { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
+    .meta-line .count-warn::before { background: var(--yellow); box-shadow: 0 0 6px var(--yellow-glow); }
+    .meta-line .count-down::before { background: var(--red); box-shadow: 0 0 6px var(--red-glow); }
+    .meta-line .count-maint::before { background: var(--blue); box-shadow: 0 0 6px var(--blue-glow); }
     .uptime-section,
     .range-section {
       width: 100%;
@@ -1087,6 +1104,19 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       border-radius: var(--radius-lg);
       padding: 24px 28px;
     }
+    /* When there are no global uptime bars, the range-only card collapses
+       to a compact pill so it doesn't render as a near-empty box. */
+    .range-section {
+      padding: 12px 18px;
+      margin-bottom: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      border-radius: var(--radius-pill);
+    }
+    .range-section .range-group { margin-top: 0; }
     .uptime-head {
       display: flex;
       justify-content: space-between;
@@ -1135,6 +1165,18 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       gap: 1.5px;
       height: 44px;
       align-items: flex-end;
+    }
+    /* Skeleton placeholder when bars haven't been hydrated yet */
+    .uptime-bars:empty {
+      background: repeating-linear-gradient(
+        to right,
+        var(--surface-hover) 0,
+        var(--surface-hover) 4px,
+        transparent 4px,
+        transparent 6px
+      );
+      border-radius: 4px;
+      opacity: .55;
     }
     .uptime-foot {
       display: flex;
@@ -1197,12 +1239,25 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .svc-group { margin-bottom: 36px; }
     .svc-group.hidden { display: none; }
     .group-label {
-      font: .75rem var(--mono);
+      font: 500 .75rem var(--mono);
       text-transform: uppercase;
       letter-spacing: .1em;
-      color: var(--text-dim);
+      color: var(--text-muted);
       margin-bottom: 10px;
       padding-left: 4px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .group-label .group-count {
+      font: .65rem var(--mono);
+      color: var(--text-dim);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 1px 7px;
+      border-radius: var(--radius-pill);
+      letter-spacing: .02em;
+      font-weight: 400;
     }
     .group-cards { display: flex; flex-direction: column; gap: 8px; }
     .svc-row {
@@ -1260,8 +1315,9 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       color: var(--text-dim);
     }
     .svc-type {
-      font: .62rem var(--mono);
-      color: var(--text-dim);
+      font: 500 .62rem var(--mono);
+      color: var(--text-muted);
+      background: var(--surface);
       border: 1px solid var(--border);
       padding: 2px 7px;
       border-radius: var(--radius-sm);
@@ -1773,10 +1829,14 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .k-tile-bar .bar.bad { opacity: .9; }
     @media (max-width: 768px) {
       .hero h1 { font-size: 2.2rem; }
-      .svc-right { gap: 12px; }
-      .svc-metric { display: none; }
-      .status-badge span { display: none; }
-      .status-badge { min-width: auto; }
+      .svc-right { gap: 10px; }
+      /* Drop the second metric (uptime %), keep latency value visible */
+      .svc-metric + .svc-metric { display: none; }
+      /* Drop the small caps sub-label so only the value remains */
+      .svc-metric-label { display: none; }
+      .svc-metric { min-width: 0; }
+      /* Keep status pill text on phones — it's the primary signal */
+      .status-badge { min-width: auto; font-size: .62rem; letter-spacing: 0; }
       .mode-btn span { display: none; }
       .toolbar { border-radius: var(--radius-md); padding: 8px 14px; flex-direction: column; align-items: stretch; }
       .search-wrap { border-right: none; padding-right: 0; margin-right: 0; }
@@ -1986,7 +2046,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     <section id="servicesList">
       {{range .Sections}}
         <div class="svc-group monitor-section-group" data-section-id="{{.ID}}">
-          <div class="group-label">{{.Title}}</div>
+          <div class="group-label">
+            <span class="group-title">{{.Title}}</span>
+            <span class="group-count" data-monitor-count>{{.MonitorCount}}</span>
+          </div>
           <div class="group-cards">
             {{range .Monitors}}
               <details class="svc-row monitor-card" data-monitor-id="{{.ID}}" data-search="{{.SearchText}}" data-status="{{.Status}}">

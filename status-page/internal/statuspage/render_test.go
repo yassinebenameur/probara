@@ -3,7 +3,9 @@ package statuspage
 import (
 	"encoding/json"
 	"html"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -288,6 +290,22 @@ func TestRenderPublicStatusPage_RendersPublishedIncidentCards(t *testing.T) {
 	}
 }
 
+func TestPublicStatusPageDarkThemeDimTextMeetsContrastOnDarkSurfaces(t *testing.T) {
+	darkTheme := strings.Split(publicStatusPageTemplate, `body[data-theme="light"]`)[0]
+	textDim := extractCSSHexVariable(t, darkTheme, "--text-dim")
+	surfaceCard := extractCSSHexVariable(t, darkTheme, "--surface-card")
+	bg := extractCSSHexVariable(t, darkTheme, "--bg")
+
+	for name, background := range map[string]string{
+		"card": surfaceCard,
+		"page": bg,
+	} {
+		if got := contrastRatio(textDim, background); got < 4.5 {
+			t.Fatalf("dark --text-dim contrast on %s background = %.2f, want at least 4.50", name, got)
+		}
+	}
+}
+
 func assertStripPointCount(t *testing.T, renderedHTML string, pattern string, want int) {
 	t.Helper()
 	match := regexp.MustCompile(pattern).FindStringSubmatch(renderedHTML)
@@ -301,6 +319,42 @@ func assertStripPointCount(t *testing.T, renderedHTML string, pattern string, wa
 	if got := len(points); got != want {
 		t.Fatalf("expected %d strip points for %q, got %d", want, pattern, got)
 	}
+}
+
+func extractCSSHexVariable(t *testing.T, css string, name string) string {
+	t.Helper()
+	match := regexp.MustCompile(regexp.QuoteMeta(name) + `:\s*(#[0-9a-fA-F]{6});`).FindStringSubmatch(css)
+	if len(match) < 2 {
+		t.Fatalf("expected CSS variable %s to be a hex color", name)
+	}
+	return match[1]
+}
+
+func contrastRatio(foreground, background string) float64 {
+	foregroundLuminance := relativeLuminance(foreground)
+	backgroundLuminance := relativeLuminance(background)
+	lighter := math.Max(foregroundLuminance, backgroundLuminance)
+	darker := math.Min(foregroundLuminance, backgroundLuminance)
+	return (lighter + 0.05) / (darker + 0.05)
+}
+
+func relativeLuminance(hexColor string) float64 {
+	red := linearRGB(hexColor[1:3])
+	green := linearRGB(hexColor[3:5])
+	blue := linearRGB(hexColor[5:7])
+	return 0.2126*red + 0.7152*green + 0.0722*blue
+}
+
+func linearRGB(hexPair string) float64 {
+	value, err := strconv.ParseInt(hexPair, 16, 64)
+	if err != nil {
+		return 0
+	}
+	channel := float64(value) / 255
+	if channel <= 0.03928 {
+		return channel / 12.92
+	}
+	return math.Pow((channel+0.055)/1.055, 2.4)
 }
 
 func assertStripContainsUptime(t *testing.T, renderedHTML string, pattern string, want ...float64) {
