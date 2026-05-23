@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { AlertPolicy, BulkAlertPolicyOp, Monitor } from '@/lib/types';
 import { bulkUpdateMonitorAlertPolicy, getAlertPolicies } from '@/lib/api';
+import Button from '@/components/ui/Button';
 
 type Mode =
   | { kind: 'pick-policy'; monitors: Monitor[] }
@@ -201,22 +202,25 @@ export default function BulkAttachPolicyDialog(props: Props) {
         )}
 
         <div className="mt-5 flex items-center justify-end gap-2">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={onClose}
             disabled={submitting}
-            className="btn btn-secondary btn-sm"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="accent"
+            size="sm"
             onClick={handleConfirm}
             disabled={!canConfirm}
-            className="btn btn-primary btn-sm"
+            loading={submitting}
           >
-            {submitting ? 'Working…' : op === 'attach' ? 'Attach' : 'Detach'}
-          </button>
+            {op === 'attach' ? 'Attach' : 'Detach'}
+          </Button>
         </div>
       </div>
     </div>
