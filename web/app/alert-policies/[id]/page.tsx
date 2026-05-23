@@ -5,9 +5,11 @@ import { useState, useEffect } from 'react';
 import { AlertChannel, AlertPolicy, CreateAlertPolicyRequest, UpdateAlertPolicyRequest } from '@/lib/types';
 import { getAlertChannels, getAlertPolicy, updateAlertPolicy } from '@/lib/api';
 import AlertPolicyForm from '@/components/alert-policies/AlertPolicyForm';
+import BulkAttachPolicyDialog from '@/components/alert-policies/BulkAttachPolicyDialog';
 import Toast from '@/components/ui/Toast';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
+import Button from '@/components/ui/Button';
 
 export default function EditAlertPolicyPage() {
   const router = useRouter();
@@ -21,6 +23,7 @@ export default function EditAlertPolicyPage() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [channelsError, setChannelsError] = useState<string>('');
+  const [showAttachMonitors, setShowAttachMonitors] = useState(false);
 
   useEffect(() => {
     loadPolicy();
@@ -100,6 +103,11 @@ export default function EditAlertPolicyPage() {
         breadcrumb={[{ label: 'Alert policies', href: '/alert-policies' }, { label: policy.name }]}
         title="Edit alert policy"
         subtitle="Update alert thresholds and notification channels."
+        action={
+          <Button variant="ghost" size="sm" onClick={() => setShowAttachMonitors(true)}>
+            Attach to monitors
+          </Button>
+        }
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -144,6 +152,23 @@ export default function EditAlertPolicyPage() {
           </dl>
         </FormCard>
       </div>
+
+      {showAttachMonitors && (
+        <BulkAttachPolicyDialog
+          open={showAttachMonitors}
+          kind="pick-monitors"
+          policy={policy}
+          onClose={() => setShowAttachMonitors(false)}
+          onDone={(result) => {
+            setShowAttachMonitors(false);
+            const verb = result.op === 'attach' ? 'Attached' : 'Detached';
+            setToast({
+              message: `${verb} ${result.policyName} on ${result.updated} monitors (${result.unchanged} unchanged)`,
+              type: 'success',
+            });
+          }}
+        />
+      )}
 
       {toast && (
         <Toast
