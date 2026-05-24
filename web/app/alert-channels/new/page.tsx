@@ -1,7 +1,7 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useState } from 'react';
 import { CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
 import { createAlertChannel } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
@@ -10,7 +10,17 @@ import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 
 export default function NewAlertChannelPage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-slate-400">Loading…</p>}>
+      <NewAlertChannelPageInner />
+    </Suspense>
+  );
+}
+
+function NewAlertChannelPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialType = searchParams.get('type') || undefined;
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -43,6 +53,7 @@ export default function NewAlertChannelPage() {
 
       <FormCard>
         <AlertChannelForm
+          initialType={initialType}
           onSubmit={handleSubmit}
           onCancel={() => router.push('/alert-channels')}
           loading={loading}

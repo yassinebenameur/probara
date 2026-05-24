@@ -1,8 +1,11 @@
-package alerter
+package notifications
 
 import "time"
 
-// AlertEvent represents an alert event emitted by the alerter service.
+// AlertEvent is the canonical alert event published by the alerter to NATS and
+// consumed by the worker (async notification dispatch) and the API
+// (SSE broadcast). Plugin implementations also receive this type via
+// plugin.DispatchRequest.Event so they can render rich, native messages.
 type AlertEvent struct {
 	Type      string       `json:"type"`
 	TenantID  string       `json:"tenant_id"`
@@ -10,7 +13,7 @@ type AlertEvent struct {
 	Timestamp time.Time    `json:"timestamp"`
 }
 
-// AlertDetails contains details about the alert.
+// AlertDetails carries the alert payload for a single alert event.
 type AlertDetails struct {
 	ID                   string     `json:"id"`
 	MonitorID            string     `json:"monitor_id"`

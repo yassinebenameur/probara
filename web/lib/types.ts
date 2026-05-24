@@ -693,7 +693,8 @@ export interface PublishIncidentToStatusPageRequest {
 }
 
 // Alert Channel types
-export type AlertChannelType = 'teams' | 'email';
+// Plugin types are dynamic now (registry-driven), so this is a free-form string.
+export type AlertChannelType = string;
 
 export interface AlertChannel {
   id: string;
@@ -724,6 +725,39 @@ export interface AlertChannelListResponse {
   page: number;
   page_size: number;
   total: number;
+}
+
+// Plugin manifest (mirrors shared/notifications/plugin.Manifest).
+export type PluginFieldType =
+  | 'string'
+  | 'url'
+  | 'email_list'
+  | 'textarea'
+  | 'secret'
+  | 'bool';
+
+export type PluginCapability = 'rendered_alert' | 'raw_event' | 'testable';
+
+export interface PluginField {
+  key: string;
+  label: string;
+  placeholder?: string;
+  help?: string;
+  type: PluginFieldType;
+  required?: boolean;
+  secret?: boolean;
+  default?: unknown;
+}
+
+export interface PluginManifest {
+  type: string;
+  display_name: string;
+  description: string;
+  icon_key: string;
+  docs_url?: string;
+  version: string;
+  capabilities: PluginCapability[];
+  fields: PluginField[];
 }
 
 // Status Page types

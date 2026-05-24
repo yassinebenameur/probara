@@ -64,6 +64,22 @@ type WorkerConfig struct {
 	HTTPBlockPrivateIPs   bool
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
+
+	// Notification dispatch consumer settings — only used when the alerter is
+	// publishing to the NOTIFICATIONS stream (ALERTER_ASYNC_DISPATCH=true).
+	NotificationsEnabled      bool
+	NotificationsStream       string
+	NotificationsSubjectGlob  string
+	NotificationsConsumerName string
+
+	// SMTP backend wired into the builtin email plugin (worker side, used by
+	// the notifications consumer). Mirrors AlerterConfig fields.
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPUseTLS   bool
 }
 
 // AlerterConfig contains configuration for the alerter service
@@ -82,6 +98,14 @@ type AlerterConfig struct {
 	SMTPFrom                     string
 	SMTPUseTLS                   bool
 	AlertEmailTo                 string
+
+	// AsyncDispatch toggles publishing channel notifications to the NATS
+	// NOTIFICATIONS stream instead of dispatching synchronously inside the
+	// alerter loop. When true, the worker consumes "alerts.dispatch.*" and
+	// invokes the plugin Send path.
+	AsyncDispatch            bool
+	NotificationsStream      string
+	NotificationsSubjectGlob string
 }
 
 // StatusPageConfig contains configuration for the status page service
@@ -463,7 +487,59 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	}
 	cfg.SyntheticArtifactsDir = artifactsDir
 
+	// NOTIFICATIONS_ENABLED — opt-in for the notifications consumer goroutine.
+	enabledStr := strings.TrimSpace(os.Getenv("NOTIFICATIONS_ENABLED"))
+	if enabledStr != "" {
+		enabled, err := strconv.ParseBool(enabledStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid NOTIFICATIONS_ENABLED: %w", err)
+		}
+		cfg.NotificationsEnabled = enabled
+	}
+
+	cfg.NotificationsStream = envOrDefault("NOTIFICATIONS_STREAM", "NOTIFICATIONS")
+	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
+	cfg.NotificationsConsumerName = envOrDefault("NOTIFICATIONS_CONSUMER_NAME", "notifications-worker")
+
+	// SMTP — only required when the email plugin is registered AND the
+	// notifications consumer is wired in. Otherwise these stay empty and the
+	// email plugin Send() returns an explicit error.
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+	smtpPortStr := os.Getenv("SMTP_PORT")
+	if smtpPortStr == "" {
+		cfg.SMTPPort = 587
+	} else {
+		port, err := strconv.Atoi(smtpPortStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SMTP_PORT: %w", err)
+		}
+		cfg.SMTPPort = port
+	}
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
+	cfg.SMTPFrom = os.Getenv("SMTP_FROM")
+	if cfg.SMTPFrom == "" {
+		cfg.SMTPFrom = cfg.SMTPUsername
+	}
+	useTLSStr := os.Getenv("SMTP_USE_TLS")
+	if useTLSStr == "" {
+		cfg.SMTPUseTLS = true
+	} else {
+		useTLS, err := strconv.ParseBool(useTLSStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SMTP_USE_TLS: %w", err)
+		}
+		cfg.SMTPUseTLS = useTLS
+	}
+
 	return cfg, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // LoadAlerterConfig loads alerter service configuration
@@ -580,6 +656,21 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 
 	// ALERT_EMAIL_TO
 	cfg.AlertEmailTo = os.Getenv("ALERT_EMAIL_TO")
+
+	// ALERTER_ASYNC_DISPATCH — when true, dispatchNotifications publishes to
+	// NATS rather than calling plugin.Send inline. Defaults to false so
+	// rollout is opt-in per environment.
+	asyncStr := strings.TrimSpace(os.Getenv("ALERTER_ASYNC_DISPATCH"))
+	if asyncStr != "" {
+		async, err := strconv.ParseBool(asyncStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERTER_ASYNC_DISPATCH: %w", err)
+		}
+		cfg.AsyncDispatch = async
+	}
+
+	cfg.NotificationsStream = envOrDefault("NOTIFICATIONS_STREAM", "NOTIFICATIONS")
+	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
 
 	return cfg, nil
 }

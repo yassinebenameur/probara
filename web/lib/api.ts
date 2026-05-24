@@ -55,6 +55,7 @@ import type {
   IncidentState,
   BulkAlertPolicyOp,
   BulkUpdateMonitorAlertPolicyResponse,
+  PluginManifest,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -456,6 +457,14 @@ export async function deleteAlertChannel(id: string): Promise<void> {
 
 export async function testAlertChannel(id: string): Promise<void> {
   return apiRequest<void>('POST', `/v1/alert-channels/${id}/test`);
+}
+
+export async function getAlertChannelPlugins(): Promise<PluginManifest[]> {
+  return apiRequest<PluginManifest[]>('GET', '/v1/alert-channel-plugins');
+}
+
+export async function getAlertChannelPlugin(type: string): Promise<PluginManifest> {
+  return apiRequest<PluginManifest>('GET', `/v1/alert-channel-plugins/${type}`);
 }
 
 // API Key functions

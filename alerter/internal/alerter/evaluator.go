@@ -13,6 +13,8 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 type policyBinding struct {
@@ -1063,104 +1065,54 @@ func (a *Alerter) sendChannelNotification(
 	groupInfo *groupDetail,
 	now time.Time,
 ) error {
-	switch channel.Type {
-	case "teams":
-		cfg, err := notifications.ParseTeamsWebhookConfig(channel.Config)
-		if err != nil {
-			return err
-		}
-		message := a.buildTeamsMessage(eventType, binding, alert, groupInfo, now)
-		return notifications.SendTeamsWebhook(ctx, cfg.WebhookURL, message)
-	case "email":
-		if a.mailer == nil {
-			return fmt.Errorf("email sender is not configured")
-		}
-		emailCfg, err := notifications.ParseEmailConfig(channel.Config)
-		if err != nil {
-			return err
-		}
-		var resolvedAt *time.Time
-		if eventType == "resolved" {
-			resolvedAt = &now
-		}
-		event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
-		templates := EmailTemplates{
-			SubjectTemplate: emailCfg.SubjectTemplate,
-			BodyTemplate:    emailCfg.BodyTemplate,
-		}
-		return a.mailer.SendAlert(ctx, event, templates, emailCfg.To)
-	default:
+	_ = groupInfo // group context plumbing follows in a later refactor
+
+	p, ok := plugin.DefaultRegistry.Get(channel.Type)
+	if !ok {
 		return fmt.Errorf("unsupported alert channel type: %s", channel.Type)
 	}
-}
 
-func (a *Alerter) buildTeamsMessage(eventType string, binding policyBinding, alert *alertRecord, groupInfo *groupDetail, now time.Time) notifications.TeamsMessage {
-	titlePrefix := "Alert"
-	switch eventType {
-	case "created":
-		titlePrefix = "Alert Triggered"
-	case "resolved":
-		titlePrefix = "Alert Resolved"
-	case "reminder":
-		titlePrefix = "Alert Still Active"
+	var resolvedAt *time.Time
+	if eventType == "resolved" {
+		resolvedAt = &now
+	}
+	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
+
+	if a.config.AsyncDispatch && a.nats != nil {
+		envelope := notifications.DispatchEnvelope{
+			V:           1,
+			ChannelID:   channel.ID.String(),
+			ChannelType: channel.Type,
+			AlertID:     alert.ID.String(),
+			EventType:   eventType,
+			Event:       event,
+		}
+		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
+		headers := map[string][]string{"x-idempotency-key": {envelope.IdempotencyKey()}}
+		return a.nats.PublishJSON(ctx, subject, envelope, headers)
 	}
 
-	facts := []notifications.TeamsFact{
-		{Name: "Monitor", Value: binding.MonitorName},
-		{Name: "Policy", Value: binding.PolicyName},
-		{Name: "Threshold", Value: fmt.Sprintf("%d failures in %ds", binding.FailureThreshold, binding.FailureWindowSeconds)},
-		{Name: "Failure Count", Value: fmt.Sprintf("%d", alert.FailureCount)},
+	configMap := map[string]any{}
+	if len(channel.Config) > 0 {
+		if err := json.Unmarshal(channel.Config, &configMap); err != nil {
+			return fmt.Errorf("decode channel config: %w", err)
+		}
+	}
+	configMap, err := secrets.DecryptConfig(a.encryptor, p.Manifest(), configMap)
+	if err != nil {
+		return fmt.Errorf("decrypt channel config: %w", err)
 	}
 
-	if alert.LastError != nil {
-		facts = append(facts, notifications.TeamsFact{Name: "Last Error", Value: *alert.LastError})
-	}
-
-	sections := []notifications.TeamsSection{
-		{
-			Facts:    facts,
-			Markdown: true,
+	return p.Send(ctx, plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{
+			ID:     channel.ID.String(),
+			Name:   channel.Name,
+			Config: configMap,
 		},
-	}
-
-	if groupInfo != nil && len(groupInfo.Failures) > 0 {
-		detailLines := make([]string, 0, len(groupInfo.Failures)+1)
-		for _, failure := range groupInfo.Failures {
-			line := fmt.Sprintf("- %s (%s)", failure.Name, failure.Status)
-			if failure.Error != nil && *failure.Error != "" {
-				line += fmt.Sprintf(" - %s", *failure.Error)
-			}
-			detailLines = append(detailLines, line)
-		}
-		if groupInfo.ExtraCount > 0 {
-			detailLines = append(detailLines, fmt.Sprintf("- and %d more failing monitors", groupInfo.ExtraCount))
-		}
-
-		sections = append(sections, notifications.TeamsSection{
-			Text:     fmt.Sprintf("Failing monitors (last %ds):\n%s", a.config.AlertGroupWindowSeconds, joinLines(detailLines)),
-			Markdown: true,
-		})
-	}
-
-	return notifications.TeamsMessage{
-		Type:     "MessageCard",
-		Context:  "https://schema.org/extensions",
-		Summary:  fmt.Sprintf("%s: %s", titlePrefix, binding.MonitorName),
-		Title:    fmt.Sprintf("%s: %s", titlePrefix, binding.MonitorName),
-		Text:     fmt.Sprintf("Event: **%s** at %s", eventType, now.Format(time.RFC1123)),
-		Sections: sections,
-	}
-}
-
-func joinLines(lines []string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	result := lines[0]
-	for i := 1; i < len(lines); i++ {
-		result += "\n" + lines[i]
-	}
-	return result
+		Event:     event,
+		EventType: eventType,
+		Attempt:   1,
+	})
 }
 
 func (a *Alerter) upsertNotificationState(ctx context.Context, alertID, channelID uuid.UUID, eventType string, sentAt time.Time) error {
@@ -1209,17 +1161,17 @@ func alertKey(monitorID, policyID uuid.UUID) string {
 	return monitorID.String() + "|" + policyID.String()
 }
 
-func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time, timestamp time.Time) AlertEvent {
+func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time, timestamp time.Time) notifications.AlertEvent {
 	status := "active"
 	if eventType == "resolved" {
 		status = "resolved"
 	}
 
-	return AlertEvent{
+	return notifications.AlertEvent{
 		Type:      eventType,
 		TenantID:  binding.TenantID.String(),
 		Timestamp: timestamp,
-		Alert: AlertDetails{
+		Alert: notifications.AlertDetails{
 			ID:                   alert.ID.String(),
 			MonitorID:            binding.MonitorID.String(),
 			MonitorName:          binding.MonitorName,

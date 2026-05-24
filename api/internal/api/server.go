@@ -47,6 +47,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -105,6 +106,18 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	r.Get("/static/*", func(w http.ResponseWriter, r *http.Request) {
 		http.StripPrefix("/static/", http.FileServer(staticDir)).ServeHTTP(w, r)
 	})
+
+	// Encryption for sensitive alert channel config fields. Falls back to a
+	// no-op encryptor in dev when PROBARA_SECRETS_KEY is not set — existing
+	// plaintext rows still serve, but new writes will be stored unencrypted.
+	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
+	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
+		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
+	} else if kerr != secrets.ErrKeyNotConfigured {
+		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
+	} else {
+		log.Warn("PROBARA_SECRETS_KEY not set; alert channel secrets will be stored unencrypted")
+	}
 
 	// Status update publisher (optional)
 	statusPublisher, err := statusupdates.NewPublisher(cfg.NATSURL)
@@ -274,7 +287,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			})
 
 			// Alert channels
-			alertChannelService := alertchannelservice.NewService(dbClient)
+			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor)
 			alertChannelHandlers := alertchannelhandlers.NewHandlers(alertChannelService, log)
 			r.Route("/alert-channels", func(r chi.Router) {
 				r.Post("/", alertChannelHandlers.CreateAlertChannel)
@@ -283,6 +296,12 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Patch("/{id}", alertChannelHandlers.UpdateAlertChannel)
 				r.Delete("/{id}", alertChannelHandlers.DeleteAlertChannel)
 				r.Post("/{id}/test", alertChannelHandlers.TestAlertChannel)
+			})
+
+			// Alert channel plugin catalog (manifests driving the UI form).
+			r.Route("/alert-channel-plugins", func(r chi.Router) {
+				r.Get("/", alertChannelHandlers.ListPlugins)
+				r.Get("/{type}", alertChannelHandlers.GetPlugin)
 			})
 
 			// API keys

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 )
 
 func TestValidateAlertChannel(t *testing.T) {
@@ -45,7 +46,7 @@ func TestValidateAlertChannel(t *testing.T) {
 			name: "invalid type",
 			req: &models.CreateAlertChannelRequest{
 				Name:   "Invalid",
-				Type:   "slack",
+				Type:   "definitely-not-a-plugin",
 				Config: []byte(`{"webhook_url":"https://example.com"}`),
 			},
 			wantErr:     true,
@@ -78,7 +79,7 @@ func TestValidateAlertChannel(t *testing.T) {
 				Config: []byte(`{}`),
 			},
 			wantErr:     true,
-			errContains: "email recipients are required",
+			errContains: "at least one recipient",
 		},
 	}
 

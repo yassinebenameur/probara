@@ -50,6 +50,7 @@ nats_data/
 # Kubernetes secrets
 *.secret.yaml
 secrets/
+!shared/secrets/
 
 # Environment files
 .env

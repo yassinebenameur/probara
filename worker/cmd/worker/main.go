@@ -13,9 +13,13 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 	"github.com/yassinebenameur/probara/worker/internal/worker"
+	"github.com/yassinebenameur/probara/worker/internal/worker/notifications"
 )
 
 func main() {
@@ -57,6 +61,52 @@ func main() {
 
 	// Create worker
 	w := worker.NewWorker(cfg, log, metricsRegistry, dbClient, queueClient, statusPublisher)
+
+	// Wire SMTP backend into the email plugin so the notifications consumer
+	// can dispatch email alerts. No-op when SMTP is unset — email plugin Send
+	// will return an explicit error and JetStream will retry until the
+	// operator wires SMTP in.
+	if cfg.NotificationsEnabled && cfg.SMTPHost != "" && cfg.SMTPFrom != "" {
+		smtpMailer, err := email.NewSMTPMailer(email.SMTPParams{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+			UseTLS:   cfg.SMTPUseTLS,
+		})
+		if err != nil {
+			log.WithError(err).Warn("Failed to configure worker SMTP mailer; email alerts will fail until SMTP is fixed")
+		} else {
+			email.SetMailer(smtpMailer)
+		}
+	} else if cfg.NotificationsEnabled {
+		log.Warn("Notifications consumer enabled but SMTP not configured; email channels will fail")
+	}
+
+	// Secrets encryption — same provider the API uses so what API encrypted,
+	// the worker can decrypt.
+	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
+	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
+		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
+	} else if kerr != secrets.ErrKeyNotConfigured {
+		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
+	} else if cfg.NotificationsEnabled {
+		log.Warn("PROBARA_SECRETS_KEY not set; worker will only handle plaintext channel configs")
+	}
+
+	// Start notifications consumer if enabled — runs in its own goroutine and
+	// shares the queue client + db client with the check-worker loop.
+	var notifConsumer *notifications.Consumer
+	if cfg.NotificationsEnabled {
+		notifConsumer = notifications.New(cfg, log, dbClient, queueClient, secretsEncryptor)
+		go func() {
+			ctx := context.Background()
+			if err := notifConsumer.Start(ctx); err != nil && err != context.Canceled {
+				log.WithError(err).Error("Notifications consumer exited with error")
+			}
+		}()
+	}
 
 	// Start minimal HTTP server for health/metrics
 	go func() {

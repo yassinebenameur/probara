@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Pencil, Plus, Send, Trash2 } from 'lucide-react';
+import { LayoutGrid, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { AlertChannel } from '@/lib/types';
 import { deleteAlertChannel, getAlertChannels, testAlertChannel } from '@/lib/api';
 import Panel from '@/components/ui/Panel';
@@ -61,9 +61,14 @@ export default function AlertChannelsPage() {
       title="Alert channels"
       subtitle="Deliver alerts to your team."
       action={
-        <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-          <Link href="/alert-channels/new">Create alert channel</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" icon={<LayoutGrid strokeWidth={1.75} />} asChild>
+            <Link href="/alert-channels/catalog">Browse catalog</Link>
+          </Button>
+          <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+            <Link href="/alert-channels/new">Create alert channel</Link>
+          </Button>
+        </div>
       }
     />
   );

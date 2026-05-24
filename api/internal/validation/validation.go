@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
-	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
 const (
@@ -432,34 +432,26 @@ func validateStatusPageSections(sections []models.StatusPageSection) error {
 	return nil
 }
 
-// ValidateAlertChannel validates a CreateAlertChannelRequest
+// ValidateAlertChannel validates a CreateAlertChannelRequest by delegating
+// the type-specific config check to the registered plugin.
 func ValidateAlertChannel(req *models.CreateAlertChannelRequest) error {
 	if strings.TrimSpace(req.Name) == "" {
 		return fmt.Errorf("name is required")
 	}
+	if req.Type == "" {
+		return fmt.Errorf("type is required")
+	}
 
-	switch req.Type {
-	case models.AlertChannelTypeTeams, models.AlertChannelTypeEmail:
-		// ok
-	default:
-		return fmt.Errorf("invalid alert channel type")
+	p, ok := plugin.DefaultRegistry.Get(string(req.Type))
+	if !ok {
+		return fmt.Errorf("invalid alert channel type: %s", req.Type)
 	}
 
 	if len(req.Config) == 0 {
 		return fmt.Errorf("config is required")
 	}
 
-	if req.Type == models.AlertChannelTypeTeams {
-		if _, err := notifications.ParseTeamsWebhookConfig(req.Config); err != nil {
-			return err
-		}
-	} else if req.Type == models.AlertChannelTypeEmail {
-		if _, err := notifications.ParseEmailConfig(req.Config); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return p.Validate(req.Config)
 }
 
 // ValidateAlertChannelUpdate validates an UpdateAlertChannelRequest

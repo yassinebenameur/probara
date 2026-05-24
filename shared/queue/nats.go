@@ -132,6 +132,23 @@ func (c *Client) PublishJSON(ctx context.Context, subject string, v interface{},
 
 // CreateConsumer creates or gets a consumer for the given stream
 func (c *Client) CreateConsumer(ctx context.Context, streamName string, consumerName string) (jetstream.Consumer, error) {
+	return c.CreateConsumerWithOptions(ctx, streamName, consumerName, ConsumerOptions{})
+}
+
+// ConsumerOptions tunes a JetStream consumer. Zero values fall back to the
+// defaults previously hardcoded in CreateConsumer (AckWait=30s, MaxDeliver=3,
+// no BackOff array, no FilterSubject).
+type ConsumerOptions struct {
+	AckWait       time.Duration
+	MaxDeliver    int
+	BackOff       []time.Duration
+	FilterSubject string
+}
+
+// CreateConsumerWithOptions creates or gets a consumer with custom retry
+// policy. Used by the notifications worker to install an exponential backoff
+// schedule (10s, 30s, 2m, 10m, 30m) for transient webhook failures.
+func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, consumerName string, opts ConsumerOptions) (jetstream.Consumer, error) {
 	key := fmt.Sprintf("%s:%s", streamName, consumerName)
 	if consumer, exists := c.consumers[key]; exists {
 		return consumer, nil
@@ -142,12 +159,23 @@ func (c *Client) CreateConsumer(ctx context.Context, streamName string, consumer
 		return nil, fmt.Errorf("stream not found: %w", err)
 	}
 
+	ackWait := opts.AckWait
+	if ackWait <= 0 {
+		ackWait = 30 * time.Second
+	}
+	maxDeliver := opts.MaxDeliver
+	if maxDeliver <= 0 {
+		maxDeliver = 3
+	}
+
 	cfg := jetstream.ConsumerConfig{
-		Name:       consumerName,
-		Durable:    consumerName,
-		AckPolicy:  jetstream.AckExplicitPolicy,
-		AckWait:    30 * time.Second,
-		MaxDeliver: 3,
+		Name:          consumerName,
+		Durable:       consumerName,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       ackWait,
+		MaxDeliver:    maxDeliver,
+		BackOff:       opts.BackOff,
+		FilterSubject: opts.FilterSubject,
 	}
 
 	consumer, err := stream.CreateConsumer(ctx, cfg)

@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 )
 
 func main() {
