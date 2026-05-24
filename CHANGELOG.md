@@ -1,3 +1,11 @@
+# [1.0.0-alpha.44](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.43...v1.0.0-alpha.44) (2026-05-24)
+
+
+### Bug Fixes
+
+* **api:** honor PUBLIC_BASE_URL when building agent/push URLs ([9a1fba8](https://github.com/yassinebenameur/probara/commit/9a1fba8e15a529ef27301abb814ae0ee94328d4a))
+* **ci:** update chromedp dependencies for Chrome loopback events ([ddc0d0d](https://github.com/yassinebenameur/probara/commit/ddc0d0d57890a765de017dfcd5db0c8175c916f9))
+
 # [1.0.0-alpha.43](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.42...v1.0.0-alpha.43) (2026-05-23)
 
 
