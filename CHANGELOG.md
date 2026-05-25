@@ -1,3 +1,10 @@
+# [1.0.0-alpha.45](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.44...v1.0.0-alpha.45) (2026-05-25)
+
+
+### Features
+
+* **alerts:** introduce alert channel plugin system ([c225e76](https://github.com/yassinebenameur/probara/commit/c225e76390ea87e06405bac544d534329b159102))
+
 # [1.0.0-alpha.44](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.43...v1.0.0-alpha.44) (2026-05-24)
 
 
