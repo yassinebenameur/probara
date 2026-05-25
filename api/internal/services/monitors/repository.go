@@ -85,7 +85,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
 		FROM monitors
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
 
 	var monitor models.Monitor
@@ -114,7 +114,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 	offset := (page - 1) * pageSize
 
 	// Build query with filters
-	whereClause := "WHERE tenant_id = $1"
+	whereClause := "WHERE tenant_id = $1 AND deleted_at IS NULL"
 	args := []interface{}{tenantID}
 	argIndex := 2
 
@@ -210,7 +210,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 	query := fmt.Sprintf(`
 		UPDATE monitors
 		SET %s
-		WHERE id = $%d AND tenant_id = $%d
+		WHERE id = $%d AND tenant_id = $%d AND deleted_at IS NULL
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
@@ -347,7 +347,8 @@ func (r *PostgresRepository) VerifyMonitorsBelongToTenant(ctx context.Context, t
 		return fmt.Errorf("monitor IDs cannot be empty")
 	}
 	var count int
-	query := `SELECT COUNT(*) FROM monitors WHERE id = ANY($1) AND tenant_id = $2`
+	query := `SELECT COUNT(*) FROM monitors
+	          WHERE id = ANY($1) AND tenant_id = $2 AND deleted_at IS NULL`
 	if err := r.db.QueryRowContext(ctx, query, pq.Array(monitorIDs), tenantID).Scan(&count); err != nil {
 		return fmt.Errorf("failed to verify monitors: %w", err)
 	}
@@ -505,7 +506,7 @@ func (r *PostgresRepository) BulkAttachAlertPolicy(
 		INSERT INTO monitor_alert_policies (monitor_id, alert_policy_id, created_at)
 		SELECT m.id, $2, NOW()
 		FROM monitors m
-		WHERE m.id = ANY($1) AND m.tenant_id = $3
+		WHERE m.id = ANY($1) AND m.tenant_id = $3 AND m.deleted_at IS NULL
 		ON CONFLICT (monitor_id, alert_policy_id) DO NOTHING
 		RETURNING monitor_id
 	`
@@ -532,7 +533,7 @@ func (r *PostgresRepository) BulkAttachAlertPolicy(
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
 		SET alert_policy_id = $2
-		WHERE id = ANY($1) AND tenant_id = $3 AND alert_policy_id IS NULL
+		WHERE id = ANY($1) AND tenant_id = $3 AND alert_policy_id IS NULL AND deleted_at IS NULL
 	`, pq.Array(monitorIDs), policyID, tenantID); err != nil {
 		return nil, fmt.Errorf("failed to seed legacy alert_policy_id: %w", err)
 	}
@@ -602,7 +603,7 @@ func (r *PostgresRepository) BulkDetachAlertPolicy(
 			ORDER BY map2.created_at ASC
 			LIMIT 1
 		)
-		WHERE m.id = ANY($1) AND m.tenant_id = $3 AND m.alert_policy_id = $2
+		WHERE m.id = ANY($1) AND m.tenant_id = $3 AND m.alert_policy_id = $2 AND m.deleted_at IS NULL
 	`, pq.Array(monitorIDs), policyID, tenantID); err != nil {
 		return nil, fmt.Errorf("failed to sync legacy alert_policy_id after detach: %w", err)
 	}

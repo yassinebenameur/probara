@@ -69,3 +69,30 @@ func TestPostgresRepository_BulkSoftDelete(t *testing.T) {
 		t.Fatalf("idempotent BulkSoftDelete deleted = %d, want 0", again)
 	}
 }
+
+func TestPostgresRepository_ListAndVerify_ExcludeSoftDeleted(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "")
+	live := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "live")
+	gone := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "gone")
+
+	repo := NewPostgresRepository(dbClient)
+	if err := repo.Delete(ctx, tenantID, gone); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	monitors, total, err := repo.List(ctx, tenantID, nil, nil, 1, 50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 || len(monitors) != 1 || monitors[0].ID != live {
+		t.Fatalf("List = %+v (total=%d), want only live monitor", monitors, total)
+	}
+
+	if err := repo.VerifyMonitorsBelongToTenant(ctx, tenantID, []uuid.UUID{live, gone}); err == nil {
+		t.Fatal("VerifyMonitorsBelongToTenant should reject a soft-deleted monitor")
+	}
+}
