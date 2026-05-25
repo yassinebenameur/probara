@@ -79,7 +79,7 @@ func (w *StaleWorker) checkStaleMonitors() {
 		            m.created_at
 		        ) as last_check
 		 FROM monitors m
-		 WHERE m.type = 'push' AND m.enabled = true`)
+		 WHERE m.type = 'push' AND m.enabled = true AND m.deleted_at IS NULL`)
 	if err != nil {
 		w.log.WithError(err).Error("failed to query push monitors")
 		return

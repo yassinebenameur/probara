@@ -319,7 +319,7 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
 
 	var monitor models.Monitor

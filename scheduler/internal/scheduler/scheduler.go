@@ -459,7 +459,7 @@ func (s *Scheduler) updateMonitorNextRunAt(ctx context.Context, tx *sql.Tx, moni
 	query := `
 		UPDATE monitors
 		SET next_run_at = $1, updated_at = NOW()
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 	`
 
 	_, err := tx.ExecContext(ctx, query, nextRunAt, monitorID)

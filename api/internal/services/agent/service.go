@@ -38,7 +38,7 @@ func (s *Service) ProcessMetrics(ctx context.Context, payload models.AgentMetric
 	var enabled bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, name, enabled FROM monitors
-		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent'`,
+		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
 		payload.AgentID, tenantID,
 	).Scan(&monitorID, &monitorName, &enabled)
 	if err == sql.ErrNoRows {
@@ -115,8 +115,8 @@ func (s *Service) publishStatusUpdate(monitorID, tenantID uuid.UUID) {
 func (s *Service) GetMonitorByAgentID(ctx context.Context, agentID string, tenantID uuid.UUID) (uuid.UUID, error) {
 	var monitorID uuid.UUID
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM monitors 
-		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent'`,
+		`SELECT id FROM monitors
+		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
 		agentID, tenantID,
 	).Scan(&monitorID)
 	if err != nil {
@@ -131,8 +131,8 @@ func (s *Service) GenerateInstallCommand(ctx context.Context, monitorID, tenantI
 	var agentID sql.NullString
 	var intervalSeconds int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT agent_id, interval_seconds FROM monitors 
-		 WHERE id = $1 AND tenant_id = $2 AND type = 'agent'`,
+		`SELECT agent_id, interval_seconds FROM monitors
+		 WHERE id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
 		monitorID, tenantID,
 	).Scan(&agentID, &intervalSeconds)
 	if err != nil {

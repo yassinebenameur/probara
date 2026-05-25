@@ -448,7 +448,7 @@ func (s *Service) loadIncidentAffectedComponents(ctx context.Context, incidentID
 		SELECT m.name
 		FROM incident_status_page_monitors ispm
 		JOIN monitors m ON m.id = ispm.monitor_id
-		WHERE ispm.incident_id = $1 AND ispm.status_page_id = $2
+		WHERE ispm.incident_id = $1 AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
 		ORDER BY m.name ASC
 	`, incidentID, statusPageID)
 	if err != nil {
@@ -638,7 +638,7 @@ func (s *Service) getStatusPageSectionMonitors(ctx context.Context, sectionID, t
 		SELECT m.id, m.name, spsm.display_name, m.type, m.config, m.tags
 		FROM monitors m
 		INNER JOIN status_page_section_monitors spsm ON m.id = spsm.monitor_id
-		WHERE spsm.section_id = $1 AND m.tenant_id = $2
+		WHERE spsm.section_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY spsm.position ASC, m.name
 	`
 	rows, err := s.db.QueryContext(ctx, query, sectionID, tenantID)
@@ -655,7 +655,7 @@ func (s *Service) loadLegacyStatusPageSections(ctx context.Context, statusPageID
 		SELECT m.id, m.name, spm.display_name, m.type, m.config, m.tags
 		FROM monitors m
 		INNER JOIN status_page_monitors spm ON m.id = spm.monitor_id
-		WHERE spm.status_page_id = $1 AND m.tenant_id = $2
+		WHERE spm.status_page_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY spm.position ASC, m.name
 	`, statusPageID, tenantID)
 	if err != nil {
@@ -1002,7 +1002,7 @@ func (s *Service) resolveStatusPageOperationalMonitorIDs(ctx context.Context, st
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type
 		FROM monitors m
-		WHERE m.id = ANY($1) AND m.tenant_id = $2
+		WHERE m.id = ANY($1) AND m.tenant_id = $2 AND m.deleted_at IS NULL
 	`, pq.Array(monitorIDs), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list status page monitor ids: %w", err)
@@ -1950,7 +1950,7 @@ func (s *Service) getGroupMemberIDs(ctx context.Context, groupID, tenantID uuid.
 			SELECT mg.monitor_id
 			FROM monitor_groups mg
 			JOIN monitors m ON m.id = mg.monitor_id
-			WHERE mg.group_id = $1 AND m.tenant_id = $2
+			WHERE mg.group_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 			UNION
 			SELECT mg.monitor_id
 			FROM member_tree mt
@@ -1958,12 +1958,15 @@ func (s *Service) getGroupMemberIDs(ctx context.Context, groupID, tenantID uuid.
 			JOIN monitor_groups mg ON mg.group_id = parent.id
 			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = $2
 			WHERE parent.type = 'group'
+			  AND parent.deleted_at IS NULL
+			  AND child.deleted_at IS NULL
 		)
 		SELECT m.id
 		FROM monitors m
 		JOIN member_tree mt ON mt.monitor_id = m.id
 		WHERE m.tenant_id = $2
 		  AND m.type <> 'group'
+		  AND m.deleted_at IS NULL
 		ORDER BY m.name
 	`
 

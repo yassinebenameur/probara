@@ -70,7 +70,12 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 	whereClause := strings.Join(whereParts, " AND ")
 
 	// Count total
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM alerts a WHERE %s`, whereClause)
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM alerts a
+		JOIN monitors m ON a.monitor_id = m.id
+		WHERE %s AND m.deleted_at IS NULL
+	`, whereClause)
 	var total int
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("failed to count alerts: %w", err)
@@ -85,7 +90,7 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		WHERE %s
+		WHERE %s AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $%d OFFSET $%d
 	`, whereClause, argIndex, argIndex+1)
@@ -135,7 +140,7 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		WHERE a.id = $1 AND a.tenant_id = $2
+		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 	`
 
 	var alert models.AlertWithDetails
@@ -173,7 +178,7 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		WHERE a.tenant_id = $1
+		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
 	`
@@ -225,6 +230,7 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
+		  AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $3
 	`
@@ -366,7 +372,7 @@ func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID 
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		WHERE a.id = $1 AND a.tenant_id = $2
+		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 	`
 
 	var alert models.AlertWithDetails
@@ -448,7 +454,7 @@ func (s *Service) GetMonitorCountsByPolicy(ctx context.Context, tenantID uuid.UU
 	query := `
 		SELECT alert_policy_id, COUNT(*) as count
 		FROM monitors
-		WHERE tenant_id = $1 AND alert_policy_id IS NOT NULL
+		WHERE tenant_id = $1 AND alert_policy_id IS NOT NULL AND deleted_at IS NULL
 		GROUP BY alert_policy_id
 	`
 
@@ -485,7 +491,7 @@ func (s *Service) GetAlertsByPolicy(ctx context.Context, tenantID, policyID uuid
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		WHERE a.tenant_id = $1 AND a.alert_policy_id = $2
+		WHERE a.tenant_id = $1 AND a.alert_policy_id = $2 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $3
 	`
@@ -520,7 +526,7 @@ func (s *Service) GetMonitorsByPolicy(ctx context.Context, tenantID, policyID uu
 		SELECT id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
 			alert_policy_id, enabled, tags, next_run_at, created_at, updated_at
 		FROM monitors
-		WHERE tenant_id = $1 AND alert_policy_id = $2
+		WHERE tenant_id = $1 AND alert_policy_id = $2 AND deleted_at IS NULL
 		ORDER BY name
 	`
 

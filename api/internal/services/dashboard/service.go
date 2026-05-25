@@ -245,7 +245,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			COUNT(*) FILTER (WHERE type = 'http') AS http_monitors,
 			COUNT(*) FILTER (WHERE type = 'agent') AS agent_monitors
 		FROM monitors
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1 AND deleted_at IS NULL
 	`
 	countArgs := []interface{}{tenantID}
 	if len(tags) > 0 {
@@ -288,6 +288,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			WHERE cr.tenant_id = $1
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
+			  AND m.deleted_at IS NULL
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
@@ -318,6 +319,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			WHERE cr.tenant_id = $1
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
+			  AND m.deleted_at IS NULL
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
@@ -404,6 +406,7 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			WHERE cr.tenant_id = $1
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
+			  AND m.deleted_at IS NULL
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $4
@@ -478,6 +481,7 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags [
 			WHERE cr.tenant_id = $1
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
+			  AND m.deleted_at IS NULL
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $4
 			  %s
@@ -516,7 +520,7 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags [
 
 func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time, tags []string) ([]models.DashboardMonitorHealth, error) {
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
-	whereClause := "WHERE m.tenant_id = $1"
+	whereClause := "WHERE m.tenant_id = $1 AND m.deleted_at IS NULL"
 	if len(tags) > 0 {
 		whereClause += " AND m.tags @> $4::text[]"
 		args = append(args, pq.Array(tags))
@@ -622,6 +626,7 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 		JOIN monitors m ON m.id = a.monitor_id AND m.tenant_id = a.tenant_id
 		WHERE a.tenant_id = $1
 		  AND a.status IN ('active', 'acknowledged')
+		  AND m.deleted_at IS NULL
 	`
 	args := []interface{}{tenantID}
 	if len(tags) > 0 {
@@ -687,6 +692,7 @@ func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID,
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
+			  AND m.deleted_at IS NULL
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
@@ -705,7 +711,7 @@ func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID,
 			END AS uptime,
 			ps.latest_failure_at
 		FROM problem_stats ps
-		JOIN monitors m ON m.id = ps.monitor_id AND m.tenant_id = $1
+		JOIN monitors m ON m.id = ps.monitor_id AND m.tenant_id = $1 AND m.deleted_at IS NULL
 		LEFT JOIN LATERAL (
 			SELECT cr.status AS current_status
 			FROM check_results cr
@@ -849,6 +855,7 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 			WHERE m.tenant_id = $1
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
+			  AND m.deleted_at IS NULL
 			  %s
 			GROUP BY m.id, m.name, latest.current_status, latest.latest_check_at
 			HAVING COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) > 0
@@ -1005,6 +1012,7 @@ func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, ran
 		  AND cr.status IN ('failure', 'error')
 		  AND cr.created_at >= $2
 		  AND cr.created_at < $3
+		  AND m.deleted_at IS NULL
 		  %s
 		ORDER BY cr.created_at DESC
 		LIMIT $%d
@@ -1073,6 +1081,7 @@ func (s *Service) listEnabledOperationalMonitorIDs(ctx context.Context, tenantID
 		WHERE tenant_id = $1
 		  AND enabled = TRUE
 		  AND type <> 'group'
+		  AND deleted_at IS NULL
 		ORDER BY id
 	`
 	args := []interface{}{tenantID}
@@ -1083,6 +1092,7 @@ func (s *Service) listEnabledOperationalMonitorIDs(ctx context.Context, tenantID
 			WHERE tenant_id = $1
 			  AND enabled = TRUE
 			  AND type <> 'group'
+			  AND deleted_at IS NULL
 			  AND tags @> $2::text[]
 			ORDER BY id
 		`
@@ -1115,6 +1125,7 @@ func (s *Service) getAvailableTags(ctx context.Context, tenantID uuid.UUID) ([]s
 		FROM monitors
 		WHERE tenant_id = $1
 		  AND tags IS NOT NULL
+		  AND deleted_at IS NULL
 		ORDER BY tag
 	`, tenantID)
 	if err != nil {

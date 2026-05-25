@@ -33,8 +33,8 @@ func (s *Service) ProcessPush(ctx context.Context, token string, payload PushPay
 	var tenantID uuid.UUID
 	var enabled bool
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, enabled FROM monitors 
-		 WHERE push_token = $1 AND type = 'push'`,
+		`SELECT id, tenant_id, enabled FROM monitors
+		 WHERE push_token = $1 AND type = 'push' AND deleted_at IS NULL`,
 		token,
 	).Scan(&monitorID, &tenantID, &enabled)
 	if err == sql.ErrNoRows {
@@ -131,10 +131,10 @@ func (s *Service) GetMonitorByPushToken(ctx context.Context, token string) (*mod
 	var nextRunAt sql.NullTime
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, type, config, interval_seconds, timeout_seconds, 
+		`SELECT id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
 		        alert_policy_id, enabled, tags, next_run_at, agent_id, push_token, created_at, updated_at
-		 FROM monitors 
-		 WHERE push_token = $1 AND type = 'push'`,
+		 FROM monitors
+		 WHERE push_token = $1 AND type = 'push' AND deleted_at IS NULL`,
 		token,
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type, &monitor.Config,
@@ -179,8 +179,8 @@ func (s *Service) GetPushInfo(ctx context.Context, monitorID, tenantID uuid.UUID
 	var config json.RawMessage
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT push_token, interval_seconds, config FROM monitors 
-		 WHERE id = $1 AND tenant_id = $2 AND type = 'push'`,
+		`SELECT push_token, interval_seconds, config FROM monitors
+		 WHERE id = $1 AND tenant_id = $2 AND type = 'push' AND deleted_at IS NULL`,
 		monitorID, tenantID,
 	).Scan(&pushToken, &intervalSeconds, &config)
 	if err == sql.ErrNoRows {

@@ -1191,7 +1191,7 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		JOIN alerts a ON a.id = ia.alert_id
 		JOIN monitors m ON m.id = a.monitor_id
 		JOIN alert_policies ap ON ap.id = a.alert_policy_id
-		WHERE ia.incident_id = $1 AND a.tenant_id = $2
+		WHERE ia.incident_id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC, a.id DESC
 	`, incidentID, tenantID)
 	if err != nil {
@@ -1238,7 +1238,7 @@ func (s *Service) loadIncidentMonitors(ctx context.Context, tenantID, incidentID
 		SELECT m.id, m.tenant_id, m.name, m.type, m.created_at, m.updated_at
 		FROM incident_monitors im
 		JOIN monitors m ON m.id = im.monitor_id
-		WHERE im.incident_id = $1 AND m.tenant_id = $2
+		WHERE im.incident_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY m.name ASC, m.id ASC
 	`, incidentID, tenantID)
 	if err != nil {
@@ -1342,7 +1342,7 @@ func (s *Service) ensureMonitorBelongsToTenant(ctx context.Context, tx *sql.Tx, 
 	if err := tx.QueryRowContext(ctx, `
 		SELECT 1
 		FROM monitors
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`, monitorID, tenantID).Scan(new(int)); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("monitor not found")
@@ -1376,7 +1376,7 @@ func (s *Service) validatePublicationMonitorSelection(ctx context.Context, tx *s
 	tenantMonitorIDs, err := loadUUIDSet(ctx, tx, `
 		SELECT id
 		FROM monitors
-		WHERE tenant_id = $1 AND id = ANY($2)
+		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
 	`, tenantID, pq.Array(monitorIDs))
 	if err != nil {
 		return fmt.Errorf("validate publication monitors: %w", err)

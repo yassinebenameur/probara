@@ -31,7 +31,7 @@ const agentStaleMonitorsQuery = `
 			ORDER BY created_at DESC, id DESC
 			LIMIT 1
 		) latest ON true
-		WHERE m.type = 'agent' AND m.enabled = true`
+		WHERE m.type = 'agent' AND m.enabled = true AND m.deleted_at IS NULL`
 
 // StaleWorker monitors passive agent monitors and emits a failure result when
 // an enabled agent has not reported within twice its expected interval.

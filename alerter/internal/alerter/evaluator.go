@@ -218,7 +218,7 @@ func (a *Alerter) loadPolicyBindings(ctx context.Context) ([]policyBinding, erro
 			ap.email_subject_template, ap.email_body_template
 		FROM monitors m
 		JOIN alert_policies ap ON m.alert_policy_id = ap.id AND m.tenant_id = ap.tenant_id
-		WHERE m.alert_policy_id IS NOT NULL AND m.enabled = true
+		WHERE m.alert_policy_id IS NOT NULL AND m.enabled = true AND m.deleted_at IS NULL
 		UNION
 		SELECT m.id, m.tenant_id, m.name, m.type,
 			ap.id, ap.name, ap.failure_threshold, ap.failure_window_seconds, ap.create_incident_on_fire,
@@ -226,7 +226,7 @@ func (a *Alerter) loadPolicyBindings(ctx context.Context) ([]policyBinding, erro
 		FROM monitor_alert_policies map
 		JOIN monitors m ON map.monitor_id = m.id
 		JOIN alert_policies ap ON map.alert_policy_id = ap.id AND m.tenant_id = ap.tenant_id
-		WHERE m.enabled = true
+		WHERE m.enabled = true AND m.deleted_at IS NULL
 	`
 
 	rows, err := a.db.QueryContext(ctx, query)
@@ -419,6 +419,8 @@ func (a *Alerter) loadGroupMembers(ctx context.Context, bindings []policyBinding
 			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = root.tenant_id
 			WHERE root.id = ANY($1)
 			  AND root.type = 'group'
+			  AND root.deleted_at IS NULL
+			  AND child.deleted_at IS NULL
 			UNION
 			SELECT mt.root_group_id, mt.tenant_id, mg.monitor_id
 			FROM member_tree mt
@@ -426,11 +428,14 @@ func (a *Alerter) loadGroupMembers(ctx context.Context, bindings []policyBinding
 			JOIN monitor_groups mg ON mg.group_id = parent.id
 			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = mt.tenant_id
 			WHERE parent.type = 'group'
+			  AND parent.deleted_at IS NULL
+			  AND child.deleted_at IS NULL
 		)
 		SELECT mt.root_group_id, m.id, m.name
 		FROM member_tree mt
 		JOIN monitors m ON m.id = mt.monitor_id AND m.tenant_id = mt.tenant_id
 		WHERE m.type <> 'group'
+		  AND m.deleted_at IS NULL
 		ORDER BY mt.root_group_id, m.name
 	`
 

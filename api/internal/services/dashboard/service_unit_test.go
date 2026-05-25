@@ -55,7 +55,7 @@ func TestService_GetStats_LongRangeUsesInjectedAnalyticsReader(t *testing.T) {
 			COUNT(*) FILTER (WHERE type = 'http') AS http_monitors,
 			COUNT(*) FILTER (WHERE type = 'agent') AS agent_monitors
 		FROM monitors
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1 AND deleted_at IS NULL
 	`)).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -69,6 +69,7 @@ func TestService_GetStats_LongRangeUsesInjectedAnalyticsReader(t *testing.T) {
 		WHERE tenant_id = $1
 		  AND enabled = TRUE
 		  AND type <> 'group'
+		  AND deleted_at IS NULL
 		ORDER BY id
 	`)).
 		WithArgs(tenantID).
@@ -139,6 +140,7 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 			WHERE m.tenant_id = $1
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
+			  AND m.deleted_at IS NULL
 			GROUP BY m.id, m.name, latest.current_status, latest.latest_check_at
 			HAVING COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) > 0
 			    OR (latest.current_status IS NOT NULL AND latest.current_status <> 'success')

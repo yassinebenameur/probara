@@ -17,13 +17,13 @@ const statusPageSlugQuery = `
 	WITH RECURSIVE monitor_targets AS (
 		SELECT id
 		FROM monitors
-		WHERE tenant_id = $1 AND id = $2
+		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
 		UNION
 		SELECT mg.group_id
 		FROM monitor_groups mg
 		JOIN monitor_targets mt ON mt.id = mg.monitor_id
 		JOIN monitors m ON m.id = mg.group_id
-		WHERE m.tenant_id = $1 AND m.type = 'group'
+		WHERE m.tenant_id = $1 AND m.type = 'group' AND m.deleted_at IS NULL
 	)
 	SELECT DISTINCT sp.slug
 	FROM status_pages sp
@@ -44,13 +44,13 @@ const legacyStatusPageSlugQuery = `
 	WITH RECURSIVE monitor_targets AS (
 		SELECT id
 		FROM monitors
-		WHERE tenant_id = $1 AND id = $2
+		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
 		UNION
 		SELECT mg.group_id
 		FROM monitor_groups mg
 		JOIN monitor_targets mt ON mt.id = mg.monitor_id
 		JOIN monitors m ON m.id = mg.group_id
-		WHERE m.tenant_id = $1 AND m.type = 'group'
+		WHERE m.tenant_id = $1 AND m.type = 'group' AND m.deleted_at IS NULL
 	)
 	SELECT DISTINCT sp.slug
 	FROM status_pages sp

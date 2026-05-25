@@ -737,7 +737,7 @@ func (s *Service) validateAndParseMonitorIDs(ctx context.Context, dbtx statusPag
 
 	query := `
 		SELECT id FROM monitors
-		WHERE id = ANY($1) AND tenant_id = $2
+		WHERE id = ANY($1) AND tenant_id = $2 AND deleted_at IS NULL
 	`
 	rows, err := dbtx.QueryContext(ctx, query, pq.Array(monitorUUIDs), tenantID)
 	if err != nil {

@@ -162,6 +162,7 @@ func (s *Service) queryMonitorsForGroupsRaw(
 			  AND m.tenant_id = $1
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
+			  AND m.deleted_at IS NULL
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= $2
 			  AND cr.created_at < $3
@@ -197,6 +198,7 @@ func (s *Service) queryMonitorsForGroupsRaw(
 		WHERE m.tenant_id = $1
 		  AND m.enabled = TRUE
 		  AND m.type <> 'group'
+		  AND m.deleted_at IS NULL
 		  %s
 	`, tagClause, tagClause)
 
@@ -251,6 +253,7 @@ func (s *Service) queryMonitorsForGroups24hHourlyRollup(
 			WHERE m.tenant_id = $1
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
+			  AND m.deleted_at IS NULL
 			  %s
 		),
 		rollup_state AS (
@@ -416,6 +419,7 @@ func (s *Service) queryMonitorsForGroupsRollup(
 		WHERE m.tenant_id = $1
 		  AND m.enabled = TRUE
 		  AND m.type <> 'group'
+		  AND m.deleted_at IS NULL
 		  %s
 	`, tagClause)
 
@@ -543,6 +547,7 @@ func (s *Service) monitorIDsForGroup(
             WHERE tenant_id = $1
               AND enabled = TRUE
               AND type <> 'group'
+              AND deleted_at IS NULL
               AND $2 = ANY(tags)
         `
 		args = append(args, *tag)
@@ -565,6 +570,7 @@ func (s *Service) monitorIDsForGroup(
             WHERE tenant_id = $1
               AND enabled = TRUE
               AND type <> 'group'
+              AND deleted_at IS NULL
               AND NOT (tags && $2::text[])
         `
 		args = append(args, pq.Array(curated))
