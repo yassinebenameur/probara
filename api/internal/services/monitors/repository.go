@@ -20,7 +20,9 @@ type Repository interface {
 	List(ctx context.Context, tenantID uuid.UUID, tag *string, enabled *bool, page, pageSize int) ([]models.Monitor, int, error)
 	Update(ctx context.Context, monitor *models.Monitor, fields []string, values []interface{}) error
 	Delete(ctx context.Context, tenantID, monitorID uuid.UUID) error
+	BulkSoftDelete(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error)
 	DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
+	HardDelete(ctx context.Context, monitorID uuid.UUID) error
 	VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error
 	VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
 	SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error
@@ -234,23 +236,55 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 	return nil
 }
 
-// Delete removes a monitor from the database
+// Delete marks a monitor as deleted (soft delete). The background purger
+// removes child rows and the monitor row itself.
 func (r *PostgresRepository) Delete(ctx context.Context, tenantID, monitorID uuid.UUID) error {
-	query := `DELETE FROM monitors WHERE id = $1 AND tenant_id = $2`
+	query := `UPDATE monitors SET deleted_at = NOW(), updated_at = NOW()
+	          WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`
 	result, err := r.db.ExecContext(ctx, query, monitorID, tenantID)
 	if err != nil {
-		return fmt.Errorf("failed to delete monitor: %w", err)
+		return fmt.Errorf("failed to soft delete monitor: %w", err)
 	}
-
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
-
 	if rowsAffected == 0 {
 		return fmt.Errorf("monitor not found")
 	}
+	return nil
+}
 
+// BulkSoftDelete tombstones every monitor in monitorIDs that belongs to the
+// tenant and is not already deleted. Returns the number of newly tombstoned rows.
+func (r *PostgresRepository) BulkSoftDelete(
+	ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID,
+) (int64, error) {
+	if len(monitorIDs) == 0 {
+		return 0, nil
+	}
+	query := `UPDATE monitors SET deleted_at = NOW(), updated_at = NOW()
+	          WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL`
+	result, err := r.db.ExecContext(ctx, query, tenantID, pq.Array(monitorIDs))
+	if err != nil {
+		return 0, fmt.Errorf("failed to bulk soft delete monitors: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rows, nil
+}
+
+// HardDelete removes the monitor row itself. Used by the purger after it has
+// drained all child tables. Tenant-agnostic because the caller already loaded
+// the row.
+func (r *PostgresRepository) HardDelete(ctx context.Context, monitorID uuid.UUID) error {
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM monitors WHERE id = $1`, monitorID,
+	); err != nil {
+		return fmt.Errorf("failed to hard delete monitor: %w", err)
+	}
 	return nil
 }
 

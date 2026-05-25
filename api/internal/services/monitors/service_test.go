@@ -26,6 +26,12 @@ type MockRepository struct {
 	bulkAttachErr        error
 	bulkDetachChanged    []uuid.UUID
 	bulkDetachErr        error
+
+	// Soft-delete tracking.
+	bulkSoftDeleted   []uuid.UUID
+	bulkSoftDeleteN   int64 // override return value; if zero, returns len(monitorIDs)
+	bulkSoftDeleteErr error
+	hardDeletedID     *uuid.UUID
 }
 
 func NewMockRepository() *MockRepository {
@@ -74,6 +80,27 @@ func (m *MockRepository) Delete(ctx context.Context, tenantID, monitorID uuid.UU
 
 func (m *MockRepository) DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
 	m.deletedHistoryIDs = append([]uuid.UUID(nil), monitorIDs...)
+	return nil
+}
+
+func (m *MockRepository) BulkSoftDelete(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error) {
+	if m.bulkSoftDeleteErr != nil {
+		return 0, m.bulkSoftDeleteErr
+	}
+	m.bulkSoftDeleted = append([]uuid.UUID(nil), monitorIDs...)
+	for _, id := range monitorIDs {
+		delete(m.monitors, id)
+	}
+	if m.bulkSoftDeleteN > 0 {
+		return m.bulkSoftDeleteN, nil
+	}
+	return int64(len(monitorIDs)), nil
+}
+
+func (m *MockRepository) HardDelete(ctx context.Context, monitorID uuid.UUID) error {
+	id := monitorID
+	m.hardDeletedID = &id
+	delete(m.monitors, monitorID)
 	return nil
 }
 
