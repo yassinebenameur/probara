@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
 func TestCreateCheckJob(t *testing.T) {
@@ -266,5 +268,49 @@ func TestMonitor_Struct(t *testing.T) {
 	}
 	if m.TimeoutSeconds != 30 {
 		t.Errorf("Monitor TimeoutSeconds = %v, want 30", m.TimeoutSeconds)
+	}
+}
+
+func TestScheduler_FetchDueMonitors_ExcludesSoftDeleted(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "")
+	live := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "live")
+	gone := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "gone")
+
+	if _, err := dbClient.ExecContext(ctx,
+		`UPDATE monitors SET deleted_at = NOW() WHERE id = $1`, gone,
+	); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	s := &Scheduler{db: dbClient}
+	tx, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback()
+
+	monitors, err := s.fetchDueMonitors(ctx, tx, 10)
+	if err != nil {
+		t.Fatalf("fetchDueMonitors: %v", err)
+	}
+
+	var sawLive, sawGone bool
+	for _, m := range monitors {
+		if m.ID == live {
+			sawLive = true
+		}
+		if m.ID == gone {
+			sawGone = true
+		}
+	}
+	if !sawLive {
+		t.Error("expected live monitor in batch; not found")
+	}
+	if sawGone {
+		t.Error("soft-deleted monitor must NOT appear in batch")
 	}
 }

@@ -384,6 +384,7 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds
 		FROM monitors
 		WHERE enabled = true
+		  AND deleted_at IS NULL
 		  AND type != 'group'
 		  AND (next_run_at IS NULL OR next_run_at <= NOW())
 		ORDER BY next_run_at NULLS FIRST, id
