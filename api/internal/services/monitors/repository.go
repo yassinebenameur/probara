@@ -47,11 +47,11 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL)
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
 	`
 
 	var tags []string
@@ -65,7 +65,7 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
-		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 	)
 
 	if err != nil {
@@ -81,7 +81,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 	query := `
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2
 	`
@@ -93,7 +93,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
-		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 	)
 
 	if err != nil {
@@ -140,7 +140,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
 		FROM monitors
 		%s
 		ORDER BY created_at DESC
@@ -164,7 +164,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 			&monitor.AlertPolicyID, &monitor.Enabled,
-			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan monitor: %w", err)
@@ -211,7 +211,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		WHERE id = $%d AND tenant_id = $%d
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
 	`, setClause, whereArgIndex, whereArgIndex+1)
 
 	var tags []string
@@ -220,7 +220,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
-		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 	)
 
 	if err != nil {

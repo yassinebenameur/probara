@@ -42,6 +42,7 @@ type Monitor struct {
 	MemberIDs       []uuid.UUID     `json:"member_ids,omitempty"` // Populated for group monitors
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
+	DeletedAt       *time.Time      `json:"deleted_at,omitempty"`
 }
 
 // CreateMonitorRequest represents a request to create a monitor
