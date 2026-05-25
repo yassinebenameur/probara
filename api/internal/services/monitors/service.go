@@ -426,6 +426,20 @@ func (s *Service) DeleteMonitorHistory(ctx context.Context, tenantID, monitorID 
 	return nil
 }
 
+// BulkDeleteMonitors soft-deletes the supplied monitors in one statement.
+// All monitors must belong to the tenant — if any don't, no rows are tombstoned.
+func (s *Service) BulkDeleteMonitors(
+	ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID,
+) (int64, error) {
+	if len(monitorIDs) == 0 {
+		return 0, fmt.Errorf("monitor_ids cannot be empty")
+	}
+	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
+		return 0, err
+	}
+	return s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs)
+}
+
 // BulkUpdateAlertPolicy attaches or detaches a single alert policy across many monitors.
 func (s *Service) BulkUpdateAlertPolicy(
 	ctx context.Context,

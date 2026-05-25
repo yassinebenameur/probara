@@ -25,6 +25,10 @@ type MonitorService interface {
 	// DeleteMonitor deletes a monitor
 	DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error
 
+	// BulkDeleteMonitors soft-deletes many monitors in a single statement.
+	// Returns the number of newly tombstoned rows.
+	BulkDeleteMonitors(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error)
+
 	// DeleteMonitorHistory clears check, alert, and analytics history while preserving the monitor.
 	DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error
 

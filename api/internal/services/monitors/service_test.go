@@ -459,3 +459,49 @@ func TestService_BulkUpdateAlertPolicy_UnknownOp(t *testing.T) {
 		t.Fatalf("expected error for unknown op")
 	}
 }
+
+func TestService_BulkDeleteMonitors(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+
+	repo := NewMockRepository()
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	for _, id := range ids {
+		repo.monitors[id] = &models.Monitor{ID: id, TenantID: tenantID}
+	}
+
+	svc := NewService(repo)
+
+	deleted, err := svc.BulkDeleteMonitors(ctx, tenantID, ids)
+	if err != nil {
+		t.Fatalf("BulkDeleteMonitors: %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("deleted = %d, want 3", deleted)
+	}
+	if got, want := len(repo.bulkSoftDeleted), 3; got != want {
+		t.Fatalf("mock saw %d ids, want %d", got, want)
+	}
+}
+
+func TestService_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
+	svc := NewService(NewMockRepository())
+	if _, err := svc.BulkDeleteMonitors(context.Background(), uuid.New(), nil); err == nil {
+		t.Fatal("BulkDeleteMonitors(nil) should reject empty input")
+	}
+}
+
+func TestService_BulkDeleteMonitors_VerifyFailsBlocks(t *testing.T) {
+	repo := NewMockRepository()
+	repo.verifyMonitorsErr = fmt.Errorf("one or more monitors not found or do not belong to tenant")
+	svc := NewService(repo)
+
+	_, err := svc.BulkDeleteMonitors(context.Background(), uuid.New(),
+		[]uuid.UUID{uuid.New()})
+	if err == nil {
+		t.Fatal("BulkDeleteMonitors should propagate verify error")
+	}
+	if len(repo.bulkSoftDeleted) != 0 {
+		t.Fatal("must not call BulkSoftDelete when verify fails")
+	}
+}

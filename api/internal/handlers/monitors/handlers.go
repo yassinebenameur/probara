@@ -434,6 +434,64 @@ func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// BulkDeleteMonitors handles POST /api/v1/monitors/bulk/delete.
+// Soft-deletes the listed monitors; child rows are purged asynchronously.
+func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	var req models.BulkDeleteMonitorsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return
+	}
+	if len(req.MonitorIDs) == 0 {
+		errors.WriteValidationError(w, "monitor_ids is required and cannot be empty")
+		return
+	}
+
+	monitorIDs := make([]uuid.UUID, len(req.MonitorIDs))
+	for i, idStr := range req.MonitorIDs {
+		monitorID, err := uuid.Parse(idStr)
+		if err != nil {
+			errors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID: %s", idStr))
+			return
+		}
+		monitorIDs[i] = monitorID
+	}
+
+	deleted, err := h.service.BulkDeleteMonitors(r.Context(), tenantUUID, monitorIDs)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found or do not belong to tenant") {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to bulk delete monitors")
+		errors.WriteInternalError(w, "failed to bulk delete monitors")
+		return
+	}
+
+	h.logger.WithFields(map[string]interface{}{
+		"tenant_id":   tenantID,
+		"deleted":     deleted,
+		"monitor_ids": req.MonitorIDs,
+	}).Info("Monitors bulk-deleted")
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(models.BulkDeleteMonitorsResponse{Deleted: deleted})
+}
+
 // DeleteMonitorHistory handles DELETE /api/v1/monitors/{id}/history
 func (h *Handlers) DeleteMonitorHistory(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := middleware.GetTenantID(r.Context())

@@ -287,6 +287,16 @@ type RemoveMonitorsFromGroupRequest struct {
 	MonitorIDs []string `json:"monitor_ids"`
 }
 
+// BulkDeleteMonitorsRequest is the body of POST /api/v1/monitors/bulk/delete.
+type BulkDeleteMonitorsRequest struct {
+	MonitorIDs []string `json:"monitor_ids"`
+}
+
+// BulkDeleteMonitorsResponse is the response to a bulk delete.
+type BulkDeleteMonitorsResponse struct {
+	Deleted int64 `json:"deleted"`
+}
+
 // BulkAlertPolicyOp is the operation type for BulkUpdateAlertPolicyRequest.
 type BulkAlertPolicyOp string
 

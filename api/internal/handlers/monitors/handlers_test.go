@@ -118,6 +118,19 @@ func (m *MockMonitorService) BulkUpdateAlertPolicy(
 	return &models.BulkUpdateAlertPolicyResponse{}, nil
 }
 
+func (m *MockMonitorService) BulkDeleteMonitors(
+	ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID,
+) (int64, error) {
+	var deleted int64
+	for _, id := range monitorIDs {
+		if monitor, ok := m.monitors[id]; ok && monitor.TenantID == tenantID {
+			delete(m.monitors, id)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
 type mockNotFoundError struct{}
 
 func (e *mockNotFoundError) Error() string {

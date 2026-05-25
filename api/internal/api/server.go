@@ -210,6 +210,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/import", importHdlrs.Execute)
 				// Bulk operations (must be before /{id} to avoid conflicts)
 				r.Post("/bulk/alert-policy", monitorHandlers.BulkUpdateAlertPolicy)
+				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
