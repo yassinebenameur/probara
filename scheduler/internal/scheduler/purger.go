@@ -54,12 +54,29 @@ func newPurger(dbClient *db.Client, log *logger.Logger, metrics *purgerMetrics, 
 // runOnce acquires the advisory lock, drains as many tombstoned monitors as it
 // can within MaxRowsPerRun of total child-row deletions, and returns the count
 // of monitor rows fully purged.
+//
+// All SQL runs through a single pinned *sql.Conn: pg_try_advisory_lock is
+// session-scoped, so the lock query, every delete, and the matching
+// pg_advisory_unlock must share one Postgres session. Routing them through the
+// pooled *sql.DB would let the unlock hit a different session (leaking the
+// lock on the original) and let a later run reuse a connection that still
+// holds the lock (reentrant claim).
 func (p *purger) runOnce(ctx context.Context) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, monitorPurgeRunTimeout)
 	defer cancel()
 
+	conn, err := p.db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire pinned db connection for monitor purge: %w", err)
+	}
+	defer func() {
+		if cerr := conn.Close(); cerr != nil {
+			p.logger.WithError(cerr).Warn("failed to return monitor purge connection to pool")
+		}
+	}()
+
 	var locked bool
-	if err := p.db.QueryRowContext(ctx,
+	if err := conn.QueryRowContext(ctx,
 		`SELECT pg_try_advisory_lock($1)`, monitorPurgeAdvisoryLock,
 	).Scan(&locked); err != nil {
 		return 0, fmt.Errorf("acquire monitor purge advisory lock: %w", err)
@@ -69,7 +86,10 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	defer func() {
-		if _, err := p.db.ExecContext(context.Background(),
+		// Use a background context so a cancelled parent ctx still releases the
+		// lock, but use the same pinned connection so it actually hits the
+		// session that holds it.
+		if _, err := conn.ExecContext(context.Background(),
 			`SELECT pg_advisory_unlock($1)`, monitorPurgeAdvisoryLock,
 		); err != nil {
 			p.logger.WithError(err).Warn("failed to release monitor purge advisory lock")
@@ -80,7 +100,7 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 	rowsBudget := p.opts.MaxRowsPerRun
 
 	for rowsBudget > 0 {
-		mon, err := p.claimNextTombstonedMonitor(ctx)
+		mon, err := p.claimNextTombstonedMonitor(ctx, conn)
 		if err != nil {
 			return purged, err
 		}
@@ -96,7 +116,7 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 			"rows_budget_left": rowsBudget,
 		}).Debug("monitor purge: starting monitor")
 
-		spent, done, err := p.purgeMonitor(ctx, *mon, rowsBudget)
+		spent, done, err := p.purgeMonitor(ctx, conn, *mon, rowsBudget)
 		if err != nil {
 			if p.metrics != nil {
 				p.metrics.errors.With(prometheus.Labels{}).Inc()
@@ -133,10 +153,11 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 }
 
 // claimNextTombstonedMonitor returns the oldest tombstoned monitor (FIFO by deleted_at)
-// or nil if there are none.
-func (p *purger) claimNextTombstonedMonitor(ctx context.Context) (*uuid.UUID, error) {
+// or nil if there are none. Uses the pinned connection so the read sees state
+// consistent with the in-progress purge session.
+func (p *purger) claimNextTombstonedMonitor(ctx context.Context, conn *sql.Conn) (*uuid.UUID, error) {
 	var id uuid.UUID
-	err := p.db.QueryRowContext(ctx, `
+	err := conn.QueryRowContext(ctx, `
 		SELECT id FROM monitors
 		WHERE deleted_at IS NOT NULL
 		ORDER BY deleted_at ASC
@@ -159,7 +180,7 @@ func (p *purger) claimNextTombstonedMonitor(ctx context.Context) (*uuid.UUID, er
 //
 // When budget is exhausted partway, the monitor row is left in place
 // (still tombstoned) and the next purger tick resumes it.
-func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudget int) (spent int, done bool, err error) {
+func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uuid.UUID, rowsBudget int) (spent int, done bool, err error) {
 	ids := []uuid.UUID{monitorID}
 
 	// Each entry is a child table that should be drained before the monitor row
@@ -218,7 +239,7 @@ func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudg
 				return spent, false, nil
 			}
 
-			result, execErr := p.db.ExecContext(ctx, d.sql, pq.Array(ids), limit)
+			result, execErr := conn.ExecContext(ctx, d.sql, pq.Array(ids), limit)
 			if execErr != nil {
 				return spent, false, fmt.Errorf("delete %s: %w", d.name, execErr)
 			}
@@ -254,7 +275,7 @@ func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudg
 	// is_auto_created is true — so we have to demote the incident to manual
 	// first, otherwise the DELETE below trips the CHECK and the monitor stays
 	// stuck at the head of the purge queue forever.
-	if _, execErr := p.db.ExecContext(ctx,
+	if _, execErr := conn.ExecContext(ctx,
 		`UPDATE incidents SET is_auto_created = FALSE, auto_monitor_id = NULL, auto_alert_policy_id = NULL, updated_at = NOW()
 		 WHERE auto_monitor_id = $1`, monitorID,
 	); execErr != nil {
@@ -266,7 +287,7 @@ func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudg
 	// monitor; monitor_groups, monitor_alert_policies, status_page_monitors,
 	// status_page_section_monitors, incident_monitors) are cleaned up via
 	// their existing ON DELETE CASCADE FKs.
-	if _, execErr := p.db.ExecContext(ctx,
+	if _, execErr := conn.ExecContext(ctx,
 		`DELETE FROM monitors WHERE id = $1`, monitorID,
 	); execErr != nil {
 		return spent, false, fmt.Errorf("delete monitor row: %w", execErr)
