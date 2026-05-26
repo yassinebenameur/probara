@@ -1,3 +1,27 @@
+# [1.0.0-alpha.46](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.45...v1.0.0-alpha.46) (2026-05-26)
+
+
+### Bug Fixes
+
+* align alerts mock SQL and import test mock with new interface ([e83a0b2](https://github.com/yassinebenameur/probara/commit/e83a0b23ba7babae94e6ba209d947d6b2cb80074))
+* **monitors:** detach auto-incidents and filter tombstoned group members ([9dcdd65](https://github.com/yassinebenameur/probara/commit/9dcdd6568f1c26eb9dc002ae40e0afc673291cf4))
+* **scheduler:** pin purger SQL to one connection; detach incidents on down migration ([fe60b75](https://github.com/yassinebenameur/probara/commit/fe60b754f015e6ddfc8171e0ef896748d33dd51e))
+* **web:** resolve dashboard page.tsx merge conflicts ([7ff7a27](https://github.com/yassinebenameur/probara/commit/7ff7a2766679bda8f9402e777e82d632dcfb267c))
+
+
+### Features
+
+* **api:** add POST /monitors/bulk/delete for soft bulk delete ([37f7d3f](https://github.com/yassinebenameur/probara/commit/37f7d3fa636ea4970e6f816fca404205c8bb63b4))
+* **config:** add monitor purge worker tunables ([5cffee5](https://github.com/yassinebenameur/probara/commit/5cffee5d69f26e849a0367ebca0f01d7c6b77513))
+* **db:** add monitors.deleted_at and partial unique indexes for soft delete ([a22ce0d](https://github.com/yassinebenameur/probara/commit/a22ce0dd6b706c6d0eee1f64805c3a6242efc82b))
+* filter soft-deleted monitors from every read and update site ([f690c1f](https://github.com/yassinebenameur/probara/commit/f690c1fbc8d7a986012efa628ad6c12608d2bd73))
+* **models:** add DeletedAt to Monitor and select it in repo queries ([a84f3bf](https://github.com/yassinebenameur/probara/commit/a84f3bf4bcea29eabfb8adf8ff7fb25dba7ebd83))
+* **monitors:** exclude tombstoned monitors from repository reads ([2502980](https://github.com/yassinebenameur/probara/commit/2502980c72d2cd755a558b2d41eded1daec651b0))
+* **monitors:** soft delete via tombstone + BulkSoftDelete/HardDelete repo methods ([38303ee](https://github.com/yassinebenameur/probara/commit/38303ee7528024d1b9d81511fbcfb860992f4592))
+* **scheduler:** add async purger for soft-deleted monitors ([c76051e](https://github.com/yassinebenameur/probara/commit/c76051e0b143b89cb07cfe6bee862e9f0afba6a5))
+* **scheduler:** add per-batch debug logs to monitor purger ([9af3cd5](https://github.com/yassinebenameur/probara/commit/9af3cd5ad40d30fbd70276fedee33e67bc4c8d32))
+* **scheduler:** skip soft-deleted monitors when fetching due work ([daa9797](https://github.com/yassinebenameur/probara/commit/daa97975796a928f100168c4345dbde19d035aab))
+
 # [1.0.0-alpha.45](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.44...v1.0.0-alpha.45) (2026-05-25)
 
 
