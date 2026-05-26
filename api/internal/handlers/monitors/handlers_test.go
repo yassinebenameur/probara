@@ -663,3 +663,65 @@ func TestHandlers_RunMonitorNow_QueueUnavailable(t *testing.T) {
 		t.Fatalf("Expected status %d, got %d: %s", http.StatusInternalServerError, w.Code, w.Body.String())
 	}
 }
+
+func TestHandlers_BulkDeleteMonitors(t *testing.T) {
+	log := logger.New("test", "debug")
+	monitorSvc := NewMockMonitorService()
+	groupSvc := &MockGroupService{}
+	resultSvc := &MockResultsService{}
+	handlers := NewHandlers(monitorSvc, groupSvc, resultSvc, log, t.TempDir())
+
+	tenantID := uuid.New()
+	idA, idB := uuid.New(), uuid.New()
+	monitorSvc.monitors[idA] = &models.Monitor{ID: idA, TenantID: tenantID}
+	monitorSvc.monitors[idB] = &models.Monitor{ID: idB, TenantID: tenantID}
+
+	r := chi.NewRouter()
+	r.Post("/bulk/delete", handlers.BulkDeleteMonitors)
+
+	body := `{"monitor_ids":["` + idA.String() + `","` + idB.String() + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/bulk/delete", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var resp models.BulkDeleteMonitorsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Deleted != 2 {
+		t.Errorf("Deleted = %d, want 2", resp.Deleted)
+	}
+	if _, ok := monitorSvc.monitors[idA]; ok {
+		t.Error("monitor A should be removed from mock")
+	}
+	if _, ok := monitorSvc.monitors[idB]; ok {
+		t.Error("monitor B should be removed from mock")
+	}
+}
+
+func TestHandlers_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
+	log := logger.New("test", "debug")
+	handlers := NewHandlers(NewMockMonitorService(), &MockGroupService{}, &MockResultsService{}, log, t.TempDir())
+
+	r := chi.NewRouter()
+	r.Post("/bulk/delete", handlers.BulkDeleteMonitors)
+
+	req := httptest.NewRequest(http.MethodPost, "/bulk/delete",
+		bytes.NewBufferString(`{"monitor_ids":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.NewString()))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
+	}
+}
