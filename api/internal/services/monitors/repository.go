@@ -448,13 +448,14 @@ func (r *PostgresRepository) GetAlertPolicyIDsForMonitors(ctx context.Context, m
 	return result, nil
 }
 
-// GetMemberIDs retrieves all member IDs for a group monitor
+// GetMemberIDs retrieves all member IDs for a group monitor, excluding tombstoned members.
 func (r *PostgresRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
 	query := `
-		SELECT monitor_id
-		FROM monitor_groups
-		WHERE group_id = $1
-		ORDER BY created_at
+		SELECT mg.monitor_id
+		FROM monitor_groups mg
+		JOIN monitors m ON m.id = mg.monitor_id
+		WHERE mg.group_id = $1 AND m.deleted_at IS NULL
+		ORDER BY mg.created_at
 	`
 	rows, err := r.db.QueryContext(ctx, query, groupID)
 	if err != nil {

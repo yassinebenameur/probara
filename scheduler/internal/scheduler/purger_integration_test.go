@@ -156,6 +156,56 @@ func TestPurger_PartialUniqueIndexAllowsReimport(t *testing.T) {
 	require.NoError(t, err, "reimporting with the same push_token must succeed while old row is tombstoned but not yet purged")
 }
 
+func TestPurger_DetachesAutoIncidentsBeforeDelete(t *testing.T) {
+	// Regression: incidents_auto_fields_check (migration 000038) requires
+	// auto_monitor_id to stay non-null while is_auto_created is true. The FK
+	// has ON DELETE SET NULL, so without an explicit detach the final
+	// DELETE FROM monitors trips the CHECK and the monitor stays stuck.
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "")
+
+	policyID := uuid.New()
+	_, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, created_at, updated_at)
+		VALUES ($1, $2, 'p', 1, 60, NOW(), NOW())
+	`, policyID, tenantID)
+	require.NoError(t, err)
+
+	incidentID := uuid.New()
+	_, err = dbClient.ExecContext(ctx, `
+		INSERT INTO incidents (id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id, created_at, updated_at)
+		VALUES ($1, $2, 'auto', '', 'investigating', TRUE, $3, $4, NOW(), NOW())
+	`, incidentID, tenantID, monitorID, policyID)
+	require.NoError(t, err)
+
+	_, err = dbClient.ExecContext(ctx,
+		`UPDATE monitors SET deleted_at = NOW() WHERE id = $1`, monitorID)
+	require.NoError(t, err)
+
+	p := newPurger(dbClient, testLogger(t), nil, purgerOptions{BatchSize: 10, MaxRowsPerRun: 100})
+	purged, err := p.runOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, purged, "monitor with auto-incident must be purged, not blocked")
+
+	// Incident must still exist, detached.
+	var (
+		isAuto       bool
+		autoMonitor  *uuid.UUID
+		autoPolicy   *uuid.UUID
+	)
+	require.NoError(t, dbClient.QueryRowContext(ctx,
+		`SELECT is_auto_created, auto_monitor_id, auto_alert_policy_id FROM incidents WHERE id = $1`,
+		incidentID,
+	).Scan(&isAuto, &autoMonitor, &autoPolicy))
+	require.False(t, isAuto, "incident should be demoted to manual")
+	require.Nil(t, autoMonitor, "auto_monitor_id should be cleared")
+	require.Nil(t, autoPolicy, "auto_alert_policy_id should be cleared")
+}
+
 func testLogger(t testing.TB) *logger.Logger {
 	t.Helper()
 	return logger.New("scheduler_test", "error")

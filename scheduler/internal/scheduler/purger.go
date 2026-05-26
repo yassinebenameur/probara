@@ -221,6 +221,19 @@ func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudg
 		}
 	}
 
+	// Detach auto-created incidents before the monitor row goes away. The FK
+	// has ON DELETE SET NULL on auto_monitor_id, but incidents_auto_fields_check
+	// (migration 000038) requires auto_monitor_id to stay non-null whenever
+	// is_auto_created is true — so we have to demote the incident to manual
+	// first, otherwise the DELETE below trips the CHECK and the monitor stays
+	// stuck at the head of the purge queue forever.
+	if _, execErr := p.db.ExecContext(ctx,
+		`UPDATE incidents SET is_auto_created = FALSE, auto_monitor_id = NULL, auto_alert_policy_id = NULL, updated_at = NOW()
+		 WHERE auto_monitor_id = $1`, monitorID,
+	); execErr != nil {
+		return spent, false, fmt.Errorf("detach auto incidents: %w", execErr)
+	}
+
 	// Child tables fully drained. Drop the monitor row itself. Remaining
 	// children with small bounded fan-out (monitor_downtime_open: 1 row per
 	// monitor; monitor_groups, monitor_alert_policies, status_page_monitors,
