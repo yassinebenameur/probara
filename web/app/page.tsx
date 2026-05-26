@@ -34,9 +34,12 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
+  ChevronDown,
   Clock3,
   Plus,
   RefreshCw,
+  Tags,
+  X,
 } from 'lucide-react';
 import {
   ActivityTimelineItem,
@@ -112,24 +115,20 @@ function TagFilterPicker({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((value) => !value)}
-        className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+        className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors ${
           hasSelection
             ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
             : 'border-white/[0.06] bg-slate-900/50 text-slate-300 hover:text-white'
         }`}
       >
-        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-        </svg>
+        <Tags className="h-3.5 w-3.5" strokeWidth={1.8} />
         <span>Tags</span>
         {hasSelection && (
           <span className="rounded-full bg-cyan-500/20 px-1.5 py-0.5 text-[10px] text-cyan-200">
             {selectedTags.length}
           </span>
         )}
-        <svg className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
+        <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2} />
       </button>
 
       {open && (
@@ -161,8 +160,11 @@ function TagFilterPicker({
 
 function SectionLoadingState({ message }: { message: string }) {
   return (
-    <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-white/[0.06]">
-      <p className="text-sm text-slate-500">{message}</p>
+    <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-white/[0.08] bg-slate-950/25">
+      <div className="flex items-center gap-2 text-sm text-slate-500">
+        <RefreshCw className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
+        <span>{message}</span>
+      </div>
     </div>
   );
 }
@@ -212,7 +214,7 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
   ];
 
   return (
-    <div className="py-3">
+    <div className="py-3.5">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start gap-2">
@@ -224,9 +226,9 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
             </Link>
             <InfoTip entries={infoEntries} title={monitor.monitor_name} />
           </div>
-          <div className="mt-2 flex items-center gap-3">
+          <div className="mt-2.5 flex items-center gap-3">
             {/* Uptime bar */}
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800/80">
               <div
                 className={`h-full rounded-full ${barColor} transition-all`}
                 style={{ width: `${uptimePct}%` }}
@@ -268,13 +270,19 @@ function CustomTooltip({ active, payload, label }: any) {
 
 function LoadingSkeleton() {
   return (
-    <div className="animate-pulse space-y-5">
+    <div className="animate-pulse space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="space-y-2">
+          <div className="h-6 w-40 rounded-lg bg-slate-800/60" />
+          <div className="h-4 w-72 rounded-lg bg-slate-800/40" />
+        </div>
+        <div className="hidden h-9 w-48 rounded-lg bg-slate-800/50 sm:block" />
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="h-28 rounded-xl bg-slate-800/50" />
+          <div key={i} className="h-24 rounded-xl bg-slate-800/50" />
         ))}
       </div>
-      <div className="h-10 rounded-xl bg-slate-800/50" />
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="h-64 rounded-xl bg-slate-800/50" />
         <div className="h-64 rounded-xl bg-slate-800/50" />
@@ -289,9 +297,9 @@ function LoadingSkeleton() {
 
 function EmptyState({ message, sub }: { message: string; sub?: string }) {
   return (
-    <div className="flex min-h-[160px] flex-col items-center justify-center text-center">
-      <p className="text-sm text-slate-500">{message}</p>
-      {sub && <p className="mt-1 text-xs text-slate-600">{sub}</p>}
+    <div className="flex min-h-[168px] flex-col items-center justify-center rounded-lg border border-dashed border-white/[0.06] bg-slate-950/20 px-4 text-center">
+      <p className="text-sm font-medium text-slate-300">{message}</p>
+      {sub && <p className="mt-1 max-w-sm text-xs text-slate-500">{sub}</p>}
     </div>
   );
 }
@@ -310,12 +318,12 @@ function SectionCard({
   className?: string;
 }) {
   return (
-    <div className={`min-w-0 rounded-xl border border-white/[0.06] bg-slate-900/50 ${className ?? ''}`}>
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-white/[0.04] px-5 py-3.5">
-        <h3 className="min-w-0 text-sm font-medium text-white">{title}</h3>
+    <div className={`min-w-0 overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-[0_18px_45px_rgba(0,0,0,0.18)] ${className ?? ''}`}>
+      <div className="flex min-h-14 min-w-0 flex-wrap items-center justify-between gap-2 border-b border-white/[0.05] bg-slate-950/20 px-5 py-3">
+        <h3 className="min-w-0 text-sm font-semibold text-white">{title}</h3>
         {action && <div className="min-w-0 text-xs text-slate-500">{action}</div>}
       </div>
-      <div className="min-w-0 px-5">{children}</div>
+      <div className="min-w-0 p-5">{children}</div>
     </div>
   );
 }
@@ -350,14 +358,14 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
   const tone = toneStyles[summary.tone];
 
   return (
-    <section className={`overflow-hidden rounded-2xl border ${tone.ring} bg-slate-900/55`}>
-      <div className="grid gap-5 p-5 lg:grid-cols-[1.4fr_2fr] lg:p-6">
+    <section className={`overflow-hidden rounded-xl border ${tone.ring} bg-slate-900/60 shadow-[0_18px_45px_rgba(0,0,0,0.2)]`}>
+      <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
-          <div className={`flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-current/30 ${tone.iconBg} ${tone.icon}`}>
+          <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-current/25 ${tone.iconBg} ${tone.icon}`}>
             {summary.tone === 'critical' ? (
-              <AlertTriangle className="h-9 w-9" strokeWidth={1.8} />
+              <AlertTriangle className="h-8 w-8" strokeWidth={1.8} />
             ) : (
-              <Check className="h-10 w-10" strokeWidth={2.3} />
+              <Check className="h-8 w-8" strokeWidth={2.3} />
             )}
           </div>
           <div className="min-w-0">
@@ -365,7 +373,7 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
               <span className={`h-2.5 w-2.5 rounded-full ${summary.tone === 'critical' ? 'bg-rose-400' : summary.tone === 'attention' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
               <h2 className={`text-lg font-semibold tracking-tight ${tone.text}`}>{summary.label}</h2>
             </div>
-            <p className="mt-2 max-w-xl text-sm text-slate-400">{summary.description}</p>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{summary.description}</p>
             <p className={`mt-2 text-sm font-medium ${summary.attentionCount > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
               {summary.attentionCount > 0
                 ? `${summary.attentionCount} monitor${summary.attentionCount === 1 ? '' : 's'} need attention.`
@@ -392,7 +400,7 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
                     ? 'text-emerald-300'
                     : 'text-white';
             return (
-              <div key={metric.label} className="rounded-xl border border-white/[0.06] bg-slate-950/35 p-4">
+              <div key={metric.label} className="min-h-24 rounded-lg border border-white/[0.06] bg-slate-950/35 p-4">
                 <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{metric.label}</p>
                 <p className={`mt-2 text-2xl font-semibold tabular-nums ${metricTone}`}>{metric.value}</p>
                 {metric.detail && <p className="mt-1 text-xs text-slate-500">{metric.detail}</p>}
@@ -441,8 +449,8 @@ function UptimeResponseChart({
   noMatchingMonitors: boolean;
 }) {
   return (
-    <section className="rounded-2xl border border-white/[0.06] bg-slate-900/50 p-5">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-[0_18px_45px_rgba(0,0,0,0.18)]">
+      <div className="flex flex-col gap-3 border-b border-white/[0.05] bg-slate-950/20 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
             <h3 className="text-base font-semibold text-white">Uptime & response time</h3>
@@ -463,37 +471,39 @@ function UptimeResponseChart({
         <RangeControls timeRange={timeRange} setTimeRange={setTimeRange} />
       </div>
 
-      {hasEnoughTrendData ? (
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={trendData} margin={{ top: 10, right: 6, bottom: 0, left: 4 }}>
-              <defs>
-                <linearGradient id="combinedUptimeGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.22} />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-              <YAxis yAxisId="uptime" domain={[98.5, 100]} width={58} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-              <YAxis yAxisId="latency" orientation="right" width={48} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}ms`} />
-              <Tooltip content={<CustomTooltip />} />
-              <Area yAxisId="uptime" type="monotone" dataKey="uptime" stroke="#34d399" strokeWidth={2} fill="url(#combinedUptimeGradient)" name="uptime" />
-              <Line yAxisId="latency" type="monotone" dataKey="responseTime" stroke="#60a5fa" strokeWidth={2} dot={false} name="responseTime" />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-white/[0.06] bg-slate-950/25 px-4 text-center">
-          <div>
-            <p className="text-sm font-medium text-slate-300">
-              {noMatchingMonitors ? 'No monitors match these tags' : 'Not enough trend data yet'}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              {noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Trend lines will appear after at least two populated buckets.'}
-            </p>
+      <div className="p-5">
+        {hasEnoughTrendData ? (
+          <div className="h-64 min-w-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={trendData} margin={{ top: 10, right: 6, bottom: 0, left: 4 }}>
+                <defs>
+                  <linearGradient id="combinedUptimeGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                <YAxis yAxisId="uptime" domain={[98.5, 100]} width={58} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                <YAxis yAxisId="latency" orientation="right" width={48} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}ms`} />
+                <Tooltip content={<CustomTooltip />} />
+                <Area yAxisId="uptime" type="monotone" dataKey="uptime" stroke="#34d399" strokeWidth={2} fill="url(#combinedUptimeGradient)" name="uptime" />
+                <Line yAxisId="latency" type="monotone" dataKey="responseTime" stroke="#60a5fa" strokeWidth={2} dot={false} name="responseTime" />
+              </ComposedChart>
+            </ResponsiveContainer>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-white/[0.06] bg-slate-950/25 px-4 text-center">
+            <div>
+              <p className="text-sm font-medium text-slate-300">
+                {noMatchingMonitors ? 'No monitors match these tags' : 'Not enough trend data yet'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                {noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Trend lines will appear after at least two populated buckets.'}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -516,7 +526,7 @@ function NeedsAttentionPanel({
       {loading ? (
         <SectionLoadingState message="Loading monitors needing attention..." />
       ) : monitors.length > 0 ? (
-        <div className="dashboard-scroll max-h-72 divide-y divide-white/[0.04] overflow-y-auto pb-2 pr-1">
+        <div className="dashboard-scroll -my-1 max-h-72 divide-y divide-white/[0.04] overflow-y-auto pr-1">
           {monitors.map((monitor) => (
             <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
           ))}
@@ -577,7 +587,7 @@ function WhatChangedTimeline({
       {loading ? (
         <SectionLoadingState message="Loading recent activity..." />
       ) : items.length > 0 ? (
-        <div className="dashboard-scroll max-h-80 overflow-y-auto py-3 pr-1">
+        <div className="dashboard-scroll -my-1 max-h-80 overflow-y-auto pr-1">
           <div className="relative space-y-4">
             <div className="absolute bottom-3 left-3.5 top-3 w-px bg-white/[0.08]" />
             {items.map((item) => (
@@ -775,7 +785,7 @@ export default function DashboardPage() {
   if (loading) return <LoadingSkeleton />;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Error Banner */}
       {error && (
         <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
@@ -784,10 +794,10 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-3 border-b border-white/[0.06] pb-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-white">Dashboard</h1>
-          <p className="mt-0.5 text-sm text-slate-500">Real-time overview of your monitoring environment</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-white">Dashboard</h1>
+          <p className="mt-1 text-sm text-slate-500">Real-time overview of your monitoring environment</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <TagFilterPicker
@@ -818,8 +828,9 @@ export default function DashboardPage() {
               {tag}
             </span>
           ))}
-          <button onClick={clearTags} className="ml-auto text-xs text-slate-400 transition-colors hover:text-white">
-            Clear all
+          <button onClick={clearTags} className="ml-auto inline-flex items-center gap-1 text-xs text-slate-400 transition-colors hover:text-white">
+            <X className="h-3.5 w-3.5" strokeWidth={1.8} />
+            Clear
           </button>
         </div>
       )}
