@@ -50,6 +50,11 @@ type SchedulerConfig struct {
 	RetentionCleanupHourUTC       int
 	RetentionCleanupBatchSize     int
 	RetentionCleanupMaxRowsPerRun int
+	// Monitor purge: removes child rows of soft-deleted monitors then the row itself.
+	MonitorPurgeEnabled         bool
+	MonitorPurgeIntervalSeconds int
+	MonitorPurgeBatchSize       int
+	MonitorPurgeMaxRowsPerRun   int
 }
 
 // WorkerConfig contains configuration for the worker service
@@ -377,6 +382,42 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 			return nil, fmt.Errorf("invalid RETENTION_CLEANUP_MAX_ROWS_PER_RUN: must be greater than 0")
 		}
 		cfg.RetentionCleanupMaxRowsPerRun = maxRows
+	}
+
+	cfg.MonitorPurgeEnabled = true
+	if v := os.Getenv("MONITOR_PURGE_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_ENABLED: %w", err)
+		}
+		cfg.MonitorPurgeEnabled = enabled
+	}
+
+	cfg.MonitorPurgeIntervalSeconds = 30
+	if v := os.Getenv("MONITOR_PURGE_INTERVAL_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_INTERVAL_SECONDS: %q", v)
+		}
+		cfg.MonitorPurgeIntervalSeconds = n
+	}
+
+	cfg.MonitorPurgeBatchSize = 5000
+	if v := os.Getenv("MONITOR_PURGE_BATCH_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_BATCH_SIZE: %q", v)
+		}
+		cfg.MonitorPurgeBatchSize = n
+	}
+
+	cfg.MonitorPurgeMaxRowsPerRun = 200000
+	if v := os.Getenv("MONITOR_PURGE_MAX_ROWS_PER_RUN"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_MAX_ROWS_PER_RUN: %q", v)
+		}
+		cfg.MonitorPurgeMaxRowsPerRun = n
 	}
 
 	return cfg, nil
