@@ -639,11 +639,14 @@ func (s *Scheduler) triggerMonitorPurge() {
 			s.logger.WithError(err).Warn("monitor purge run failed")
 			return
 		}
+		fields := logrus.Fields{
+			"monitors_purged":  purged,
+			"duration_seconds": duration,
+		}
 		if purged > 0 {
-			s.logger.WithFields(logrus.Fields{
-				"monitors_purged":  purged,
-				"duration_seconds": duration,
-			}).Info("monitor purge run completed")
+			s.logger.WithFields(fields).Info("monitor purge run completed")
+		} else {
+			s.logger.WithFields(fields).Debug("monitor purge tick completed (no-op)")
 		}
 	}()
 }

@@ -65,6 +65,7 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("acquire monitor purge advisory lock: %w", err)
 	}
 	if !locked {
+		p.logger.Debug("monitor purge: advisory lock held by another replica; skipping run")
 		return 0, nil
 	}
 	defer func() {
@@ -84,8 +85,16 @@ func (p *purger) runOnce(ctx context.Context) (int, error) {
 			return purged, err
 		}
 		if mon == nil {
+			if purged == 0 {
+				p.logger.Debug("monitor purge: no tombstoned monitors")
+			}
 			return purged, nil
 		}
+
+		p.logger.WithFields(logrus.Fields{
+			"monitor_id":       *mon,
+			"rows_budget_left": rowsBudget,
+		}).Debug("monitor purge: starting monitor")
 
 		spent, done, err := p.purgeMonitor(ctx, *mon, rowsBudget)
 		if err != nil {
@@ -187,6 +196,7 @@ func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudg
 	}
 
 	for _, d := range deletes {
+		tableSpent := 0
 		for {
 			limit := p.opts.BatchSize
 			if limit > rowsBudget {
@@ -198,6 +208,13 @@ func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudg
 				// and the monitor row hasn't been deleted yet. Return done=false
 				// so runOnce defers the rest to the next tick — this is NOT
 				// an error.
+				p.logger.WithFields(logrus.Fields{
+					"monitor_id":         monitorID,
+					"table":              d.name,
+					"rows_in_table":      tableSpent,
+					"rows_in_run":        spent,
+					"rows_budget_left":   rowsBudget,
+				}).Debug("monitor purge: row budget exhausted at batch boundary; resuming next tick")
 				return spent, false, nil
 			}
 
@@ -210,10 +227,20 @@ func (p *purger) purgeMonitor(ctx context.Context, monitorID uuid.UUID, rowsBudg
 				return spent, false, fmt.Errorf("rows affected for %s: %w", d.name, raErr)
 			}
 			spent += int(rowsAffected)
+			tableSpent += int(rowsAffected)
 			rowsBudget -= int(rowsAffected)
 			if p.metrics != nil {
 				p.metrics.rows.With(prometheus.Labels{}).Add(float64(rowsAffected))
 			}
+
+			p.logger.WithFields(logrus.Fields{
+				"monitor_id":       monitorID,
+				"table":            d.name,
+				"batch_rows":       rowsAffected,
+				"rows_in_table":    tableSpent,
+				"rows_in_run":      spent,
+				"rows_budget_left": rowsBudget,
+			}).Debug("monitor purge: batch deleted")
 
 			if rowsAffected < int64(limit) {
 				break // table is drained for this monitor
