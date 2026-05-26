@@ -69,6 +69,8 @@ type Scheduler struct {
 	rollupErrors      *prometheus.CounterVec
 	rollupDuration    *prometheus.HistogramVec
 	rollupCursor      *prometheus.GaugeVec
+
+	purger *purger
 }
 
 // NewScheduler creates a new scheduler instance
@@ -156,6 +158,23 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		[]string{},
 	)
 
+	purgerMetrics := &purgerMetrics{
+		runs: metricsRegistry.NewCounter(
+			"monitor_purge_runs_total", "Total monitor purge runs", []string{}),
+		rows: metricsRegistry.NewCounter(
+			"monitor_purge_rows_total", "Total child rows deleted by purger", []string{}),
+		monitors: metricsRegistry.NewCounter(
+			"monitor_purge_monitors_total", "Total monitor rows fully purged", []string{}),
+		errors: metricsRegistry.NewCounter(
+			"monitor_purge_errors_total", "Total monitor purge errors", []string{}),
+		runDuration: metricsRegistry.NewHistogram(
+			"monitor_purge_run_duration_seconds", "Duration of monitor purge runs", []string{}, nil),
+	}
+	s.purger = newPurger(dbClient, log, purgerMetrics, purgerOptions{
+		BatchSize:     cfg.MonitorPurgeBatchSize,
+		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
+	})
+
 	return s
 }
 
@@ -186,6 +205,8 @@ func (s *Scheduler) Start() error {
 	defer retentionTicker.Stop()
 	rollupTicker := time.NewTicker(rollupMaintenanceTicker)
 	defer rollupTicker.Stop()
+	purgeTicker := time.NewTicker(time.Duration(s.config.MonitorPurgeIntervalSeconds) * time.Second)
+	defer purgeTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
@@ -206,6 +227,8 @@ func (s *Scheduler) Start() error {
 			s.triggerRetentionCleanup()
 		case <-rollupTicker.C:
 			s.triggerRollupMaintenance()
+		case <-purgeTicker.C:
+			s.triggerMonitorPurge()
 		}
 	}
 }
@@ -600,4 +623,27 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	// Start() will return when it sees the context is cancelled or stop channel is closed
 	// The timeout in the caller (main.go) will handle cases where Start() doesn't stop in time
 	return nil
+}
+
+func (s *Scheduler) triggerMonitorPurge() {
+	if !s.config.MonitorPurgeEnabled {
+		return
+	}
+	go func() {
+		start := time.Now()
+		purged, err := s.purger.runOnce(s.ctx)
+		duration := time.Since(start).Seconds()
+		s.purger.metrics.runs.With(prometheus.Labels{}).Inc()
+		s.purger.metrics.runDuration.With(prometheus.Labels{}).Observe(duration)
+		if err != nil {
+			s.logger.WithError(err).Warn("monitor purge run failed")
+			return
+		}
+		if purged > 0 {
+			s.logger.WithFields(logrus.Fields{
+				"monitors_purged":  purged,
+				"duration_seconds": duration,
+			}).Info("monitor purge run completed")
+		}
+	}()
 }
