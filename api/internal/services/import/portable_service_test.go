@@ -87,6 +87,10 @@ func (m *portableMonitorServiceMock) DeleteMonitor(ctx context.Context, tenantID
 	return nil
 }
 
+func (m *portableMonitorServiceMock) BulkDeleteMonitors(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 func (m *portableMonitorServiceMock) DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error {
 	return nil
 }

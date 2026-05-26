@@ -137,7 +137,7 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		WHERE a.tenant_id = $1
+		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
 	`)).
@@ -182,6 +182,7 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
+		  AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $3
 	`)).
