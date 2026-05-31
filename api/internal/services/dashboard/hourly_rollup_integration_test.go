@@ -114,9 +114,13 @@ func TestLoadHourlyBucketSeries24h_RollupPlusCurrentHourRawSplice(t *testing.T) 
 	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, hour9, 10, 5, 500, 5, "failure", hour9.Add(59*time.Minute))
 	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, hour11, 10, 10, 1000, 10, "success", hour11.Add(59*time.Minute))
 
-	// Cursor at 11:59:30 so today 12 is unrolled.
+	// Cursor at 11:59:30 so today 12 is unrolled. Insert the cursor row itself
+	// as a real check_result, then point rollup_job_state at it. The strict
+	// tuple comparison (cr.created_at, cr.id) > (cursor_ts, cursor_id) must
+	// exclude THIS row while still including the later lagTime row.
 	cursorTime := time.Date(2026, time.March, 6, 11, 59, 30, 0, time.UTC)
-	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", cursorTime, uuid.New())
+	cursorID := testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, cursorTime, "success", "monitor", testutil.IntPtr(200))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", cursorTime, cursorID)
 
 	// Raw rows in today 12:xx (current incomplete hour, past cursor).
 	for _, m := range []int{5, 10, 15, 20, 25} {

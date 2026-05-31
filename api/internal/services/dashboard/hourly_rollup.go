@@ -333,8 +333,12 @@ func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uui
 		if idx >= len(series) {
 			break
 		}
+		bucketUTC := bucket.UTC()
+		if !bucketUTC.Equal(series[idx].BucketStart) {
+			return nil, fmt.Errorf("hourly bucket series misaligned at index %d: got %s, want %s", idx, bucketUTC, series[idx].BucketStart)
+		}
 		series[idx] = HourlyBucketPoint{
-			BucketStart:   bucket.UTC(),
+			BucketStart:   bucketUTC,
 			TotalChecks:   int(total),
 			SuccessChecks: int(success),
 			LatencySumMS:  latencySum,
