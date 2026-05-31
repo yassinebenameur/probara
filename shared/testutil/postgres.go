@@ -181,6 +181,37 @@ func InsertDailyRollup(ctx context.Context, t testing.TB, dbClient *shareddb.Cli
 	}
 }
 
+func InsertHourlyRollup(ctx context.Context, t testing.TB, dbClient *shareddb.Client, tenantID, monitorID uuid.UUID, bucketHour time.Time, totalChecks, successChecks int, latencySumMS float64, latencyCount int, latestStatus string, latestCheckAt time.Time) {
+	t.Helper()
+
+	hour := bucketHour.UTC().Truncate(time.Hour)
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitor_hourly_rollups (
+			tenant_id, monitor_id, bucket_hour, total_checks, success_checks,
+			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, NOW(), NOW())
+	`, tenantID, monitorID, hour, totalChecks, successChecks, latencySumMS, latencyCount, latestStatus, latestCheckAt.UTC()); err != nil {
+		t.Fatalf("insert hourly rollup: %v", err)
+	}
+}
+
+func InsertRollupJobState(ctx context.Context, t testing.TB, dbClient *shareddb.Client, jobName string, lastCreatedAt time.Time, lastCheckResultID uuid.UUID) {
+	t.Helper()
+
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO rollup_job_state (job_name, last_created_at, last_check_result_id, last_run_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		ON CONFLICT (job_name) DO UPDATE SET
+			last_created_at = EXCLUDED.last_created_at,
+			last_check_result_id = EXCLUDED.last_check_result_id,
+			last_run_at = NOW(),
+			updated_at = NOW()
+	`, jobName, lastCreatedAt.UTC(), lastCheckResultID); err != nil {
+		t.Fatalf("insert rollup job state: %v", err)
+	}
+}
+
 func InsertDowntimePeriod(ctx context.Context, t testing.TB, dbClient *shareddb.Client, tenantID, monitorID uuid.UUID, start, end time.Time) {
 	t.Helper()
 
