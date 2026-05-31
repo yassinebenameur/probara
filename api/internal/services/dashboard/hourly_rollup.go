@@ -16,6 +16,10 @@ import (
 // stitching together monitor_hourly_rollups (full clock-hours strictly inside the
 // window AND fully covered by the rollup cursor) with check_results for the
 // partial leading hour, the partial trailing hour, and anything after the cursor.
+//
+// FailureChecks includes rollup-era bad checks (total − success) because
+// monitor_hourly_rollups has no failure/error breakdown. ErrorChecks is therefore
+// an undercount for the rollup region and reflects only raw-edge errors.
 type MonitorRolling24hTotals struct {
 	TotalChecks   int
 	SuccessChecks int
