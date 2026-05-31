@@ -261,6 +261,20 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		return stats, fmt.Errorf("failed to query dashboard stats: %w", err)
 	}
 
+	if dashboardRange == models.DashboardRange24h {
+		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+		if err != nil {
+			return stats, err
+		}
+		totals, err := loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+		if err != nil {
+			return stats, fmt.Errorf("failed to load 24h rolling summary: %w", err)
+		}
+		stats.OverallUptime = computeMonitorWeightedUptime(totals)
+		stats.AvgResponseMS = computeMonitorWeightedLatency(totals)
+		return stats, nil
+	}
+
 	if isDashboardRollupRange(dashboardRange) {
 		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 		if err != nil {
@@ -1295,4 +1309,42 @@ func formatTrendLabel(bucketStart time.Time, rangeValue models.DashboardRange) s
 	default:
 		return bucketStart.UTC().Format("Jan 2")
 	}
+}
+
+func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) float64 {
+	if len(totals) == 0 {
+		return 0
+	}
+	sum := 0.0
+	n := 0
+	for _, t := range totals {
+		if t.TotalChecks == 0 {
+			continue
+		}
+		sum += (float64(t.SuccessChecks) / float64(t.TotalChecks)) * 100.0
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
+
+func computeMonitorWeightedLatency(totals map[uuid.UUID]MonitorRolling24hTotals) float64 {
+	if len(totals) == 0 {
+		return 0
+	}
+	sum := 0.0
+	n := 0
+	for _, t := range totals {
+		if t.LatencyCount == 0 {
+			continue
+		}
+		sum += t.LatencySumMS / float64(t.LatencyCount)
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
 }

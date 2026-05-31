@@ -495,3 +495,38 @@ func assertDashboardClose(t *testing.T, got, want float64) {
 		t.Fatalf("value = %.6f, want %.6f", got, want)
 	}
 }
+
+func TestService_GetSummary_24hStatsExactRollingFromHourlyRollup(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "stats-24h-rolling")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "stats-mon")
+
+	// Seed only hourly rollups inside the rolling window (no raw rows), so the
+	// stats values must come from the rollup path or this test will read zeros.
+	now := time.Now().UTC()
+	// Build 20 full rollup hours inside (now-24h, now] (skipping the partial leading hour).
+	leadingEdgeEnd := now.Add(-24 * time.Hour).Truncate(time.Hour).Add(time.Hour)
+	for i := 0; i < 20; i++ {
+		bucket := leadingEdgeEnd.Add(time.Duration(i) * time.Hour)
+		testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 9, 900, 9, "success", bucket.Add(59*time.Minute))
+	}
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	// 20 buckets * (9 success / 10 total) = 90% uptime; latency 100ms/check.
+	if math.Abs(resp.Stats.OverallUptime-90) > 0.01 {
+		t.Fatalf("OverallUptime = %f, want 90", resp.Stats.OverallUptime)
+	}
+	if math.Abs(resp.Stats.AvgResponseMS-100) > 0.01 {
+		t.Fatalf("AvgResponseMS = %f, want 100", resp.Stats.AvgResponseMS)
+	}
+}
