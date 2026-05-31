@@ -584,18 +584,30 @@ func (s *Service) groupUptimeSeries(
 		return out, nil
 	}
 
-	interval := "1 hour"
-	if rng == models.DashboardRange1h {
-		interval = "5 minutes"
+	if rng == models.DashboardRange24h {
+		series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load 24h group sparkline: %w", err)
+		}
+		out := make([]float64, 0, len(series))
+		for _, p := range series {
+			if p.TotalChecks == 0 {
+				out = append(out, 100.0)
+				continue
+			}
+			out = append(out, (float64(p.SuccessChecks)/float64(p.TotalChecks))*100.0)
+		}
+		return out, nil
 	}
 
-	query := fmt.Sprintf(`
+	// 1h only — keep the existing raw 5-minute bucket query.
+	query := `
         WITH buckets AS (
-            SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '%s') AS bucket_start
+            SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '5 minutes') AS bucket_start
         ),
         per_bucket AS (
             SELECT
-                date_bin(INTERVAL '%s', cr.created_at, $2::timestamptz) AS bucket_start,
+                date_bin(INTERVAL '5 minutes', cr.created_at, $2::timestamptz) AS bucket_start,
                 COUNT(*) AS total_checks,
                 COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks
             FROM check_results cr
@@ -617,14 +629,12 @@ func (s *Service) groupUptimeSeries(
         FROM buckets b
         LEFT JOIN per_bucket pb ON pb.bucket_start = b.bucket_start
         ORDER BY b.bucket_start
-    `, interval, interval)
-
+    `
 	rows, err := s.db.QueryContext(ctx, query, tenantID, rangeStart, rangeEnd, pq.Array(monitorIDs), rangeEndExclusive)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query 24h sparkline: %w", err)
+		return nil, fmt.Errorf("failed to query 1h sparkline: %w", err)
 	}
 	defer rows.Close()
-
 	out := []float64{}
 	for rows.Next() {
 		var v float64

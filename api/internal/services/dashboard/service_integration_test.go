@@ -689,3 +689,46 @@ func TestService_LoadGroups_24hUsesExactRollingSummary(t *testing.T) {
 		t.Fatalf("team-a Uptime = %f, want 50", g.Uptime)
 	}
 }
+
+func TestService_GetGroupSparkline_24hHourAligned(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "sparkline-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "spark-mon")
+	_, err := dbClient.ExecContext(ctx, `UPDATE monitors SET tags = ARRAY['team-a'] WHERE id = $1`, monitorID)
+	if err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	now := time.Now().UTC()
+	bucket := now.Truncate(time.Hour).Add(-1 * time.Hour)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 5, 500, 5, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	tag := "team-a"
+	resp, err := svc.GetGroupSparkline(ctx, tenantID, &models.DashboardGroupSparklineQuery{
+		Tag:   &tag,
+		Range: models.DashboardRange24h,
+	})
+	if err != nil {
+		t.Fatalf("GetGroupSparkline() error = %v", err)
+	}
+	if len(resp.Buckets) != 12 {
+		t.Fatalf("Buckets length = %d, want 12 (resampled)", len(resp.Buckets))
+	}
+	found50 := false
+	for _, v := range resp.Buckets {
+		if math.Abs(v-50) < 0.01 {
+			found50 = true
+			break
+		}
+	}
+	if !found50 {
+		t.Fatalf("no 50%% bucket in sparkline %v", resp.Buckets)
+	}
+}
