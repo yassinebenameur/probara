@@ -56,7 +56,15 @@ type DashboardOverviewResponse struct {
 	RecentAlerts    []AlertWithDetails        `json:"recent_alerts"`
 }
 
-// DashboardSummaryResponse is the lightweight dashboard payload used for first paint.
+// DashboardSummaryResponse is the dashboard's lightweight first-paint payload.
+//
+// For Range = 24h, semantic note:
+//   - Stats are computed over an EXACT ROLLING window (now - 24h, now].
+//   - Trend and Activity24h are 24 HOUR-ALIGNED buckets ending in the current
+//     incomplete hour.
+// As a consequence, summing Trend.TotalChecks or Activity24h.Checks is NOT
+// guaranteed to equal Stats over the same range — the chart represents hourly
+// history, the scalar represents the exact rolling window.
 type DashboardSummaryResponse struct {
 	Range         DashboardRange           `json:"range"`
 	GeneratedAt   time.Time                `json:"generated_at"`
@@ -91,7 +99,9 @@ type DashboardRecentAlertsResponse struct {
 	RecentAlerts []AlertWithDetails `json:"recent_alerts"`
 }
 
-// DashboardStats contains KPI counters and summary values.
+// DashboardStats are 24h-range scalars computed over the EXACT ROLLING window
+// (now - 24h, now]. They are not derived from the per-hour Trend/Activity24h
+// buckets and may differ from naive sums of those.
 type DashboardStats struct {
 	TotalMonitors  int     `json:"total_monitors"`
 	ActiveMonitors int     `json:"active_monitors"`
@@ -101,7 +111,10 @@ type DashboardStats struct {
 	AvgResponseMS  float64 `json:"avg_response_ms"`
 }
 
-// DashboardTrendPoint is a time-bucketed trend point.
+// DashboardTrendPoint is one bucket in the trend series.
+//
+// For Range = 24h the bucket is the hour starting at BucketStart [bucket, bucket+1h);
+// the most recent bucket may cover the current incomplete hour.
 type DashboardTrendPoint struct {
 	BucketStart  time.Time `json:"bucket_start"`
 	Label        string    `json:"label"`
@@ -110,7 +123,8 @@ type DashboardTrendPoint struct {
 	TotalChecks  int       `json:"total_checks"`
 }
 
-// DashboardActivityHour is the checks/failures bucket for the 24-hour activity chart.
+// DashboardActivityHour is one hour-aligned bucket of check counts.
+// The most recent entry covers the current incomplete hour.
 type DashboardActivityHour struct {
 	BucketStart time.Time `json:"bucket_start"`
 	Label       string    `json:"label"`
