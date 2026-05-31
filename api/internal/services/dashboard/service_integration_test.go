@@ -732,3 +732,39 @@ func TestService_GetGroupSparkline_24hHourAligned(t *testing.T) {
 		t.Fatalf("no 50%% bucket in sparkline %v", resp.Buckets)
 	}
 }
+
+func TestService_GetProblemMonitors_24hCountsFromExactRollingSummary(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "problems-24h-rolling")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "problem-mon")
+
+	now := time.Now().UTC()
+	bucket := now.Truncate(time.Hour).Add(-2 * time.Hour)
+	// 10 checks / 3 success → 7 bad, all attributed to FailureChecks via rollup.
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 3, 300, 3, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	resp, err := svc.GetProblemMonitors(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("GetProblemMonitors() error = %v", err)
+	}
+	if len(resp.ProblemMonitors) != 1 {
+		t.Fatalf("ProblemMonitors length = %d, want 1", len(resp.ProblemMonitors))
+	}
+	got := resp.ProblemMonitors[0]
+	if got.FailureCount+got.ErrorCount != 7 {
+		t.Fatalf("failures+errors = %d, want 7", got.FailureCount+got.ErrorCount)
+	}
+	if math.Abs(got.Uptime-30) > 0.01 {
+		t.Fatalf("Uptime = %f, want 30", got.Uptime)
+	}
+}

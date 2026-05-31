@@ -671,73 +671,117 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 	return s.getProblemMonitorsLongRange(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
 }
 
-func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
-	tagClause := ""
-	limitPlaceholder := 4
-	args := []interface{}{tenantID, rangeStart, rangeEndExclusive, limit}
-	if len(tags) > 0 {
-		tagClause = "AND m.tags @> $5::text[]"
-		args = []interface{}{tenantID, rangeStart, rangeEndExclusive, limit, pq.Array(tags)}
-	}
-
-	query := fmt.Sprintf(`
-		WITH problem_stats AS (
-			SELECT
-				cr.monitor_id,
-				COUNT(*) AS total_checks,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks,
-				COUNT(*) FILTER (WHERE cr.status = 'failure') AS failure_count,
-				COUNT(*) FILTER (WHERE cr.status = 'error') AS error_count,
-				MAX(cr.created_at) FILTER (WHERE cr.status IN ('failure', 'error')) AS latest_failure_at
-			FROM check_results cr
-			JOIN monitors m ON m.id = cr.monitor_id
-			WHERE cr.tenant_id = $1
-			  AND m.tenant_id = $1
-			  AND m.enabled = TRUE
-			  AND m.type <> 'group'
-			  AND m.deleted_at IS NULL
-			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= $2
-			  AND cr.created_at < $3
-			  %s
-			GROUP BY cr.monitor_id
-		)
-		SELECT
-			m.id,
-			m.name,
-			cs.current_status,
-			ps.failure_count,
-			ps.error_count,
-			CASE
-				WHEN ps.total_checks > 0 THEN (ps.success_checks::float / ps.total_checks::float) * 100.0
-				ELSE 0
-			END AS uptime,
-			ps.latest_failure_at
-		FROM problem_stats ps
-		JOIN monitors m ON m.id = ps.monitor_id AND m.tenant_id = $1 AND m.deleted_at IS NULL
-		LEFT JOIN LATERAL (
-			SELECT cr.status AS current_status
-			FROM check_results cr
-			WHERE cr.monitor_id = ps.monitor_id
-			  AND cr.tenant_id = $1
-			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= $2
-			  AND cr.created_at < $3
-			ORDER BY cr.created_at DESC
-			LIMIT 1
-		) cs ON TRUE
-		WHERE (ps.failure_count + ps.error_count) > 0
-		ORDER BY (ps.failure_count + ps.error_count) DESC, ps.latest_failure_at DESC NULLS LAST, m.name ASC
-		LIMIT $%d
-	`, tagClause, limitPlaceholder)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID, _rangeStart, _rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
+	monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query 24h problem monitors: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
+	if len(monitorIDs) == 0 {
+		return []models.DashboardProblemMonitor{}, nil
+	}
+	totals, err := loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load 24h problem-monitor totals: %w", err)
+	}
 
-	return scanProblemMonitorRows(rows)
+	// Materialise candidates (any monitor with at least one bad check).
+	type candidate struct {
+		monitorID     uuid.UUID
+		failureCount  int
+		errorCount    int
+		uptime        float64
+		latestFailure *time.Time
+	}
+	cands := make([]candidate, 0, len(monitorIDs))
+	for _, id := range monitorIDs {
+		t := totals[id]
+		bad := t.FailureChecks + t.ErrorChecks
+		if bad == 0 {
+			continue
+		}
+		uptime := 0.0
+		if t.TotalChecks > 0 {
+			uptime = (float64(t.SuccessChecks) / float64(t.TotalChecks)) * 100.0
+		}
+		var latest *time.Time
+		if t.LatestCheckAt != nil && t.LatestStatus != nil && (*t.LatestStatus == "failure" || *t.LatestStatus == "error") {
+			ts := *t.LatestCheckAt
+			latest = &ts
+		}
+		cands = append(cands, candidate{
+			monitorID:     id,
+			failureCount:  t.FailureChecks,
+			errorCount:    t.ErrorChecks,
+			uptime:        uptime,
+			latestFailure: latest,
+		})
+	}
+	if len(cands) == 0 {
+		return []models.DashboardProblemMonitor{}, nil
+	}
+
+	sort.Slice(cands, func(i, j int) bool {
+		li := cands[i].failureCount + cands[i].errorCount
+		lj := cands[j].failureCount + cands[j].errorCount
+		if li != lj {
+			return li > lj
+		}
+		if cands[i].latestFailure == nil && cands[j].latestFailure != nil {
+			return false
+		}
+		if cands[i].latestFailure != nil && cands[j].latestFailure == nil {
+			return true
+		}
+		if cands[i].latestFailure != nil && cands[j].latestFailure != nil && !cands[i].latestFailure.Equal(*cands[j].latestFailure) {
+			return cands[i].latestFailure.After(*cands[j].latestFailure)
+		}
+		return cands[i].monitorID.String() < cands[j].monitorID.String()
+	})
+	if len(cands) > limit {
+		cands = cands[:limit]
+	}
+
+	// Fetch names + current_status for the top-N candidates.
+	topIDs := make([]uuid.UUID, 0, len(cands))
+	for _, c := range cands {
+		topIDs = append(topIDs, c.monitorID)
+	}
+	nameRows, err := s.db.QueryContext(ctx, `
+		SELECT id, name
+		FROM monitors
+		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+	`, tenantID, pq.Array(topIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to load problem-monitor names: %w", err)
+	}
+	defer nameRows.Close()
+	names := make(map[uuid.UUID]string, len(topIDs))
+	for nameRows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := nameRows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("failed to scan problem-monitor name: %w", err)
+		}
+		names[id] = name
+	}
+	if err := nameRows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating problem-monitor names: %w", err)
+	}
+
+	out := make([]models.DashboardProblemMonitor, 0, len(cands))
+	for _, c := range cands {
+		t := totals[c.monitorID]
+		out = append(out, models.DashboardProblemMonitor{
+			MonitorID:       c.monitorID,
+			MonitorName:     names[c.monitorID],
+			CurrentStatus:   t.LatestStatus,
+			FailureCount:    c.failureCount,
+			ErrorCount:      c.errorCount,
+			Uptime:          c.uptime,
+			LatestFailureAt: c.latestFailure,
+		})
+	}
+	return out, nil
 }
 
 func (s *Service) getProblemMonitorsLongRange(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
