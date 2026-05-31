@@ -228,3 +228,122 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 	}
 	return out, nil
 }
+
+// HourlyBucketPoint is one hour-aligned bucket [BucketStart, BucketStart+1h).
+// The most recent bucket may cover the current incomplete hour and is built
+// by adding the per-hour rollup row (if any) to raw check_results past the
+// rollup cursor inside the same hour.
+type HourlyBucketPoint struct {
+	BucketStart   time.Time
+	TotalChecks   int
+	SuccessChecks int
+	LatencySumMS  float64
+	LatencyCount  int
+}
+
+// loadHourlyBucketSeries24h returns 24 hour-aligned bucket points ending at
+// date_trunc('hour', now). Empty input returns 24 empty buckets.
+func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uuid.UUID, monitorIDs []uuid.UUID, now time.Time) ([]HourlyBucketPoint, error) {
+	now = now.UTC()
+	endHour := now.Truncate(time.Hour)
+	startHour := endHour.Add(-23 * time.Hour)
+	endExclusive := endHour.Add(time.Hour)
+
+	series := make([]HourlyBucketPoint, 24)
+	for i := 0; i < 24; i++ {
+		series[i] = HourlyBucketPoint{BucketStart: startHour.Add(time.Duration(i) * time.Hour)}
+	}
+	if len(monitorIDs) == 0 {
+		return series, nil
+	}
+
+	query := `
+		WITH rollup_state AS (
+			SELECT last_created_at, last_check_result_id
+			FROM rollup_job_state
+			WHERE job_name = 'monitor_daily_rollups'
+		),
+		rollup_per_hour AS (
+			SELECT
+				mhr.bucket_hour,
+				SUM(mhr.total_checks)::bigint AS total_checks,
+				SUM(mhr.success_checks)::bigint AS success_checks,
+				SUM(mhr.latency_success_sum_ms) AS latency_sum_ms,
+				SUM(mhr.latency_success_count)::bigint AS latency_count
+			FROM monitor_hourly_rollups mhr
+			WHERE mhr.tenant_id = $1
+			  AND mhr.monitor_id = ANY($4)
+			  AND mhr.bucket_hour >= $2
+			  AND mhr.bucket_hour < $3
+			GROUP BY mhr.bucket_hour
+		),
+		raw_per_hour AS (
+			SELECT
+				date_trunc('hour', cr.created_at) AS bucket_hour,
+				COUNT(*)::bigint AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks,
+				COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
+				COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
+			FROM check_results cr
+			LEFT JOIN rollup_state rs ON TRUE
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($4)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			  AND (
+				rs.last_created_at IS NULL
+				OR (cr.created_at, cr.id) > (
+					rs.last_created_at,
+					COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid)
+				)
+			  )
+			GROUP BY 1
+		)
+		SELECT
+			b.bucket_hour,
+			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
+			COALESCE(rh.success_checks, 0) + COALESCE(rwh.success_checks, 0) AS success_checks,
+			COALESCE(rh.latency_sum_ms, 0) + COALESCE(rwh.latency_sum_ms, 0) AS latency_sum_ms,
+			COALESCE(rh.latency_count, 0) + COALESCE(rwh.latency_count, 0) AS latency_count
+		FROM generate_series($2::timestamptz, ($3::timestamptz - INTERVAL '1 hour'), INTERVAL '1 hour') AS b(bucket_hour)
+		LEFT JOIN rollup_per_hour rh ON rh.bucket_hour = b.bucket_hour
+		LEFT JOIN raw_per_hour rwh ON rwh.bucket_hour = b.bucket_hour
+		ORDER BY b.bucket_hour
+	`
+
+	rows, err := dbClient.QueryContext(ctx, query, tenantID, startHour, endExclusive, pq.Array(monitorIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query hourly bucket series: %w", err)
+	}
+	defer rows.Close()
+
+	idx := 0
+	for rows.Next() {
+		var (
+			bucket       time.Time
+			total        int64
+			success      int64
+			latencySum   float64
+			latencyCount int64
+		)
+		if err := rows.Scan(&bucket, &total, &success, &latencySum, &latencyCount); err != nil {
+			return nil, fmt.Errorf("failed to scan hourly bucket row: %w", err)
+		}
+		if idx >= len(series) {
+			break
+		}
+		series[idx] = HourlyBucketPoint{
+			BucketStart:   bucket.UTC(),
+			TotalChecks:   int(total),
+			SuccessChecks: int(success),
+			LatencySumMS:  latencySum,
+			LatencyCount:  int(latencyCount),
+		}
+		idx++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating hourly bucket rows: %w", err)
+	}
+	return series, nil
+}

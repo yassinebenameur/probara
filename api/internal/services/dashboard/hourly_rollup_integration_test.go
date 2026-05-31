@@ -95,3 +95,90 @@ func TestLoadExactRolling24hSummary_SplitsLeadingEdgeRollupAndRawTail(t *testing
 		t.Fatalf("LatestStatus = %v, want failure", got.LatestStatus)
 	}
 }
+
+func TestLoadHourlyBucketSeries24h_RollupPlusCurrentHourRawSplice(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "bucket-series")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "bucket-mon")
+
+	now := time.Date(2026, time.March, 6, 12, 30, 0, 0, time.UTC)
+
+	// Past hour rollups: today 9:00 (5/10) and today 11:00 (10/10).
+	hour9 := time.Date(2026, time.March, 6, 9, 0, 0, 0, time.UTC)
+	hour11 := time.Date(2026, time.March, 6, 11, 0, 0, 0, time.UTC)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, hour9, 10, 5, 500, 5, "failure", hour9.Add(59*time.Minute))
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, hour11, 10, 10, 1000, 10, "success", hour11.Add(59*time.Minute))
+
+	// Cursor at 11:59:30 so today 12 is unrolled.
+	cursorTime := time.Date(2026, time.March, 6, 11, 59, 30, 0, time.UTC)
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", cursorTime, uuid.New())
+
+	// Raw rows in today 12:xx (current incomplete hour, past cursor).
+	for _, m := range []int{5, 10, 15, 20, 25} {
+		ts := time.Date(2026, time.March, 6, 12, m, 0, 0, time.UTC)
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, ts, "success", "monitor", testutil.IntPtr(100))
+	}
+
+	// A raw row in an OLDER hour past the cursor should also be picked up by the
+	// splice (cursor lag tolerance).
+	lagTime := time.Date(2026, time.March, 6, 11, 59, 45, 0, time.UTC) // past cursor, in hour 11
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, lagTime, "failure", "monitor", nil)
+
+	series, err := loadHourlyBucketSeries24h(ctx, dbClient, tenantID, []uuid.UUID{monitorID}, now)
+	if err != nil {
+		t.Fatalf("loadHourlyBucketSeries24h() error = %v", err)
+	}
+	if len(series) != 24 {
+		t.Fatalf("len(series) = %d, want 24", len(series))
+	}
+	// Buckets are hour-aligned: [now.Truncate(1h) - 23h, ..., now.Truncate(1h)].
+	wantFirstBucket := time.Date(2026, time.March, 5, 13, 0, 0, 0, time.UTC)
+	if !series[0].BucketStart.Equal(wantFirstBucket) {
+		t.Fatalf("series[0] = %v, want %v", series[0].BucketStart, wantFirstBucket)
+	}
+	wantLastBucket := time.Date(2026, time.March, 6, 12, 0, 0, 0, time.UTC)
+	if !series[23].BucketStart.Equal(wantLastBucket) {
+		t.Fatalf("series[23] = %v, want %v", series[23].BucketStart, wantLastBucket)
+	}
+
+	// Bucket for hour 9: 10 total / 5 success (rollup only).
+	pHour9 := findBucket(t, series, hour9)
+	if pHour9.TotalChecks != 10 || pHour9.SuccessChecks != 5 {
+		t.Fatalf("hour9 totals = %d/%d, want 5/10", pHour9.SuccessChecks, pHour9.TotalChecks)
+	}
+
+	// Bucket for hour 11: 10 total / 10 success (rollup) + 1 failure (raw past-cursor splice) = 11/10.
+	pHour11 := findBucket(t, series, hour11)
+	if pHour11.TotalChecks != 11 || pHour11.SuccessChecks != 10 {
+		t.Fatalf("hour11 totals = %d/%d (success/total), want 10/11", pHour11.SuccessChecks, pHour11.TotalChecks)
+	}
+
+	// Bucket for hour 12 (current incomplete): 0 rollup + 5 raw → 5/5.
+	pHour12 := findBucket(t, series, wantLastBucket)
+	if pHour12.TotalChecks != 5 || pHour12.SuccessChecks != 5 {
+		t.Fatalf("hour12 totals = %d/%d, want 5/5", pHour12.SuccessChecks, pHour12.TotalChecks)
+	}
+
+	// Empty bucket (no data anywhere).
+	emptyBucket := time.Date(2026, time.March, 6, 8, 0, 0, 0, time.UTC)
+	pEmpty := findBucket(t, series, emptyBucket)
+	if pEmpty.TotalChecks != 0 {
+		t.Fatalf("empty bucket TotalChecks = %d, want 0", pEmpty.TotalChecks)
+	}
+}
+
+func findBucket(t *testing.T, series []HourlyBucketPoint, bucketStart time.Time) HourlyBucketPoint {
+	t.Helper()
+	for _, p := range series {
+		if p.BucketStart.Equal(bucketStart) {
+			return p
+		}
+	}
+	t.Fatalf("bucket %v not found in series", bucketStart)
+	return HourlyBucketPoint{}
+}
