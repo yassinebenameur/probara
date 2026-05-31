@@ -386,6 +386,9 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	}
 
 	if dashboardRange == models.DashboardRange24h {
+		// 24h trend uses pooled (sum-of-success / sum-of-total) bucket uptime.
+		// This intentionally differs from getStats' monitor-weighted mean: see
+		// plan Decision D4 (chart sums are not required to equal scalar stats).
 		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 		if err != nil {
 			return nil, err
@@ -413,6 +416,10 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			})
 		}
 		return trend, nil
+	}
+
+	if dashboardRange != models.DashboardRange1h {
+		return nil, fmt.Errorf("getTrend: unexpected dashboard range for raw fallback: %s", dashboardRange)
 	}
 
 	interval := "5 minutes"
