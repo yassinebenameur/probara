@@ -530,3 +530,42 @@ func TestService_GetSummary_24hStatsExactRollingFromHourlyRollup(t *testing.T) {
 		t.Fatalf("AvgResponseMS = %f, want 100", resp.Stats.AvgResponseMS)
 	}
 }
+
+func TestService_GetSummary_24hTrendHourAligned(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "trend-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "trend-mon")
+
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	bucketA := endHour.Add(-3 * time.Hour)
+	bucketB := endHour.Add(-1 * time.Hour)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucketA, 10, 10, 1000, 10, "success", bucketA.Add(59*time.Minute))
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucketB, 10, 5, 500, 5, "failure", bucketB.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	if len(resp.Trend) != 24 {
+		t.Fatalf("len(Trend) = %d, want 24", len(resp.Trend))
+	}
+	pointA := findTrendPoint(t, resp.Trend, bucketA)
+	if math.Abs(pointA.Uptime-100) > 0.01 {
+		t.Fatalf("Trend[bucketA].Uptime = %f, want 100", pointA.Uptime)
+	}
+	if pointA.TotalChecks != 10 {
+		t.Fatalf("Trend[bucketA].TotalChecks = %d, want 10", pointA.TotalChecks)
+	}
+	pointB := findTrendPoint(t, resp.Trend, bucketB)
+	if math.Abs(pointB.Uptime-50) > 0.01 {
+		t.Fatalf("Trend[bucketB].Uptime = %f, want 50", pointB.Uptime)
+	}
+}

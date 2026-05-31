@@ -385,17 +385,38 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		return trend, nil
 	}
 
-	interval := "1 hour"
 	if dashboardRange == models.DashboardRange24h {
-		interval = "1 hour"
-	} else if dashboardRange == models.DashboardRange1h {
-		interval = "5 minutes"
+		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+		if err != nil {
+			return nil, err
+		}
+		series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load 24h hourly trend series: %w", err)
+		}
+		trend := make([]models.DashboardTrendPoint, 0, len(series))
+		for _, p := range series {
+			uptime := 0.0
+			if p.TotalChecks > 0 {
+				uptime = (float64(p.SuccessChecks) / float64(p.TotalChecks)) * 100.0
+			}
+			responseTime := 0.0
+			if p.LatencyCount > 0 {
+				responseTime = p.LatencySumMS / float64(p.LatencyCount)
+			}
+			trend = append(trend, models.DashboardTrendPoint{
+				BucketStart:  p.BucketStart,
+				Label:        formatTrendLabel(p.BucketStart, dashboardRange),
+				Uptime:       uptime,
+				ResponseTime: responseTime,
+				TotalChecks:  p.TotalChecks,
+			})
+		}
+		return trend, nil
 	}
 
-	endExclusive := rangeEnd.Add(time.Hour)
-	if dashboardRange == models.DashboardRange1h {
-		endExclusive = rangeEnd.Add(5 * time.Minute)
-	}
+	interval := "5 minutes"
+	endExclusive := rangeEnd.Add(5 * time.Minute)
 
 	tagClause := ""
 	args := []interface{}{tenantID, rangeStart, rangeEnd, endExclusive}
