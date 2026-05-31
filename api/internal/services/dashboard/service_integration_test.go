@@ -814,3 +814,39 @@ func TestService_GetOverview_24hHourlyRollupSmoke(t *testing.T) {
 		t.Fatalf("ProblemMonitors length = %d, want 1", len(resp.ProblemMonitors))
 	}
 }
+
+func TestService_GetProblemMonitors_1hUsesNarrowWindowNotLast24h(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "problems-1h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "problem-mon-1h")
+
+	now := time.Now().UTC()
+	// One failure 30 minutes ago (inside both 1h and 24h windows).
+	recent := now.Add(-30 * time.Minute)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, recent, "failure", "monitor", nil)
+	// One failure 12 hours ago (outside 1h window, inside 24h window).
+	old := now.Add(-12 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, old, "failure", "monitor", nil)
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	resp, err := svc.GetProblemMonitors(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange1h,
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("GetProblemMonitors() error = %v", err)
+	}
+	if len(resp.ProblemMonitors) != 1 {
+		t.Fatalf("ProblemMonitors length = %d, want 1", len(resp.ProblemMonitors))
+	}
+	got := resp.ProblemMonitors[0]
+	// 1h window must see only the recent failure, not the 12h-old one.
+	if got.FailureCount != 1 {
+		t.Fatalf("FailureCount = %d, want 1 (12h-old failure must be outside 1h window)", got.FailureCount)
+	}
+}

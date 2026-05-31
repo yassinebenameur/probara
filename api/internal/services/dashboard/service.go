@@ -664,11 +664,82 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 		limit = problemMonitorLimit
 	}
 
-	if !isDashboardRollupRange(dashboardRange) {
+	if isDashboardRollupRange(dashboardRange) {
+		return s.getProblemMonitorsLongRange(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	}
+	if dashboardRange == models.DashboardRange24h {
 		return s.getProblemMonitors24h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
 	}
+	return s.getProblemMonitors1h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+}
 
-	return s.getProblemMonitorsLongRange(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
+	tagClause := ""
+	limitPlaceholder := 4
+	args := []interface{}{tenantID, rangeStart, rangeEndExclusive, limit}
+	if len(tags) > 0 {
+		tagClause = "AND m.tags @> $5::text[]"
+		args = []interface{}{tenantID, rangeStart, rangeEndExclusive, limit, pq.Array(tags)}
+	}
+
+	query := fmt.Sprintf(`
+		WITH problem_stats AS (
+			SELECT
+				cr.monitor_id,
+				COUNT(*) AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success') AS success_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'failure') AS failure_count,
+				COUNT(*) FILTER (WHERE cr.status = 'error') AS error_count,
+				MAX(cr.created_at) FILTER (WHERE cr.status IN ('failure', 'error')) AS latest_failure_at
+			FROM check_results cr
+			JOIN monitors m ON m.id = cr.monitor_id
+			WHERE cr.tenant_id = $1
+			  AND m.tenant_id = $1
+			  AND m.enabled = TRUE
+			  AND m.type <> 'group'
+			  AND m.deleted_at IS NULL
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			  %s
+			GROUP BY cr.monitor_id
+		)
+		SELECT
+			m.id,
+			m.name,
+			cs.current_status,
+			ps.failure_count,
+			ps.error_count,
+			CASE
+				WHEN ps.total_checks > 0 THEN (ps.success_checks::float / ps.total_checks::float) * 100.0
+				ELSE 0
+			END AS uptime,
+			ps.latest_failure_at
+		FROM problem_stats ps
+		JOIN monitors m ON m.id = ps.monitor_id AND m.tenant_id = $1 AND m.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+			SELECT cr.status AS current_status
+			FROM check_results cr
+			WHERE cr.monitor_id = ps.monitor_id
+			  AND cr.tenant_id = $1
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) cs ON TRUE
+		WHERE (ps.failure_count + ps.error_count) > 0
+		ORDER BY (ps.failure_count + ps.error_count) DESC, ps.latest_failure_at DESC NULLS LAST, m.name ASC
+		LIMIT $%d
+	`, tagClause, limitPlaceholder)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query 1h problem monitors: %w", err)
+	}
+	defer rows.Close()
+
+	return scanProblemMonitorRows(rows)
 }
 
 func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID, _rangeStart, _rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
