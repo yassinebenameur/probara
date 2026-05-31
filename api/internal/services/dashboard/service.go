@@ -1311,6 +1311,9 @@ func formatTrendLabel(bucketStart time.Time, rangeValue models.DashboardRange) s
 	}
 }
 
+// computeMonitorWeightedUptime returns the monitor-weighted mean uptime % over the
+// given totals: each monitor contributes one data point (its per-monitor success
+// rate); monitors with no data are skipped. Returns 0 on empty input.
 func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) float64 {
 	if len(totals) == 0 {
 		return 0
@@ -1330,6 +1333,9 @@ func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) 
 	return sum / float64(n)
 }
 
+// computeMonitorWeightedLatency returns the monitor-weighted mean success-latency
+// in milliseconds: each monitor contributes one data point (its per-monitor avg
+// latency); monitors with no successful checks are skipped. Returns 0 on empty input.
 func computeMonitorWeightedLatency(totals map[uuid.UUID]MonitorRolling24hTotals) float64 {
 	if len(totals) == 0 {
 		return 0
