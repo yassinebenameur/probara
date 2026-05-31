@@ -227,7 +227,7 @@ func TestService_LoadGroups_LongRangeUsesRollups(t *testing.T) {
 	}
 }
 
-func TestService_LoadGroups_24hUsesHourlyRollups(t *testing.T) {
+func TestService_LoadGroups_24hUsesExactRollingHelper(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New() error = %v", err)
@@ -239,11 +239,21 @@ func TestService_LoadGroups_24hUsesHourlyRollups(t *testing.T) {
 	rangeStart := time.Date(2026, time.April, 1, 18, 0, 0, 0, time.UTC)
 	rangeEnd := time.Date(2026, time.April, 2, 18, 0, 0, 0, time.UTC)
 
+	// Step 1: listGroupMonitorRows queries the monitors table.
+	latestStatus := "failure"
+	mock.ExpectQuery("SELECT m.id, m.name").
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "tags"}).
+			AddRow(monitorID, "api", "{api}"))
+
+	// Step 2: loadExactRolling24hSummary queries the CTE (monitor_hourly_rollups, check_results, rollup_job_state).
 	mock.ExpectQuery("monitor_hourly_rollups").
-		WithArgs(tenantID, rangeStart, rangeEnd).
+		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), pq.Array([]uuid.UUID{monitorID})).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "tags", "current_status", "uptime", "needs_attention",
-		}).AddRow(monitorID, "api", "{api}", "failure", 97.5, true))
+			"monitor_id", "total_checks", "success_checks",
+			"failure_checks_raw", "error_checks_raw", "bad_checks_rollup",
+			"latency_sum_ms", "latency_count", "latest_status", "latest_check_at",
+		}).AddRow(monitorID, 40, 39, 0, 0, 1, 3900.0, 39, latestStatus, time.Now().UTC()))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
 

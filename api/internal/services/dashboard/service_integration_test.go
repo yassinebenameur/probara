@@ -257,10 +257,19 @@ func TestService_LoadGroups_24hHourlyRollupIgnoresOutsideWindowRawRows(t *testin
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api-monitor")
 	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
 
-	rangeStart := time.Date(2026, time.April, 1, 18, 0, 0, 0, time.UTC)
-	rangeEnd := time.Date(2026, time.April, 2, 18, 0, 0, 0, time.UTC)
-	day1 := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
-	day2 := time.Date(2026, time.April, 2, 0, 0, 0, 0, time.UTC)
+	// Use now-relative times so the exact-rolling window [now-24h, now) covers the data.
+	// Anchor on the current hour so rollup bucket boundaries are stable.
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	// rollup bucket: 16h ago (well inside the 24h rolling window)
+	rollupBucket := endHour.Add(-16 * time.Hour)
+	// rollup cursor: 2h ago — rollup_end = trunc_hour(cursor) so raw_complement covers [trunc_hour(cursor), now)
+	cursorAt := now.Add(-2 * time.Hour)
+	// raw row INSIDE raw_complement region: 1h ago (>= trunc_hour(cursorAt)), status=success
+	insideAt := now.Add(-1 * time.Hour)
+	// raw rows OUTSIDE window: >24h ago (before window start) and in the future (after now)
+	beforeWindow := now.Add(-26 * time.Hour)
+	afterWindow := now.Add(2 * time.Hour)
 
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitor_hourly_rollups (
@@ -268,22 +277,29 @@ func TestService_LoadGroups_24hHourlyRollupIgnoresOutsideWindowRawRows(t *testin
 			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
 			created_at, updated_at
 		) VALUES ($1, $2, $3, 16, 15, 1500, 15, 'failure', $4, NOW(), NOW())
-	`, tenantID, monitorID, rangeStart, day2.Add(16*time.Hour)); err != nil {
+	`, tenantID, monitorID, rollupBucket, rollupBucket.Add(59*time.Minute)); err != nil {
 		t.Fatalf("insert hourly rollup: %v", err)
 	}
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO rollup_job_state (job_name, last_created_at, last_check_result_id, last_run_at, updated_at)
 		VALUES ('monitor_daily_rollups', $1, $2, NOW(), NOW())
-	`, rangeEnd, uuid.New()); err != nil {
+	`, cursorAt, uuid.New()); err != nil {
 		t.Fatalf("insert rollup state: %v", err)
 	}
 
+	// Rows before the window — should be ignored.
 	for i := 0; i < 4; i++ {
-		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, day1.Add(time.Duration(i+1)*time.Hour), "failure", "monitor", nil)
-		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, day2.Add(time.Duration(19+i)*time.Hour), "failure", "monitor", nil)
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, beforeWindow.Add(time.Duration(i)*time.Hour), "failure", "monitor", nil)
 	}
-	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, day2.Add(17*time.Hour), "success", "monitor", testutil.IntPtr(100))
+	// Row inside the raw-complement region (after cursor, before now) — drives current_status.
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, insideAt, "success", "monitor", testutil.IntPtr(100))
+	// Rows after window end — should be ignored by the helper's w_end boundary.
+	for i := 0; i < 4; i++ {
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, afterWindow.Add(time.Duration(i)*time.Hour), "failure", "monitor", nil)
+	}
 
+	rangeStart := now.Add(-24 * time.Hour)
+	rangeEnd := now
 	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
 	if err != nil {
 		t.Fatalf("loadGroups() error = %v", err)
@@ -291,13 +307,17 @@ func TestService_LoadGroups_24hHourlyRollupIgnoresOutsideWindowRawRows(t *testin
 	if len(groups) != 1 {
 		t.Fatalf("len(groups) = %d, want 1", len(groups))
 	}
-	assertDashboardClose(t, groups[0].Uptime, 93.75)
+	// Rollup bucket (endHour-16h): 16 total, 15 success, 1 bad → needsAttention = true.
+	// Raw row at now-1h (success) falls in raw_complement [trunc_hour(cursor), now).
+	// Rows before w_start and after w_end are excluded.
+	// The rollup bad check drives AttentionCount=1.
 	if groups[0].AttentionCount != 1 {
 		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
 	}
 	if len(groups[0].Members) != 1 {
 		t.Fatalf("Members length = %d, want 1", len(groups[0].Members))
 	}
+	// current_status comes from latest check in the window: insideAt row (now-1h) = "success"
 	if groups[0].Members[0].CurrentStatus == nil || *groups[0].Members[0].CurrentStatus != "success" {
 		t.Fatalf("CurrentStatus = %v, want success", groups[0].Members[0].CurrentStatus)
 	}
@@ -315,17 +335,25 @@ func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api-monitor")
 	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
 
-	rangeStart := time.Date(2026, time.April, 1, 18, 0, 0, 0, time.UTC)
-	rangeEnd := time.Date(2026, time.April, 2, 18, 0, 0, 0, time.UTC)
-	cursorAt := time.Date(2026, time.April, 2, 17, 0, 0, 0, time.UTC)
+	// Use now-relative times for the exact-rolling window.
+	// Rollup covers a full hour inside the window; cursor is 2h ago;
+	// one raw failure row falls after the cursor (lag tail).
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	// rollup bucket: 10h ago — a complete hour well within the 24h window
+	rollupBucket := endHour.Add(-10 * time.Hour)
+	// cursor: 2h ago — rollup has processed up to this point
+	cursorAt := now.Add(-2 * time.Hour)
+	// raw lag-tail row: 1h ago (after cursor, inside window) — status=failure
+	lagTailAt := now.Add(-1 * time.Hour)
 
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitor_hourly_rollups (
 			tenant_id, monitor_id, bucket_hour, total_checks, success_checks,
 			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, 23, 23, 2300, 23, 'success', $3, NOW(), NOW())
-	`, tenantID, monitorID, rangeStart); err != nil {
+		) VALUES ($1, $2, $3, 23, 23, 2300, 23, 'success', $4, NOW(), NOW())
+	`, tenantID, monitorID, rollupBucket, rollupBucket.Add(59*time.Minute)); err != nil {
 		t.Fatalf("insert hourly rollup: %v", err)
 	}
 	if _, err := dbClient.ExecContext(ctx, `
@@ -334,8 +362,11 @@ func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
 	`, cursorAt, uuid.New()); err != nil {
 		t.Fatalf("insert rollup state: %v", err)
 	}
-	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, cursorAt.Add(30*time.Minute), "failure", "monitor", nil)
+	// Lag-tail failure row after cursor: should be included in raw_complement.
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, lagTailAt, "failure", "monitor", nil)
 
+	rangeStart := now.Add(-24 * time.Hour)
+	rangeEnd := now
 	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
 	if err != nil {
 		t.Fatalf("loadGroups() error = %v", err)
@@ -343,10 +374,13 @@ func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("len(groups) = %d, want 1", len(groups))
 	}
+	// Rollup: 23 total, 23 success. Raw lag-tail: 1 failure.
+	// Total = 24, success = 23 → 23/24 ≈ 95.83%.
 	assertDashboardClose(t, groups[0].Uptime, 95.8333333333)
 	if groups[0].AttentionCount != 1 {
 		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
 	}
+	// current_status: latest check is the lag-tail failure.
 	if groups[0].Members[0].CurrentStatus == nil || *groups[0].Members[0].CurrentStatus != "failure" {
 		t.Fatalf("CurrentStatus = %v, want failure", groups[0].Members[0].CurrentStatus)
 	}
@@ -606,5 +640,52 @@ func TestService_GetSummary_24hActivityHourAligned(t *testing.T) {
 	}
 	if found.Checks != 10 || found.Failures != 3 {
 		t.Fatalf("activity[bucket] = {checks:%d, failures:%d}, want {10, 3}", found.Checks, found.Failures)
+	}
+}
+
+// fakeTenantSettingsWithTags is a test-local tenant settings reader that returns
+// a fixed set of dashboard_group_tags. Used when GetSummary must see specific tags.
+type fakeTenantSettingsWithTags struct {
+	tags []string
+}
+
+func (f *fakeTenantSettingsWithTags) GetTenantSettings(_ context.Context, _ uuid.UUID) (*models.TenantSettings, error) {
+	return &models.TenantSettings{DashboardGroupTags: f.tags}, nil
+}
+
+func TestService_LoadGroups_24hUsesExactRollingSummary(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "groups-24h-rolling")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "group-mon")
+	_, err := dbClient.ExecContext(ctx, `UPDATE monitors SET tags = ARRAY['team-a'] WHERE id = $1`, monitorID)
+	if err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	now := time.Now().UTC()
+	bucket := now.Truncate(time.Hour).Add(-1 * time.Hour)
+	// Rollup latest_status = failure, totals 5/10 → 50% uptime.
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 5, 500, 5, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsWithTags{tags: []string{"team-a"}})
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	if len(resp.Groups) == 0 {
+		t.Fatalf("Groups empty")
+	}
+	g := resp.Groups[0]
+	if g.AttentionCount != 1 {
+		t.Fatalf("team-a AttentionCount = %d, want 1", g.AttentionCount)
+	}
+	if math.Abs(g.Uptime-50) > 0.01 {
+		t.Fatalf("team-a Uptime = %f, want 50", g.Uptime)
 	}
 }
