@@ -497,66 +497,27 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 }
 
 func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags []string) ([]models.DashboardActivityHour, error) {
-	now := time.Now().UTC()
-	end := now.Truncate(time.Hour)
-	start := end.Add(-23 * time.Hour)
-	endExclusive := end.Add(time.Hour)
-
-	tagClause := ""
-	args := []interface{}{tenantID, start, end, endExclusive}
-	if len(tags) > 0 {
-		tagClause = "AND m.tags @> $5::text[]"
-		args = append(args, pq.Array(tags))
-	}
-
-	query := fmt.Sprintf(`
-		WITH buckets AS (
-			SELECT generate_series($2::timestamptz, $3::timestamptz, INTERVAL '1 hour') AS bucket_start
-		),
-		hourly_stats AS (
-			SELECT
-				date_trunc('hour', cr.created_at) AS bucket_start,
-				COUNT(*) AS checks,
-				COUNT(*) FILTER (WHERE cr.status IN ('failure', 'error')) AS failures
-			FROM check_results cr
-			JOIN monitors m ON m.id = cr.monitor_id
-			WHERE cr.tenant_id = $1
-			  AND m.tenant_id = $1
-			  AND m.enabled = TRUE
-			  AND m.deleted_at IS NULL
-			  AND cr.created_at >= $2
-			  AND cr.created_at < $4
-			  %s
-			GROUP BY 1
-		)
-		SELECT
-			b.bucket_start,
-			COALESCE(hs.checks, 0) AS checks,
-			COALESCE(hs.failures, 0) AS failures
-		FROM buckets b
-		LEFT JOIN hourly_stats hs ON hs.bucket_start = b.bucket_start
-		ORDER BY b.bucket_start
-	`, tagClause)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query 24-hour activity: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-
-	activity := make([]models.DashboardActivityHour, 0)
-	for rows.Next() {
-		var point models.DashboardActivityHour
-		if err := rows.Scan(&point.BucketStart, &point.Checks, &point.Failures); err != nil {
-			return nil, fmt.Errorf("failed to scan 24-hour activity point: %w", err)
+	series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load 24h activity series: %w", err)
+	}
+	activity := make([]models.DashboardActivityHour, 0, len(series))
+	for _, p := range series {
+		failures := p.TotalChecks - p.SuccessChecks
+		if failures < 0 {
+			failures = 0
 		}
-		point.Label = point.BucketStart.UTC().Format("15")
-		activity = append(activity, point)
+		activity = append(activity, models.DashboardActivityHour{
+			BucketStart: p.BucketStart,
+			Label:       p.BucketStart.Format("15"),
+			Checks:      p.TotalChecks,
+			Failures:    failures,
+		})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating 24-hour activity rows: %w", err)
-	}
-
 	return activity, nil
 }
 

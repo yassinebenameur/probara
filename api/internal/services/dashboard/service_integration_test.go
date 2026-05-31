@@ -569,3 +569,42 @@ func TestService_GetSummary_24hTrendHourAligned(t *testing.T) {
 		t.Fatalf("Trend[bucketB].Uptime = %f, want 50", pointB.Uptime)
 	}
 }
+
+func TestService_GetSummary_24hActivityHourAligned(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "activity-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "activity-mon")
+
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	bucket := endHour.Add(-2 * time.Hour)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 7, 700, 7, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	if len(resp.Activity24h) != 24 {
+		t.Fatalf("len(Activity24h) = %d, want 24", len(resp.Activity24h))
+	}
+	var found *models.DashboardActivityHour
+	for i := range resp.Activity24h {
+		if resp.Activity24h[i].BucketStart.Equal(bucket) {
+			found = &resp.Activity24h[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("activity bucket %v not found", bucket)
+	}
+	if found.Checks != 10 || found.Failures != 3 {
+		t.Fatalf("activity[bucket] = {checks:%d, failures:%d}, want {10, 3}", found.Checks, found.Failures)
+	}
+}
