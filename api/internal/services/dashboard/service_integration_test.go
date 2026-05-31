@@ -768,3 +768,49 @@ func TestService_GetProblemMonitors_24hCountsFromExactRollingSummary(t *testing.
 		t.Fatalf("Uptime = %f, want 30", got.Uptime)
 	}
 }
+
+func TestService_GetOverview_24hHourlyRollupSmoke(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "smoke-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "smoke-mon")
+
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	// Seed 5 hourly rollup rows in the past, each 10 total / 5 success.
+	for i := 1; i <= 5; i++ {
+		bucket := endHour.Add(time.Duration(-i) * time.Hour)
+		testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 5, 500, 5, "failure", bucket.Add(59*time.Minute))
+	}
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+	resp, err := svc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetOverview() error = %v", err)
+	}
+	// Per-monitor uptime = 25/50 = 50% (single monitor).
+	if math.Abs(resp.Stats.OverallUptime-50) > 0.01 {
+		t.Fatalf("OverallUptime = %f, want 50", resp.Stats.OverallUptime)
+	}
+	// Activity sums: 5 buckets * 10 checks = 50 checks; 5 * 5 failures = 25 failures.
+	totalChecks := 0
+	totalFailures := 0
+	for _, p := range resp.Activity24h {
+		totalChecks += p.Checks
+		totalFailures += p.Failures
+	}
+	if totalChecks != 50 {
+		t.Fatalf("activity check sum = %d, want 50", totalChecks)
+	}
+	if totalFailures != 25 {
+		t.Fatalf("activity failure sum = %d, want 25", totalFailures)
+	}
+	if len(resp.ProblemMonitors) != 1 {
+		t.Fatalf("ProblemMonitors length = %d, want 1", len(resp.ProblemMonitors))
+	}
+}
