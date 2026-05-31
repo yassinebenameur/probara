@@ -1,3 +1,26 @@
+# [1.0.0-alpha.47](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.46...v1.0.0-alpha.47) (2026-05-31)
+
+
+### Bug Fixes
+
+* **dashboard:** restore 1h problem monitors window (regression from Task 10) ([eec9146](https://github.com/yassinebenameur/probara/commit/eec9146e8c9e3422778ee5448f0c55b9c41a0c1c))
+
+
+### Features
+
+* **dashboard:** add loadExactRolling24hSummary helper ([795d41e](https://github.com/yassinebenameur/probara/commit/795d41ecaaf97146a5663defe5faed0fea382a71))
+* **dashboard:** add loadHourlyBucketSeries24h helper ([ce078e5](https://github.com/yassinebenameur/probara/commit/ce078e5eeca6550704c3d15d3739c1bee82b0049))
+
+
+### Performance Improvements
+
+* **dashboard:** derive Activity24h from hour-aligned bucket helper ([38ceef8](https://github.com/yassinebenameur/probara/commit/38ceef865573956a6443e560d29b7408c558b16c))
+* **dashboard:** switch 24h problem monitors to exact-rolling helper ([72218aa](https://github.com/yassinebenameur/probara/commit/72218aa8063d9d3f7f81608732086da4f78cbe01))
+* **dashboard:** use exact-rolling hourly rollup helper for 24h stats ([c365406](https://github.com/yassinebenameur/probara/commit/c365406f1091314f2ae2efdc61300f90232126ef))
+* **dashboard:** use exact-rolling summary for 24h groups ([f6d4ad9](https://github.com/yassinebenameur/probara/commit/f6d4ad99c0c65198596f778862bbd867127adae7))
+* **dashboard:** use hour-aligned bucket helper for 24h trend ([8072345](https://github.com/yassinebenameur/probara/commit/8072345a0b241a4279614da741d0906ac7eea38b))
+* **dashboard:** use hour-aligned helper for 24h group sparkline ([a663eee](https://github.com/yassinebenameur/probara/commit/a663eee6d55fd2a7e54c0e0eaa484eb376d9c7f1))
+
 # [1.0.0-alpha.46](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.45...v1.0.0-alpha.46) (2026-05-26)
 
 
