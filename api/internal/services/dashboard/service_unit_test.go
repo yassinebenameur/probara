@@ -271,3 +271,38 @@ func TestService_LoadGroups_24hUsesExactRollingHelper(t *testing.T) {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+
+func TestLoadHourlyBucketSeries24h_BoundsRawScanAtRollupCursor(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	now := time.Date(2026, time.June, 1, 11, 54, 0, 0, time.UTC)
+	startHour := now.Truncate(time.Hour).Add(-23 * time.Hour)
+
+	rows := sqlmock.NewRows([]string{
+		"bucket_hour", "total_checks", "success_checks", "latency_sum_ms", "latency_count",
+	})
+	for i := 0; i < 24; i++ {
+		rows.AddRow(startHour.Add(time.Duration(i)*time.Hour), int64(0), int64(0), 0.0, int64(0))
+	}
+
+	mock.ExpectQuery("raw_bounds").
+		WithArgs(tenantID, startHour, startHour.Add(24*time.Hour), pq.Array([]uuid.UUID{monitorID})).
+		WillReturnRows(rows)
+
+	series, err := loadHourlyBucketSeries24h(context.Background(), &shareddb.Client{DB: sqlDB}, tenantID, []uuid.UUID{monitorID}, now)
+	if err != nil {
+		t.Fatalf("loadHourlyBucketSeries24h() error = %v", err)
+	}
+	if len(series) != 24 {
+		t.Fatalf("len(series) = %d, want 24", len(series))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}

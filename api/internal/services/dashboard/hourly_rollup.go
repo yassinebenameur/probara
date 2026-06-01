@@ -276,16 +276,26 @@ func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uui
 	}
 
 	query := `
-		WITH rollup_state AS (
-			SELECT last_created_at, last_check_result_id
-			FROM rollup_job_state
-			WHERE job_name = 'monitor_daily_rollups'
-		),
-		rollup_per_hour AS (
-			SELECT
-				mhr.bucket_hour,
-				SUM(mhr.total_checks)::bigint AS total_checks,
-				SUM(mhr.success_checks)::bigint AS success_checks,
+			WITH rollup_state AS (
+				SELECT last_created_at, last_check_result_id
+				FROM rollup_job_state
+				WHERE job_name = 'monitor_daily_rollups'
+			),
+			raw_bounds AS MATERIALIZED (
+				SELECT
+					$2::timestamptz AS start_hour,
+					$3::timestamptz AS end_exclusive,
+					COALESCE(GREATEST($2::timestamptz, rs.last_created_at), $2::timestamptz) AS raw_start,
+					rs.last_created_at,
+					COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid) AS last_check_result_id
+				FROM (SELECT 1) anchor
+				LEFT JOIN rollup_state rs ON TRUE
+			),
+			rollup_per_hour AS (
+				SELECT
+					mhr.bucket_hour,
+					SUM(mhr.total_checks)::bigint AS total_checks,
+					SUM(mhr.success_checks)::bigint AS success_checks,
 				SUM(mhr.latency_success_sum_ms) AS latency_sum_ms,
 				SUM(mhr.latency_success_count)::bigint AS latency_count
 			FROM monitor_hourly_rollups mhr
@@ -300,24 +310,24 @@ func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uui
 				date_trunc('hour', cr.created_at) AS bucket_hour,
 				COUNT(*)::bigint AS total_checks,
 				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks,
-				COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
-				COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
-			FROM check_results cr
-			LEFT JOIN rollup_state rs ON TRUE
-			WHERE cr.tenant_id = $1
-			  AND cr.monitor_id = ANY($4)
-			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= $2
-			  AND cr.created_at < $3
-			  AND (
-				rs.last_created_at IS NULL
-				OR (cr.created_at, cr.id) > (
-					rs.last_created_at,
-					COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid)
-				)
-			  )
-			GROUP BY 1
-		)
+					COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
+					COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
+				FROM check_results cr
+				CROSS JOIN raw_bounds rb
+				WHERE cr.tenant_id = $1
+				  AND cr.monitor_id = ANY($4)
+				  AND cr.result_source <> 'platform'
+				  AND cr.created_at >= rb.raw_start
+				  AND cr.created_at < rb.end_exclusive
+				  AND (
+					rb.last_created_at IS NULL
+					OR (cr.created_at, cr.id) > (
+						rb.last_created_at,
+						rb.last_check_result_id
+					)
+				  )
+				GROUP BY 1
+			)
 		SELECT
 			b.bucket_hour,
 			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
