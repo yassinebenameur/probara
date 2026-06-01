@@ -126,12 +126,13 @@ func (s *Service) queryMonitorsForGroups(
 	dashboardRange models.DashboardRange,
 	rangeStart, rangeEndExclusive time.Time,
 	filterTags []string,
+	precomp *rolling24hData,
 ) ([]groupAggregationRow, error) {
 	if isDashboardRollupRange(dashboardRange) {
 		return s.queryMonitorsForGroupsRollup(ctx, tenantID, rangeStart, rangeEndExclusive, filterTags)
 	}
 	if dashboardRange == models.DashboardRange24h {
-		return s.queryMonitorsForGroups24hHourlyRollup(ctx, tenantID, rangeStart, rangeEndExclusive, filterTags)
+		return s.queryMonitorsForGroups24hHourlyRollup(ctx, tenantID, filterTags, precomp)
 	}
 	return s.queryMonitorsForGroupsRaw(ctx, tenantID, rangeStart, rangeEndExclusive, filterTags)
 }
@@ -236,8 +237,8 @@ func (s *Service) queryMonitorsForGroupsRaw(
 func (s *Service) queryMonitorsForGroups24hHourlyRollup(
 	ctx context.Context,
 	tenantID uuid.UUID,
-	_rangeStart, _rangeEndExclusive time.Time, // ignored — helper uses exact-rolling window
 	filterTags []string,
+	precomp *rolling24hData,
 ) ([]groupAggregationRow, error) {
 	monitorRows, err := s.listGroupMonitorRows(ctx, tenantID, filterTags)
 	if err != nil {
@@ -247,13 +248,23 @@ func (s *Service) queryMonitorsForGroups24hHourlyRollup(
 		return []groupAggregationRow{}, nil
 	}
 
-	monitorIDs := make([]uuid.UUID, 0, len(monitorRows))
-	for _, m := range monitorRows {
-		monitorIDs = append(monitorIDs, m.id)
+	// The group monitor set is identical to the enabled-operational set used to
+	// build precomp.totals (same enabled / type<>'group' / not-deleted / tag
+	// filter), so the precomputed exact-rolling totals already cover every
+	// monitor here. Fall back to a fresh query only when precomp is absent.
+	var totals map[uuid.UUID]MonitorRolling24hTotals
+	if precomp != nil {
+		totals = precomp.totals
 	}
-	totals, err := loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-	if err != nil {
-		return nil, fmt.Errorf("failed to load 24h group totals: %w", err)
+	if totals == nil {
+		monitorIDs := make([]uuid.UUID, 0, len(monitorRows))
+		for _, m := range monitorRows {
+			monitorIDs = append(monitorIDs, m.id)
+		}
+		totals, err = loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load 24h group totals: %w", err)
+		}
 	}
 
 	out := make([]groupAggregationRow, 0, len(monitorRows))
@@ -419,12 +430,13 @@ func (s *Service) loadGroups(
 	rangeStart, rangeEndExclusive time.Time,
 	filterTags []string,
 	groupTags []string,
+	precomp *rolling24hData,
 ) ([]models.DashboardGroup, error) {
 	if len(groupTags) == 0 {
 		return []models.DashboardGroup{}, nil
 	}
 
-	rows, err := s.queryMonitorsForGroups(ctx, tenantID, dashboardRange, rangeStart, rangeEndExclusive, filterTags)
+	rows, err := s.queryMonitorsForGroups(ctx, tenantID, dashboardRange, rangeStart, rangeEndExclusive, filterTags, precomp)
 	if err != nil {
 		return nil, err
 	}

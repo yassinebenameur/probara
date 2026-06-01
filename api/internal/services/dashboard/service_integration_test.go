@@ -233,7 +233,7 @@ func TestService_QueryMonitorsForGroups_NoCheckDataDoesNotScanNullAttention(t *t
 	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
 
 	now := time.Now().UTC()
-	rows, err := dashboardSvc.queryMonitorsForGroups(ctx, tenantID, models.DashboardRange24h, now.Add(-24*time.Hour), now, nil)
+	rows, err := dashboardSvc.queryMonitorsForGroups(ctx, tenantID, models.DashboardRange24h, now.Add(-24*time.Hour), now, nil, nil)
 	if err != nil {
 		t.Fatalf("queryMonitorsForGroups() error = %v", err)
 	}
@@ -300,7 +300,7 @@ func TestService_LoadGroups_24hHourlyRollupIgnoresOutsideWindowRawRows(t *testin
 
 	rangeStart := now.Add(-24 * time.Hour)
 	rangeEnd := now
-	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
+	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"}, nil)
 	if err != nil {
 		t.Fatalf("loadGroups() error = %v", err)
 	}
@@ -367,7 +367,7 @@ func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
 
 	rangeStart := now.Add(-24 * time.Hour)
 	rangeEnd := now
-	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
+	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"}, nil)
 	if err != nil {
 		t.Fatalf("loadGroups() error = %v", err)
 	}

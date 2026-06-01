@@ -96,24 +96,49 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			  AND mhr.bucket_hour < rw.rollup_end
 			GROUP BY mhr.monitor_id
 		),
-		raw_complement AS (
-			SELECT
-				cr.monitor_id,
-				COUNT(*)::bigint AS total_checks,
-				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks,
-				COUNT(*) FILTER (WHERE cr.status = 'failure')::bigint AS failure_checks,
-				COUNT(*) FILTER (WHERE cr.status = 'error')::bigint AS error_checks,
-				COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
-				COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
+		-- Raw edge rows are the partial leading hour and the trailing/past-cursor
+		-- tail: everything in the exact window NOT covered by the rollup region
+		-- [leading_edge_end, rollup_end). Selecting them as two direct indexed
+		-- ranges (instead of scanning the full 24h and discarding the rollup
+		-- region with a filter) lets Postgres use the (tenant_id, monitor_id,
+		-- created_at) index to touch only the ~edge rows. The two ranges are
+		-- disjoint: range 1 ends at leading_edge_end and range 2 starts at
+		-- GREATEST(rollup_end, leading_edge_end) >= leading_edge_end. When the
+		-- rollup contributes nothing (rollup_end <= leading_edge_end) the ranges
+		-- meet at leading_edge_end and together cover the whole window. This is
+		-- exactly equivalent to the previous full-scan + edge filter.
+		raw_edge_rows AS MATERIALIZED (
+			SELECT cr.monitor_id, cr.status, cr.latency_ms, cr.created_at
 			FROM check_results cr
 			CROSS JOIN rollup_window rw
 			WHERE cr.tenant_id = $1
 			  AND cr.monitor_id = ANY($4)
 			  AND cr.result_source <> 'platform'
 			  AND cr.created_at >= rw.w_start
+			  AND cr.created_at < rw.leading_edge_end
+
+			UNION ALL
+
+			SELECT cr.monitor_id, cr.status, cr.latency_ms, cr.created_at
+			FROM check_results cr
+			CROSS JOIN rollup_window rw
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($4)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= GREATEST(rw.rollup_end, rw.leading_edge_end)
 			  AND cr.created_at < rw.w_end
-			  AND (cr.created_at < rw.leading_edge_end OR cr.created_at >= rw.rollup_end)
-			GROUP BY cr.monitor_id
+		),
+		raw_complement AS (
+			SELECT
+				er.monitor_id,
+				COUNT(*)::bigint AS total_checks,
+				COUNT(*) FILTER (WHERE er.status = 'success')::bigint AS success_checks,
+				COUNT(*) FILTER (WHERE er.status = 'failure')::bigint AS failure_checks,
+				COUNT(*) FILTER (WHERE er.status = 'error')::bigint AS error_checks,
+				COALESCE(SUM(er.latency_ms) FILTER (WHERE er.status = 'success' AND er.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
+				COUNT(er.latency_ms) FILTER (WHERE er.status = 'success')::bigint AS latency_count
+			FROM raw_edge_rows er
+			GROUP BY er.monitor_id
 		),
 		latest_rollup AS (
 			SELECT DISTINCT ON (mhr.monitor_id)
@@ -129,19 +154,12 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			ORDER BY mhr.monitor_id, mhr.bucket_hour DESC
 		),
 		latest_raw AS (
-			SELECT DISTINCT ON (cr.monitor_id)
-				cr.monitor_id,
-				cr.status AS latest_status,
-				cr.created_at AS latest_check_at
-			FROM check_results cr
-			CROSS JOIN rollup_window rw
-			WHERE cr.tenant_id = $1
-			  AND cr.monitor_id = ANY($4)
-			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= rw.w_start
-			  AND cr.created_at < rw.w_end
-			  AND (cr.created_at < rw.leading_edge_end OR cr.created_at >= rw.rollup_end)
-			ORDER BY cr.monitor_id, cr.created_at DESC
+			SELECT DISTINCT ON (er.monitor_id)
+				er.monitor_id,
+				er.status AS latest_status,
+				er.created_at AS latest_check_at
+			FROM raw_edge_rows er
+			ORDER BY er.monitor_id, er.created_at DESC
 		)
 		SELECT
 			m.id AS monitor_id,

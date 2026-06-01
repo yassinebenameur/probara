@@ -103,6 +103,16 @@ func (s *Service) GetOverview(ctx context.Context, tenantID uuid.UUID, params *m
 	}, nil
 }
 
+// rolling24hData holds the DB-heavy exact-rolling-24h aggregates that several
+// dashboard sections (stats, trend, activity, groups) all derive from. For the
+// 24h range GetSummary computes these once and shares them across sections so
+// the same expensive queries don't run multiple times per request. It is nil
+// for every other range.
+type rolling24hData struct {
+	totals       map[uuid.UUID]MonitorRolling24hTotals
+	hourlySeries []HourlyBucketPoint
+}
+
 // GetSummary returns lightweight dashboard data for first paint.
 func (s *Service) GetSummary(ctx context.Context, tenantID uuid.UUID, params *models.DashboardOverviewQuery) (*models.DashboardSummaryResponse, error) {
 	normalized := normalizeOverviewParams(params)
@@ -117,19 +127,30 @@ func (s *Service) GetSummary(ctx context.Context, tenantID uuid.UUID, params *mo
 		return nil, err
 	}
 
-	stats, err := s.getStats(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags)
+	// For the 24h range, compute the shared exact-rolling totals and the hourly
+	// bucket series once at a single "now" and reuse them across stats, trend,
+	// activity, and groups instead of re-running each heavy query per section.
+	var precomp *rolling24hData
+	if normalized.Range == models.DashboardRange24h {
+		precomp, err = s.loadRolling24hData(ctx, tenantID, normalized.Tags)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	stats, err := s.getStats(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags, precomp)
 	if err != nil {
 		return nil, err
 	}
 
-	trend, err := s.getTrend(ctx, tenantID, normalized.Range, rangeStart, rangeEnd, normalized.Tags)
+	trend, err := s.getTrend(ctx, tenantID, normalized.Range, rangeStart, rangeEnd, normalized.Tags, precomp)
 	if err != nil {
 		return nil, err
 	}
 
 	activity := []models.DashboardActivityHour{}
 	if normalized.Range == models.DashboardRange24h {
-		activity, err = s.getActivity24h(ctx, tenantID, normalized.Tags)
+		activity, err = s.getActivity24h(ctx, tenantID, normalized.Tags, precomp)
 		if err != nil {
 			return nil, err
 		}
@@ -154,7 +175,7 @@ func (s *Service) GetSummary(ctx context.Context, tenantID uuid.UUID, params *mo
 		groupTags = []string{}
 	}
 
-	groups, err := s.loadGroups(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags, groupTags)
+	groups, err := s.loadGroups(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags, groupTags, precomp)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +256,30 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, param
 	}, nil
 }
 
-func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string) (models.DashboardStats, error) {
+// loadRolling24hData computes the per-request shared 24h aggregates: the
+// enabled operational monitor set, the exact-rolling-24h totals, and the
+// hour-aligned bucket series, all anchored to a single "now".
+func (s *Service) loadRolling24hData(ctx context.Context, tenantID uuid.UUID, tags []string) (*rolling24hData, error) {
+	monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	totals, err := loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, now)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load 24h rolling summary: %w", err)
+	}
+	series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, now)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load 24h hourly bucket series: %w", err)
+	}
+	return &rolling24hData{
+		totals:       totals,
+		hourlySeries: series,
+	}, nil
+}
+
+func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string, precomp *rolling24hData) (models.DashboardStats, error) {
 	stats := models.DashboardStats{}
 
 	countQuery := `
@@ -262,13 +306,19 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	}
 
 	if dashboardRange == models.DashboardRange24h {
-		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
-		if err != nil {
-			return stats, err
+		var totals map[uuid.UUID]MonitorRolling24hTotals
+		if precomp != nil {
+			totals = precomp.totals
 		}
-		totals, err := loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-		if err != nil {
-			return stats, fmt.Errorf("failed to load 24h rolling summary: %w", err)
+		if totals == nil {
+			monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+			if err != nil {
+				return stats, err
+			}
+			totals, err = loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+			if err != nil {
+				return stats, fmt.Errorf("failed to load 24h rolling summary: %w", err)
+			}
 		}
 		stats.OverallUptime = computeMonitorWeightedUptime(totals)
 		stats.AvgResponseMS = computeMonitorWeightedLatency(totals)
@@ -358,7 +408,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	return stats, nil
 }
 
-func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string) ([]models.DashboardTrendPoint, error) {
+func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string, precomp *rolling24hData) ([]models.DashboardTrendPoint, error) {
 	if isDashboardRollupRange(dashboardRange) {
 		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
 		if err != nil {
@@ -389,13 +439,19 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		// 24h trend uses pooled (sum-of-success / sum-of-total) bucket uptime.
 		// This intentionally differs from getStats' monitor-weighted mean: see
 		// plan Decision D4 (chart sums are not required to equal scalar stats).
-		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
-		if err != nil {
-			return nil, err
+		var series []HourlyBucketPoint
+		if precomp != nil {
+			series = precomp.hourlySeries
 		}
-		series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load 24h hourly trend series: %w", err)
+		if series == nil {
+			monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+			if err != nil {
+				return nil, err
+			}
+			series, err = loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+			if err != nil {
+				return nil, fmt.Errorf("failed to load 24h hourly trend series: %w", err)
+			}
 		}
 		trend := make([]models.DashboardTrendPoint, 0, len(series))
 		for _, p := range series {
@@ -496,14 +552,20 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 	return trend, nil
 }
 
-func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags []string) ([]models.DashboardActivityHour, error) {
-	monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
-	if err != nil {
-		return nil, err
+func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags []string, precomp *rolling24hData) ([]models.DashboardActivityHour, error) {
+	var series []HourlyBucketPoint
+	if precomp != nil {
+		series = precomp.hourlySeries
 	}
-	series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-	if err != nil {
-		return nil, fmt.Errorf("failed to load 24h activity series: %w", err)
+	if series == nil {
+		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+		if err != nil {
+			return nil, err
+		}
+		series, err = loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load 24h activity series: %w", err)
+		}
 	}
 	activity := make([]models.DashboardActivityHour, 0, len(series))
 	for _, p := range series {

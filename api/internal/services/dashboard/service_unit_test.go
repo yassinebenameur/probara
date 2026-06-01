@@ -78,7 +78,7 @@ func TestService_GetStats_LongRangeUsesInjectedAnalyticsReader(t *testing.T) {
 	analytics := &fakeAnalyticsReader{}
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, analytics, &fakeTenantSettingsReader{})
 
-	stats, err := svc.getStats(context.Background(), tenantID, models.DashboardRange30d, now.AddDate(0, 0, -29), now, nil)
+	stats, err := svc.getStats(context.Background(), tenantID, models.DashboardRange30d, now.AddDate(0, 0, -29), now, nil, nil)
 	if err != nil {
 		t.Fatalf("getStats() error = %v", err)
 	}
@@ -212,7 +212,7 @@ func TestService_LoadGroups_LongRangeUsesRollups(t *testing.T) {
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
 
-	groups, err := svc.loadGroups(context.Background(), tenantID, models.DashboardRange30d, rangeStart, rangeEnd, nil, []string{"api"})
+	groups, err := svc.loadGroups(context.Background(), tenantID, models.DashboardRange30d, rangeStart, rangeEnd, nil, []string{"api"}, nil)
 	if err != nil {
 		t.Fatalf("loadGroups() error = %v", err)
 	}
@@ -257,7 +257,7 @@ func TestService_LoadGroups_24hUsesExactRollingHelper(t *testing.T) {
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
 
-	groups, err := svc.loadGroups(context.Background(), tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"})
+	groups, err := svc.loadGroups(context.Background(), tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"}, nil)
 	if err != nil {
 		t.Fatalf("loadGroups() error = %v", err)
 	}
