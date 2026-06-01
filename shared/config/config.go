@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // BaseConfig contains common configuration for all services
@@ -118,6 +119,10 @@ type StatusPageConfig struct {
 	BaseConfig
 	StatusPageBaseURL string
 	APIBaseURL        string
+	// HTTP server timeouts. These are a safety net only; the public status page
+	// is expected to render well within them. See LoadStatusPageConfig for defaults.
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
 // LoadBaseConfig loads base configuration from environment variables
@@ -731,5 +736,24 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	// STATUS_PAGE_API_BASE_URL (optional; enables /_sp_api/* proxy for the in-page customizer)
 	cfg.APIBaseURL = os.Getenv("STATUS_PAGE_API_BASE_URL")
 
+	// HTTP server timeouts (seconds). Optional; defaults are generous so a large
+	// status page never trips the timeout while page generation itself is the real fix.
+	cfg.ReadTimeout = envDurationSeconds("STATUS_PAGE_READ_TIMEOUT_SECONDS", 15*time.Second)
+	cfg.WriteTimeout = envDurationSeconds("STATUS_PAGE_WRITE_TIMEOUT_SECONDS", 60*time.Second)
+
 	return cfg, nil
+}
+
+// envDurationSeconds reads an integer number of seconds from the environment,
+// falling back to def when unset or invalid.
+func envDurationSeconds(key string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return def
+	}
+	return time.Duration(seconds) * time.Second
 }

@@ -77,6 +77,259 @@ func (r *Repository) GetScopeAnalytics(ctx context.Context, tenantID uuid.UUID, 
 	return r.getRawAnalytics(ctx, tenantID, monitorIDs, window, now.UTC())
 }
 
+// ScopeAnalyticsBatchRequest identifies one analytics scope to compute within a batch.
+// Key is an opaque identifier (e.g. a monitor or group id) used to key the returned map;
+// MonitorIDs is the set of leaf monitors that make up the scope.
+type ScopeAnalyticsBatchRequest struct {
+	Key        uuid.UUID
+	MonitorIDs []uuid.UUID
+}
+
+// GetScopeAnalyticsBatch computes analytics for many scopes across several ranges while
+// amortizing database access: rollup rows and downtime are loaded once for the union of
+// all monitors over the widest window, then every (scope, range) result is assembled in
+// memory using the exact same builders as GetScopeAnalytics. This is the batched, N+1-free
+// counterpart of GetScopeAnalytics for rollup-backed (long) ranges. Any non-rollup range is
+// computed per scope to remain correct; callers that only request long ranges issue a
+// constant number of queries regardless of how many scopes are involved.
+func (r *Repository) GetScopeAnalyticsBatch(ctx context.Context, tenantID uuid.UUID, scopes []ScopeAnalyticsBatchRequest, ranges []Range, now time.Time) (map[uuid.UUID]map[Range]*Result, error) {
+	now = now.UTC()
+	out := make(map[uuid.UUID]map[Range]*Result, len(scopes))
+	for _, scope := range scopes {
+		if _, ok := out[scope.Key]; !ok {
+			out[scope.Key] = make(map[Range]*Result, len(ranges))
+		}
+	}
+
+	rollupRanges := make([]Range, 0, len(ranges))
+	otherRanges := make([]Range, 0)
+	for _, rng := range ranges {
+		window, err := ResolveWindow(rng, now)
+		if err != nil {
+			return nil, err
+		}
+		if window.UseRollup {
+			rollupRanges = append(rollupRanges, rng)
+		} else {
+			otherRanges = append(otherRanges, rng)
+		}
+	}
+
+	if len(rollupRanges) > 0 {
+		if err := r.fillRollupBatch(ctx, tenantID, scopes, rollupRanges, now, out); err != nil {
+			return nil, err
+		}
+	}
+
+	// Non-rollup ranges are not expected in batch usage (the status page only batches long
+	// ranges). Compute them per scope so the method stays correct if ever called that way.
+	for _, scope := range scopes {
+		for _, rng := range otherRanges {
+			res, err := r.GetScopeAnalytics(ctx, tenantID, scope.MonitorIDs, rng, now)
+			if err != nil {
+				return nil, err
+			}
+			out[scope.Key][rng] = res
+		}
+	}
+
+	return out, nil
+}
+
+func (r *Repository) fillRollupBatch(ctx context.Context, tenantID uuid.UUID, scopes []ScopeAnalyticsBatchRequest, rollupRanges []Range, now time.Time, out map[uuid.UUID]map[Range]*Result) error {
+	union := make([]uuid.UUID, 0)
+	for _, scope := range scopes {
+		union = append(union, scope.MonitorIDs...)
+	}
+	union = dedupeUUIDs(union)
+
+	windows := make(map[Range]Window, len(rollupRanges))
+	var widest Window
+	for i, rng := range rollupRanges {
+		window, err := ResolveWindow(rng, now)
+		if err != nil {
+			return err
+		}
+		windows[rng] = window
+		if i == 0 || window.Start.Before(widest.Start) {
+			widest = window
+		}
+	}
+
+	if len(union) == 0 {
+		for _, scope := range scopes {
+			for _, rng := range rollupRanges {
+				window := windows[rng]
+				out[scope.Key][rng] = &Result{
+					Range:       rng,
+					GeneratedAt: now,
+					Source:      SourceRollup,
+					IsPartial:   true,
+					Series:      emptySeries(window),
+				}
+			}
+		}
+		return nil
+	}
+
+	rollupsByMonitor, err := r.loadRollupRowsByMonitor(ctx, tenantID, union, widest.Start, now)
+	if err != nil {
+		return err
+	}
+	periodsByMonitor, openByMonitor, err := r.loadDowntimeByMonitor(ctx, tenantID, union, widest.Start, now)
+	if err != nil {
+		return err
+	}
+
+	for _, scope := range scopes {
+		for _, rng := range rollupRanges {
+			window := windows[rng]
+			rows := make([]rollupRow, 0)
+			for _, monitorID := range scope.MonitorIDs {
+				for _, row := range rollupsByMonitor[monitorID] {
+					if row.BucketDay.Before(window.Start) || row.BucketDay.After(window.End) {
+						continue
+					}
+					rows = append(rows, row)
+				}
+			}
+			res := buildRollupResult(window, now, rows)
+			res.Range = rng
+			res.Source = SourceRollup
+			res.Downtime = buildScopeDowntime(scope.MonitorIDs, periodsByMonitor, openByMonitor, window.Start, now)
+			out[scope.Key][rng] = res
+		}
+	}
+
+	return nil
+}
+
+func (r *Repository) loadRollupRowsByMonitor(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, start, end time.Time) (map[uuid.UUID][]rollupRow, error) {
+	query := `
+		SELECT monitor_id, bucket_day, total_checks, success_checks,
+		       latency_success_sum_ms, latency_success_count, latest_status, latest_check_at
+		FROM monitor_daily_rollups
+		WHERE tenant_id = $1
+		  AND monitor_id = ANY($2)
+		  AND bucket_day >= $3::date
+		  AND bucket_day <= $4::date
+	`
+	rows, err := r.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs), start, end)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query batch rollup rows: %w", err)
+	}
+	defer rows.Close()
+
+	byMonitor := make(map[uuid.UUID][]rollupRow)
+	for rows.Next() {
+		var row rollupRow
+		if err := rows.Scan(
+			&row.MonitorID,
+			&row.BucketDay,
+			&row.TotalChecks,
+			&row.SuccessChecks,
+			&row.LatencySuccessSumMS,
+			&row.LatencySuccessCount,
+			&row.LatestStatus,
+			&row.LatestCheckAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan batch rollup row: %w", err)
+		}
+		row.BucketDay = row.BucketDay.UTC()
+		byMonitor[row.MonitorID] = append(byMonitor[row.MonitorID], row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating batch rollup rows: %w", err)
+	}
+	return byMonitor, nil
+}
+
+func (r *Repository) loadDowntimeByMonitor(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, start, end time.Time) (map[uuid.UUID][]DowntimePeriod, map[uuid.UUID][]time.Time, error) {
+	periodsByMonitor := make(map[uuid.UUID][]DowntimePeriod)
+	periodQuery := `
+		SELECT monitor_id, start_time, end_time
+		FROM monitor_downtime_periods
+		WHERE tenant_id = $1
+		  AND monitor_id = ANY($2)
+		  AND end_time >= $3
+		  AND start_time <= $4
+		ORDER BY start_time ASC
+	`
+	rows, err := r.db.QueryContext(ctx, periodQuery, tenantID, pq.Array(monitorIDs), start, end)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query batch downtime periods: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var period DowntimePeriod
+		if err := rows.Scan(&monitorID, &period.Start, &period.End); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan batch downtime period: %w", err)
+		}
+		period.Start = period.Start.UTC()
+		period.End = period.End.UTC()
+		periodsByMonitor[monitorID] = append(periodsByMonitor[monitorID], period)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("error iterating batch downtime periods: %w", err)
+	}
+
+	openByMonitor := make(map[uuid.UUID][]time.Time)
+	openQuery := `
+		SELECT monitor_id, started_at
+		FROM monitor_downtime_open
+		WHERE tenant_id = $1
+		  AND monitor_id = ANY($2)
+		  AND started_at <= $3
+	`
+	openRows, err := r.db.QueryContext(ctx, openQuery, tenantID, pq.Array(monitorIDs), end)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query batch open downtime periods: %w", err)
+	}
+	defer openRows.Close()
+	for openRows.Next() {
+		var monitorID uuid.UUID
+		var startedAt time.Time
+		if err := openRows.Scan(&monitorID, &startedAt); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan batch open downtime period: %w", err)
+		}
+		openByMonitor[monitorID] = append(openByMonitor[monitorID], startedAt.UTC())
+	}
+	if err := openRows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("error iterating batch open downtime periods: %w", err)
+	}
+
+	return periodsByMonitor, openByMonitor, nil
+}
+
+// buildScopeDowntime reproduces loadRollupDowntime for a single scope/window from
+// pre-loaded, monitor-keyed downtime data.
+func buildScopeDowntime(monitorIDs []uuid.UUID, periodsByMonitor map[uuid.UUID][]DowntimePeriod, openByMonitor map[uuid.UUID][]time.Time, start, end time.Time) []DowntimePeriod {
+	periods := make([]DowntimePeriod, 0)
+	for _, monitorID := range monitorIDs {
+		for _, period := range periodsByMonitor[monitorID] {
+			if period.End.Before(start) || period.Start.After(end) {
+				continue
+			}
+			periods = append(periods, DowntimePeriod{
+				Start: clampTime(period.Start, start, end),
+				End:   clampTime(period.End, start, end),
+			})
+		}
+		for _, startedAt := range openByMonitor[monitorID] {
+			if startedAt.After(end) {
+				continue
+			}
+			periods = append(periods, DowntimePeriod{
+				Start:  clampTime(startedAt, start, end),
+				End:    end,
+				IsOpen: true,
+			})
+		}
+	}
+	return mergeDowntimePeriods(periods)
+}
+
 func sourceForRange(rangeValue Range) Source {
 	if rangeValue.IsLongRange() {
 		return SourceRollup

@@ -64,11 +64,20 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	// Public status page routes
 	mux.HandleFunc("/public/status/", handlers.HandleStatusPage)
 
+	readTimeout := cfg.ReadTimeout
+	if readTimeout <= 0 {
+		readTimeout = 15 * time.Second
+	}
+	writeTimeout := cfg.WriteTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = 60 * time.Second
+	}
+
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 

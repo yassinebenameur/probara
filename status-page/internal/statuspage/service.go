@@ -191,22 +191,34 @@ type HourlyUptime struct {
 	Uptime float64 `json:"uptime"`
 }
 
+// batchAnalyticsReader is the optional batched counterpart of sharedanalytics.Reader.
+// *sharedanalytics.Repository implements it; when available the status page resolves all
+// per-monitor long-range analytics with a constant number of queries instead of O(monitors).
+type batchAnalyticsReader interface {
+	GetScopeAnalyticsBatch(ctx context.Context, tenantID uuid.UUID, scopes []sharedanalytics.ScopeAnalyticsBatchRequest, ranges []sharedanalytics.Range, now time.Time) (map[uuid.UUID]map[sharedanalytics.Range]*sharedanalytics.Result, error)
+}
+
 // Service handles status page business logic
 type Service struct {
-	db         *db.Client
-	analytics  sharedanalytics.Reader
-	presenters map[string]monitorPresenter
-	now        func() time.Time
+	db             db.Querier
+	analytics      sharedanalytics.Reader
+	analyticsBatch batchAnalyticsReader
+	presenters     map[string]monitorPresenter
+	now            func() time.Time
 }
 
 // NewService creates a new status page service
-func NewService(db *db.Client, analytics sharedanalytics.Reader) *Service {
-	return &Service{
-		db:         db,
+func NewService(database db.Querier, analytics sharedanalytics.Reader) *Service {
+	svc := &Service{
+		db:         database,
 		analytics:  analytics,
 		presenters: newMonitorPresenters(),
 		now:        func() time.Time { return time.Now().UTC() },
 	}
+	if batch, ok := analytics.(batchAnalyticsReader); ok {
+		svc.analyticsBatch = batch
+	}
+	return svc
 }
 
 type statusPageSettingsPatch struct {
@@ -574,7 +586,21 @@ func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tena
 	return result, nil
 }
 
+// GetStatusPageSections loads the page's sections with their monitors fully populated
+// (status, uptime, history and analytics). Loading happens in two phases: cheap section
+// "skeletons" first, then a single batched metric pass across every monitor on the page.
 func (s *Service) GetStatusPageSections(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageSectionData, error) {
+	sections, err := s.loadStatusPageSectionSkeletons(ctx, statusPageID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.populatePageMonitors(ctx, tenantID, sections); err != nil {
+		return nil, err
+	}
+	return sections, nil
+}
+
+func (s *Service) loadStatusPageSectionSkeletons(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageSectionData, error) {
 	type sectionRow struct {
 		ID       uuid.UUID
 		Title    string
@@ -700,9 +726,9 @@ func (s *Service) scanMonitorStatuses(ctx context.Context, rows *sql.Rows, tenan
 		}
 
 		presenter.Configure(&monitor, configJSON)
-		monitor.Uptime24hFormatted = ""
-		monitor.Uptime1hFormatted = ""
-		presenter.Populate(ctx, s, &monitor, monitorID, tenantID)
+		// Metrics (status, uptime, history, analytics) are populated in a single batched
+		// pass by populatePageMonitors after all section skeletons are loaded. Doing it here,
+		// per monitor, was the source of the N+1 query storm that timed out large pages.
 		monitors = append(monitors, monitor)
 	}
 	if err := rows.Err(); err != nil {
@@ -794,75 +820,13 @@ func (s *Service) monitorPresenter(monitorType string) monitorPresenter {
 	return regularMonitorPresenter{}
 }
 
-func (s *Service) populateRegularMonitorStatus(ctx context.Context, monitor *MonitorStatus, monitorID, tenantID uuid.UUID) {
-	currentStatus, err := s.GetMonitorCurrentStatus(ctx, monitorID, tenantID)
-	if err != nil {
-		monitor.Status = "unknown"
-	} else {
-		monitor.Status = currentStatus.Status
-		monitor.LastCheckTime = currentStatus.LastCheckTime
-		monitor.LastHTTPStatus = currentStatus.LastHTTPStatus
-		monitor.LastLatency = currentStatus.LastLatency
-		monitor.TLSDaysUntilExpiry = currentStatus.TLSDaysUntilExpiry
-		monitor.TLSNotAfter = currentStatus.TLSNotAfter
-	}
-
-	uptime24h, err := s.CalculateUptime24h(ctx, monitorID, tenantID)
-	monitor.Uptime24h = uptime24h
-	monitor.Uptime24hFormatted = formatUptime(uptime24h, err)
-
-	uptime1h, err := s.CalculateUptime1h(ctx, monitorID, tenantID)
-	monitor.Uptime1h = uptime1h
-	monitor.Uptime1hFormatted = formatUptime(uptime1h, err)
-
-	avgLatency1h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "1 hour")
-	monitor.AvgLatency1h = avgLatency1h
-
-	avgLatency24h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "24 hours")
-	monitor.AvgLatency24h = avgLatency24h
-
-	hourlyUptime, err := s.GetMonitorHourlyUptime(ctx, monitorID, tenantID)
-	if err == nil {
-		monitor.HourlyUptime = hourlyUptime
-		monitor.UptimeHistory24h = hourlyUptime
-	}
-
-	uptimeHistory1h, err := s.GetMonitor5MinuteUptime(ctx, monitorID, tenantID)
-	if err == nil {
-		monitor.UptimeHistory1h = uptimeHistory1h
-	}
-
-	latencyHistory1h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "1 hour", 100)
-	if err == nil {
-		monitor.LatencyHistory1h = latencyHistory1h
-	}
-
-	latencyHistory24h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "24 hours", 100)
-	if err == nil {
-		monitor.LatencyHistory = latencyHistory24h
-	}
-
-	downtimePeriods1h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "1 hour")
-	if err == nil {
-		monitor.DowntimePeriods1h = downtimePeriods1h
-	}
-
-	downtimePeriods24h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "24 hours")
-	if err == nil {
-		monitor.DowntimePeriods24h = downtimePeriods24h
-	}
-
-	history, err := s.GetMonitorHistory(ctx, monitorID, tenantID, 50, nil)
-	if err == nil {
-		monitor.History = history
-	}
-
-	s.applyMonitorLongRangeAnalytics(ctx, monitor, tenantID, []uuid.UUID{monitorID})
-}
-
-func (s *Service) populateGroupMonitorStatus(ctx context.Context, monitor *MonitorStatus, monitorID, tenantID uuid.UUID) {
-	memberIDs, err := s.getGroupMemberIDs(ctx, monitorID, tenantID)
-	if err != nil || len(memberIDs) == 0 {
+// populateGroupMonitorShortRange fills a group monitor's status, uptime, latency, hourly
+// strip and recent history by aggregating over its (pre-resolved) leaf member IDs. Long-range
+// analytics are applied separately by the batched pass. Per-monitor widgets that the public
+// page never renders (5-minute strip, raw latency series, short-range downtime) are
+// intentionally not populated.
+func (s *Service) populateGroupMonitorShortRange(ctx context.Context, monitor *MonitorStatus, memberIDs []uuid.UUID, tenantID uuid.UUID) {
+	if len(memberIDs) == 0 {
 		monitor.Status = "unknown"
 		monitor.Uptime24hFormatted = "N/A"
 		monitor.Uptime1hFormatted = "N/A"
@@ -898,37 +862,10 @@ func (s *Service) populateGroupMonitorStatus(ctx context.Context, monitor *Monit
 		monitor.UptimeHistory24h = hourlyUptime
 	}
 
-	uptimeHistory1h, err := s.GetGroup5MinuteUptime(ctx, memberIDs, tenantID)
-	if err == nil {
-		monitor.UptimeHistory1h = uptimeHistory1h
-	}
-
-	latencyHistory1h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "1 hour", 100)
-	if err == nil {
-		monitor.LatencyHistory1h = latencyHistory1h
-	}
-
-	latencyHistory24h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "24 hours", 100)
-	if err == nil {
-		monitor.LatencyHistory = latencyHistory24h
-	}
-
-	downtimePeriods1h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "1 hour")
-	if err == nil {
-		monitor.DowntimePeriods1h = downtimePeriods1h
-	}
-
-	downtimePeriods24h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "24 hours")
-	if err == nil {
-		monitor.DowntimePeriods24h = downtimePeriods24h
-	}
-
 	history, err := s.GetGroupHistory(ctx, memberIDs, tenantID, 50)
 	if err == nil {
 		monitor.History = history
 	}
-
-	s.applyMonitorLongRangeAnalytics(ctx, monitor, tenantID, memberIDs)
 }
 
 func formatUptime(uptime *float64, err error) string {
@@ -938,33 +875,46 @@ func formatUptime(uptime *float64, err error) string {
 	return fmt.Sprintf("%.2f%%", *uptime)
 }
 
+// longRangeRanges are the rollup-backed ranges rendered per monitor on the status page.
+var longRangeRanges = []sharedanalytics.Range{sharedanalytics.Range7d, sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
+
+// applyMonitorLongRangeAnalytics is the per-monitor (unbatched) long-range path, retained as
+// a fallback for analytics readers that do not implement batched access.
 func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *MonitorStatus, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
-	ranges := []sharedanalytics.Range{sharedanalytics.Range7d, sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
 	now := s.now()
-	for _, rangeValue := range ranges {
+	for _, rangeValue := range longRangeRanges {
 		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
 		if err != nil {
 			continue
 		}
-		uptimeHistory := mapDailySeries(result.Series)
-		latencyHistory := mapLatencySeries(result.Series, rangeValue)
-		downtime := mapDowntimePeriods(result.Downtime)
-		switch rangeValue {
-		case sharedanalytics.Range7d:
-			monitor.UptimeHistory7d = uptimeHistory
-		case sharedanalytics.Range30d:
-			monitor.UptimeHistory30d = uptimeHistory
-			monitor.LatencyHistory30d = latencyHistory
-			monitor.DowntimePeriods30d = downtime
-		case sharedanalytics.Range90d:
-			monitor.UptimeHistory90d = uptimeHistory
-			monitor.LatencyHistory90d = latencyHistory
-			monitor.DowntimePeriods90d = downtime
-		case sharedanalytics.Range365d:
-			monitor.UptimeHistory365d = uptimeHistory
-			monitor.LatencyHistory365d = latencyHistory
-			monitor.DowntimePeriods365d = downtime
-		}
+		assignLongRangeResult(monitor, rangeValue, result)
+	}
+}
+
+// assignLongRangeResult maps one analytics Result onto the monitor's range-specific fields.
+// Shared by the batched and unbatched long-range paths so they produce identical output.
+func assignLongRangeResult(monitor *MonitorStatus, rangeValue sharedanalytics.Range, result *sharedanalytics.Result) {
+	if result == nil {
+		return
+	}
+	uptimeHistory := mapDailySeries(result.Series)
+	latencyHistory := mapLatencySeries(result.Series, rangeValue)
+	downtime := mapDowntimePeriods(result.Downtime)
+	switch rangeValue {
+	case sharedanalytics.Range7d:
+		monitor.UptimeHistory7d = uptimeHistory
+	case sharedanalytics.Range30d:
+		monitor.UptimeHistory30d = uptimeHistory
+		monitor.LatencyHistory30d = latencyHistory
+		monitor.DowntimePeriods30d = downtime
+	case sharedanalytics.Range90d:
+		monitor.UptimeHistory90d = uptimeHistory
+		monitor.LatencyHistory90d = latencyHistory
+		monitor.DowntimePeriods90d = downtime
+	case sharedanalytics.Range365d:
+		monitor.UptimeHistory365d = uptimeHistory
+		monitor.LatencyHistory365d = latencyHistory
+		monitor.DowntimePeriods365d = downtime
 	}
 }
 
