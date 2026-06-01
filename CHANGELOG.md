@@ -1,3 +1,16 @@
+# [1.0.0-alpha.48](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.47...v1.0.0-alpha.48) (2026-06-01)
+
+
+### Bug Fixes
+
+* **web:** proxy agent binary downloads ([6c2a23f](https://github.com/yassinebenameur/probara/commit/6c2a23f60e7f985825d3967db25445b2e042e4fc))
+
+
+### Performance Improvements
+
+* **dashboard:** fix slow 24h summary via edge-range scan and dedupe ([f31f02e](https://github.com/yassinebenameur/probara/commit/f31f02e81ee5a128fbbdcfec187a5df0f320d43d))
+* **status-page:** batch monitor loading to fix N+1 query timeout ([32a0f45](https://github.com/yassinebenameur/probara/commit/32a0f455b332c865b80b0d463ef5c10d34f5ebd9))
+
 # [1.0.0-alpha.47](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.46...v1.0.0-alpha.47) (2026-05-31)
 
 
