@@ -1,3 +1,11 @@
+# [1.0.0-alpha.49](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.48...v1.0.0-alpha.49) (2026-06-02)
+
+
+### Performance Improvements
+
+* **dashboard:** bound 24h hourly raw scan ([d9a6940](https://github.com/yassinebenameur/probara/commit/d9a6940c88b0bfd7ff6b735a33402d1728bc395a))
+* **status-page:** bound global 24h hourly scan ([751ebac](https://github.com/yassinebenameur/probara/commit/751ebac8c07246d85ece8c40aed8464457239412))
+
 # [1.0.0-alpha.48](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.47...v1.0.0-alpha.48) (2026-06-01)
 
 
