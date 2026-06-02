@@ -1,3 +1,10 @@
+# [1.0.0-alpha.50](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.49...v1.0.0-alpha.50) (2026-06-02)
+
+
+### Bug Fixes
+
+* **status-page:** bound batched check result lookups ([a50a0b4](https://github.com/yassinebenameur/probara/commit/a50a0b4716f89009c217ced2b37cfb0f2566a1a2))
+
 # [1.0.0-alpha.49](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.48...v1.0.0-alpha.49) (2026-06-02)
 
 
