@@ -59,3 +59,63 @@ func TestService_GetGlobalHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *tes
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+func TestService_BatchCurrentStatus_UsesPerMonitorLateralLimit(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorA := uuid.New()
+	checkedAt := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("(?s)CROSS JOIN LATERAL.*ORDER BY cr\\.created_at DESC\\s+LIMIT 1").
+		WithArgs(sqlmock.AnyArg(), tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"monitor_id", "status", "http_status", "latency_ms", "created_at", "metrics_data",
+		}).AddRow(monitorA, "success", 200, 123, checkedAt, []byte("{}")))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
+	statuses, err := svc.batchCurrentStatus(context.Background(), []uuid.UUID{monitorA}, tenantID)
+	if err != nil {
+		t.Fatalf("batchCurrentStatus() error = %v", err)
+	}
+	if statuses[monitorA] == nil || statuses[monitorA].Status != "up" {
+		t.Fatalf("batchCurrentStatus() status = %#v, want up", statuses[monitorA])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestService_BatchHistory_UsesPerMonitorLateralLimit(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorA := uuid.New()
+	checkedAt := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("(?s)CROSS JOIN LATERAL.*ORDER BY cr\\.created_at DESC\\s+LIMIT 50").
+		WithArgs(sqlmock.AnyArg(), tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"monitor_id", "status", "latency_ms", "created_at",
+		}).AddRow(monitorA, "success", 123, checkedAt))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
+	history, err := svc.batchHistory(context.Background(), []uuid.UUID{monitorA}, tenantID)
+	if err != nil {
+		t.Fatalf("batchHistory() error = %v", err)
+	}
+	if len(history[monitorA]) != 1 || history[monitorA][0].Status != "up" {
+		t.Fatalf("batchHistory() history = %#v, want one up point", history[monitorA])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}

@@ -189,10 +189,17 @@ type uptimeSummary struct {
 // Equivalent to calling GetMonitorCurrentStatus per monitor.
 func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID]*CurrentStatus, error) {
 	query := `
-		SELECT DISTINCT ON (monitor_id) monitor_id, status, http_status, latency_ms, created_at, metrics_data
-		FROM check_results
-		WHERE monitor_id = ANY($1) AND tenant_id = $2
-		ORDER BY monitor_id, created_at DESC
+		SELECT m.monitor_id, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		FROM unnest($1::uuid[]) AS m(monitor_id)
+		CROSS JOIN LATERAL (
+			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+			FROM check_results cr
+			WHERE cr.monitor_id = m.monitor_id
+			  AND cr.tenant_id = $2
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) cr
+		ORDER BY m.monitor_id
 	`
 	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
 	if err != nil {
@@ -356,16 +363,18 @@ func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID,
 // in one query. Equivalent to GetMonitorHistory(monitorID, 50, nil) per monitor.
 func (s *Service) batchHistory(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID][]CheckResultHistory, error) {
 	query := `
-		SELECT monitor_id, status, latency_ms, created_at
-		FROM (
-			SELECT
-				monitor_id, status, latency_ms, created_at,
-				ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY created_at DESC) AS rn
-			FROM check_results
-			WHERE monitor_id = ANY($1) AND tenant_id = $2 AND created_at >= NOW() - INTERVAL '24 hours'
-		) ranked
-		WHERE rn <= 50
-		ORDER BY monitor_id, created_at ASC
+		SELECT m.monitor_id, cr.status, cr.latency_ms, cr.created_at
+		FROM unnest($1::uuid[]) AS m(monitor_id)
+		CROSS JOIN LATERAL (
+			SELECT cr.status, cr.latency_ms, cr.created_at
+			FROM check_results cr
+			WHERE cr.monitor_id = m.monitor_id
+			  AND cr.tenant_id = $2
+			  AND cr.created_at >= NOW() - INTERVAL '24 hours'
+			ORDER BY cr.created_at DESC
+			LIMIT 50
+		) cr
+		ORDER BY m.monitor_id, cr.created_at ASC
 	`
 	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
 	if err != nil {
