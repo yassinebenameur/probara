@@ -2,6 +2,7 @@ package statuspage
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"testing"
 	"time"
@@ -114,6 +115,75 @@ func TestService_BatchHistory_UsesPerMonitorLateralLimit(t *testing.T) {
 	}
 	if len(history[monitorA]) != 1 || history[monitorA][0].Status != "up" {
 		t.Fatalf("batchHistory() history = %#v, want one up point", history[monitorA])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestService_BatchHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorA := uuid.New()
+	bucket := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_bounds").
+		WithArgs(tenantID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"monitor_id", "bucket_hour", "total_checks", "success_checks",
+		}).AddRow(monitorA, bucket, int64(12), int64(10)))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
+	hourly, err := svc.batchHourlyUptime(context.Background(), []uuid.UUID{monitorA}, tenantID)
+	if err != nil {
+		t.Fatalf("batchHourlyUptime() error = %v", err)
+	}
+	found := false
+	for _, point := range hourly[monitorA] {
+		if point.Hour != bucket.Format("15:04") {
+			continue
+		}
+		found = true
+		if math.Abs(point.Uptime-((10.0/12.0)*100.0)) > 0.000001 {
+			t.Fatalf("batchHourlyUptime() bucket uptime = %f, want %f", point.Uptime, (10.0/12.0)*100.0)
+		}
+	}
+	if !found {
+		t.Fatalf("batchHourlyUptime() missing bucket %s in %#v", bucket.Format("15:04"), hourly[monitorA])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestService_BatchUptimeSummary_UsesHourlyRollupsAndBoundedRawScan(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorA := uuid.New()
+
+	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_bounds").
+		WithArgs(tenantID, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"monitor_id", "total_24h", "success_24h", "total_1h", "success_1h", "avg_latency_1h", "avg_latency_24h",
+		}).AddRow(monitorA, int64(12), int64(10), int64(3), int64(3), 90.0, 100.0))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
+	summary, err := svc.batchUptimeSummary(context.Background(), []uuid.UUID{monitorA}, tenantID)
+	if err != nil {
+		t.Fatalf("batchUptimeSummary() error = %v", err)
+	}
+	if summary[monitorA] == nil || summary[monitorA].Uptime24h == nil || math.Abs(*summary[monitorA].Uptime24h-((10.0/12.0)*100.0)) > 0.000001 {
+		t.Fatalf("batchUptimeSummary() = %#v, want rollup-backed 24h uptime", summary[monitorA])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

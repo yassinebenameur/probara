@@ -254,18 +254,103 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 // query. Equivalent to CalculateUptime24h + CalculateUptime1h + CalculateAvgLatency(1h/24h).
 func (s *Service) batchUptimeSummary(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID]*uptimeSummary, error) {
 	query := `
-		SELECT monitor_id,
-			COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') AS total_24h,
-			COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours' AND status = 'success') AS success_24h,
-			COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour') AS total_1h,
-			COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour' AND status = 'success') AS success_1h,
-			AVG(latency_ms) FILTER (WHERE created_at >= NOW() - INTERVAL '1 hour' AND status = 'success' AND latency_ms IS NOT NULL) AS avg_latency_1h,
-			AVG(latency_ms) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours' AND status = 'success' AND latency_ms IS NOT NULL) AS avg_latency_24h
-		FROM check_results
-		WHERE monitor_id = ANY($1) AND tenant_id = $2 AND created_at >= NOW() - INTERVAL '24 hours'
-		GROUP BY monitor_id
+		WITH rollup_state AS (
+			SELECT last_created_at, last_check_result_id
+			FROM rollup_job_state
+			WHERE job_name = 'monitor_daily_rollups'
+		),
+		bounds AS (
+			SELECT
+				NOW() - INTERVAL '24 hours' AS w_start,
+				NOW() AS w_end,
+				NOW() - INTERVAL '1 hour' AS one_hour_start,
+				date_trunc('hour', NOW() - INTERVAL '24 hours') + INTERVAL '1 hour' AS leading_edge_end,
+				date_trunc('hour', NOW()) AS trailing_edge_start
+		),
+		raw_bounds AS MATERIALIZED (
+			SELECT
+				b.w_start,
+				b.w_end,
+				b.one_hour_start,
+				b.leading_edge_end,
+				LEAST(
+					b.trailing_edge_start,
+					COALESCE(date_trunc('hour', rs.last_created_at), b.leading_edge_end)
+				) AS rollup_end
+			FROM bounds b
+			LEFT JOIN rollup_state rs ON TRUE
+		),
+		mons AS (
+			SELECT unnest($2::uuid[]) AS monitor_id
+		),
+		rollup_24h AS (
+			SELECT
+				mhr.monitor_id,
+				SUM(mhr.total_checks)::bigint AS total_checks,
+				SUM(mhr.success_checks)::bigint AS success_checks,
+				SUM(mhr.latency_success_sum_ms) AS latency_sum_ms,
+				SUM(mhr.latency_success_count)::bigint AS latency_count
+			FROM monitor_hourly_rollups mhr
+			CROSS JOIN raw_bounds rb
+			WHERE mhr.tenant_id = $1
+			  AND mhr.monitor_id = ANY($2)
+			  AND mhr.bucket_hour >= rb.leading_edge_end
+			  AND mhr.bucket_hour < rb.rollup_end
+			GROUP BY mhr.monitor_id
+		),
+		raw_24h AS (
+			SELECT
+				cr.monitor_id,
+				COUNT(*)::bigint AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks,
+				COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
+				COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
+			FROM check_results cr
+			CROSS JOIN raw_bounds rb
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($2)
+			  AND cr.result_source <> 'platform'
+			  AND (
+				(cr.created_at >= rb.w_start AND cr.created_at < rb.leading_edge_end)
+				OR (cr.created_at >= GREATEST(rb.rollup_end, rb.leading_edge_end) AND cr.created_at < rb.w_end)
+			  )
+			GROUP BY cr.monitor_id
+		),
+		raw_1h AS (
+			SELECT
+				cr.monitor_id,
+				COUNT(*)::bigint AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks,
+				AVG(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL) AS avg_latency
+			FROM check_results cr
+			CROSS JOIN raw_bounds rb
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($2)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= rb.one_hour_start
+			  AND cr.created_at < rb.w_end
+			GROUP BY cr.monitor_id
+		)
+		SELECT
+			m.monitor_id,
+			COALESCE(r24.total_checks, 0) + COALESCE(raw24.total_checks, 0) AS total_24h,
+			COALESCE(r24.success_checks, 0) + COALESCE(raw24.success_checks, 0) AS success_24h,
+			COALESCE(r1.total_checks, 0) AS total_1h,
+			COALESCE(r1.success_checks, 0) AS success_1h,
+			r1.avg_latency AS avg_latency_1h,
+			CASE
+				WHEN COALESCE(r24.latency_count, 0) + COALESCE(raw24.latency_count, 0) > 0
+					THEN (COALESCE(r24.latency_sum_ms, 0) + COALESCE(raw24.latency_sum_ms, 0))
+						/ (COALESCE(r24.latency_count, 0) + COALESCE(raw24.latency_count, 0))::double precision
+				ELSE NULL
+			END AS avg_latency_24h
+		FROM mons m
+		LEFT JOIN rollup_24h r24 ON r24.monitor_id = m.monitor_id
+		LEFT JOIN raw_24h raw24 ON raw24.monitor_id = m.monitor_id
+		LEFT JOIN raw_1h r1 ON r1.monitor_id = m.monitor_id
+		ORDER BY m.monitor_id
 	`
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to batch uptime summary: %w", err)
 	}
@@ -304,33 +389,78 @@ func (s *Service) batchUptimeSummary(ctx context.Context, monitorIDs []uuid.UUID
 // Each monitor gets a full 24-bucket series (empty hours carry -1), matching GetMonitorHourlyUptime.
 func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID][]HourlyUptime, error) {
 	query := `
-		WITH hours AS (
-			SELECT generate_series(
-				date_trunc('hour', NOW() - INTERVAL '23 hours'),
-				date_trunc('hour', NOW()),
-				INTERVAL '1 hour'
-			) AS hour
+		WITH rollup_state AS (
+			SELECT last_created_at, last_check_result_id
+			FROM rollup_job_state
+			WHERE job_name = 'monitor_daily_rollups'
+		),
+		bounds AS (
+			SELECT
+				date_trunc('hour', NOW() - INTERVAL '23 hours') AS start_hour,
+				date_trunc('hour', NOW()) + INTERVAL '1 hour' AS end_exclusive
+		),
+		raw_bounds AS MATERIALIZED (
+			SELECT
+				b.start_hour,
+				b.end_exclusive,
+				COALESCE(GREATEST(b.start_hour, rs.last_created_at), b.start_hour) AS raw_start,
+				rs.last_created_at,
+				COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid) AS last_check_result_id
+			FROM bounds b
+			LEFT JOIN rollup_state rs ON TRUE
 		),
 		mons AS (
-			SELECT unnest($1::uuid[]) AS monitor_id
+			SELECT unnest($2::uuid[]) AS monitor_id
 		),
-		hourly_stats AS (
+		rollup_stats AS (
 			SELECT
-				monitor_id,
-				date_trunc('hour', created_at) AS hour,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE status = 'success') AS successful
-			FROM check_results
-			WHERE monitor_id = ANY($1) AND tenant_id = $2 AND created_at >= NOW() - INTERVAL '24 hours'
-			GROUP BY monitor_id, date_trunc('hour', created_at)
+				mhr.monitor_id,
+				mhr.bucket_hour AS hour,
+				SUM(mhr.total_checks)::bigint AS total,
+				SUM(mhr.success_checks)::bigint AS successful
+			FROM monitor_hourly_rollups mhr
+			CROSS JOIN raw_bounds rb
+			WHERE mhr.tenant_id = $1
+			  AND mhr.monitor_id = ANY($2)
+			  AND mhr.bucket_hour >= rb.start_hour
+			  AND mhr.bucket_hour < rb.end_exclusive
+			GROUP BY mhr.monitor_id, mhr.bucket_hour
+		),
+		raw_stats AS (
+			SELECT
+				cr.monitor_id,
+				date_trunc('hour', cr.created_at) AS hour,
+				COUNT(*)::bigint AS total,
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS successful
+			FROM check_results cr
+			CROSS JOIN raw_bounds rb
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($2)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= rb.raw_start
+			  AND cr.created_at < rb.end_exclusive
+			  AND (
+				rb.last_created_at IS NULL
+				OR (cr.created_at, cr.id) > (
+					rb.last_created_at,
+					rb.last_check_result_id
+				)
+			  )
+			GROUP BY cr.monitor_id, date_trunc('hour', cr.created_at)
 		)
-		SELECT m.monitor_id, h.hour, COALESCE(hs.total, 0) AS total, COALESCE(hs.successful, 0) AS successful
+		SELECT
+			m.monitor_id,
+			h.hour,
+			COALESCE(rs.total, 0) + COALESCE(raw.total, 0) AS total,
+			COALESCE(rs.successful, 0) + COALESCE(raw.successful, 0) AS successful
 		FROM mons m
-		CROSS JOIN hours h
-		LEFT JOIN hourly_stats hs ON hs.monitor_id = m.monitor_id AND hs.hour = h.hour
+		CROSS JOIN bounds b
+		CROSS JOIN generate_series(b.start_hour, b.end_exclusive - INTERVAL '1 hour', INTERVAL '1 hour') AS h(hour)
+		LEFT JOIN rollup_stats rs ON rs.monitor_id = m.monitor_id AND rs.hour = h.hour
+		LEFT JOIN raw_stats raw ON raw.monitor_id = m.monitor_id AND raw.hour = h.hour
 		ORDER BY m.monitor_id, h.hour
 	`
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to batch hourly uptime: %w", err)
 	}
