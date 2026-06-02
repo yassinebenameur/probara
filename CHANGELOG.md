@@ -1,3 +1,10 @@
+# [1.0.0-alpha.51](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.50...v1.0.0-alpha.51) (2026-06-02)
+
+
+### Bug Fixes
+
+* **status-page:** use rollups for 24h monitor aggregates ([0a37427](https://github.com/yassinebenameur/probara/commit/0a37427a187774b6c0ea9190343660ddeedfc310))
+
 # [1.0.0-alpha.50](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.49...v1.0.0-alpha.50) (2026-06-02)
 
 
