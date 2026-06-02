@@ -1576,34 +1576,72 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 	}
 
 	query := `
-		WITH hours AS (
-			SELECT generate_series(
-				date_trunc('hour', NOW() - INTERVAL '23 hours'),
-				date_trunc('hour', NOW()),
-				INTERVAL '1 hour'
-			) AS hour
+		WITH rollup_state AS (
+			SELECT last_created_at, last_check_result_id
+			FROM rollup_job_state
+			WHERE job_name = 'monitor_daily_rollups'
 		),
-		hourly_stats AS (
-			SELECT 
-				date_trunc('hour', cr.created_at) AS hour,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
+		bounds AS (
+			SELECT
+				date_trunc('hour', NOW() - INTERVAL '23 hours') AS start_hour,
+				date_trunc('hour', NOW()) + INTERVAL '1 hour' AS end_exclusive
+		),
+		raw_bounds AS MATERIALIZED (
+			SELECT
+				b.start_hour,
+				b.end_exclusive,
+				COALESCE(GREATEST(b.start_hour, rs.last_created_at), b.start_hour) AS raw_start,
+				rs.last_created_at,
+				COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid) AS last_check_result_id
+			FROM bounds b
+			LEFT JOIN rollup_state rs ON TRUE
+		),
+		rollup_per_hour AS (
+			SELECT
+				mhr.bucket_hour,
+				SUM(mhr.total_checks)::bigint AS total_checks,
+				SUM(mhr.success_checks)::bigint AS success_checks
+			FROM monitor_hourly_rollups mhr
+			CROSS JOIN bounds b
+			WHERE mhr.tenant_id = $1
+			  AND mhr.monitor_id = ANY($2)
+			  AND mhr.bucket_hour >= b.start_hour
+			  AND mhr.bucket_hour < b.end_exclusive
+			GROUP BY mhr.bucket_hour
+		),
+		raw_per_hour AS (
+			SELECT
+				date_trunc('hour', cr.created_at) AS bucket_hour,
+				COUNT(*)::bigint AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks
 			FROM check_results cr
-			WHERE cr.monitor_id = ANY($1)
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - INTERVAL '24 hours'
-			GROUP BY date_trunc('hour', cr.created_at)
+			CROSS JOIN raw_bounds rb
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($2)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= rb.raw_start
+			  AND cr.created_at < rb.end_exclusive
+			  AND (
+				rb.last_created_at IS NULL
+				OR (cr.created_at, cr.id) > (
+					rb.last_created_at,
+					rb.last_check_result_id
+				)
+			  )
+			GROUP BY 1
 		)
-		SELECT 
-			h.hour,
-			COALESCE(hs.total, 0) AS total,
-			COALESCE(hs.successful, 0) AS successful
-		FROM hours h
-		LEFT JOIN hourly_stats hs ON h.hour = hs.hour
-		ORDER BY h.hour
+		SELECT
+			b.bucket_hour,
+			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
+			COALESCE(rh.success_checks, 0) + COALESCE(rwh.success_checks, 0) AS success_checks
+		FROM bounds bounds
+		CROSS JOIN generate_series(bounds.start_hour, bounds.end_exclusive - INTERVAL '1 hour', INTERVAL '1 hour') AS b(bucket_hour)
+		LEFT JOIN rollup_per_hour rh ON rh.bucket_hour = b.bucket_hour
+		LEFT JOIN raw_per_hour rwh ON rwh.bucket_hour = b.bucket_hour
+		ORDER BY b.bucket_hour
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hourly uptime: %w", err)
 	}
@@ -1624,7 +1662,7 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 		}
 
 		result = append(result, HourlyUptime{
-			Hour:   hour.Format("2006-01-02T15:04"),
+			Hour:   hour.Format("15:04"),
 			Uptime: uptime,
 		})
 	}
