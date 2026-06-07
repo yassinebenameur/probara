@@ -27,6 +27,8 @@ const (
 type MonitorChannelAssignment struct {
 	ChannelID    string `json:"channel_id"`
 	DelaySeconds int    `json:"delay_seconds"`
+	ChannelName  string `json:"channel_name,omitempty"`
+	ChannelType  string `json:"channel_type,omitempty"`
 }
 
 // Monitor represents a monitor in the system

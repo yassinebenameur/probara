@@ -138,7 +138,16 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		if err := s.repo.ReplaceMonitorChannels(ctx, tenantID, monitorID, req.NotificationChannels); err != nil {
 			return nil, err
 		}
-		monitor.NotificationChannels = req.NotificationChannels
+		// Reload from DB to pick up channel name/type joined from alert_channels.
+		if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+			if channels, ok := channelMap[monitorID]; ok {
+				monitor.NotificationChannels = channels
+			} else {
+				monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+			}
+		} else {
+			monitor.NotificationChannels = req.NotificationChannels
+		}
 	} else {
 		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
 	}
@@ -407,7 +416,16 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		if err := s.repo.ReplaceMonitorChannels(ctx, tenantID, monitorID, req.NotificationChannels); err != nil {
 			return nil, err
 		}
-		monitor.NotificationChannels = req.NotificationChannels
+		// Reload from DB to pick up channel name/type joined from alert_channels.
+		if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+			if channels, ok := channelMap[monitorID]; ok {
+				monitor.NotificationChannels = channels
+			} else {
+				monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+			}
+		} else {
+			monitor.NotificationChannels = req.NotificationChannels
+		}
 	} else {
 		// Load existing channels
 		if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {

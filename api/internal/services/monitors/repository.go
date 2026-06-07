@@ -687,10 +687,11 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 	}
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT monitor_id, channel_id, delay_seconds
-		FROM monitor_channels
-		WHERE monitor_id = ANY($1)
-		ORDER BY monitor_id, channel_id
+		SELECT mc.monitor_id, mc.channel_id, ac.name, ac.type, mc.delay_seconds
+		FROM monitor_channels mc
+		JOIN alert_channels ac ON ac.id = mc.channel_id
+		WHERE mc.monitor_id = ANY($1)
+		ORDER BY mc.monitor_id, mc.channel_id
 	`, pq.Array(monitorIDs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query monitor channels: %w", err)
@@ -700,13 +701,17 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 	for rows.Next() {
 		var monitorID uuid.UUID
 		var channelID uuid.UUID
+		var channelName string
+		var channelType string
 		var delaySeconds int
-		if err := rows.Scan(&monitorID, &channelID, &delaySeconds); err != nil {
+		if err := rows.Scan(&monitorID, &channelID, &channelName, &channelType, &delaySeconds); err != nil {
 			return nil, fmt.Errorf("failed to scan monitor channel: %w", err)
 		}
 		result[monitorID] = append(result[monitorID], models.MonitorChannelAssignment{
 			ChannelID:    channelID.String(),
 			DelaySeconds: delaySeconds,
+			ChannelName:  channelName,
+			ChannelType:  channelType,
 		})
 	}
 	if err := rows.Err(); err != nil {

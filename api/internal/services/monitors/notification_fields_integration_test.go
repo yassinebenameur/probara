@@ -55,6 +55,9 @@ func TestMonitorNotificationFieldsRoundTrip(t *testing.T) {
 	require.Equal(t, "custom", created.NotificationMode, "mode should be custom")
 	require.Len(t, created.NotificationChannels, 1, "should have 1 channel")
 	require.Equal(t, channelID.String(), created.NotificationChannels[0].ChannelID)
+	require.Equal(t, "test-channel", created.NotificationChannels[0].ChannelName, "channel name should be populated")
+	require.NotEmpty(t, created.NotificationChannels[0].ChannelType, "channel type should be populated")
+	require.Equal(t, "email", created.NotificationChannels[0].ChannelType, "channel type should be email")
 
 	// Verify Get also returns the channels
 	got, err := svc.GetMonitor(ctx, tenantID, created.ID)
