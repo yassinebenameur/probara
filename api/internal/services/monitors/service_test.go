@@ -141,6 +141,18 @@ func (m *MockRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([
 	return m.members[groupID], nil
 }
 
+func (m *MockRepository) ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error {
+	return nil
+}
+
+func (m *MockRepository) DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error {
+	return nil
+}
+
+func (m *MockRepository) GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error) {
+	return make(map[uuid.UUID][]models.MonitorChannelAssignment), nil
+}
+
 // ErrMonitorNotFound is returned when a monitor is not found
 var ErrMonitorNotFound = &NotFoundError{msg: "monitor not found"}
 

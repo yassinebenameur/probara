@@ -131,6 +131,17 @@ func (m *MockMonitorService) BulkDeleteMonitors(
 	return deleted, nil
 }
 
+func (m *MockMonitorService) BulkUpdateAlerting(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	monitorIDs []uuid.UUID,
+	threshold *int,
+	mode *string,
+	channels []models.MonitorChannelAssignment,
+) (int, error) {
+	return len(monitorIDs), nil
+}
+
 type mockNotFoundError struct{}
 
 func (e *mockNotFoundError) Error() string {

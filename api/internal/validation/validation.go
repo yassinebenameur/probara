@@ -189,6 +189,10 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 		}
 	}
 
+	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -260,6 +264,30 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 		}
 	}
 
+	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ValidateMonitorNotificationFields validates the notification-routing fields that can be set
+// on both CreateMonitorRequest and UpdateMonitorRequest (spec §7.4).
+func ValidateMonitorNotificationFields(threshold *int, mode *string, channels []models.MonitorChannelAssignment) error {
+	if threshold != nil && (*threshold < 1 || *threshold > 10) {
+		return fmt.Errorf("consecutive_failures_threshold must be between 1 and 10")
+	}
+	if mode != nil && *mode != "default" && *mode != "custom" {
+		return fmt.Errorf("notification_mode must be 'default' or 'custom'")
+	}
+	for _, c := range channels {
+		if _, err := uuid.Parse(c.ChannelID); err != nil {
+			return fmt.Errorf("invalid channel_id %q", c.ChannelID)
+		}
+		if c.DelaySeconds < 0 {
+			return fmt.Errorf("delay_seconds must be >= 0")
+		}
+	}
 	return nil
 }
 

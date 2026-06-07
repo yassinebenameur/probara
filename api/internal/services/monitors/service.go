@@ -94,23 +94,35 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		pushToken = &token
 	}
 
+	// Apply defaults for notification fields
+	consecutiveFailuresThreshold := 2 // DB default
+	if req.ConsecutiveFailuresThreshold != nil {
+		consecutiveFailuresThreshold = *req.ConsecutiveFailuresThreshold
+	}
+	notificationMode := "default" // DB default
+	if req.NotificationMode != nil {
+		notificationMode = *req.NotificationMode
+	}
+
 	monitor := &models.Monitor{
-		ID:              monitorID,
-		TenantID:        tenantID,
-		Name:            req.Name,
-		Type:            req.Type,
-		Config:          req.Config,
-		IntervalSeconds: req.IntervalSeconds,
-		TimeoutSeconds:  req.TimeoutSeconds,
-		AlertPolicyID:   alertPolicyID,
-		AlertPolicyIDs:  alertPolicyIDs,
-		Enabled:         enabled,
-		Tags:            req.Tags,
-		AgentID:         agentID,
-		PushToken:       pushToken,
-		NextRunAt:       &nextRunAt,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                           monitorID,
+		TenantID:                     tenantID,
+		Name:                         req.Name,
+		Type:                         req.Type,
+		Config:                       req.Config,
+		IntervalSeconds:              req.IntervalSeconds,
+		TimeoutSeconds:               req.TimeoutSeconds,
+		AlertPolicyID:                alertPolicyID,
+		AlertPolicyIDs:               alertPolicyIDs,
+		Enabled:                      enabled,
+		Tags:                         req.Tags,
+		AgentID:                      agentID,
+		PushToken:                    pushToken,
+		NextRunAt:                    &nextRunAt,
+		CreatedAt:                    now,
+		UpdatedAt:                    now,
+		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
+		NotificationMode:             notificationMode,
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
@@ -119,6 +131,16 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 
 	if err := s.repo.SetAlertPolicies(ctx, monitorID, alertPolicyIDs); err != nil {
 		return nil, err
+	}
+
+	// Persist custom channel assignments if mode is 'custom'
+	if notificationMode == "custom" && len(req.NotificationChannels) > 0 {
+		if err := s.repo.ReplaceMonitorChannels(ctx, tenantID, monitorID, req.NotificationChannels); err != nil {
+			return nil, err
+		}
+		monitor.NotificationChannels = req.NotificationChannels
+	} else {
+		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
 	}
 
 	return monitor, nil
@@ -142,6 +164,15 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			return nil, err
 		}
 		monitor.MemberIDs = memberIDs
+	}
+
+	// Attach notification channels
+	if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		if channels, ok := channelMap[monitorID]; ok {
+			monitor.NotificationChannels = channels
+		} else {
+			monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+		}
 	}
 
 	return monitor, nil
@@ -172,6 +203,17 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 		for i := range monitors {
 			policies := policyMap[monitors[i].ID]
 			monitors[i].AlertPolicyIDs = mergeAlertPolicyIDs(policies, derefUUID(monitors[i].AlertPolicyID))
+		}
+	}
+
+	// Attach notification channels for all monitors
+	if channelMap, err := s.repo.GetChannelsForMonitors(ctx, monitorIDs); err == nil {
+		for i := range monitors {
+			if channels, ok := channelMap[monitors[i].ID]; ok {
+				monitors[i].NotificationChannels = channels
+			} else {
+				monitors[i].NotificationChannels = []models.MonitorChannelAssignment{}
+			}
 		}
 	}
 
@@ -295,6 +337,18 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	if req.ConsecutiveFailuresThreshold != nil {
+		setParts = append(setParts, fmt.Sprintf("consecutive_failures_threshold = $%d", argIndex))
+		args = append(args, *req.ConsecutiveFailuresThreshold)
+		argIndex++
+	}
+
+	if req.NotificationMode != nil {
+		setParts = append(setParts, fmt.Sprintf("notification_mode = $%d", argIndex))
+		args = append(args, *req.NotificationMode)
+		argIndex++
+	}
+
 	// Update next_run_at if interval changed
 	if req.IntervalSeconds != nil {
 		setParts = append(setParts, fmt.Sprintf("next_run_at = $%d", argIndex))
@@ -302,7 +356,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
-	if len(setParts) == 0 {
+	if len(setParts) == 0 && req.NotificationChannels == nil {
 		// No fields to update, return existing
 		return existing, nil
 	}
@@ -313,8 +367,18 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		TenantID: tenantID,
 	}
 
-	if err := s.repo.Update(ctx, monitor, setParts, args); err != nil {
-		return nil, err
+	if len(setParts) > 0 {
+		if err := s.repo.Update(ctx, monitor, setParts, args); err != nil {
+			return nil, err
+		}
+	} else {
+		// No DB column updates but we still need to handle monitor_channels below.
+		// Re-load so monitor has all fields populated.
+		loaded, err := s.repo.GetByID(ctx, tenantID, monitorID)
+		if err != nil {
+			return nil, err
+		}
+		*monitor = *loaded
 	}
 
 	if updatePolicies {
@@ -324,6 +388,35 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		monitor.AlertPolicyIDs = alertPolicyIDs
 	} else if policies, err := s.repo.GetAlertPolicyIDs(ctx, monitorID); err == nil {
 		monitor.AlertPolicyIDs = mergeAlertPolicyIDs(policies, derefUUID(monitor.AlertPolicyID))
+	}
+
+	// Handle notification channel updates
+	effectiveMode := monitor.NotificationMode
+	if req.NotificationMode != nil {
+		effectiveMode = *req.NotificationMode
+	}
+
+	if req.NotificationMode != nil && effectiveMode == "default" {
+		// Switching to default: remove all custom channels
+		if err := s.repo.DeleteMonitorChannels(ctx, monitorID); err != nil {
+			return nil, err
+		}
+		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+	} else if req.NotificationChannels != nil {
+		// Replace channel set
+		if err := s.repo.ReplaceMonitorChannels(ctx, tenantID, monitorID, req.NotificationChannels); err != nil {
+			return nil, err
+		}
+		monitor.NotificationChannels = req.NotificationChannels
+	} else {
+		// Load existing channels
+		if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+			if channels, ok := channelMap[monitorID]; ok {
+				monitor.NotificationChannels = channels
+			} else {
+				monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+			}
+		}
 	}
 
 	return monitor, nil
@@ -482,6 +575,36 @@ func (s *Service) BulkUpdateAlertPolicy(
 		Unchanged:         len(monitorIDs) - len(changed),
 		MonitorIDsUpdated: changed,
 	}, nil
+}
+
+// BulkUpdateAlerting applies alerting fields to many monitors in a tenant-scoped way.
+// Nil fields mean "leave unchanged". Returns the count of monitors updated.
+func (s *Service) BulkUpdateAlerting(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	monitorIDs []uuid.UUID,
+	threshold *int,
+	mode *string,
+	channels []models.MonitorChannelAssignment,
+) (int, error) {
+	if len(monitorIDs) == 0 {
+		return 0, fmt.Errorf("monitor_ids cannot be empty")
+	}
+	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
+		return 0, err
+	}
+
+	for _, monitorID := range monitorIDs {
+		req := &models.UpdateMonitorRequest{
+			ConsecutiveFailuresThreshold: threshold,
+			NotificationMode:             mode,
+			NotificationChannels:         channels,
+		}
+		if _, err := s.UpdateMonitor(ctx, tenantID, monitorID, req); err != nil {
+			return 0, fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
+		}
+	}
+	return len(monitorIDs), nil
 }
 
 // generatePushToken generates a unique token for push monitors

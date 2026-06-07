@@ -40,6 +40,17 @@ func (f *fakeBulkSvc) BulkUpdateAlertPolicy(
 	return f.bulkResp, f.bulkErr
 }
 
+func (f *fakeBulkSvc) BulkUpdateAlerting(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	monitorIDs []uuid.UUID,
+	threshold *int,
+	mode *string,
+	channels []models.MonitorChannelAssignment,
+) (int, error) {
+	return len(monitorIDs), nil
+}
+
 func tenantCtx(t *testing.T) context.Context {
 	t.Helper()
 	tenantID := uuid.New()

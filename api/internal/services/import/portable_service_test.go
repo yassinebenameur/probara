@@ -101,6 +101,10 @@ func (m *portableMonitorServiceMock) BulkUpdateAlertPolicy(ctx context.Context, 
 	}, nil
 }
 
+func (m *portableMonitorServiceMock) BulkUpdateAlerting(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, threshold *int, mode *string, channels []models.MonitorChannelAssignment) (int, error) {
+	return len(monitorIDs), nil
+}
+
 func TestParseFile_PortableMonitorExport(t *testing.T) {
 	svc := &Service{}
 	data := []byte(`
