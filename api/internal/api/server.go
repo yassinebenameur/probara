@@ -13,7 +13,6 @@ import (
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
-	"github.com/yassinebenameur/probara/api/internal/handlers/alertpolicies"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
@@ -31,7 +30,6 @@ import (
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
-	alertpolicyservice "github.com/yassinebenameur/probara/api/internal/services/alertpolicies"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
@@ -211,7 +209,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/import/preview", importHdlrs.Preview)
 				r.Post("/import", importHdlrs.Execute)
 				// Bulk operations (must be before /{id} to avoid conflicts)
-				r.Post("/bulk/alert-policy", monitorHandlers.BulkUpdateAlertPolicy)
 				r.Post("/bulk/alerting", monitorHandlers.BulkUpdateAlerting)
 				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
@@ -277,17 +274,19 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Delete("/{id}/status-pages/{statusPageId}", incidentHandlers.UnpublishIncidentFromStatusPage)
 			})
 
-			// Alert policies
-			alertPolicyService := alertpolicyservice.NewService(dbClient)
-			alertPolicyHandlers := alertpolicies.NewHandlers(alertPolicyService, log)
+			// Alert policies — retired; all endpoints return 410 Gone.
+			// Use /notification-settings instead.
 			r.Route("/alert-policies", func(r chi.Router) {
-				r.Post("/", alertPolicyHandlers.CreateAlertPolicy)
-				r.Get("/", alertPolicyHandlers.ListAlertPolicies)
-				r.Get("/{id}/alerts", alertHandlers.GetAlertsByPolicy)
-				r.Get("/{id}/monitors", alertHandlers.GetMonitorsByPolicy)
-				r.Get("/{id}", alertPolicyHandlers.GetAlertPolicy)
-				r.Patch("/{id}", alertPolicyHandlers.UpdateAlertPolicy)
-				r.Delete("/{id}", alertPolicyHandlers.DeleteAlertPolicy)
+				gone := func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusGone)
+					_, _ = w.Write([]byte(`{"error":"alert policies were replaced by notification settings; see /notification-settings"}`))
+				}
+				r.Post("/", gone)
+				r.Get("/", gone)
+				r.Get("/{id}", gone)
+				r.Patch("/{id}", gone)
+				r.Delete("/{id}", gone)
 			})
 
 			// Alert channels

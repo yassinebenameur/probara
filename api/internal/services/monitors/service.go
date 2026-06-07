@@ -533,50 +533,6 @@ func (s *Service) BulkDeleteMonitors(
 	return s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs)
 }
 
-// BulkUpdateAlertPolicy attaches or detaches a single alert policy across many monitors.
-func (s *Service) BulkUpdateAlertPolicy(
-	ctx context.Context,
-	tenantID uuid.UUID,
-	monitorIDs []uuid.UUID,
-	policyID uuid.UUID,
-	op models.BulkAlertPolicyOp,
-) (*models.BulkUpdateAlertPolicyResponse, error) {
-	if len(monitorIDs) == 0 {
-		return nil, fmt.Errorf("monitor_ids cannot be empty")
-	}
-	if op != models.BulkAlertPolicyOpAttach && op != models.BulkAlertPolicyOpDetach {
-		return nil, fmt.Errorf("invalid op: %q", op)
-	}
-
-	if err := s.repo.VerifyAlertPolicy(ctx, tenantID, policyID); err != nil {
-		return nil, err
-	}
-	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
-		return nil, err
-	}
-
-	var changed []uuid.UUID
-	var err error
-	switch op {
-	case models.BulkAlertPolicyOpAttach:
-		changed, err = s.repo.BulkAttachAlertPolicy(ctx, tenantID, monitorIDs, policyID)
-	case models.BulkAlertPolicyOpDetach:
-		changed, err = s.repo.BulkDetachAlertPolicy(ctx, tenantID, monitorIDs, policyID)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if changed == nil {
-		changed = []uuid.UUID{}
-	}
-	return &models.BulkUpdateAlertPolicyResponse{
-		Updated:           len(changed),
-		Unchanged:         len(monitorIDs) - len(changed),
-		MonitorIDsUpdated: changed,
-	}, nil
-}
-
 // BulkUpdateAlerting applies alerting fields to many monitors in a tenant-scoped way.
 // Nil fields mean "leave unchanged". Returns the count of monitors updated.
 func (s *Service) BulkUpdateAlerting(
