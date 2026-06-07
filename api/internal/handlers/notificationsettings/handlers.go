@@ -2,11 +2,13 @@ package notificationsettings
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
 
-	"github.com/yassinebenameur/probara/api/internal/errors"
+	apierrors "github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	svc "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -27,20 +29,23 @@ func NewHandlers(service *svc.Service, log *logger.Logger) *Handlers {
 func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := middleware.GetTenantID(r.Context())
 	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
 		return
 	}
 
 	tenantUUID, err := uuid.Parse(tenantID)
 	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteInternalError(w, "invalid tenant ID")
 		return
 	}
 
 	settings, err := h.service.Get(r.Context(), tenantUUID)
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to get notification settings")
-		errors.WriteInternalError(w, "failed to load notification settings")
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to get notification settings")
+		apierrors.WriteInternalError(w, "failed to load notification settings")
 		return
 	}
 
@@ -52,25 +57,42 @@ func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := middleware.GetTenantID(r.Context())
 	if err != nil {
-		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		apierrors.WriteUnauthorizedError(w, "tenant ID not found")
 		return
 	}
 
 	tenantUUID, err := uuid.Parse(tenantID)
 	if err != nil {
-		errors.WriteInternalError(w, "invalid tenant ID")
+		apierrors.WriteInternalError(w, "invalid tenant ID")
 		return
 	}
 
 	var req svc.UpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
 		return
+	}
+
+	// Validate before calling the service so that client errors return 400
+	// without ever touching the database.
+	for i, ch := range req.DefaultChannels {
+		if ch.DelaySeconds < 0 {
+			apierrors.WriteValidationError(w, fmt.Sprintf("default_channels[%d].delay_seconds must be >= 0", i))
+			return
+		}
 	}
 
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)
 	if err != nil {
-		errors.WriteValidationError(w, err.Error())
+		if errors.Is(err, svc.ErrChannelNotFound) {
+			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to update notification settings")
+		apierrors.WriteInternalError(w, "failed to update notification settings")
 		return
 	}
 

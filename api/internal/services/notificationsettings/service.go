@@ -4,12 +4,17 @@ package notificationsettings
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 )
+
+// ErrChannelNotFound is returned by Update when a requested channel_id does
+// not exist or does not belong to the tenant. The handler maps this to HTTP 400.
+var ErrChannelNotFound = errors.New("channel not found")
 
 // ChannelAssignment describes a channel in the workspace default routing list.
 type ChannelAssignment struct {
@@ -89,12 +94,20 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 			if a.DelaySeconds < 0 {
 				return nil, fmt.Errorf("delay_seconds must be >= 0")
 			}
-			if _, err := tx.ExecContext(ctx, `
+			result, err := tx.ExecContext(ctx, `
 				INSERT INTO tenant_default_channels (tenant_id, channel_id, delay_seconds, position)
 				SELECT $1, $2, $3, $4
 				WHERE EXISTS (SELECT 1 FROM alert_channels WHERE id = $2 AND tenant_id = $1)
-			`, tenantID, a.ChannelID, a.DelaySeconds, i); err != nil {
+			`, tenantID, a.ChannelID, a.DelaySeconds, i)
+			if err != nil {
 				return nil, fmt.Errorf("insert default channel: %w", err)
+			}
+			n, err := result.RowsAffected()
+			if err != nil {
+				return nil, fmt.Errorf("check rows affected: %w", err)
+			}
+			if n == 0 {
+				return nil, fmt.Errorf("channel %s not found for tenant: %w", a.ChannelID, ErrChannelNotFound)
 			}
 		}
 	}

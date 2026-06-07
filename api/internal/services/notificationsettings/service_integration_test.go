@@ -2,6 +2,7 @@ package notificationsettings
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -52,6 +53,41 @@ func TestGetUpdateNotificationSettings(t *testing.T) {
 	}
 	if len(settings.DefaultChannels) != 0 {
 		t.Fatalf("default channels not cleared: %+v", settings.DefaultChannels)
+	}
+}
+
+// TestUpdateRejectsChannelFromOtherTenant asserts that Update returns
+// ErrChannelNotFound (wrapped) when the caller supplies a channel_id that
+// belongs to a different tenant, and that no row is persisted.
+func TestUpdateRejectsChannelFromOtherTenant(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantA := testutil.InsertTenant(ctx, t, dbClient, "tenant-a")
+	tenantB := testutil.InsertTenant(ctx, t, dbClient, "tenant-b")
+	// channelB belongs to tenant B — tenant A must NOT be able to use it.
+	channelB := insertTestChannel(ctx, t, dbClient, tenantB, "channel-b")
+
+	svc := NewService(dbClient)
+
+	_, err := svc.Update(ctx, tenantA, UpdateRequest{
+		DefaultChannels: []ChannelAssignment{{ChannelID: channelB, DelaySeconds: 0}},
+	})
+	if err == nil {
+		t.Fatal("Update() expected error for cross-tenant channel, got nil")
+	}
+	if !errors.Is(err, ErrChannelNotFound) {
+		t.Fatalf("Update() expected ErrChannelNotFound, got: %v", err)
+	}
+
+	// Verify nothing was persisted for tenant A.
+	settings, err := svc.Get(ctx, tenantA)
+	if err != nil {
+		t.Fatalf("Get() after failed update error = %v", err)
+	}
+	if len(settings.DefaultChannels) != 0 {
+		t.Fatalf("expected no default channels for tenant A after rejected update, got: %+v", settings.DefaultChannels)
 	}
 }
 
