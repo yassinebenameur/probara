@@ -88,10 +88,7 @@ func main() {
 	// Start minimal HTTP server for health/metrics
 	go func() {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("OK"))
-		})
+		mux.HandleFunc("/healthz", healthzHandler(natsClient))
 		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -158,4 +155,20 @@ func main() {
 	}
 
 	log.Info("Alerter exited")
+}
+
+// healthzHandler reports the pod as dead once the NATS connection is
+// permanently closed, so Kubernetes restarts it instead of leaving a zombie
+// alerter. A nil client (NATS disabled) or a reconnecting connection is
+// healthy.
+func healthzHandler(natsClient *queue.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if natsClient != nil && natsClient.Closed() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("NATS connection permanently closed"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}
 }
