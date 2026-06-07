@@ -22,6 +22,11 @@ type Alerter struct {
 	nats      *queue.Client
 	encryptor secrets.Encryptor
 	stop      chan struct{}
+
+	// sendFunc dispatches one channel notification. It defaults to
+	// sendChannelNotification and is swapped in tests so the lifecycle can be
+	// exercised without hitting real channel plugins.
+	sendFunc func(ctx context.Context, channel alertChannel, eventType string, binding policyBinding, alert *alertRecord, groupInfo *groupDetail, now time.Time) error
 }
 
 // NewAlerter creates a new alerter instance. A nil encryptor is treated as a
@@ -30,7 +35,7 @@ func NewAlerter(cfg *config.AlerterConfig, log *logger.Logger, metricsRegistry *
 	if encryptor == nil {
 		encryptor = secrets.NoOpEncryptor{}
 	}
-	return &Alerter{
+	a := &Alerter{
 		config:    cfg,
 		logger:    log,
 		metrics:   metricsRegistry,
@@ -39,6 +44,8 @@ func NewAlerter(cfg *config.AlerterConfig, log *logger.Logger, metricsRegistry *
 		encryptor: encryptor,
 		stop:      make(chan struct{}),
 	}
+	a.sendFunc = a.sendChannelNotification
+	return a
 }
 
 // Start starts the alerter evaluation loop
@@ -87,8 +94,8 @@ func (a *Alerter) Start() error {
 			return nil
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), evalInterval)
-			if err := a.evaluateAlerts(ctx); err != nil {
-				a.logger.WithError(err).Error("Alert evaluation failed")
+			if err := a.runLifecycle(ctx); err != nil {
+				a.logger.WithError(err).Error("Alert lifecycle evaluation failed")
 			}
 			cancel()
 		}

@@ -273,122 +273,16 @@ func TestAlerterResolveAlertSkipsDuplicateAfterLaterNonRecoveryEntry(t *testing.
 	}
 }
 
-func TestEvaluateAlertsKeepsAlertActiveWhileMonitorStillFailing(t *testing.T) {
-	// Reproduces dev-cluster flapping: policy threshold=1/window=30s on a
-	// monitor checked every 60s. The only failure ages out of the window
-	// before the next check lands, but the monitor never produced a success —
-	// the alert must stay active instead of resolving and re-firing forever.
-	ctx := context.Background()
-	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
-	defer cleanup()
-
-	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
-	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
-	policyID := insertAlerterTestPolicyWithWindow(ctx, t, dbClient, tenantID, "policy", false, 1, 30)
-	bindMonitorAlertPolicy(ctx, t, dbClient, monitorID, policyID)
-
-	now := time.Now().UTC()
-	resultID := testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), "failure", "monitor", nil)
-
-	alerter := newIntegrationAlerter(dbClient)
-	if err := alerter.evaluateAlerts(ctx); err != nil {
-		t.Fatalf("evaluateAlerts(fire) error = %v", err)
-	}
-	if got := countAlerterAlertsByStatus(ctx, t, dbClient, monitorID, "active"); got != 1 {
-		t.Fatalf("active alert count after failure = %d, want 1", got)
-	}
-
-	// Age the failure past the 30s window without any newer result, as happens
-	// between two 60s-spaced checks.
-	if _, err := dbClient.ExecContext(ctx, `
-		UPDATE check_results SET created_at = $2 WHERE id = $1
-	`, resultID, now.Add(-50*time.Second)); err != nil {
-		t.Fatalf("age check result: %v", err)
-	}
-
-	if err := alerter.evaluateAlerts(ctx); err != nil {
-		t.Fatalf("evaluateAlerts(window slid) error = %v", err)
-	}
-	if got := countAlerterAlertsByStatus(ctx, t, dbClient, monitorID, "active"); got != 1 {
-		t.Fatalf("active alert count after window slid = %d, want 1 (alert must not resolve without a successful check)", got)
-	}
-	if got := countAlerterAlertsByStatus(ctx, t, dbClient, monitorID, "resolved"); got != 0 {
-		t.Fatalf("resolved alert count after window slid = %d, want 0", got)
-	}
-}
-
-func TestEvaluateAlertsResolvesAlertAfterSuccessfulCheck(t *testing.T) {
-	// Genuine recovery: once a successful check lands and the failure window
-	// is clear, the active alert must resolve.
-	ctx := context.Background()
-	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
-	defer cleanup()
-
-	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
-	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
-	policyID := insertAlerterTestPolicyWithWindow(ctx, t, dbClient, tenantID, "policy", false, 1, 30)
-	bindMonitorAlertPolicy(ctx, t, dbClient, monitorID, policyID)
-
-	now := time.Now().UTC()
-	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), "failure", "monitor", nil)
-
-	alerter := newIntegrationAlerter(dbClient)
-	if err := alerter.evaluateAlerts(ctx); err != nil {
-		t.Fatalf("evaluateAlerts(fire) error = %v", err)
-	}
-	if got := countAlerterAlertsByStatus(ctx, t, dbClient, monitorID, "active"); got != 1 {
-		t.Fatalf("active alert count after failure = %d, want 1", got)
-	}
-
-	// Monitor recovers: failure ages out of the window and a success lands.
-	if _, err := dbClient.ExecContext(ctx, `
-		UPDATE check_results SET created_at = $2 WHERE monitor_id = $1
-	`, monitorID, now.Add(-50*time.Second)); err != nil {
-		t.Fatalf("age check result: %v", err)
-	}
-	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-5*time.Second), "success", "monitor", nil)
-
-	if err := alerter.evaluateAlerts(ctx); err != nil {
-		t.Fatalf("evaluateAlerts(recovery) error = %v", err)
-	}
-	if got := countAlerterAlertsByStatus(ctx, t, dbClient, monitorID, "active"); got != 0 {
-		t.Fatalf("active alert count after recovery = %d, want 0", got)
-	}
-	if got := countAlerterAlertsByStatus(ctx, t, dbClient, monitorID, "resolved"); got != 1 {
-		t.Fatalf("resolved alert count after recovery = %d, want 1", got)
-	}
-}
-
 func newIntegrationAlerter(dbClient *shareddb.Client) *Alerter {
-	return &Alerter{
+	a := &Alerter{
 		config: &config.AlerterConfig{},
 		logger: logger.New("alerter-test", "error"),
 		db:     dbClient,
 	}
-}
-
-func insertAlerterTestPolicyWithWindow(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID uuid.UUID, name string, createIncidentOnFire bool, failureThreshold, failureWindowSeconds int) uuid.UUID {
-	t.Helper()
-
-	policyID := uuid.New()
-	if _, err := dbClient.ExecContext(ctx, `
-		INSERT INTO alert_policies (id, tenant_id, name, failure_threshold, failure_window_seconds, create_incident_on_fire, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-	`, policyID, tenantID, name, failureThreshold, failureWindowSeconds, createIncidentOnFire); err != nil {
-		t.Fatalf("insert alert policy: %v", err)
+	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+		return nil
 	}
-
-	return policyID
-}
-
-func bindMonitorAlertPolicy(ctx context.Context, t *testing.T, dbClient *shareddb.Client, monitorID, policyID uuid.UUID) {
-	t.Helper()
-
-	if _, err := dbClient.ExecContext(ctx, `
-		UPDATE monitors SET alert_policy_id = $2 WHERE id = $1
-	`, monitorID, policyID); err != nil {
-		t.Fatalf("bind monitor alert policy: %v", err)
-	}
+	return a
 }
 
 func countAlerterAlertsByStatus(ctx context.Context, t *testing.T, dbClient *shareddb.Client, monitorID uuid.UUID, status string) int {

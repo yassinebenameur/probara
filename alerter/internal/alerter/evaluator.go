@@ -55,17 +55,6 @@ type notificationState struct {
 	LastEventType string
 }
 
-type groupMember struct {
-	ID   uuid.UUID
-	Name string
-}
-
-type checkSummary struct {
-	Status    string
-	Error     *string
-	CreatedAt time.Time
-}
-
 type groupDetail struct {
 	Failures   []groupFailure
 	ExtraCount int
@@ -79,582 +68,9 @@ type groupFailure struct {
 }
 
 const (
-	monitorTypeGroup        = "group"
 	alertsRecoveredMessage  = "All linked alerts recovered"
 	incidentSystemEntryType = "system"
 )
-
-var failureStatuses = map[string]bool{
-	"failure": true,
-	"error":   true,
-}
-
-func (a *Alerter) evaluateAlerts(ctx context.Context) error {
-	bindings, err := a.loadPolicyBindings(ctx)
-	if err != nil {
-		return err
-	}
-	if len(bindings) == 0 {
-		return nil
-	}
-
-	policyIDs := uniquePolicyIDs(bindings)
-	policyChannels, err := a.loadPolicyChannels(ctx, policyIDs)
-	if err != nil {
-		return err
-	}
-
-	activeAlerts, activeAlertIDs, err := a.loadActiveAlerts(ctx, policyIDs)
-	if err != nil {
-		return err
-	}
-
-	notificationStates, err := a.loadNotificationStates(ctx, activeAlertIDs)
-	if err != nil {
-		return err
-	}
-
-	groupMembers, groupTenants, err := a.loadGroupMembers(ctx, bindings)
-	if err != nil {
-		return err
-	}
-
-	groupLatestResults, err := a.loadGroupLatestResults(ctx, groupMembers, groupTenants)
-	if err != nil {
-		return err
-	}
-
-	suppressedMonitors := map[uuid.UUID]bool{}
-	for _, members := range groupMembers {
-		for _, member := range members {
-			suppressedMonitors[member.ID] = true
-		}
-	}
-
-	reminderInterval := time.Duration(a.config.AlertReminderIntervalSeconds) * time.Second
-	if reminderInterval <= 0 {
-		reminderInterval = time.Hour
-	}
-
-	now := time.Now()
-
-	for _, binding := range bindings {
-		key := alertKey(binding.MonitorID, binding.PolicyID)
-		active := activeAlerts[key]
-
-		var (
-			failureCount int
-			lastError    *string
-			groupInfo    *groupDetail
-			recovered    bool
-		)
-
-		if binding.MonitorType == monitorTypeGroup {
-			members := groupMembers[binding.MonitorID]
-			results := groupLatestResults[binding.MonitorID]
-			failureCount, lastError, groupInfo = a.evaluateGroupFailures(now, binding, members, results)
-			recovered = groupRecovered(results)
-		} else {
-			failureCount, lastError, recovered, err = a.getMonitorFailureSummary(ctx, binding, now)
-			if err != nil {
-				a.logger.WithError(err).WithFields(map[string]interface{}{
-					"monitor_id": binding.MonitorID,
-					"policy_id":  binding.PolicyID,
-				}).Error("Failed to evaluate monitor failures")
-				continue
-			}
-		}
-
-		shouldBeActive := failureCount >= binding.FailureThreshold
-		if shouldBeActive {
-			if active == nil {
-				newAlert, err := a.createAlert(ctx, binding, failureCount, lastError, now)
-				if err != nil {
-					a.logger.WithError(err).WithFields(map[string]interface{}{
-						"monitor_id": binding.MonitorID,
-						"policy_id":  binding.PolicyID,
-					}).Error("Failed to create alert")
-					continue
-				}
-				active = newAlert
-				activeAlerts[key] = newAlert
-
-				a.publishAlertEvent(ctx, "created", binding, newAlert, nil)
-				a.dispatchNotifications(ctx, "created", binding, newAlert, policyChannels[binding.PolicyID], notificationStates, groupInfo, suppressedMonitors[binding.MonitorID], now, reminderInterval)
-			} else {
-				if err := a.updateAlertMetadata(ctx, active.ID, failureCount, lastError); err != nil {
-					a.logger.WithError(err).WithFields(map[string]interface{}{
-						"alert_id":   active.ID,
-						"monitor_id": binding.MonitorID,
-						"policy_id":  binding.PolicyID,
-					}).Warn("Failed to update alert metadata")
-				}
-				active.FailureCount = failureCount
-				active.LastError = lastError
-				a.dispatchNotifications(ctx, "reminder", binding, active, policyChannels[binding.PolicyID], notificationStates, groupInfo, suppressedMonitors[binding.MonitorID], now, reminderInterval)
-			}
-		} else if active != nil {
-			if !recovered {
-				// The failure window slid past the last failure without an
-				// observed success — when checks run less often than the
-				// window, resolving here flaps the alert created/resolved on
-				// every cycle while the monitor is still down.
-				continue
-			}
-			resolvedAt, err := a.resolveAlert(ctx, active.ID, now)
-			if err != nil {
-				a.logger.WithError(err).WithFields(map[string]interface{}{
-					"alert_id":   active.ID,
-					"monitor_id": binding.MonitorID,
-					"policy_id":  binding.PolicyID,
-				}).Error("Failed to resolve alert")
-				continue
-			}
-
-			a.publishAlertEvent(ctx, "resolved", binding, active, &resolvedAt)
-			a.dispatchNotifications(ctx, "resolved", binding, active, policyChannels[binding.PolicyID], notificationStates, nil, suppressedMonitors[binding.MonitorID], now, reminderInterval)
-			delete(activeAlerts, key)
-		}
-	}
-
-	return nil
-}
-
-func (a *Alerter) loadPolicyBindings(ctx context.Context) ([]policyBinding, error) {
-	query := `
-		SELECT m.id, m.tenant_id, m.name, m.type,
-			ap.id, ap.name, ap.failure_threshold, ap.failure_window_seconds, ap.create_incident_on_fire,
-			ap.email_subject_template, ap.email_body_template
-		FROM monitors m
-		JOIN alert_policies ap ON m.alert_policy_id = ap.id AND m.tenant_id = ap.tenant_id
-		WHERE m.alert_policy_id IS NOT NULL AND m.enabled = true AND m.deleted_at IS NULL
-		UNION
-		SELECT m.id, m.tenant_id, m.name, m.type,
-			ap.id, ap.name, ap.failure_threshold, ap.failure_window_seconds, ap.create_incident_on_fire,
-			ap.email_subject_template, ap.email_body_template
-		FROM monitor_alert_policies map
-		JOIN monitors m ON map.monitor_id = m.id
-		JOIN alert_policies ap ON map.alert_policy_id = ap.id AND m.tenant_id = ap.tenant_id
-		WHERE m.enabled = true AND m.deleted_at IS NULL
-	`
-
-	rows, err := a.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load policy bindings: %w", err)
-	}
-	defer rows.Close()
-
-	var bindings []policyBinding
-	for rows.Next() {
-		var binding policyBinding
-		if err := rows.Scan(
-			&binding.MonitorID,
-			&binding.TenantID,
-			&binding.MonitorName,
-			&binding.MonitorType,
-			&binding.PolicyID,
-			&binding.PolicyName,
-			&binding.FailureThreshold,
-			&binding.FailureWindowSeconds,
-			&binding.CreateIncidentOnFire,
-			&binding.EmailSubjectTemplate,
-			&binding.EmailBodyTemplate,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan policy binding: %w", err)
-		}
-		bindings = append(bindings, binding)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating policy bindings: %w", err)
-	}
-	return bindings, nil
-}
-
-func uniquePolicyIDs(bindings []policyBinding) []uuid.UUID {
-	seen := make(map[uuid.UUID]struct{}, len(bindings))
-	var ids []uuid.UUID
-	for _, binding := range bindings {
-		if _, ok := seen[binding.PolicyID]; ok {
-			continue
-		}
-		seen[binding.PolicyID] = struct{}{}
-		ids = append(ids, binding.PolicyID)
-	}
-	return ids
-}
-
-func (a *Alerter) loadPolicyChannels(ctx context.Context, policyIDs []uuid.UUID) (map[uuid.UUID][]alertChannel, error) {
-	result := make(map[uuid.UUID][]alertChannel)
-	if len(policyIDs) == 0 {
-		return result, nil
-	}
-
-	query := `
-		SELECT apc.alert_policy_id, ac.id, ac.name, ac.type, ac.config, ac.is_active
-		FROM alert_policy_channels apc
-		JOIN alert_channels ac ON apc.channel_id = ac.id
-		WHERE apc.alert_policy_id = ANY($1)
-	`
-
-	rows, err := a.db.QueryContext(ctx, query, pq.Array(policyIDs))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load alert policy channels: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var policyID uuid.UUID
-		var channel alertChannel
-		var configBytes []byte
-		if err := rows.Scan(&policyID, &channel.ID, &channel.Name, &channel.Type, &configBytes, &channel.IsActive); err != nil {
-			return nil, fmt.Errorf("failed to scan alert channel: %w", err)
-		}
-		channel.Config = json.RawMessage(configBytes)
-		result[policyID] = append(result[policyID], channel)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating alert channels: %w", err)
-	}
-	return result, nil
-}
-
-func (a *Alerter) loadActiveAlerts(ctx context.Context, policyIDs []uuid.UUID) (map[string]*alertRecord, []uuid.UUID, error) {
-	if len(policyIDs) == 0 {
-		return map[string]*alertRecord{}, nil, nil
-	}
-
-	query := `
-		SELECT id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, last_error
-		FROM alerts
-		WHERE status IN ('active', 'acknowledged') AND alert_policy_id = ANY($1)
-	`
-
-	rows, err := a.db.QueryContext(ctx, query, pq.Array(policyIDs))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load active alerts: %w", err)
-	}
-	defer rows.Close()
-
-	alerts := make(map[string]*alertRecord)
-	var alertIDs []uuid.UUID
-	for rows.Next() {
-		var record alertRecord
-		var lastError sql.NullString
-		if err := rows.Scan(
-			&record.ID,
-			&record.TenantID,
-			&record.MonitorID,
-			&record.PolicyID,
-			&record.Status,
-			&record.TriggeredAt,
-			&record.FailureCount,
-			&lastError,
-		); err != nil {
-			return nil, nil, fmt.Errorf("failed to scan alert: %w", err)
-		}
-		if lastError.Valid {
-			record.LastError = &lastError.String
-		}
-		alerts[alertKey(record.MonitorID, record.PolicyID)] = &record
-		alertIDs = append(alertIDs, record.ID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("error iterating alerts: %w", err)
-	}
-	return alerts, alertIDs, nil
-}
-
-func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UUID) (map[uuid.UUID]map[uuid.UUID]*notificationState, error) {
-	states := make(map[uuid.UUID]map[uuid.UUID]*notificationState)
-	if len(alertIDs) == 0 {
-		return states, nil
-	}
-
-	query := `
-		SELECT alert_id, channel_id, last_sent_at, last_event_type
-		FROM alert_notification_states
-		WHERE alert_id = ANY($1)
-	`
-
-	rows, err := a.db.QueryContext(ctx, query, pq.Array(alertIDs))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load notification states: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var alertID uuid.UUID
-		var channelID uuid.UUID
-		var state notificationState
-		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType); err != nil {
-			return nil, fmt.Errorf("failed to scan notification state: %w", err)
-		}
-		if _, ok := states[alertID]; !ok {
-			states[alertID] = make(map[uuid.UUID]*notificationState)
-		}
-		states[alertID][channelID] = &state
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating notification states: %w", err)
-	}
-	return states, nil
-}
-
-func (a *Alerter) loadGroupMembers(ctx context.Context, bindings []policyBinding) (map[uuid.UUID][]groupMember, map[uuid.UUID]uuid.UUID, error) {
-	groupIDs := make([]uuid.UUID, 0)
-	groupTenants := make(map[uuid.UUID]uuid.UUID)
-	seen := make(map[uuid.UUID]struct{})
-	for _, binding := range bindings {
-		if binding.MonitorType != monitorTypeGroup {
-			continue
-		}
-		if _, ok := seen[binding.MonitorID]; ok {
-			continue
-		}
-		seen[binding.MonitorID] = struct{}{}
-		groupIDs = append(groupIDs, binding.MonitorID)
-		groupTenants[binding.MonitorID] = binding.TenantID
-	}
-
-	if len(groupIDs) == 0 {
-		return map[uuid.UUID][]groupMember{}, groupTenants, nil
-	}
-
-	query := `
-		WITH RECURSIVE member_tree AS (
-			SELECT root.id AS root_group_id, root.tenant_id, mg.monitor_id
-			FROM monitors root
-			JOIN monitor_groups mg ON mg.group_id = root.id
-			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = root.tenant_id
-			WHERE root.id = ANY($1)
-			  AND root.type = 'group'
-			  AND root.deleted_at IS NULL
-			  AND child.deleted_at IS NULL
-			UNION
-			SELECT mt.root_group_id, mt.tenant_id, mg.monitor_id
-			FROM member_tree mt
-			JOIN monitors parent ON parent.id = mt.monitor_id AND parent.tenant_id = mt.tenant_id
-			JOIN monitor_groups mg ON mg.group_id = parent.id
-			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = mt.tenant_id
-			WHERE parent.type = 'group'
-			  AND parent.deleted_at IS NULL
-			  AND child.deleted_at IS NULL
-		)
-		SELECT mt.root_group_id, m.id, m.name
-		FROM member_tree mt
-		JOIN monitors m ON m.id = mt.monitor_id AND m.tenant_id = mt.tenant_id
-		WHERE m.type <> 'group'
-		  AND m.deleted_at IS NULL
-		ORDER BY mt.root_group_id, m.name
-	`
-
-	rows, err := a.db.QueryContext(ctx, query, pq.Array(groupIDs))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load group members: %w", err)
-	}
-	defer rows.Close()
-
-	groupMembers := make(map[uuid.UUID][]groupMember)
-	for rows.Next() {
-		var groupID uuid.UUID
-		var member groupMember
-		if err := rows.Scan(&groupID, &member.ID, &member.Name); err != nil {
-			return nil, nil, fmt.Errorf("failed to scan group member: %w", err)
-		}
-		groupMembers[groupID] = append(groupMembers[groupID], member)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("error iterating group members: %w", err)
-	}
-
-	return groupMembers, groupTenants, nil
-}
-
-func (a *Alerter) loadGroupLatestResults(ctx context.Context, groupMembers map[uuid.UUID][]groupMember, groupTenants map[uuid.UUID]uuid.UUID) (map[uuid.UUID]map[uuid.UUID]checkSummary, error) {
-	result := make(map[uuid.UUID]map[uuid.UUID]checkSummary)
-	for groupID, members := range groupMembers {
-		if len(members) == 0 {
-			result[groupID] = map[uuid.UUID]checkSummary{}
-			continue
-		}
-
-		tenantID, ok := groupTenants[groupID]
-		if !ok {
-			continue
-		}
-
-		memberIDs := make([]uuid.UUID, 0, len(members))
-		for _, member := range members {
-			memberIDs = append(memberIDs, member.ID)
-		}
-
-		query := `
-			SELECT DISTINCT ON (monitor_id) monitor_id, status, error_message, created_at
-			FROM check_results
-			WHERE tenant_id = $1 AND monitor_id = ANY($2)
-			ORDER BY monitor_id, created_at DESC
-		`
-
-		rows, err := a.db.QueryContext(ctx, query, tenantID, pq.Array(memberIDs))
-		if err != nil {
-			return nil, fmt.Errorf("failed to load group check results: %w", err)
-		}
-
-		summaries := make(map[uuid.UUID]checkSummary)
-		for rows.Next() {
-			var monitorID uuid.UUID
-			var summary checkSummary
-			var errorMessage sql.NullString
-			if err := rows.Scan(&monitorID, &summary.Status, &errorMessage, &summary.CreatedAt); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("failed to scan group check result: %w", err)
-			}
-			if errorMessage.Valid {
-				summary.Error = &errorMessage.String
-			}
-			summaries[monitorID] = summary
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("error iterating group check results: %w", err)
-		}
-		result[groupID] = summaries
-	}
-	return result, nil
-}
-
-func (a *Alerter) evaluateGroupFailures(now time.Time, binding policyBinding, members []groupMember, results map[uuid.UUID]checkSummary) (int, *string, *groupDetail) {
-	if len(members) == 0 {
-		return 0, nil, nil
-	}
-
-	windowCutoff := now.Add(-time.Duration(binding.FailureWindowSeconds) * time.Second)
-	detailCutoff := now.Add(-time.Duration(a.config.AlertGroupWindowSeconds) * time.Second)
-
-	var failures []groupFailure
-	var lastFailure *groupFailure
-	failureCount := 0
-
-	for _, member := range members {
-		summary, ok := results[member.ID]
-		if !ok {
-			continue
-		}
-		if !failureStatuses[summary.Status] {
-			continue
-		}
-		if summary.CreatedAt.Before(windowCutoff) {
-			continue
-		}
-		failureCount++
-
-		if lastFailure == nil || summary.CreatedAt.After(lastFailure.CreatedAt) {
-			lastFailure = &groupFailure{
-				Name:      member.Name,
-				Status:    summary.Status,
-				Error:     summary.Error,
-				CreatedAt: summary.CreatedAt,
-			}
-		}
-
-		if summary.CreatedAt.Before(detailCutoff) {
-			continue
-		}
-
-		failures = append(failures, groupFailure{
-			Name:      member.Name,
-			Status:    summary.Status,
-			Error:     summary.Error,
-			CreatedAt: summary.CreatedAt,
-		})
-	}
-
-	var lastError *string
-	if lastFailure != nil {
-		lastError = lastFailure.Error
-		if lastError == nil {
-			msg := fmt.Sprintf("%s reported %s", lastFailure.Name, lastFailure.Status)
-			lastError = &msg
-		}
-	}
-
-	if failureCount == 0 {
-		return 0, nil, nil
-	}
-
-	sort.Slice(failures, func(i, j int) bool {
-		return failures[i].CreatedAt.After(failures[j].CreatedAt)
-	})
-
-	maxChildren := a.config.AlertGroupMaxChildren
-	if maxChildren <= 0 {
-		maxChildren = 5
-	}
-
-	if len(failures) > maxChildren {
-		failures = failures[:maxChildren]
-	}
-	extraCount := failureCount - len(failures)
-
-	return failureCount, lastError, &groupDetail{
-		Failures:   failures,
-		ExtraCount: extraCount,
-	}
-}
-
-// getMonitorFailureSummary counts failures within the policy window and
-// reports whether the monitor has recovered — i.e. its latest check result
-// (regardless of window) is a success. Failures aging out of the window do
-// not count as recovery on their own.
-func (a *Alerter) getMonitorFailureSummary(ctx context.Context, binding policyBinding, now time.Time) (int, *string, bool, error) {
-	cutoff := now.Add(-time.Duration(binding.FailureWindowSeconds) * time.Second)
-	query := `
-		SELECT COUNT(*) FILTER (WHERE status IN ('failure', 'error')) AS failure_count,
-			(
-				SELECT error_message
-				FROM check_results
-				WHERE monitor_id = $1 AND tenant_id = $2
-					AND status IN ('failure', 'error')
-					AND created_at >= $3
-				ORDER BY created_at DESC
-				LIMIT 1
-			) AS last_error,
-			(
-				SELECT status
-				FROM check_results
-				WHERE monitor_id = $1 AND tenant_id = $2
-				ORDER BY created_at DESC
-				LIMIT 1
-			) AS latest_status
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2 AND created_at >= $3
-	`
-
-	var failureCount int
-	var lastError sql.NullString
-	var latestStatus sql.NullString
-	if err := a.db.QueryRowContext(ctx, query, binding.MonitorID, binding.TenantID, cutoff).Scan(&failureCount, &lastError, &latestStatus); err != nil {
-		return 0, nil, false, fmt.Errorf("failed to query monitor failures: %w", err)
-	}
-
-	recovered := latestStatus.Valid && !failureStatuses[latestStatus.String]
-	if lastError.Valid {
-		return failureCount, &lastError.String, recovered, nil
-	}
-	return failureCount, nil, recovered, nil
-}
-
-// groupRecovered reports whether no group member's latest known check result
-// is a failure. A member whose latest result is failing keeps the group alert
-// active even after that result ages out of the failure window.
-func groupRecovered(results map[uuid.UUID]checkSummary) bool {
-	for _, summary := range results {
-		if failureStatuses[summary.Status] {
-			return false
-		}
-	}
-	return true
-}
 
 func (a *Alerter) createAlert(ctx context.Context, binding policyBinding, failureCount int, lastError *string, now time.Time) (*alertRecord, error) {
 	alertID := uuid.New()
@@ -1016,20 +432,6 @@ func alerterMutationChanged(result sql.Result) bool {
 	return err == nil && rowsAffected > 0
 }
 
-func (a *Alerter) updateAlertMetadata(ctx context.Context, alertID uuid.UUID, failureCount int, lastError *string) error {
-	query := `
-		UPDATE alerts
-		SET failure_count = $1, last_error = $2, updated_at = NOW()
-		WHERE id = $3
-	`
-
-	_, err := a.db.ExecContext(ctx, query, failureCount, lastError, alertID)
-	if err != nil {
-		return fmt.Errorf("failed to update alert metadata: %w", err)
-	}
-	return nil
-}
-
 func (a *Alerter) publishAlertEvent(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time) {
 	if a.nats == nil {
 		return
@@ -1040,58 +442,6 @@ func (a *Alerter) publishAlertEvent(ctx context.Context, eventType string, bindi
 	subject := fmt.Sprintf("%s.%s", a.config.AlertSubject, eventType)
 	if err := a.nats.PublishJSON(ctx, subject, event, nil); err != nil {
 		a.logger.WithError(err).Warn("Failed to publish alert event")
-	}
-}
-
-func (a *Alerter) dispatchNotifications(
-	ctx context.Context,
-	eventType string,
-	binding policyBinding,
-	alert *alertRecord,
-	channels []alertChannel,
-	states map[uuid.UUID]map[uuid.UUID]*notificationState,
-	groupInfo *groupDetail,
-	suppressed bool,
-	now time.Time,
-	reminderInterval time.Duration,
-) {
-	if suppressed || len(channels) == 0 {
-		return
-	}
-
-	for _, channel := range channels {
-		if !channel.IsActive {
-			continue
-		}
-
-		state := getNotificationState(states, alert.ID, channel.ID)
-		if !shouldSendNotification(eventType, state, now, reminderInterval) {
-			continue
-		}
-
-		if err := a.sendChannelNotification(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
-			a.logger.WithError(err).WithFields(map[string]interface{}{
-				"alert_id":   alert.ID,
-				"channel_id": channel.ID,
-				"event_type": eventType,
-			}).Warn("Failed to send alert notification")
-			continue
-		}
-
-		if err := a.upsertNotificationState(ctx, alert.ID, channel.ID, eventType, now); err != nil {
-			a.logger.WithError(err).WithFields(map[string]interface{}{
-				"alert_id":   alert.ID,
-				"channel_id": channel.ID,
-			}).Warn("Failed to update notification state")
-		}
-
-		if _, ok := states[alert.ID]; !ok {
-			states[alert.ID] = make(map[uuid.UUID]*notificationState)
-		}
-		states[alert.ID][channel.ID] = &notificationState{
-			LastSentAt:    now,
-			LastEventType: eventType,
-		}
 	}
 }
 
@@ -1170,6 +520,42 @@ func (a *Alerter) upsertNotificationState(ctx context.Context, alertID, channelI
 	return nil
 }
 
+func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UUID) (map[uuid.UUID]map[uuid.UUID]*notificationState, error) {
+	states := make(map[uuid.UUID]map[uuid.UUID]*notificationState)
+	if len(alertIDs) == 0 {
+		return states, nil
+	}
+
+	query := `
+		SELECT alert_id, channel_id, last_sent_at, last_event_type
+		FROM alert_notification_states
+		WHERE alert_id = ANY($1)
+	`
+
+	rows, err := a.db.QueryContext(ctx, query, pq.Array(alertIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to load notification states: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var alertID uuid.UUID
+		var channelID uuid.UUID
+		var state notificationState
+		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType); err != nil {
+			return nil, fmt.Errorf("failed to scan notification state: %w", err)
+		}
+		if _, ok := states[alertID]; !ok {
+			states[alertID] = make(map[uuid.UUID]*notificationState)
+		}
+		states[alertID][channelID] = &state
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating notification states: %w", err)
+	}
+	return states, nil
+}
+
 func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration) bool {
 	switch eventType {
 	case "created":
@@ -1194,10 +580,6 @@ func getNotificationState(states map[uuid.UUID]map[uuid.UUID]*notificationState,
 		return alertStates[channelID]
 	}
 	return nil
-}
-
-func alertKey(monitorID, policyID uuid.UUID) string {
-	return monitorID.String() + "|" + policyID.String()
 }
 
 func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time, timestamp time.Time) notifications.AlertEvent {
