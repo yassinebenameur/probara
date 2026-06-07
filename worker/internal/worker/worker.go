@@ -17,6 +17,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
@@ -313,62 +314,85 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 	return nil
 }
 
-// persistResult persists the check result to the database
+// persistResult persists the check result to the database (parses IDs then
+// delegates to persistResultAndState).
 func (w *Worker) persistResult(ctx context.Context, job *models.Job, payload *models.CheckJobPayload, checkResult *CheckResult, startedAt time.Time) error {
 	monitorID, err := uuid.Parse(payload.MonitorID)
 	if err != nil {
 		return fmt.Errorf("invalid monitor_id: %w", err)
 	}
-
 	tenantID, err := uuid.Parse(job.TenantID)
 	if err != nil {
 		return fmt.Errorf("invalid tenant_id: %w", err)
 	}
-
 	jobID, err := uuid.Parse(job.ID)
 	if err != nil {
 		return fmt.Errorf("invalid job_id: %w", err)
 	}
+	if err := w.persistResultAndState(ctx, tenantID, monitorID, jobID, checkResult, startedAt); err != nil {
+		return err
+	}
+	w.publishStatusUpdate(monitorID, tenantID)
+	return nil
+}
 
+// persistResultAndState inserts the check result and advances the monitor's
+// state machine in one transaction. The monitor row is locked so concurrent
+// workers serialize their transitions (spec §5).
+func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID, jobID uuid.UUID, checkResult *CheckResult, startedAt time.Time) error {
 	completedAt := time.Now()
 	metricsData := checkResult.MetricsData
 	if len(metricsData) == 0 {
-		// lib/pq rejects []byte(nil) for json/jsonb parameters ("invalid input syntax for type json").
-		// Use explicit JSON null when a checker doesn't emit metrics.
 		metricsData = json.RawMessage("null")
 	}
 
-	query := `
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin result transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var snap monitorstate.Snapshot
+	var threshold int
+	err = tx.QueryRowContext(ctx, `
+		SELECT current_state, consecutive_failures, consecutive_failures_threshold
+		FROM monitors
+		WHERE id = $1
+		FOR UPDATE
+	`, monitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &threshold)
+	if err != nil {
+		return fmt.Errorf("lock monitor state: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO check_results (
 			id, monitor_id, tenant_id, job_id, status, result_source, http_status,
 			latency_ms, error_message, matched_body_substring, metrics_data,
 			created_at, started_at, completed_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`
-
-	resultID := uuid.New()
-	_, err = w.db.ExecContext(ctx, query,
-		resultID,
-		monitorID,
-		tenantID,
-		jobID,
-		checkResult.Status,
-		string(models.ResultSourceMonitor),
-		checkResult.HTTPStatus,
-		checkResult.LatencyMs,
-		checkResult.ErrorMessage,
-		checkResult.MatchedBodySubstring,
-		metricsData,
-		startedAt,
-		startedAt,
-		completedAt,
-	)
-
-	if err != nil {
+	`, uuid.New(), monitorID, tenantID, jobID, checkResult.Status,
+		string(models.ResultSourceMonitor), checkResult.HTTPStatus,
+		checkResult.LatencyMs, checkResult.ErrorMessage,
+		checkResult.MatchedBodySubstring, metricsData,
+		startedAt, startedAt, completedAt); err != nil {
 		return fmt.Errorf("failed to insert check result: %w", err)
 	}
 
-	w.publishStatusUpdate(monitorID, tenantID)
+	transition := monitorstate.Apply(snap, monitorstate.IsFailureStatus(checkResult.Status), threshold)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE monitors
+		SET current_state = $1,
+			consecutive_failures = $2,
+			last_state_change_at = CASE WHEN $3 THEN NOW() ELSE last_state_change_at END,
+			updated_at = NOW()
+		WHERE id = $4
+	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, monitorID); err != nil {
+		return fmt.Errorf("update monitor state: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit result transaction: %w", err)
+	}
 	return nil
 }
 
