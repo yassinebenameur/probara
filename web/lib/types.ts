@@ -292,6 +292,23 @@ export type MonitorConfig =
   | SyntheticAPIMonitorConfig
   | SyntheticBrowserMonitorConfig;
 
+export type NotificationMode = 'default' | 'custom';
+
+export interface ChannelAssignment {
+  channel_id: string;
+  channel_name?: string;
+  channel_type?: string;
+  delay_seconds: number;
+}
+
+export interface NotificationSettings {
+  default_channels: ChannelAssignment[];
+  alert_reminder_seconds: number;
+  auto_create_incident: boolean;
+}
+
+export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down';
+
 export interface Monitor {
   id: string;
   tenant_id: string;
@@ -310,6 +327,10 @@ export interface Monitor {
   member_ids?: string[]; // Populated for group monitors
   created_at: string;
   updated_at: string;
+  consecutive_failures_threshold: number;
+  notification_mode: NotificationMode;
+  notification_channels?: ChannelAssignment[];
+  current_state?: MonitorState;
   // Old format fields (for backward compatibility during migration)
   url?: string;
   method?: string;
@@ -329,6 +350,9 @@ export interface CreateMonitorRequest {
   alert_policy_ids?: string[];
   enabled?: boolean;
   tags?: string[];
+  consecutive_failures_threshold?: number;
+  notification_mode?: NotificationMode;
+  notification_channels?: ChannelAssignment[];
 }
 
 export interface UpdateMonitorRequest {
@@ -341,6 +365,9 @@ export interface UpdateMonitorRequest {
   alert_policy_ids?: string[];
   enabled?: boolean;
   tags?: string[];
+  consecutive_failures_threshold?: number;
+  notification_mode?: NotificationMode;
+  notification_channels?: ChannelAssignment[];
 }
 
 export interface MonitorListResponse {

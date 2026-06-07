@@ -56,6 +56,9 @@ import type {
   BulkAlertPolicyOp,
   BulkUpdateMonitorAlertPolicyResponse,
   PluginManifest,
+  NotificationSettings,
+  NotificationMode,
+  ChannelAssignment,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -833,6 +836,27 @@ export async function previewImport(file: File): Promise<ImportPreviewResponse> 
 
 export async function executeImport(data: ImportExecuteRequest): Promise<ImportExecuteResponse> {
   return apiRequest<ImportExecuteResponse>('POST', '/v1/monitors/import', data);
+}
+
+// Notification Settings API functions
+export async function getNotificationSettings(): Promise<NotificationSettings> {
+  return apiRequest<NotificationSettings>('GET', '/v1/notification-settings');
+}
+
+export async function updateNotificationSettings(
+  data: Partial<NotificationSettings>
+): Promise<NotificationSettings> {
+  return apiRequest<NotificationSettings>('PUT', '/v1/notification-settings', data);
+}
+
+// Bulk Alerting API functions
+export async function bulkUpdateAlerting(data: {
+  monitor_ids: string[];
+  consecutive_failures_threshold?: number;
+  notification_mode?: NotificationMode;
+  notification_channels?: ChannelAssignment[];
+}): Promise<{ updated: number }> {
+  return apiRequest<{ updated: number }>('POST', '/v1/monitors/bulk/alerting', data);
 }
 
 export async function exportMonitors(): Promise<{ blob: Blob; filename: string }> {
