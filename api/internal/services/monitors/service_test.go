@@ -22,10 +22,6 @@ type MockRepository struct {
 	// Controllable error/return fields for bulk alert policy tests.
 	verifyAlertPolicyErr error
 	verifyMonitorsErr    error
-	bulkAttachChanged    []uuid.UUID
-	bulkAttachErr        error
-	bulkDetachChanged    []uuid.UUID
-	bulkDetachErr        error
 
 	// Soft-delete tracking.
 	bulkSoftDeleted   []uuid.UUID
@@ -110,14 +106,6 @@ func (m *MockRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policy
 
 func (m *MockRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
 	return m.verifyMonitorsErr
-}
-
-func (m *MockRepository) BulkAttachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error) {
-	return m.bulkAttachChanged, m.bulkAttachErr
-}
-
-func (m *MockRepository) BulkDetachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error) {
-	return m.bulkDetachChanged, m.bulkDetachErr
 }
 
 func (m *MockRepository) SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error {

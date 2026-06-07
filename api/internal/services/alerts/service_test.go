@@ -209,42 +209,6 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	}
 }
 
-// TestAlertsByPolicyLimit_Normalization tests the limit clamping for GetAlertsByPolicy
-func TestAlertsByPolicyLimit_Normalization(t *testing.T) {
-	tests := []struct {
-		name          string
-		inputLimit    int
-		expectedLimit int
-	}{
-		{"limit 0 defaults to 10", 0, 10},
-		{"limit -1 defaults to 10", -1, 10},
-		{"limit 1 stays 1", 1, 1},
-		{"limit 10 stays 10", 10, 10},
-		{"limit 100 stays 100", 100, 100},
-		// Note: GetAlertsByPolicy has no upper limit in the current implementation
-		{"limit 1000 stays 1000", 1000, 1000},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeAlertsByPolicyLimit(tt.inputLimit)
-
-			if result != tt.expectedLimit {
-				t.Errorf("normalizeAlertsByPolicyLimit(%d) = %d, want %d", tt.inputLimit, result, tt.expectedLimit)
-			}
-		})
-	}
-}
-
-// normalizeAlertsByPolicyLimit applies the same normalization as GetAlertsByPolicy
-func normalizeAlertsByPolicyLimit(limit int) int {
-	if limit < 1 {
-		limit = 10
-	}
-	// Note: Current implementation has no upper limit
-	return limit
-}
-
 // TestAlertListParams_OffsetCalculation tests the offset calculation
 func TestAlertListParams_OffsetCalculation(t *testing.T) {
 	tests := []struct {
