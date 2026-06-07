@@ -87,7 +87,6 @@ export default function TopBar() {
     if (pathname === '/') return 'Probara dashboard';
     if (pathname?.startsWith('/monitors')) return 'Monitors';
     if (pathname?.startsWith('/alerts')) return 'Alerts';
-    if (pathname?.startsWith('/alert-policies')) return 'Alert Policies';
     if (pathname?.startsWith('/alert-channels')) return 'Alert Channels';
     if (pathname?.startsWith('/status-pages')) return 'Status Pages';
     if (pathname?.startsWith('/users')) return 'Users';
@@ -99,7 +98,6 @@ export default function TopBar() {
     if (pathname === '/') return 'Monitor HTTP, TCP, WebSocket & custom checks across all regions.';
     if (pathname?.startsWith('/monitors')) return 'View and manage your uptime monitors';
     if (pathname?.startsWith('/alerts')) return 'View and triage active and historical alerts';
-    if (pathname?.startsWith('/alert-policies')) return 'Configure alerting rules and notifications';
     if (pathname?.startsWith('/alert-channels')) return 'Manage delivery channels for alerts';
     if (pathname?.startsWith('/status-pages')) return 'Manage your public status pages';
     if (pathname?.startsWith('/users')) return 'Manage platform admin accounts';

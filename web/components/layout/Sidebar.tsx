@@ -8,7 +8,6 @@ import {
   Activity,
   FileText,
   AlertTriangle,
-  Bell,
   Send,
   Users,
   Settings,
@@ -16,7 +15,7 @@ import {
   Zap,
   Siren,
 } from 'lucide-react';
-import { getMonitors, getAlertChannels, getAlertPolicies, getStatusPages, getIncidents } from '@/lib/api';
+import { getMonitors, getAlertChannels, getStatusPages, getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { clearSelectedTenantId } from '@/lib/tenant';
 import Pill from '@/components/ui/Pill';
@@ -26,7 +25,7 @@ type NavItem = {
   name: string;
   href: string;
   icon: React.ElementType;
-  countKey?: 'monitors' | 'statusPages' | 'alertPolicies' | 'alertChannels' | 'incidents';
+  countKey?: 'monitors' | 'statusPages' | 'alertChannels' | 'incidents';
 };
 
 type NavGroup = {
@@ -53,7 +52,6 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'Alerts', href: '/alerts', icon: AlertTriangle },
       { name: 'Incidents', href: '/incidents', icon: Siren, countKey: 'incidents' },
-      { name: 'Alert Policies', href: '/alert-policies', icon: Bell, countKey: 'alertPolicies' },
       { name: 'Alert Channels', href: '/alert-channels', icon: Send, countKey: 'alertChannels' },
     ],
   },
@@ -74,7 +72,6 @@ export default function Sidebar() {
     monitors: 0,
     statusPages: 0,
     incidents: 0,
-    alertPolicies: 0,
     alertChannels: 0,
   });
 
@@ -96,18 +93,16 @@ export default function Sidebar() {
 
   const loadCounts = useCallback(async () => {
     try {
-      const [monitorsRes, pagesRes, incidentsRes, policiesRes, channelsRes] = await Promise.all([
+      const [monitorsRes, pagesRes, incidentsRes, channelsRes] = await Promise.all([
         getMonitors({ page_size: 1 }),
         getStatusPages({ page_size: 1 }),
         getIncidents({ page_size: 1 }),
-        getAlertPolicies({ page_size: 1 }),
         getAlertChannels({ page_size: 1 }),
       ]);
       setCounts({
         monitors: monitorsRes.total || 0,
         statusPages: pagesRes.total || 0,
         incidents: incidentsRes.total || 0,
-        alertPolicies: policiesRes.total || 0,
         alertChannels: channelsRes.total || 0,
       });
     } catch (error) {

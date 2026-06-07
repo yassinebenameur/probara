@@ -7,10 +7,6 @@ import type {
   MonitorListResponse,
   Alert,
   AlertListResponse,
-  AlertPolicy,
-  CreateAlertPolicyRequest,
-  UpdateAlertPolicyRequest,
-  AlertPolicyListResponse,
   AlertChannel,
   CreateAlertChannelRequest,
   UpdateAlertChannelRequest,
@@ -53,8 +49,6 @@ import type {
   CreateIncidentTimelineEntryRequest,
   PublishIncidentToStatusPageRequest,
   IncidentState,
-  BulkAlertPolicyOp,
-  BulkUpdateMonitorAlertPolicyResponse,
   PluginManifest,
   NotificationSettings,
   NotificationMode,
@@ -388,41 +382,6 @@ export async function resolveAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/resolve`);
 }
 
-// Alert Policy API functions
-export async function getAlertPolicies(params?: {
-  page?: number;
-  page_size?: number;
-}): Promise<AlertPolicyListResponse> {
-  const queryParams = new URLSearchParams();
-  if (params?.page) queryParams.append('page', String(params.page));
-  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
-
-  const queryString = queryParams.toString();
-  const path = `/v1/alert-policies${queryString ? `?${queryString}` : ''}`;
-  return apiRequest<AlertPolicyListResponse>('GET', path);
-}
-
-export async function getAlertPolicy(id: string): Promise<AlertPolicy> {
-  return apiRequest<AlertPolicy>('GET', `/v1/alert-policies/${id}`);
-}
-
-export async function createAlertPolicy(
-  data: CreateAlertPolicyRequest
-): Promise<AlertPolicy> {
-  return apiRequest<AlertPolicy>('POST', '/v1/alert-policies', data);
-}
-
-export async function updateAlertPolicy(
-  id: string,
-  data: UpdateAlertPolicyRequest
-): Promise<AlertPolicy> {
-  return apiRequest<AlertPolicy>('PATCH', `/v1/alert-policies/${id}`, data);
-}
-
-export async function deleteAlertPolicy(id: string): Promise<void> {
-  return apiRequest<void>('DELETE', `/v1/alert-policies/${id}`);
-}
-
 // Alert Channel API functions
 export async function getAlertChannels(params?: {
   page?: number;
@@ -712,22 +671,6 @@ export async function removeMonitorsFromGroup(
 
 export async function getGroupMembers(groupId: string): Promise<Monitor[]> {
   return apiRequest<Monitor[]>('GET', `/v1/monitors/${groupId}/members`);
-}
-
-export async function bulkUpdateMonitorAlertPolicy(
-  monitorIds: string[],
-  policyId: string,
-  op: BulkAlertPolicyOp,
-): Promise<BulkUpdateMonitorAlertPolicyResponse> {
-  return apiRequest<BulkUpdateMonitorAlertPolicyResponse>(
-    'POST',
-    '/v1/monitors/bulk/alert-policy',
-    {
-      monitor_ids: monitorIds,
-      policy_id: policyId,
-      op,
-    },
-  );
 }
 
 // Agent API functions

@@ -8,7 +8,7 @@ import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
 import PageHeader from '@/components/ui/PageHeader';
 import SharedEmptyState from '@/components/ui/EmptyState';
-import BulkAttachPolicyDialog from '@/components/alert-policies/BulkAttachPolicyDialog';
+import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
   deleteMonitor,
@@ -1029,7 +1029,7 @@ export default function MonitorsPage() {
   const [groupNameInput, setGroupNameInput] = useState('');
   const [targetGroupId, setTargetGroupId] = useState('');
   const [exporting, setExporting] = useState(false);
-  const [showAttachPolicy, setShowAttachPolicy] = useState(false);
+  const [showBulkAlerting, setShowBulkAlerting] = useState(false);
 
   useEffect(() => {
     loadMonitors();
@@ -1722,9 +1722,9 @@ export default function MonitorsPage() {
                           variant="ghost"
                           size="xs"
                           icon={<Bell strokeWidth={1.75} />}
-                          onClick={() => setShowAttachPolicy(true)}
+                          onClick={() => setShowBulkAlerting(true)}
                         >
-                          Attach policy
+                          Edit alerting…
                         </Button>
 
                         <Button
@@ -1799,22 +1799,17 @@ export default function MonitorsPage() {
         </div>
       )}
 
-      {showAttachPolicy && (
-        <BulkAttachPolicyDialog
-          open={showAttachPolicy}
-          kind="pick-policy"
-          monitors={selectedMonitors}
-          onClose={() => setShowAttachPolicy(false)}
-          onDone={(result) => {
-            setShowAttachPolicy(false);
+      {showBulkAlerting && (
+        <BulkAlertingModal
+          monitorIds={Array.from(selectedMonitorIds)}
+          onDone={() => {
+            setShowBulkAlerting(false);
             setSelectedMonitorIds(new Set());
-            const verb = result.op === 'attach' ? 'Attached' : 'Detached';
-            setToast({
-              message: `${verb} ${result.policyName} · ${result.updated} updated, ${result.unchanged} unchanged`,
-              type: 'success',
-            });
+            setSelectionMode(false);
+            setToast({ message: 'Alerting settings updated', type: 'success' });
             loadMonitors();
           }}
+          onCancel={() => setShowBulkAlerting(false)}
         />
       )}
 

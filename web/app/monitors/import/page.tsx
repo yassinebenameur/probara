@@ -31,7 +31,6 @@ const TARGET_FIELDS = [
   { key: 'tags', label: 'Tags', required: false },
   { key: 'enabled', label: 'Enabled', required: false },
   { key: 'group_members', label: 'Group Members', required: false },
-  { key: 'alert_policy_names', label: 'Alert Policy Names', required: false },
 ];
 
 type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';

@@ -545,51 +545,6 @@ export interface DashboardRecentAlertsResponse {
   recent_alerts: Alert[];
 }
 
-// Alert Policy types
-export interface AlertPolicy {
-  id: string;
-  tenant_id: string;
-  name: string;
-  description?: string;
-  failure_threshold: number;
-  failure_window_seconds: number;
-  create_incident_on_fire: boolean;
-  channel_ids?: string[];
-  email_subject_template?: string;
-  email_body_template?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateAlertPolicyRequest {
-  name: string;
-  description?: string;
-  failure_threshold: number;
-  failure_window_seconds: number;
-  create_incident_on_fire?: boolean;
-  channel_ids?: string[];
-  email_subject_template?: string;
-  email_body_template?: string;
-}
-
-export interface UpdateAlertPolicyRequest {
-  name?: string;
-  description?: string;
-  failure_threshold?: number;
-  failure_window_seconds?: number;
-  create_incident_on_fire?: boolean;
-  channel_ids?: string[];
-  email_subject_template?: string;
-  email_body_template?: string;
-}
-
-export interface AlertPolicyListResponse {
-  items: AlertPolicy[];
-  page: number;
-  page_size: number;
-  total: number;
-}
-
 // Incident types
 export type IncidentState = 'investigating' | 'identified' | 'monitoring' | 'resolved';
 export type IncidentSource = 'manual' | 'auto';
@@ -1054,21 +1009,6 @@ export interface RemoveMonitorsFromGroupRequest {
   monitor_ids: string[];
 }
 
-// Bulk alert policy types
-export type BulkAlertPolicyOp = 'attach' | 'detach';
-
-export interface BulkUpdateMonitorAlertPolicyRequest {
-  monitor_ids: string[];
-  policy_id: string;
-  op: BulkAlertPolicyOp;
-}
-
-export interface BulkUpdateMonitorAlertPolicyResponse {
-  updated: number;
-  unchanged: number;
-  monitor_ids_updated: string[];
-}
-
 // Import types
 export type ImportFormat = 'json' | 'yaml' | 'csv';
 
@@ -1094,7 +1034,6 @@ export interface FieldMapping {
   tags?: string;
   enabled?: string;
   group_members?: string;
-  alert_policy_names?: string;
 }
 
 export interface ImportPreviewResponse {

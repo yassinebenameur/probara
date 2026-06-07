@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import {
   Monitor,
   CheckResult,
-  AlertPolicy,
   HTTPMonitorConfig,
   PingMonitorConfig,
   DNSMonitorConfig,
@@ -15,7 +14,7 @@ import {
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserMetricsEnvelope,
 } from '@/lib/types';
-import { getMonitorResults, getAlertPolicy, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
+import { getMonitorResults, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import {
   calculateUptime,
@@ -33,7 +32,6 @@ interface MonitorDetailPanelProps {
 
 export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps) {
   const [checkResults, setCheckResults] = useState<CheckResult[]>([]);
-  const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
   const [loading, setLoading] = useState(false);
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
@@ -133,34 +131,14 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
   useEffect(() => {
     if (!monitor) {
       setCheckResults([]);
-      setAlertPolicies([]);
       return;
     }
 
     const fetchData = async () => {
       setLoading(true);
       try {
-        // Fetch check results
         const resultsResponse = await getMonitorResults(monitor.id, { limit: 100 });
         setCheckResults(resultsResponse.results || []);
-
-        const policyIDs = monitor.alert_policy_ids?.length
-          ? monitor.alert_policy_ids
-          : monitor.alert_policy_id
-            ? [monitor.alert_policy_id]
-            : [];
-
-        if (policyIDs.length > 0) {
-          try {
-            const policies = await Promise.all(policyIDs.map((id) => getAlertPolicy(id)));
-            setAlertPolicies(policies);
-          } catch (err) {
-            console.error('Failed to fetch alert policies:', err);
-            setAlertPolicies([]);
-          }
-        } else {
-          setAlertPolicies([]);
-        }
       } catch (err) {
         console.error('Failed to fetch monitor details:', err);
         setCheckResults([]);
@@ -545,27 +523,6 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   </span>
                 </li>
               )}
-            </ul>
-          </div>
-
-          {/* Alerting */}
-          <div className="mt-2.5 border-t border-dashed border-[rgba(255,255,255,0.06)] pt-2">
-            <div className="mb-1.5 text-[0.78rem] uppercase tracking-wide text-muted">
-              Alerting
-            </div>
-            <ul className="flex flex-col gap-1.5 text-xs">
-              <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
-                <span className="text-muted">Policies</span>
-                <span className="text-[#e5e7eb]">
-                  {alertPolicies.length > 0
-                    ? alertPolicies.map((policy) => (
-                        <div key={policy.id}>
-                          {policy.name} ({policy.failure_threshold} fails in {policy.failure_window_seconds}s)
-                        </div>
-                      ))
-                    : 'No policy configured'}
-                </span>
-              </li>
             </ul>
           </div>
 
