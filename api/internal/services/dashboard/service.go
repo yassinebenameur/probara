@@ -708,7 +708,7 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 type problemMonitorCandidate struct {
 	MonitorID     uuid.UUID
 	MonitorName   string
-	CurrentStatus *string
+	CurrentState  string
 	TotalChecks   int
 	SuccessChecks int
 	ProblemChecks int
@@ -769,7 +769,7 @@ func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, 
 		SELECT
 			m.id,
 			m.name,
-			cs.current_status,
+			m.current_state,
 			ps.failure_count,
 			ps.error_count,
 			CASE
@@ -779,17 +779,6 @@ func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, 
 			ps.latest_failure_at
 		FROM problem_stats ps
 		JOIN monitors m ON m.id = ps.monitor_id AND m.tenant_id = $1 AND m.deleted_at IS NULL
-		LEFT JOIN LATERAL (
-			SELECT cr.status AS current_status
-			FROM check_results cr
-			WHERE cr.monitor_id = ps.monitor_id
-			  AND cr.tenant_id = $1
-			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= $2
-			  AND cr.created_at < $3
-			ORDER BY cr.created_at DESC
-			LIMIT 1
-		) cs ON TRUE
 		WHERE (ps.failure_count + ps.error_count) > 0
 		ORDER BY (ps.failure_count + ps.error_count) DESC, ps.latest_failure_at DESC NULLS LAST, m.name ASC
 		LIMIT $%d
@@ -874,13 +863,13 @@ func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID,
 		cands = cands[:limit]
 	}
 
-	// Fetch names + current_status for the top-N candidates.
+	// Fetch names + current_state for the top-N candidates.
 	topIDs := make([]uuid.UUID, 0, len(cands))
 	for _, c := range cands {
 		topIDs = append(topIDs, c.monitorID)
 	}
 	nameRows, err := s.db.QueryContext(ctx, `
-		SELECT id, name
+		SELECT id, name, current_state
 		FROM monitors
 		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
 	`, tenantID, pq.Array(topIDs))
@@ -888,14 +877,18 @@ func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID,
 		return nil, fmt.Errorf("failed to load problem-monitor names: %w", err)
 	}
 	defer nameRows.Close()
-	names := make(map[uuid.UUID]string, len(topIDs))
+	type monitorMeta struct {
+		name         string
+		currentState string
+	}
+	meta := make(map[uuid.UUID]monitorMeta, len(topIDs))
 	for nameRows.Next() {
 		var id uuid.UUID
-		var name string
-		if err := nameRows.Scan(&id, &name); err != nil {
+		var m monitorMeta
+		if err := nameRows.Scan(&id, &m.name, &m.currentState); err != nil {
 			return nil, fmt.Errorf("failed to scan problem-monitor name: %w", err)
 		}
-		names[id] = name
+		meta[id] = m
 	}
 	if err := nameRows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating problem-monitor names: %w", err)
@@ -903,11 +896,12 @@ func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID,
 
 	out := make([]models.DashboardProblemMonitor, 0, len(cands))
 	for _, c := range cands {
-		t := totals[c.monitorID]
+		m := meta[c.monitorID]
 		out = append(out, models.DashboardProblemMonitor{
 			MonitorID:       c.monitorID,
-			MonitorName:     names[c.monitorID],
-			CurrentStatus:   t.LatestStatus,
+			MonitorName:     m.name,
+			CurrentState:    m.currentState,
+			CurrentStatus:   monitorStateToStatus(m.currentState),
 			FailureCount:    c.failureCount,
 			ErrorCount:      c.errorCount,
 			Uptime:          c.uptime,
@@ -964,7 +958,8 @@ func (s *Service) getProblemMonitorsLongRange(ctx context.Context, tenantID uuid
 		monitors = append(monitors, models.DashboardProblemMonitor{
 			MonitorID:       candidate.MonitorID,
 			MonitorName:     candidate.MonitorName,
-			CurrentStatus:   candidate.CurrentStatus,
+			CurrentState:    candidate.CurrentState,
+			CurrentStatus:   monitorStateToStatus(candidate.CurrentState),
 			FailureCount:    failureCount,
 			ErrorCount:      errorCount,
 			Uptime:          uptime,
@@ -1009,10 +1004,10 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 			SELECT
 				m.id,
 				m.name,
+				m.current_state,
 				COALESCE(SUM(mdr.total_checks), 0) AS total_checks,
 				COALESCE(SUM(mdr.success_checks), 0) AS success_checks,
 				COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) AS problem_checks,
-				latest.current_status,
 				latest.latest_check_at
 			FROM monitors m
 			LEFT JOIN monitor_daily_rollups mdr
@@ -1021,9 +1016,7 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 				AND mdr.bucket_day >= $2::date
 				AND mdr.bucket_day < $3::date
 			LEFT JOIN LATERAL (
-				SELECT
-					mdr_latest.latest_status AS current_status,
-					mdr_latest.latest_check_at
+				SELECT mdr_latest.latest_check_at
 				FROM monitor_daily_rollups mdr_latest
 				WHERE mdr_latest.monitor_id = m.id
 				  AND mdr_latest.tenant_id = m.tenant_id
@@ -1037,13 +1030,13 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 			  AND m.type <> 'group'
 			  AND m.deleted_at IS NULL
 			  %s
-			GROUP BY m.id, m.name, latest.current_status, latest.latest_check_at
+			GROUP BY m.id, m.name, m.current_state, latest.latest_check_at
 			HAVING COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) > 0
-			    OR (latest.current_status IS NOT NULL AND latest.current_status <> 'success')
+			    OR m.current_state = 'down'
 			ORDER BY problem_checks DESC, name ASC
 			LIMIT $4
 		)
-		SELECT id, name, current_status, total_checks, success_checks, problem_checks, latest_check_at
+		SELECT id, name, current_state, total_checks, success_checks, problem_checks, latest_check_at
 		FROM rollup_candidates
 		ORDER BY problem_checks DESC, name ASC
 	`, tagClause)
@@ -1057,22 +1050,18 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 	candidates := make([]problemMonitorCandidate, 0)
 	for rows.Next() {
 		var candidate problemMonitorCandidate
-		var currentStatus sql.NullString
 		var latestCheckAt sql.NullTime
 
 		if err := rows.Scan(
 			&candidate.MonitorID,
 			&candidate.MonitorName,
-			&currentStatus,
+			&candidate.CurrentState,
 			&candidate.TotalChecks,
 			&candidate.SuccessChecks,
 			&candidate.ProblemChecks,
 			&latestCheckAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan problem monitor rollup candidate: %w", err)
-		}
-		if currentStatus.Valid {
-			candidate.CurrentStatus = &currentStatus.String
 		}
 		if latestCheckAt.Valid {
 			ts := latestCheckAt.Time
@@ -1133,13 +1122,12 @@ func scanProblemMonitorRows(rows *sql.Rows) ([]models.DashboardProblemMonitor, e
 	monitors := make([]models.DashboardProblemMonitor, 0)
 	for rows.Next() {
 		var row models.DashboardProblemMonitor
-		var currentStatus sql.NullString
 		var latestFailureAt sql.NullTime
 
 		if err := rows.Scan(
 			&row.MonitorID,
 			&row.MonitorName,
-			&currentStatus,
+			&row.CurrentState,
 			&row.FailureCount,
 			&row.ErrorCount,
 			&row.Uptime,
@@ -1148,9 +1136,7 @@ func scanProblemMonitorRows(rows *sql.Rows) ([]models.DashboardProblemMonitor, e
 			return nil, fmt.Errorf("failed to scan problem monitor row: %w", err)
 		}
 
-		if currentStatus.Valid {
-			row.CurrentStatus = &currentStatus.String
-		}
+		row.CurrentStatus = monitorStateToStatus(row.CurrentState)
 		if latestFailureAt.Valid {
 			ts := latestFailureAt.Time
 			row.LatestFailureAt = &ts
@@ -1162,6 +1148,22 @@ func scanProblemMonitorRows(rows *sql.Rows) ([]models.DashboardProblemMonitor, e
 	}
 
 	return monitors, nil
+}
+
+// monitorStateToStatus maps the persisted state-machine value to the result-status vocabulary
+// used in CurrentStatus, keeping the existing API surface while deriving status from state.
+// down → "failure" (confirmed outage); suspect/up → "success"; unknown → nil (no data yet).
+func monitorStateToStatus(state string) *string {
+	switch state {
+	case "down":
+		s := "failure"
+		return &s
+	case "up", "suspect":
+		s := "success"
+		return &s
+	default:
+		return nil
+	}
 }
 
 func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEnd time.Time, limit int, tags []string) ([]models.DashboardFailureEvent, error) {

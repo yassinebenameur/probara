@@ -185,20 +185,24 @@ type uptimeSummary struct {
 	AvgLatency24h *float64
 }
 
-// batchCurrentStatus loads the latest check result for each monitor in one query.
-// Equivalent to calling GetMonitorCurrentStatus per monitor.
+// batchCurrentStatus loads the persisted state and latest check result for each monitor in one
+// query. The public status is derived from monitors.current_state (the authoritative state
+// machine), while the lateral check_result columns (http_status, latency_ms, metrics_data) are
+// retained for display purposes. Monitors with no check results still produce a row (via LEFT
+// JOIN LATERAL) whose result columns are all NULL.
 func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID]*CurrentStatus, error) {
 	query := `
-		SELECT m.monitor_id, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		SELECT m.monitor_id, mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
 		FROM unnest($1::uuid[]) AS m(monitor_id)
-		CROSS JOIN LATERAL (
+		JOIN monitors mon ON mon.id = m.monitor_id
+		LEFT JOIN LATERAL (
 			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
 			FROM check_results cr
 			WHERE cr.monitor_id = m.monitor_id
 			  AND cr.tenant_id = $2
 			ORDER BY cr.created_at DESC
 			LIMIT 1
-		) cr
+		) cr ON TRUE
 		ORDER BY m.monitor_id
 	`
 	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
@@ -210,18 +214,21 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 	result := make(map[uuid.UUID]*CurrentStatus)
 	for rows.Next() {
 		var monitorID uuid.UUID
-		var status string
+		var currentState string
+		var resultStatus sql.NullString
 		var httpStatus, latencyMS sql.NullInt64
-		var createdAt time.Time
+		var createdAt sql.NullTime
 		var metricsJSON []byte
-		if err := rows.Scan(&monitorID, &status, &httpStatus, &latencyMS, &createdAt, &metricsJSON); err != nil {
+		if err := rows.Scan(&monitorID, &currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON); err != nil {
 			return nil, fmt.Errorf("failed to scan batch current status: %w", err)
 		}
 
-		checkTime := createdAt
 		cs := &CurrentStatus{
-			Status:        mapResultStatus(status),
-			LastCheckTime: &checkTime,
+			Status: mapMonitorState(currentState),
+		}
+		if createdAt.Valid {
+			t := createdAt.Time
+			cs.LastCheckTime = &t
 		}
 		if httpStatus.Valid {
 			v := int(httpStatus.Int64)
@@ -248,6 +255,21 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 		return nil, fmt.Errorf("error iterating batch current status: %w", err)
 	}
 	return result, nil
+}
+
+// mapMonitorState maps the persisted state-machine value to the public status-page vocabulary.
+// "down" is the only confirmed-outage state and maps to "down".
+// "suspect" must NOT show as down (unconfirmed blip) — it maps to "up" to avoid public flapping.
+// "up" maps to "up" and "unknown" (no data yet) maps to "unknown".
+func mapMonitorState(state string) string {
+	switch state {
+	case "down":
+		return "down"
+	case "up", "suspect":
+		return "up"
+	default: // "unknown" or anything unexpected
+		return "unknown"
+	}
 }
 
 // batchUptimeSummary computes 24h/1h uptime and 1h/24h average latency for each monitor in one

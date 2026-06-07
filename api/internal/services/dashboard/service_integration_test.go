@@ -111,6 +111,10 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET enabled = FALSE WHERE id = $1`, monitorPaused); err != nil {
 		t.Fatalf("disable paused monitor: %v", err)
 	}
+	// Seed current_state via the persisted state machine: monitorA and monitorB are confirmed down.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = ANY($1)`, pq.Array([]uuid.UUID{monitorA, monitorB})); err != nil {
+		t.Fatalf("set current_state down: %v", err)
+	}
 
 	now := time.Now().UTC()
 	bucketDay := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.UTC)
@@ -177,8 +181,12 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 	if math.Abs(overview.ProblemMonitors[0].Uptime-70.0) > 0.0001 {
 		t.Fatalf("ProblemMonitors[0].Uptime = %.4f, want 70.0", overview.ProblemMonitors[0].Uptime)
 	}
-	if overview.ProblemMonitors[0].CurrentStatus == nil || *overview.ProblemMonitors[0].CurrentStatus != "error" {
-		t.Fatalf("ProblemMonitors[0].CurrentStatus = %v, want error", overview.ProblemMonitors[0].CurrentStatus)
+	// current_state='down' maps to CurrentStatus="failure" and CurrentState="down".
+	if overview.ProblemMonitors[0].CurrentStatus == nil || *overview.ProblemMonitors[0].CurrentStatus != "failure" {
+		t.Fatalf("ProblemMonitors[0].CurrentStatus = %v, want failure", overview.ProblemMonitors[0].CurrentStatus)
+	}
+	if overview.ProblemMonitors[0].CurrentState != "down" {
+		t.Fatalf("ProblemMonitors[0].CurrentState = %q, want down", overview.ProblemMonitors[0].CurrentState)
 	}
 	if overview.ProblemMonitors[1].MonitorID != monitorB {
 		t.Fatalf("ProblemMonitors[1].MonitorID = %s, want %s", overview.ProblemMonitors[1].MonitorID, monitorB)

@@ -114,10 +114,10 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 			SELECT
 				m.id,
 				m.name,
+				m.current_state,
 				COALESCE(SUM(mdr.total_checks), 0) AS total_checks,
 				COALESCE(SUM(mdr.success_checks), 0) AS success_checks,
 				COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) AS problem_checks,
-				latest.current_status,
 				latest.latest_check_at
 			FROM monitors m
 			LEFT JOIN monitor_daily_rollups mdr
@@ -126,9 +126,7 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 				AND mdr.bucket_day >= $2::date
 				AND mdr.bucket_day < $3::date
 			LEFT JOIN LATERAL (
-				SELECT
-					mdr_latest.latest_status AS current_status,
-					mdr_latest.latest_check_at
+				SELECT mdr_latest.latest_check_at
 				FROM monitor_daily_rollups mdr_latest
 				WHERE mdr_latest.monitor_id = m.id
 				  AND mdr_latest.tenant_id = m.tenant_id
@@ -141,20 +139,20 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
 			  AND m.deleted_at IS NULL
-			GROUP BY m.id, m.name, latest.current_status, latest.latest_check_at
+			GROUP BY m.id, m.name, m.current_state, latest.latest_check_at
 			HAVING COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) > 0
-			    OR (latest.current_status IS NOT NULL AND latest.current_status <> 'success')
+			    OR m.current_state = 'down'
 			ORDER BY problem_checks DESC, name ASC
 			LIMIT $4
 		)
-		SELECT id, name, current_status, total_checks, success_checks, problem_checks, latest_check_at
+		SELECT id, name, current_state, total_checks, success_checks, problem_checks, latest_check_at
 		FROM rollup_candidates
 		ORDER BY problem_checks DESC, name ASC
 	`)).
 		WithArgs(tenantID, rangeStart, rangeEnd, problemMonitorLimit*4).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "name", "current_status", "total_checks", "success_checks", "problem_checks", "latest_check_at",
-		}).AddRow(monitorID, "api", "failure", 10, 7, 3, rangeEnd.Add(-2*time.Hour)))
+			"id", "name", "current_state", "total_checks", "success_checks", "problem_checks", "latest_check_at",
+		}).AddRow(monitorID, "api", "down", 10, 7, 3, rangeEnd.Add(-2*time.Hour)))
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT

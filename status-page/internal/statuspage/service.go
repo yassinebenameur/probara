@@ -1052,23 +1052,31 @@ type CurrentStatus struct {
 	TLSNotAfter        string
 }
 
-// GetMonitorCurrentStatus gets the latest check result for a monitor
+// GetMonitorCurrentStatus gets the current status derived from the monitor's persisted state and
+// the latest check result (for display fields). Status is derived from current_state, not the
+// raw result status, for consistency with batchCurrentStatus.
 func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenantID uuid.UUID) (*CurrentStatus, error) {
 	query := `
-		SELECT status, http_status, latency_ms, created_at, metrics_data
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2
-		ORDER BY created_at DESC
-		LIMIT 1
+		SELECT mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		FROM monitors mon
+		LEFT JOIN LATERAL (
+			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+			FROM check_results cr
+			WHERE cr.monitor_id = mon.id AND cr.tenant_id = $2
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) cr ON TRUE
+		WHERE mon.id = $1
 	`
 
-	var status string
+	var currentState string
+	var resultStatus sql.NullString
 	var httpStatus sql.NullInt64
 	var latencyMS sql.NullInt64
-	var createdAt time.Time
+	var createdAt sql.NullTime
 	var metricsJSON []byte
 
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&status, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
+	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("no check results found")
@@ -1077,8 +1085,11 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 	}
 
 	result := &CurrentStatus{
-		Status:        mapResultStatus(status),
-		LastCheckTime: &createdAt,
+		Status: mapMonitorState(currentState),
+	}
+	if createdAt.Valid {
+		t := createdAt.Time
+		result.LastCheckTime = &t
 	}
 
 	if httpStatus.Valid {

@@ -155,6 +155,7 @@ type DashboardProblemMonitor struct {
 	MonitorID       uuid.UUID  `json:"monitor_id"`
 	MonitorName     string     `json:"monitor_name"`
 	CurrentStatus   *string    `json:"current_status"`
+	CurrentState    string     `json:"current_state"`
 	FailureCount    int        `json:"failure_count"`
 	ErrorCount      int        `json:"error_count"`
 	Uptime          float64    `json:"uptime"`

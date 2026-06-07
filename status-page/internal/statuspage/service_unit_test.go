@@ -72,19 +72,21 @@ func TestService_BatchCurrentStatus_UsesPerMonitorLateralLimit(t *testing.T) {
 	monitorA := uuid.New()
 	checkedAt := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 
-	mock.ExpectQuery("(?s)CROSS JOIN LATERAL.*ORDER BY cr\\.created_at DESC\\s+LIMIT 1").
+	// Query now: JOIN monitors mon + LEFT JOIN LATERAL, derives status from current_state.
+	mock.ExpectQuery("(?s)JOIN monitors mon.*LEFT JOIN LATERAL.*ORDER BY cr\\.created_at DESC\\s+LIMIT 1").
 		WithArgs(sqlmock.AnyArg(), tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"monitor_id", "status", "http_status", "latency_ms", "created_at", "metrics_data",
-		}).AddRow(monitorA, "success", 200, 123, checkedAt, []byte("{}")))
+			"monitor_id", "current_state", "status", "http_status", "latency_ms", "created_at", "metrics_data",
+		}).AddRow(monitorA, "down", "success", 200, 123, checkedAt, []byte("{}")))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
 	statuses, err := svc.batchCurrentStatus(context.Background(), []uuid.UUID{monitorA}, tenantID)
 	if err != nil {
 		t.Fatalf("batchCurrentStatus() error = %v", err)
 	}
-	if statuses[monitorA] == nil || statuses[monitorA].Status != "up" {
-		t.Fatalf("batchCurrentStatus() status = %#v, want up", statuses[monitorA])
+	// current_state="down" maps to public status "down" regardless of check result status.
+	if statuses[monitorA] == nil || statuses[monitorA].Status != "down" {
+		t.Fatalf("batchCurrentStatus() status = %#v, want down", statuses[monitorA])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
