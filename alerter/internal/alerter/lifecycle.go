@@ -114,8 +114,14 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 }
 
 func (a *Alerter) openOutageAlert(ctx context.Context, tenantID, monitorID uuid.UUID, monitorName string, failureCount int, lastError *string) error {
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin outage alert transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var alertID uuid.UUID
-	err := a.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status,
 			triggered_at, failure_count, last_error, created_at, updated_at)
 		VALUES ($1, $2, $3, NULL, 'active', NOW(), $4, $5, NOW(), NOW())
@@ -129,11 +135,22 @@ func (a *Alerter) openOutageAlert(ctx context.Context, tenantID, monitorID uuid.
 		return fmt.Errorf("insert outage alert: %w", err)
 	}
 
-	// NOTE: auto-incident creation is intentionally not performed here. The
-	// incidents schema requires a non-null auto_alert_policy_id (FK + CHECK),
-	// but lifecycle alerts carry no policy. Auto-incidents remain available via
-	// the policy-based createAlert path until the incidents schema gains a
-	// policy-less auto-incident path (tracked separately).
+	var autoIncident bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT auto_create_incident FROM tenants WHERE id = $1`, tenantID).Scan(&autoIncident); err != nil {
+		return fmt.Errorf("load incident toggle: %w", err)
+	}
+	if autoIncident {
+		record := alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID, FailureCount: failureCount, LastError: lastError}
+		binding := policyBinding{MonitorID: monitorID, TenantID: tenantID, MonitorName: monitorName, CreateIncidentOnFire: true}
+		if err := a.ensureAutoIncidentForAlertTx(ctx, tx, binding, &record); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit outage alert transaction: %w", err)
+	}
 
 	record := alertRecord{ID: alertID, TenantID: tenantID, MonitorID: monitorID, FailureCount: failureCount, LastError: lastError, TriggeredAt: time.Now()}
 	binding := policyBinding{MonitorID: monitorID, TenantID: tenantID, MonitorName: monitorName}

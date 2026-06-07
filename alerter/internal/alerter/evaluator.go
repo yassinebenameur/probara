@@ -186,11 +186,14 @@ func (a *Alerter) ensureAutoIncidentForAlertTx(ctx context.Context, tx *sql.Tx, 
 		if created {
 			message = "Incident auto-created from firing alert"
 		}
-		if err := a.insertIncidentTimelineEntryTx(ctx, tx, binding.TenantID, incidentID, "system", message, map[string]interface{}{
-			"alert_id":        alert.ID.String(),
-			"monitor_id":      binding.MonitorID.String(),
-			"alert_policy_id": binding.PolicyID.String(),
-		}); err != nil {
+		metadata := map[string]interface{}{
+			"alert_id":   alert.ID.String(),
+			"monitor_id": binding.MonitorID.String(),
+		}
+		if binding.PolicyID != uuid.Nil {
+			metadata["alert_policy_id"] = binding.PolicyID.String()
+		}
+		if err := a.insertIncidentTimelineEntryTx(ctx, tx, binding.TenantID, incidentID, "system", message, metadata); err != nil {
 			return err
 		}
 	}
@@ -262,6 +265,14 @@ func (a *Alerter) recordAlertRecoveryIfNeededTx(ctx context.Context, tx *sql.Tx,
 }
 
 func (a *Alerter) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, binding policyBinding) (uuid.UUID, bool, error) {
+	// policyParam is nil (SQL NULL) when there is no policy (lifecycle alerts),
+	// or the policy UUID when called from the policy-based createAlert path.
+	// IS NOT DISTINCT FROM handles both NULL and non-NULL equality correctly.
+	var policyParam interface{}
+	if binding.PolicyID != uuid.Nil {
+		policyParam = binding.PolicyID
+	}
+
 	var incidentID uuid.UUID
 	err := tx.QueryRowContext(ctx, `
 		SELECT id
@@ -269,12 +280,12 @@ func (a *Alerter) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, bi
 		WHERE tenant_id = $1
 			AND is_auto_created = TRUE
 			AND auto_monitor_id = $2
-			AND auto_alert_policy_id = $3
+			AND auto_alert_policy_id IS NOT DISTINCT FROM $3
 			AND state <> 'resolved'
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
 		FOR UPDATE
-	`, binding.TenantID, binding.MonitorID, binding.PolicyID).Scan(&incidentID)
+	`, binding.TenantID, binding.MonitorID, policyParam).Scan(&incidentID)
 	if err == nil {
 		return incidentID, false, nil
 	}
@@ -288,7 +299,7 @@ func (a *Alerter) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, bi
 		INSERT INTO incidents (
 			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, 'investigating', TRUE, $5, $6, NOW(), NOW())
-	`, incidentID, binding.TenantID, title, summary, binding.MonitorID, binding.PolicyID); err != nil {
+	`, incidentID, binding.TenantID, title, summary, binding.MonitorID, policyParam); err != nil {
 		return uuid.Nil, false, fmt.Errorf("create auto incident: %w", err)
 	}
 

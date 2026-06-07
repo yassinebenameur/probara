@@ -170,6 +170,47 @@ func TestLifecycleGroupMemberIsSuppressed(t *testing.T) {
 	}
 }
 
+func TestLifecycleAutoCreatesIncidentWhenToggleOn(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "lc")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	mustExec(ctx, t, dbClient, `UPDATE tenants SET auto_create_incident = TRUE WHERE id = $1`, tenantID)
+
+	a := newIntegrationAlerter(dbClient)
+	setStateForTest(ctx, t, dbClient, monitorID, "down", time.Now().UTC())
+	// run twice: second cycle must not duplicate the incident
+	for i := 0; i < 2; i++ {
+		if err := a.runLifecycle(ctx); err != nil {
+			t.Fatalf("runLifecycle(%d) error = %v", i, err)
+		}
+	}
+
+	var incidentCount int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM incidents
+		WHERE tenant_id = $1 AND is_auto_created = TRUE AND auto_monitor_id = $2
+	`, tenantID, monitorID).Scan(&incidentCount); err != nil {
+		t.Fatalf("count incidents: %v", err)
+	}
+	if incidentCount != 1 {
+		t.Fatalf("auto incident count = %d, want 1", incidentCount)
+	}
+
+	var linkCount int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM incident_alerts ia
+		JOIN alerts al ON al.id = ia.alert_id
+		WHERE al.monitor_id = $1
+	`, monitorID).Scan(&linkCount); err != nil {
+		t.Fatalf("count incident alert links: %v", err)
+	}
+	if linkCount != 1 {
+		t.Fatalf("incident alert link count = %d, want 1", linkCount)
+	}
+}
+
 func TestLifecycleCustomListOverridesDefault(t *testing.T) {
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
