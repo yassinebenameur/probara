@@ -49,6 +49,7 @@ import {
   sortNeedsAttention,
 } from '@/lib/dashboard-view-model';
 import ServiceGroupsPanel from '@/components/dashboard/ServiceGroupsPanel';
+import { NotificationNudge } from '@/components/layout/NotificationNudge';
 
 type TrendPoint = { date: string; uptime: number | null; responseTime: number | null; total: number };
 
@@ -786,6 +787,8 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-4">
+      <NotificationNudge />
+
       {/* Error Banner */}
       {error && (
         <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">

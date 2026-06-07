@@ -13,6 +13,7 @@ import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenant
 import { getApiKey } from '@/lib/auth';
 import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
 import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection';
+import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
 
 type ToastState = { message: string; type: 'success' | 'error' } | null;
 
@@ -175,6 +176,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Settings" subtitle="Manage retention, API access, and integrations." />
+
+      <NotificationsPanel />
 
       <Panel
         title="Data retention"
