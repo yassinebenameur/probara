@@ -2,14 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { Download } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AlertPolicy, AgentMonitorConfig, AgentInstallCommand, ApiKey } from '@/lib/types';
-import { getAlertPolicies, getAgentInstallCommand, getApiKeys } from '@/lib/api';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, AgentInstallCommand, ApiKey, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { getAgentInstallCommand, getApiKeys } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
+import { AlertingSection } from './AlertingSection';
 
 type ServerType =
   | 'linux-amd64'
@@ -55,7 +56,6 @@ export default function AgentForm({
   onCancel,
   loading = false,
 }: AgentFormProps) {
-  const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
   const [showInstallInstructions, setShowInstallInstructions] = useState(false);
   const [installCommand, setInstallCommand] = useState<AgentInstallCommand | null>(null);
   const [loadingInstallCmd, setLoadingInstallCmd] = useState(false);
@@ -77,29 +77,19 @@ export default function AgentForm({
     expected_interval_seconds: monitor && monitor.type === 'agent'
       ? (monitor.config as AgentMonitorConfig).expected_interval_seconds
       : initialAgentConfig?.expected_interval_seconds || 60,
-    alert_policy_ids:
-      monitor?.alert_policy_ids ||
-      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
+    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
+    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    loadAlertPolicies();
     const key = getApiKey();
     if (key) setApiKeyState(key);
   }, []);
-
-  const loadAlertPolicies = async () => {
-    try {
-      const response = await getAlertPolicies({ page_size: 100 });
-      setAlertPolicies(response?.items || []);
-    } catch (error) {
-      console.error('Failed to load alert policies:', error);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -128,7 +118,9 @@ export default function AgentForm({
       enabled: formData.enabled,
     };
 
-    requestData.alert_policy_ids = formData.alert_policy_ids;
+    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
+    requestData.notification_mode = formData.notification_mode;
+    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
@@ -506,31 +498,17 @@ export default function AgentForm({
         </FormField>
       </FormSection>
 
-      <FormSection title="Alert policies">
-        {alertPolicies.length === 0 ? (
-          <div className="text-sm text-slate-500">No alert policies configured.</div>
-        ) : (
-          <div className="space-y-2">
-            {alertPolicies.map((policy) => {
-              const checked = formData.alert_policy_ids.includes(policy.id);
-              return (
-                <label key={policy.id} className="flex items-center gap-2 text-sm text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? [...formData.alert_policy_ids, policy.id]
-                        : formData.alert_policy_ids.filter((id) => id !== policy.id);
-                      setFormData({ ...formData, alert_policy_ids: next });
-                    }}
-                  />
-                  {policy.name}
-                </label>
-              );
-            })}
-          </div>
-        )}
+      <FormSection title="Alerting">
+        <AlertingSection
+          isGroup={false}
+          intervalSeconds={formData.expected_interval_seconds}
+          threshold={formData.consecutive_failures_threshold}
+          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          mode={formData.notification_mode}
+          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          customChannels={formData.notification_channels}
+          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+        />
       </FormSection>
 
       <FormSection title="Status">

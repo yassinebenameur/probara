@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AlertPolicy, GroupMonitorConfig } from '@/lib/types';
-import { getAlertPolicies, getMonitors } from '@/lib/api';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, GroupMonitorConfig, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { getMonitors } from '@/lib/api';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
+import { AlertingSection } from './AlertingSection';
 
 interface GroupFormProps {
   monitor?: Monitor;
@@ -24,7 +25,6 @@ export default function GroupForm({
   onCancel,
   loading = false,
 }: GroupFormProps) {
-  const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
   const [availableMonitors, setAvailableMonitors] = useState<Monitor[]>([]);
   const isEditMode = Boolean(monitor);
   const initialGroupConfig =
@@ -34,18 +34,16 @@ export default function GroupForm({
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
     monitor_ids: existingMemberIds,
-    alert_policy_ids:
-      monitor?.alert_policy_ids ||
-      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
+    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [initializedMonitorId, setInitializedMonitorId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadAlertPolicies();
     loadAvailableMonitors();
   }, []);
 
@@ -54,31 +52,24 @@ export default function GroupForm({
       setFormData({
         name: monitor.name || '',
         monitor_ids: monitor.member_ids || [],
-        alert_policy_ids: monitor.alert_policy_ids || (monitor.alert_policy_id ? [monitor.alert_policy_id] : []),
         enabled: monitor.enabled ?? true,
         tags: monitor.tags?.join(', ') || '',
+        notification_mode: (monitor.notification_mode ?? 'default') as NotificationMode,
+        notification_channels: monitor.notification_channels ?? [],
       });
       setInitializedMonitorId(monitor.id);
     } else if (!monitor && initializedMonitorId !== null) {
       setFormData({
         name: '',
         monitor_ids: [],
-        alert_policy_ids: [],
         enabled: true,
         tags: '',
+        notification_mode: 'default',
+        notification_channels: [],
       });
       setInitializedMonitorId(null);
     }
   }, [monitor?.id]);
-
-  const loadAlertPolicies = async () => {
-    try {
-      const response = await getAlertPolicies({ page_size: 100 });
-      setAlertPolicies(response?.items || []);
-    } catch (error) {
-      console.error('Failed to load alert policies:', error);
-    }
-  };
 
   const loadAvailableMonitors = async () => {
     try {
@@ -114,7 +105,8 @@ export default function GroupForm({
       enabled: formData.enabled,
     };
 
-    requestData.alert_policy_ids = formData.alert_policy_ids;
+    requestData.notification_mode = formData.notification_mode;
+    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
@@ -228,31 +220,17 @@ export default function GroupForm({
         {errors.monitor_ids && <p className="text-xs text-rose-400">{errors.monitor_ids}</p>}
       </FormSection>
 
-      <FormSection title="Alert policies">
-        {alertPolicies.length === 0 ? (
-          <div className="text-sm text-slate-500">No alert policies configured.</div>
-        ) : (
-          <div className="space-y-2">
-            {alertPolicies.map((policy) => {
-              const checked = formData.alert_policy_ids.includes(policy.id);
-              return (
-                <label key={policy.id} className="flex items-center gap-2 text-sm text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? [...formData.alert_policy_ids, policy.id]
-                        : formData.alert_policy_ids.filter((id) => id !== policy.id);
-                      setFormData({ ...formData, alert_policy_ids: next });
-                    }}
-                  />
-                  {policy.name}
-                </label>
-              );
-            })}
-          </div>
-        )}
+      <FormSection title="Alerting">
+        <AlertingSection
+          isGroup={true}
+          intervalSeconds={60}
+          threshold={2}
+          onThresholdChange={() => {}}
+          mode={formData.notification_mode}
+          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          customChannels={formData.notification_channels}
+          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+        />
       </FormSection>
 
       <FormSection title="Status">
