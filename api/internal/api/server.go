@@ -12,6 +12,7 @@ import (
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
+	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	"github.com/yassinebenameur/probara/api/internal/handlers/alertpolicies"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
@@ -29,6 +30,7 @@ import (
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
+	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	alertpolicyservice "github.com/yassinebenameur/probara/api/internal/services/alertpolicies"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
@@ -303,6 +305,14 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			r.Route("/alert-channel-plugins", func(r chi.Router) {
 				r.Get("/", alertChannelHandlers.ListPlugins)
 				r.Get("/{type}", alertChannelHandlers.GetPlugin)
+			})
+
+			// Notification settings (workspace default routing, reminders, auto-incident)
+			notificationSettingsSvc := notificationsettingsservice.NewService(dbClient)
+			notificationSettingsHdlrs := notificationsettingshandlers.NewHandlers(notificationSettingsSvc, log)
+			r.Route("/notification-settings", func(r chi.Router) {
+				r.Get("/", notificationSettingsHdlrs.GetSettings)
+				r.Put("/", notificationSettingsHdlrs.UpdateSettings)
 			})
 
 			// API keys
