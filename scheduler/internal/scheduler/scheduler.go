@@ -26,7 +26,20 @@ const (
 	retentionCleanupAdvisoryLock   = int64(901_337_401)
 	rollupMaintenanceTicker        = time.Minute
 	checkJobStreamMaxAge           = 24 * time.Hour
+
+	// suspectRecheckInterval is the fast cadence used while a monitor is in the
+	// suspect state, confirming or clearing a potential outage (spec §5).
+	suspectRecheckInterval = 20 * time.Second
 )
+
+// nextCheckDelay returns how long after now the monitor should run again.
+func nextCheckDelay(currentState string, intervalSeconds int) time.Duration {
+	interval := time.Duration(intervalSeconds) * time.Second
+	if currentState == "suspect" && suspectRecheckInterval < interval {
+		return suspectRecheckInterval
+	}
+	return interval
+}
 
 // Monitor represents a monitor for scheduling purposes
 type Monitor struct {
@@ -36,6 +49,7 @@ type Monitor struct {
 	Config          []byte
 	IntervalSeconds int
 	TimeoutSeconds  int
+	CurrentState    string
 }
 
 // Scheduler represents the scheduler service
@@ -404,7 +418,7 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 // fetchDueMonitors fetches monitors that are due to run within a transaction
 func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize int) ([]Monitor, error) {
 	query := `
-		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds
+		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state
 		FROM monitors
 		WHERE enabled = true
 		  AND deleted_at IS NULL
@@ -427,7 +441,7 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 
 		err := rows.Scan(
 			&m.ID, &m.TenantID, &m.Type, &m.Config,
-			&m.IntervalSeconds, &m.TimeoutSeconds,
+			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)
@@ -561,7 +575,7 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 		}
 
 		// Calculate next run time
-		nextRunAt := time.Now().Add(time.Duration(monitor.IntervalSeconds) * time.Second)
+		nextRunAt := time.Now().Add(nextCheckDelay(monitor.CurrentState, monitor.IntervalSeconds))
 
 		// Update monitor's next_run_at within the transaction
 		if err := s.updateMonitorNextRunAt(ctx, tx, monitor.ID, nextRunAt); err != nil {
