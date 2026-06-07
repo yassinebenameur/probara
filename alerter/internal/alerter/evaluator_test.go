@@ -103,6 +103,39 @@ func TestEvaluateGroupFailures_LastErrorFallback(t *testing.T) {
 	}
 }
 
+func TestGroupRecovered(t *testing.T) {
+	memberA := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	memberB := uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	staleFailure := time.Date(2026, 2, 4, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		results  map[uuid.UUID]checkSummary
+		expected bool
+	}{
+		{"no_results", map[uuid.UUID]checkSummary{}, true},
+		{"all_success", map[uuid.UUID]checkSummary{
+			memberA: {Status: "success"},
+			memberB: {Status: "success"},
+		}, true},
+		{"one_member_still_failing", map[uuid.UUID]checkSummary{
+			memberA: {Status: "success"},
+			memberB: {Status: "failure", CreatedAt: staleFailure},
+		}, false},
+		{"error_counts_as_failing", map[uuid.UUID]checkSummary{
+			memberA: {Status: "error"},
+		}, false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := groupRecovered(test.results); got != test.expected {
+				t.Fatalf("groupRecovered() = %v, want %v", got, test.expected)
+			}
+		})
+	}
+}
+
 func TestShouldSendNotification(t *testing.T) {
 	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
 	interval := 10 * time.Minute
