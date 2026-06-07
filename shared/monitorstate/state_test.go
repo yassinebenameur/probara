@@ -30,6 +30,8 @@ func TestApply(t *testing.T) {
 			Transition{From: StateDown, To: StateUp, ConsecutiveFailures: 0, Changed: true, ClosedOutage: true}},
 		{"up_success_stays_up", Snapshot{StateUp, 0}, false, 2,
 			Transition{From: StateUp, To: StateUp, ConsecutiveFailures: 0}},
+		{"threshold_zero_clamps_to_one", Snapshot{StateUp, 0}, true, 0,
+			Transition{From: StateUp, To: StateDown, ConsecutiveFailures: 1, Changed: true, OpenedOutage: true}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,7 +46,7 @@ func TestApply(t *testing.T) {
 func TestIsFailureStatus(t *testing.T) {
 	for status, want := range map[string]bool{"failure": true, "error": true, "success": false} {
 		if got := IsFailureStatus(status); got != want {
-			t.Fatalf("IsFailureStatus(%q) = %v, want %v", status, got, want)
+			t.Errorf("IsFailureStatus(%q) = %v, want %v", status, got, want)
 		}
 	}
 }
