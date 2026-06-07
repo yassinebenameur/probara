@@ -15,6 +15,10 @@ import (
 )
 
 func TestAlerterCreateAlertCreatesAndReusesAutoIncident(t *testing.T) {
+	// Verifies that after the first alert resolves, a new alert for the same
+	// monitor reuses the still-open auto-incident rather than creating a
+	// duplicate. Under the one-open-alert-per-monitor invariant, the monitor
+	// must have no open alert before the second one can be inserted.
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
@@ -45,6 +49,13 @@ func TestAlerterCreateAlertCreatesAndReusesAutoIncident(t *testing.T) {
 		t.Fatalf("incident alert count after first create = %d, want 1", count)
 	}
 
+	// Resolve the first alert so the monitor has no open alert. The incident
+	// remains open (state = investigating) until an operator closes it.
+	if _, err := alerter.resolveAlert(ctx, firstAlert.ID, now.Add(30*time.Second)); err != nil {
+		t.Fatalf("resolveAlert(first) error = %v", err)
+	}
+
+	// The monitor re-fires; the new alert must link to the existing incident.
 	secondAlert, err := alerter.createAlert(ctx, binding, 3, nil, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("createAlert(second) error = %v", err)
@@ -62,6 +73,10 @@ func TestAlerterCreateAlertCreatesAndReusesAutoIncident(t *testing.T) {
 }
 
 func TestAlerterResolveAlertRecordsRecoveryTimeline(t *testing.T) {
+	// Two monitors fire alerts that both link to the same auto-incident
+	// (same tenant/policy; the second monitor's createAlert re-fires after the
+	// first resolves so it finds the still-open incident). Recovery is recorded
+	// only when the last linked alert resolves.
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
@@ -83,38 +98,54 @@ func TestAlerterResolveAlertRecordsRecoveryTimeline(t *testing.T) {
 		CreateIncidentOnFire: true,
 	}
 
+	// First fire: alert + incident created.
 	firstAlert, err := alerter.createAlert(ctx, binding, 2, nil, now)
 	if err != nil {
 		t.Fatalf("createAlert(first) error = %v", err)
 	}
-	secondAlert, err := alerter.createAlert(ctx, binding, 3, nil, now.Add(time.Minute))
+	incidentID := loadAlerterAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+
+	// Resolve first alert; incident stays open (state = investigating).
+	if _, err := alerter.resolveAlert(ctx, firstAlert.ID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("resolveAlert(first) error = %v", err)
+	}
+	// After first (and only) alert resolves, recovery IS recorded.
+	if got := countAlerterTimelineMessages(ctx, t, dbClient, incidentID, "All linked alerts recovered"); got != 1 {
+		t.Fatalf("recovery message count after first resolve = %d, want 1", got)
+	}
+
+	// Monitor re-fires; new alert links to the same still-open incident.
+	secondAlert, err := alerter.createAlert(ctx, binding, 3, nil, now.Add(2*time.Minute))
 	if err != nil {
 		t.Fatalf("createAlert(second) error = %v", err)
 	}
-
-	incidentID := loadAlerterAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
-	if _, err := alerter.resolveAlert(ctx, firstAlert.ID, now.Add(2*time.Minute)); err != nil {
-		t.Fatalf("resolveAlert(first) error = %v", err)
-	}
-	if got := countAlerterTimelineMessages(ctx, t, dbClient, incidentID, "All linked alerts recovered"); got != 0 {
-		t.Fatalf("recovery message count after first resolve = %d, want 0", got)
+	// Incident now has 2 alerts (1 resolved, 1 active) — not all resolved yet.
+	if got := countAlerterTimelineMessages(ctx, t, dbClient, incidentID, "All linked alerts recovered"); got != 1 {
+		t.Fatalf("recovery message count after second create = %d, want still 1", got)
 	}
 
+	// Resolve second alert; all alerts now resolved → second recovery message.
 	if _, err := alerter.resolveAlert(ctx, secondAlert.ID, now.Add(3*time.Minute)); err != nil {
 		t.Fatalf("resolveAlert(second) error = %v", err)
 	}
-	if got := countAlerterTimelineMessages(ctx, t, dbClient, incidentID, "All linked alerts recovered"); got != 1 {
-		t.Fatalf("recovery message count after second resolve = %d, want 1", got)
+	if got := countAlerterTimelineMessages(ctx, t, dbClient, incidentID, "All linked alerts recovered"); got != 2 {
+		t.Fatalf("recovery message count after second resolve = %d, want 2", got)
 	}
 }
 
 func TestAlerterResolveAlertSerializesConcurrentFinalResolutions(t *testing.T) {
+	// Two alerts are linked to the same auto-incident. The first is created via
+	// the normal path; the second is inserted directly (bypassing the unique
+	// index on the first monitor) and manually linked to the same incident.
+	// This exercises the advisory-lock serialization in
+	// recordAlertRecoveryIfNeededTx when both are resolved concurrently.
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	monitor2ID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API2")
 	policyID := insertAlerterTestPolicy(ctx, t, dbClient, tenantID, "policy", true)
 	now := time.Now().UTC()
 	alerter := newIntegrationAlerter(dbClient)
@@ -134,12 +165,11 @@ func TestAlerterResolveAlertSerializesConcurrentFinalResolutions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createAlert(first) error = %v", err)
 	}
-	secondAlert, err := alerter.createAlert(ctx, binding, 3, nil, now.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("createAlert(second) error = %v", err)
-	}
-
 	incidentID := loadAlerterAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+
+	// Insert a second alert on a different monitor and link it directly to the
+	// same incident, simulating a multi-monitor incident under the new schema.
+	secondAlert := insertAlerterSecondAlertAndLink(ctx, t, dbClient, tenantID, monitor2ID, policyID, incidentID, now.Add(time.Minute))
 
 	tx1, err := dbClient.BeginTx(ctx, nil)
 	if err != nil {
@@ -451,4 +481,38 @@ func assertAlerterIncidentRecoveryLockHeld(ctx context.Context, t *testing.T, db
 	if acquired {
 		t.Fatalf("expected incident recovery lock to be held for %s", incidentID)
 	}
+}
+
+// insertAlerterSecondAlertAndLink inserts an active alert for monitorID and
+// links it to an existing incidentID. This bypasses createAlert (and therefore
+// the auto-incident logic) so that two concurrent active alerts can exist for
+// different monitors but share the same incident — needed for tests that verify
+// the advisory-lock serialization in recordAlertRecoveryIfNeededTx.
+func insertAlerterSecondAlertAndLink(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID, monitorID, policyID, incidentID uuid.UUID, triggeredAt time.Time) *alertRecord {
+	t.Helper()
+
+	alertID := uuid.New()
+	var record alertRecord
+	var lastErr sql.NullString
+	if err := dbClient.QueryRowContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', $5, 1, $5, $5)
+		RETURNING id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, last_error
+	`, alertID, tenantID, monitorID, policyID, triggeredAt).Scan(
+		&record.ID, &record.TenantID, &record.MonitorID, &record.PolicyID,
+		&record.Status, &record.TriggeredAt, &record.FailureCount, &lastErr,
+	); err != nil {
+		t.Fatalf("insert second alert: %v", err)
+	}
+	if lastErr.Valid {
+		record.LastError = &lastErr.String
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT DO NOTHING
+	`, incidentID, alertID); err != nil {
+		t.Fatalf("link second alert to incident: %v", err)
+	}
+	return &record
 }
