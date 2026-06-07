@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -28,9 +29,32 @@ type Message struct {
 	InProgress func() error
 }
 
-// NewClient creates a new NATS JetStream client
+// reconnectOptions keeps the connection retrying forever. The nats.go
+// default gives up after 60 attempts (~2 minutes) and leaves the connection
+// permanently CLOSED, which froze every worker/alerter when the NATS pod
+// moved nodes. Keep in sync with shared/statusupdates.
+func reconnectOptions() []nats.Option {
+	return []nats.Option{
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2 * time.Second),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			log.Printf("nats: disconnected: %v", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			log.Printf("nats: reconnected to %s", nc.ConnectedUrl())
+		}),
+		nats.ClosedHandler(func(_ *nats.Conn) {
+			log.Printf("nats: connection permanently closed")
+		}),
+	}
+}
+
+// NewClient creates a new NATS JetStream client. The connection retries
+// forever (initial connect and reconnects) so a NATS outage never leaves
+// the client permanently disconnected.
 func NewClient(natsURL string) (*Client, error) {
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(natsURL, reconnectOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
@@ -352,4 +376,11 @@ func (c *Client) Close() {
 	if c.nc != nil {
 		c.nc.Close()
 	}
+}
+
+// Closed reports whether the underlying connection is permanently closed
+// and will never reconnect. Liveness probes use this so Kubernetes restarts
+// pods holding a dead connection instead of leaving them as zombies.
+func (c *Client) Closed() bool {
+	return c.nc == nil || c.nc.IsClosed()
 }
