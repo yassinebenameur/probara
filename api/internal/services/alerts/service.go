@@ -89,7 +89,7 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 			m.name as monitor_name, ap.name as policy_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
-		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 		WHERE %s AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $%d OFFSET $%d
@@ -106,14 +106,18 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 	var alerts []models.AlertWithDetails
 	for rows.Next() {
 		var alert models.AlertWithDetails
+		var policyName sql.NullString
 		err := rows.Scan(
 			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
-			&alert.MonitorName, &alert.PolicyName,
+			&alert.MonitorName, &policyName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
+		}
+		if policyName.Valid {
+			alert.PolicyName = &policyName.String
 		}
 		alerts = append(alerts, alert)
 	}
@@ -139,16 +143,17 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 			m.name as monitor_name, ap.name as policy_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
-		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 	`
 
 	var alert models.AlertWithDetails
+	var policyName sql.NullString
 	err := s.db.QueryRowContext(ctx, query, alertID, tenantID).Scan(
 		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
-		&alert.MonitorName, &alert.PolicyName,
+		&alert.MonitorName, &policyName,
 	)
 
 	if err != nil {
@@ -158,6 +163,9 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 		return nil, fmt.Errorf("failed to get alert: %w", err)
 	}
 
+	if policyName.Valid {
+		alert.PolicyName = &policyName.String
+	}
 	return &alert, nil
 }
 
@@ -177,7 +185,7 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 			m.name as monitor_name, ap.name as policy_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
-		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
@@ -192,14 +200,18 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 	alerts := []models.AlertWithDetails{}
 	for rows.Next() {
 		var alert models.AlertWithDetails
+		var policyName sql.NullString
 		err := rows.Scan(
 			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
-			&alert.MonitorName, &alert.PolicyName,
+			&alert.MonitorName, &policyName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
+		}
+		if policyName.Valid {
+			alert.PolicyName = &policyName.String
 		}
 		alerts = append(alerts, alert)
 	}
@@ -226,7 +238,7 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 			m.name as monitor_name, ap.name as policy_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
-		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
@@ -244,14 +256,18 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	alerts := []models.AlertWithDetails{}
 	for rows.Next() {
 		var alert models.AlertWithDetails
+		var policyName sql.NullString
 		err := rows.Scan(
 			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
-			&alert.MonitorName, &alert.PolicyName,
+			&alert.MonitorName, &policyName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
+		}
+		if policyName.Valid {
+			alert.PolicyName = &policyName.String
 		}
 		alerts = append(alerts, alert)
 	}
@@ -371,16 +387,17 @@ func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID 
 			m.name as monitor_name, ap.name as policy_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
-		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 	`
 
 	var alert models.AlertWithDetails
+	var policyName sql.NullString
 	err := tx.QueryRowContext(ctx, query, alertID, tenantID).Scan(
 		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
-		&alert.MonitorName, &alert.PolicyName,
+		&alert.MonitorName, &policyName,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -389,6 +406,9 @@ func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID 
 		return nil, fmt.Errorf("failed to get alert: %w", err)
 	}
 
+	if policyName.Valid {
+		alert.PolicyName = &policyName.String
+	}
 	return &alert, nil
 }
 

@@ -20,7 +20,7 @@ type Alert struct {
 	ID             uuid.UUID   `json:"id"`
 	TenantID       uuid.UUID   `json:"tenant_id"`
 	MonitorID      uuid.UUID   `json:"monitor_id"`
-	AlertPolicyID  uuid.UUID   `json:"alert_policy_id"`
+	AlertPolicyID  *uuid.UUID  `json:"alert_policy_id,omitempty"`
 	Status         AlertStatus `json:"status"`
 	TriggeredAt    time.Time   `json:"triggered_at"`
 	AcknowledgedAt *time.Time  `json:"acknowledged_at,omitempty"`
@@ -34,8 +34,8 @@ type Alert struct {
 // AlertWithDetails includes related entity names for display
 type AlertWithDetails struct {
 	Alert
-	MonitorName string `json:"monitor_name"`
-	PolicyName  string `json:"policy_name"`
+	MonitorName string  `json:"monitor_name"`
+	PolicyName  *string `json:"policy_name,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

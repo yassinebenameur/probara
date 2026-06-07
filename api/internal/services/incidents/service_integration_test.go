@@ -917,11 +917,11 @@ func TestServiceEnsureIncidentForAlertCreatesAndReusesAutoIncident(t *testing.T)
 			ID:            firstAlertID,
 			TenantID:      tenantID,
 			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
+			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
 		MonitorName: "API",
-		PolicyName:  "auto-policy",
+		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
 		t.Fatalf("EnsureIncidentForAlert(first) error = %v", err)
@@ -960,11 +960,11 @@ func TestServiceEnsureIncidentForAlertCreatesAndReusesAutoIncident(t *testing.T)
 			ID:            secondAlertID,
 			TenantID:      tenantID,
 			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
+			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
 		MonitorName: "API",
-		PolicyName:  "auto-policy",
+		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, secondAlert); err != nil {
 		t.Fatalf("EnsureIncidentForAlert(second) error = %v", err)
@@ -1003,11 +1003,11 @@ func TestServiceEnsureIncidentForAlertRejectsTenantMismatch(t *testing.T) {
 			ID:            uuid.New(),
 			TenantID:      otherTenantID,
 			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
+			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
 		MonitorName: "API",
-		PolicyName:  "auto-policy",
+		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err == nil {
 		t.Fatalf("expected EnsureIncidentForAlert() tenant mismatch error")
@@ -1036,11 +1036,11 @@ func TestServiceRecordAlertRecoveryIfNeededAppendsTimelineAfterFinalResolution(t
 			ID:            firstAlertID,
 			TenantID:      tenantID,
 			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
+			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
 		MonitorName: "API",
-		PolicyName:  "auto-policy",
+		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
 		t.Fatalf("EnsureIncidentForAlert(first) error = %v", err)
@@ -1107,11 +1107,11 @@ func TestServiceRecordAlertRecoveryIfNeededSerializesConcurrentFinalResolutions(
 			ID:            firstAlertID,
 			TenantID:      tenantID,
 			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
+			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
 		MonitorName: "API",
-		PolicyName:  "auto-policy",
+		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
 		t.Fatalf("EnsureIncidentForAlert(first) error = %v", err)
@@ -1198,11 +1198,11 @@ func TestServiceRecordAlertRecoveryIfNeededSkipsDuplicateAfterLaterNonRecoveryEn
 			ID:            alertID,
 			TenantID:      tenantID,
 			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
+			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
 		MonitorName: "API",
-		PolicyName:  "auto-policy",
+		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err != nil {
 		t.Fatalf("EnsureIncidentForAlert() error = %v", err)
@@ -1464,6 +1464,55 @@ func countIncidentAlertLinks(ctx context.Context, t *testing.T, dbClient testuti
 	return count
 }
 
+// TestIncidentDetailIncludesNullPolicyAlert is a regression test for the bug
+// where loadIncidentAlerts INNER JOINed alert_policies, silently dropping any
+// alert whose alert_policy_id is NULL (lifecycle alerts).
+func TestIncidentDetailIncludesNullPolicyAlert(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "null-policy-monitor")
+	svc := NewService(dbClient, nil)
+
+	// Create a manual incident.
+	incident, err := svc.CreateIncident(ctx, tenantID, &models.CreateIncidentRequest{
+		Title:   "Lifecycle alert incident",
+		Summary: "Alert fired without a policy.",
+	})
+	if err != nil {
+		t.Fatalf("CreateIncident() error = %v", err)
+	}
+
+	// Insert an alert with alert_policy_id = NULL and link it to the incident.
+	alertID := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, 'active', NOW(), 1, NOW(), NOW())
+	`, alertID, tenantID, monitorID); err != nil {
+		t.Fatalf("insert NULL-policy alert: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
+		VALUES ($1, $2, NOW())
+	`, incident.ID, alertID); err != nil {
+		t.Fatalf("link alert to incident: %v", err)
+	}
+
+	// GetIncident must surface the NULL-policy alert in detail.Alerts.
+	detail, err := svc.GetIncident(ctx, tenantID, incident.ID)
+	if err != nil {
+		t.Fatalf("GetIncident() error = %v", err)
+	}
+	if len(detail.Alerts) != 1 {
+		t.Fatalf("GetIncident().Alerts len = %d, want 1 (NULL-policy alert must be visible)", len(detail.Alerts))
+	}
+	if detail.Alerts[0].ID != alertID {
+		t.Fatalf("GetIncident().Alerts[0].ID = %s, want %s", detail.Alerts[0].ID, alertID)
+	}
+}
+
 func countIncidentMonitorLinks(ctx context.Context, t *testing.T, dbClient testutilDBClient, incidentID uuid.UUID) int {
 	t.Helper()
 
@@ -1535,4 +1584,8 @@ func (p *fakeIncidentStatusUpdatePublisher) Reset() {
 	defer p.mu.Unlock()
 
 	p.events = nil
+}
+
+func strPtr(s string) *string {
+	return &s
 }

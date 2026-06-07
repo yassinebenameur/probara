@@ -384,7 +384,7 @@ export interface Alert {
   id: string;
   tenant_id: string;
   monitor_id: string;
-  alert_policy_id: string;
+  alert_policy_id?: string;
   status: AlertStatus;
   triggered_at: string;
   acknowledged_at?: string;
@@ -565,7 +565,7 @@ export interface IncidentTimelineEntry {
 export interface IncidentAlertSummary {
   id: string;
   monitor_id: string;
-  alert_policy_id: string;
+  alert_policy_id?: string;
   status: AlertStatus;
   triggered_at: string;
   acknowledged_at?: string;
@@ -575,7 +575,7 @@ export interface IncidentAlertSummary {
   created_at: string;
   updated_at: string;
   monitor_name: string;
-  policy_name: string;
+  policy_name?: string;
 }
 
 export interface IncidentMonitorSummary {

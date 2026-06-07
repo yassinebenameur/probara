@@ -152,23 +152,31 @@ func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertW
 	alertID, _ := uuid.Parse(event.Alert.ID)
 	tenantID, _ := uuid.Parse(event.TenantID)
 	monitorID, _ := uuid.Parse(event.Alert.MonitorID)
-	policyID, _ := uuid.Parse(event.Alert.AlertPolicyID)
 
-	return &models.AlertWithDetails{
+	alert := &models.AlertWithDetails{
 		Alert: models.Alert{
-			ID:            alertID,
-			TenantID:      tenantID,
-			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
-			Status:        models.AlertStatus(event.Alert.Status),
-			TriggeredAt:   event.Alert.TriggeredAt,
-			ResolvedAt:    event.Alert.ResolvedAt,
-			FailureCount:  event.Alert.FailureCount,
-			LastError:     event.Alert.LastError,
-			CreatedAt:     event.Alert.TriggeredAt,
-			UpdatedAt:     event.Timestamp,
+			ID:           alertID,
+			TenantID:     tenantID,
+			MonitorID:    monitorID,
+			Status:       models.AlertStatus(event.Alert.Status),
+			TriggeredAt:  event.Alert.TriggeredAt,
+			ResolvedAt:   event.Alert.ResolvedAt,
+			FailureCount: event.Alert.FailureCount,
+			LastError:    event.Alert.LastError,
+			CreatedAt:    event.Alert.TriggeredAt,
+			UpdatedAt:    event.Timestamp,
 		},
 		MonitorName: event.Alert.MonitorName,
-		PolicyName:  event.Alert.PolicyName,
 	}
+
+	if event.Alert.AlertPolicyID != "" {
+		if policyID, err := uuid.Parse(event.Alert.AlertPolicyID); err == nil {
+			alert.AlertPolicyID = &policyID
+		}
+	}
+	if event.Alert.PolicyName != "" {
+		alert.PolicyName = &event.Alert.PolicyName
+	}
+
+	return alert
 }

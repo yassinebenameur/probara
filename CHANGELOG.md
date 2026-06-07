@@ -3,7 +3,7 @@
 
 ### BREAKING CHANGES
 
-* **alerting:** Alert policies have been replaced by workspace-level notification settings and per-monitor channel routing. Existing policies were automatically migrated: each policy's channel set becomes either the workspace default (if it was the most common) or a per-monitor custom list. Policies with `failure_threshold=1` are migrated to sensitivity N=1 (alert on first failure); all others to N=2 — review any monitors where the threshold should differ. The `/alert-policies` API endpoints have been removed and now return **410 Gone**. Callers must migrate to `GET/PUT /v1/notification-settings` (workspace defaults) and the per-monitor `alerting_channels` / `consecutive_failures_threshold` fields.
+* **alerting:** Alert policies have been replaced by workspace-level notification settings and per-monitor channel routing. Existing policies were automatically migrated: each policy's channel set becomes either the workspace default (if it was the most common) or a per-monitor custom list. Policies with `failure_threshold=1` are migrated to sensitivity N=1 (alert on first failure); all others to N=2 — review any monitors where the threshold should differ. The `/alert-policies` API endpoints have been removed and now return **410 Gone**. Callers must migrate to `GET/PUT /v1/notification-settings` (workspace defaults) and the per-monitor `notification_channels` / `consecutive_failures_threshold` fields.
 * **alerting:** One open alert per monitor is now enforced. Any monitor that had multiple simultaneous active alerts will have had extras closed by the migration; the new one-alert-per-outage model means duplicate triggers are silently dropped rather than stacked.
 
 
@@ -14,7 +14,7 @@
 * **alerting:** Bulk "Edit alerting" action on the monitors table allows setting channels and sensitivity across many monitors at once.
 * **web:** Day-0 nudge banner prompts workspaces with no notification channels configured to complete setup before their first alert.
 * **api:** New `GET /v1/notification-settings` and `PUT /v1/notification-settings` endpoints expose workspace-wide alert defaults (channels, reminder interval, auto-incident creation toggle).
-* **api:** Monitor create/update now accepts `alerting_channels` (per-monitor channel override list) and `consecutive_failures_threshold` (sensitivity N).
+* **api:** Monitor create/update now accepts `notification_channels` (per-monitor channel override list) and `consecutive_failures_threshold` (sensitivity N).
 
 
 ### Changes
@@ -26,7 +26,7 @@
 ### Operations
 
 * **deploy:** The policy→channel-routing backfill in migration `000045` should be validated against a production-like database snapshot before deploying to production. Run the migration in a dry-run or staging environment first and spot-check that channels mapped correctly.
-* **deploy:** The new alerter image must be rolled out **together** with the API, worker, and scheduler images. The old window-based evaluator has been removed from the alerter; running a mixed fleet (new API + old alerter or vice versa) will cause missed or duplicate alerts.
+* **deploy:** The new alerter image must be rolled out **together** with the API, worker, and scheduler images. Deploying the new alerter with an OLD worker leaves all monitor states as `unknown`, so the state machine never transitions to `down` — **no alerts will fire (silent outage)**. The reverse is also unsafe: a new worker writing state-machine state with the old alerter's window-based evaluator will cause missed or duplicate alerts. The worker, scheduler, alerter, and API must all ship in the same deployment.
 
 # [1.0.0-alpha.51](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.50...v1.0.0-alpha.51) (2026-06-02)
 

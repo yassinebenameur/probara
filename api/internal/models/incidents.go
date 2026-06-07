@@ -77,7 +77,7 @@ type IncidentTimelineEntry struct {
 type IncidentAlertSummary struct {
 	ID             uuid.UUID  `json:"id"`
 	MonitorID      uuid.UUID  `json:"monitor_id"`
-	AlertPolicyID  uuid.UUID  `json:"alert_policy_id"`
+	AlertPolicyID  *uuid.UUID `json:"alert_policy_id,omitempty"`
 	Status         string     `json:"status"`
 	TriggeredAt    time.Time  `json:"triggered_at"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
@@ -87,7 +87,7 @@ type IncidentAlertSummary struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	MonitorName    string     `json:"monitor_name"`
-	PolicyName     string     `json:"policy_name"`
+	PolicyName     *string    `json:"policy_name,omitempty"`
 }
 
 // IncidentMonitorSummary represents a monitor linked to an incident.
