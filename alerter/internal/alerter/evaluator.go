@@ -146,14 +146,16 @@ func (a *Alerter) evaluateAlerts(ctx context.Context) error {
 			failureCount int
 			lastError    *string
 			groupInfo    *groupDetail
+			recovered    bool
 		)
 
 		if binding.MonitorType == monitorTypeGroup {
 			members := groupMembers[binding.MonitorID]
 			results := groupLatestResults[binding.MonitorID]
 			failureCount, lastError, groupInfo = a.evaluateGroupFailures(now, binding, members, results)
+			recovered = groupRecovered(results)
 		} else {
-			failureCount, lastError, err = a.getMonitorFailureSummary(ctx, binding, now)
+			failureCount, lastError, recovered, err = a.getMonitorFailureSummary(ctx, binding, now)
 			if err != nil {
 				a.logger.WithError(err).WithFields(map[string]interface{}{
 					"monitor_id": binding.MonitorID,
@@ -192,6 +194,13 @@ func (a *Alerter) evaluateAlerts(ctx context.Context) error {
 				a.dispatchNotifications(ctx, "reminder", binding, active, policyChannels[binding.PolicyID], notificationStates, groupInfo, suppressedMonitors[binding.MonitorID], now, reminderInterval)
 			}
 		} else if active != nil {
+			if !recovered {
+				// The failure window slid past the last failure without an
+				// observed success — when checks run less often than the
+				// window, resolving here flaps the alert created/resolved on
+				// every cycle while the monitor is still down.
+				continue
+			}
 			resolvedAt, err := a.resolveAlert(ctx, active.ID, now)
 			if err != nil {
 				a.logger.WithError(err).WithFields(map[string]interface{}{
@@ -593,7 +602,11 @@ func (a *Alerter) evaluateGroupFailures(now time.Time, binding policyBinding, me
 	}
 }
 
-func (a *Alerter) getMonitorFailureSummary(ctx context.Context, binding policyBinding, now time.Time) (int, *string, error) {
+// getMonitorFailureSummary counts failures within the policy window and
+// reports whether the monitor has recovered — i.e. its latest check result
+// (regardless of window) is a success. Failures aging out of the window do
+// not count as recovery on their own.
+func (a *Alerter) getMonitorFailureSummary(ctx context.Context, binding policyBinding, now time.Time) (int, *string, bool, error) {
 	cutoff := now.Add(-time.Duration(binding.FailureWindowSeconds) * time.Second)
 	query := `
 		SELECT COUNT(*) FILTER (WHERE status IN ('failure', 'error')) AS failure_count,
@@ -605,21 +618,42 @@ func (a *Alerter) getMonitorFailureSummary(ctx context.Context, binding policyBi
 					AND created_at >= $3
 				ORDER BY created_at DESC
 				LIMIT 1
-			) AS last_error
+			) AS last_error,
+			(
+				SELECT status
+				FROM check_results
+				WHERE monitor_id = $1 AND tenant_id = $2
+				ORDER BY created_at DESC
+				LIMIT 1
+			) AS latest_status
 		FROM check_results
 		WHERE monitor_id = $1 AND tenant_id = $2 AND created_at >= $3
 	`
 
 	var failureCount int
 	var lastError sql.NullString
-	if err := a.db.QueryRowContext(ctx, query, binding.MonitorID, binding.TenantID, cutoff).Scan(&failureCount, &lastError); err != nil {
-		return 0, nil, fmt.Errorf("failed to query monitor failures: %w", err)
+	var latestStatus sql.NullString
+	if err := a.db.QueryRowContext(ctx, query, binding.MonitorID, binding.TenantID, cutoff).Scan(&failureCount, &lastError, &latestStatus); err != nil {
+		return 0, nil, false, fmt.Errorf("failed to query monitor failures: %w", err)
 	}
 
+	recovered := latestStatus.Valid && !failureStatuses[latestStatus.String]
 	if lastError.Valid {
-		return failureCount, &lastError.String, nil
+		return failureCount, &lastError.String, recovered, nil
 	}
-	return failureCount, nil, nil
+	return failureCount, nil, recovered, nil
+}
+
+// groupRecovered reports whether no group member's latest known check result
+// is a failure. A member whose latest result is failing keeps the group alert
+// active even after that result ages out of the failure window.
+func groupRecovered(results map[uuid.UUID]checkSummary) bool {
+	for _, summary := range results {
+		if failureStatuses[summary.Status] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Alerter) createAlert(ctx context.Context, binding policyBinding, failureCount int, lastError *string, now time.Time) (*alertRecord, error) {
