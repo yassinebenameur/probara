@@ -140,8 +140,13 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
 
                 {/* Channel picker when custom */}
                 {mode === 'custom' && (
-                  <div className="pt-1">
+                  <div className="pt-1 space-y-2">
                     <ChannelPicker value={channels} onChange={setChannels} />
+                    {channels.length === 0 && (
+                      <div className="rounded-lg border border-rose-700/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+                        🔕 This will mute all {monitorIds.length} selected monitors — alerts fire but notify no one.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

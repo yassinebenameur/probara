@@ -19,9 +19,11 @@ interface AlertingSectionProps {
 
 function detectionHint(threshold: number, intervalSeconds: number): string {
   const recheck = Math.min(intervalSeconds, 20);
-  const confirmSeconds = threshold * recheck;
-  const approx = confirmSeconds >= 90 ? `~${Math.round(confirmSeconds / 60)} min` : `~${confirmSeconds}s`;
-  return `rechecks every ${recheck}s once a failure is seen — you'd be alerted ${approx} into an outage`;
+  // Worst case: a full interval passes before the first failure is observed,
+  // then (threshold - 1) fast rechecks confirm the outage.
+  const worstCaseSeconds = intervalSeconds + (threshold - 1) * recheck;
+  const approx = worstCaseSeconds >= 90 ? `~${Math.round(worstCaseSeconds / 60)} min` : `~${worstCaseSeconds}s`;
+  return `rechecks every ${recheck}s once a failure is seen — alerted within ${approx} of an outage starting`;
 }
 
 export function AlertingSection({
