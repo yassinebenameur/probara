@@ -898,6 +898,10 @@ func TestServiceCreateIncidentTimelineEntryPublicUpdateEmitsDirectRefreshEvents(
 }
 
 func TestServiceEnsureIncidentForAlertCreatesAndReusesAutoIncident(t *testing.T) {
+	// Verifies that after the first alert resolves, a new alert for the same
+	// monitor+policy reuses the still-open auto-incident rather than creating a
+	// duplicate. Under the one-open-alert-per-monitor invariant, the first alert
+	// must be resolved before the second can be inserted on the same monitor.
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
@@ -941,6 +945,15 @@ func TestServiceEnsureIncidentForAlertCreatesAndReusesAutoIncident(t *testing.T)
 		t.Fatalf("unexpected first timeline = %#v", detail.Timeline)
 	}
 
+	// Resolve the first alert so the monitor has no open alert. The incident
+	// remains open (state = investigating) until an operator closes it.
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1
+	`, firstAlertID); err != nil {
+		t.Fatalf("resolve first alert: %v", err)
+	}
+
+	// The monitor re-fires; the new alert must link to the existing incident.
 	secondAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
 	secondAlert := &models.AlertWithDetails{
 		Alert: models.Alert{
@@ -1002,35 +1015,42 @@ func TestServiceEnsureIncidentForAlertRejectsTenantMismatch(t *testing.T) {
 }
 
 func TestServiceRecordAlertRecoveryIfNeededAppendsTimelineAfterFinalResolution(t *testing.T) {
+	// Two monitors fire alerts that both link to the same auto-incident. Recovery
+	// is recorded only when the last linked alert resolves. Under the
+	// one-open-alert-per-monitor invariant, each alert must belong to a distinct
+	// monitor, so the second alert is inserted directly on monitor2 and linked to
+	// the existing incident (bypassing EnsureIncidentForAlert for the second alert).
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	monitor2ID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API2")
 	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
 	svc := NewService(dbClient, nil)
 
 	firstAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
-	secondAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
-	for _, alertID := range []uuid.UUID{firstAlertID, secondAlertID} {
-		alert := &models.AlertWithDetails{
-			Alert: models.Alert{
-				ID:            alertID,
-				TenantID:      tenantID,
-				MonitorID:     monitorID,
-				AlertPolicyID: policyID,
-				Status:        models.AlertStatusActive,
-			},
-			MonitorName: "API",
-			PolicyName:  "auto-policy",
-		}
-		if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err != nil {
-			t.Fatalf("EnsureIncidentForAlert(%s) error = %v", alertID, err)
-		}
+	firstAlert := &models.AlertWithDetails{
+		Alert: models.Alert{
+			ID:            firstAlertID,
+			TenantID:      tenantID,
+			MonitorID:     monitorID,
+			AlertPolicyID: policyID,
+			Status:        models.AlertStatusActive,
+		},
+		MonitorName: "API",
+		PolicyName:  "auto-policy",
+	}
+	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
+		t.Fatalf("EnsureIncidentForAlert(first) error = %v", err)
 	}
 
 	incidentID := loadAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+
+	// Insert a second alert on a different monitor and link it directly to the
+	// same incident, simulating a multi-monitor incident under the new schema.
+	secondAlertID := insertIncidentSecondAlertAndLink(ctx, t, dbClient, tenantID, monitor2ID, policyID, incidentID)
 	if _, err := dbClient.ExecContext(ctx, `UPDATE alerts SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = $1`, firstAlertID); err != nil {
 		t.Fatalf("resolve first alert: %v", err)
 	}
@@ -1066,35 +1086,42 @@ func TestServiceRecordAlertRecoveryIfNeededAppendsTimelineAfterFinalResolution(t
 }
 
 func TestServiceRecordAlertRecoveryIfNeededSerializesConcurrentFinalResolutions(t *testing.T) {
+	// Two alerts are linked to the same auto-incident. The first is created via
+	// the normal path; the second is inserted directly (bypassing the unique
+	// index on the first monitor) and manually linked to the same incident.
+	// This exercises the advisory-lock serialization in
+	// RecordAlertRecoveryIfNeededTx when both are resolved concurrently.
 	ctx := context.Background()
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "incidents")
 	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	monitor2ID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API2")
 	policyID := insertIncidentTestPolicy(ctx, t, dbClient, tenantID, "auto-policy", true)
 	svc := NewService(dbClient, nil)
 
 	firstAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
-	secondAlertID := insertIncidentTestAlertWithPolicy(ctx, t, dbClient, tenantID, monitorID, policyID)
-	for _, alertID := range []uuid.UUID{firstAlertID, secondAlertID} {
-		alert := &models.AlertWithDetails{
-			Alert: models.Alert{
-				ID:            alertID,
-				TenantID:      tenantID,
-				MonitorID:     monitorID,
-				AlertPolicyID: policyID,
-				Status:        models.AlertStatusActive,
-			},
-			MonitorName: "API",
-			PolicyName:  "auto-policy",
-		}
-		if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err != nil {
-			t.Fatalf("EnsureIncidentForAlert(%s) error = %v", alertID, err)
-		}
+	firstAlert := &models.AlertWithDetails{
+		Alert: models.Alert{
+			ID:            firstAlertID,
+			TenantID:      tenantID,
+			MonitorID:     monitorID,
+			AlertPolicyID: policyID,
+			Status:        models.AlertStatusActive,
+		},
+		MonitorName: "API",
+		PolicyName:  "auto-policy",
+	}
+	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
+		t.Fatalf("EnsureIncidentForAlert(first) error = %v", err)
 	}
 
 	incidentID := loadAutoIncidentID(ctx, t, dbClient, tenantID, monitorID, policyID)
+
+	// Insert a second alert on a different monitor and link it directly to the
+	// same incident, simulating a multi-monitor incident under the new schema.
+	secondAlertID := insertIncidentSecondAlertAndLink(ctx, t, dbClient, tenantID, monitor2ID, policyID, incidentID)
 
 	tx1, err := dbClient.BeginTx(ctx, nil)
 	if err != nil {
@@ -1337,6 +1364,39 @@ func insertIncidentTestAlertWithPolicy(ctx context.Context, t *testing.T, dbClie
 		t.Fatalf("insert alert: %v", err)
 	}
 
+	return alertID
+}
+
+// insertIncidentSecondAlertAndLink inserts an active alert for monitorID and
+// links it to an existing incidentID, also appending the "alert auto-linked"
+// timeline entry that EnsureIncidentForAlert would normally produce. This
+// bypasses EnsureIncidentForAlert (and therefore the auto-incident lookup keyed
+// on auto_monitor_id) so that two concurrent active alerts can exist for
+// different monitors but share the same incident — needed for tests that verify
+// multi-alert recovery logic under the one-open-alert-per-monitor invariant.
+func insertIncidentSecondAlertAndLink(ctx context.Context, t *testing.T, dbClient testutilDBClient, tenantID, monitorID, policyID, incidentID uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	alertID := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status, triggered_at, failure_count, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', NOW(), 1, NOW(), NOW())
+	`, alertID, tenantID, monitorID, policyID); err != nil {
+		t.Fatalf("insert second alert: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO incident_alerts (incident_id, alert_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT DO NOTHING
+	`, incidentID, alertID); err != nil {
+		t.Fatalf("link second alert to incident: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO incident_timeline_entries (id, tenant_id, incident_id, entry_type, message, metadata, created_at)
+		VALUES ($1, $2, $3, 'system', $4, '{}'::jsonb, clock_timestamp())
+	`, uuid.New(), tenantID, incidentID, autoIncidentLinkedMessage); err != nil {
+		t.Fatalf("insert linked timeline entry: %v", err)
+	}
 	return alertID
 }
 
