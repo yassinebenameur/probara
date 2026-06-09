@@ -1586,38 +1586,30 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 		return []HourlyUptime{}, nil
 	}
 
+	// Read the rollup cursor first and pass all hour-strip bounds as parameters:
+	// bounds derived from a CTE join on rollup_job_state cannot be pushed into
+	// index conditions on check_results.created_at and forced a full sequential scan.
+	cursor, err := sharedanalytics.LoadRollupCursor(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	startHour := now.Truncate(time.Hour).Add(-23 * time.Hour)
+	endExclusive := now.Truncate(time.Hour).Add(time.Hour)
+	rawStart := cursor.RawStart(startHour)
+
 	query := `
-		WITH rollup_state AS (
-			SELECT last_created_at, last_check_result_id
-			FROM rollup_job_state
-			WHERE job_name = 'monitor_daily_rollups'
-		),
-		bounds AS (
-			SELECT
-				date_trunc('hour', NOW() - INTERVAL '23 hours') AS start_hour,
-				date_trunc('hour', NOW()) + INTERVAL '1 hour' AS end_exclusive
-		),
-		raw_bounds AS MATERIALIZED (
-			SELECT
-				b.start_hour,
-				b.end_exclusive,
-				COALESCE(GREATEST(b.start_hour, rs.last_created_at), b.start_hour) AS raw_start,
-				rs.last_created_at,
-				COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid) AS last_check_result_id
-			FROM bounds b
-			LEFT JOIN rollup_state rs ON TRUE
-		),
-		rollup_per_hour AS (
+		WITH rollup_per_hour AS (
 			SELECT
 				mhr.bucket_hour,
 				SUM(mhr.total_checks)::bigint AS total_checks,
 				SUM(mhr.success_checks)::bigint AS success_checks
 			FROM monitor_hourly_rollups mhr
-			CROSS JOIN bounds b
 			WHERE mhr.tenant_id = $1
 			  AND mhr.monitor_id = ANY($2)
-			  AND mhr.bucket_hour >= b.start_hour
-			  AND mhr.bucket_hour < b.end_exclusive
+			  AND mhr.bucket_hour >= $3
+			  AND mhr.bucket_hour < $4
 			GROUP BY mhr.bucket_hour
 		),
 		raw_per_hour AS (
@@ -1626,18 +1618,14 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 				COUNT(*)::bigint AS total_checks,
 				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks
 			FROM check_results cr
-			CROSS JOIN raw_bounds rb
 			WHERE cr.tenant_id = $1
 			  AND cr.monitor_id = ANY($2)
 			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= rb.raw_start
-			  AND cr.created_at < rb.end_exclusive
+			  AND cr.created_at >= $5
+			  AND cr.created_at < $4
 			  AND (
-				rb.last_created_at IS NULL
-				OR (cr.created_at, cr.id) > (
-					rb.last_created_at,
-					rb.last_check_result_id
-				)
+				$6::timestamptz IS NULL
+				OR (cr.created_at, cr.id) > ($6::timestamptz, $7::uuid)
 			  )
 			GROUP BY 1
 		)
@@ -1645,14 +1633,13 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 			b.bucket_hour,
 			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
 			COALESCE(rh.success_checks, 0) + COALESCE(rwh.success_checks, 0) AS success_checks
-		FROM bounds bounds
-		CROSS JOIN generate_series(bounds.start_hour, bounds.end_exclusive - INTERVAL '1 hour', INTERVAL '1 hour') AS b(bucket_hour)
+		FROM generate_series($3::timestamptz, $4::timestamptz - INTERVAL '1 hour', INTERVAL '1 hour') AS b(bucket_hour)
 		LEFT JOIN rollup_per_hour rh ON rh.bucket_hour = b.bucket_hour
 		LEFT JOIN raw_per_hour rwh ON rwh.bucket_hour = b.bucket_hour
 		ORDER BY b.bucket_hour
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs))
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs), startHour, endExclusive, rawStart, cursor.LastCreatedAt, cursor.LastCheckResultID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hourly uptime: %w", err)
 	}

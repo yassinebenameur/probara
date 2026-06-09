@@ -45,11 +45,16 @@ func TestService_GetGlobalHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *tes
 			AddRow(monitorA, "http").
 			AddRow(monitorB, "http"))
 
+	// The rollup cursor is read in its own cheap query so the main query's raw
+	// scan bounds arrive as plain parameters (index-friendly), not a CTE join.
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+
 	rows := sqlmock.NewRows([]string{"bucket_hour", "total_checks", "success_checks"}).
 		AddRow(time.Date(2026, 6, 2, 8, 0, 0, 0, time.UTC), int64(12), int64(10))
 
-	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_bounds").
-		WithArgs(tenantID, sqlmock.AnyArg()).
+	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_per_hour").
+		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
@@ -134,8 +139,12 @@ func TestService_BatchHourlyUptime_UsesHourlyRollupsAndBoundedRawScan(t *testing
 	monitorA := uuid.New()
 	bucket := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 
-	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_bounds").
-		WithArgs(tenantID, sqlmock.AnyArg()).
+	// Cursor read first; main query receives the bounds as parameters.
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+
+	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_stats").
+		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"monitor_id", "bucket_hour", "total_checks", "success_checks",
 		}).AddRow(monitorA, bucket, int64(12), int64(10)))
@@ -173,8 +182,12 @@ func TestService_BatchUptimeSummary_UsesHourlyRollupsAndBoundedRawScan(t *testin
 	tenantID := uuid.New()
 	monitorA := uuid.New()
 
-	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_bounds").
-		WithArgs(tenantID, sqlmock.AnyArg()).
+	// Cursor read first; main query receives the bounds as parameters.
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+
+	mock.ExpectQuery("(?s)monitor_hourly_rollups.*raw_24h").
+		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"monitor_id", "total_24h", "success_24h", "total_1h", "success_1h", "avg_latency_1h", "avg_latency_24h",
 		}).AddRow(monitorA, int64(12), int64(10), int64(3), int64(3), 90.0, 100.0))

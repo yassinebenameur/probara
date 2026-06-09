@@ -244,9 +244,12 @@ func TestService_LoadGroups_24hUsesExactRollingHelper(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "tags"}).
 			AddRow(monitorID, "api", "{api}"))
 
-	// Step 2: loadExactRolling24hSummary queries the CTE (monitor_hourly_rollups, check_results, rollup_job_state).
+	// Step 2: loadExactRolling24hSummary reads the rollup cursor first (cheap
+	// one-row lookup), then runs the stitched query with parameter bounds.
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
 	mock.ExpectQuery("monitor_hourly_rollups").
-		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), pq.Array([]uuid.UUID{monitorID})).
+		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), pq.Array([]uuid.UUID{monitorID}), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"monitor_id", "total_checks", "success_checks",
 			"failure_checks_raw", "error_checks_raw", "bad_checks_rollup",
@@ -289,8 +292,16 @@ func TestLoadHourlyBucketSeries24h_BoundsRawScanAtRollupCursor(t *testing.T) {
 		rows.AddRow(startHour.Add(time.Duration(i)*time.Hour), int64(0), int64(0), 0.0, int64(0))
 	}
 
-	mock.ExpectQuery("raw_bounds").
-		WithArgs(tenantID, startHour, startHour.Add(24*time.Hour), pq.Array([]uuid.UUID{monitorID})).
+	// The cursor is read first; the raw scan in the main query must then start
+	// at the cursor (not startHour) via a plain parameter the planner can use.
+	cursorAt := now.Add(-30 * time.Minute)
+	cursorID := uuid.New()
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}).
+			AddRow(cursorAt, cursorID))
+
+	mock.ExpectQuery("raw_per_hour").
+		WithArgs(tenantID, startHour, startHour.Add(24*time.Hour), pq.Array([]uuid.UUID{monitorID}), cursorAt, cursorAt, cursorID).
 		WillReturnRows(rows)
 
 	series, err := loadHourlyBucketSeries24h(context.Background(), &shareddb.Client{DB: sqlDB}, tenantID, []uuid.UUID{monitorID}, now)

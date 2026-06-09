@@ -96,6 +96,67 @@ func TestLoadExactRolling24hSummary_SplitsLeadingEdgeRollupAndRawTail(t *testing
 	}
 }
 
+func TestLoadExactRolling24hSummary_NullCursorServesEntireWindowFromRaw(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "rolling-null-cursor")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "null-cursor-mon")
+
+	now := time.Date(2026, time.March, 6, 12, 30, 0, 0, time.UTC)
+
+	// No rollup_job_state row exists: rollup_end collapses to leading_edge_end,
+	// so the rollup region is empty and the two raw ranges meet at
+	// leading_edge_end (yesterday 13:00) to cover the whole window.
+	// An hourly rollup inside the would-be rollup region must be IGNORED.
+	rollupBucket := time.Date(2026, time.March, 6, 3, 0, 0, 0, time.UTC)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, rollupBucket, 10, 9, 900, 9, "success", rollupBucket.Add(59*time.Minute))
+
+	// Raw rows spread across the window: leading partial hour, middle, trailing partial hour.
+	leading := time.Date(2026, time.March, 5, 12, 45, 0, 0, time.UTC)
+	middle := time.Date(2026, time.March, 6, 3, 15, 0, 0, time.UTC)
+	trailing := time.Date(2026, time.March, 6, 12, 10, 0, 0, time.UTC)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, leading, "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, middle, "success", "monitor", testutil.IntPtr(80))
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, trailing, "success", "monitor", testutil.IntPtr(120))
+
+	// Out-of-window rows must be excluded.
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-25*time.Hour), "success", "monitor", testutil.IntPtr(50))
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, now.Add(15*time.Minute), "success", "monitor", testutil.IntPtr(60))
+
+	totals, err := loadExactRolling24hSummary(ctx, dbClient, tenantID, []uuid.UUID{monitorID}, now)
+	if err != nil {
+		t.Fatalf("loadExactRolling24hSummary() error = %v", err)
+	}
+	got, ok := totals[monitorID]
+	if !ok {
+		t.Fatalf("monitor totals missing")
+	}
+
+	// Raw-only: 3 total, 2 success, 1 failure, latency 80+120 over 2 samples.
+	if got.TotalChecks != 3 {
+		t.Fatalf("TotalChecks = %d, want 3", got.TotalChecks)
+	}
+	if got.SuccessChecks != 2 {
+		t.Fatalf("SuccessChecks = %d, want 2", got.SuccessChecks)
+	}
+	if got.FailureChecks != 1 {
+		t.Fatalf("FailureChecks = %d, want 1", got.FailureChecks)
+	}
+	if math.Abs(got.LatencySumMS-200) > 0.01 {
+		t.Fatalf("LatencySumMS = %f, want 200", got.LatencySumMS)
+	}
+	if got.LatencyCount != 2 {
+		t.Fatalf("LatencyCount = %d, want 2", got.LatencyCount)
+	}
+	if got.LatestCheckAt == nil || !got.LatestCheckAt.Equal(trailing) {
+		t.Fatalf("LatestCheckAt = %v, want %v", got.LatestCheckAt, trailing)
+	}
+}
+
 func TestLoadHourlyBucketSeries24h_RollupPlusCurrentHourRawSplice(t *testing.T) {
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
