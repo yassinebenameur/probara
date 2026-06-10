@@ -224,6 +224,23 @@ body::before {
   animation: pulse-soft 2s ease-in-out infinite;
 }
 
+/* Staggered section entrance (delay set inline via animation-delay) */
+.dash-enter {
+  animation: slide-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  .dash-enter,
+  .animate-fade-in,
+  .animate-slide-up,
+  .animate-pulse-soft,
+  .animate-gauge-fill,
+  .animate-gauge-glow-pulse {
+    animation: none;
+  }
+}
+
 /* Chart backgrounds */
 .metric-card-gradient {
   background:

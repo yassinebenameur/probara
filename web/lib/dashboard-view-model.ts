@@ -39,6 +39,7 @@ type OperationalSummaryInput = {
   recentFailuresCount: number;
   overallUptime: number;
   avgResponseMs: number;
+  rangeLabel?: string;
 };
 
 export function formatPercent(value: number): string {
@@ -91,9 +92,9 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
     primaryActionHref: '/monitors',
     metrics: [
       {
-        label: '30-day uptime',
+        label: 'Uptime',
         value: formatPercent(input.overallUptime),
-        detail: 'Selected range',
+        detail: input.rangeLabel ?? 'Selected range',
         tone: input.overallUptime >= 99 ? 'clean' : input.overallUptime >= 95 ? 'attention' : 'critical',
       },
       {
