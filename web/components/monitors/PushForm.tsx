@@ -323,6 +323,7 @@ export default function PushForm({
       </FormSection>
 
       <FormActions
+        middle={`Expect a push every ${formData.expected_interval_seconds}s · down if none arrives within ${formData.expected_interval_seconds + formData.grace_period_seconds}s`}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create push monitor',

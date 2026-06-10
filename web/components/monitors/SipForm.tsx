@@ -244,6 +244,11 @@ export default function SipForm({
       </div>
 
       <FormActions
+        middle={
+          formData.host.trim()
+            ? `Every ${formData.interval_seconds}s · SIP OPTIONS ${formData.host.trim()}:${formData.port} (${formData.transport.toUpperCase()}) · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`
+            : undefined
+        }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create SIP monitor',
