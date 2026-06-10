@@ -2,12 +2,16 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -281,6 +285,241 @@ func TestRollupMaintenance_RollupsSurviveRawPruning(t *testing.T) {
 	}
 	if rollupCount != 1 {
 		t.Fatalf("rollupCount = %d, want 1", rollupCount)
+	}
+}
+
+func TestRollupMaintenance_PoisonedRowIsSkippedAndCursorAdvances(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	s := newTestScheduler(dbClient)
+	tenantID := insertTenant(ctx, t, dbClient)
+	monitorID := insertMonitor(ctx, t, dbClient, tenantID, "rollup-poison")
+
+	base := time.Date(2026, time.January, 4, 8, 0, 0, 0, time.UTC)
+	times := []time.Time{base, base.Add(time.Minute), base.Add(2 * time.Minute), base.Add(3 * time.Minute)}
+	for _, ts := range times {
+		insertCheckResult(ctx, t, dbClient, tenantID, monitorID, ts, string(sharedmodels.ResultStatusSuccess), string(sharedmodels.ResultSourceMonitor), 60)
+	}
+
+	// Poison the second row via the test seam: every attempt (batch and
+	// row-by-row replay) fails with a non-transient error. check_results has
+	// FK monitor_id REFERENCES monitors(id) ON DELETE CASCADE, so a "natural"
+	// poison (rollup FK violation for a deleted monitor) cannot be fabricated
+	// with valid rows.
+	var poisonedID uuid.UUID
+	if err := dbClient.QueryRowContext(ctx, `SELECT id FROM check_results WHERE created_at = $1`, times[1]).Scan(&poisonedID); err != nil {
+		t.Fatalf("load poisoned row id: %v", err)
+	}
+	s.applyRow = func(ctx context.Context, tx *sql.Tx, row rollupCheckResult) error {
+		if row.ID == poisonedID {
+			return errors.New("synthetic permanent row failure")
+		}
+		return applyRollupRow(ctx, tx, row)
+	}
+	// Materialize the counter so its value is readable even at 0.
+	s.rollupRowsSkipped.With(prometheus.Labels{})
+
+	processed, cursorUnix, err := s.runRollupMaintenance()
+	if err != nil {
+		t.Fatalf("runRollupMaintenance() error = %v", err)
+	}
+	if processed != 3 {
+		t.Fatalf("processed = %d, want 3 (poisoned row excluded)", processed)
+	}
+	if want := times[len(times)-1].Unix(); cursorUnix != want {
+		t.Fatalf("cursorUnix = %d, want %d (cursor past the poisoned row)", cursorUnix, want)
+	}
+	if got := promtestutil.ToFloat64(s.rollupRowsSkipped); got != 1 {
+		t.Fatalf("rollup_rows_skipped_total = %v, want 1", got)
+	}
+
+	// The cursor persisted in rollup_job_state must point at the LAST row.
+	var lastCreatedAt time.Time
+	var lastID uuid.UUID
+	if err := dbClient.QueryRowContext(ctx, `SELECT last_created_at, last_check_result_id FROM rollup_job_state WHERE job_name = $1`, rollupJobName).Scan(&lastCreatedAt, &lastID); err != nil {
+		t.Fatalf("load rollup state: %v", err)
+	}
+	if !lastCreatedAt.Equal(times[len(times)-1]) {
+		t.Fatalf("persisted cursor time = %v, want %v", lastCreatedAt, times[len(times)-1])
+	}
+
+	// The other three rows in the batch were still applied.
+	var totalChecks, successChecks int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT total_checks, success_checks
+		FROM monitor_hourly_rollups
+		WHERE tenant_id = $1 AND monitor_id = $2 AND bucket_hour = $3
+	`, tenantID, monitorID, base.Truncate(time.Hour)).Scan(&totalChecks, &successChecks); err != nil {
+		t.Fatalf("query hourly rollup row: %v", err)
+	}
+	if totalChecks != 3 || successChecks != 3 {
+		t.Fatalf("hourly totals = %d/%d, want 3/3", successChecks, totalChecks)
+	}
+
+	// The poisoned raw row is untouched and recoverable via backfill.
+	var rawCount int
+	if err := dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM check_results WHERE id = $1`, poisonedID).Scan(&rawCount); err != nil {
+		t.Fatalf("count poisoned raw row: %v", err)
+	}
+	if rawCount != 1 {
+		t.Fatalf("poisoned raw row count = %d, want 1", rawCount)
+	}
+}
+
+func TestRollupMaintenance_TransientBatchErrorAbortsRun(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	s := newTestScheduler(dbClient)
+	tenantID := insertTenant(ctx, t, dbClient)
+	monitorID := insertMonitor(ctx, t, dbClient, tenantID, "rollup-transient")
+
+	base := time.Date(2026, time.January, 4, 9, 0, 0, 0, time.UTC)
+	insertCheckResult(ctx, t, dbClient, tenantID, monitorID, base, string(sharedmodels.ResultStatusSuccess), string(sharedmodels.ResultSourceMonitor), 60)
+	insertCheckResult(ctx, t, dbClient, tenantID, monitorID, base.Add(time.Minute), string(sharedmodels.ResultStatusSuccess), string(sharedmodels.ResultSourceMonitor), 60)
+
+	s.applyRow = func(ctx context.Context, tx *sql.Tx, row rollupCheckResult) error {
+		if row.CreatedAt.Equal(base.Add(time.Minute)) {
+			return fmt.Errorf("rollup apply: %w", context.DeadlineExceeded)
+		}
+		return applyRollupRow(ctx, tx, row)
+	}
+
+	if _, _, err := s.runRollupMaintenance(); err == nil {
+		t.Fatalf("runRollupMaintenance() error = nil, want transient abort")
+	}
+
+	// The cursor must NOT have advanced: the batch tx was rolled back and the
+	// transient error skipped the row-by-row replay entirely.
+	var stateRows int
+	if err := dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM rollup_job_state WHERE job_name = $1`, rollupJobName).Scan(&stateRows); err != nil {
+		t.Fatalf("count rollup state rows: %v", err)
+	}
+	if stateRows != 0 {
+		t.Fatalf("rollup_job_state rows = %d, want 0 (cursor untouched)", stateRows)
+	}
+	var rollupRows int
+	if err := dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM monitor_hourly_rollups WHERE monitor_id = $1`, monitorID).Scan(&rollupRows); err != nil {
+		t.Fatalf("count hourly rollups: %v", err)
+	}
+	if rollupRows != 0 {
+		t.Fatalf("hourly rollup rows = %d, want 0", rollupRows)
+	}
+}
+
+func TestRollupMaintenance_TransientErrorDuringReplayStopsAtLastSuccess(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	s := newTestScheduler(dbClient)
+	tenantID := insertTenant(ctx, t, dbClient)
+	monitorID := insertMonitor(ctx, t, dbClient, tenantID, "rollup-replay-transient")
+
+	base := time.Date(2026, time.January, 4, 10, 0, 0, 0, time.UTC)
+	times := []time.Time{base, base.Add(time.Minute), base.Add(2 * time.Minute)}
+	for _, ts := range times {
+		insertCheckResult(ctx, t, dbClient, tenantID, monitorID, ts, string(sharedmodels.ResultStatusSuccess), string(sharedmodels.ResultSourceMonitor), 60)
+	}
+
+	// Second row fails non-transiently on the batch attempt (forcing the
+	// row-by-row replay) and then transiently during the replay.
+	attempts := 0
+	s.applyRow = func(ctx context.Context, tx *sql.Tx, row rollupCheckResult) error {
+		if row.CreatedAt.Equal(times[1]) {
+			attempts++
+			if attempts == 1 {
+				return errors.New("synthetic batch failure")
+			}
+			return fmt.Errorf("rollup apply: %w", context.DeadlineExceeded)
+		}
+		return applyRollupRow(ctx, tx, row)
+	}
+
+	processed, cursorUnix, err := s.runRollupMaintenance()
+	if err == nil {
+		t.Fatalf("runRollupMaintenance() error = nil, want transient abort during replay")
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1 (only the first row replayed)", processed)
+	}
+	if cursorUnix != times[0].Unix() {
+		t.Fatalf("cursorUnix = %d, want %d (last committed row)", cursorUnix, times[0].Unix())
+	}
+
+	// Persisted cursor stops at the first row; rows after the transient
+	// failure were not applied and stay pending for the next run.
+	var lastCreatedAt time.Time
+	if err := dbClient.QueryRowContext(ctx, `SELECT last_created_at FROM rollup_job_state WHERE job_name = $1`, rollupJobName).Scan(&lastCreatedAt); err != nil {
+		t.Fatalf("load rollup state: %v", err)
+	}
+	if !lastCreatedAt.Equal(times[0]) {
+		t.Fatalf("persisted cursor time = %v, want %v", lastCreatedAt, times[0])
+	}
+	var totalChecks int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT total_checks FROM monitor_hourly_rollups
+		WHERE tenant_id = $1 AND monitor_id = $2 AND bucket_hour = $3
+	`, tenantID, monitorID, base.Truncate(time.Hour)).Scan(&totalChecks); err != nil {
+		t.Fatalf("query hourly rollup row: %v", err)
+	}
+	if totalChecks != 1 {
+		t.Fatalf("hourly total_checks = %d, want 1", totalChecks)
+	}
+}
+
+func TestRollupMaintenance_TracksErrorChecks(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := setupRollupTestDB(ctx, t)
+	defer cleanup()
+
+	s := newTestScheduler(dbClient)
+	tenantID := insertTenant(ctx, t, dbClient)
+	monitorID := insertMonitor(ctx, t, dbClient, tenantID, "rollup-error-checks")
+
+	base := time.Date(2026, time.January, 5, 14, 5, 0, 0, time.UTC)
+	insertCheckResult(ctx, t, dbClient, tenantID, monitorID, base, string(sharedmodels.ResultStatusSuccess), string(sharedmodels.ResultSourceMonitor), 70)
+	insertCheckResult(ctx, t, dbClient, tenantID, monitorID, base.Add(time.Minute), string(sharedmodels.ResultStatusFailure), string(sharedmodels.ResultSourceMonitor), 0)
+	insertCheckResult(ctx, t, dbClient, tenantID, monitorID, base.Add(2*time.Minute), string(sharedmodels.ResultStatusError), string(sharedmodels.ResultSourceMonitor), 0)
+	insertCheckResult(ctx, t, dbClient, tenantID, monitorID, base.Add(3*time.Minute), string(sharedmodels.ResultStatusError), string(sharedmodels.ResultSourceMonitor), 0)
+
+	if _, _, err := s.runRollupMaintenance(); err != nil {
+		t.Fatalf("runRollupMaintenance() error = %v", err)
+	}
+
+	var hourlyTotal, hourlySuccess, hourlyErrors int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT total_checks, success_checks, error_checks
+		FROM monitor_hourly_rollups
+		WHERE tenant_id = $1 AND monitor_id = $2 AND bucket_hour = $3
+	`, tenantID, monitorID, base.Truncate(time.Hour)).Scan(&hourlyTotal, &hourlySuccess, &hourlyErrors); err != nil {
+		t.Fatalf("query hourly rollup row: %v", err)
+	}
+	if hourlyTotal != 4 || hourlySuccess != 1 || hourlyErrors != 2 {
+		t.Fatalf("hourly total/success/error = %d/%d/%d, want 4/1/2", hourlyTotal, hourlySuccess, hourlyErrors)
+	}
+
+	var dailyTotal, dailySuccess, dailyErrors int
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT total_checks, success_checks, error_checks
+		FROM monitor_daily_rollups
+		WHERE tenant_id = $1 AND monitor_id = $2 AND bucket_day = $3::date
+	`, tenantID, monitorID, base).Scan(&dailyTotal, &dailySuccess, &dailyErrors); err != nil {
+		t.Fatalf("query daily rollup row: %v", err)
+	}
+	if dailyTotal != 4 || dailySuccess != 1 || dailyErrors != 2 {
+		t.Fatalf("daily total/success/error = %d/%d/%d, want 4/1/2", dailyTotal, dailySuccess, dailyErrors)
 	}
 }
 

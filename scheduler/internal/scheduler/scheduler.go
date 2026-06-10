@@ -81,8 +81,14 @@ type Scheduler struct {
 	rollupRuns        *prometheus.CounterVec
 	rollupRows        *prometheus.CounterVec
 	rollupErrors      *prometheus.CounterVec
+	rollupRowsSkipped *prometheus.CounterVec
 	rollupDuration    *prometheus.HistogramVec
 	rollupCursor      *prometheus.GaugeVec
+
+	// applyRow applies one check result to the rollup tables inside the given
+	// transaction. It defaults to applyRollupRow and exists as a seam so tests
+	// can inject per-row failures.
+	applyRow func(ctx context.Context, tx *sql.Tx, row rollupCheckResult) error
 
 	purger *purger
 }
@@ -160,6 +166,11 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Total number of rollup maintenance failures",
 		[]string{},
 	)
+	s.rollupRowsSkipped = metricsRegistry.NewCounter(
+		"rollup_rows_skipped_total",
+		"Total number of poisoned check result rows skipped by rollup maintenance",
+		[]string{},
+	)
 	s.rollupDuration = metricsRegistry.NewHistogram(
 		"rollup_duration_seconds",
 		"Duration of rollup maintenance runs",
@@ -171,6 +182,7 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Unix timestamp of the latest processed check result cursor",
 		[]string{},
 	)
+	s.applyRow = applyRollupRow
 
 	purgerMetrics := &purgerMetrics{
 		runs: metricsRegistry.NewCounter(

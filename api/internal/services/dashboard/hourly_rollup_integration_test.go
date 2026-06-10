@@ -33,6 +33,16 @@ func TestLoadExactRolling24hSummary_SplitsLeadingEdgeRollupAndRawTail(t *testing
 		testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 9, 900, 9, "success", bucket.Add(59*time.Minute))
 	}
 
+	// --- Mark 5 of the 23 rollup buckets as carrying their 1 bad check as an
+	//     ERROR (error_checks = 1): those must surface in ErrorChecks while the
+	//     other 18 rollup-era bad checks stay in FailureChecks.
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE monitor_hourly_rollups SET error_checks = 1
+		WHERE tenant_id = $1 AND monitor_id = $2 AND bucket_hour < $3
+	`, tenantID, monitorID, time.Date(2026, time.March, 5, 18, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("set rollup error_checks: %v", err)
+	}
+
 	// --- Leading-edge raw: yesterday 12:35 (inside window, before leading_edge_end 13:00).
 	leadingTime := time.Date(2026, time.March, 5, 12, 35, 0, 0, time.UTC)
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, leadingTime, "failure", "monitor", nil)
@@ -80,6 +90,16 @@ func TestLoadExactRolling24hSummary_SplitsLeadingEdgeRollupAndRawTail(t *testing
 	}
 	if got.SuccessChecks != 208 {
 		t.Fatalf("SuccessChecks = %d, want 208", got.SuccessChecks)
+	}
+	// Bad checks: 23 rollup-era (10-9 per bucket) of which 5 are errors
+	// (error_checks=1 on 5 buckets), plus 1 leading raw failure and 1 trailing
+	// raw failure. ErrorChecks must surface the 5 rollup errors; FailureChecks
+	// must exclude them: 18 rollup + 2 raw = 20.
+	if got.FailureChecks != 20 {
+		t.Fatalf("FailureChecks = %d, want 20 (rollup errors excluded)", got.FailureChecks)
+	}
+	if got.ErrorChecks != 5 {
+		t.Fatalf("ErrorChecks = %d, want 5 (from rollup error_checks)", got.ErrorChecks)
 	}
 	if math.Abs(got.LatencySumMS-20820) > 0.01 {
 		t.Fatalf("LatencySumMS = %f, want 20820", got.LatencySumMS)

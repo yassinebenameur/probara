@@ -18,9 +18,12 @@ import (
 // window AND fully covered by the rollup cursor) with check_results for the
 // partial leading hour, the partial trailing hour, and anything after the cursor.
 //
-// FailureChecks includes rollup-era bad checks (total − success) because
-// monitor_hourly_rollups has no failure/error breakdown. ErrorChecks is therefore
-// an undercount for the rollup region and reflects only raw-edge errors.
+// Rollup rows carry an error_checks breakdown (migration 000047), so
+// ErrorChecks counts rollup-era errors plus raw-edge errors, and
+// FailureChecks counts the remaining rollup-era bad checks
+// (total − success − error) plus raw-edge failures. Rollup rows written
+// before the error_checks backfill have error_checks = 0, in which case all
+// their bad checks fall back to FailureChecks (the pre-000047 behavior).
 type MonitorRolling24hTotals struct {
 	TotalChecks   int
 	SuccessChecks int
@@ -76,6 +79,7 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 				mhr.monitor_id,
 				SUM(mhr.total_checks)::bigint AS total_checks,
 				SUM(mhr.success_checks)::bigint AS success_checks,
+				SUM(mhr.error_checks)::bigint AS error_checks,
 				SUM(mhr.latency_success_sum_ms) AS latency_sum_ms,
 				SUM(mhr.latency_success_count)::bigint AS latency_count
 			FROM monitor_hourly_rollups mhr
@@ -155,6 +159,7 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			COALESCE(rc.failure_checks, 0) AS failure_checks_raw,
 			COALESCE(rc.error_checks, 0) AS error_checks_raw,
 			(COALESCE(rt.total_checks, 0) - COALESCE(rt.success_checks, 0)) AS bad_checks_rollup,
+			COALESCE(rt.error_checks, 0) AS error_checks_rollup,
 			COALESCE(rt.latency_sum_ms, 0) + COALESCE(rc.latency_sum_ms, 0) AS latency_sum_ms,
 			COALESCE(rt.latency_count, 0) + COALESCE(rc.latency_count, 0) AS latency_count,
 			CASE
@@ -181,16 +186,17 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 	out := make(map[uuid.UUID]MonitorRolling24hTotals, len(monitorIDs))
 	for rows.Next() {
 		var (
-			monitorID       uuid.UUID
-			totalChecks     int64
-			successChecks   int64
-			failureCountRaw int64
-			errorCountRaw   int64
-			badChecksRollup int64
-			latencySumMS    float64
-			latencyCount    int64
-			latestStatus    sql.NullString
-			latestCheckAt   sql.NullTime
+			monitorID         uuid.UUID
+			totalChecks       int64
+			successChecks     int64
+			failureCountRaw   int64
+			errorCountRaw     int64
+			badChecksRollup   int64
+			errorChecksRollup int64
+			latencySumMS      float64
+			latencyCount      int64
+			latestStatus      sql.NullString
+			latestCheckAt     sql.NullTime
 		)
 		if err := rows.Scan(
 			&monitorID,
@@ -199,6 +205,7 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			&failureCountRaw,
 			&errorCountRaw,
 			&badChecksRollup,
+			&errorChecksRollup,
 			&latencySumMS,
 			&latencyCount,
 			&latestStatus,
@@ -207,14 +214,16 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			return nil, fmt.Errorf("failed to scan rolling 24h summary row: %w", err)
 		}
 
-		// Rollup region does not break out failure vs error, so we attribute the
-		// rollup-era bad checks to FailureChecks. The raw-edge counts still
-		// preserve the breakdown for the partial leading/trailing/past-cursor portion.
+		// Rollup rows break out error_checks (migration 000047): attribute
+		// those to ErrorChecks and the remaining rollup-era bad checks
+		// (total − success − error) to FailureChecks. Rows written before the
+		// error_checks backfill have error_checks = 0, so their bad checks
+		// all land in FailureChecks exactly as before.
 		row := MonitorRolling24hTotals{
 			TotalChecks:   int(totalChecks),
 			SuccessChecks: int(successChecks),
-			FailureChecks: int(failureCountRaw) + int(badChecksRollup),
-			ErrorChecks:   int(errorCountRaw),
+			FailureChecks: int(failureCountRaw) + int(badChecksRollup) - int(errorChecksRollup),
+			ErrorChecks:   int(errorCountRaw) + int(errorChecksRollup),
 			LatencySumMS:  latencySumMS,
 			LatencyCount:  int(latencyCount),
 		}

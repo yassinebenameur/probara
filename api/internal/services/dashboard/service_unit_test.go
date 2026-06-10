@@ -252,9 +252,9 @@ func TestService_LoadGroups_24hUsesExactRollingHelper(t *testing.T) {
 		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), pq.Array([]uuid.UUID{monitorID}), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"monitor_id", "total_checks", "success_checks",
-			"failure_checks_raw", "error_checks_raw", "bad_checks_rollup",
+			"failure_checks_raw", "error_checks_raw", "bad_checks_rollup", "error_checks_rollup",
 			"latency_sum_ms", "latency_count", "latest_status", "latest_check_at",
-		}).AddRow(monitorID, 40, 39, 0, 0, 1, 3900.0, 39, latestStatus, time.Now().UTC()))
+		}).AddRow(monitorID, 40, 39, 0, 0, 1, 0, 3900.0, 39, latestStatus, time.Now().UTC()))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
 
