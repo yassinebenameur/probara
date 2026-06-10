@@ -18,7 +18,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <AlertStreamProvider>
         <div className="flex min-h-screen">
           <Sidebar />
-          <main className="min-w-0 flex-1 overflow-auto">
+          {/* overflow-x-clip contains wide content without creating a scroll container,
+    which would break position:sticky descendants (the window is the scroller) */}
+          <main className="min-w-0 flex-1 overflow-x-clip">
             <div className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
               {children}
             </div>

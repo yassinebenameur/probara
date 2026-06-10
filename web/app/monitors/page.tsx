@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, Layers } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
@@ -140,6 +141,25 @@ function StatusDot({ status }: { status: MonitorDisplayStatus }) {
   return <span className={`h-2 w-2 rounded-full ${colors[status]}`} />;
 }
 
+// Display names for monitor types. Types missing here (new features) still
+// render via the fallback — they show up in the filter automatically.
+const TYPE_LABELS: Record<string, { label: string; short: string }> = {
+  http: { label: 'HTTP', short: 'HTTP' },
+  ping: { label: 'Ping', short: 'PING' },
+  dns: { label: 'DNS', short: 'DNS' },
+  grpc: { label: 'gRPC', short: 'GRPC' },
+  agent: { label: 'Agent', short: 'AGENT' },
+  group: { label: 'Group', short: 'GROUP' },
+  push: { label: 'Push', short: 'PUSH' },
+  sip: { label: 'SIP', short: 'SIP' },
+  synthetic_api: { label: 'Synthetic API', short: 'SYN API' },
+  synthetic_browser: { label: 'Synthetic Browser', short: 'SYN BROWSER' },
+};
+
+function monitorTypeLabel(type: string, variant: 'label' | 'short' = 'label') {
+  return TYPE_LABELS[type]?.[variant] ?? type.replace(/_/g, ' ');
+}
+
 // Type badge component
 function TypeBadge({ type }: { type: string }) {
   const colors: Record<string, string> = {
@@ -156,7 +176,7 @@ function TypeBadge({ type }: { type: string }) {
   };
   return (
     <span className={`text-[10px] font-medium uppercase ${colors[type] || 'text-slate-400'}`}>
-      {type}
+      {monitorTypeLabel(type, 'short')}
     </span>
   );
 }
@@ -413,7 +433,7 @@ function MonitorRow({
       {/* Name & Type */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-white truncate">{monitor.name}</span>
+          <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
           <TypeBadge type={monitor.type} />
           {/* Tags */}
           {monitor.tags && monitor.tags.length > 0 && (
@@ -459,7 +479,7 @@ function MonitorRow({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-1 opacity-100 transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
         <MonitorActionsMenu
           monitor={monitor}
           monitorId={monitor.id}
@@ -563,7 +583,7 @@ function GroupCard({
         {/* Name */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-white">{monitor.name}</span>
+            <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
             <span className="text-[10px] font-medium uppercase text-indigo-400">GROUP</span>
             {/* Tags */}
             {monitor.tags && monitor.tags.length > 0 && (
@@ -608,7 +628,7 @@ function GroupCard({
         <StatusDot status={status} />
 
         {/* Actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 opacity-100 transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
           <MonitorActionsMenu
             monitor={monitor}
             monitorId={monitor.id}
@@ -1016,7 +1036,8 @@ export default function MonitorsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
+  const [showTypeFilter, setShowTypeFilter] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
@@ -1030,6 +1051,21 @@ export default function MonitorsPage() {
   const [targetGroupId, setTargetGroupId] = useState('');
   const [exporting, setExporting] = useState(false);
   const [showBulkAlerting, setShowBulkAlerting] = useState(false);
+  const router = useRouter();
+
+  // Below lg the detail panel is not rendered, so selecting a row would do
+  // nothing visible — open the monitor's page instead.
+  const selectMonitor = (id: string) => {
+    if (selectionMode) {
+      setSelectedMonitorId(id);
+      return;
+    }
+    if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 1024px)').matches) {
+      router.push(`/monitors/${id}`);
+      return;
+    }
+    setSelectedMonitorId(id);
+  };
 
   useEffect(() => {
     loadMonitors();
@@ -1274,6 +1310,28 @@ export default function MonitorsPage() {
     return Array.from(tagSet).sort();
   }, [monitors]);
 
+  // Types present in the workspace, with counts, most common first.
+  // Derived from data so new monitor types appear here with no UI changes.
+  const typeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    monitors.forEach((monitor) => {
+      counts.set(monitor.type, (counts.get(monitor.type) || 0) + 1);
+    });
+    return Array.from(counts.entries()).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+    );
+  }, [monitors]);
+
+  const toggleType = (type: string) => {
+    const newSelected = new Set(selectedTypes);
+    if (newSelected.has(type)) {
+      newSelected.delete(type);
+    } else {
+      newSelected.add(type);
+    }
+    setSelectedTypes(newSelected);
+  };
+
   // Toggle tag selection
   const toggleTag = (tag: string) => {
     const newSelected = new Set(selectedTags);
@@ -1305,7 +1363,7 @@ export default function MonitorsPage() {
     if (groupMemberIds.has(monitor.id)) return false;
     
     const matchesSearch = monitor.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesType = typeFilter === 'all' || monitor.type === typeFilter;
+    const matchesType = selectedTypes.size === 0 || selectedTypes.has(monitor.type);
     const status = getEffectiveMonitorStatus(monitor, checkResultsMap[monitor.id] || []);
     const matchesStatus = statusFilter === 'all' || 
       (statusFilter === 'up' && status === 'up') ||
@@ -1538,23 +1596,22 @@ export default function MonitorsPage() {
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            {['all', 'http', 'ping', 'dns', 'grpc', 'agent', 'group', 'push', 'sip', 'synthetic_api', 'synthetic_browser'].map((type) => (
-              <FilterChip
-                key={type}
-                selected={typeFilter === type}
-                onClick={() => setTypeFilter(type)}
-              >
-                {type === 'all'
-                  ? 'All'
-                  : type === 'synthetic_api'
-                    ? 'SYN API'
-                    : type === 'synthetic_browser'
-                      ? 'SYN BROWSER'
-                      : type.toUpperCase()}
-              </FilterChip>
-            ))}
-          </div>
+          {/* Type Filter Toggle */}
+          <FilterChip
+            selected={selectedTypes.size > 0}
+            count={selectedTypes.size > 0 ? selectedTypes.size : undefined}
+            icon={<Layers strokeWidth={1.75} />}
+            onClick={() => setShowTypeFilter(!showTypeFilter)}
+            aria-expanded={showTypeFilter}
+          >
+            <span className="inline-flex items-center gap-1">
+              Type
+              <ChevronDown
+                className={`h-3 w-3 transition-transform ${showTypeFilter ? 'rotate-180' : ''}`}
+                strokeWidth={1.75}
+              />
+            </span>
+          </FilterChip>
 
           <div className="flex flex-wrap items-center gap-1.5">
             {['all', 'up', 'down', 'paused'].map((status) => (
@@ -1587,6 +1644,37 @@ export default function MonitorsPage() {
             </FilterChip>
           )}
         </div>
+
+        {/* Type Filter Dropdown */}
+        {showTypeFilter && typeCounts.length > 0 && (
+          <div className="rounded-xl border border-white/[0.06] bg-slate-900/60 p-3 backdrop-blur-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                Filter by type
+              </span>
+              {selectedTypes.size > 0 && (
+                <button
+                  onClick={() => setSelectedTypes(new Set())}
+                  className="text-[10px] text-slate-400 hover:text-white transition-colors"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {typeCounts.map(([type, count]) => (
+                <FilterChip
+                  key={type}
+                  selected={selectedTypes.has(type)}
+                  count={count}
+                  onClick={() => toggleType(type)}
+                >
+                  {monitorTypeLabel(type)}
+                </FilterChip>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Tag Filter Dropdown */}
         {showTagFilter && allTags.length > 0 && (
@@ -1633,9 +1721,9 @@ export default function MonitorsPage() {
       ) : monitors.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
           {/* Monitor List */}
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             {/* Selection Mode Toggle & Actions Bar */}
             {filteredMonitors.length > 0 && (
               <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
@@ -1765,7 +1853,7 @@ export default function MonitorsPage() {
                     selectionMode={selectionMode}
                     onClick={() => setSelectedMonitorId(monitor.id)}
                     onDelete={() => handleDelete(monitor.id)}
-                    onSelectMonitor={(id) => setSelectedMonitorId(id)}
+                    onSelectMonitor={selectMonitor}
                     selectedMonitorId={selectedMonitorId}
                     selectedMonitorIds={selectedMonitorIds}
                   />
@@ -1778,7 +1866,7 @@ export default function MonitorsPage() {
                     isChecked={selectedMonitorIds.has(monitor.id)}
                     onToggleSelect={() => toggleMonitorSelection(monitor.id)}
                     selectionMode={selectionMode}
-                    onClick={() => setSelectedMonitorId(monitor.id)}
+                    onClick={() => selectMonitor(monitor.id)}
                     onDelete={() => handleDelete(monitor.id)}
                     onToggleEnabled={handleToggleEnabled}
                   />
@@ -1789,7 +1877,7 @@ export default function MonitorsPage() {
 
           {/* Detail Panel */}
           <div className="hidden lg:block">
-            <div className="sticky top-6">
+            <div className="dashboard-scroll sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto overscroll-contain rounded-xl">
               <DetailPanel
                 monitor={selectedMonitor}
                 results={selectedMonitor ? checkResultsMap[selectedMonitor.id] || [] : []}
