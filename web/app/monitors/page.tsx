@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, Layers } from 'lucide-react';
@@ -419,7 +419,7 @@ function MonitorRow({
           : isChecked
           ? 'border-cyan-500/20 bg-cyan-500/5'
           : 'border-transparent hover:border-white/[0.06] hover:bg-slate-800/30'
-      } ${isChild ? 'ml-4 bg-slate-800/20 rounded-lg' : ''}`}
+      } ${isChild ? 'bg-slate-800/20' : ''}`}
     >
       <SelectCheckbox
         checked={isChecked}
@@ -511,6 +511,9 @@ function GroupCard({
   selectedMonitorId,
   selectedMonitorIds,
   visitedGroupIds = new Set<string>(),
+  autoExpand = false,
+  memberMatcher,
+  groupHasMatch,
 }: {
   monitor: Monitor;
   results: CheckResult[];
@@ -530,8 +533,26 @@ function GroupCard({
   selectedMonitorId: string | null;
   selectedMonitorIds: Set<string>;
   visitedGroupIds?: Set<string>;
+  autoExpand?: boolean;
+  memberMatcher?: (monitor: Monitor) => boolean;
+  groupHasMatch?: (groupId: string) => boolean;
 }) {
   const [expanded, setExpanded] = useState(false); // Collapsed by default
+
+  // Expand automatically while a filter matches members inside this group,
+  // and collapse again when that filter is cleared (unless the user expanded it).
+  const wasAutoExpanded = useRef(false);
+  useEffect(() => {
+    if (autoExpand) {
+      setExpanded((prev) => {
+        if (!prev) wasAutoExpanded.current = true;
+        return true;
+      });
+    } else if (wasAutoExpanded.current) {
+      wasAutoExpanded.current = false;
+      setExpanded(false);
+    }
+  }, [autoExpand]);
   const status = getEffectiveMonitorStatus(monitor, results);
   const uptime = calculateUptime(results);
   const operationalCount = countOperationalResults(results);
@@ -544,6 +565,24 @@ function GroupCard({
     uptime: calculateUptime(memberResults[m.id] || [])
   }));
   const healthyCount = memberStats.filter(s => s.status === 'up').length;
+  const downCount = memberStats.filter(s => s.status === 'down' || s.status === 'degraded').length;
+  const healthTone = downCount > 0
+    ? 'text-rose-400'
+    : healthyCount === members.length && members.length > 0
+      ? 'text-emerald-400/90'
+      : 'text-slate-500';
+
+  // While filtering, only show the members that match (fall back to all if
+  // the group itself matched but none of its members did).
+  const matchingMembers = memberMatcher
+    ? members.filter(
+        (member) =>
+          memberMatcher(member) ||
+          (member.type === 'group' && groupHasMatch?.(member.id))
+      )
+    : members;
+  const visibleMembers = matchingMembers.length > 0 ? matchingMembers : members;
+  const hiddenMemberCount = members.length - visibleMembers.length;
 
   return (
     <div className={`rounded-xl border transition-all ${
@@ -598,7 +637,8 @@ function GroupCard({
             )}
           </div>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {healthyCount}/{members.length} healthy · {operationalCount > 0 ? `${uptime.toFixed(1)}%` : 'N/A'} uptime
+            <span className={healthTone}>{healthyCount}/{members.length} healthy</span>
+            {' · '}{operationalCount > 0 ? `${uptime.toFixed(1)}%` : 'N/A'} uptime
           </p>
         </div>
 
@@ -639,14 +679,20 @@ function GroupCard({
       </div>
 
       {/* Expanded Children */}
-      {expanded && members.length > 0 && (
-        <div className="border-t border-white/[0.04] px-3 py-3 space-y-2">
-          {members.map((member) => {
+      {expanded && visibleMembers.length > 0 && (
+        <div className="dashboard-scroll max-h-[60vh] overflow-y-auto overscroll-contain border-t border-white/[0.04] px-3 py-3">
+          {hiddenMemberCount > 0 && (
+            <p className="mb-2 ml-5 pl-2.5 text-[10px] text-slate-500">
+              Showing {visibleMembers.length} matching of {members.length} members
+            </p>
+          )}
+          <div className="ml-5 space-y-1.5 border-l border-white/[0.08] pl-2.5">
+          {visibleMembers.map((member) => {
             const memberKey = `${monitor.id}:${member.id}`;
             if (member.type === 'group') {
               const cycleDetected = nextVisitedGroupIDs.has(member.id);
               return (
-                <div key={memberKey} className="ml-4 space-y-1">
+                <div key={memberKey} className="space-y-1">
                   {cycleDetected ? (
                     <>
                       <MonitorRow
@@ -685,6 +731,9 @@ function GroupCard({
                       selectedMonitorId={selectedMonitorId}
                       selectedMonitorIds={selectedMonitorIds}
                       visitedGroupIds={nextVisitedGroupIDs}
+                      autoExpand={Boolean(memberMatcher) && groupHasMatch?.(member.id)}
+                      memberMatcher={memberMatcher}
+                      groupHasMatch={groupHasMatch}
                     />
                   )}
                 </div>
@@ -692,22 +741,22 @@ function GroupCard({
             }
 
             return (
-              <div key={memberKey} className="ml-4">
-                <MonitorRow
-                  monitor={member}
-                  results={memberResults[member.id] || []}
-                  isSelected={member.id === selectedMonitorId}
-                  onClick={() => onSelectMonitor(member.id)}
-                  onDelete={() => onDeleteMonitor(member.id)}
-                  onToggleEnabled={onToggleEnabled}
-                  isChecked={selectedMonitorIds.has(member.id)}
-                  onToggleSelect={() => onToggleMonitorSelection(member.id)}
-                  selectionMode={selectionMode}
-                  isChild
-                />
-              </div>
+              <MonitorRow
+                key={memberKey}
+                monitor={member}
+                results={memberResults[member.id] || []}
+                isSelected={member.id === selectedMonitorId}
+                onClick={() => onSelectMonitor(member.id)}
+                onDelete={() => onDeleteMonitor(member.id)}
+                onToggleEnabled={onToggleEnabled}
+                isChecked={selectedMonitorIds.has(member.id)}
+                onToggleSelect={() => onToggleMonitorSelection(member.id)}
+                selectionMode={selectionMode}
+                isChild
+              />
             );
           })}
+          </div>
         </div>
       )}
     </div>
@@ -715,12 +764,18 @@ function GroupCard({
 }
 
 // Detail Panel Component
-function DetailPanel({ 
-  monitor, 
-  results 
-}: { 
+function DetailPanel({
+  monitor,
+  results,
+  members = [],
+  memberResults = {},
+  onSelectMember,
+}: {
   monitor: Monitor | null;
   results: CheckResult[];
+  members?: Monitor[];
+  memberResults?: Record<string, CheckResult[]>;
+  onSelectMember?: (id: string) => void;
 }) {
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
@@ -817,6 +872,14 @@ function DetailPanel({
   const latestResult = results[0];
   const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
 
+  const memberStatuses = monitor.type === 'group'
+    ? members.map((m) => getEffectiveMonitorStatus(m, memberResults[m.id] || []))
+    : [];
+  const memberUp = memberStatuses.filter((s) => s === 'up').length;
+  const memberDown = memberStatuses.filter((s) => s === 'down' || s === 'degraded').length;
+  const memberPaused = memberStatuses.filter((s) => s === 'paused').length;
+  const memberOther = memberStatuses.length - memberUp - memberDown - memberPaused;
+
   const getUrl = () => {
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
     if (monitor.config && 'base_url' in monitor.config) return monitor.config.base_url || null;
@@ -854,6 +917,67 @@ function DetailPanel({
           <p className="text-[10px] text-slate-500">P95</p>
         </div>
       </div>
+
+      {/* Group Members */}
+      {monitor.type === 'group' && (
+        <div className="border-b border-white/[0.06] p-4">
+          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">
+            Members ({members.length})
+          </h4>
+          {members.length > 0 && (
+            <>
+              <div className="mb-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-800">
+                {memberUp > 0 && (
+                  <div className="bg-emerald-500" style={{ width: `${(memberUp / members.length) * 100}%` }} />
+                )}
+                {memberDown > 0 && (
+                  <div className="bg-rose-500" style={{ width: `${(memberDown / members.length) * 100}%` }} />
+                )}
+                {memberPaused > 0 && (
+                  <div className="bg-slate-500" style={{ width: `${(memberPaused / members.length) * 100}%` }} />
+                )}
+                {memberOther > 0 && (
+                  <div className="bg-slate-600" style={{ width: `${(memberOther / members.length) * 100}%` }} />
+                )}
+              </div>
+              <p className="mb-2 text-[10px] text-slate-500">
+                {[
+                  `${memberUp} up`,
+                  memberDown ? `${memberDown} down` : null,
+                  memberPaused ? `${memberPaused} paused` : null,
+                  memberOther ? `${memberOther} unknown` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            </>
+          )}
+          {members.length > 0 ? (
+            <div className="dashboard-scroll max-h-56 space-y-0.5 overflow-y-auto overscroll-contain">
+              {members.map((member) => {
+                const memberStatus = getEffectiveMonitorStatus(member, memberResults[member.id] || []);
+                const memberOperational = countOperationalResults(memberResults[member.id] || []);
+                const memberUptime = calculateUptime(memberResults[member.id] || []);
+                return (
+                  <button
+                    key={member.id}
+                    onClick={() => onSelectMember?.(member.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/[0.04]"
+                  >
+                    <StatusDot status={memberStatus} />
+                    <span className="min-w-0 flex-1 truncate text-xs text-slate-300">{member.name}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {memberOperational > 0 ? `${memberUptime.toFixed(1)}%` : '—'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">No members yet</p>
+          )}
+        </div>
+      )}
 
       {/* Agent Metrics Section */}
       {monitor.type === 'agent' && agentMetrics && (
@@ -1357,22 +1481,43 @@ export default function MonitorsPage() {
     return memberIds;
   }, [groupMembersMap]);
 
-  // Filter monitors (exclude monitors that are members of a group - they only show under their group)
-  const filteredMonitors = monitors.filter((monitor) => {
-    // Don't show monitors that belong to a group as standalone items
-    if (groupMemberIds.has(monitor.id)) return false;
-    
+  const monitorMatchesFilters = (monitor: Monitor) => {
     const matchesSearch = monitor.name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = selectedTypes.size === 0 || selectedTypes.has(monitor.type);
     const status = getEffectiveMonitorStatus(monitor, checkResultsMap[monitor.id] || []);
-    const matchesStatus = statusFilter === 'all' || 
+    const matchesStatus = statusFilter === 'all' ||
       (statusFilter === 'up' && status === 'up') ||
       (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
       (statusFilter === 'paused' && status === 'paused');
-    const matchesTags = selectedTags.size === 0 || 
-      (monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
+    const matchesTags = selectedTags.size === 0 ||
+      Boolean(monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
     return matchesSearch && matchesType && matchesStatus && matchesTags;
-  });
+  };
+
+  // A group also matches when any of its (nested) members match, so searching
+  // for a member surfaces the group it lives in.
+  const groupHasMatchingMember = (groupId: string, visited: Set<string> = new Set()): boolean => {
+    if (visited.has(groupId)) return false;
+    visited.add(groupId);
+    return (groupMembersMap[groupId] || []).some(
+      (member) =>
+        monitorMatchesFilters(member) ||
+        (member.type === 'group' && groupHasMatchingMember(member.id, visited))
+    );
+  };
+
+  const hasActiveFilters =
+    searchTerm.trim() !== '' || selectedTypes.size > 0 || statusFilter !== 'all' || selectedTags.size > 0;
+
+  // Filter monitors (exclude monitors that are members of a group - they only show under their group),
+  // then show groups ahead of ungrouped monitors.
+  const filteredMonitors = monitors
+    .filter((monitor) => {
+      if (groupMemberIds.has(monitor.id)) return false;
+      if (monitorMatchesFilters(monitor)) return true;
+      return monitor.type === 'group' && groupHasMatchingMember(monitor.id);
+    })
+    .sort((a, b) => Number(b.type === 'group') - Number(a.type === 'group'));
 
   const selectedMonitor = monitors.find((m) => m.id === selectedMonitorId) || null;
   const selectedMonitors = monitors.filter((m) => selectedMonitorIds.has(m.id));
@@ -1856,6 +2001,9 @@ export default function MonitorsPage() {
                     onSelectMonitor={selectMonitor}
                     selectedMonitorId={selectedMonitorId}
                     selectedMonitorIds={selectedMonitorIds}
+                    autoExpand={hasActiveFilters && groupHasMatchingMember(monitor.id)}
+                    memberMatcher={hasActiveFilters ? monitorMatchesFilters : undefined}
+                    groupHasMatch={(groupId) => groupHasMatchingMember(groupId)}
                   />
                 ) : (
                   <MonitorRow
@@ -1881,6 +2029,9 @@ export default function MonitorsPage() {
               <DetailPanel
                 monitor={selectedMonitor}
                 results={selectedMonitor ? checkResultsMap[selectedMonitor.id] || [] : []}
+                members={selectedMonitor ? groupMembersMap[selectedMonitor.id] || [] : []}
+                memberResults={checkResultsMap}
+                onSelectMember={setSelectedMonitorId}
               />
             </div>
           </div>
