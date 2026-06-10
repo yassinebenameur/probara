@@ -381,3 +381,63 @@ func assertStripContainsUptime(t *testing.T, renderedHTML string, pattern string
 		}
 	}
 }
+
+func benchmarkStatusPageData(monitorCount int) *StatusPageData {
+	monitors := make([]MonitorStatus, 0, monitorCount)
+	for i := 0; i < monitorCount; i++ {
+		monitors = append(monitors, MonitorStatus{
+			ID:          "monitor-" + strconv.Itoa(i),
+			Name:        "Service " + strconv.Itoa(i),
+			MonitorType: "http",
+			Status:      "up",
+			URL:         "https://example.com/health/" + strconv.Itoa(i),
+			Tags:        []string{"core"},
+			UptimeHistory24h: []HourlyUptime{
+				{Hour: "2026-03-01T00:00", Uptime: 100},
+				{Hour: "2026-03-01T01:00", Uptime: 99},
+			},
+			UptimeHistory7d: []DailyUptime{
+				{Date: "2026-02-23", Uptime: 98},
+				{Date: "2026-02-24", Uptime: 97},
+			},
+			UptimeHistory30d: []DailyUptime{
+				{Date: "2026-02-01", Uptime: 96},
+				{Date: "2026-02-02", Uptime: 94},
+			},
+			UptimeHistory90d: []DailyUptime{
+				{Date: "2026-01-01", Uptime: 92},
+				{Date: "2026-01-02", Uptime: 90},
+			},
+		})
+	}
+	return &StatusPageData{
+		ID:                "page-bench",
+		Slug:              "status",
+		Title:             "Benchmark Status",
+		DefaultTheme:      "dark",
+		AllowThemeToggle:  true,
+		ShowFooter:        true,
+		ShowGlobalUptime:  true,
+		ShowMonitorUptime: true,
+		Monitors:          monitors,
+		UptimeHistory1: []HourlyUptime{
+			{Hour: "2026-03-01T00:00", Uptime: 99},
+			{Hour: "2026-03-01T01:00", Uptime: 97},
+		},
+		UptimeHistory7: []DailyUptime{
+			{Date: "2026-02-23", Uptime: 98},
+			{Date: "2026-02-24", Uptime: 96},
+		},
+	}
+}
+
+func BenchmarkRenderPublicStatusPage(b *testing.B) {
+	data := benchmarkStatusPageData(180)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := renderPublicStatusPage(data, true); err != nil {
+			b.Fatalf("renderPublicStatusPage() error = %v", err)
+		}
+	}
+}

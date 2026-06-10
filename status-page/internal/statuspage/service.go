@@ -424,6 +424,7 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 	defer rows.Close()
 
 	incidents := make([]StatusPageIncident, 0)
+	incidentIDs := make([]uuid.UUID, 0)
 	for rows.Next() {
 		var incident StatusPageIncident
 		var incidentID uuid.UUID
@@ -437,82 +438,113 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 			incident.ResolvedAt = &resolvedTime
 		}
 
-		incident.AffectedComponents, err = s.loadIncidentAffectedComponents(ctx, incidentID, statusPageID)
-		if err != nil {
-			return nil, err
-		}
-		incident.Updates, err = s.loadIncidentPublicUpdates(ctx, tenantID, incidentID)
-		if err != nil {
-			return nil, err
-		}
-
 		incidents = append(incidents, incident)
+		incidentIDs = append(incidentIDs, incidentID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate published incidents: %w", err)
 	}
 
+	componentsByIncident, err := s.batchIncidentAffectedComponents(ctx, statusPageID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+	updatesByIncident, err := s.batchIncidentPublicUpdates(ctx, tenantID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range incidents {
+		incidentID := incidentIDs[i]
+		if components, ok := componentsByIncident[incidentID]; ok {
+			incidents[i].AffectedComponents = components
+		} else {
+			incidents[i].AffectedComponents = make([]string, 0)
+		}
+		if updates, ok := updatesByIncident[incidentID]; ok {
+			incidents[i].Updates = updates
+		} else {
+			incidents[i].Updates = make([]StatusPageIncidentUpdate, 0)
+		}
+	}
+
 	return incidents, nil
 }
 
-func (s *Service) loadIncidentAffectedComponents(ctx context.Context, incidentID, statusPageID uuid.UUID) ([]string, error) {
+// batchIncidentAffectedComponents fetches the affected component names for all
+// given incidents in a single query, keyed by incident ID. Per-incident
+// ordering (monitor name ASC) matches the previous per-incident query.
+func (s *Service) batchIncidentAffectedComponents(ctx context.Context, statusPageID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	result := make(map[uuid.UUID][]string, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.name
+		SELECT ispm.incident_id, m.name
 		FROM incident_status_page_monitors ispm
 		JOIN monitors m ON m.id = ispm.monitor_id
-		WHERE ispm.incident_id = $1 AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
+		WHERE ispm.incident_id = ANY($1) AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
 		ORDER BY m.name ASC
-	`, incidentID, statusPageID)
+	`, pq.Array(incidentIDs), statusPageID)
 	if err != nil {
 		return nil, fmt.Errorf("query incident affected components: %w", err)
 	}
 	defer rows.Close()
 
-	components := make([]string, 0)
 	for rows.Next() {
+		var incidentID uuid.UUID
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		if err := rows.Scan(&incidentID, &name); err != nil {
 			return nil, fmt.Errorf("scan incident affected component: %w", err)
 		}
 		if strings.TrimSpace(name) != "" {
-			components = append(components, strings.TrimSpace(name))
+			result[incidentID] = append(result[incidentID], strings.TrimSpace(name))
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate incident affected components: %w", err)
 	}
 
-	return components, nil
+	return result, nil
 }
 
-func (s *Service) loadIncidentPublicUpdates(ctx context.Context, tenantID, incidentID uuid.UUID) ([]StatusPageIncidentUpdate, error) {
+// batchIncidentPublicUpdates fetches the public timeline updates for all given
+// incidents in a single query, keyed by incident ID. Per-incident ordering
+// (created_at DESC, id DESC) matches the previous per-incident query.
+func (s *Service) batchIncidentPublicUpdates(ctx context.Context, tenantID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]StatusPageIncidentUpdate, error) {
+	result := make(map[uuid.UUID][]StatusPageIncidentUpdate, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT message, created_at
+		SELECT incident_id, message, created_at
 		FROM incident_timeline_entries
-		WHERE tenant_id = $1 AND incident_id = $2 AND entry_type = 'public_update'
+		WHERE tenant_id = $1 AND incident_id = ANY($2) AND entry_type = 'public_update'
 		ORDER BY created_at DESC, id DESC
-	`, tenantID, incidentID)
+	`, tenantID, pq.Array(incidentIDs))
 	if err != nil {
 		return nil, fmt.Errorf("query incident public updates: %w", err)
 	}
 	defer rows.Close()
 
-	updates := make([]StatusPageIncidentUpdate, 0)
 	for rows.Next() {
+		var incidentID uuid.UUID
 		var update StatusPageIncidentUpdate
-		if err := rows.Scan(&update.Message, &update.CreatedAt); err != nil {
+		if err := rows.Scan(&incidentID, &update.Message, &update.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan incident public update: %w", err)
 		}
 		update.Message = strings.TrimSpace(update.Message)
 		if update.Message != "" {
-			updates = append(updates, update)
+			result[incidentID] = append(result[incidentID], update)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate incident public updates: %w", err)
 	}
 
-	return updates, nil
+	return result, nil
 }
 
 // GetGlobal5MinuteUptime calculates 5-minute bucket uptime across all monitors in a status page for the last 1 hour
