@@ -345,6 +345,14 @@ func isTransientRollupError(err error) bool {
 	if errors.As(err, &pqErr) {
 		switch pqErr.Code.Class() {
 		case "40", // transaction rollback (deadlock, serialization failure)
+			// 42: syntax error / undefined object (42703 undefined_column,
+			// 42P01 undefined_table, ...). The rollup SQL is constant, so a
+			// class-42 error can never be row-specific poison — it means the
+			// schema lags the code (e.g. the app rolled out before its
+			// migration, which the post-upgrade helm hook allows). Treating it
+			// as transient aborts the run so the job retries after the
+			// migration lands instead of skipping the whole backlog.
+			"42",
 			"53", // insufficient resources
 			"57", // operator intervention (query_canceled, shutdown)
 			"58": // system error

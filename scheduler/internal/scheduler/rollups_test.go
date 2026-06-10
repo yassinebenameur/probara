@@ -29,6 +29,8 @@ func TestIsTransientRollupError(t *testing.T) {
 		{name: "pq query canceled (57014)", err: &pq.Error{Code: "57014"}, want: true},
 		{name: "pq system error (58000)", err: &pq.Error{Code: "58000"}, want: true},
 		{name: "wrapped pq serialization class (40001)", err: fmt.Errorf("failed to commit rollup transaction: %w", &pq.Error{Code: "40001"}), want: true},
+		{name: "pq undefined column (42703, schema lag)", err: &pq.Error{Code: "42703"}, want: true},
+		{name: "pq undefined table (42P01, schema lag)", err: &pq.Error{Code: "42P01"}, want: true},
 		{name: "pq unique violation (23505)", err: &pq.Error{Code: "23505"}, want: false},
 		{name: "generic error", err: errors.New("boom"), want: false},
 	}

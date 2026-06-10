@@ -102,3 +102,25 @@ when the underlying numbers were computed. Bounded staleness windows:
 
 Numbers shown can therefore lag reality by up to the relevant TTL; this is a
 deliberate trade for collapsing request bursts into one computation.
+
+## Deploy ordering
+
+The helm migrations job is a **post-install/post-upgrade hook**
+(`helm/monitoring-platform/templates/job-migrations.yaml`): on upgrade the new
+pods are rolled out first, and migrations run after. New code must therefore
+tolerate running against the **old schema** for the rollout window.
+Concretely:
+
+- **Scheduler rollup job**: schema-lag errors (Postgres SQLSTATE class 42,
+  e.g. `42703` undefined_column, `42P01` undefined_table) are classified as
+  *transient* in `isTransientRollupError`
+  (`scheduler/internal/scheduler/rollups.go`). The run aborts without
+  advancing the cursor and stalls until the migration lands — it must never
+  enter the poison-skip replay path, which would silently drop the backlog.
+- **Dashboard 24h endpoints**: queries reading columns added by a pending
+  migration (e.g. `error_checks`) return errors during the window; this
+  self-heals once the migration job completes.
+
+For zero-error rollouts, when convenient, run the migration job manually
+before `helm upgrade` so the new schema is already in place when the new pods
+start.
