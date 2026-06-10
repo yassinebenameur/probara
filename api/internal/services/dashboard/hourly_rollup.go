@@ -68,12 +68,7 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 	leadingEdgeEnd := wStart.Truncate(time.Hour).Add(time.Hour)
 	trailingEdgeStart := wEnd.Truncate(time.Hour)
 	rollupEnd := cursor.RollupEnd(leadingEdgeEnd, trailingEdgeStart)
-	// Raw tail starts at GREATEST(rollup_end, leading_edge_end) so the two raw
-	// ranges below stay disjoint even when the cursor lags behind the window.
-	rawTailStart := rollupEnd
-	if rawTailStart.Before(leadingEdgeEnd) {
-		rawTailStart = leadingEdgeEnd
-	}
+	rawTailStart := cursor.RawTailStart(leadingEdgeEnd, trailingEdgeStart)
 
 	query := `
 		WITH rollup_totals AS (

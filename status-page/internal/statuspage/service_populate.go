@@ -292,11 +292,9 @@ func (s *Service) batchUptimeSummary(ctx context.Context, monitorIDs []uuid.UUID
 	wEnd := now
 	oneHourStart := now.Add(-1 * time.Hour)
 	leadingEdgeEnd := wStart.Truncate(time.Hour).Add(time.Hour)
-	rollupEnd := cursor.RollupEnd(leadingEdgeEnd, wEnd.Truncate(time.Hour))
-	rawTailStart := rollupEnd
-	if rawTailStart.Before(leadingEdgeEnd) {
-		rawTailStart = leadingEdgeEnd
-	}
+	trailingEdgeStart := wEnd.Truncate(time.Hour)
+	rollupEnd := cursor.RollupEnd(leadingEdgeEnd, trailingEdgeStart)
+	rawTailStart := cursor.RawTailStart(leadingEdgeEnd, trailingEdgeStart)
 
 	query := `
 		WITH mons AS (
