@@ -1,3 +1,10 @@
+# [1.0.0-alpha.53](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.52...v1.0.0-alpha.53) (2026-06-10)
+
+
+### Bug Fixes
+
+* **alerter:** restore policy evaluator build ([fedea12](https://github.com/yassinebenameur/probara/commit/fedea12ac5bd3719fbdf6d06d9257a8d4db9c51d))
+
 # [1.0.0-alpha.52](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.51...v1.0.0-alpha.52) (2026-06-10)
 
 
