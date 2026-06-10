@@ -1,3 +1,13 @@
+# [1.0.0-alpha.51](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.50...v1.0.0-alpha.51) (2026-06-10)
+
+
+### Bug Fixes
+
+* **alerter:** resolve alerts only after an observed success, not when the failure window empties ([1f38cb1](https://github.com/yassinebenameur/probara/commit/1f38cb1ed8e1ebb82911571a432feba7acad8bd9))
+* **queue:** reconnect to NATS forever instead of giving up after 2 minutes ([51e2404](https://github.com/yassinebenameur/probara/commit/51e2404b567b5378292458ebc0838144f44170c5))
+* **status-page:** use rollups for 24h monitor aggregates ([0a37427](https://github.com/yassinebenameur/probara/commit/0a37427a187774b6c0ea9190343660ddeedfc310))
+* **worker,alerter:** fail liveness once NATS connection is permanently closed ([e78c8c3](https://github.com/yassinebenameur/probara/commit/e78c8c33e1b1179f3b8828f13fc7bf43cc5e84cd))
+
 # [1.0.0-alpha.50](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.49...v1.0.0-alpha.50) (2026-06-02)
 
 
