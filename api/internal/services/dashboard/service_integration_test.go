@@ -858,3 +858,126 @@ func TestService_GetProblemMonitors_1hUsesNarrowWindowNotLast24h(t *testing.T) {
 		t.Fatalf("FailureCount = %d, want 1 (12h-old failure must be outside 1h window)", got.FailureCount)
 	}
 }
+
+func TestService_GetRecentFailures_ResolvedAtTagsLimitAndOrdering(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "recent-failures")
+	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "rf-monitor-a")
+	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "rf-monitor-b")
+	setMonitorTags(ctx, t, dbClient, monitorA, []string{"prod"})
+	setMonitorTags(ctx, t, dbClient, monitorB, []string{"api"})
+
+	now := time.Now().UTC().Truncate(time.Second)
+	// Monitor A timeline: success before any failure must NOT count as resolution;
+	// each failure resolves at the FIRST success strictly after it.
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-11*time.Hour), "success", "monitor", testutil.IntPtr(100))
+	failA1 := now.Add(-10 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, failA1, "failure", "monitor", nil)
+	succA1 := now.Add(-9 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, succA1, "success", "monitor", testutil.IntPtr(110))
+	failA2 := now.Add(-8 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, failA2, "failure", "monitor", nil)
+	succA2First := now.Add(-7*time.Hour - 30*time.Minute)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, succA2First, "success", "monitor", testutil.IntPtr(120))
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-7*time.Hour), "success", "monitor", testutil.IntPtr(130))
+	// Monitor B timeline: failure + error with no later success → still firing.
+	failB1 := now.Add(-6 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, failB1, "failure", "monitor", nil)
+	errB2 := now.Add(-5 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, errB2, "error", "monitor", nil)
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{})
+
+	resp, err := svc.GetRecentFailures(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("GetRecentFailures() error = %v", err)
+	}
+	if len(resp.RecentFailures) != 4 {
+		t.Fatalf("RecentFailures length = %d, want 4", len(resp.RecentFailures))
+	}
+
+	type expectation struct {
+		monitorID  uuid.UUID
+		status     string
+		occurredAt time.Time
+		resolvedAt *time.Time
+	}
+	expected := []expectation{
+		{monitorB, "error", errB2, nil},
+		{monitorB, "failure", failB1, nil},
+		{monitorA, "failure", failA2, &succA2First},
+		{monitorA, "failure", failA1, &succA1},
+	}
+	for i, want := range expected {
+		got := resp.RecentFailures[i]
+		if got.MonitorID != want.monitorID {
+			t.Fatalf("RecentFailures[%d].MonitorID = %s, want %s", i, got.MonitorID, want.monitorID)
+		}
+		if got.Status != want.status {
+			t.Fatalf("RecentFailures[%d].Status = %s, want %s", i, got.Status, want.status)
+		}
+		if !got.OccurredAt.Equal(want.occurredAt) {
+			t.Fatalf("RecentFailures[%d].OccurredAt = %s, want %s", i, got.OccurredAt, want.occurredAt)
+		}
+		if want.resolvedAt == nil {
+			if got.ResolvedAt != nil {
+				t.Fatalf("RecentFailures[%d].ResolvedAt = %v, want nil", i, got.ResolvedAt)
+			}
+			if got.State != models.DashboardFailureStateFiring {
+				t.Fatalf("RecentFailures[%d].State = %s, want firing", i, got.State)
+			}
+		} else {
+			if got.ResolvedAt == nil || !got.ResolvedAt.Equal(*want.resolvedAt) {
+				t.Fatalf("RecentFailures[%d].ResolvedAt = %v, want %s (first success after failure)", i, got.ResolvedAt, *want.resolvedAt)
+			}
+			if got.State != models.DashboardFailureStateResolved {
+				t.Fatalf("RecentFailures[%d].State = %s, want resolved", i, got.State)
+			}
+		}
+	}
+
+	// Limit smaller than total failures → newest N only, still desc.
+	limited, err := svc.GetRecentFailures(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("GetRecentFailures(limit=2) error = %v", err)
+	}
+	if len(limited.RecentFailures) != 2 {
+		t.Fatalf("limited RecentFailures length = %d, want 2", len(limited.RecentFailures))
+	}
+	if !limited.RecentFailures[0].OccurredAt.Equal(errB2) || !limited.RecentFailures[1].OccurredAt.Equal(failB1) {
+		t.Fatalf("limited RecentFailures = [%s, %s], want newest two [%s, %s]",
+			limited.RecentFailures[0].OccurredAt, limited.RecentFailures[1].OccurredAt, errB2, failB1)
+	}
+
+	// Tag filter → only monitorA failures, resolved_at still computed.
+	tagged, err := svc.GetRecentFailures(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 10,
+		Tags:  []string{"prod"},
+	})
+	if err != nil {
+		t.Fatalf("GetRecentFailures(tags=prod) error = %v", err)
+	}
+	if len(tagged.RecentFailures) != 2 {
+		t.Fatalf("tagged RecentFailures length = %d, want 2", len(tagged.RecentFailures))
+	}
+	for _, failure := range tagged.RecentFailures {
+		if failure.MonitorID != monitorA {
+			t.Fatalf("tagged RecentFailures included monitor %s, want only %s", failure.MonitorID, monitorA)
+		}
+	}
+	if tagged.RecentFailures[0].ResolvedAt == nil || !tagged.RecentFailures[0].ResolvedAt.Equal(succA2First) {
+		t.Fatalf("tagged RecentFailures[0].ResolvedAt = %v, want %s", tagged.RecentFailures[0].ResolvedAt, succA2First)
+	}
+}

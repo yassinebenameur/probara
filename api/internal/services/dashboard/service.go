@@ -1171,37 +1171,53 @@ func monitorStateToStatus(state string) *string {
 }
 
 func (s *Service) getRecentFailures(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEnd time.Time, limit int, tags []string) ([]models.DashboardFailureEvent, error) {
+	// The LIMIT is applied inside the CTE so the next-success LATERAL probe
+	// only runs for the <= limit emitted rows, not every failure in the window.
 	query := `
+		WITH recent AS (
+			SELECT
+				cr.id,
+				cr.tenant_id,
+				cr.monitor_id,
+				m.name AS monitor_name,
+				cr.status,
+				cr.result_source,
+				cr.error_message,
+				cr.latency_ms,
+				cr.created_at
+			FROM check_results cr
+			JOIN monitors m ON m.id = cr.monitor_id AND m.tenant_id = cr.tenant_id
+			WHERE cr.tenant_id = $1
+			  AND cr.status IN ('failure', 'error')
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $3
+			  AND m.deleted_at IS NULL
+			  %s
+			ORDER BY cr.created_at DESC
+			LIMIT $%d
+		)
 		SELECT
-			cr.id,
-			cr.monitor_id,
-			m.name,
-			cr.status,
-			cr.result_source,
-			cr.error_message,
-			cr.latency_ms,
-			cr.created_at,
+			r.id,
+			r.monitor_id,
+			r.monitor_name,
+			r.status,
+			r.result_source,
+			r.error_message,
+			r.latency_ms,
+			r.created_at,
 			rs.created_at AS resolved_at
-		FROM check_results cr
-		JOIN monitors m ON m.id = cr.monitor_id AND m.tenant_id = cr.tenant_id
+		FROM recent r
 		LEFT JOIN LATERAL (
 			SELECT succ.created_at
 			FROM check_results succ
-			WHERE succ.tenant_id = cr.tenant_id
-			  AND succ.monitor_id = cr.monitor_id
+			WHERE succ.tenant_id = r.tenant_id
+			  AND succ.monitor_id = r.monitor_id
 			  AND succ.status = 'success'
-			  AND succ.created_at > cr.created_at
+			  AND succ.created_at > r.created_at
 			ORDER BY succ.created_at ASC
 			LIMIT 1
 		) rs ON TRUE
-		WHERE cr.tenant_id = $1
-		  AND cr.status IN ('failure', 'error')
-		  AND cr.created_at >= $2
-		  AND cr.created_at < $3
-		  AND m.deleted_at IS NULL
-		  %s
-		ORDER BY cr.created_at DESC
-		LIMIT $%d
+		ORDER BY r.created_at DESC
 	`
 
 	tagClause := ""
