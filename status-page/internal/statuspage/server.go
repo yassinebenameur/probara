@@ -40,11 +40,12 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	// 1 while the NATS subscriber that drives SSE updates and render-cache
 	// invalidation is connected; 0 when it failed to start (pages then go
 	// stale up to the render-cache TTL and live updates are off).
-	sseConnected := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "statuspage_sse_subscriber_connected",
-		Help: "1 when the NATS status-update subscriber is connected, 0 otherwise.",
-	})
-	metricsRegistry.GetRegistry().MustRegister(sseConnected)
+	// Full name: probara_status_page_sse_subscriber_connected.
+	sseConnected := metricsRegistry.NewGauge(
+		"sse_subscriber_connected",
+		"1 when the NATS status-update subscriber is connected, 0 otherwise.",
+		nil,
+	).WithLabelValues()
 	sseConnected.Set(0)
 
 	// Start NATS subscriber for live updates and render-cache invalidation.

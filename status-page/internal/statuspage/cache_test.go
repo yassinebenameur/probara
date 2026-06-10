@@ -196,6 +196,73 @@ func TestRenderCacheDoesNotCacheBuildErrors(t *testing.T) {
 	}
 }
 
+func TestRenderCacheHasEntriesIsFreshnessAware(t *testing.T) {
+	cache := newRenderCache(10 * time.Second)
+	base := time.Now()
+	current := base
+	cache.now = func() time.Time { return current }
+
+	if cache.HasEntries() {
+		t.Fatal("HasEntries() = true on empty cache, want false")
+	}
+	if _, _, err := cache.Get("edge", func() (string, error) { return "<html>v</html>", nil }); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !cache.HasEntries() {
+		t.Fatal("HasEntries() = false with a fresh entry, want true")
+	}
+
+	current = base.Add(10*time.Second + time.Millisecond)
+	if cache.HasEntries() {
+		t.Fatal("HasEntries() = true after TTL expiry, want false")
+	}
+	// The freshness scan must also have evicted the expired entry.
+	cache.mu.Lock()
+	n := len(cache.entries)
+	cache.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("entries after HasEntries freshness scan = %d, want 0 (expired entries must be evicted)", n)
+	}
+}
+
+func TestRenderCacheLookupEvictsExpiredEntry(t *testing.T) {
+	cache := newRenderCache(10 * time.Second)
+	base := time.Now()
+	current := base
+	cache.now = func() time.Time { return current }
+
+	builds := 0
+	build := func() (string, error) {
+		builds++
+		return "<html>v</html>", nil
+	}
+	if _, _, err := cache.Get("edge", build); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	current = base.Add(10*time.Second + time.Millisecond)
+	if entry, ok := cache.lookup("edge"); ok {
+		t.Fatalf("lookup() = (%+v, true) after TTL expiry, want miss", entry)
+	}
+	cache.mu.Lock()
+	n := len(cache.entries)
+	cache.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("entries after expired lookup = %d, want 0 (lookup must evict the expired entry)", n)
+	}
+
+	// A follow-up Get rebuilds and re-populates the cache.
+	if _, _, err := cache.Get("edge", build); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if builds != 2 {
+		t.Fatalf("builds = %d, want 2 (expired entry must be rebuilt)", builds)
+	}
+	if !cache.HasEntries() {
+		t.Fatal("HasEntries() = false after rebuild, want true")
+	}
+}
+
 func TestComputeETagStableQuotedAndContentSensitive(t *testing.T) {
 	a1 := computeETag("<html>a</html>")
 	a2 := computeETag("<html>a</html>")

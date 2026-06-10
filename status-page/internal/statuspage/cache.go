@@ -131,23 +131,37 @@ func (c *renderCache) Invalidate(slug string) {
 	c.group.Forget(slug)
 }
 
-// HasEntries reports whether any rendered page is currently cached (expired
-// entries count until overwritten; this is a cheap conservative check). The
-// SSE subscriber uses it to skip slug resolution when nothing could be stale.
+// HasEntries reports whether any unexpired rendered page is currently cached.
+// Expired entries encountered during the scan are evicted, so a viewer-less
+// deployment converges back to an empty map after one TTL. The SSE subscriber
+// uses it to skip slug resolution when nothing could be stale.
 func (c *renderCache) HasEntries() bool {
 	if c == nil {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.entries) > 0
+	now := c.now()
+	fresh := false
+	for slug, entry := range c.entries {
+		if now.After(entry.expires) {
+			delete(c.entries, slug)
+			continue
+		}
+		fresh = true
+	}
+	return fresh
 }
 
 func (c *renderCache) lookup(slug string) (*cacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[slug]
-	if !ok || c.now().After(entry.expires) {
+	if !ok {
+		return nil, false
+	}
+	if c.now().After(entry.expires) {
+		delete(c.entries, slug)
 		return nil, false
 	}
 	return entry, true
