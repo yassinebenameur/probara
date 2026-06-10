@@ -1,3 +1,61 @@
+# [1.0.0-alpha.52](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.51...v1.0.0-alpha.52) (2026-06-10)
+
+
+### Bug Fixes
+
+* **alerter:** resolve alerts only after an observed success, not when the failure window empties ([4be0f78](https://github.com/yassinebenameur/probara/commit/4be0f78c7f5e612e76da2f68f918642dc893f23b))
+* **alerter:** resolve alerts only after an observed success, not when the failure window empties ([1f38cb1](https://github.com/yassinebenameur/probara/commit/1f38cb1ed8e1ebb82911571a432feba7acad8bd9))
+* **analytics:** whole-window per-monitor SLA for rollup ranges (D2) ([9e5f859](https://github.com/yassinebenameur/probara/commit/9e5f8598e4f24cc2189ab79beb42e3450152851a))
+* **api:** map notification-settings DB errors to 500, reject unknown channels ([a98a686](https://github.com/yassinebenameur/probara/commit/a98a6869a1ae5acbda8aaa8d68e531b167123ba6))
+* **api:** surface policy-less lifecycle alerts in all alert read paths ([cf5a817](https://github.com/yassinebenameur/probara/commit/cf5a8170408b10311718c815838e38d7ee6445ab))
+* **helm:** wire NATS_URL into status-page deployment ([ca1f451](https://github.com/yassinebenameur/probara/commit/ca1f451a67c831c9e5a5ee0bed9003a403e6104d))
+* **queue:** reconnect to NATS forever instead of giving up after 2 minutes ([bbc835e](https://github.com/yassinebenameur/probara/commit/bbc835e18fd0f6a794baa0e75803bf2e766ca57e))
+* **queue:** reconnect to NATS forever instead of giving up after 2 minutes ([51e2404](https://github.com/yassinebenameur/probara/commit/51e2404b567b5378292458ebc0838144f44170c5))
+* **scheduler,dashboard:** broaden transient rollup error classes; clamp failure attribution ([70ece64](https://github.com/yassinebenameur/probara/commit/70ece64cd25794bdf32491e5ba0756a27811e826))
+* **scheduler:** treat schema-lag errors as transient, not row poison ([3e0b2e4](https://github.com/yassinebenameur/probara/commit/3e0b2e4cf52d0e01906878be0a50d305de48cc6d))
+* **status-page,metrics:** evict expired render-cache entries; sanitize metric subsystem names ([05b01f5](https://github.com/yassinebenameur/probara/commit/05b01f57f59dd2f6a228850695f2eab2392f4426))
+* **status-page:** bound slug throttler memory; document clock split ([0c48f55](https://github.com/yassinebenameur/probara/commit/0c48f5585e18d015cd2c0cad1c68b3bf4f054da2))
+* **web:** honest worst-case detection hint; warn on bulk mute ([941aaa6](https://github.com/yassinebenameur/probara/commit/941aaa6ec86ff347660fde85653b8aff946f378d))
+* **worker,alerter:** fail liveness once NATS connection is permanently closed ([77cb483](https://github.com/yassinebenameur/probara/commit/77cb4838ef6ed0ae29608e73430dff2da18408c5))
+* **worker,alerter:** fail liveness once NATS connection is permanently closed ([e78c8c3](https://github.com/yassinebenameur/probara/commit/e78c8c33e1b1179f3b8828f13fc7bf43cc5e84cd))
+
+
+### Features
+
+* **alerter:** auto-create incidents from lifecycle alerts (policy-less) ([6a908dd](https://github.com/yassinebenameur/probara/commit/6a908ddabcba4a6a9d5fa7bcf662b6e81ce36e0a))
+* **alerter:** transition-driven alert lifecycle with per-channel escalation; retire window-based evaluator ([859bf08](https://github.com/yassinebenameur/probara/commit/859bf08d763f85d22e766d301c4f7e9f5b90b001))
+* **api:** include channel name/type in monitor notification channel assignments ([f853366](https://github.com/yassinebenameur/probara/commit/f853366ec872dafeaacc2231691b315714adf998))
+* **api:** monitor sensitivity + notification routing fields, bulk alerting endpoint ([fe4eaa5](https://github.com/yassinebenameur/probara/commit/fe4eaa5e4d678e58aa75fac94ec319f751803e42))
+* **api:** retire alert-policy endpoints (410 Gone) ([bacdda2](https://github.com/yassinebenameur/probara/commit/bacdda271ebc431abf07a4bf952e84bbe831b347))
+* **api:** workspace notification settings endpoints ([5d0d178](https://github.com/yassinebenameur/probara/commit/5d0d178ce52d99644c3c48d94cbe669fe88c0717))
+* **dashboard:** derive monitor health from persisted state machine (D1) ([b49ff00](https://github.com/yassinebenameur/probara/commit/b49ff00e965a408bebb6510f22864cd4ce12ed08))
+* **db:** add monitor state machine and sensitivity columns ([87e2afb](https://github.com/yassinebenameur/probara/commit/87e2afb24a9de7d5ae1d8858deb1aedd1eff323d))
+* **db:** notification routing tables, workspace alert settings, policy backfill ([1391806](https://github.com/yassinebenameur/probara/commit/13918061ed5d400d1eb53148e7ab65573ec0fc2c))
+* **monitorstate:** pure state-machine transition logic ([94c2b37](https://github.com/yassinebenameur/probara/commit/94c2b373840bd1bafe46775c36291f9ac6dd1372))
+* **scheduler:** fast-recheck suspect monitors at min(interval, 20s) ([8661f6d](https://github.com/yassinebenameur/probara/commit/8661f6d0515268ca465b922284d6e8226d5da09c))
+* **scheduler:** skip poisoned rollup rows; track error_checks in rollups ([3e29727](https://github.com/yassinebenameur/probara/commit/3e2972721d3ce86ce9565c666aeb1e2418f34b97))
+* **scripts:** idempotent hourly/daily rollup backfill ([63414b7](https://github.com/yassinebenameur/probara/commit/63414b7b52801ac2e011749b854927c4f5609ab0))
+* **status-page:** harden SSE subscriber (no-client exit, slug cache, per-slug throttle) ([064eb52](https://github.com/yassinebenameur/probara/commit/064eb526601a9a7a312239ef2bc00d756943862d))
+* **status-page:** per-slug render cache with ETag/304 and SSE invalidation ([bc66a82](https://github.com/yassinebenameur/probara/commit/bc66a82d1a9e515a8ba1fa006dd65839d047c18b))
+* **status,dashboard:** derive monitor status from persisted state machine ([c639de8](https://github.com/yassinebenameur/probara/commit/c639de893cb797d4735e1a09cd675a3dcfaaff36))
+* **web:** alerting section in group/agent/push/sip/grpc monitor forms ([bad8198](https://github.com/yassinebenameur/probara/commit/bad81982cc8ba8249252a4e03a219e8370a19651))
+* **web:** bulk edit alerting; remove alert-policies UI ([70db79e](https://github.com/yassinebenameur/probara/commit/70db79eb63ce9055353e525511b55f2b1da7f647))
+* **web:** monitor form alerting section (sensitivity + notifications picker) ([6e4c6d1](https://github.com/yassinebenameur/probara/commit/6e4c6d13ee743a6838e887149ca63d3bfdfcfe8a))
+* **web:** shared ChannelPicker with inline create and escalation delays ([673f8cb](https://github.com/yassinebenameur/probara/commit/673f8cb8bee4f3970c2327625906e441d48516d9))
+* **web:** types and client for notification settings and bulk alerting ([14c651e](https://github.com/yassinebenameur/probara/commit/14c651e6bd85cc8f17366ead890c5e8d89af4eb7))
+* **web:** workspace notifications settings panel and day-0 nudge banner ([3941b97](https://github.com/yassinebenameur/probara/commit/3941b97380b5aa379b8f30a537cf7ac5bb123283))
+* **worker:** advance monitor state machine transactionally with each result ([53f5559](https://github.com/yassinebenameur/probara/commit/53f55594d05efa5caeb2f7fc346d0a4740654b77))
+* **worker:** publish status updates only on monitor state transitions ([ca24ae5](https://github.com/yassinebenameur/probara/commit/ca24ae50c3a0a8f0cf2634cea42a0a2cc236c469))
+
+
+### Performance Improvements
+
+* **dashboard,status-page:** pass window bounds as parameters so check_results scans use indexes ([60458d9](https://github.com/yassinebenameur/probara/commit/60458d9f042c1293d9d36c6fd18f7021fe8133ad))
+* **dashboard:** bound recent-failures next-success probe to emitted rows ([10eb407](https://github.com/yassinebenameur/probara/commit/10eb40736c81d8ad822f98ea2c2373c83106b38c))
+* **dashboard:** share rolling-24h aggregates via short-TTL cache ([2806c15](https://github.com/yassinebenameur/probara/commit/2806c1538d4c49eb6c548a38b27a014859877bfa))
+* **scripts:** index-friendly bounds + retention warning for rollup backfill ([34c1330](https://github.com/yassinebenameur/probara/commit/34c133011caa7d6c6fa6fc08b9680bc739178231))
+* **status-page:** parse template once; batch incident queries ([c38f219](https://github.com/yassinebenameur/probara/commit/c38f219e91582d22fff89f894b893dc6d205acb8))
+
 # Unreleased — Alerting UX Revamp
 
 
