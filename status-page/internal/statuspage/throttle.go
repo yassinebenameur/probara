@@ -15,10 +15,19 @@ import (
 type slugThrottler struct {
 	mu       sync.Mutex
 	interval time.Duration
-	now      func() time.Time
-	last     map[string]time.Time
-	pending  map[string]*pendingFire
+	// now is injected for tests: window arithmetic uses this clock, but trailing
+	// fires run on real time.AfterFunc, so fake-clock tests must avoid the
+	// trailing path.
+	now     func() time.Time
+	last    map[string]time.Time
+	pending map[string]*pendingFire
 }
+
+// slugThrottlerMaxEntries caps the last-fire map so deleted or renamed slugs
+// don't accumulate forever in a long-running process. Entries whose window has
+// elapsed carry no information (a missing entry just means "fire immediately"),
+// so they are safe to prune.
+const slugThrottlerMaxEntries = 1024
 
 type pendingFire struct {
 	timer *time.Timer
@@ -51,6 +60,20 @@ func (t *slugThrottler) Fire(slug string, urgent bool, fn func()) {
 
 	t.mu.Lock()
 	now := t.now()
+
+	// Bound memory: once over the cap, drop entries whose window already
+	// elapsed. Slugs with a pending trailing fire are kept; flush still needs
+	// their state. Cheap because it only runs when over the cap.
+	if len(t.last) > slugThrottlerMaxEntries {
+		for s, ts := range t.last {
+			if _, hasPending := t.pending[s]; hasPending {
+				continue
+			}
+			if now.Sub(ts) >= t.interval {
+				delete(t.last, s)
+			}
+		}
+	}
 
 	if urgent {
 		if p, ok := t.pending[slug]; ok {

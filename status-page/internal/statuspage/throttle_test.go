@@ -1,6 +1,7 @@
 package statuspage
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -145,6 +146,43 @@ func TestSlugThrottlerRoutineFiresAgainAfterInterval(t *testing.T) {
 	if got := count.Load(); got != 2 {
 		t.Fatalf("count = %d, want 2 (window elapsed, no suppression)", got)
 	}
+}
+
+func TestSlugThrottlerPrunesStaleEntriesOverCap(t *testing.T) {
+	// Window arithmetic uses the injected clock; the 1h interval keeps the real
+	// time.AfterFunc trailing timer from firing during the test.
+	throttler := newSlugThrottler(time.Hour)
+	base := time.Now()
+	current := base
+	throttler.now = func() time.Time { return current }
+
+	// A slug with a pending trailing fire must survive pruning even once its
+	// last-fire timestamp goes stale.
+	throttler.Fire("pending", false, func() {}) // leading fire
+	throttler.Fire("pending", false, func() {}) // suppressed -> pending trailing
+
+	// Seed well over the cap with slugs whose windows will have elapsed.
+	for i := 0; i < slugThrottlerMaxEntries+10; i++ {
+		throttler.Fire(fmt.Sprintf("slug-%d", i), false, func() {})
+	}
+
+	// Advance past the window and fire once more to trigger the inline prune.
+	current = base.Add(2 * time.Hour)
+	throttler.Fire("trigger", false, func() {})
+
+	throttler.mu.Lock()
+	defer throttler.mu.Unlock()
+	if got := len(throttler.last); got > slugThrottlerMaxEntries+1 {
+		t.Fatalf("len(last) = %d, want <= %d after prune", got, slugThrottlerMaxEntries+1)
+	}
+	if _, ok := throttler.last["pending"]; !ok {
+		t.Fatalf("slug with pending trailing fire was pruned from last")
+	}
+	p, ok := throttler.pending["pending"]
+	if !ok {
+		t.Fatalf("pending trailing fire was lost")
+	}
+	p.timer.Stop()
 }
 
 func TestNilSlugThrottlerFiresImmediately(t *testing.T) {
