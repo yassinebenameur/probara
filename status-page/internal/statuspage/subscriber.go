@@ -90,17 +90,26 @@ type statusPageSlugResolver struct {
 	db statusPageSlugStore
 }
 
-// Subscriber listens for status update events and broadcasts to SSE clients.
+// renderInvalidator is the subset of renderCache the subscriber needs. It is
+// an interface so tests can observe invalidation ordering with a spy.
+type renderInvalidator interface {
+	Invalidate(slug string)
+	HasEntries() bool
+}
+
+// Subscriber listens for status update events, invalidates the render cache,
+// and broadcasts to SSE clients.
 type Subscriber struct {
 	subject      *statusupdates.Subscriber
 	hub          *Hub
 	logger       *logger.Logger
 	resolveSlugs slugResolver
 	throttle     *slugThrottler
+	cache        renderInvalidator
 }
 
-// NewSubscriber creates a new status update subscriber.
-func NewSubscriber(natsURL string, hub *Hub, dbClient shareddb.Querier, log *logger.Logger) (*Subscriber, error) {
+// NewSubscriber creates a new status update subscriber. cache may be nil.
+func NewSubscriber(natsURL string, hub *Hub, dbClient shareddb.Querier, log *logger.Logger, cache *renderCache) (*Subscriber, error) {
 	sub, err := statusupdates.NewSubscriber(natsURL)
 	if err != nil {
 		return nil, err
@@ -111,6 +120,7 @@ func NewSubscriber(natsURL string, hub *Hub, dbClient shareddb.Querier, log *log
 		logger:       log,
 		resolveSlugs: newCachingSlugResolver(newStatusPageSlugResolver(dbClient), slugCacheTTL, slugCacheMaxEntries, time.Now),
 		throttle:     newSlugThrottler(slugBroadcastInterval),
+		cache:        cache,
 	}, nil
 }
 
@@ -296,10 +306,17 @@ func (s *Subscriber) handleEvent(event statusupdates.Event) {
 		return
 	}
 
-	// No connected SSE clients: skip slug resolution (and its SQL) entirely.
-	// NOTE: when render-cache invalidation is added to this handler, the
-	// invalidation must run unconditionally — move this early exit AFTER it.
-	if !s.hub.HasAnyClients() {
+	// NOTE: the ordering below matters.
+	//  1. Cheap guard: with no connected SSE clients AND an empty render
+	//     cache there is nothing to invalidate and nobody to notify, so skip
+	//     slug resolution (and its SQL) entirely.
+	//  2. Resolve the affected slugs (through the 60s slug TTL cache) and
+	//     invalidate the render cache for every one of them BEFORE any
+	//     broadcast: a browser that refetches the page in response to the SSE
+	//     event must never be served stale pre-event HTML from the cache.
+	//  3. Only then broadcast (throttled per slug, urgent events bypass), and
+	//     only if someone is actually listening.
+	if !s.hub.HasAnyClients() && !s.cacheHasEntries() {
 		return
 	}
 
@@ -320,12 +337,8 @@ func (s *Subscriber) handleEvent(event statusupdates.Event) {
 		return
 	}
 
-	update := SSEEvent{
-		Type: "update",
-		Data: string(payload),
-	}
-	urgent := isUrgentEventType(event.Type)
 	seen := make(map[string]struct{}, len(slugs))
+	affected := make([]string, 0, len(slugs))
 	for _, slug := range slugs {
 		if slug == "" {
 			continue
@@ -334,9 +347,35 @@ func (s *Subscriber) handleEvent(event statusupdates.Event) {
 			continue
 		}
 		seen[slug] = struct{}{}
+		affected = append(affected, slug)
+		s.invalidateCache(slug)
+	}
+
+	if !s.hub.HasAnyClients() {
+		return
+	}
+
+	update := SSEEvent{
+		Type: "update",
+		Data: string(payload),
+	}
+	urgent := isUrgentEventType(event.Type)
+	for _, slug := range affected {
 		s.throttle.Fire(slug, urgent, func() {
 			s.hub.Broadcast(slug, update)
 		})
+	}
+}
+
+// cacheHasEntries reports whether the render cache holds any entry. Both a
+// nil interface and a nil *renderCache behind it count as empty.
+func (s *Subscriber) cacheHasEntries() bool {
+	return s.cache != nil && s.cache.HasEntries()
+}
+
+func (s *Subscriber) invalidateCache(slug string) {
+	if s.cache != nil {
+		s.cache.Invalidate(slug)
 	}
 }
 

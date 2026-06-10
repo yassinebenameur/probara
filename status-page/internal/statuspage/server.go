@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -15,12 +17,13 @@ import (
 
 // Server represents the status page HTTP server
 type Server struct {
-	config     *config.StatusPageConfig
-	logger     *logger.Logger
-	metrics    *metrics.Registry
-	db         *db.Client
-	http       *http.Server
-	subscriber *Subscriber
+	config       *config.StatusPageConfig
+	logger       *logger.Logger
+	metrics      *metrics.Registry
+	db           *db.Client
+	http         *http.Server
+	subscriber   *Subscriber
+	sseConnected prometheus.Gauge
 }
 
 // NewServer creates a new status page server
@@ -31,18 +34,32 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	analyticsRepo := sharedanalytics.NewRepository(dbClient)
 	service := NewService(dbClient, analyticsRepo)
 	hub := NewHub()
-	handlers := NewHandlers(service, cfg, log, hub)
+	renderCache := newRenderCache(renderCacheTTLFromEnv())
+	handlers := NewHandlers(service, cfg, log, hub, renderCache)
 
-	// Start NATS subscriber for live updates (optional)
+	// 1 while the NATS subscriber that drives SSE updates and render-cache
+	// invalidation is connected; 0 when it failed to start (pages then go
+	// stale up to the render-cache TTL and live updates are off).
+	sseConnected := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "statuspage_sse_subscriber_connected",
+		Help: "1 when the NATS status-update subscriber is connected, 0 otherwise.",
+	})
+	metricsRegistry.GetRegistry().MustRegister(sseConnected)
+	sseConnected.Set(0)
+
+	// Start NATS subscriber for live updates and render-cache invalidation.
+	// Without it the page still works, but SSE is dead and cached HTML is only
+	// refreshed by TTL — loud failure, not a Warn-and-forget.
 	var subscriber *Subscriber
 	if cfg.NATSURL != "" {
-		if sub, err := NewSubscriber(cfg.NATSURL, hub, dbClient, log); err != nil {
-			log.WithError(err).Warn("Failed to initialize status update subscriber")
+		if sub, err := NewSubscriber(cfg.NATSURL, hub, dbClient, log, renderCache); err != nil {
+			log.WithError(err).Error("Failed to initialize status update subscriber; live updates and event-driven cache invalidation are disabled")
 		} else {
 			if err := sub.Start(); err != nil {
-				log.WithError(err).Warn("Failed to start status update subscriber")
+				log.WithError(err).Error("Failed to start status update subscriber; live updates and event-driven cache invalidation are disabled")
 			} else {
 				subscriber = sub
+				sseConnected.Set(1)
 			}
 		}
 	}
@@ -82,12 +99,13 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	}
 
 	return &Server{
-		config:     cfg,
-		logger:     log,
-		metrics:    metricsRegistry,
-		db:         dbClient,
-		http:       httpServer,
-		subscriber: subscriber,
+		config:       cfg,
+		logger:       log,
+		metrics:      metricsRegistry,
+		db:           dbClient,
+		http:         httpServer,
+		subscriber:   subscriber,
+		sseConnected: sseConnected,
 	}
 }
 
@@ -105,6 +123,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down HTTP server")
 	if s.subscriber != nil {
 		s.subscriber.Close()
+		if s.sseConnected != nil {
+			s.sseConnected.Set(0)
+		}
 	}
 	return s.http.Shutdown(ctx)
 }

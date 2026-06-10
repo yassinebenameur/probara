@@ -548,6 +548,159 @@ func TestIsUrgentEventType(t *testing.T) {
 	}
 }
 
+// spyRenderCache is an order-observable renderInvalidator for tests.
+type spyRenderCache struct {
+	hasEntries   bool
+	invalidated  []string
+	onInvalidate func(slug string)
+}
+
+func (s *spyRenderCache) Invalidate(slug string) {
+	if s.onInvalidate != nil {
+		s.onInvalidate(slug)
+	}
+	s.invalidated = append(s.invalidated, slug)
+}
+
+func (s *spyRenderCache) HasEntries() bool { return s.hasEntries }
+
+func TestSubscriberHandleEventInvalidatesCacheBeforeBroadcast(t *testing.T) {
+	hub := NewHub()
+	alpha := hub.Register("alpha")
+	defer hub.Unregister("alpha", alpha)
+
+	cache := &spyRenderCache{hasEntries: true}
+	cache.onInvalidate = func(slug string) {
+		// The SSE event triggers a refetch in the browser; it must never be
+		// able to observe pre-invalidation cached HTML. Therefore nothing may
+		// have been broadcast by the time the cache is invalidated.
+		if len(alpha) != 0 {
+			t.Errorf("broadcast for %q happened before cache invalidation", slug)
+		}
+	}
+
+	subscriber := &Subscriber{
+		hub:    hub,
+		logger: logger.New("status-page", "debug"),
+		cache:  cache,
+		resolveSlugs: func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+			return []string{"alpha", "alpha", ""}, nil
+		},
+		throttle: newSlugThrottler(slugBroadcastInterval),
+	}
+
+	subscriber.handleEvent(statusupdates.Event{
+		Type:      "state_change",
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+	})
+
+	if !reflect.DeepEqual(cache.invalidated, []string{"alpha"}) {
+		t.Fatalf("invalidated slugs = %v, want [alpha] (deduped, empties dropped)", cache.invalidated)
+	}
+	if got := len(alpha); got != 1 {
+		t.Fatalf("delivered events = %d, want 1", got)
+	}
+}
+
+func TestSubscriberHandleEventNoClientsAndEmptyCacheSkipsResolution(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+	// No expectations registered: any query is unexpected.
+
+	cache := &spyRenderCache{hasEntries: false}
+	subscriber := &Subscriber{
+		hub:          NewHub(),
+		logger:       logger.New("status-page", "debug"),
+		cache:        cache,
+		resolveSlugs: newStatusPageSlugResolver(&shareddb.Client{DB: sqlDB}),
+		throttle:     newSlugThrottler(slugBroadcastInterval),
+	}
+
+	subscriber.handleEvent(statusupdates.Event{
+		Type:      "check_result",
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+		Timestamp: time.Now().UTC(),
+	})
+
+	if len(cache.invalidated) != 0 {
+		t.Fatalf("invalidated slugs = %v, want none", cache.invalidated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expected zero DB queries with no clients and no cache entries: %v", err)
+	}
+}
+
+func TestSubscriberHandleEventNoClientsButCachedEntriesInvalidatesWithoutBroadcast(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	mock.ExpectQuery(regexp.QuoteMeta(statusPageSlugQuery)).
+		WithArgs(tenantID, monitorID).
+		WillReturnRows(sqlmock.NewRows([]string{"slug"}).AddRow("edge"))
+
+	cache := &spyRenderCache{hasEntries: true}
+	subscriber := &Subscriber{
+		hub:          NewHub(), // no clients connected
+		logger:       logger.New("status-page", "debug"),
+		cache:        cache,
+		resolveSlugs: newStatusPageSlugResolver(&shareddb.Client{DB: sqlDB}),
+		// nil throttle: reaching the broadcast path would panic the test,
+		// proving no broadcast is attempted when nobody is listening.
+		throttle: nil,
+	}
+
+	subscriber.handleEvent(statusupdates.Event{
+		Type:      "state_change",
+		TenantID:  tenantID.String(),
+		MonitorID: monitorID.String(),
+	})
+
+	if !reflect.DeepEqual(cache.invalidated, []string{"edge"}) {
+		t.Fatalf("invalidated slugs = %v, want [edge]", cache.invalidated)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expected the slug query to run for cache invalidation: %v", err)
+	}
+}
+
+func TestSubscriberHandleEventNilCacheBehavesLikeEmpty(t *testing.T) {
+	// Subscriber constructed without a cache (e.g. existing tests, or a nil
+	// *renderCache passed through NewSubscriber) must keep the old behavior:
+	// exit early when no clients, broadcast normally when clients exist.
+	subscriber := &Subscriber{
+		hub:    NewHub(),
+		logger: logger.New("status-page", "debug"),
+		resolveSlugs: func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+			t.Fatal("slug resolution ran with zero clients and nil cache")
+			return nil, nil
+		},
+		throttle: newSlugThrottler(slugBroadcastInterval),
+	}
+	subscriber.handleEvent(statusupdates.Event{
+		Type:      "check_result",
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+	})
+
+	var nilCache *renderCache
+	subscriber.cache = nilCache // non-nil interface holding a nil pointer
+	subscriber.handleEvent(statusupdates.Event{
+		Type:      "check_result",
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+	})
+}
+
 func assertSSEEvent(t *testing.T, ch <-chan SSEEvent, want SSEEvent) {
 	t.Helper()
 
