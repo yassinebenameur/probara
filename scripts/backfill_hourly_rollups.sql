@@ -13,6 +13,7 @@
 --
 -- USAGE
 --   psql "$DATABASE_URL" \
+--     -v ON_ERROR_STOP=1 \
 --     -v start="2026-05-01 00:00:00+00" \
 --     -v end="2026-05-02 00:00:00+00" \
 --     -f scripts/backfill_hourly_rollups.sql
@@ -22,10 +23,20 @@
 --     \set end   '2026-05-02 00:00:00+00'
 --     \i scripts/backfill_hourly_rollups.sql
 --
+--   NOTE: in a long-lived interactive session, an error before COMMIT leaves
+--   the advisory lock below held (stalling the incremental rollup job) until
+--   the session ends. One-shot `psql -f` is safe: session exit releases it.
+--
 --   CHUNKING: keep each run to <= 1 day of raw data. check_results can hold
 --   millions of rows per day; one giant range bloats the transaction, holds
 --   the rollup advisory lock for a long time (stalling the incremental job),
 --   and risks statement timeouts. Loop over consecutive [start, end) days.
+--
+--   WARNING — RETENTION: never run this over ranges at or older than any
+--   tenant's raw retention horizon (tenants.data_retention_days). Raw rows
+--   there have been pruned, so the replace-semantics rebuild would UNDERCOUNT
+--   any bucket that straddles the horizon (rebuilt from only the surviving
+--   raws). Rollups for fully-pruned history must be left untouched.
 --
 -- SEMANTICS
 --   * Buckets are REBUILT from raw rows and REPLACED wholesale
@@ -109,6 +120,11 @@ WHERE cr.result_source = 'monitor'
   AND date_trunc('hour', cr.created_at) >= date_trunc('hour', :'start'::timestamptz)
   AND date_trunc('hour', cr.created_at) < :'end'::timestamptz
   AND date_trunc('hour', cr.created_at) < cursor_cap.hour_cap
+  -- Redundant with the bucket predicates above (a strict superset of the
+  -- bucket-snapped range); present only to enable index range scans on
+  -- created_at instead of full table scans.
+  AND cr.created_at >= date_trunc('hour', :'start'::timestamptz)
+  AND cr.created_at < :'end'::timestamptz + interval '1 hour'
 GROUP BY cr.tenant_id, cr.monitor_id, date_trunc('hour', cr.created_at)
 ON CONFLICT (monitor_id, bucket_hour) DO UPDATE SET
     tenant_id = EXCLUDED.tenant_id,
@@ -156,6 +172,11 @@ WHERE cr.result_source = 'monitor'
   AND date_trunc('day', cr.created_at) >= date_trunc('day', :'start'::timestamptz)
   AND date_trunc('day', cr.created_at) < :'end'::timestamptz
   AND date_trunc('day', cr.created_at) < cursor_cap.day_cap
+  -- Redundant with the bucket predicates above (a strict superset of the
+  -- bucket-snapped range); present only to enable index range scans on
+  -- created_at instead of full table scans.
+  AND cr.created_at >= date_trunc('day', :'start'::timestamptz)
+  AND cr.created_at < :'end'::timestamptz + interval '1 day'
 GROUP BY cr.tenant_id, cr.monitor_id, date_trunc('day', cr.created_at)
 ON CONFLICT (monitor_id, bucket_day) DO UPDATE SET
     tenant_id = EXCLUDED.tenant_id,
