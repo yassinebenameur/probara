@@ -79,10 +79,17 @@ type statusPageIncidentView struct {
 }
 
 type statusPageSectionView struct {
-	ID           string
-	Title        string
-	MonitorCount int
-	Monitors     []statusPageMonitorView
+	ID               string
+	Title            string
+	MonitorCount     int
+	OperationalCount int
+	DegradedCount    int
+	DownCount        int
+	MaintenanceCount int
+	UnknownCount     int
+	ToneClass        string
+	StatusSummary    string
+	Monitors         []statusPageMonitorView
 }
 
 type statusPageMonitorView struct {
@@ -261,21 +268,27 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 			switch renderMonitor.ToneClass {
 			case "ok":
 				view.OperationalCount++
+				renderSection.OperationalCount++
 			case "warn":
 				view.DegradedCount++
 				view.IssueCount++
+				renderSection.DegradedCount++
 			case "down":
 				view.DownCount++
 				view.IssueCount++
+				renderSection.DownCount++
 			case "maint":
 				view.MaintenanceCount++
 				view.IssueCount++
+				renderSection.MaintenanceCount++
 			default:
 				view.UnknownCount++
 				view.IssueCount++
+				renderSection.UnknownCount++
 			}
 		}
 
+		renderSection.ToneClass, renderSection.StatusSummary = sectionStatus(renderSection)
 		view.Sections = append(view.Sections, renderSection)
 	}
 
@@ -323,6 +336,23 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	})
 
 	return view
+}
+
+// sectionStatus rolls a section's monitor tones up to a single worst-status
+// tone plus a short human summary shown next to the section title.
+func sectionStatus(section statusPageSectionView) (string, string) {
+	switch {
+	case section.DownCount > 0:
+		return "down", fmt.Sprintf("%d down", section.DownCount)
+	case section.DegradedCount > 0:
+		return "warn", fmt.Sprintf("%d degraded", section.DegradedCount)
+	case section.UnknownCount > 0:
+		return "unknown", fmt.Sprintf("%d unknown", section.UnknownCount)
+	case section.MaintenanceCount > 0:
+		return "maint", fmt.Sprintf("%d in maintenance", section.MaintenanceCount)
+	default:
+		return "ok", "Operational"
+	}
 }
 
 func buildStatusPageIncidentView(incident StatusPageIncident) statusPageIncidentView {
@@ -1163,7 +1193,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     }
     .uptime-bars {
       display: flex;
-      gap: 1.5px;
+      gap: 2px;
       height: 44px;
       align-items: flex-end;
     }
@@ -1237,18 +1267,38 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       padding-right: 16px;
     }
     .filter-sel:hover { color: var(--text); }
-    .svc-group { margin-bottom: 36px; }
+    .svc-group { margin-bottom: 32px; }
     .svc-group.hidden { display: none; }
     .group-label {
-      font: 500 .75rem var(--mono);
-      text-transform: uppercase;
-      letter-spacing: .1em;
-      color: var(--text-muted);
-      margin-bottom: 10px;
-      padding-left: 4px;
       display: flex;
       align-items: center;
       gap: 10px;
+      font-size: .92rem;
+      font-weight: 600;
+      letter-spacing: -.01em;
+      color: var(--text);
+      margin-bottom: 10px;
+      padding: 2px 4px;
+    }
+    summary.group-label {
+      list-style: none;
+      cursor: pointer;
+      user-select: none;
+      border-radius: var(--radius-sm);
+    }
+    summary.group-label::-webkit-details-marker { display: none; }
+    summary.group-label:hover .group-chevron { color: var(--text); }
+    .group-chevron {
+      color: var(--text-dim);
+      font: 500 .85rem var(--mono);
+      transition: transform .3s var(--ease);
+      flex-shrink: 0;
+    }
+    .svc-group:not([open]) > summary .group-chevron { transform: rotate(-90deg); }
+    .group-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .group-label .group-count {
       font: .65rem var(--mono);
@@ -1259,7 +1309,33 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       border-radius: var(--radius-pill);
       letter-spacing: .02em;
       font-weight: 400;
+      flex-shrink: 0;
     }
+    .group-rule {
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+      min-width: 16px;
+    }
+    .group-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font: 500 .66rem var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      flex-shrink: 0;
+    }
+    .gs-ok { color: var(--green); }
+    .gs-ok .status-dot { background: var(--green); box-shadow: 0 0 8px var(--green-glow); }
+    .gs-warn { color: var(--yellow); }
+    .gs-warn .status-dot { background: var(--yellow); box-shadow: 0 0 8px var(--yellow-glow); }
+    .gs-down { color: var(--red); }
+    .gs-down .status-dot { background: var(--red); box-shadow: 0 0 8px var(--red-glow); }
+    .gs-maint { color: var(--blue); }
+    .gs-maint .status-dot { background: var(--blue); box-shadow: 0 0 8px var(--blue-glow); }
+    .gs-unknown { color: var(--gray); }
+    .gs-unknown .status-dot { background: var(--gray); box-shadow: 0 0 8px var(--gray-glow); }
     .group-cards { display: flex; flex-direction: column; gap: 8px; }
     .svc-row {
       background: var(--surface-card);
@@ -1428,7 +1504,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     }
     .expanded-bars {
       display: flex;
-      gap: 1.5px;
+      gap: 2px;
       height: 28px;
       align-items: flex-end;
     }
@@ -1463,9 +1539,10 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .bar {
       flex: 1;
       min-width: 1px;
-      border-radius: 999px;
-      transition: all .18s;
-      cursor: crosshair;
+      border-radius: 2px;
+      transition: opacity .15s, filter .15s, transform .15s;
+      cursor: pointer;
+      transform-origin: center bottom;
     }
     .bar.good { background: var(--green); }
     .bar.warn { background: var(--yellow); }
@@ -1473,29 +1550,69 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .bar.nodata { background: var(--border); }
     .uptime-bars .bar {
       height: 100%;
-      opacity: .72;
+      opacity: .78;
+      border-radius: 3px;
     }
-    .uptime-bars .bar.warn { height: 60%; opacity: .88; }
-    .uptime-bars .bar.bad { height: 30%; opacity: 1; }
-    .uptime-bars .bar:hover { opacity: 1; filter: brightness(1.25); }
+    .uptime-bars .bar.warn,
+    .uptime-bars .bar.bad { opacity: 1; }
+    .uptime-bars .bar.warn { box-shadow: 0 0 10px var(--yellow-glow); }
+    .uptime-bars .bar.bad { box-shadow: 0 0 10px var(--red-glow); }
+    .uptime-bars .bar:hover {
+      opacity: 1;
+      filter: brightness(1.15);
+      transform: scaleY(1.05);
+    }
     .monitor-bar .bar {
-      opacity: .52;
+      opacity: .55;
+      border-radius: 1px;
     }
-    .monitor-bar .bar.warn { opacity: .82; }
+    .monitor-bar .bar.warn,
     .monitor-bar .bar.bad { opacity: .95; }
     .monitor-bar .bar:hover {
-      filter: brightness(1.35);
-      transform: scaleY(2.3);
+      filter: brightness(1.3);
+      transform: scaleY(1.8);
     }
     .expanded-bars .bar {
       height: 100%;
-      opacity: .62;
+      opacity: .72;
     }
-    .expanded-bars .bar.warn { height: 60%; opacity: .84; }
-    .expanded-bars .bar.bad { height: 30%; opacity: 1; }
+    .expanded-bars .bar.warn,
+    .expanded-bars .bar.bad { opacity: 1; }
     .expanded-bars .bar:hover {
-      filter: brightness(1.25);
-      transform: scaleY(1.12);
+      filter: brightness(1.15);
+      transform: scaleY(1.06);
+    }
+    .bar-tooltip {
+      position: fixed;
+      z-index: 300;
+      pointer-events: none;
+      display: grid;
+      gap: 1px;
+      background: var(--surface-card);
+      border: 1px solid var(--border-hover);
+      border-radius: var(--radius-sm);
+      padding: 7px 11px;
+      font: .66rem var(--mono);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+      opacity: 0;
+      transform: translate(-50%, -100%);
+      transition: opacity .12s var(--ease);
+      white-space: nowrap;
+    }
+    .bar-tooltip.visible { opacity: 1; }
+    .bar-tooltip .tip-value {
+      font-size: .8rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .bar-tooltip .tip-value.good { color: var(--green); }
+    .bar-tooltip .tip-value.warn { color: var(--yellow); }
+    .bar-tooltip .tip-value.bad { color: var(--red); }
+    .bar-tooltip .tip-value.nodata { color: var(--text-dim); }
+    .bar-tooltip .tip-label {
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .04em;
     }
     .incidents-section { margin-bottom: 48px; }
     .inc-card {
@@ -1601,19 +1718,34 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       font-size: .6rem;
       margin: 0 2px;
     }
-    body.compact .hero { padding: 40px 0 24px; }
-    body.compact .hero h1 { font-size: 2rem; margin-bottom: 8px; }
-    body.compact .tagline { font-size: .92rem; margin-bottom: 8px; }
-    body.compact .uptime-bars { height: 28px; }
-    body.compact .uptime-section { margin-bottom: 32px; }
-    body.compact .svc-header { padding: 12px 16px 4px; }
-    body.compact .svc-name { font-size: .85rem; }
-    body.compact .svc-right { gap: 16px; }
-    body.compact .svc-group { margin-bottom: 28px; }
-    body.compact .monitor-bar { height: 2px; margin: 4px 16px 6px; }
+    body.compact .hero { padding: 36px 0 18px; }
+    body.compact .hero h1 { font-size: 1.6rem; margin-bottom: 6px; }
+    body.compact .overall-badge { margin-bottom: 16px; }
+    body.compact .tagline,
+    body.compact .hero-summary { display: none; }
+    body.compact .meta-line { margin-bottom: 22px; gap: 14px; }
+    body.compact .uptime-section { padding: 14px 18px; margin-bottom: 20px; }
+    body.compact .uptime-head { margin-bottom: 8px; }
+    body.compact .uptime-bars { height: 20px; }
+    body.compact .uptime-foot { margin-top: 6px; }
+    body.compact .uptime-pct { font-size: 1.1rem; }
+    body.compact .range-section { margin-bottom: 18px; padding: 8px 14px; }
+    body.compact .toolbar { margin-bottom: 14px; padding: 6px 14px; }
+    body.compact .svc-group { margin-bottom: 18px; }
+    body.compact .group-label { margin-bottom: 6px; font-size: .84rem; }
+    body.compact .group-cards { gap: 4px; }
+    body.compact .svc-header { padding: 7px 14px 4px; }
+    body.compact .svc-left { gap: 10px; }
+    body.compact .svc-name { font-size: .82rem; }
+    body.compact .svc-meta { display: none; }
+    body.compact .svc-type { font-size: .56rem; padding: 1px 5px; }
+    body.compact .svc-right { gap: 14px; }
+    body.compact .svc-metric-label { display: none; }
+    body.compact .status-badge { min-width: 84px; font-size: .64rem; }
+    body.compact .monitor-bar { height: 2px; margin: 0 14px 7px; }
     body.compact .details-content { padding-bottom: 16px; }
-    body.compact .group-label { margin-bottom: 4px; }
-    body.compact .meta-line { margin-bottom: 28px; }
+    body.compact .incidents-section { margin-bottom: 28px; }
+    body.compact .inc-card { padding: 16px 18px; }
     body.kiosk { overflow: hidden; }
     body.kiosk .header,
     body.kiosk main,
@@ -1724,23 +1856,65 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .kiosk-grid-wrap {
       flex: 1;
       overflow-y: auto;
-      padding: 12px;
+      padding: 12px 14px 16px;
+    }
+    .kiosk-section.hidden { display: none; }
+    .kiosk-section + .kiosk-section { margin-top: 16px; }
+    .kiosk-section-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      padding: 0 2px;
+    }
+    .kiosk-section-title {
+      font: 600 .78rem var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .kiosk-section-count {
+      font: .62rem var(--mono);
+      color: var(--text-dim);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 0 6px;
+      border-radius: var(--radius-pill);
+      flex-shrink: 0;
+    }
+    .kiosk-section-rule {
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+      min-width: 16px;
+    }
+    .kiosk-section-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: 500 .62rem var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      flex-shrink: 0;
     }
     .kiosk-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-      gap: 6px;
+      grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+      gap: 5px;
     }
     .k-tile {
       background: var(--surface-card);
       border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: 12px 14px 8px;
+      border-radius: var(--radius-sm);
+      padding: 9px 11px 7px;
       position: relative;
       border-left: 3px solid transparent;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 4px;
       transition: all .25s;
     }
     .k-tile:hover { background: var(--surface-hover); }
@@ -1838,7 +2012,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       .svc-metric { min-width: 0; }
       /* Keep status pill text on phones — it's the primary signal */
       .status-badge { min-width: auto; font-size: .62rem; letter-spacing: 0; }
-      .mode-btn span { display: none; }
+      .mode-btn { padding: 6px 8px; font-size: .6rem; }
       .toolbar { border-radius: var(--radius-md); padding: 8px 14px; flex-direction: column; align-items: stretch; }
       .search-wrap { border-right: none; padding-right: 0; margin-right: 0; }
       .filters { justify-content: space-between; }
@@ -1890,34 +2064,47 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         <button type="button" class="kiosk-exit" id="kioskExitBtn">Esc Exit</button>
       </div>
     </div>
-    <div class="kiosk-grid-wrap">
-      <div class="kiosk-grid" id="kioskGrid">
-        {{range .Monitors}}
-          <article class="k-tile t-{{.ToneClass}} kiosk-tile" data-search="{{.SearchText}}" data-status="{{.Status}}">
-            <div class="k-tile-head">
-              <div class="k-tile-name">{{.Name}}</div>
-              <span class="k-tile-dot"></span>
-            </div>
-            <div class="k-tile-sub">{{.TypeLabel}} · {{.LastCheckAgo}}</div>
-            <div class="k-tile-metrics">
-              <span>{{.LatencyText}}</span>
-              <span>{{.SummaryMetric}}</span>
-            </div>
-            {{if $.ShowMonitorUptime}}
-              <div
-                class="k-tile-bar js-strip"
-                data-strip-kind="kiosk"
-                data-active-range="{{$.DefaultRange}}"
-                data-cells="{{$.MonitorStripCells}}"
-                data-range-24h="{{.History24hJSON}}"
-                data-range-7d="{{.History7dJSON}}"
-                data-range-30d="{{.History30dJSON}}"
-                data-range-90d="{{.History90dJSON}}"
-              ></div>
+    <div class="kiosk-grid-wrap" id="kioskGrid">
+      {{range .Sections}}
+        <section class="kiosk-section kiosk-section-group" data-section-id="{{.ID}}">
+          <div class="kiosk-section-head">
+            <span class="kiosk-section-title">{{.Title}}</span>
+            <span class="kiosk-section-count">{{.MonitorCount}}</span>
+            <span class="kiosk-section-rule"></span>
+            <span class="kiosk-section-status gs-{{.ToneClass}}">
+              <span class="status-dot"></span>
+              <span>{{.StatusSummary}}</span>
+            </span>
+          </div>
+          <div class="kiosk-grid">
+            {{range .Monitors}}
+              <article class="k-tile t-{{.ToneClass}} kiosk-tile" data-search="{{.SearchText}}" data-status="{{.Status}}">
+                <div class="k-tile-head">
+                  <div class="k-tile-name">{{.Name}}</div>
+                  <span class="k-tile-dot"></span>
+                </div>
+                <div class="k-tile-sub">{{.TypeLabel}} · {{.LastCheckAgo}}</div>
+                <div class="k-tile-metrics">
+                  <span>{{.LatencyText}}</span>
+                  <span>{{.SummaryMetric}}</span>
+                </div>
+                {{if $.ShowMonitorUptime}}
+                  <div
+                    class="k-tile-bar js-strip"
+                    data-strip-kind="kiosk"
+                    data-active-range="{{$.DefaultRange}}"
+                    data-cells="{{$.MonitorStripCells}}"
+                    data-range-24h="{{.History24hJSON}}"
+                    data-range-7d="{{.History7dJSON}}"
+                    data-range-30d="{{.History30dJSON}}"
+                    data-range-90d="{{.History90dJSON}}"
+                  ></div>
+                {{end}}
+              </article>
             {{end}}
-          </article>
-        {{end}}
-      </div>
+          </div>
+        </section>
+      {{end}}
     </div>
   </div>
 
@@ -2046,11 +2233,17 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
 
     <section id="servicesList">
       {{range .Sections}}
-        <div class="svc-group monitor-section-group" data-section-id="{{.ID}}">
-          <div class="group-label">
+        <details class="svc-group monitor-section-group" data-section-id="{{.ID}}" open>
+          <summary class="group-label">
+            <span class="group-chevron">⌄</span>
             <span class="group-title">{{.Title}}</span>
             <span class="group-count" data-monitor-count>{{.MonitorCount}}</span>
-          </div>
+            <span class="group-rule"></span>
+            <span class="group-status gs-{{.ToneClass}}">
+              <span class="status-dot"></span>
+              <span>{{.StatusSummary}}</span>
+            </span>
+          </summary>
           <div class="group-cards">
             {{range .Monitors}}
               <details class="svc-row monitor-card" data-monitor-id="{{.ID}}" data-search="{{.SearchText}}" data-status="{{.Status}}">
@@ -2168,7 +2361,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
               </details>
             {{end}}
           </div>
-        </div>
+        </details>
       {{end}}
       <div class="empty-state hidden" id="emptyState">
         <div>
@@ -2244,6 +2437,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           sectionGroups: Array.from(document.querySelectorAll('.monitor-section-group')),
           rows: Array.from(document.querySelectorAll('.monitor-card')),
           kioskTiles: Array.from(document.querySelectorAll('.kiosk-tile')),
+          kioskSections: Array.from(document.querySelectorAll('.kiosk-section-group')),
           emptyState: document.getElementById('emptyState'),
           searchInput: document.getElementById('statusPageSearch'),
           statusFilter: document.getElementById('statusFilter'),
@@ -2331,6 +2525,14 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         return Math.max(1, parseInt(el.dataset.cells || '24', 10) || 24);
       }
 
+      function escapeAttr(value) {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
       function renderStrip(el, raw, range) {
         const points = parseStripData(raw);
         const cells = stripCells(el, range);
@@ -2340,11 +2542,58 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         }
         el.innerHTML = filled.map(function (point) {
           const tone = toneForUptime(point.uptime);
-          const label = String(point.label || '').trim();
-          const summary = point.uptime >= 0 ? point.uptime.toFixed(2) + '%' : 'No data';
-          const title = label ? label + ': ' + summary : summary;
-          return '<span class="bar ' + tone + '" title="' + title + '"></span>';
+          const label = escapeAttr(String(point.label || '').trim());
+          const value = point.uptime >= 0 ? point.uptime.toFixed(2) + '%' : '';
+          return '<span class="bar ' + tone + '" data-label="' + label + '" data-value="' + value + '"></span>';
         }).join('');
+      }
+
+      function setupBarTooltip() {
+        const tip = document.createElement('div');
+        tip.className = 'bar-tooltip';
+        tip.setAttribute('aria-hidden', 'true');
+        const tipValue = document.createElement('span');
+        tipValue.className = 'tip-value';
+        const tipLabel = document.createElement('span');
+        tipLabel.className = 'tip-label';
+        tip.appendChild(tipValue);
+        tip.appendChild(tipLabel);
+        document.body.appendChild(tip);
+
+        function hideTip() {
+          tip.classList.remove('visible');
+        }
+
+        document.addEventListener('mouseover', function (event) {
+          const bar = event.target.closest('.js-strip .bar');
+          if (!bar) {
+            hideTip();
+            return;
+          }
+          const value = bar.dataset.value || '';
+          const label = bar.dataset.label || '';
+          let tone = 'nodata';
+          if (value) {
+            tone = bar.classList.contains('bad') ? 'bad' : bar.classList.contains('warn') ? 'warn' : 'good';
+          }
+          tipValue.textContent = value || 'No data';
+          tipValue.className = 'tip-value ' + tone;
+          tipLabel.textContent = label;
+          tipLabel.style.display = label ? '' : 'none';
+          tip.classList.add('visible');
+
+          const rect = bar.getBoundingClientRect();
+          const half = tip.offsetWidth / 2;
+          const left = Math.max(half + 8, Math.min(rect.left + rect.width / 2, window.innerWidth - half - 8));
+          tip.style.left = left + 'px';
+          tip.style.top = Math.max(rect.top - 8, 8) + 'px';
+        });
+        document.addEventListener('mouseout', function (event) {
+          if (!event.relatedTarget) {
+            hideTip();
+          }
+        });
+        document.addEventListener('scroll', hideTip, true);
       }
 
       function applyRange(range, syncUrl) {
@@ -2436,11 +2685,28 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           tile.classList.toggle('hidden', !(matchesQuery && matchesStatus));
         });
 
+        // While a search/status filter is active every matching section is
+        // forced open so results stay visible; once cleared, the visitor's
+        // saved collapse preferences are restored.
+        const filtering = Boolean(query) || activeStatus !== 'all';
+        const collapsedSections = filtering ? null : new Set(readCollapsedSectionIds());
         dom.sectionGroups.forEach(function (section) {
           const visibleCount = dom.rows.filter(function (row) {
             return row.closest('.monitor-section-group') === section && !row.classList.contains('hidden');
           }).length;
           section.classList.toggle('hidden', visibleCount === 0);
+          if (filtering) {
+            section.open = true;
+          } else if (collapsedSections) {
+            section.open = !collapsedSections.has(section.dataset.sectionId || '');
+          }
+        });
+
+        dom.kioskSections.forEach(function (section) {
+          const visibleTiles = dom.kioskTiles.filter(function (tile) {
+            return tile.closest('.kiosk-section-group') === section && !tile.classList.contains('hidden');
+          }).length;
+          section.classList.toggle('hidden', visibleTiles === 0);
         });
 
         if (dom.emptyState) {
@@ -2520,6 +2786,30 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         });
       }
 
+      function collapsedSectionsKey() {
+        return 'status-page-collapsed-' + (body.dataset.statusPageSlug || '');
+      }
+
+      function readCollapsedSectionIds() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(collapsedSectionsKey()) || '[]');
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+          return [];
+        }
+      }
+
+      function saveCollapsedSectionIds() {
+        const collapsed = getDom().sectionGroups.filter(function (section) {
+          return !section.open && section.dataset.sectionId;
+        }).map(function (section) {
+          return section.dataset.sectionId;
+        });
+        try {
+          localStorage.setItem(collapsedSectionsKey(), JSON.stringify(collapsed));
+        } catch (err) {}
+      }
+
       function replaceLiveRegion(id, nextDoc) {
         const current = document.getElementById(id);
         const incoming = nextDoc.getElementById(id);
@@ -2541,6 +2831,14 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           }
         });
         document.addEventListener('click', function (event) {
+          const sectionSummary = event.target.closest('.monitor-section-group > summary');
+          if (sectionSummary) {
+            // The details element toggles after this handler runs, so persist
+            // the collapse state on the next tick.
+            window.setTimeout(saveCollapsedSectionIds, 0);
+            return;
+          }
+
           const rangeBtn = event.target.closest('[data-range-pill]');
           if (rangeBtn) {
             applyRange(rangeBtn.dataset.rangePill || defaultRange, true);
@@ -2566,6 +2864,13 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
 
       function setupShortcuts() {
         document.addEventListener('keydown', function (event) {
+          if (event.ctrlKey || event.metaKey || event.altKey) {
+            return;
+          }
+          const targetTag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
+          if (event.key !== 'Escape' && (targetTag === 'input' || targetTag === 'select' || targetTag === 'textarea')) {
+            return;
+          }
           const dom = getDom();
           if (event.key === '/') {
             if (dom.searchInput) {
@@ -2681,6 +2986,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       setupControls();
       setupShortcuts();
       setupClock();
+      setupBarTooltip();
       applyViewState();
       setupLiveRefresh();
     })();

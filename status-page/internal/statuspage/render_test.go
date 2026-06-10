@@ -215,7 +215,19 @@ func TestRenderPublicStatusPage_IncludesToolbarForMultipleMonitors(t *testing.T)
 	}
 	assertStripPointCount(t, html, `class="monitor-bar js-strip"[\s\S]*?data-range-30d="([^"]+)"`, 60)
 	assertStripPointCount(t, html, `class="monitor-bar js-strip"[\s\S]*?data-range-90d="([^"]+)"`, 60)
-	for _, want := range []string{`Core`, `Edge`, `data-section-id="section-core"`, `data-section-id="section-edge"`} {
+	for _, want := range []string{
+		`Core`,
+		`Edge`,
+		`<details class="svc-group monitor-section-group" data-section-id="section-core" open>`,
+		`<details class="svc-group monitor-section-group" data-section-id="section-edge" open>`,
+		`class="group-status gs-ok"`,
+		`class="group-status gs-warn"`,
+		`>Operational<`,
+		`>1 degraded<`,
+		`class="kiosk-section kiosk-section-group" data-section-id="section-core"`,
+		`class="kiosk-section kiosk-section-group" data-section-id="section-edge"`,
+		`class="kiosk-section-status gs-warn"`,
+	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("expected rendered HTML to contain section marker %q", want)
 		}
