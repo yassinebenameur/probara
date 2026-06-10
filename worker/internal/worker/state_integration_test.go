@@ -37,7 +37,7 @@ func TestPersistResultAdvancesMonitorState(t *testing.T) {
 
 	persist := func(status string) {
 		t.Helper()
-		if err := w.persistResultAndState(ctx, tenantID, monitorID, uuid.New(), &CheckResult{Status: status}, time.Now()); err != nil {
+		if _, err := w.persistResultAndState(ctx, tenantID, monitorID, uuid.New(), &CheckResult{Status: status}, time.Now()); err != nil {
 			t.Fatalf("persist %s: %v", status, err)
 		}
 	}

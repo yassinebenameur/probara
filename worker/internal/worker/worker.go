@@ -25,6 +25,12 @@ import (
 const checkJobStreamMaxAge = 24 * time.Hour
 const consumerRestartBackoff = 2 * time.Second
 
+// statusPublisher is the minimal publishing surface the worker needs. It is
+// satisfied by *statusupdates.Publisher and by test spies.
+type statusPublisher interface {
+	Publish(event statusupdates.Event) error
+}
+
 // Worker represents the worker service
 type Worker struct {
 	config  *config.WorkerConfig
@@ -32,7 +38,7 @@ type Worker struct {
 	metrics *metrics.Registry
 	db      *db.Client
 	queue   *queue.Client
-	status  *statusupdates.Publisher
+	status  statusPublisher
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -329,17 +335,23 @@ func (w *Worker) persistResult(ctx context.Context, job *models.Job, payload *mo
 	if err != nil {
 		return fmt.Errorf("invalid job_id: %w", err)
 	}
-	if err := w.persistResultAndState(ctx, tenantID, monitorID, jobID, checkResult, startedAt); err != nil {
+	transition, err := w.persistResultAndState(ctx, tenantID, monitorID, jobID, checkResult, startedAt)
+	if err != nil {
 		return err
 	}
-	w.publishStatusUpdate(monitorID, tenantID)
+	// Only state transitions are published; per-result events flooded the
+	// status-page service (and connected browsers) with no visible change.
+	if transition.Changed {
+		w.publishStatusUpdate(monitorID, tenantID, "state_change")
+	}
 	return nil
 }
 
 // persistResultAndState inserts the check result and advances the monitor's
 // state machine in one transaction. The monitor row is locked so concurrent
-// workers serialize their transitions (spec §5).
-func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID, jobID uuid.UUID, checkResult *CheckResult, startedAt time.Time) error {
+// workers serialize their transitions (spec §5). It returns the applied
+// transition so callers can react to state changes (zero value on error).
+func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID, jobID uuid.UUID, checkResult *CheckResult, startedAt time.Time) (monitorstate.Transition, error) {
 	completedAt := time.Now()
 	metricsData := checkResult.MetricsData
 	if len(metricsData) == 0 {
@@ -348,7 +360,7 @@ func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID,
 
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin result transaction: %w", err)
+		return monitorstate.Transition{}, fmt.Errorf("begin result transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -361,7 +373,7 @@ func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID,
 		FOR UPDATE
 	`, monitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &threshold)
 	if err != nil {
-		return fmt.Errorf("lock monitor state: %w", err)
+		return monitorstate.Transition{}, fmt.Errorf("lock monitor state: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `
@@ -375,7 +387,7 @@ func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID,
 		checkResult.LatencyMs, checkResult.ErrorMessage,
 		checkResult.MatchedBodySubstring, metricsData,
 		startedAt, startedAt, completedAt); err != nil {
-		return fmt.Errorf("failed to insert check result: %w", err)
+		return monitorstate.Transition{}, fmt.Errorf("failed to insert check result: %w", err)
 	}
 
 	transition := monitorstate.Apply(snap, monitorstate.IsFailureStatus(checkResult.Status), threshold)
@@ -387,13 +399,13 @@ func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID,
 			updated_at = NOW()
 		WHERE id = $4
 	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, monitorID); err != nil {
-		return fmt.Errorf("update monitor state: %w", err)
+		return monitorstate.Transition{}, fmt.Errorf("update monitor state: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit result transaction: %w", err)
+		return monitorstate.Transition{}, fmt.Errorf("commit result transaction: %w", err)
 	}
-	return nil
+	return transition, nil
 }
 
 // persistExpiredJob persists an expired job as an error result
@@ -452,16 +464,18 @@ func (w *Worker) persistExpiredJob(ctx context.Context, job *models.Job) error {
 		return fmt.Errorf("failed to insert expired job result: %w", err)
 	}
 
-	w.publishStatusUpdate(monitorID, tenantID)
+	// No status update is published here: platform-sourced results are
+	// excluded from public status queries and never run the state machine,
+	// so this event could never change what a status page shows.
 	return nil
 }
 
-func (w *Worker) publishStatusUpdate(monitorID, tenantID uuid.UUID) {
+func (w *Worker) publishStatusUpdate(monitorID, tenantID uuid.UUID, eventType string) {
 	if w.status == nil {
 		return
 	}
 	event := statusupdates.Event{
-		Type:      "check_result",
+		Type:      eventType,
 		MonitorID: monitorID.String(),
 		TenantID:  tenantID.String(),
 		Timestamp: time.Now().UTC(),
