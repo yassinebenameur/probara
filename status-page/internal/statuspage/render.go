@@ -178,21 +178,22 @@ func expandedStripCellCount(rangeName string) int {
 	}
 }
 
+// publicStatusPageTmpl is parsed once at package init; the template source is
+// large (~200KB), so re-parsing per request is wasteful. Execute is safe for
+// concurrent use.
+var publicStatusPageTmpl = template.Must(template.New("public_status_page").Funcs(template.FuncMap{
+	"expandedStripCells": expandedStripCellCount,
+	"globalStripCells":   globalStripCellCount,
+	"join":               strings.Join,
+	"monitorStripCells":  monitorStripCellCount,
+	"typeIcon":           typeIcon,
+}).Parse(publicStatusPageTemplate))
+
 func renderPublicStatusPage(data *StatusPageData, apiEnabled bool) (string, error) {
 	view := buildStatusPageRenderView(data, apiEnabled)
-	tmpl, err := template.New("public_status_page").Funcs(template.FuncMap{
-		"expandedStripCells": expandedStripCellCount,
-		"globalStripCells":   globalStripCellCount,
-		"join":               strings.Join,
-		"monitorStripCells":  monitorStripCellCount,
-		"typeIcon":           typeIcon,
-	}).Parse(publicStatusPageTemplate)
-	if err != nil {
-		return "", err
-	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, view); err != nil {
+	if err := publicStatusPageTmpl.Execute(&buf, view); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

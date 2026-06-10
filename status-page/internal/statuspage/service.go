@@ -424,6 +424,7 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 	defer rows.Close()
 
 	incidents := make([]StatusPageIncident, 0)
+	incidentIDs := make([]uuid.UUID, 0)
 	for rows.Next() {
 		var incident StatusPageIncident
 		var incidentID uuid.UUID
@@ -437,82 +438,113 @@ func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tena
 			incident.ResolvedAt = &resolvedTime
 		}
 
-		incident.AffectedComponents, err = s.loadIncidentAffectedComponents(ctx, incidentID, statusPageID)
-		if err != nil {
-			return nil, err
-		}
-		incident.Updates, err = s.loadIncidentPublicUpdates(ctx, tenantID, incidentID)
-		if err != nil {
-			return nil, err
-		}
-
 		incidents = append(incidents, incident)
+		incidentIDs = append(incidentIDs, incidentID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate published incidents: %w", err)
 	}
 
+	componentsByIncident, err := s.batchIncidentAffectedComponents(ctx, statusPageID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+	updatesByIncident, err := s.batchIncidentPublicUpdates(ctx, tenantID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range incidents {
+		incidentID := incidentIDs[i]
+		if components, ok := componentsByIncident[incidentID]; ok {
+			incidents[i].AffectedComponents = components
+		} else {
+			incidents[i].AffectedComponents = make([]string, 0)
+		}
+		if updates, ok := updatesByIncident[incidentID]; ok {
+			incidents[i].Updates = updates
+		} else {
+			incidents[i].Updates = make([]StatusPageIncidentUpdate, 0)
+		}
+	}
+
 	return incidents, nil
 }
 
-func (s *Service) loadIncidentAffectedComponents(ctx context.Context, incidentID, statusPageID uuid.UUID) ([]string, error) {
+// batchIncidentAffectedComponents fetches the affected component names for all
+// given incidents in a single query, keyed by incident ID. Per-incident
+// ordering (monitor name ASC) matches the previous per-incident query.
+func (s *Service) batchIncidentAffectedComponents(ctx context.Context, statusPageID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	result := make(map[uuid.UUID][]string, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.name
+		SELECT ispm.incident_id, m.name
 		FROM incident_status_page_monitors ispm
 		JOIN monitors m ON m.id = ispm.monitor_id
-		WHERE ispm.incident_id = $1 AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
+		WHERE ispm.incident_id = ANY($1) AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
 		ORDER BY m.name ASC
-	`, incidentID, statusPageID)
+	`, pq.Array(incidentIDs), statusPageID)
 	if err != nil {
 		return nil, fmt.Errorf("query incident affected components: %w", err)
 	}
 	defer rows.Close()
 
-	components := make([]string, 0)
 	for rows.Next() {
+		var incidentID uuid.UUID
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		if err := rows.Scan(&incidentID, &name); err != nil {
 			return nil, fmt.Errorf("scan incident affected component: %w", err)
 		}
 		if strings.TrimSpace(name) != "" {
-			components = append(components, strings.TrimSpace(name))
+			result[incidentID] = append(result[incidentID], strings.TrimSpace(name))
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate incident affected components: %w", err)
 	}
 
-	return components, nil
+	return result, nil
 }
 
-func (s *Service) loadIncidentPublicUpdates(ctx context.Context, tenantID, incidentID uuid.UUID) ([]StatusPageIncidentUpdate, error) {
+// batchIncidentPublicUpdates fetches the public timeline updates for all given
+// incidents in a single query, keyed by incident ID. Per-incident ordering
+// (created_at DESC, id DESC) matches the previous per-incident query.
+func (s *Service) batchIncidentPublicUpdates(ctx context.Context, tenantID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]StatusPageIncidentUpdate, error) {
+	result := make(map[uuid.UUID][]StatusPageIncidentUpdate, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT message, created_at
+		SELECT incident_id, message, created_at
 		FROM incident_timeline_entries
-		WHERE tenant_id = $1 AND incident_id = $2 AND entry_type = 'public_update'
+		WHERE tenant_id = $1 AND incident_id = ANY($2) AND entry_type = 'public_update'
 		ORDER BY created_at DESC, id DESC
-	`, tenantID, incidentID)
+	`, tenantID, pq.Array(incidentIDs))
 	if err != nil {
 		return nil, fmt.Errorf("query incident public updates: %w", err)
 	}
 	defer rows.Close()
 
-	updates := make([]StatusPageIncidentUpdate, 0)
 	for rows.Next() {
+		var incidentID uuid.UUID
 		var update StatusPageIncidentUpdate
-		if err := rows.Scan(&update.Message, &update.CreatedAt); err != nil {
+		if err := rows.Scan(&incidentID, &update.Message, &update.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan incident public update: %w", err)
 		}
 		update.Message = strings.TrimSpace(update.Message)
 		if update.Message != "" {
-			updates = append(updates, update)
+			result[incidentID] = append(result[incidentID], update)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate incident public updates: %w", err)
 	}
 
-	return updates, nil
+	return result, nil
 }
 
 // GetGlobal5MinuteUptime calculates 5-minute bucket uptime across all monitors in a status page for the last 1 hour
@@ -1052,23 +1084,31 @@ type CurrentStatus struct {
 	TLSNotAfter        string
 }
 
-// GetMonitorCurrentStatus gets the latest check result for a monitor
+// GetMonitorCurrentStatus gets the current status derived from the monitor's persisted state and
+// the latest check result (for display fields). Status is derived from current_state, not the
+// raw result status, for consistency with batchCurrentStatus.
 func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenantID uuid.UUID) (*CurrentStatus, error) {
 	query := `
-		SELECT status, http_status, latency_ms, created_at, metrics_data
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2
-		ORDER BY created_at DESC
-		LIMIT 1
+		SELECT mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		FROM monitors mon
+		LEFT JOIN LATERAL (
+			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+			FROM check_results cr
+			WHERE cr.monitor_id = mon.id AND cr.tenant_id = $2
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) cr ON TRUE
+		WHERE mon.id = $1
 	`
 
-	var status string
+	var currentState string
+	var resultStatus sql.NullString
 	var httpStatus sql.NullInt64
 	var latencyMS sql.NullInt64
-	var createdAt time.Time
+	var createdAt sql.NullTime
 	var metricsJSON []byte
 
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&status, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
+	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("no check results found")
@@ -1077,8 +1117,11 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 	}
 
 	result := &CurrentStatus{
-		Status:        mapResultStatus(status),
-		LastCheckTime: &createdAt,
+		Status: mapMonitorState(currentState),
+	}
+	if createdAt.Valid {
+		t := createdAt.Time
+		result.LastCheckTime = &t
 	}
 
 	if httpStatus.Valid {
@@ -1575,38 +1618,30 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 		return []HourlyUptime{}, nil
 	}
 
+	// Read the rollup cursor first and pass all hour-strip bounds as parameters:
+	// bounds derived from a CTE join on rollup_job_state cannot be pushed into
+	// index conditions on check_results.created_at and forced a full sequential scan.
+	cursor, err := sharedanalytics.LoadRollupCursor(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	startHour := now.Truncate(time.Hour).Add(-23 * time.Hour)
+	endExclusive := now.Truncate(time.Hour).Add(time.Hour)
+	rawStart := cursor.RawStart(startHour)
+
 	query := `
-		WITH rollup_state AS (
-			SELECT last_created_at, last_check_result_id
-			FROM rollup_job_state
-			WHERE job_name = 'monitor_daily_rollups'
-		),
-		bounds AS (
-			SELECT
-				date_trunc('hour', NOW() - INTERVAL '23 hours') AS start_hour,
-				date_trunc('hour', NOW()) + INTERVAL '1 hour' AS end_exclusive
-		),
-		raw_bounds AS MATERIALIZED (
-			SELECT
-				b.start_hour,
-				b.end_exclusive,
-				COALESCE(GREATEST(b.start_hour, rs.last_created_at), b.start_hour) AS raw_start,
-				rs.last_created_at,
-				COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid) AS last_check_result_id
-			FROM bounds b
-			LEFT JOIN rollup_state rs ON TRUE
-		),
-		rollup_per_hour AS (
+		WITH rollup_per_hour AS (
 			SELECT
 				mhr.bucket_hour,
 				SUM(mhr.total_checks)::bigint AS total_checks,
 				SUM(mhr.success_checks)::bigint AS success_checks
 			FROM monitor_hourly_rollups mhr
-			CROSS JOIN bounds b
 			WHERE mhr.tenant_id = $1
 			  AND mhr.monitor_id = ANY($2)
-			  AND mhr.bucket_hour >= b.start_hour
-			  AND mhr.bucket_hour < b.end_exclusive
+			  AND mhr.bucket_hour >= $3
+			  AND mhr.bucket_hour < $4
 			GROUP BY mhr.bucket_hour
 		),
 		raw_per_hour AS (
@@ -1615,18 +1650,14 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 				COUNT(*)::bigint AS total_checks,
 				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks
 			FROM check_results cr
-			CROSS JOIN raw_bounds rb
 			WHERE cr.tenant_id = $1
 			  AND cr.monitor_id = ANY($2)
 			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= rb.raw_start
-			  AND cr.created_at < rb.end_exclusive
+			  AND cr.created_at >= $5
+			  AND cr.created_at < $4
 			  AND (
-				rb.last_created_at IS NULL
-				OR (cr.created_at, cr.id) > (
-					rb.last_created_at,
-					rb.last_check_result_id
-				)
+				$6::timestamptz IS NULL
+				OR (cr.created_at, cr.id) > ($6::timestamptz, $7::uuid)
 			  )
 			GROUP BY 1
 		)
@@ -1634,14 +1665,13 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 			b.bucket_hour,
 			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
 			COALESCE(rh.success_checks, 0) + COALESCE(rwh.success_checks, 0) AS success_checks
-		FROM bounds bounds
-		CROSS JOIN generate_series(bounds.start_hour, bounds.end_exclusive - INTERVAL '1 hour', INTERVAL '1 hour') AS b(bucket_hour)
+		FROM generate_series($3::timestamptz, $4::timestamptz - INTERVAL '1 hour', INTERVAL '1 hour') AS b(bucket_hour)
 		LEFT JOIN rollup_per_hour rh ON rh.bucket_hour = b.bucket_hour
 		LEFT JOIN raw_per_hour rwh ON rwh.bucket_hour = b.bucket_hour
 		ORDER BY b.bucket_hour
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs))
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs), startHour, endExclusive, rawStart, cursor.LastCreatedAt, cursor.LastCheckResultID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hourly uptime: %w", err)
 	}

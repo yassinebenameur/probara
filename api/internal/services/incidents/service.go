@@ -792,14 +792,18 @@ func (s *Service) EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tena
 	if tenantID == uuid.Nil {
 		return fmt.Errorf("tenant id is required")
 	}
-	if alert.TenantID == uuid.Nil || alert.ID == uuid.Nil || alert.MonitorID == uuid.Nil || alert.AlertPolicyID == uuid.Nil {
-		return fmt.Errorf("alert automation requires non-nil tenant, alert, monitor, and policy ids")
+	if alert.TenantID == uuid.Nil || alert.ID == uuid.Nil || alert.MonitorID == uuid.Nil {
+		return fmt.Errorf("alert automation requires non-nil tenant, alert, and monitor ids")
+	}
+	// Lifecycle alerts (alert_policy_id = NULL) bypass policy-driven incident automation.
+	if alert.AlertPolicyID == nil {
+		return nil
 	}
 	if alert.TenantID != tenantID {
 		return fmt.Errorf("alert tenant mismatch")
 	}
 
-	enabled, err := s.loadCreateIncidentOnFireFlagTx(ctx, tx, tenantID, alert.AlertPolicyID)
+	enabled, err := s.loadCreateIncidentOnFireFlagTx(ctx, tx, tenantID, *alert.AlertPolicyID)
 	if err != nil {
 		return err
 	}
@@ -807,7 +811,7 @@ func (s *Service) EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tena
 		return nil
 	}
 
-	if err := s.lockAutoIncidentKeyTx(ctx, tx, tenantID, alert.MonitorID, alert.AlertPolicyID); err != nil {
+	if err := s.lockAutoIncidentKeyTx(ctx, tx, tenantID, alert.MonitorID, *alert.AlertPolicyID); err != nil {
 		return err
 	}
 
@@ -1010,7 +1014,11 @@ func (s *Service) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, te
 	}
 
 	incidentID = uuid.New()
-	title, summary := buildAutoIncidentNarrative(alert.MonitorName, alert.PolicyName)
+	policyNameStr := ""
+	if alert.PolicyName != nil {
+		policyNameStr = *alert.PolicyName
+	}
+	title, summary := buildAutoIncidentNarrative(alert.MonitorName, policyNameStr)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO incidents (
 			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id, created_at, updated_at
@@ -1190,7 +1198,7 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		FROM incident_alerts ia
 		JOIN alerts a ON a.id = ia.alert_id
 		JOIN monitors m ON m.id = a.monitor_id
-		JOIN alert_policies ap ON ap.id = a.alert_policy_id
+		LEFT JOIN alert_policies ap ON ap.id = a.alert_policy_id
 		WHERE ia.incident_id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC, a.id DESC
 	`, incidentID, tenantID)
@@ -1205,10 +1213,11 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		var acknowledgedAt sql.NullTime
 		var resolvedAt sql.NullTime
 		var lastError sql.NullString
+		var policyName sql.NullString
 		if err := rows.Scan(
 			&item.ID, &item.MonitorID, &item.AlertPolicyID, &item.Status, &item.TriggeredAt,
 			&acknowledgedAt, &resolvedAt, &item.FailureCount, &lastError, &item.CreatedAt, &item.UpdatedAt,
-			&item.MonitorName, &item.PolicyName,
+			&item.MonitorName, &policyName,
 		); err != nil {
 			return nil, fmt.Errorf("scan incident alert: %w", err)
 		}
@@ -1223,6 +1232,9 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		if lastError.Valid {
 			value := lastError.String
 			item.LastError = &value
+		}
+		if policyName.Valid {
+			item.PolicyName = &policyName.String
 		}
 		alerts = append(alerts, item)
 	}

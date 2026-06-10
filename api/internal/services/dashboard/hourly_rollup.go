@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -17,9 +18,12 @@ import (
 // window AND fully covered by the rollup cursor) with check_results for the
 // partial leading hour, the partial trailing hour, and anything after the cursor.
 //
-// FailureChecks includes rollup-era bad checks (total − success) because
-// monitor_hourly_rollups has no failure/error breakdown. ErrorChecks is therefore
-// an undercount for the rollup region and reflects only raw-edge errors.
+// Rollup rows carry an error_checks breakdown (migration 000047), so
+// ErrorChecks counts rollup-era errors plus raw-edge errors, and
+// FailureChecks counts the remaining rollup-era bad checks
+// (total − success − error) plus raw-edge failures. Rollup rows written
+// before the error_checks backfill have error_checks = 0, in which case all
+// their bad checks fall back to FailureChecks (the pre-000047 behavior).
 type MonitorRolling24hTotals struct {
 	TotalChecks   int
 	SuccessChecks int
@@ -46,87 +50,75 @@ type MonitorRolling24hTotals struct {
 //
 // rollup_end == leading_edge_end means the rollup contributes nothing (e.g. the
 // cursor lags by more than a day) and the entire window comes from raw.
+//
+// The rollup cursor is read in a separate cheap query and every bound is
+// computed in Go and passed as a parameter: bounds derived from a CTE join on
+// rollup_job_state cannot be pushed into index conditions on
+// check_results.created_at and forced full sequential scans.
 func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uuid.UUID, monitorIDs []uuid.UUID, now time.Time) (map[uuid.UUID]MonitorRolling24hTotals, error) {
 	if len(monitorIDs) == 0 {
 		return map[uuid.UUID]MonitorRolling24hTotals{}, nil
 	}
 
+	cursor, err := analytics.LoadRollupCursor(ctx, dbClient)
+	if err != nil {
+		return nil, err
+	}
+
 	now = now.UTC()
 	wStart := now.Add(-24 * time.Hour)
 	wEnd := now
+	leadingEdgeEnd := wStart.Truncate(time.Hour).Add(time.Hour)
+	trailingEdgeStart := wEnd.Truncate(time.Hour)
+	rollupEnd := cursor.RollupEnd(leadingEdgeEnd, trailingEdgeStart)
+	rawTailStart := cursor.RawTailStart(leadingEdgeEnd, trailingEdgeStart)
 
 	query := `
-		WITH rollup_state AS (
-			SELECT last_created_at, last_check_result_id
-			FROM rollup_job_state
-			WHERE job_name = 'monitor_daily_rollups'
-		),
-		bounds AS (
-			SELECT
-				$2::timestamptz AS w_start,
-				$3::timestamptz AS w_end,
-				date_trunc('hour', $2::timestamptz) + INTERVAL '1 hour' AS leading_edge_end,
-				date_trunc('hour', $3::timestamptz) AS trailing_edge_start
-		),
-		rollup_window AS (
-			SELECT
-				b.w_start,
-				b.w_end,
-				b.leading_edge_end,
-				b.trailing_edge_start,
-				LEAST(
-					b.trailing_edge_start,
-					COALESCE(date_trunc('hour', rs.last_created_at), b.leading_edge_end)
-				) AS rollup_end
-			FROM bounds b
-			LEFT JOIN rollup_state rs ON TRUE
-		),
-		rollup_totals AS (
+		WITH rollup_totals AS (
 			SELECT
 				mhr.monitor_id,
 				SUM(mhr.total_checks)::bigint AS total_checks,
 				SUM(mhr.success_checks)::bigint AS success_checks,
+				SUM(mhr.error_checks)::bigint AS error_checks,
 				SUM(mhr.latency_success_sum_ms) AS latency_sum_ms,
 				SUM(mhr.latency_success_count)::bigint AS latency_count
 			FROM monitor_hourly_rollups mhr
-			CROSS JOIN rollup_window rw
 			WHERE mhr.tenant_id = $1
 			  AND mhr.monitor_id = ANY($4)
-			  AND mhr.bucket_hour >= rw.leading_edge_end
-			  AND mhr.bucket_hour < rw.rollup_end
+			  AND mhr.bucket_hour >= $5
+			  AND mhr.bucket_hour < $6
 			GROUP BY mhr.monitor_id
 		),
 		-- Raw edge rows are the partial leading hour and the trailing/past-cursor
 		-- tail: everything in the exact window NOT covered by the rollup region
-		-- [leading_edge_end, rollup_end). Selecting them as two direct indexed
-		-- ranges (instead of scanning the full 24h and discarding the rollup
-		-- region with a filter) lets Postgres use the (tenant_id, monitor_id,
-		-- created_at) index to touch only the ~edge rows. The two ranges are
-		-- disjoint: range 1 ends at leading_edge_end and range 2 starts at
-		-- GREATEST(rollup_end, leading_edge_end) >= leading_edge_end. When the
-		-- rollup contributes nothing (rollup_end <= leading_edge_end) the ranges
-		-- meet at leading_edge_end and together cover the whole window. This is
-		-- exactly equivalent to the previous full-scan + edge filter.
+		-- [leading_edge_end ($5), rollup_end ($6)). Selecting them as two direct
+		-- indexed ranges with parameter bounds (instead of scanning the full 24h
+		-- and discarding the rollup region with a filter) lets Postgres use the
+		-- (tenant_id, monitor_id, created_at) index to touch only the ~edge rows.
+		-- The two ranges are disjoint: range 1 ends at leading_edge_end and
+		-- range 2 starts at $7 = GREATEST(rollup_end, leading_edge_end), computed
+		-- in Go, which is >= leading_edge_end. When the rollup contributes
+		-- nothing (rollup_end <= leading_edge_end) the ranges meet at
+		-- leading_edge_end and together cover the whole window. This is exactly
+		-- equivalent to the previous full-scan + edge filter.
 		raw_edge_rows AS MATERIALIZED (
 			SELECT cr.monitor_id, cr.status, cr.latency_ms, cr.created_at
 			FROM check_results cr
-			CROSS JOIN rollup_window rw
 			WHERE cr.tenant_id = $1
 			  AND cr.monitor_id = ANY($4)
 			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= rw.w_start
-			  AND cr.created_at < rw.leading_edge_end
+			  AND cr.created_at >= $2
+			  AND cr.created_at < $5
 
 			UNION ALL
 
 			SELECT cr.monitor_id, cr.status, cr.latency_ms, cr.created_at
 			FROM check_results cr
-			CROSS JOIN rollup_window rw
 			WHERE cr.tenant_id = $1
 			  AND cr.monitor_id = ANY($4)
 			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= GREATEST(rw.rollup_end, rw.leading_edge_end)
-			  AND cr.created_at < rw.w_end
+			  AND cr.created_at >= $7
+			  AND cr.created_at < $3
 		),
 		raw_complement AS (
 			SELECT
@@ -146,11 +138,10 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 				mhr.latest_status,
 				mhr.latest_check_at
 			FROM monitor_hourly_rollups mhr
-			CROSS JOIN rollup_window rw
 			WHERE mhr.tenant_id = $1
 			  AND mhr.monitor_id = ANY($4)
-			  AND mhr.bucket_hour >= rw.leading_edge_end
-			  AND mhr.bucket_hour < rw.rollup_end
+			  AND mhr.bucket_hour >= $5
+			  AND mhr.bucket_hour < $6
 			ORDER BY mhr.monitor_id, mhr.bucket_hour DESC
 		),
 		latest_raw AS (
@@ -168,6 +159,7 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			COALESCE(rc.failure_checks, 0) AS failure_checks_raw,
 			COALESCE(rc.error_checks, 0) AS error_checks_raw,
 			(COALESCE(rt.total_checks, 0) - COALESCE(rt.success_checks, 0)) AS bad_checks_rollup,
+			COALESCE(rt.error_checks, 0) AS error_checks_rollup,
 			COALESCE(rt.latency_sum_ms, 0) + COALESCE(rc.latency_sum_ms, 0) AS latency_sum_ms,
 			COALESCE(rt.latency_count, 0) + COALESCE(rc.latency_count, 0) AS latency_count,
 			CASE
@@ -185,7 +177,7 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 		WHERE m.id = ANY($4) AND m.tenant_id = $1
 	`
 
-	rows, err := dbClient.QueryContext(ctx, query, tenantID, wStart, wEnd, pq.Array(monitorIDs))
+	rows, err := dbClient.QueryContext(ctx, query, tenantID, wStart, wEnd, pq.Array(monitorIDs), leadingEdgeEnd, rollupEnd, rawTailStart)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query exact-rolling 24h summary: %w", err)
 	}
@@ -194,16 +186,17 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 	out := make(map[uuid.UUID]MonitorRolling24hTotals, len(monitorIDs))
 	for rows.Next() {
 		var (
-			monitorID       uuid.UUID
-			totalChecks     int64
-			successChecks   int64
-			failureCountRaw int64
-			errorCountRaw   int64
-			badChecksRollup int64
-			latencySumMS    float64
-			latencyCount    int64
-			latestStatus    sql.NullString
-			latestCheckAt   sql.NullTime
+			monitorID         uuid.UUID
+			totalChecks       int64
+			successChecks     int64
+			failureCountRaw   int64
+			errorCountRaw     int64
+			badChecksRollup   int64
+			errorChecksRollup int64
+			latencySumMS      float64
+			latencyCount      int64
+			latestStatus      sql.NullString
+			latestCheckAt     sql.NullTime
 		)
 		if err := rows.Scan(
 			&monitorID,
@@ -212,6 +205,7 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			&failureCountRaw,
 			&errorCountRaw,
 			&badChecksRollup,
+			&errorChecksRollup,
 			&latencySumMS,
 			&latencyCount,
 			&latestStatus,
@@ -220,14 +214,24 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 			return nil, fmt.Errorf("failed to scan rolling 24h summary row: %w", err)
 		}
 
-		// Rollup region does not break out failure vs error, so we attribute the
-		// rollup-era bad checks to FailureChecks. The raw-edge counts still
-		// preserve the breakdown for the partial leading/trailing/past-cursor portion.
+		// Rollup rows break out error_checks (migration 000047): attribute
+		// those to ErrorChecks and the remaining rollup-era bad checks
+		// (total − success − error) to FailureChecks. Rows written before the
+		// error_checks backfill have error_checks = 0, so their bad checks
+		// all land in FailureChecks exactly as before.
+		//
+		// Clamp the rollup-attributed failure component to >= 0 so a future
+		// backfill/manual write that violates the error_checks <= total -
+		// success invariant cannot push FailureChecks negative.
+		failureChecksRollup := badChecksRollup - errorChecksRollup
+		if failureChecksRollup < 0 {
+			failureChecksRollup = 0
+		}
 		row := MonitorRolling24hTotals{
 			TotalChecks:   int(totalChecks),
 			SuccessChecks: int(successChecks),
-			FailureChecks: int(failureCountRaw) + int(badChecksRollup),
-			ErrorChecks:   int(errorCountRaw),
+			FailureChecks: int(failureCountRaw) + int(failureChecksRollup),
+			ErrorChecks:   int(errorCountRaw) + int(errorChecksRollup),
 			LatencySumMS:  latencySumMS,
 			LatencyCount:  int(latencyCount),
 		}
@@ -261,6 +265,11 @@ type HourlyBucketPoint struct {
 
 // loadHourlyBucketSeries24h returns 24 hour-aligned bucket points ending at
 // date_trunc('hour', now). Empty input returns 24 empty buckets.
+//
+// The rollup cursor is read first in a separate cheap query so the raw scan's
+// start bound ($5) is a plain parameter the planner can push into the
+// (tenant_id, monitor_id, created_at) index; a bounds CTE joining
+// rollup_job_state forced a full sequential scan of check_results.
 func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uuid.UUID, monitorIDs []uuid.UUID, now time.Time) ([]HourlyBucketPoint, error) {
 	now = now.UTC()
 	endHour := now.Truncate(time.Hour)
@@ -275,27 +284,18 @@ func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uui
 		return series, nil
 	}
 
+	cursor, err := analytics.LoadRollupCursor(ctx, dbClient)
+	if err != nil {
+		return nil, err
+	}
+	rawStart := cursor.RawStart(startHour)
+
 	query := `
-			WITH rollup_state AS (
-				SELECT last_created_at, last_check_result_id
-				FROM rollup_job_state
-				WHERE job_name = 'monitor_daily_rollups'
-			),
-			raw_bounds AS MATERIALIZED (
-				SELECT
-					$2::timestamptz AS start_hour,
-					$3::timestamptz AS end_exclusive,
-					COALESCE(GREATEST($2::timestamptz, rs.last_created_at), $2::timestamptz) AS raw_start,
-					rs.last_created_at,
-					COALESCE(rs.last_check_result_id, '00000000-0000-0000-0000-000000000000'::uuid) AS last_check_result_id
-				FROM (SELECT 1) anchor
-				LEFT JOIN rollup_state rs ON TRUE
-			),
-			rollup_per_hour AS (
-				SELECT
-					mhr.bucket_hour,
-					SUM(mhr.total_checks)::bigint AS total_checks,
-					SUM(mhr.success_checks)::bigint AS success_checks,
+		WITH rollup_per_hour AS (
+			SELECT
+				mhr.bucket_hour,
+				SUM(mhr.total_checks)::bigint AS total_checks,
+				SUM(mhr.success_checks)::bigint AS success_checks,
 				SUM(mhr.latency_success_sum_ms) AS latency_sum_ms,
 				SUM(mhr.latency_success_count)::bigint AS latency_count
 			FROM monitor_hourly_rollups mhr
@@ -310,24 +310,20 @@ func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uui
 				date_trunc('hour', cr.created_at) AS bucket_hour,
 				COUNT(*)::bigint AS total_checks,
 				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks,
-					COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
-					COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
-				FROM check_results cr
-				CROSS JOIN raw_bounds rb
-				WHERE cr.tenant_id = $1
-				  AND cr.monitor_id = ANY($4)
-				  AND cr.result_source <> 'platform'
-				  AND cr.created_at >= rb.raw_start
-				  AND cr.created_at < rb.end_exclusive
-				  AND (
-					rb.last_created_at IS NULL
-					OR (cr.created_at, cr.id) > (
-						rb.last_created_at,
-						rb.last_check_result_id
-					)
-				  )
-				GROUP BY 1
-			)
+				COALESCE(SUM(cr.latency_ms) FILTER (WHERE cr.status = 'success' AND cr.latency_ms IS NOT NULL), 0)::double precision AS latency_sum_ms,
+				COUNT(cr.latency_ms) FILTER (WHERE cr.status = 'success')::bigint AS latency_count
+			FROM check_results cr
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($4)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $5
+			  AND cr.created_at < $3
+			  AND (
+				$6::timestamptz IS NULL
+				OR (cr.created_at, cr.id) > ($6::timestamptz, $7::uuid)
+			  )
+			GROUP BY 1
+		)
 		SELECT
 			b.bucket_hour,
 			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
@@ -340,7 +336,7 @@ func loadHourlyBucketSeries24h(ctx context.Context, dbClient db.DB, tenantID uui
 		ORDER BY b.bucket_hour
 	`
 
-	rows, err := dbClient.QueryContext(ctx, query, tenantID, startHour, endExclusive, pq.Array(monitorIDs))
+	rows, err := dbClient.QueryContext(ctx, query, tenantID, startHour, endExclusive, pq.Array(monitorIDs), rawStart, cursor.LastCreatedAt, cursor.LastCheckResultID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hourly bucket series: %w", err)
 	}

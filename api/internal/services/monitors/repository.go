@@ -26,11 +26,13 @@ type Repository interface {
 	VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error
 	VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
 	SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error
-	BulkAttachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error)
-	BulkDetachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error)
 	GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
 	GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 	GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
+	// monitor_channels management
+	ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error
+	DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error
+	GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error)
 }
 
 // PostgresRepository implements Repository for PostgreSQL
@@ -49,11 +51,13 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL)
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, $16, $17)
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, current_state
 	`
 
 	var tags []string
@@ -63,11 +67,13 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 		monitor.IntervalSeconds, monitor.TimeoutSeconds, monitor.AlertPolicyID,
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
 		monitor.CreatedAt, monitor.UpdatedAt,
+		monitor.ConsecutiveFailuresThreshold, monitor.NotificationMode,
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.CurrentState,
 	)
 
 	if err != nil {
@@ -83,7 +89,8 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 	query := `
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, current_state
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
@@ -96,6 +103,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.CurrentState,
 	)
 
 	if err != nil {
@@ -142,7 +150,8 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, current_state
 		FROM monitors
 		%s
 		ORDER BY created_at DESC
@@ -167,6 +176,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 			&monitor.AlertPolicyID, &monitor.Enabled,
 			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.CurrentState,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan monitor: %w", err)
@@ -213,7 +223,8 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		WHERE id = $%d AND tenant_id = $%d AND deleted_at IS NULL
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, current_state
 	`, setClause, whereArgIndex, whereArgIndex+1)
 
 	var tags []string
@@ -223,6 +234,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.CurrentState,
 	)
 
 	if err != nil {
@@ -479,140 +491,96 @@ func (r *PostgresRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID
 	return memberIDs, nil
 }
 
-// BulkAttachAlertPolicy inserts (monitor, policy) rows into monitor_alert_policies for
-// monitors that don't already have the link. It also seeds the legacy monitors.alert_policy_id
-// column on rows where it is currently NULL. Returns the IDs of monitors actually changed.
-//
-// Caller is expected to have already verified that all monitorIDs belong to tenantID.
-// The tenant filter is repeated in the SQL for defense-in-depth.
-func (r *PostgresRepository) BulkAttachAlertPolicy(
-	ctx context.Context,
-	tenantID uuid.UUID,
-	monitorIDs []uuid.UUID,
-	policyID uuid.UUID,
-) ([]uuid.UUID, error) {
-	if len(monitorIDs) == 0 {
-		return nil, nil
-	}
 
+// ReplaceMonitorChannels atomically replaces all channel assignments for a monitor.
+// Each channel is validated against alert_channels to prevent cross-tenant assignments.
+func (r *PostgresRepository) ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Insert links for monitors that don't already have one.
-	// RETURNING tells us which rows were actually inserted.
-	insertQuery := `
-		INSERT INTO monitor_alert_policies (monitor_id, alert_policy_id, created_at)
-		SELECT m.id, $2, NOW()
-		FROM monitors m
-		WHERE m.id = ANY($1) AND m.tenant_id = $3 AND m.deleted_at IS NULL
-		ON CONFLICT (monitor_id, alert_policy_id) DO NOTHING
-		RETURNING monitor_id
-	`
-	rows, err := tx.QueryContext(ctx, insertQuery, pq.Array(monitorIDs), policyID, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to attach alert policy: %w", err)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_channels WHERE monitor_id = $1`, monitorID); err != nil {
+		return fmt.Errorf("failed to clear monitor channels: %w", err)
 	}
-	defer rows.Close()
 
-	var changed []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("failed to scan changed monitor: %w", err)
+	for _, c := range channels {
+		channelID, err := uuid.Parse(c.ChannelID)
+		if err != nil {
+			return fmt.Errorf("invalid channel_id %q: %w", c.ChannelID, err)
 		}
-		changed = append(changed, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating changed monitors: %w", err)
-	}
-
-	// Keep the legacy monitors.alert_policy_id mirror in sync: seed it on rows
-	// where it is currently NULL.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE monitors
-		SET alert_policy_id = $2
-		WHERE id = ANY($1) AND tenant_id = $3 AND alert_policy_id IS NULL AND deleted_at IS NULL
-	`, pq.Array(monitorIDs), policyID, tenantID); err != nil {
-		return nil, fmt.Errorf("failed to seed legacy alert_policy_id: %w", err)
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO monitor_channels (monitor_id, channel_id, delay_seconds)
+			SELECT $1, $2, $3
+			WHERE EXISTS (SELECT 1 FROM alert_channels WHERE id = $2 AND tenant_id = $4)
+		`, monitorID, channelID, c.DelaySeconds, tenantID)
+		if err != nil {
+			return fmt.Errorf("failed to insert monitor channel: %w", err)
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed to check rows affected: %w", err)
+		}
+		if n == 0 {
+			return fmt.Errorf("channel %s not found or does not belong to tenant", c.ChannelID)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit bulk attach: %w", err)
+		return fmt.Errorf("failed to commit monitor channels: %w", err)
 	}
-	return changed, nil
+	return nil
 }
 
-// BulkDetachAlertPolicy removes (monitor, policy) rows from monitor_alert_policies for the
-// given monitors. It also keeps the legacy monitors.alert_policy_id mirror in sync:
-// on any monitor where alert_policy_id equals the detached policy, replace it with the
-// remaining "first" policy from the join table (or NULL).
-// Returns the IDs of monitors actually changed.
-func (r *PostgresRepository) BulkDetachAlertPolicy(
-	ctx context.Context,
-	tenantID uuid.UUID,
-	monitorIDs []uuid.UUID,
-	policyID uuid.UUID,
-) ([]uuid.UUID, error) {
+// DeleteMonitorChannels removes all channel assignments for a monitor.
+func (r *PostgresRepository) DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM monitor_channels WHERE monitor_id = $1`, monitorID); err != nil {
+		return fmt.Errorf("failed to delete monitor channels: %w", err)
+	}
+	return nil
+}
+
+// GetChannelsForMonitors loads monitor_channels rows for a set of monitors,
+// returning a map keyed by monitor ID.
+func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error) {
+	result := make(map[uuid.UUID][]models.MonitorChannelAssignment)
 	if len(monitorIDs) == 0 {
-		return nil, nil
+		return result, nil
 	}
 
-	tx, err := r.db.BeginTx(ctx, nil)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT mc.monitor_id, mc.channel_id, ac.name, ac.type, mc.delay_seconds
+		FROM monitor_channels mc
+		JOIN alert_channels ac ON ac.id = mc.channel_id
+		WHERE mc.monitor_id = ANY($1)
+		ORDER BY mc.monitor_id, mc.channel_id
+	`, pq.Array(monitorIDs))
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	deleteQuery := `
-		DELETE FROM monitor_alert_policies map
-		USING monitors m
-		WHERE map.monitor_id = m.id
-		  AND m.tenant_id = $3
-		  AND map.monitor_id = ANY($1)
-		  AND map.alert_policy_id = $2
-		RETURNING map.monitor_id
-	`
-	rows, err := tx.QueryContext(ctx, deleteQuery, pq.Array(monitorIDs), policyID, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to detach alert policy: %w", err)
+		return nil, fmt.Errorf("failed to query monitor channels: %w", err)
 	}
 	defer rows.Close()
 
-	var changed []uuid.UUID
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("failed to scan changed monitor: %w", err)
+		var monitorID uuid.UUID
+		var channelID uuid.UUID
+		var channelName string
+		var channelType string
+		var delaySeconds int
+		if err := rows.Scan(&monitorID, &channelID, &channelName, &channelType, &delaySeconds); err != nil {
+			return nil, fmt.Errorf("failed to scan monitor channel: %w", err)
 		}
-		changed = append(changed, id)
+		result[monitorID] = append(result[monitorID], models.MonitorChannelAssignment{
+			ChannelID:    channelID.String(),
+			DelaySeconds: delaySeconds,
+			ChannelName:  channelName,
+			ChannelType:  channelType,
+		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating changed monitors: %w", err)
+		return nil, fmt.Errorf("error iterating monitor channels: %w", err)
 	}
-
-	// Sync legacy alert_policy_id where it matched the detached policy.
-	// Pick the oldest remaining policy from the join table, or NULL if none.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE monitors m
-		SET alert_policy_id = (
-			SELECT map2.alert_policy_id
-			FROM monitor_alert_policies map2
-			WHERE map2.monitor_id = m.id
-			ORDER BY map2.created_at ASC
-			LIMIT 1
-		)
-		WHERE m.id = ANY($1) AND m.tenant_id = $3 AND m.alert_policy_id = $2 AND m.deleted_at IS NULL
-	`, pq.Array(monitorIDs), policyID, tenantID); err != nil {
-		return nil, fmt.Errorf("failed to sync legacy alert_policy_id after detach: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit bulk detach: %w", err)
-	}
-	return changed, nil
+	return result, nil
 }
 
 // Ensure PostgresRepository implements Repository

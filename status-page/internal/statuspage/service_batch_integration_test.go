@@ -119,6 +119,14 @@ func TestService_GetStatusPageBySlug_BatchedShortRangeMatchesPerMonitorHelpers(t
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-4*time.Minute), "success", "monitor", testutil.IntPtr(155))
 	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, now.Add(-10*time.Minute), "success", "monitor", testutil.IntPtr(80))
 
+	// Seed current_state so both helpers return a non-default state and parity can be verified.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, monitorA); err != nil {
+		t.Fatalf("seed current_state: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'up' WHERE id = $1`, monitorB); err != nil {
+		t.Fatalf("seed current_state: %v", err)
+	}
+
 	page, err := svc.GetStatusPageBySlug(ctx, "batch-parity")
 	if err != nil {
 		t.Fatalf("GetStatusPageBySlug() error = %v", err)

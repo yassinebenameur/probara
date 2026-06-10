@@ -108,16 +108,6 @@ func (m *MockMonitorService) DeleteMonitorHistory(ctx context.Context, tenantID,
 	return nil
 }
 
-func (m *MockMonitorService) BulkUpdateAlertPolicy(
-	ctx context.Context,
-	tenantID uuid.UUID,
-	monitorIDs []uuid.UUID,
-	policyID uuid.UUID,
-	op models.BulkAlertPolicyOp,
-) (*models.BulkUpdateAlertPolicyResponse, error) {
-	return &models.BulkUpdateAlertPolicyResponse{}, nil
-}
-
 func (m *MockMonitorService) BulkDeleteMonitors(
 	ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID,
 ) (int64, error) {
@@ -129,6 +119,17 @@ func (m *MockMonitorService) BulkDeleteMonitors(
 		}
 	}
 	return deleted, nil
+}
+
+func (m *MockMonitorService) BulkUpdateAlerting(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	monitorIDs []uuid.UUID,
+	threshold *int,
+	mode *string,
+	channels []models.MonitorChannelAssignment,
+) (int, error) {
+	return len(monitorIDs), nil
 }
 
 type mockNotFoundError struct{}

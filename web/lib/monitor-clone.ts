@@ -108,7 +108,6 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
 
 export function buildClonedMonitorInitialData(monitor: Monitor): CreateMonitorRequest {
   const name = `${monitor.name} (Copy)`;
-  const alertPolicyIds = monitor.alert_policy_ids || (monitor.alert_policy_id ? [monitor.alert_policy_id] : []);
 
   return {
     name,
@@ -117,7 +116,6 @@ export function buildClonedMonitorInitialData(monitor: Monitor): CreateMonitorRe
     interval_seconds: monitor.interval_seconds || 60,
     timeout_seconds: monitor.timeout_seconds || 30,
     enabled: monitor.enabled ?? true,
-    ...(alertPolicyIds.length > 0 ? { alert_policy_ids: cloneObject(alertPolicyIds) } : {}),
     ...(monitor.tags && monitor.tags.length > 0 ? { tags: cloneObject(monitor.tags) } : {}),
   };
 }

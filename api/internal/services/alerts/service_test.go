@@ -136,7 +136,7 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 			m.name as monitor_name, ap.name as policy_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
-		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
@@ -178,7 +178,7 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 			m.name as monitor_name, ap.name as policy_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
-		JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
@@ -207,42 +207,6 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
-}
-
-// TestAlertsByPolicyLimit_Normalization tests the limit clamping for GetAlertsByPolicy
-func TestAlertsByPolicyLimit_Normalization(t *testing.T) {
-	tests := []struct {
-		name          string
-		inputLimit    int
-		expectedLimit int
-	}{
-		{"limit 0 defaults to 10", 0, 10},
-		{"limit -1 defaults to 10", -1, 10},
-		{"limit 1 stays 1", 1, 1},
-		{"limit 10 stays 10", 10, 10},
-		{"limit 100 stays 100", 100, 100},
-		// Note: GetAlertsByPolicy has no upper limit in the current implementation
-		{"limit 1000 stays 1000", 1000, 1000},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeAlertsByPolicyLimit(tt.inputLimit)
-
-			if result != tt.expectedLimit {
-				t.Errorf("normalizeAlertsByPolicyLimit(%d) = %d, want %d", tt.inputLimit, result, tt.expectedLimit)
-			}
-		})
-	}
-}
-
-// normalizeAlertsByPolicyLimit applies the same normalization as GetAlertsByPolicy
-func normalizeAlertsByPolicyLimit(limit int) int {
-	if limit < 1 {
-		limit = 10
-	}
-	// Note: Current implementation has no upper limit
-	return limit
 }
 
 // TestAlertListParams_OffsetCalculation tests the offset calculation

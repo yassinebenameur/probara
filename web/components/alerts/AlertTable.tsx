@@ -156,12 +156,9 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                 )}
               </td>
               <td>
-                <Link 
-                  href={`/alert-policies/${alert.alert_policy_id}`}
-                  className="text-slate-400 hover:text-cyan-400"
-                >
+                <span className="text-slate-400">
                   {alert.policy_name || 'Unknown'}
-                </Link>
+                </span>
               </td>
               <td className="text-slate-400">
                 <div>{formatDate(alert.triggered_at)}</div>

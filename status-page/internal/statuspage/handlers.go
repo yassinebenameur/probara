@@ -1,6 +1,7 @@
 package statuspage
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,21 +15,27 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
+// statusPageBuildTimeout bounds a single load-and-render of a status page.
+// It is intentionally below the server's 60s WriteTimeout safety net.
+const statusPageBuildTimeout = 30 * time.Second
+
 // Handlers handles status page HTTP requests
 type Handlers struct {
 	service *Service
 	config  *config.StatusPageConfig
 	logger  *logger.Logger
 	hub     *Hub
+	cache   *renderCache
 }
 
 // NewHandlers creates a new status page handlers
-func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Logger, hub *Hub) *Handlers {
+func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Logger, hub *Hub, cache *renderCache) *Handlers {
 	return &Handlers{
 		service: service,
 		config:  cfg,
 		logger:  log,
 		hub:     hub,
+		cache:   cache,
 	}
 }
 
@@ -65,9 +72,23 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get status page data
-	ctx := r.Context()
-	data, err := h.service.GetStatusPageBySlug(ctx, slug)
+	// Load and render through the per-slug render cache. The rendered HTML
+	// depends only on the slug (and process-constant config): theme, kiosk and
+	// filter handling are entirely client-side, and no query parameter or
+	// header reaches the renderer — so the slug is the whole cache key.
+	//
+	// The build runs detached from this request's cancellation: with
+	// singleflight, one client disconnecting must not fail the render every
+	// concurrent waiter is collapsed onto. A timeout still bounds the load.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), statusPageBuildTimeout)
+	defer cancel()
+	html, etag, err := h.cache.Get(slug, func() (string, error) {
+		data, err := h.service.GetStatusPageBySlug(ctx, slug)
+		if err != nil {
+			return "", err
+		}
+		return renderPublicStatusPage(data, h.config != nil && strings.TrimSpace(h.config.APIBaseURL) != "")
+	})
 	if err != nil {
 		if err.Error() == "status page not found" {
 			http.Error(w, "Status page not found", http.StatusNotFound)
@@ -76,13 +97,41 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		h.logger.WithFields(map[string]interface{}{
 			"error": err.Error(),
 			"slug":  slug,
-		}).Error("Failed to get status page")
+		}).Error("Failed to build status page")
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Render HTML template
-	h.renderStatusPageHTML(w, data)
+	// no-cache (unlike no-store) lets the browser keep the body and
+	// revalidate it with If-None-Match; a 304 then skips the ~150KB page.
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := w.Write([]byte(html)); err != nil {
+		h.logger.WithError(err).Error("Failed to write status page response")
+	}
+}
+
+// etagMatches reports whether the If-None-Match header value matches etag.
+// Comma-separated candidate lists and the "*" wildcard are honored; a weak
+// validator prefix (W/) is tolerated since the body comparison is exact.
+func etagMatches(ifNoneMatch, etag string) bool {
+	if ifNoneMatch == "" || etag == "" {
+		return false
+	}
+	for _, candidate := range strings.Split(ifNoneMatch, ",") {
+		candidate = strings.TrimSpace(candidate)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleStatusPageData handles GET /public/status/{slug}/data
@@ -282,23 +331,6 @@ func (h *Handlers) HandleAPIProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy.ServeHTTP(w, r)
-}
-
-// renderStatusPageHTML renders the status page HTML template
-func (h *Handlers) renderStatusPageHTML(w http.ResponseWriter, data *StatusPageData) {
-	html, err := renderPublicStatusPage(data, h.config != nil && strings.TrimSpace(h.config.APIBaseURL) != "")
-	if err != nil {
-		h.logger.WithError(err).Error("Failed to render status page")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if _, err := w.Write([]byte(html)); err != nil {
-		h.logger.WithError(err).Error("Failed to write status page response")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
 }
 
 // statusPageTemplate is the embedded HTML template for status pages
@@ -3770,7 +3802,9 @@ const statusPageTemplate = `<!DOCTYPE html>
 
       try {
         const pageUrl = window.location.pathname.replace(/\/$/, "");
-        const response = await fetch(pageUrl, { cache: "no-store" });
+        // no-cache (not no-store) so the browser sends If-None-Match and a
+        // 304 from the server skips re-downloading an unchanged page.
+        const response = await fetch(pageUrl, { cache: "no-cache" });
         if (!response.ok) {
           return;
         }

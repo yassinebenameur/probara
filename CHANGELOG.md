@@ -1,3 +1,40 @@
+# Unreleased — Alerting UX Revamp
+
+
+### BREAKING CHANGES
+
+* **alerting:** Alert policies have been replaced by workspace-level notification settings and per-monitor channel routing. Existing policies were automatically migrated: each policy's channel set becomes either the workspace default (if it was the most common) or a per-monitor custom list. Policies with `failure_threshold=1` are migrated to sensitivity N=1 (alert on first failure); all others to N=2 — review any monitors where the threshold should differ. The `/alert-policies` API endpoints have been removed and now return **410 Gone**. Callers must migrate to `GET/PUT /v1/notification-settings` (workspace defaults) and the per-monitor `notification_channels` / `consecutive_failures_threshold` fields.
+* **alerting:** One open alert per monitor is now enforced. Any monitor that had multiple simultaneous active alerts will have had extras closed by the migration; the new one-alert-per-outage model means duplicate triggers are silently dropped rather than stacked.
+
+
+### Features
+
+* **alerting:** Monitor state machine (unknown → up → suspect → down) replaces the old window-based evaluator. While a monitor is `suspect`, the scheduler issues fast 20-second rechecks before confirming `down`, reducing false alerts on transient blips.
+* **alerting:** Per-channel escalation delays and workspace-level reminder cadence: configure how long to wait before notifying each channel, and how often to re-notify on an ongoing outage.
+* **alerting:** Bulk "Edit alerting" action on the monitors table allows setting channels and sensitivity across many monitors at once.
+* **web:** Day-0 nudge banner prompts workspaces with no notification channels configured to complete setup before their first alert.
+* **api:** New `GET /v1/notification-settings` and `PUT /v1/notification-settings` endpoints expose workspace-wide alert defaults (channels, reminder interval, auto-incident creation toggle).
+* **api:** Monitor create/update now accepts `notification_channels` (per-monitor channel override list) and `consecutive_failures_threshold` (sensitivity N).
+
+
+### Changes
+
+* **status-page:** Public status pages and the internal dashboard now derive monitor status from the persisted state-machine column (`current_state`). A monitor in `suspect` state is shown as operational on public pages to avoid premature customer-visible incidents.
+* **dashboard:** Problem-monitors panel reflects the state-machine `down` state rather than raw consecutive failure counts.
+
+
+### Operations
+
+* **deploy:** The policy→channel-routing backfill in migration `000045` should be validated against a production-like database snapshot before deploying to production. Run the migration in a dry-run or staging environment first and spot-check that channels mapped correctly.
+* **deploy:** The new alerter image must be rolled out **together** with the API, worker, and scheduler images. Deploying the new alerter with an OLD worker leaves all monitor states as `unknown`, so the state machine never transitions to `down` — **no alerts will fire (silent outage)**. The reverse is also unsafe: a new worker writing state-machine state with the old alerter's window-based evaluator will cause missed or duplicate alerts. The worker, scheduler, alerter, and API must all ship in the same deployment.
+
+# [1.0.0-alpha.51](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.50...v1.0.0-alpha.51) (2026-06-02)
+
+
+### Bug Fixes
+
+* **status-page:** use rollups for 24h monitor aggregates ([0a37427](https://github.com/yassinebenameur/probara/commit/0a37427a187774b6c0ea9190343660ddeedfc310))
+
 # [1.0.0-alpha.50](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.49...v1.0.0-alpha.50) (2026-06-02)
 
 

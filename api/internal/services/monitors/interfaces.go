@@ -32,14 +32,15 @@ type MonitorService interface {
 	// DeleteMonitorHistory clears check, alert, and analytics history while preserving the monitor.
 	DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error
 
-	// BulkUpdateAlertPolicy attaches or detaches a single alert policy across many monitors.
-	BulkUpdateAlertPolicy(
+	// BulkUpdateAlerting applies notification-routing fields to many monitors.
+	BulkUpdateAlerting(
 		ctx context.Context,
 		tenantID uuid.UUID,
 		monitorIDs []uuid.UUID,
-		policyID uuid.UUID,
-		op models.BulkAlertPolicyOp,
-	) (*models.BulkUpdateAlertPolicyResponse, error)
+		threshold *int,
+		mode *string,
+		channels []models.MonitorChannelAssignment,
+	) (int, error)
 }
 
 // Ensure Service implements MonitorService

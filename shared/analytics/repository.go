@@ -48,11 +48,21 @@ type uptimeAccumulator struct {
 }
 
 type dayAccumulator struct {
-	totalChecks   int
-	successChecks int
-	avgLatencyMS  *float64
-	latestStatus  *string
-	latestCheckAt *time.Time
+	totalChecks         int
+	successChecks       int
+	latencySuccessSumMS float64
+	latencySuccessCount int
+	latestStatus        *string
+	latestCheckAt       *time.Time
+}
+
+// avgLatencyMS returns the day's average success latency, or nil when the day
+// had no successful checks with latency data.
+func (a dayAccumulator) avgLatencyMS() *float64 {
+	if a.latencySuccessCount <= 0 {
+		return nil
+	}
+	return PtrFloat64(a.latencySuccessSumMS / float64(a.latencySuccessCount))
 }
 
 func (r *Repository) GetScopeAnalytics(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, rangeValue Range, now time.Time) (*Result, error) {
@@ -617,11 +627,10 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 			coverageStart = &day
 		}
 		acc := dayAccumulator{
-			totalChecks:   row.TotalChecks,
-			successChecks: row.SuccessChecks,
-		}
-		if row.LatencySuccessCount > 0 {
-			acc.avgLatencyMS = PtrFloat64(row.LatencySuccessSumMS / float64(row.LatencySuccessCount))
+			totalChecks:         row.TotalChecks,
+			successChecks:       row.SuccessChecks,
+			latencySuccessSumMS: row.LatencySuccessSumMS,
+			latencySuccessCount: row.LatencySuccessCount,
 		}
 		if row.LatestStatus.Valid {
 			status := row.LatestStatus.String
@@ -666,8 +675,8 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 				uptimes = append(uptimes, (float64(stat.successChecks)/float64(stat.totalChecks))*100)
 				point.TotalChecks += stat.totalChecks
 			}
-			if stat.avgLatencyMS != nil {
-				latencies = append(latencies, *stat.avgLatencyMS)
+			if avg := stat.avgLatencyMS(); avg != nil {
+				latencies = append(latencies, *avg)
 			}
 		}
 		point.UptimePct = average(uptimes)
@@ -678,28 +687,30 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 	}
 	res.Series = series
 
+	// Summary semantics (D2): each monitor's SLA/latency is computed over the
+	// WHOLE window — sum(success_checks)/sum(total_checks) across all of the
+	// monitor's daily rollup rows — so every check weighs equally regardless of
+	// which day it landed on. This matches the 24h dashboard math
+	// (computeMonitorWeightedUptime in api/internal/services/dashboard). The
+	// per-day series above intentionally keeps day-scoped rates: averaging
+	// per-day rates here would let a 1-check day weigh as much as a 1000-check
+	// day in the headline number.
 	perMonitorSLA := make([]float64, 0, len(perMonitor))
 	perMonitorLatency := make([]float64, 0, len(perMonitor))
 	for _, stats := range perMonitor {
-		dailyUptimes := make([]float64, 0, len(stats))
-		dailyLatencies := make([]float64, 0, len(stats))
-		var monitorLatest *time.Time
+		var totalChecks, successChecks, latencyCount int
+		var latencySumMS float64
 		for _, stat := range stats {
-			if stat.totalChecks > 0 {
-				dailyUptimes = append(dailyUptimes, (float64(stat.successChecks)/float64(stat.totalChecks))*100)
-			}
-			if stat.avgLatencyMS != nil {
-				dailyLatencies = append(dailyLatencies, *stat.avgLatencyMS)
-			}
-			if stat.latestCheckAt != nil && (monitorLatest == nil || stat.latestCheckAt.After(*monitorLatest)) {
-				monitorLatest = cloneTimePtr(stat.latestCheckAt)
-			}
+			totalChecks += stat.totalChecks
+			successChecks += stat.successChecks
+			latencySumMS += stat.latencySuccessSumMS
+			latencyCount += stat.latencySuccessCount
 		}
-		if len(dailyUptimes) > 0 {
-			perMonitorSLA = append(perMonitorSLA, average(dailyUptimes))
+		if totalChecks > 0 {
+			perMonitorSLA = append(perMonitorSLA, (float64(successChecks)/float64(totalChecks))*100)
 		}
-		if len(dailyLatencies) > 0 {
-			perMonitorLatency = append(perMonitorLatency, average(dailyLatencies))
+		if latencyCount > 0 {
+			perMonitorLatency = append(perMonitorLatency, latencySumMS/float64(latencyCount))
 		}
 	}
 	sla := average(perMonitorSLA)

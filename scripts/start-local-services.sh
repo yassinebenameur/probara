@@ -27,6 +27,29 @@ fail() {
   exit 1
 }
 
+ensure_port_available() {
+  local name="$1"
+  local port="$2"
+
+  local listener_pid
+  listener_pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sed -n '1p' || true)"
+  if [[ -z "$listener_pid" ]]; then
+    return 0
+  fi
+
+  local listener_cmd
+  listener_cmd="$(ps -p "$listener_pid" -o command= 2>/dev/null || true)"
+  if [[ "$listener_cmd" == *"/tmp/probara-bin/$name"* ]]; then
+    log "Port $port already in use by stale ${name} process ($listener_pid); stopping it"
+    kill "$listener_pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$listener_pid" 2>/dev/null || true
+    return 0
+  fi
+
+  fail "Port $port is already in use by pid $listener_pid ($listener_cmd). Stop that process and retry."
+}
+
 ensure_go_toolchain() {
   if ! command -v go >/dev/null 2>&1; then
     fail "Go is not installed. Install Go $REQUIRED_GO_MINOR.x. See $STARTUP_LOG"
@@ -51,6 +74,9 @@ start_service() {
   local log_file="/tmp/probara-${name}.log"
   local pid_file="/tmp/probara-${name}.pid"
   local bin_file="$BIN_DIR/${name}"
+
+  ensure_port_available "$name" "$http_port"
+  ensure_port_available "$name" "$metrics_port"
 
   if [[ -f "$pid_file" ]]; then
     local existing_pid

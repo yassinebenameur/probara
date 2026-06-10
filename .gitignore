@@ -69,3 +69,6 @@ temp/
 # Test/report artifacts
 web/playwright-report/
 web/test-results/
+
+# Visual brainstorming sessions
+.superpowers/

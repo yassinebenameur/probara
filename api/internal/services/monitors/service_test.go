@@ -22,10 +22,6 @@ type MockRepository struct {
 	// Controllable error/return fields for bulk alert policy tests.
 	verifyAlertPolicyErr error
 	verifyMonitorsErr    error
-	bulkAttachChanged    []uuid.UUID
-	bulkAttachErr        error
-	bulkDetachChanged    []uuid.UUID
-	bulkDetachErr        error
 
 	// Soft-delete tracking.
 	bulkSoftDeleted   []uuid.UUID
@@ -112,14 +108,6 @@ func (m *MockRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenan
 	return m.verifyMonitorsErr
 }
 
-func (m *MockRepository) BulkAttachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error) {
-	return m.bulkAttachChanged, m.bulkAttachErr
-}
-
-func (m *MockRepository) BulkDetachAlertPolicy(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, policyID uuid.UUID) ([]uuid.UUID, error) {
-	return m.bulkDetachChanged, m.bulkDetachErr
-}
-
 func (m *MockRepository) SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error {
 	m.policies[monitorID] = policyIDs
 	return nil
@@ -139,6 +127,18 @@ func (m *MockRepository) GetAlertPolicyIDsForMonitors(ctx context.Context, monit
 
 func (m *MockRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
 	return m.members[groupID], nil
+}
+
+func (m *MockRepository) ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error {
+	return nil
+}
+
+func (m *MockRepository) DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error {
+	return nil
+}
+
+func (m *MockRepository) GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error) {
+	return make(map[uuid.UUID][]models.MonitorChannelAssignment), nil
 }
 
 // ErrMonitorNotFound is returned when a monitor is not found
@@ -381,82 +381,6 @@ func TestService_DeleteMonitorHistory_GroupMonitorWithoutMembers(t *testing.T) {
 	}
 	if len(repo.deletedHistoryIDs) != 1 || repo.deletedHistoryIDs[0] != groupID {
 		t.Fatalf("deletedHistoryIDs = %v, want [%s]", repo.deletedHistoryIDs, groupID)
-	}
-}
-
-func TestService_BulkUpdateAlertPolicy_Attach(t *testing.T) {
-	tenantID := uuid.New()
-	policyID := uuid.New()
-	m1, m2, m3 := uuid.New(), uuid.New(), uuid.New()
-
-	repo := NewMockRepository()
-	// Pre-configure mock: VerifyAlertPolicy succeeds, VerifyMonitorsBelongToTenant
-	// succeeds, BulkAttachAlertPolicy reports m1 and m2 changed (m3 already had it).
-	repo.verifyAlertPolicyErr = nil
-	repo.verifyMonitorsErr = nil
-	repo.bulkAttachChanged = []uuid.UUID{m1, m2}
-
-	svc := NewService(repo)
-	resp, err := svc.BulkUpdateAlertPolicy(
-		context.Background(),
-		tenantID,
-		[]uuid.UUID{m1, m2, m3},
-		policyID,
-		models.BulkAlertPolicyOpAttach,
-	)
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Updated != 2 {
-		t.Errorf("expected updated=2, got %d", resp.Updated)
-	}
-	if resp.Unchanged != 1 {
-		t.Errorf("expected unchanged=1, got %d", resp.Unchanged)
-	}
-	if len(resp.MonitorIDsUpdated) != 2 {
-		t.Errorf("expected 2 IDs in MonitorIDsUpdated, got %d", len(resp.MonitorIDsUpdated))
-	}
-}
-
-func TestService_BulkUpdateAlertPolicy_CrossTenantMonitor(t *testing.T) {
-	tenantID := uuid.New()
-	policyID := uuid.New()
-	m1 := uuid.New()
-
-	repo := NewMockRepository()
-	repo.verifyAlertPolicyErr = nil
-	repo.verifyMonitorsErr = fmt.Errorf("one or more monitors not found or do not belong to tenant")
-
-	svc := NewService(repo)
-	_, err := svc.BulkUpdateAlertPolicy(
-		context.Background(),
-		tenantID,
-		[]uuid.UUID{m1},
-		policyID,
-		models.BulkAlertPolicyOpAttach,
-	)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestService_BulkUpdateAlertPolicy_UnknownOp(t *testing.T) {
-	tenantID := uuid.New()
-	policyID := uuid.New()
-	m1 := uuid.New()
-
-	repo := NewMockRepository()
-	svc := NewService(repo)
-	_, err := svc.BulkUpdateAlertPolicy(
-		context.Background(),
-		tenantID,
-		[]uuid.UUID{m1},
-		policyID,
-		models.BulkAlertPolicyOp("explode"),
-	)
-	if err == nil {
-		t.Fatalf("expected error for unknown op")
 	}
 }
 

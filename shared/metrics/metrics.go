@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -14,7 +15,10 @@ type Registry struct {
 	service  string
 }
 
-// NewRegistry creates a new metrics registry for the given service
+// NewRegistry creates a new metrics registry for the given service.
+// The service name is used as the Prometheus Subsystem of every metric the
+// helper constructors create; dashes are invalid in metric names (promauto
+// would panic), so a name like "status-page" is sanitized to "status_page".
 func NewRegistry(serviceName string) *Registry {
 	reg := prometheus.NewRegistry()
 
@@ -24,7 +28,7 @@ func NewRegistry(serviceName string) *Registry {
 
 	return &Registry{
 		registry: reg,
-		service:  serviceName,
+		service:  strings.ReplaceAll(serviceName, "-", "_"),
 	}
 }
 
