@@ -9,6 +9,8 @@ import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
 import PageHeader from '@/components/ui/PageHeader';
 import SharedEmptyState from '@/components/ui/EmptyState';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
@@ -300,66 +302,110 @@ function MonitorActionsMenu({
   monitorId: string;
   onDelete: () => void;
 }) {
-  const closeMenu = (target: EventTarget | null) => {
-    if (!(target instanceof HTMLElement)) return;
-    const details = target.closest('details') as HTMLDetailsElement | null;
-    if (details) details.open = false;
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // The menu renders position:fixed so it can escape the group children's
+  // overflow-y-auto container; anchor it to the trigger on open.
+  const MENU_WIDTH = 144;
+  const MENU_HEIGHT = 140;
+
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const openUp = rect.bottom + 4 + MENU_HEIGHT > window.innerHeight;
+    setPos({
+      top: openUp ? rect.top - 4 - MENU_HEIGHT : rect.bottom + 4,
+      left: Math.max(8, rect.right - MENU_WIDTH),
+    });
+    setOpen(true);
   };
 
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [open]);
+
+  const itemClass =
+    'block w-full rounded px-2.5 py-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white';
+
   return (
-    <details className="relative" onClick={(e) => e.stopPropagation()}>
-      <summary
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggle}
         aria-label="Monitor actions"
-        className="list-none rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white cursor-pointer [&::-webkit-details-marker]:hidden"
+        aria-expanded={open}
+        className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white cursor-pointer"
       >
         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6h.01M12 12h.01M12 18h.01" />
         </svg>
-      </summary>
-      <div className="absolute right-0 z-30 mt-1 w-36 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-lg">
-        <Link
-          href={`/monitors/${monitorId}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-          }}
-          className="block rounded px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
+      </button>
+      {open && pos && (
+        <div
+          className="fixed z-50 w-36 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-lg backdrop-blur-sm"
+          style={{ top: pos.top, left: pos.left }}
+          onClick={(e) => e.stopPropagation()}
         >
-          Edit
-        </Link>
-        <Link
-          href={`/monitors/new?clone=${monitorId}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-          }}
-          className="block rounded px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
-        >
-          Clone
-        </Link>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-            onToggleEnabled(monitor);
-          }}
-          className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
-        >
-          {monitor.enabled ? 'Pause' : 'Start'}
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-            onDelete();
-          }}
-          className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-rose-300 transition-colors hover:bg-rose-500/10 hover:text-rose-200"
-        >
-          Delete
-        </button>
-      </div>
-    </details>
+          <Link
+            href={`/monitors/${monitorId}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+            className={itemClass}
+          >
+            Edit
+          </Link>
+          <Link
+            href={`/monitors/new?clone=${monitorId}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+            className={itemClass}
+          >
+            Clone
+          </Link>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onToggleEnabled(monitor);
+            }}
+            className={itemClass}
+          >
+            {monitor.enabled ? 'Pause' : 'Start'}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onDelete();
+            }}
+            className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-rose-300 transition-colors hover:bg-rose-500/10 hover:text-rose-200"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1167,7 +1213,10 @@ export default function MonitorsPage() {
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
   const [checkResultsMap, setCheckResultsMap] = useState<Record<string, CheckResult[]>>({});
   const [groupMembersMap, setGroupMembersMap] = useState<Record<string, Monitor[]>>({});
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
+  const [pendingDelete, setPendingDelete] = useState<Monitor | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<Set<string>>(new Set());
@@ -1361,26 +1410,36 @@ export default function MonitorsPage() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      setToast({ message: 'Monitor export downloaded', type: 'success' });
+      showToast('Monitor export downloaded', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to export monitors', type: 'error' });
+      showToast(err.message || 'Failed to export monitors', 'error');
     } finally {
       setExporting(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this monitor?')) return;
+  const requestDeleteById = (id: string) => {
+    const all = [...monitors, ...Object.values(groupMembersMap).flat()];
+    const target = all.find((m) => m.id === id);
+    if (target) setPendingDelete(target);
+  };
 
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+    const id = pendingDelete.id;
+    setDeleting(true);
     try {
       await deleteMonitor(id);
       setMonitors(monitors.filter((m) => m.id !== id));
       if (selectedMonitorId === id) {
         setSelectedMonitorId(monitors.find((m) => m.id !== id)?.id || null);
       }
-      setToast({ message: 'Monitor deleted', type: 'success' });
+      showToast('Monitor deleted', 'success');
+      setPendingDelete(null);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete', type: 'error' });
+      showToast(err.message || 'Failed to delete', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1395,12 +1454,9 @@ export default function MonitorsPage() {
         ] as const);
         return Object.fromEntries(nextEntries);
       });
-      setToast({
-        message: updated.enabled ? 'Monitor resumed' : 'Monitor paused',
-        type: 'success',
-      });
+      showToast(updated.enabled ? 'Monitor resumed' : 'Monitor paused', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update monitor', type: 'error' });
+      showToast(err.message || 'Failed to update monitor', 'error');
     }
   };
 
@@ -1555,25 +1611,28 @@ export default function MonitorsPage() {
 
   const handleBulkDelete = async () => {
     if (selectedMonitors.length === 0) return;
-    if (!confirm(`Delete ${selectedMonitors.length} selected monitor(s)?`)) return;
+    setDeleting(true);
     try {
       await Promise.all(selectedMonitors.map((m) => deleteMonitor(m.id)));
       setMonitors(monitors.filter((m) => !selectedMonitorIds.has(m.id)));
       setSelectedMonitorIds(new Set());
-      setToast({ message: 'Selected monitors deleted', type: 'success' });
+      showToast('Selected monitors deleted', 'success');
+      setConfirmBulkDelete(false);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete selected monitors', type: 'error' });
+      showToast(err.message || 'Failed to delete selected monitors', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
   const handleCreateGroup = async () => {
     const trimmedName = groupNameInput.trim();
     if (!trimmedName) {
-      setToast({ message: 'Group name is required', type: 'error' });
+      showToast('Group name is required', 'error');
       return;
     }
     if (selectedMonitors.length < 1) {
-      setToast({ message: 'Select at least one item to create a group', type: 'error' });
+      showToast('Select at least one item to create a group', 'error');
       return;
     }
 
@@ -1589,19 +1648,19 @@ export default function MonitorsPage() {
       setGroupNameInput('');
       setSelectedMonitorIds(new Set());
       await loadMonitors();
-      setToast({ message: 'Group created', type: 'success' });
+      showToast('Group created', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to create group', type: 'error' });
+      showToast(err.message || 'Failed to create group', 'error');
     }
   };
 
   const handleMoveToGroup = async () => {
     if (!targetGroupId) {
-      setToast({ message: 'Select a destination group first', type: 'error' });
+      showToast('Select a destination group first', 'error');
       return;
     }
     if (selectedMonitors.length === 0) {
-      setToast({ message: 'Select at least one monitor or group to move', type: 'error' });
+      showToast('Select at least one monitor or group to move', 'error');
       return;
     }
 
@@ -1610,7 +1669,7 @@ export default function MonitorsPage() {
       ? null
       : monitors.find((m) => m.id === targetGroupId && m.type === 'group');
     if (!isNoGroupDestination && !targetGroup) {
-      setToast({ message: 'Destination group not found', type: 'error' });
+      showToast('Destination group not found', 'error');
       return;
     }
 
@@ -1621,7 +1680,7 @@ export default function MonitorsPage() {
 
     if (!isNoGroupDestination) {
       if (selectedGroupIDs.includes(targetGroupId)) {
-        setToast({ message: 'Cannot move a group into itself', type: 'error' });
+        showToast('Cannot move a group into itself', 'error');
         return;
       }
 
@@ -1629,7 +1688,7 @@ export default function MonitorsPage() {
         groupContainsGroup(groupID, targetGroupId, groupMembersMap)
       );
       if (wouldCreateCycle) {
-        setToast({ message: 'Cannot move a group into one of its descendants', type: 'error' });
+        showToast('Cannot move a group into one of its descendants', 'error');
         return;
       }
     }
@@ -1649,7 +1708,7 @@ export default function MonitorsPage() {
     const hasRemovals = Object.keys(removalsByGroup).length > 0;
 
     if (isNoGroupDestination && !hasRemovals) {
-      setToast({ message: 'Selected items are not in any group', type: 'error' });
+      showToast('Selected items are not in any group', 'error');
       return;
     }
 
@@ -1661,7 +1720,7 @@ export default function MonitorsPage() {
       : selectedIds.filter((id) => !targetMemberIds.has(id));
 
     if (!isNoGroupDestination && !hasRemovals && idsToAdd.length === 0) {
-      setToast({ message: 'Selected items are already in the target group', type: 'error' });
+      showToast('Selected items are already in the target group', 'error');
       return;
     }
 
@@ -1680,14 +1739,11 @@ export default function MonitorsPage() {
 
       setSelectedMonitorIds(new Set());
       await loadMonitors();
-      setToast({
-        message: isNoGroupDestination
+      showToast(isNoGroupDestination
           ? `Removed ${selectedMonitors.length} item(s) from all groups`
-          : `Moved ${selectedMonitors.length} item(s) to ${targetGroup?.name}`,
-        type: 'success',
-      });
+          : `Moved ${selectedMonitors.length} item(s) to ${targetGroup?.name}`, 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to move monitors', type: 'error' });
+      showToast(err.message || 'Failed to move monitors', 'error');
     }
   };
 
@@ -1964,7 +2020,7 @@ export default function MonitorsPage() {
                           variant="danger"
                           size="xs"
                           icon={<Trash2 strokeWidth={1.75} />}
-                          onClick={handleBulkDelete}
+                          onClick={() => setConfirmBulkDelete(true)}
                         >
                           Delete
                         </Button>
@@ -1993,11 +2049,11 @@ export default function MonitorsPage() {
                     isChecked={selectedMonitorIds.has(monitor.id)}
                     onToggleSelect={() => toggleMonitorSelection(monitor.id)}
                     onToggleMonitorSelection={toggleMonitorSelection}
-                    onDeleteMonitor={handleDelete}
+                    onDeleteMonitor={requestDeleteById}
                     onToggleEnabled={handleToggleEnabled}
                     selectionMode={selectionMode}
                     onClick={() => setSelectedMonitorId(monitor.id)}
-                    onDelete={() => handleDelete(monitor.id)}
+                    onDelete={() => requestDeleteById(monitor.id)}
                     onSelectMonitor={selectMonitor}
                     selectedMonitorId={selectedMonitorId}
                     selectedMonitorIds={selectedMonitorIds}
@@ -2015,7 +2071,7 @@ export default function MonitorsPage() {
                     onToggleSelect={() => toggleMonitorSelection(monitor.id)}
                     selectionMode={selectionMode}
                     onClick={() => selectMonitor(monitor.id)}
-                    onDelete={() => handleDelete(monitor.id)}
+                    onDelete={() => requestDeleteById(monitor.id)}
                     onToggleEnabled={handleToggleEnabled}
                   />
                 )
@@ -2045,24 +2101,36 @@ export default function MonitorsPage() {
             setShowBulkAlerting(false);
             setSelectedMonitorIds(new Set());
             setSelectionMode(false);
-            setToast({ message: 'Alerting settings updated', type: 'success' });
+            showToast('Alerting settings updated', 'success');
             loadMonitors();
           }}
           onCancel={() => setShowBulkAlerting(false)}
         />
       )}
 
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed bottom-4 right-4 rounded-lg px-3 py-2 shadow-lg text-xs ${
-          toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-        }`}>
-          <div className="flex items-center gap-2">
-            <span className="text-white">{toast.message}</span>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white">×</button>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={pendingDelete?.type === 'group' ? 'Delete group' : 'Delete monitor'}
+        description={
+          pendingDelete
+            ? `“${pendingDelete.name}” will be removed along with its check history. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={`Delete ${selectedMonitors.length} selected monitor${selectedMonitors.length === 1 ? '' : 's'}`}
+        description="The selected monitors and their check history will be removed. This cannot be undone."
+        confirmLabel="Delete selected"
+        loading={deleting}
+        onConfirm={handleBulkDelete}
+        onCancel={() => !deleting && setConfirmBulkDelete(false)}
+      />
     </div>
   );
 }

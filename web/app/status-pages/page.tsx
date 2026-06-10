@@ -10,12 +10,16 @@ import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 
 export default function StatusPagesPage() {
+  const { showToast } = useToast();
   const [statusPages, setStatusPages] = useState<StatusPage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<StatusPage | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     loadStatusPages();
@@ -35,14 +39,18 @@ export default function StatusPagesPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this status page? This action cannot be undone.')) return;
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await deleteStatusPage(id);
-      setStatusPages(statusPages.filter((p) => p.id !== id));
-      setToast({ message: 'Status page deleted', type: 'success' });
+      await deleteStatusPage(pendingDelete.id);
+      setStatusPages(statusPages.filter((p) => p.id !== pendingDelete.id));
+      showToast('Status page deleted', 'success');
+      setPendingDelete(null);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete', type: 'error' });
+      showToast(err.message || 'Failed to delete', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -145,7 +153,7 @@ export default function StatusPagesPage() {
                   variant="danger"
                   size="xs"
                   icon={<Trash2 strokeWidth={1.75} />}
-                  onClick={() => handleDelete(page.id)}
+                  onClick={() => setPendingDelete(page)}
                   aria-label="Delete"
                 >
                   <span className="sr-only">Delete</span>
@@ -156,22 +164,19 @@ export default function StatusPagesPage() {
         </div>
       )}
 
-      {toast && (
-        <div className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-          toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-        }`}>
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-white">{toast.message}</p>
-            <button
-              onClick={() => setToast(null)}
-              className="text-white/80 hover:text-white"
-              aria-label="Dismiss"
-            >
-              <span aria-hidden="true">×</span>
-            </button>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete status page"
+        description={
+          pendingDelete
+            ? `“${pendingDelete.title}” and its public page at /${pendingDelete.slug} will be removed. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete page"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      />
     </div>
   );
 }

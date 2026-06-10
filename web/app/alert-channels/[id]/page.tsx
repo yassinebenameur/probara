@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { AlertChannel, CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
 import { getAlertChannel, updateAlertChannel } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
-import Toast from '@/components/ui/Toast';
+import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import Pill from '@/components/ui/Pill';
@@ -19,7 +19,7 @@ export default function EditAlertChannelPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
 
   useEffect(() => {
     loadChannel();
@@ -49,9 +49,9 @@ export default function EditAlertChannelPage() {
       setSaving(true);
       const updated = await updateAlertChannel(id, payload);
       setChannel(updated);
-      setToast({ message: 'Alert channel updated successfully', type: 'success' });
+      showToast('Alert channel updated successfully', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update alert channel', type: 'error' });
+      showToast(err.message || 'Failed to update alert channel', 'error');
     } finally {
       setSaving(false);
     }
@@ -134,13 +134,6 @@ export default function EditAlertChannelPage() {
         </FormCard>
       </div>
 
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
     </div>
   );
 }

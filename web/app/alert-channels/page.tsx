@@ -5,18 +5,22 @@ import Link from 'next/link';
 import { LayoutGrid, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { AlertChannel } from '@/lib/types';
 import { deleteAlertChannel, getAlertChannels, testAlertChannel } from '@/lib/api';
+import { pluralize } from '@/lib/format';
 import Panel from '@/components/ui/Panel';
-import Toast from '@/components/ui/Toast';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 
 export default function AlertChannelsPage() {
+  const { showToast } = useToast();
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AlertChannel | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     loadChannels();
@@ -36,23 +40,27 @@ export default function AlertChannelsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this alert channel?')) return;
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await deleteAlertChannel(id);
-      setChannels((channels || []).filter((c) => c.id !== id));
-      setToast({ message: 'Alert channel deleted successfully', type: 'success' });
+      await deleteAlertChannel(pendingDelete.id);
+      setChannels((channels || []).filter((c) => c.id !== pendingDelete.id));
+      showToast('Alert channel deleted successfully', 'success');
+      setPendingDelete(null);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete alert channel', type: 'error' });
+      showToast(err.message || 'Failed to delete alert channel', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
   const handleTest = async (id: string) => {
     try {
       await testAlertChannel(id);
-      setToast({ message: 'Test notification sent', type: 'success' });
+      showToast('Test notification sent', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to send test notification', type: 'error' });
+      showToast(err.message || 'Failed to send test notification', 'error');
     }
   };
 
@@ -91,7 +99,7 @@ export default function AlertChannelsPage() {
       ) : (
         <Panel
           title="Alert channels"
-          subtitle={`${channels.length} channel${channels.length !== 1 ? 's' : ''} configured`}
+          subtitle={`${pluralize(channels.length, 'channel')} configured`}
         >
           <div className="table-card mt-1">
             {channels.length === 0 ? (
@@ -146,7 +154,7 @@ export default function AlertChannelsPage() {
                             variant="danger"
                             size="xs"
                             icon={<Trash2 strokeWidth={1.75} />}
-                            onClick={() => handleDelete(channel.id)}
+                            onClick={() => setPendingDelete(channel)}
                           >
                             Delete
                           </Button>
@@ -161,13 +169,19 @@ export default function AlertChannelsPage() {
         </Panel>
       )}
 
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete alert channel"
+        description={
+          pendingDelete
+            ? `“${pendingDelete.name}” will be removed and will stop receiving alerts. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete channel"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      />
     </div>
   );
 }

@@ -2,9 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { Bell } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
 import Button from '@/components/ui/Button';
+import EmptyState from '@/components/ui/EmptyState';
 
 interface AlertTableProps {
   alerts: Alert[];
@@ -36,10 +39,6 @@ function getStatusBadgeClass(status: AlertStatus): string {
     default:
       return 'bg-slate-500/10 text-slate-400 border border-slate-500/20';
   }
-}
-
-function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleString();
 }
 
 function formatDuration(startDate: string, endDate?: string): string {
@@ -90,15 +89,11 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
 
   if (alerts.length === 0) {
     return (
-      <div className="table-card">
-        <div className="py-12 text-center">
-          <div className="text-4xl mb-3">🔔</div>
-          <div className="text-lg font-medium mb-1">No alerts found</div>
-          <div className="text-sm text-slate-500">
-            Alerts will appear here when monitors fail and trigger alert policies.
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        icon={<Bell className="h-9 w-9" strokeWidth={1.5} />}
+        title="No alerts found"
+        description="Alerts will appear here when monitors fail and trigger alert policies."
+      />
     );
   }
 
@@ -161,7 +156,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                 </span>
               </td>
               <td className="text-slate-400">
-                <div>{formatDate(alert.triggered_at)}</div>
+                <div>{formatDateTime(alert.triggered_at)}</div>
               </td>
               <td className="text-slate-400">
                 {formatDuration(alert.triggered_at, alert.resolved_at || undefined)}
@@ -197,7 +192,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                   )}
                   {alert.status === 'resolved' && (
                     <span className="text-[10px] text-slate-500">
-                      Resolved {alert.resolved_at ? formatDate(alert.resolved_at) : ''}
+                      Resolved {alert.resolved_at ? formatDateTime(alert.resolved_at) : ''}
                     </span>
                   )}
                 </div>

@@ -2,7 +2,7 @@
 
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowUpRight, X } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
@@ -11,6 +11,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Button from '@/components/ui/Button';
+import { useToast } from '@/components/ui/ToastProvider';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
@@ -21,7 +22,7 @@ export default function EditStatusPagePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
 
   const loadStatusPage = useCallback(async () => {
     try {
@@ -45,9 +46,9 @@ export default function EditStatusPagePage() {
       setSaving(true);
       const updated = await updateStatusPage(id, data);
       setStatusPage(updated);
-      setToast({ message: 'Status page updated', type: 'success' });
+      showToast('Status page updated', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update', type: 'error' });
+      showToast(err.message || 'Failed to update', 'error');
     } finally {
       setSaving(false);
     }
@@ -174,20 +175,6 @@ export default function EditStatusPagePage() {
         />
       </FormCard>
 
-      {toast && (
-        <div
-          className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-            toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white" aria-label="Dismiss">
-              <X className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

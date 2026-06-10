@@ -20,21 +20,11 @@ import type { Alert, IncidentDetail, IncidentState, Monitor } from '@/lib/types'
 import IncidentPublicationEditor from '@/components/incidents/IncidentPublicationEditor';
 import IncidentTimeline from '@/components/incidents/IncidentTimeline';
 import Panel from '@/components/ui/Panel';
-import Toast from '@/components/ui/Toast';
+import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
-
-function formatTimestamp(value?: string): string {
-  if (!value) {
-    return 'Not resolved';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
-}
+import { formatDateTime } from '@/lib/format';
 
 export default function IncidentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -47,7 +37,7 @@ export default function IncidentDetailPage() {
   const [error, setError] = useState('');
   const [selectedAlertId, setSelectedAlertId] = useState('');
   const [selectedMonitorId, setSelectedMonitorId] = useState('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
 
   const loadIncident = useCallback(async () => {
     if (!incidentId) {
@@ -93,9 +83,9 @@ export default function IncidentDetailPage() {
     try {
       const response = await transitionIncidentState(incident.id, state);
       setIncident(response);
-      setToast({ message: `Incident moved to ${state}`, type: 'success' });
+      showToast(`Incident moved to ${state}`, 'success');
     } catch (err) {
-      setToast({ message: err instanceof Error ? err.message : 'Failed to update incident state', type: 'error' });
+      showToast(err instanceof Error ? err.message : 'Failed to update incident state', 'error');
     }
   };
 
@@ -129,9 +119,9 @@ export default function IncidentDetailPage() {
       const response = await attachIncidentAlert(incident.id, selectedAlertId);
       setIncident(response);
       setSelectedAlertId('');
-      setToast({ message: 'Alert attached to incident', type: 'success' });
+      showToast('Alert attached to incident', 'success');
     } catch (err) {
-      setToast({ message: err instanceof Error ? err.message : 'Failed to attach alert', type: 'error' });
+      showToast(err instanceof Error ? err.message : 'Failed to attach alert', 'error');
     }
   };
 
@@ -142,9 +132,9 @@ export default function IncidentDetailPage() {
     try {
       const response = await detachIncidentAlert(incident.id, alertId);
       setIncident(response);
-      setToast({ message: 'Alert detached from incident', type: 'success' });
+      showToast('Alert detached from incident', 'success');
     } catch (err) {
-      setToast({ message: err instanceof Error ? err.message : 'Failed to detach alert', type: 'error' });
+      showToast(err instanceof Error ? err.message : 'Failed to detach alert', 'error');
     }
   };
 
@@ -156,9 +146,9 @@ export default function IncidentDetailPage() {
       const response = await attachIncidentMonitor(incident.id, selectedMonitorId);
       setIncident(response);
       setSelectedMonitorId('');
-      setToast({ message: 'Monitor attached to incident', type: 'success' });
+      showToast('Monitor attached to incident', 'success');
     } catch (err) {
-      setToast({ message: err instanceof Error ? err.message : 'Failed to attach monitor', type: 'error' });
+      showToast(err instanceof Error ? err.message : 'Failed to attach monitor', 'error');
     }
   };
 
@@ -169,9 +159,9 @@ export default function IncidentDetailPage() {
     try {
       const response = await detachIncidentMonitor(incident.id, monitorId);
       setIncident(response);
-      setToast({ message: 'Monitor detached from incident', type: 'success' });
+      showToast('Monitor detached from incident', 'success');
     } catch (err) {
-      setToast({ message: err instanceof Error ? err.message : 'Failed to detach monitor', type: 'error' });
+      showToast(err instanceof Error ? err.message : 'Failed to detach monitor', 'error');
     }
   };
 
@@ -181,7 +171,7 @@ export default function IncidentDetailPage() {
     }
     const response = await publishIncidentToStatusPage(incident.id, statusPageId, { monitor_ids: monitorIds });
     setIncident(response);
-    setToast({ message: 'Incident published to status page', type: 'success' });
+    showToast('Incident published to status page', 'success');
   };
 
   const handleUnpublish = async (statusPageId: string) => {
@@ -190,7 +180,7 @@ export default function IncidentDetailPage() {
     }
     const response = await unpublishIncidentFromStatusPage(incident.id, statusPageId);
     setIncident(response);
-    setToast({ message: 'Incident unpublished from status page', type: 'success' });
+    showToast('Incident unpublished from status page', 'success');
   };
 
   if (loading) {
@@ -273,15 +263,15 @@ export default function IncidentDetailPage() {
           <div className="grid gap-3 rounded-xl border border-white/[0.06] bg-slate-950/40 p-4 text-sm">
             <div>
               <div className="text-xs uppercase tracking-wide text-slate-500">Created</div>
-              <div className="mt-1 text-slate-300">{formatTimestamp(incident.created_at)}</div>
+              <div className="mt-1 text-slate-300">{formatDateTime(incident.created_at)}</div>
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-slate-500">Last updated</div>
-              <div className="mt-1 text-slate-300">{formatTimestamp(incident.updated_at)}</div>
+              <div className="mt-1 text-slate-300">{formatDateTime(incident.updated_at)}</div>
             </div>
             <div>
               <div className="text-xs uppercase tracking-wide text-slate-500">Resolved</div>
-              <div className="mt-1 text-slate-300">{formatTimestamp(incident.resolved_at)}</div>
+              <div className="mt-1 text-slate-300">{formatDateTime(incident.resolved_at, 'Not resolved')}</div>
             </div>
           </div>
         </div>
@@ -397,13 +387,6 @@ export default function IncidentDetailPage() {
         onUnpublish={handleUnpublish}
       />
 
-      {toast ? (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      ) : null}
     </div>
   );
 }

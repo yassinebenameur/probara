@@ -3,7 +3,7 @@
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
-import { Clock, Settings as SettingsIcon, Trash2, X } from 'lucide-react';
+import { Clock, Settings as SettingsIcon, Trash2 } from 'lucide-react';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
@@ -14,6 +14,8 @@ import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import Button from '@/components/ui/Button';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
@@ -195,7 +197,9 @@ export default function EditMonitorPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [results, setResults] = useState<MonitorResultsResponse | null>(null);
   const [historyResults, setHistoryResults] = useState<MonitorResultsResponse | null>(null);
   const [analytics, setAnalytics] = useState<MonitorAnalyticsResponse | null>(null);
@@ -424,24 +428,24 @@ export default function EditMonitorPage() {
       setSaving(true);
       const updated = await updateMonitor(id, data);
       setMonitor(updated);
-      setToast({ message: 'Monitor updated successfully', type: 'success' });
+      showToast('Monitor updated successfully', 'success');
       loadResults();
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update monitor', type: 'error' });
+      showToast(err.message || 'Failed to update monitor', 'error');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!confirm('Delete this monitor? All check history will be removed.')) return;
-
+    setDeleting(true);
     try {
       await deleteMonitor(id);
-      setToast({ message: 'Monitor deleted', type: 'success' });
+      showToast('Monitor deleted', 'success');
       setTimeout(() => router.push('/monitors'), 1000);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete', type: 'error' });
+      showToast(err.message || 'Failed to delete', 'error');
+      setDeleting(false);
     }
   };
 
@@ -471,16 +475,13 @@ export default function EditMonitorPage() {
         loadAnalytics(),
         activeTab === 'history' ? loadHistoryResults() : Promise.resolve(),
       ]);
-      setToast({
-        message: monitor.type === 'group'
+      showToast(monitor.type === 'group'
           ? 'Group history cleared for all member monitors'
-          : 'Monitor history cleared',
-        type: 'success',
-      });
+          : 'Monitor history cleared', 'success');
       setIsHistoryResetModalOpen(false);
       setHistoryResetConfirmation('');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to clear monitor history', type: 'error' });
+      showToast(err.message || 'Failed to clear monitor history', 'error');
     } finally {
       setClearingHistory(false);
     }
@@ -636,7 +637,7 @@ export default function EditMonitorPage() {
             variant="danger"
             size="sm"
             icon={<Trash2 strokeWidth={1.75} />}
-            onClick={handleDelete}
+            onClick={() => setConfirmDelete(true)}
           >
             Delete
           </Button>
@@ -805,19 +806,19 @@ export default function EditMonitorPage() {
         )}
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-          toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-        }`}>
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white" aria-label="Dismiss">
-              <X className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmDelete}
+        title={monitor?.type === 'group' ? 'Delete group' : 'Delete monitor'}
+        description={
+          monitor
+            ? `“${monitor.name}” will be removed along with all of its check history. This cannot be undone.`
+            : 'This monitor will be removed along with all of its check history. This cannot be undone.'
+        }
+        confirmLabel="Delete"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setConfirmDelete(false)}
+      />
 
       {monitor && isHistoryResetModalOpen && (
         <ConfirmHistoryResetModal
