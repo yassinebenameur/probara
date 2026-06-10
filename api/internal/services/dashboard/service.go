@@ -15,6 +15,7 @@ import (
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/logger"
 )
 
 const (
@@ -24,6 +25,13 @@ const (
 	problemMonitorLimit  = 5
 	problemCandidateMult = 4
 )
+
+// rollupCursorLagWarnThreshold is how far the hourly-rollup cursor may trail
+// "now" before the dashboard logs a warning: past this point every rolling-24h
+// computation is scanning raw check_results for the whole lag tail, which is
+// exactly the load the rollups exist to avoid. The window itself is never
+// truncated — results stay correct, only slower.
+const rollupCursorLagWarnThreshold = 2 * time.Hour
 
 // tenantSettingsReader is the minimal slice of the tenant service used by the dashboard
 // service for resolving the curated dashboard_group_tags list.
@@ -37,16 +45,19 @@ type Service struct {
 	alertService alertservice.AlertService
 	analytics    sharedanalytics.Reader
 	tenants      tenantSettingsReader
+	log          *logger.Logger // optional; nil disables service-level logging
 	rolling24h   *rolling24hCache
 }
 
-// NewService creates a new dashboard service.
-func NewService(database db.DB, alerts alertservice.AlertService, analytics sharedanalytics.Reader, tenants tenantSettingsReader) *Service {
+// NewService creates a new dashboard service. log may be nil (e.g. in tests);
+// it is only used for operational warnings such as rollup-cursor lag.
+func NewService(database db.DB, alerts alertservice.AlertService, analytics sharedanalytics.Reader, tenants tenantSettingsReader, log *logger.Logger) *Service {
 	return &Service{
 		db:           database,
 		alertService: alerts,
 		analytics:    analytics,
 		tenants:      tenants,
+		log:          log,
 		rolling24h:   newRolling24hCache(rolling24hCacheTTL),
 	}
 }
@@ -158,7 +169,7 @@ func (s *Service) GetSummary(ctx context.Context, tenantID uuid.UUID, params *mo
 		}
 	}
 
-	monitorHealth, err := s.getMonitorHealth(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags)
+	monitorHealth, err := s.getMonitorHealth(ctx, tenantID, normalized.Range, rangeStart, rangeEndExclusive, normalized.Tags, precomp)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +288,12 @@ func (s *Service) loadRolling24hData(ctx context.Context, tenantID uuid.UUID, ta
 			return nil, nil, err
 		}
 		now := time.Now().UTC()
+		// Cheap one-row cursor read purely for the lag warning: a failure here
+		// is not fatal (the stitched queries below load the cursor themselves
+		// and will surface any real error).
+		if cursor, err := sharedanalytics.LoadRollupCursor(buildCtx, s.db); err == nil {
+			s.warnIfRollupCursorLagging(now, cursor)
+		}
 		totals, err := loadExactRolling24hSummary(buildCtx, s.db, tenantID, monitorIDs, now)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to load 24h rolling summary: %w", err)
@@ -290,6 +307,25 @@ func (s *Service) loadRolling24hData(ctx context.Context, tenantID uuid.UUID, ta
 			hourlySeries: series,
 		}, monitorIDs, nil
 	})
+}
+
+// warnIfRollupCursorLagging logs a structured warning when the hourly-rollup
+// cursor trails now by more than rollupCursorLagWarnThreshold: every rolling-24h
+// dashboard query is then scanning raw check_results for the whole lag tail
+// past the cursor. The 24h window is never truncated; this is observability only.
+func (s *Service) warnIfRollupCursorLagging(now time.Time, cursor sharedanalytics.RollupCursor) {
+	if s.log == nil || cursor.LastCreatedAt == nil {
+		return
+	}
+	lag := now.Sub(cursor.LastCreatedAt.UTC())
+	if lag <= rollupCursorLagWarnThreshold {
+		return
+	}
+	s.log.WithFields(map[string]interface{}{
+		"cursor_last_created_at": cursor.LastCreatedAt.UTC().Format(time.RFC3339),
+		"lag":                    lag.Round(time.Second).String(),
+		"threshold":              rollupCursorLagWarnThreshold.String(),
+	}).Warn("rollup cursor is lagging; dashboard 24h queries are scanning raw check_results past the cursor")
 }
 
 func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string, precomp *rolling24hData) (models.DashboardStats, error) {
@@ -587,7 +623,150 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags [
 	return activity, nil
 }
 
-func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time, tags []string) ([]models.DashboardMonitorHealth, error) {
+// getMonitorHealth returns the per-monitor health grid. LatestStatus is derived
+// from the persisted state machine (monitors.current_state) for EVERY range via
+// monitorStateToStatus — the same source the status page and problem-monitors
+// use — so all surfaces agree even when a monitor's last in-window check status
+// differs from its current state (D1). LatestCheckAt remains range-scoped:
+//   - 24h: from the shared rolling-24h totals (no extra query),
+//   - 1h: one batched MAX(created_at) aggregate over the small raw window,
+//   - 7d+: the latest daily-rollup row per monitor (cheap rollup LATERAL).
+func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEndExclusive time.Time, tags []string, precomp *rolling24hData) ([]models.DashboardMonitorHealth, error) {
+	if isDashboardRollupRange(dashboardRange) {
+		return s.getMonitorHealthRollupRange(ctx, tenantID, rangeStart, rangeEndExclusive, tags)
+	}
+
+	healthRows, err := s.listMonitorHealthFromState(ctx, tenantID, tags)
+	if err != nil {
+		return nil, err
+	}
+	if len(healthRows) == 0 {
+		return healthRows, nil
+	}
+
+	if dashboardRange == models.DashboardRange24h {
+		var totals map[uuid.UUID]MonitorRolling24hTotals
+		if precomp != nil {
+			totals = precomp.totals
+		}
+		if totals == nil {
+			data, _, err := s.loadRolling24hData(ctx, tenantID, tags)
+			if err != nil {
+				return nil, err
+			}
+			totals = data.totals
+		}
+		for i := range healthRows {
+			if t, ok := totals[healthRows[i].MonitorID]; ok && t.LatestCheckAt != nil {
+				ts := *t.LatestCheckAt
+				healthRows[i].LatestCheckAt = &ts
+			}
+		}
+		return healthRows, nil
+	}
+
+	latest, err := s.batchLatestCheckAt(ctx, tenantID, rangeStart, rangeEndExclusive, tags)
+	if err != nil {
+		return nil, err
+	}
+	for i := range healthRows {
+		if ts, ok := latest[healthRows[i].MonitorID]; ok {
+			t := ts
+			healthRows[i].LatestCheckAt = &t
+		}
+	}
+	return healthRows, nil
+}
+
+// listMonitorHealthFromState lists the tenant's monitors with LatestStatus
+// derived from monitors.current_state. No check_results access at all: the
+// previous per-monitor LATERAL probe is gone. LatestCheckAt is left nil for the
+// caller to fill from range-scoped data.
+func (s *Service) listMonitorHealthFromState(ctx context.Context, tenantID uuid.UUID, tags []string) ([]models.DashboardMonitorHealth, error) {
+	query := `
+		SELECT m.id, m.name, m.enabled, m.current_state
+		FROM monitors m
+		WHERE m.tenant_id = $1 AND m.deleted_at IS NULL
+	`
+	args := []interface{}{tenantID}
+	if len(tags) > 0 {
+		query += ` AND m.tags @> $2::text[]`
+		args = append(args, pq.Array(tags))
+	}
+	query += ` ORDER BY m.name`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query monitor health: %w", err)
+	}
+	defer rows.Close()
+
+	healthRows := make([]models.DashboardMonitorHealth, 0)
+	for rows.Next() {
+		var row models.DashboardMonitorHealth
+		var currentState string
+		if err := rows.Scan(&row.MonitorID, &row.MonitorName, &row.Enabled, &currentState); err != nil {
+			return nil, fmt.Errorf("failed to scan monitor health row: %w", err)
+		}
+		row.LatestStatus = monitorStateToStatus(currentState)
+		healthRows = append(healthRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating monitor health rows: %w", err)
+	}
+	return healthRows, nil
+}
+
+// batchLatestCheckAt returns each monitor's most recent check timestamp inside
+// [rangeStart, rangeEndExclusive) as ONE bounded aggregate over the (small) raw
+// window, replacing the per-monitor descending LATERAL probe on check_results.
+func (s *Service) batchLatestCheckAt(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, tags []string) (map[uuid.UUID]time.Time, error) {
+	tagClause := ""
+	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
+	if len(tags) > 0 {
+		tagClause = "AND m.tags @> $4::text[]"
+		args = append(args, pq.Array(tags))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT cr.monitor_id, MAX(cr.created_at) AS latest_check_at
+		FROM check_results cr
+		JOIN monitors m ON m.id = cr.monitor_id AND m.tenant_id = cr.tenant_id
+		WHERE cr.tenant_id = $1
+		  AND m.deleted_at IS NULL
+		  AND cr.result_source <> 'platform'
+		  AND cr.created_at >= $2
+		  AND cr.created_at < $3
+		  %s
+		GROUP BY cr.monitor_id
+	`, tagClause)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query latest check times: %w", err)
+	}
+	defer rows.Close()
+
+	latest := make(map[uuid.UUID]time.Time)
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var ts time.Time
+		if err := rows.Scan(&monitorID, &ts); err != nil {
+			return nil, fmt.Errorf("failed to scan latest check time: %w", err)
+		}
+		latest[monitorID] = ts
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating latest check times: %w", err)
+	}
+	return latest, nil
+}
+
+// getMonitorHealthRollupRange serves 7d+ ranges: LatestCheckAt still comes from
+// the newest daily-rollup row in range (a cheap per-monitor LATERAL on the
+// small rollup table), but LatestStatus is derived from monitors.current_state,
+// NOT the rollup's latest_status, so status agrees with every other surface.
+func (s *Service) getMonitorHealthRollupRange(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, tags []string) ([]models.DashboardMonitorHealth, error) {
 	args := []interface{}{tenantID, rangeStart, rangeEndExclusive}
 	whereClause := "WHERE m.tenant_id = $1 AND m.deleted_at IS NULL"
 	if len(tags) > 0 {
@@ -600,46 +779,22 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 			m.id,
 			m.name,
 			m.enabled,
-			lr.status,
-			lr.created_at
+			m.current_state,
+			lr.latest_check_at
 		FROM monitors m
 		LEFT JOIN LATERAL (
-			SELECT cr.status, cr.created_at
-			FROM check_results cr
-			WHERE cr.monitor_id = m.id
-			  AND cr.tenant_id = m.tenant_id
-			  AND cr.result_source <> 'platform'
-			  AND cr.created_at >= $2
-			  AND cr.created_at < $3
-			ORDER BY cr.created_at DESC
+			SELECT mdr.latest_check_at
+			FROM monitor_daily_rollups mdr
+			WHERE mdr.monitor_id = m.id
+			  AND mdr.tenant_id = m.tenant_id
+			  AND mdr.bucket_day >= $2::date
+			  AND mdr.bucket_day < $3::date
+			ORDER BY mdr.bucket_day DESC
 			LIMIT 1
 		) lr ON TRUE
 		%s
 		ORDER BY m.name
 	`, whereClause)
-	if isDashboardRollupRange(dashboardRange) {
-		query = fmt.Sprintf(`
-			SELECT
-				m.id,
-				m.name,
-				m.enabled,
-				lr.latest_status,
-				lr.latest_check_at
-			FROM monitors m
-			LEFT JOIN LATERAL (
-				SELECT mdr.latest_status, mdr.latest_check_at
-				FROM monitor_daily_rollups mdr
-				WHERE mdr.monitor_id = m.id
-				  AND mdr.tenant_id = m.tenant_id
-				  AND mdr.bucket_day >= $2::date
-				  AND mdr.bucket_day < $3::date
-				ORDER BY mdr.bucket_day DESC
-				LIMIT 1
-			) lr ON TRUE
-			%s
-			ORDER BY m.name
-		`, whereClause)
-	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -650,15 +805,13 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 	healthRows := make([]models.DashboardMonitorHealth, 0)
 	for rows.Next() {
 		var row models.DashboardMonitorHealth
-		var latestStatus sql.NullString
+		var currentState string
 		var latestCheckAt sql.NullTime
 
-		if err := rows.Scan(&row.MonitorID, &row.MonitorName, &row.Enabled, &latestStatus, &latestCheckAt); err != nil {
+		if err := rows.Scan(&row.MonitorID, &row.MonitorName, &row.Enabled, &currentState, &latestCheckAt); err != nil {
 			return nil, fmt.Errorf("failed to scan monitor health row: %w", err)
 		}
-		if latestStatus.Valid {
-			row.LatestStatus = &latestStatus.String
-		}
+		row.LatestStatus = monitorStateToStatus(currentState)
 		if latestCheckAt.Valid {
 			ts := latestCheckAt.Time
 			row.LatestCheckAt = &ts
@@ -672,6 +825,11 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 	return healthRows, nil
 }
 
+// getOpsSummary derives the up/down/paused counts from the monitor-health rows,
+// whose LatestStatus comes from the persisted state machine via
+// monitorStateToStatus: down → "failure" (counted down), up/suspect → "success"
+// (counted up), unknown → nil (skipped) — consistent with problem-monitors and
+// the public status page.
 func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitorHealth []models.DashboardMonitorHealth, tags []string) (models.DashboardOpsSummary, error) {
 	summary := models.DashboardOpsSummary{}
 	for _, row := range monitorHealth {

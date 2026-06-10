@@ -186,7 +186,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			tenantSvc := tenantservice.NewService(dbClient)
 
 			// Dashboard service and handlers
-			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc, analyticsRepo, tenantSvc)
+			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc, analyticsRepo, tenantSvc, log)
 			dashboardHandlers := dashboardhandlers.NewHandlers(dashboardSvc, log)
 
 			// Monitor services
