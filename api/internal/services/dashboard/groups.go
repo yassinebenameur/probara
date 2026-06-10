@@ -597,10 +597,22 @@ func (s *Service) groupUptimeSeries(
 	}
 
 	if rng == models.DashboardRange24h {
-		series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
+		// A sparkline covers one group's monitor SUBSET, so it cannot reuse the
+		// tenant-wide hourly series. Cache it in the same rolling24h cache under
+		// a key derived from the monitor-ID set; only hourlySeries is populated.
+		data, _, err := s.rolling24h.Get(sparkline24hCacheKey(tenantID, monitorIDs), func() (*rolling24hData, []uuid.UUID, error) {
+			buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rolling24hBuildTimeout)
+			defer cancel()
+			series, err := loadHourlyBucketSeries24h(buildCtx, s.db, tenantID, monitorIDs, time.Now().UTC())
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to load 24h group sparkline: %w", err)
+			}
+			return &rolling24hData{hourlySeries: series}, nil, nil
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to load 24h group sparkline: %w", err)
+			return nil, err
 		}
+		series := data.hourlySeries
 		out := make([]float64, 0, len(series))
 		for _, p := range series {
 			if p.TotalChecks == 0 {

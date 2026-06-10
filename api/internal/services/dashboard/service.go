@@ -37,6 +37,7 @@ type Service struct {
 	alertService alertservice.AlertService
 	analytics    sharedanalytics.Reader
 	tenants      tenantSettingsReader
+	rolling24h   *rolling24hCache
 }
 
 // NewService creates a new dashboard service.
@@ -46,6 +47,7 @@ func NewService(database db.DB, alerts alertservice.AlertService, analytics shar
 		alertService: alerts,
 		analytics:    analytics,
 		tenants:      tenants,
+		rolling24h:   newRolling24hCache(rolling24hCacheTTL),
 	}
 }
 
@@ -132,7 +134,7 @@ func (s *Service) GetSummary(ctx context.Context, tenantID uuid.UUID, params *mo
 	// activity, and groups instead of re-running each heavy query per section.
 	var precomp *rolling24hData
 	if normalized.Range == models.DashboardRange24h {
-		precomp, err = s.loadRolling24hData(ctx, tenantID, normalized.Tags)
+		precomp, _, err = s.loadRolling24hData(ctx, tenantID, normalized.Tags)
 		if err != nil {
 			return nil, err
 		}
@@ -256,27 +258,38 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, param
 	}, nil
 }
 
-// loadRolling24hData computes the per-request shared 24h aggregates: the
-// enabled operational monitor set, the exact-rolling-24h totals, and the
-// hour-aligned bucket series, all anchored to a single "now".
-func (s *Service) loadRolling24hData(ctx context.Context, tenantID uuid.UUID, tags []string) (*rolling24hData, error) {
-	monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	totals, err := loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, now)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load 24h rolling summary: %w", err)
-	}
-	series, err := loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, now)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load 24h hourly bucket series: %w", err)
-	}
-	return &rolling24hData{
-		totals:       totals,
-		hourlySeries: series,
-	}, nil
+// loadRolling24hData returns the shared 24h aggregates — the enabled
+// operational monitor set, the exact-rolling-24h totals, and the hour-aligned
+// bucket series, all anchored to a single "now" — through the short-TTL
+// rolling24h cache. The summary, problem-monitors, and sparkline requests of
+// one dashboard page load therefore cost a single computation per (tenant,
+// tag-filter); the returned data and monitorIDs are shared and must be
+// treated as read-only.
+func (s *Service) loadRolling24hData(ctx context.Context, tenantID uuid.UUID, tags []string) (*rolling24hData, []uuid.UUID, error) {
+	return s.rolling24h.Get(rolling24hCacheKey(tenantID, tags), func() (*rolling24hData, []uuid.UUID, error) {
+		// Detach from the triggering request's cancellation (see
+		// rolling24hBuildTimeout): concurrent waiters share this build.
+		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rolling24hBuildTimeout)
+		defer cancel()
+
+		monitorIDs, err := s.listEnabledOperationalMonitorIDs(buildCtx, tenantID, tags)
+		if err != nil {
+			return nil, nil, err
+		}
+		now := time.Now().UTC()
+		totals, err := loadExactRolling24hSummary(buildCtx, s.db, tenantID, monitorIDs, now)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load 24h rolling summary: %w", err)
+		}
+		series, err := loadHourlyBucketSeries24h(buildCtx, s.db, tenantID, monitorIDs, now)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load 24h hourly bucket series: %w", err)
+		}
+		return &rolling24hData{
+			totals:       totals,
+			hourlySeries: series,
+		}, monitorIDs, nil
+	})
 }
 
 func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRange models.DashboardRange, rangeStart, rangeEnd time.Time, tags []string, precomp *rolling24hData) (models.DashboardStats, error) {
@@ -311,14 +324,11 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			totals = precomp.totals
 		}
 		if totals == nil {
-			monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+			data, _, err := s.loadRolling24hData(ctx, tenantID, tags)
 			if err != nil {
 				return stats, err
 			}
-			totals, err = loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-			if err != nil {
-				return stats, fmt.Errorf("failed to load 24h rolling summary: %w", err)
-			}
+			totals = data.totals
 		}
 		stats.OverallUptime = computeMonitorWeightedUptime(totals)
 		stats.AvgResponseMS = computeMonitorWeightedLatency(totals)
@@ -444,14 +454,11 @@ func (s *Service) getTrend(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			series = precomp.hourlySeries
 		}
 		if series == nil {
-			monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+			data, _, err := s.loadRolling24hData(ctx, tenantID, tags)
 			if err != nil {
 				return nil, err
 			}
-			series, err = loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-			if err != nil {
-				return nil, fmt.Errorf("failed to load 24h hourly trend series: %w", err)
-			}
+			series = data.hourlySeries
 		}
 		trend := make([]models.DashboardTrendPoint, 0, len(series))
 		for _, p := range series {
@@ -558,14 +565,11 @@ func (s *Service) getActivity24h(ctx context.Context, tenantID uuid.UUID, tags [
 		series = precomp.hourlySeries
 	}
 	if series == nil {
-		monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+		data, _, err := s.loadRolling24hData(ctx, tenantID, tags)
 		if err != nil {
 			return nil, err
 		}
-		series, err = loadHourlyBucketSeries24h(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load 24h activity series: %w", err)
-		}
+		series = data.hourlySeries
 	}
 	activity := make([]models.DashboardActivityHour, 0, len(series))
 	for _, p := range series {
@@ -794,17 +798,17 @@ func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, 
 }
 
 func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID, _rangeStart, _rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
-	monitorIDs, err := s.listEnabledOperationalMonitorIDs(ctx, tenantID, tags)
+	// The monitor-set predicate (enabled, type<>'group', deleted_at IS NULL,
+	// tags @>) and the totals computation are exactly the ones cached by
+	// loadRolling24hData, so the parallel summary request's work is reused.
+	data, monitorIDs, err := s.loadRolling24hData(ctx, tenantID, tags)
 	if err != nil {
 		return nil, err
 	}
 	if len(monitorIDs) == 0 {
 		return []models.DashboardProblemMonitor{}, nil
 	}
-	totals, err := loadExactRolling24hSummary(ctx, s.db, tenantID, monitorIDs, time.Now().UTC())
-	if err != nil {
-		return nil, fmt.Errorf("failed to load 24h problem-monitor totals: %w", err)
-	}
+	totals := data.totals
 
 	// Materialise candidates (any monitor with at least one bad check).
 	type candidate struct {

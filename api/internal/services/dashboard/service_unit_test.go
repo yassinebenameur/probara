@@ -273,6 +273,110 @@ func TestService_LoadGroups_24hUsesExactRollingHelper(t *testing.T) {
 	}
 }
 
+// TestService_LoadRolling24hData_SecondCallAndProblemMonitorsHitCache asserts
+// that the heavy rolling-24h queries (monitor list, exact-rolling summary,
+// hourly series) run exactly ONCE: a second loadRolling24hData call within the
+// TTL is served from the cache, and getProblemMonitors24h reuses the cached
+// totals + monitor set, adding only its cheap top-N name lookup. sqlmock uses
+// ordered expectations, so any extra DB query fails the test.
+func TestService_LoadRolling24hData_SecondCallAndProblemMonitorsHitCache(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	latestStatus := "failure"
+	latestAt := time.Now().UTC().Add(-10 * time.Minute)
+
+	// Build pass 1 of 1: listEnabledOperationalMonitorIDs.
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id
+		FROM monitors
+		WHERE tenant_id = $1
+		  AND enabled = TRUE
+		  AND type <> 'group'
+		  AND deleted_at IS NULL
+		ORDER BY id
+	`)).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(monitorID))
+
+	// loadExactRolling24hSummary: cursor read + stitched query.
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+	mock.ExpectQuery("monitor_hourly_rollups").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"monitor_id", "total_checks", "success_checks",
+			"failure_checks_raw", "error_checks_raw", "bad_checks_rollup", "error_checks_rollup",
+			"latency_sum_ms", "latency_count", "latest_status", "latest_check_at",
+		}).AddRow(monitorID, 40, 38, 1, 1, 0, 0, 3800.0, 38, latestStatus, latestAt))
+
+	// loadHourlyBucketSeries24h: cursor read + series query (no rows needed —
+	// the helper pre-fills 24 empty buckets).
+	mock.ExpectQuery("rollup_job_state").
+		WillReturnRows(sqlmock.NewRows([]string{"last_created_at", "last_check_result_id"}))
+	mock.ExpectQuery("raw_per_hour").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"bucket_hour", "total_checks", "success_checks", "latency_sum_ms", "latency_count",
+		}))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{})
+	ctx := context.Background()
+
+	data1, ids1, err := svc.loadRolling24hData(ctx, tenantID, nil)
+	if err != nil {
+		t.Fatalf("loadRolling24hData() #1 error = %v", err)
+	}
+	if len(ids1) != 1 || ids1[0] != monitorID {
+		t.Fatalf("monitorIDs = %v, want [%s]", ids1, monitorID)
+	}
+
+	// Second call within the TTL: must be served from the cache (no new
+	// sqlmock expectations are registered, so any DB hit errors out).
+	data2, ids2, err := svc.loadRolling24hData(ctx, tenantID, nil)
+	if err != nil {
+		t.Fatalf("loadRolling24hData() #2 error = %v", err)
+	}
+	if data1 != data2 {
+		t.Fatalf("second call did not return the cached data pointer")
+	}
+	if len(ids2) != 1 || ids2[0] != monitorID {
+		t.Fatalf("cached monitorIDs = %v, want [%s]", ids2, monitorID)
+	}
+
+	// Problem monitors reuse the cached totals + monitor set; only the cheap
+	// top-N name lookup hits the DB.
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, current_state
+		FROM monitors
+		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+	`)).
+		WithArgs(tenantID, pq.Array([]uuid.UUID{monitorID})).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "current_state"}).
+			AddRow(monitorID, "api", "down"))
+
+	monitors, err := svc.getProblemMonitors24h(ctx, tenantID, time.Time{}, time.Time{}, problemMonitorLimit, nil)
+	if err != nil {
+		t.Fatalf("getProblemMonitors24h() error = %v", err)
+	}
+	if len(monitors) != 1 || monitors[0].MonitorID != monitorID {
+		t.Fatalf("monitors = %+v, want one entry for %s", monitors, monitorID)
+	}
+	if monitors[0].FailureCount != 1 || monitors[0].ErrorCount != 1 {
+		t.Fatalf("counts = (%d,%d), want (1,1)", monitors[0].FailureCount, monitors[0].ErrorCount)
+	}
+	if monitors[0].LatestFailureAt == nil || !monitors[0].LatestFailureAt.Equal(latestAt) {
+		t.Fatalf("LatestFailureAt = %v, want %v", monitors[0].LatestFailureAt, latestAt)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestLoadHourlyBucketSeries24h_BoundsRawScanAtRollupCursor(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
