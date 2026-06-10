@@ -219,10 +219,18 @@ func loadExactRolling24hSummary(ctx context.Context, dbClient db.DB, tenantID uu
 		// (total − success − error) to FailureChecks. Rows written before the
 		// error_checks backfill have error_checks = 0, so their bad checks
 		// all land in FailureChecks exactly as before.
+		//
+		// Clamp the rollup-attributed failure component to >= 0 so a future
+		// backfill/manual write that violates the error_checks <= total -
+		// success invariant cannot push FailureChecks negative.
+		failureChecksRollup := badChecksRollup - errorChecksRollup
+		if failureChecksRollup < 0 {
+			failureChecksRollup = 0
+		}
 		row := MonitorRolling24hTotals{
 			TotalChecks:   int(totalChecks),
 			SuccessChecks: int(successChecks),
-			FailureChecks: int(failureCountRaw) + int(badChecksRollup) - int(errorChecksRollup),
+			FailureChecks: int(failureCountRaw) + int(failureChecksRollup),
 			ErrorChecks:   int(errorCountRaw) + int(errorChecksRollup),
 			LatencySumMS:  latencySumMS,
 			LatencyCount:  int(latencyCount),

@@ -6,10 +6,12 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
@@ -317,8 +319,14 @@ func advanceRollupCursor(state *rollupState, row rollupCheckResult) {
 // infrastructure failure (worth aborting the run and retrying later) rather
 // than a data problem with a specific row. Classification is deliberately
 // conservative and simple: context cancellation/deadline, bad driver
-// connections, and net errors are transient; ANYTHING else is treated as a
-// row-level error and makes the row eligible for skipping during replay.
+// connections, net errors, unexpected EOFs, and retryable Postgres SQLSTATE
+// classes are transient; ANYTHING else is treated as a row-level error and
+// makes the row eligible for skipping during replay.
+//
+// Transient errors abort the run and are retried next cycle, so erring on
+// the transient side is cheap. Misclassifying a retryable error as poison
+// would permanently skip a good row from the rollups (the raw check_results
+// row stays recoverable via backfill, but we'd rather not get there).
 func isTransientRollupError(err error) bool {
 	if err == nil {
 		return false
@@ -328,6 +336,20 @@ func isTransientRollupError(err error) bool {
 	}
 	if errors.Is(err, driver.ErrBadConn) {
 		return true
+	}
+	// lib/pq surfaces dropped connections as (unexpected) EOFs.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch pqErr.Code.Class() {
+		case "40", // transaction rollback (deadlock, serialization failure)
+			"53", // insufficient resources
+			"57", // operator intervention (query_canceled, shutdown)
+			"58": // system error
+			return true
+		}
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr)
