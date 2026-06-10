@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Layers } from 'lucide-react';
 import type { Monitor, MonitorType } from '@/lib/types';
 import SelectCheckbox from '@/components/ui/SelectCheckbox';
 import Button from '@/components/ui/Button';
@@ -59,19 +60,19 @@ export default function MonitorLibrary({
 
   return (
     <div className="flex h-full min-h-[420px] flex-col overflow-hidden rounded-xl border border-white/[0.06] bg-slate-950/40">
-      <div className="space-y-3 border-b border-white/[0.06] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span aria-hidden="true" className="h-1 w-6 rounded-full bg-gradient-to-r from-cyan-500/60 to-cyan-500/0" />
-            <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300">
-              Monitor library
-            </h4>
-          </div>
-          <span className="text-[11px] tabular-nums text-slate-500">
-            {loading ? 'Loading…' : `${filteredMonitors.length} / ${total}`}
-          </span>
+      <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] bg-slate-950/40 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span aria-hidden="true" className="h-1 w-6 flex-shrink-0 rounded-full bg-gradient-to-r from-cyan-500/60 to-cyan-500/0" />
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300">
+            Monitor library
+          </h4>
         </div>
+        <span className="flex-shrink-0 text-[11px] tabular-nums text-slate-500">
+          {loading ? 'Loading…' : `${filteredMonitors.length} / ${total}`}
+        </span>
+      </div>
 
+      <div className="space-y-3 border-b border-white/[0.06] p-4">
         <input
           type="search"
           value={filters.search}
@@ -159,25 +160,53 @@ export default function MonitorLibrary({
           <p className="p-6 text-center text-sm text-slate-500">No monitors match these filters.</p>
         ) : (
           <ul className="space-y-1">
-            {filteredMonitors.map((monitor) => {
-              const placement = derived.monitorIdToSection.get(monitor.id);
+            {(() => {
+              const groups = filteredMonitors.filter((m) => m.type === 'group');
+              const plain = filteredMonitors.filter((m) => m.type !== 'group');
+              const showHeadings = groups.length > 0 && plain.length > 0;
+              const renderRow = (monitor: Monitor) => {
+                const placement = derived.monitorIdToSection.get(monitor.id);
+                return (
+                  <MonitorRow
+                    key={monitor.id}
+                    monitor={monitor}
+                    checked={selectionSet.has(monitor.id)}
+                    placement={placement}
+                    onToggleSelect={() => onToggleSelect(monitor.id)}
+                    onRevealSection={onRevealSection}
+                    onDragStart={onDragStartMonitor ? (event) => onDragStartMonitor(event, monitor.id) : undefined}
+                    rowAction={rowAction ? () => rowAction(monitor, { placement }) : undefined}
+                  />
+                );
+              };
               return (
-                <MonitorRow
-                  key={monitor.id}
-                  monitor={monitor}
-                  checked={selectionSet.has(monitor.id)}
-                  placement={placement}
-                  onToggleSelect={() => onToggleSelect(monitor.id)}
-                  onRevealSection={onRevealSection}
-                  onDragStart={onDragStartMonitor ? (event) => onDragStartMonitor(event, monitor.id) : undefined}
-                  rowAction={rowAction ? () => rowAction(monitor, { placement }) : undefined}
-                />
+                <>
+                  {showHeadings && <ListHeading label="Groups" count={groups.length} first />}
+                  {groups.map(renderRow)}
+                  {showHeadings && <ListHeading label="Monitors" count={plain.length} />}
+                  {plain.map(renderRow)}
+                </>
               );
-            })}
+            })()}
           </ul>
         )}
       </div>
     </div>
+  );
+}
+
+function ListHeading({ label, count, first = false }: { label: string; count: number; first?: boolean }) {
+  return (
+    <li
+      className={`flex items-center gap-2 px-3 pb-1 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-600 ${
+        first ? 'pt-1' : 'pt-3'
+      }`}
+      aria-hidden="true"
+    >
+      <span>{label}</span>
+      <span className="tabular-nums">{count}</span>
+      <span className="h-px flex-1 bg-white/[0.05]" />
+    </li>
   );
 }
 
@@ -215,16 +244,26 @@ function MonitorRow({
         onChange={onToggleSelect}
         label={`Select ${monitor.name}`}
       />
-      <span
-        className={`h-2 w-2 flex-shrink-0 rounded-full ${
-          monitor.enabled ? 'bg-emerald-400' : 'bg-slate-600'
-        }`}
-        aria-hidden="true"
-      />
+      {monitor.type === 'group' ? (
+        <span
+          className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-violet-400/20 bg-violet-500/10 text-violet-300"
+          aria-hidden="true"
+          title="Monitor group"
+        >
+          <Layers className="h-3 w-3" strokeWidth={1.75} />
+        </span>
+      ) : (
+        <span
+          className={`h-2 w-2 flex-shrink-0 rounded-full ${
+            monitor.enabled ? 'bg-emerald-400' : 'bg-slate-600'
+          }`}
+          aria-hidden="true"
+        />
+      )}
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-white">{monitor.name}</p>
         <p className="truncate text-[11px] text-slate-500">
-          {monitor.type.toUpperCase()}
+          {monitor.type === 'group' ? 'Group' : monitor.type.toUpperCase()}
           {monitor.url ? ` · ${monitor.url}` : ''}
         </p>
       </div>
@@ -239,7 +278,11 @@ function MonitorRow({
           <span className="truncate">{placement.sectionTitle}</span>
         </button>
       ) : null}
-      {rowAction ? rowAction() : null}
+      {rowAction ? (
+        <span className="transition-opacity lg:opacity-0 lg:focus-within:opacity-100 lg:group-hover:opacity-100">
+          {rowAction()}
+        </span>
+      ) : null}
     </li>
   );
 }
@@ -254,35 +297,33 @@ interface FilterSelectProps {
 function FilterSelect({ label, value, options, onChange }: FilterSelectProps) {
   const active = value !== '';
   return (
-    <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-      <span>{label}</span>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className={`input input-xs h-7 min-w-[112px] cursor-pointer appearance-none pr-7 text-xs normal-case tracking-normal ${
-            active ? 'border-cyan-500/40 text-cyan-100' : ''
-          }`}
-        >
-          <option value="">Any</option>
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 20 20"
-          fill="currentColor"
-          className={`pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 transition-colors ${
-            active ? 'text-cyan-300' : 'text-slate-500'
-          }`}
-        >
-          <path d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.06l3.71-3.83a.75.75 0 1 1 1.08 1.04l-4.25 4.4a.75.75 0 0 1-1.08 0L5.21 8.27a.75.75 0 0 1 .02-1.06Z" />
-        </svg>
-      </div>
-    </label>
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label={`Filter by ${label.toLowerCase()}`}
+        className={`input input-xs h-7 min-w-[96px] cursor-pointer appearance-none pr-7 text-xs ${
+          active ? 'border-cyan-500/40 text-cyan-100' : 'text-slate-400'
+        }`}
+      >
+        <option value="">{label}</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 20 20"
+        fill="currentColor"
+        className={`pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 transition-colors ${
+          active ? 'text-cyan-300' : 'text-slate-500'
+        }`}
+      >
+        <path d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.06l3.71-3.83a.75.75 0 1 1 1.08 1.04l-4.25 4.4a.75.75 0 0 1-1.08 0L5.21 8.27a.75.75 0 0 1 .02-1.06Z" />
+      </svg>
+    </div>
   );
 }
 

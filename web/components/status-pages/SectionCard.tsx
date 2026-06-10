@@ -16,6 +16,8 @@ interface SectionCardProps {
   allSections: EditableSection[];
   error?: string;
   highlighted: boolean;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   dropActive: boolean;
   onRename: (title: string) => void;
   onRemove: () => void;
@@ -42,6 +44,8 @@ export default function SectionCard({
   allSections,
   error,
   highlighted,
+  collapsed,
+  onToggleCollapsed,
   dropActive,
   onRename,
   onRemove,
@@ -83,7 +87,27 @@ export default function SectionCard({
             : 'border-white/[0.08]'
       }`}
     >
-      <div className="flex items-center gap-2 border-b border-white/[0.06] bg-slate-950/30 px-3 py-2.5">
+      <div
+        className={`flex items-center gap-2 bg-slate-950/30 px-3 py-2.5 ${
+          collapsed ? '' : 'border-b border-white/[0.06]'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Expand section' : 'Collapse section'}
+          className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.04] hover:text-slate-200"
+        >
+          <svg
+            className={`h-3.5 w-3.5 transition-transform duration-150 ${collapsed ? '-rotate-90' : ''}`}
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.06l3.71-3.83a.75.75 0 1 1 1.08 1.04l-4.25 4.4a.75.75 0 0 1-1.08 0L5.21 8.27a.75.75 0 0 1 .02-1.06Z" />
+          </svg>
+        </button>
         <span
           aria-hidden="true"
           className="flex h-6 min-w-[26px] flex-shrink-0 items-center justify-center rounded-md border border-white/[0.08] bg-slate-950/60 px-1.5 font-mono text-[10px] tabular-nums text-slate-400"
@@ -123,6 +147,7 @@ export default function SectionCard({
 
       {error && <p className="px-4 pt-3 text-xs text-rose-400">{error}</p>}
 
+      {!collapsed && (
       <div className="space-y-1.5 p-3">
         {section.monitors.length === 0 ? (
           <p className="rounded-lg border border-dashed border-white/[0.08] px-3 py-6 text-center text-xs text-slate-500">
@@ -158,6 +183,7 @@ export default function SectionCard({
           onPick={(monitorIds) => onAddMonitors(monitorIds)}
         />
       </div>
+      )}
     </div>
   );
 }
@@ -195,7 +221,7 @@ function MonitorRow({
     <div
       draggable
       onDragStart={onDragStart}
-      className="flex flex-wrap items-center gap-2 rounded-lg border border-white/[0.06] bg-slate-950/40 px-3 py-2 transition-colors hover:border-cyan-500/20"
+      className="group flex flex-wrap items-center gap-2 rounded-lg border border-white/[0.06] bg-slate-950/40 px-3 py-2 transition-colors hover:border-cyan-500/20"
     >
       <span
         className={`h-2 w-2 flex-shrink-0 rounded-full ${
@@ -216,11 +242,11 @@ function MonitorRow({
         type="text"
         value={displayName}
         onChange={(event) => onSetDisplayName(event.target.value)}
-        placeholder="Optional public display name"
+        placeholder="Display name (optional)"
         className="input input-sm h-8 min-w-[160px] flex-1"
         aria-label={`Public display name for ${monitor.name}`}
       />
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 transition-opacity lg:opacity-0 lg:focus-within:opacity-100 lg:group-hover:opacity-100">
         <IconButton label="Move up" disabled={isFirst} onClick={() => onReorder('up')}>
           <ArrowUp />
         </IconButton>

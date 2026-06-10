@@ -326,7 +326,7 @@ export function deriveState(state: FormState, monitors: Monitor[]): DerivedState
 
 export function filterMonitors(monitors: Monitor[], filters: Filters): Monitor[] {
   const search = filters.search.trim().toLowerCase();
-  return monitors.filter((monitor) => {
+  const filtered = monitors.filter((monitor) => {
     if (filters.tag && !(monitor.tags || []).includes(filters.tag)) return false;
     if (filters.type && monitor.type !== filters.type) return false;
     if (filters.status === 'active' && !monitor.enabled) return false;
@@ -338,6 +338,12 @@ export function filterMonitors(monitors: Monitor[], filters: Filters): Monitor[]
       if (!haystack.includes(search)) return false;
     }
     return true;
+  });
+  // Groups first, then everything alphabetically within each band.
+  return filtered.sort((a, b) => {
+    const groupRank = (a.type === 'group' ? 0 : 1) - (b.type === 'group' ? 0 : 1);
+    if (groupRank !== 0) return groupRank;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
   });
 }
 
