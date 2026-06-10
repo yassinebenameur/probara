@@ -271,6 +271,283 @@ func TestSubscriberHandleEventBroadcastsDirectStatusPageTarget(t *testing.T) {
 	assertNoSSEEvent(t, beta)
 }
 
+func TestHubHasAnyClients(t *testing.T) {
+	hub := NewHub()
+	if hub.HasAnyClients() {
+		t.Fatal("HasAnyClients() = true on empty hub, want false")
+	}
+
+	ch := hub.Register("alpha")
+	if !hub.HasAnyClients() {
+		t.Fatal("HasAnyClients() = false with a registered client, want true")
+	}
+
+	hub.Unregister("alpha", ch)
+	if hub.HasAnyClients() {
+		t.Fatal("HasAnyClients() = true after last client left, want false")
+	}
+}
+
+func TestSubscriberHandleEventNoClientsSkipsSlugResolution(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+	// No expectations registered: any query is unexpected.
+
+	resolverCalled := false
+	inner := newStatusPageSlugResolver(&shareddb.Client{DB: sqlDB})
+	subscriber := &Subscriber{
+		hub:    NewHub(),
+		logger: logger.New("status-page", "debug"),
+		resolveSlugs: func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+			resolverCalled = true
+			return inner(ctx, event)
+		},
+		throttle: newSlugThrottler(slugBroadcastInterval),
+	}
+
+	subscriber.handleEvent(statusupdates.Event{
+		Type:      "check_result",
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+		Timestamp: time.Now().UTC(),
+	})
+
+	if resolverCalled {
+		t.Fatal("slug resolution ran with zero connected clients")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expected zero DB queries with no connected clients: %v", err)
+	}
+}
+
+func TestCachingSlugResolverHitsDatabaseOncePerTTL(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorID := uuid.New()
+	mock.ExpectQuery(regexp.QuoteMeta(statusPageSlugQuery)).
+		WithArgs(tenantID, monitorID).
+		WillReturnRows(sqlmock.NewRows([]string{"slug"}).AddRow("edge"))
+
+	resolver := newCachingSlugResolver(
+		newStatusPageSlugResolver(&shareddb.Client{DB: sqlDB}),
+		slugCacheTTL, slugCacheMaxEntries, time.Now,
+	)
+	event := statusupdates.Event{
+		Type:      "check_result",
+		TenantID:  tenantID.String(),
+		MonitorID: monitorID.String(),
+	}
+
+	for i := 0; i < 3; i++ {
+		slugs, err := resolver(context.Background(), event)
+		if err != nil {
+			t.Fatalf("resolver() call %d error = %v", i, err)
+		}
+		if !reflect.DeepEqual(slugs, []string{"edge"}) {
+			t.Fatalf("resolver() call %d slugs = %v, want [edge]", i, slugs)
+		}
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expected exactly one DB query within TTL: %v", err)
+	}
+}
+
+func TestCachingSlugResolverCachesNegativeResults(t *testing.T) {
+	calls := 0
+	inner := func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+		calls++
+		return []string{}, nil
+	}
+
+	resolver := newCachingSlugResolver(inner, slugCacheTTL, slugCacheMaxEntries, time.Now)
+	event := statusupdates.Event{
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+	}
+
+	for i := 0; i < 2; i++ {
+		slugs, err := resolver(context.Background(), event)
+		if err != nil {
+			t.Fatalf("resolver() error = %v", err)
+		}
+		if len(slugs) != 0 {
+			t.Fatalf("resolver() slugs = %v, want empty", slugs)
+		}
+	}
+
+	if calls != 1 {
+		t.Fatalf("inner resolver calls = %d, want 1 (negative result must be cached)", calls)
+	}
+}
+
+func TestCachingSlugResolverExpiresAfterTTL(t *testing.T) {
+	calls := 0
+	inner := func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+		calls++
+		return []string{"edge"}, nil
+	}
+
+	base := time.Now()
+	current := base
+	resolver := newCachingSlugResolver(inner, slugCacheTTL, slugCacheMaxEntries, func() time.Time { return current })
+	event := statusupdates.Event{
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+	}
+
+	if _, err := resolver(context.Background(), event); err != nil {
+		t.Fatalf("resolver() error = %v", err)
+	}
+	current = base.Add(slugCacheTTL + time.Second)
+	if _, err := resolver(context.Background(), event); err != nil {
+		t.Fatalf("resolver() error = %v", err)
+	}
+
+	if calls != 2 {
+		t.Fatalf("inner resolver calls = %d, want 2 (entry past TTL must be refreshed)", calls)
+	}
+}
+
+func TestCachingSlugResolverDoesNotCacheErrors(t *testing.T) {
+	calls := 0
+	inner := func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+		calls++
+		return nil, context.DeadlineExceeded
+	}
+
+	resolver := newCachingSlugResolver(inner, slugCacheTTL, slugCacheMaxEntries, time.Now)
+	event := statusupdates.Event{
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+	}
+
+	for i := 0; i < 2; i++ {
+		if _, err := resolver(context.Background(), event); err == nil {
+			t.Fatal("resolver() error = nil, want error")
+		}
+	}
+
+	if calls != 2 {
+		t.Fatalf("inner resolver calls = %d, want 2 (errors must not be cached)", calls)
+	}
+}
+
+func TestCachingSlugResolverEvictsWhenOverCap(t *testing.T) {
+	calls := 0
+	inner := func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+		calls++
+		return []string{"edge"}, nil
+	}
+
+	resolver := newCachingSlugResolver(inner, slugCacheTTL, 2, time.Now)
+	first := statusupdates.Event{TenantID: uuid.New().String(), MonitorID: uuid.New().String()}
+
+	if _, err := resolver(context.Background(), first); err != nil {
+		t.Fatalf("resolver() error = %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		event := statusupdates.Event{TenantID: uuid.New().String(), MonitorID: uuid.New().String()}
+		if _, err := resolver(context.Background(), event); err != nil {
+			t.Fatalf("resolver() error = %v", err)
+		}
+	}
+	// Cache was reset when it exceeded the cap; first key resolves again.
+	if _, err := resolver(context.Background(), first); err != nil {
+		t.Fatalf("resolver() error = %v", err)
+	}
+
+	if calls != 5 {
+		t.Fatalf("inner resolver calls = %d, want 5 (eviction dropped the first entry)", calls)
+	}
+}
+
+func TestSubscriberHandleEventThrottlesRoutineEvents(t *testing.T) {
+	hub := NewHub()
+	alpha := hub.Register("alpha")
+	defer hub.Unregister("alpha", alpha)
+
+	subscriber := &Subscriber{
+		hub:    hub,
+		logger: logger.New("status-page", "debug"),
+		resolveSlugs: func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+			return []string{"alpha"}, nil
+		},
+		throttle: newSlugThrottler(40 * time.Millisecond),
+	}
+
+	event := statusupdates.Event{
+		Type:      "check_result",
+		TenantID:  uuid.New().String(),
+		MonitorID: uuid.New().String(),
+	}
+	for i := 0; i < 5; i++ {
+		subscriber.handleEvent(event)
+	}
+
+	if got := len(alpha); got != 1 {
+		t.Fatalf("delivered events = %d after burst, want 1 leading fire", got)
+	}
+
+	// The trailing fire delivers the last suppressed event after the window.
+	select {
+	case <-alpha:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a trailing SSE event after the throttle interval")
+	}
+	assertNoSSEEvent(t, alpha)
+}
+
+func TestSubscriberHandleEventUrgentEventsBypassThrottle(t *testing.T) {
+	hub := NewHub()
+	alpha := hub.Register("alpha")
+	defer hub.Unregister("alpha", alpha)
+
+	subscriber := &Subscriber{
+		hub:    hub,
+		logger: logger.New("status-page", "debug"),
+		resolveSlugs: func(ctx context.Context, event statusupdates.Event) ([]string, error) {
+			return []string{"alpha"}, nil
+		},
+		throttle: newSlugThrottler(time.Hour),
+	}
+
+	tenantID := uuid.New().String()
+	monitorID := uuid.New().String()
+	subscriber.handleEvent(statusupdates.Event{Type: "state_change", TenantID: tenantID, MonitorID: monitorID})
+	subscriber.handleEvent(statusupdates.Event{Type: "state_change", TenantID: tenantID, MonitorID: monitorID})
+	subscriber.handleEvent(statusupdates.Event{Type: "incident.publication.updated", TenantID: tenantID, MonitorID: monitorID})
+
+	if got := len(alpha); got != 3 {
+		t.Fatalf("delivered events = %d, want 3 (urgent events bypass throttle)", got)
+	}
+}
+
+func TestIsUrgentEventType(t *testing.T) {
+	cases := map[string]bool{
+		"state_change":                 true,
+		"incident.publication.updated": true,
+		"incident_created":             true,
+		"check_result":                 false,
+		"history_deleted":              false,
+		"monitor.updated":              false,
+		"":                             false,
+	}
+	for eventType, want := range cases {
+		if got := isUrgentEventType(eventType); got != want {
+			t.Errorf("isUrgentEventType(%q) = %v, want %v", eventType, got, want)
+		}
+	}
+}
+
 func assertSSEEvent(t *testing.T, ch <-chan SSEEvent, want SSEEvent) {
 	t.Helper()
 
