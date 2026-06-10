@@ -407,18 +407,6 @@ func bindMonitorAlertPolicy(ctx context.Context, t *testing.T, dbClient *sharedd
 	}
 }
 
-func countAlerterAlertsByStatus(ctx context.Context, t *testing.T, dbClient *shareddb.Client, monitorID uuid.UUID, status string) int {
-	t.Helper()
-
-	var count int
-	if err := dbClient.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM alerts WHERE monitor_id = $1 AND status = $2
-	`, monitorID, status).Scan(&count); err != nil {
-		t.Fatalf("count alerts by status: %v", err)
-	}
-	return count
-}
-
 func insertAlerterTestPolicy(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID uuid.UUID, name string, createIncidentOnFire bool) uuid.UUID {
 	t.Helper()
 
