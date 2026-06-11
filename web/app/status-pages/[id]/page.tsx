@@ -2,14 +2,16 @@
 
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowUpRight, X } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
+import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Button from '@/components/ui/Button';
+import { useToast } from '@/components/ui/ToastProvider';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
@@ -20,7 +22,7 @@ export default function EditStatusPagePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
 
   const loadStatusPage = useCallback(async () => {
     try {
@@ -44,9 +46,9 @@ export default function EditStatusPagePage() {
       setSaving(true);
       const updated = await updateStatusPage(id, data);
       setStatusPage(updated);
-      setToast({ message: 'Status page updated', type: 'success' });
+      showToast('Status page updated', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update', type: 'error' });
+      showToast(err.message || 'Failed to update', 'error');
     } finally {
       setSaving(false);
     }
@@ -82,65 +84,57 @@ export default function EditStatusPagePage() {
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: statusPage.title }]}
         title={statusPage.title}
         subtitle={`/${statusPage.slug}`}
+        action={
+          <Button
+            variant="accent"
+            size="sm"
+            icon={<ArrowUpRight strokeWidth={1.75} />}
+            asChild
+          >
+            <a href={publicUrl} target="_blank" rel="noopener noreferrer">
+              Open public page
+            </a>
+          </Button>
+        }
       />
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        <FormCard>
-          <StatusPageForm
-            statusPage={statusPage}
-            onSubmit={handleSubmit}
-            onCancel={() => router.push('/status-pages')}
-            loading={saving}
-          />
-        </FormCard>
-
-        <div className="space-y-4">
-          <FormCard>
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Public URL</h3>
-            <div className="mb-3 rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
+      <CollapsibleSection title="Page info" summary={publicUrl}>
+        <div className="grid gap-4 md:grid-cols-3">
+          <div>
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Public URL</h3>
+            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
               <code className="break-all text-xs text-cyan-300">{publicUrl}</code>
             </div>
-            <Button
-              variant="accent"
-              size="sm"
-              icon={<ArrowUpRight strokeWidth={1.75} />}
-              className="w-full justify-center"
-              asChild
-            >
-              <a href={publicUrl} target="_blank" rel="noopener noreferrer">
-                Open public page
-              </a>
-            </Button>
-          </FormCard>
+          </div>
 
-          <FormCard>
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Details</h3>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
+          <div>
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Details</h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between gap-3">
                 <span className="text-slate-500">ID</span>
-                <span className="max-w-[180px] truncate font-mono text-xs text-slate-400">{statusPage.id}</span>
+                <span className="min-w-0 truncate font-mono text-xs text-slate-400">{statusPage.id}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-3">
                 <span className="text-slate-500">Monitors</span>
                 <span className="text-slate-300">{monitorCount}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-3">
                 <span className="text-slate-500">Created</span>
                 <span className="text-xs text-slate-300">
                   {new Date(statusPage.created_at).toLocaleDateString()}
                 </span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-3">
                 <span className="text-slate-500">Updated</span>
                 <span className="text-xs text-slate-300">
                   {new Date(statusPage.updated_at).toLocaleDateString()}
                 </span>
               </div>
             </div>
-          </FormCard>
+          </div>
 
-          <FormCard>
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Preview</h3>
+          <div>
+            <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Preview</h3>
             <div className="rounded-lg bg-[#0a0a0f] p-4">
               <div className="flex items-center gap-3">
                 {statusPage.logo_url ? (
@@ -160,32 +154,27 @@ export default function EditStatusPagePage() {
                     <div className="h-5 w-5 rounded-full border-2 border-white/20 bg-[#0a0a0f]" />
                   </div>
                 )}
-                <div>
-                  <div className="text-sm font-semibold text-white">{statusPage.title}</div>
-                  <div className="text-xs text-slate-500">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-white">{statusPage.title}</div>
+                  <div className="truncate text-xs text-slate-500">
                     {statusPage.description || 'System status'}
                   </div>
                 </div>
               </div>
             </div>
-          </FormCard>
-        </div>
-      </div>
-
-      {toast && (
-        <div
-          className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-            toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white" aria-label="Dismiss">
-              <X className="h-4 w-4" strokeWidth={1.75} />
-            </button>
           </div>
         </div>
-      )}
+      </CollapsibleSection>
+
+      <FormCard>
+        <StatusPageForm
+          statusPage={statusPage}
+          onSubmit={handleSubmit}
+          onCancel={() => router.push('/status-pages')}
+          loading={saving}
+        />
+      </FormCard>
+
     </div>
   );
 }

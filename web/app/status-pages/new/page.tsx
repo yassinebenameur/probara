@@ -2,28 +2,28 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { X } from 'lucide-react';
 import { CreateStatusPageRequest, UpdateStatusPageRequest } from '@/lib/types';
 import { createStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
+import { useToast } from '@/components/ui/ToastProvider';
 
 export default function NewStatusPagePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
 
   const handleSubmit = async (data: CreateStatusPageRequest | UpdateStatusPageRequest) => {
     try {
       setLoading(true);
       await createStatusPage(data as CreateStatusPageRequest);
-      setToast({ message: 'Status page created successfully', type: 'success' });
+      showToast('Status page created successfully', 'success');
       setTimeout(() => {
         router.push('/status-pages');
       }, 1000);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to create status page', type: 'error' });
+      showToast(err.message || 'Failed to create status page', 'error');
       setLoading(false);
     }
   };
@@ -44,20 +44,6 @@ export default function NewStatusPagePage() {
         />
       </FormCard>
 
-      {toast && (
-        <div
-          className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-            toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white" aria-label="Dismiss">
-              <X className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

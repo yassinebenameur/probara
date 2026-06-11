@@ -5,33 +5,29 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, RefreshCw, Trash2, Users as UsersIcon } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
-import Toast from '@/components/ui/Toast';
 import Button from '@/components/ui/Button';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { deleteUser, getUsers } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
 import type { AdminUser } from '@/lib/types';
-
-type ToastState = { message: string; type: 'success' | 'error' } | null;
 
 const PAGE_SIZE = 20;
 
-function formatDate(value?: string): string {
-  if (!value) return '-';
-  return new Date(value).toLocaleString();
-}
-
 export default function UsersPage() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [apiKeyMode, setApiKeyMode] = useState(false);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [toast, setToast] = useState<ToastState>(null);
+  const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
 
@@ -63,19 +59,18 @@ export default function UsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDelete = async (user: AdminUser) => {
-    if (!confirm(`Delete user "${user.username}"? This action cannot be undone.`)) {
-      return;
-    }
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      setDeletingId(user.id);
-      await deleteUser(user.id);
+      await deleteUser(pendingDelete.id);
       await loadUsers(page);
-      setToast({ message: 'User deleted', type: 'success' });
+      showToast('User deleted', 'success');
+      setPendingDelete(null);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete user', type: 'error' });
+      showToast(err.message || 'Failed to delete user', 'error');
     } finally {
-      setDeletingId(null);
+      setDeleting(false);
     }
   };
 
@@ -169,9 +164,9 @@ export default function UsersPage() {
                   {users.map((user) => (
                     <tr key={user.id}>
                       <td className="px-3 py-3">{user.username}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.created_at)}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.updated_at)}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.last_login_at)}</td>
+                      <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.created_at)}</td>
+                      <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.updated_at)}</td>
+                      <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.last_login_at)}</td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-1.5">
                           <Button variant="ghost" size="xs" icon={<Pencil strokeWidth={1.75} />} asChild>
@@ -181,11 +176,9 @@ export default function UsersPage() {
                             variant="danger"
                             size="xs"
                             icon={<Trash2 strokeWidth={1.75} />}
-                            onClick={() => handleDelete(user)}
-                            disabled={deletingId === user.id}
-                            loading={deletingId === user.id}
+                            onClick={() => setPendingDelete(user)}
                           >
-                            {deletingId === user.id ? 'Deleting…' : 'Delete'}
+                            Delete
                           </Button>
                         </div>
                       </td>
@@ -222,9 +215,19 @@ export default function UsersPage() {
         )}
       </Panel>
 
-      {toast && (
-        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
-      )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete user"
+        description={
+          pendingDelete
+            ? `“${pendingDelete.username}” will lose access immediately. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete user"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      />
     </div>
   );
 }

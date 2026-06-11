@@ -64,17 +64,17 @@ export default function GroupRow({ group, range, filterTags }: Props) {
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="grid w-full grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-left transition-colors hover:bg-white/[0.02]"
+        className="group grid w-full grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-left transition-colors hover:bg-white/[0.03]"
       >
         {statusIcon(group)}
         <span className="min-w-0 truncate text-sm font-medium text-white">{label}</span>
         <span className="text-xs tabular-nums text-slate-400">
           {group.monitor_count} monitor{group.monitor_count === 1 ? '' : 's'}
         </span>
-        <span className={`text-sm font-medium tabular-nums ${group.attention_count > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+        <span className={`text-sm font-medium tabular-nums ${group.monitor_count === 0 ? 'text-slate-500' : group.attention_count > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
           {group.monitor_count === 0 ? '—' : `${group.uptime.toFixed(2)}%`}
         </span>
-        <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2} />
+        <ChevronDown className={`h-4 w-4 text-slate-500 transition-all group-hover:text-slate-300 ${open ? 'rotate-180' : ''}`} strokeWidth={2} />
       </button>
 
       {open && (

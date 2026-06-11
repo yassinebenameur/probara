@@ -28,8 +28,10 @@ import {
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserStepConfig,
 } from '@/lib/types';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2 } from 'lucide-react';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, runMonitorNow } from '@/lib/api';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import GroupForm from './GroupForm';
 import AgentForm from './AgentForm';
@@ -37,10 +39,9 @@ import PushForm from './PushForm';
 import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
-import HttpRequestFlowPreview from './HttpRequestFlowPreview';
+import CurlPreview from './CurlPreview';
 
 const BTN_GHOST_SM = 'inline-flex items-center justify-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed';
-const BTN_ACCENT_SM = 'inline-flex items-center justify-center gap-2 rounded-[12px] bg-cyan-500 px-3 py-2 text-xs font-medium text-white shadow-[0_4px_20px_rgba(6,182,212,0.18)] transition-colors hover:bg-cyan-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -202,43 +203,148 @@ function SectionHeader({ title, description }: { title: string; description?: st
   );
 }
 
-// Monitor type card
-function TypeCard({
-  type,
-  icon,
-  label,
-  description,
-  selected,
-  onClick,
-  disabled,
-}: {
-  type: string;
-  icon: React.ReactNode;
+// Monitor type registry. Adding a new type (redis, postgres, websocket, …)
+// only requires a new entry here — the picker, categories, search, and
+// name placeholder all derive from it.
+type MonitorTypeMeta = {
+  type: MonitorType;
   label: string;
   description: string;
-  selected: boolean;
-  onClick: () => void;
-  disabled?: boolean;
+  icon: LucideIcon;
+  category: (typeof MONITOR_TYPE_CATEGORIES)[number];
+  namePlaceholder: string;
+};
+
+const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Infrastructure', 'Organization'] as const;
+
+const MONITOR_TYPE_META: MonitorTypeMeta[] = [
+  { type: 'http', label: 'HTTP', description: 'Check an HTTP endpoint', icon: Globe, category: 'Web & API', namePlaceholder: 'My API health check' },
+  { type: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API journey', icon: Code, category: 'Web & API', namePlaceholder: 'Checkout API journey' },
+  { type: 'synthetic_browser', label: 'Synthetic Browser', description: 'Real-browser user flow', icon: MousePointer2, category: 'Web & API', namePlaceholder: 'Login flow check' },
+  { type: 'ping', label: 'Ping', description: 'ICMP reachability check', icon: Radio, category: 'Network', namePlaceholder: 'Edge gateway ping' },
+  { type: 'dns', label: 'DNS', description: 'Resolve and verify records', icon: Search, category: 'Network', namePlaceholder: 'example.com DNS' },
+  { type: 'grpc', label: 'gRPC', description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' },
+  { type: 'sip', label: 'SIP', description: 'SIP OPTIONS availability', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' },
+  { type: 'agent', label: 'Agent', description: 'Host metrics from an agent', icon: Server, category: 'Infrastructure', namePlaceholder: 'Production server' },
+  { type: 'push', label: 'Push', description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure', namePlaceholder: 'My service health' },
+  { type: 'group', label: 'Group', description: 'Roll up monitors into one status', icon: Folder, category: 'Organization', namePlaceholder: 'Production services' },
+];
+
+const getTypeMeta = (type: MonitorType): MonitorTypeMeta =>
+  MONITOR_TYPE_META.find((m) => m.type === type) ?? MONITOR_TYPE_META[0];
+
+function MonitorTypePicker({
+  value,
+  onSelect,
+  open,
+  onOpenChange,
+  locked,
+}: {
+  value: MonitorType;
+  onSelect: (type: MonitorType) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  locked: boolean;
 }) {
+  const [query, setQuery] = useState('');
+  const selected = getTypeMeta(value);
+  const SelectedIcon = selected.icon;
+  const q = query.trim().toLowerCase();
+  const matches = (m: MonitorTypeMeta) =>
+    !q ||
+    m.label.toLowerCase().includes(q) ||
+    m.description.toLowerCase().includes(q) ||
+    m.category.toLowerCase().includes(q);
+  const visible = MONITOR_TYPE_META.filter(matches);
+
+  if (locked || !open) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="shrink-0 rounded-lg bg-cyan-500/15 p-2 text-cyan-400">
+            <SelectedIcon className="h-4 w-4" strokeWidth={1.75} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-white">{selected.label} monitor</p>
+            <p className="truncate text-xs text-slate-500">{selected.description}</p>
+          </div>
+        </div>
+        {locked ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+            <Lock className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Type is fixed after creation
+          </span>
+        ) : (
+          <button type="button" onClick={() => onOpenChange(true)} className={BTN_GHOST_SM}>
+            Change type
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-all ${
-        selected
-          ? 'border-cyan-500/50 bg-cyan-500/10'
-          : 'border-white/[0.06] bg-slate-800/30 hover:border-white/[0.1] hover:bg-slate-800/50'
-      } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-    >
-      <div className={`rounded-lg p-2 ${selected ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400'}`}>
-        {icon}
+    <div className="rounded-xl border border-white/[0.06] bg-slate-900/40 p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-white">Monitor type</p>
+          <p className="text-xs text-slate-500">Pick what you want to watch. The type can&apos;t be changed later.</p>
+        </div>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search types…"
+            aria-label="Search monitor types"
+            className="h-8 w-48 rounded-lg border border-white/[0.08] bg-slate-950/60 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
+          />
+        </div>
       </div>
-      <div>
-        <p className={`text-sm font-medium ${selected ? 'text-white' : 'text-slate-300'}`}>{label}</p>
-        <p className="text-xs text-slate-500 mt-0.5">{description}</p>
+      <div className="space-y-4" role="radiogroup" aria-label="Monitor type">
+        {MONITOR_TYPE_CATEGORIES.map((category) => {
+          const items = visible.filter((m) => m.category === category);
+          if (items.length === 0) return null;
+          return (
+            <div key={category}>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">{category}</p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {items.map((m) => {
+                  const Icon = m.icon;
+                  const isSelected = m.type === value;
+                  return (
+                    <button
+                      key={m.type}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      onClick={() => onSelect(m.type)}
+                      className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all ${
+                        isSelected
+                          ? 'border-cyan-500/50 bg-cyan-500/10'
+                          : 'border-white/[0.06] bg-slate-800/30 hover:border-white/[0.12] hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div className={`shrink-0 rounded-lg p-1.5 ${isSelected ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400'}`}>
+                        <Icon className="h-4 w-4" strokeWidth={1.75} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className={`text-xs font-medium ${isSelected ? 'text-white' : 'text-slate-300'}`}>{m.label}</p>
+                        <p className="mt-0.5 text-[11px] leading-snug text-slate-500">{m.description}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {visible.length === 0 && (
+          <p className="py-2 text-center text-xs text-slate-500">No monitor types match &ldquo;{query}&rdquo;.</p>
+        )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -861,6 +967,8 @@ export default function MonitorForm({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  // Expanded by default when creating so all types are discoverable up front.
+  const [typePickerOpen, setTypePickerOpen] = useState(!isEditMode);
   const [syntheticAPIMode, setSyntheticAPIMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserMode, setSyntheticBrowserMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserSetupMode, setSyntheticBrowserSetupMode] = useState<SyntheticBrowserSetupMode>(
@@ -1834,104 +1942,24 @@ export default function MonitorForm({
     await onSubmit(requestData);
   };
 
-  const iconCls = 'h-4 w-4';
-  const typeIcons = {
-    http: <Globe className={iconCls} strokeWidth={1.75} />,
-    ping: <Radio className={iconCls} strokeWidth={1.75} />,
-    dns: <Search className={iconCls} strokeWidth={1.75} />,
-    group: <Folder className={iconCls} strokeWidth={1.75} />,
-    agent: <Server className={iconCls} strokeWidth={1.75} />,
-    push: <Webhook className={iconCls} strokeWidth={1.75} />,
-    sip: <Phone className={iconCls} strokeWidth={1.75} />,
-    grpc: <Network className={iconCls} strokeWidth={1.75} />,
-    synthetic_api: <Code className={iconCls} strokeWidth={1.75} />,
-    synthetic_browser: <MousePointer2 className={iconCls} strokeWidth={1.75} />,
-    };
-
-    const monitorTypes: MonitorType[] = ['http', 'ping', 'dns', 'grpc', 'group', 'agent', 'push', 'sip', 'synthetic_api', 'synthetic_browser'];
-
-    const getTypeLabel = (type: MonitorType) => {
-      switch (type) {
-        case 'http':
-          return 'HTTP';
-        case 'ping':
-          return 'Ping';
-        case 'dns':
-          return 'DNS';
-        case 'grpc':
-          return 'gRPC';
-        case 'group':
-          return 'Group';
-        case 'agent':
-          return 'Agent';
-        case 'push':
-          return 'Push';
-        case 'sip':
-          return 'SIP';
-        case 'synthetic_api':
-          return 'Synthetic API';
-        case 'synthetic_browser':
-          return 'Synthetic Browser';
-        default:
-          return 'Monitor';
-      }
-    };
-
-    const getTypeDescription = (type: MonitorType) => {
-      switch (type) {
-        case 'http':
-          return 'Monitor HTTP endpoints';
-        case 'ping':
-          return 'ICMP ping checks';
-        case 'dns':
-          return 'DNS record checks';
-        case 'grpc':
-          return 'gRPC health checks';
-        case 'group':
-          return 'Group multiple monitors';
-        case 'agent':
-          return 'System metrics agent';
-        case 'push':
-          return 'Webhook-based monitoring';
-        case 'sip':
-          return 'SIP OPTIONS checks';
-        case 'synthetic_api':
-          return 'Simulate real API user flows';
-        case 'synthetic_browser':
-          return 'Simulate end-to-end browser journeys';
-        default:
-          return '';
-      }
-    };
-
-  // Compact type tab bar (shared across all delegated forms)
-  const TypeTabBar = () => (
-    <div className="mb-6">
-      <div className="flex flex-wrap gap-1.5 rounded-xl border border-white/[0.06] bg-slate-900/40 p-1.5">
-        {monitorTypes.map((type) => (
-          <button
-            key={type}
-            type="button"
-            disabled={isEditMode}
-            onClick={() => setMonitorType(type)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
-              monitorType === type
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent disabled:opacity-40'
-            }`}
-          >
-            {getTypeLabel(type)}
-          </button>
-        ))}
-      </div>
-    </div>
+  const typePicker = (
+    <MonitorTypePicker
+      value={monitorType}
+      onSelect={(type) => {
+        setMonitorType(type);
+        setTypePickerOpen(false);
+      }}
+      open={typePickerOpen}
+      onOpenChange={setTypePickerOpen}
+      locked={isEditMode}
+    />
   );
 
   // Delegate to specialized forms
   if (monitorType === 'group') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <GroupForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1940,7 +1968,7 @@ export default function MonitorForm({
   if (monitorType === 'agent') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <AgentForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1949,7 +1977,7 @@ export default function MonitorForm({
   if (monitorType === 'push') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <PushForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1958,7 +1986,7 @@ export default function MonitorForm({
   if (monitorType === 'sip') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <SipForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1967,7 +1995,7 @@ export default function MonitorForm({
   if (monitorType === 'grpc') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1992,72 +2020,80 @@ export default function MonitorForm({
     collect_timing: formData.collect_timing,
   };
 
-  const activeHeaderCount = formData.request_headers.filter((h: HeaderKV) => h.key.trim()).length;
-  const assertionCount =
-    (formData.body_assertions?.length || 0) +
-    (formData.response_header_assertions?.length || 0) +
-    (formData.json_assertions?.length || 0);
-
-  const handleScrollToSection = (sectionId: string) => {
-    // Open the section if it's a collapsible one
-    setOpenSections((prev) => ({ ...prev, [sectionId]: true }));
-    // For the monitor name field, target its wrapper div
-    const targetId = sectionId === 'monitor-name' ? 'monitor-name-field' : sectionId;
-    setTimeout(() => {
-      const el = document.getElementById(targetId);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Plain-language summary of what this monitor will do, shown next to the
+  // form actions so misconfigurations are visible right before submitting.
+  const checkPlan = (() => {
+    const target = (() => {
+      switch (monitorType) {
+        case 'http': {
+          if (!formData.url.trim()) return null;
+          let host = formData.url.trim();
+          try {
+            const u = new URL(host.startsWith('http') ? host : `https://${host}`);
+            host = `${u.hostname}${u.pathname !== '/' ? u.pathname : ''}`;
+          } catch {
+            /* show as typed */
+          }
+          return `${formData.method} ${host} · expect ${formData.status_rules.trim() || '2xx'}`;
+        }
+        case 'ping':
+          return formData.host.trim() ? `ping ${formData.host.trim()}` : null;
+        case 'dns':
+          return formData.host.trim() ? `resolve ${formData.dns_record_type} for ${formData.host.trim()}` : null;
+        case 'synthetic_api': {
+          const steps = formData.synthetic_api_steps.length;
+          return `run ${steps}-step API journey`;
+        }
+        case 'synthetic_browser': {
+          const steps = isSyntheticBrowserGuidedMode
+            ? syntheticBrowserGuidedPreview.steps.length
+            : formData.synthetic_browser_steps.length;
+          return `run ${steps}-step browser journey`;
+        }
+        default:
+          return null;
       }
-    }, 80);
-  };
+    })();
+    if (!target) return null;
+    const fails = formData.consecutive_failures_threshold;
+    return `Every ${formData.interval_seconds}s · ${target} · down after ${fails} failed check${fails === 1 ? '' : 's'}`;
+  })();
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Compact type tab bar */}
-      <div className="flex flex-wrap gap-1.5 rounded-xl border border-white/[0.06] bg-slate-900/40 p-1.5">
-        {monitorTypes.map((type) => (
-          <button
-            key={type}
-            type="button"
-            disabled={isEditMode}
-            onClick={() => setMonitorType(type)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
-              monitorType === type
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent disabled:opacity-40'
-            }`}
-          >
-            {getTypeLabel(type)}
-          </button>
-        ))}
-      </div>
-
-      {/* Two-column layout for HTTP: form left, preview right */}
-      <div className={monitorType === 'http' ? 'grid grid-cols-1 xl:grid-cols-5 gap-6 items-start' : ''}>
-        {/* Form column */}
-        <div className={`space-y-6 ${monitorType === 'http' ? 'xl:col-span-3' : ''}`}>
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {typePicker}
 
       {/* Basic Info */}
-      <div className="space-y-4" id="monitor-name-field">
-        <FormInput
-          label="Monitor Name"
-          value={formData.name}
-          onChange={(v) => setFormData({ ...formData, name: v })}
-          placeholder="My API Health Check"
-          error={errors.name}
-          hint="A descriptive name for this monitor"
-        />
-
-        {/* HTTP URL + Method hero row */}
-        {monitorType === 'http' && (
-          <MethodUrlRow
-            method={formData.method}
-            url={formData.url}
-            onMethodChange={(v) => setFormData({ ...formData, method: v })}
-            onUrlChange={(v) => setFormData({ ...formData, url: v })}
-            error={errors.url}
+      <div id="monitor-name-field">
+        <FormSection title="Basics">
+          <FormInput
+            label="Monitor Name"
+            value={formData.name}
+            onChange={(v) => setFormData({ ...formData, name: v })}
+            placeholder={getTypeMeta(monitorType).namePlaceholder}
+            error={errors.name}
+            hint="A descriptive name for this monitor"
           />
-        )}
+
+          {/* HTTP URL + Method hero row */}
+          {monitorType === 'http' && (
+            <>
+              <MethodUrlRow
+                method={formData.method}
+                url={formData.url}
+                onMethodChange={(v) => setFormData({ ...formData, method: v })}
+                onUrlChange={(v) => setFormData({ ...formData, url: v })}
+                error={errors.url}
+              />
+              <CurlPreview
+                method={formData.method}
+                url={formData.url}
+                headers={formData.request_headers}
+                body={formData.body}
+              />
+            </>
+          )}
+        </FormSection>
       </div>
 
       {/* HTTP collapsible sections */}
@@ -2073,29 +2109,28 @@ export default function MonitorForm({
 
       {/* Ping Configuration */}
       {monitorType === 'ping' && (
-        <div>
-          <SectionHeader title="Ping Configuration" />
+        <FormSection title="Ping configuration">
           <FormInput
             label="Host"
             value={formData.host}
             onChange={(v) => setFormData({ ...formData, host: v })}
             placeholder="example.com or 8.8.8.8"
             error={errors.host}
+            hint="Hostname or IP address to ping"
           />
-        </div>
+        </FormSection>
       )}
 
       {monitorType === 'dns' && (
-        <div>
-          <SectionHeader title="DNS Configuration" description="Resolve DNS records and optionally verify answers" />
-          <div className="space-y-4">
-            <FormInput
-              label="Host"
-              value={formData.host}
-              onChange={(v) => setFormData({ ...formData, host: v })}
-              placeholder="example.com"
-              error={errors.host}
-            />
+        <FormSection title="DNS configuration">
+          <FormInput
+            label="Host"
+            value={formData.host}
+            onChange={(v) => setFormData({ ...formData, host: v })}
+            placeholder="example.com"
+            error={errors.host}
+          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormSelect
               label="Record Type"
               value={formData.dns_record_type}
@@ -2118,12 +2153,12 @@ export default function MonitorForm({
               hint="Comma or newline separated. Leave empty to accept any answer."
             />
           </div>
-        </div>
+        </FormSection>
       )}
 
       {monitorType === 'synthetic_api' && (
-        <div>
-          <SectionHeader title="Synthetic API Configuration" description="Build a multi-step API workflow with request, assertions, and extracts." />
+        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+          <SectionHeader title="Synthetic API configuration" description="Build a multi-step API workflow with request, assertions, and extracts." />
           <div className="space-y-4">
             <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2775,8 +2810,8 @@ export default function MonitorForm({
       )}
 
       {monitorType === 'synthetic_browser' && (
-        <div>
-          <SectionHeader title="Synthetic Browser Configuration" description="Guided setup for normal users, expert editor for full control." />
+        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+          <SectionHeader title="Synthetic Browser configuration" description="Guided setup for normal users, expert editor for full control." />
           <div className="space-y-4">
             <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3425,8 +3460,7 @@ export default function MonitorForm({
       )}
 
       {/* Schedule */}
-      <div>
-        <SectionHeader title="Schedule" description="How often to run checks" />
+      <FormSection title="Schedule">
         <div className="grid grid-cols-2 gap-4">
           <FormInput
             label="Interval (seconds)"
@@ -3435,6 +3469,7 @@ export default function MonitorForm({
             onChange={(v) => setFormData({ ...formData, interval_seconds: parseInt(v) || 60 })}
             min={10}
             step={5}
+            hint="How often to check"
           />
           <FormInput
             label="Timeout (seconds)"
@@ -3443,45 +3478,13 @@ export default function MonitorForm({
             onChange={(v) => setFormData({ ...formData, timeout_seconds: parseInt(v) || 30 })}
             min={1}
             error={errors.timeout_seconds}
+            hint="Must be less than interval"
           />
         </div>
-      </div>
-
-        </div>{/* end form column */}
-
-        {/* Preview panel — only shown for HTTP type */}
-        {monitorType === 'http' && (
-          <div className="hidden xl:block xl:col-span-2">
-            <div className="sticky top-6 rounded-2xl border border-white/[0.07] bg-slate-900/50 p-6">
-              <HttpRequestFlowPreview
-                monitorName={formData.name}
-                method={formData.method}
-                url={formData.url}
-                headers={formData.request_headers}
-                body={formData.body}
-                statusRules={formData.status_rules}
-                bodyAssertionCount={formData.body_assertions?.length || 0}
-                headerAssertionCount={formData.response_header_assertions?.length || 0}
-                jsonAssertionCount={formData.json_assertions?.length || 0}
-                maxLatencyMs={formData.max_latency_ms}
-                tlsSkipVerify={formData.tls_skip_verify}
-                tlsMinDaysValid={formData.tls_min_days_valid}
-                tlsServerName={formData.tls_server_name}
-                followRedirects={formData.follow_redirects}
-                maxRedirects={formData.max_redirects}
-                collectTiming={formData.collect_timing}
-                intervalSeconds={formData.interval_seconds}
-                timeoutSeconds={formData.timeout_seconds}
-                onScrollToSection={handleScrollToSection}
-              />
-            </div>
-          </div>
-        )}
-      </div>{/* end two-column grid */}
+      </FormSection>
 
       {/* Alerting */}
-      <div>
-        <SectionHeader title="Alerting" />
+      <FormSection title="Alerting">
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
@@ -3492,10 +3495,10 @@ export default function MonitorForm({
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </div>
+      </FormSection>
 
-      {/* Tags */}
-      <div>
+      {/* Meta */}
+      <FormSection title="Meta">
         <FormInput
           label="Tags"
           value={formData.tags}
@@ -3503,39 +3506,24 @@ export default function MonitorForm({
           placeholder="production, api, critical"
           hint="Comma-separated tags for filtering"
         />
-      </div>
-
-      {/* Status */}
-      <div>
-        <SectionHeader title="Status" />
         <FormToggle
-          label="Monitor Enabled"
+          label="Monitor enabled"
           description="Run checks on the configured schedule"
           checked={formData.enabled}
           onChange={(v) => setFormData({ ...formData, enabled: v })}
         />
-      </div>
+      </FormSection>
 
-      {/* Actions */}
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-white/[0.06]">
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className={BTN_GHOST_SM}
-          >
-            Cancel
-          </button>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className={BTN_ACCENT_SM}
-        >
-          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Monitor'}
-        </button>
-      </div>
+      <FormActions
+        middle={checkPlan}
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+      />
     </form>
   );
 }

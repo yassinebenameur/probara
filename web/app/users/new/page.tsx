@@ -2,26 +2,24 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import Toast from '@/components/ui/Toast';
+import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import FormField from '@/components/ui/FormField';
 import FormActions from '@/components/ui/FormActions';
 import { createUser } from '@/lib/api';
 
-type ToastState = { message: string; type: 'success' | 'error' } | null;
-
 export default function NewUserPage() {
   const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<ToastState>(null);
+  const { showToast } = useToast();
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!username.trim() || !password) {
-      setToast({ message: 'Username and password are required', type: 'error' });
+      showToast('Username and password are required', 'error');
       return;
     }
 
@@ -31,12 +29,12 @@ export default function NewUserPage() {
         username: username.trim(),
         password,
       });
-      setToast({ message: 'User created successfully', type: 'success' });
+      showToast('User created successfully', 'success');
       setTimeout(() => {
         router.push('/users');
       }, 900);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to create user', type: 'error' });
+      showToast(err.message || 'Failed to create user', 'error');
       setLoading(false);
     }
   };
@@ -81,9 +79,6 @@ export default function NewUserPage() {
         </form>
       </FormCard>
 
-      {toast && (
-        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
-      )}
     </div>
   );
 }

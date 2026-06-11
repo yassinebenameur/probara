@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { X } from 'lucide-react';
 import { CreateMonitorRequest, UpdateMonitorRequest } from '@/lib/types';
 import { createMonitor, getMonitor } from '@/lib/api';
 import { buildClonedMonitorInitialData } from '@/lib/monitor-clone';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
+import { useToast } from '@/components/ui/ToastProvider';
 
 export default function NewMonitorPage() {
   const router = useRouter();
@@ -18,7 +18,7 @@ export default function NewMonitorPage() {
   const [cloneLoading, setCloneLoading] = useState(false);
   const [initialData, setInitialData] = useState<CreateMonitorRequest | null>(null);
   const [cloneSourceName, setCloneSourceName] = useState('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
   const isCloneMode = Boolean(cloneMonitorId);
 
   useEffect(() => {
@@ -40,10 +40,7 @@ export default function NewMonitorPage() {
         if (cancelled) return;
         setInitialData(null);
         setCloneSourceName('');
-        setToast({
-          message: err?.message || 'Failed to load monitor to clone. Starting with an empty form.',
-          type: 'error',
-        });
+        showToast(err?.message || 'Failed to load monitor to clone. Starting with an empty form.', 'error');
       } finally {
         if (!cancelled) {
           setCloneLoading(false);
@@ -62,12 +59,12 @@ export default function NewMonitorPage() {
     try {
       setLoading(true);
       const created = await createMonitor(data as CreateMonitorRequest);
-      setToast({ message: 'Monitor created successfully', type: 'success' });
+      showToast('Monitor created successfully', 'success');
       setTimeout(() => {
         router.push(`/monitors/${created.id}`);
       }, 1000);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to create monitor', type: 'error' });
+      showToast(err.message || 'Failed to create monitor', 'error');
       setLoading(false);
     }
   };
@@ -104,20 +101,6 @@ export default function NewMonitorPage() {
         )}
       </FormCard>
 
-      {toast && (
-        <div
-          className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-            toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white" aria-label="Dismiss">
-              <X className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

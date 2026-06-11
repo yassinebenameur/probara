@@ -534,6 +534,7 @@ export default function AgentForm({
       </FormSection>
 
       <FormActions
+        middle={`Expect an agent report every ${formData.expected_interval_seconds}s`}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create agent monitor',

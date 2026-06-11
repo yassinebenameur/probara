@@ -140,23 +140,32 @@ export default function GrpcForm({
           </FormField>
 
           <FormField label="TLS" description="Use TLS for gRPC connection">
-            <button
-              type="button"
-              onClick={() => {
-                const nextUseTLS = !formData.use_tls;
-                let nextPort = formData.port;
-                if (formData.port === 443 && !nextUseTLS) nextPort = 80;
-                if (formData.port === 80 && nextUseTLS) nextPort = 443;
-                setFormData({ ...formData, use_tls: nextUseTLS, port: nextPort });
-              }}
-              className={`relative h-10 w-full rounded-lg border text-sm transition-colors ${
-                formData.use_tls
-                  ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
-                  : 'border-white/[0.06] bg-slate-900/40 text-slate-300'
-              }`}
-            >
-              {formData.use_tls ? 'Enabled' : 'Disabled'}
-            </button>
+            <div className="flex h-10 items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-3">
+              <span className={`text-sm ${formData.use_tls ? 'text-cyan-300' : 'text-slate-400'}`}>
+                {formData.use_tls ? 'Enabled' : 'Disabled'}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const nextUseTLS = !formData.use_tls;
+                  let nextPort = formData.port;
+                  if (formData.port === 443 && !nextUseTLS) nextPort = 80;
+                  if (formData.port === 80 && nextUseTLS) nextPort = 443;
+                  setFormData({ ...formData, use_tls: nextUseTLS, port: nextPort });
+                }}
+                className={`relative h-5 w-9 rounded-full transition-colors ${
+                  formData.use_tls ? 'bg-cyan-500' : 'bg-slate-700'
+                }`}
+                aria-pressed={formData.use_tls}
+                aria-label="Toggle TLS"
+              >
+                <span
+                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                    formData.use_tls ? 'translate-x-4' : ''
+                  }`}
+                />
+              </button>
+            </div>
           </FormField>
         </div>
 
@@ -251,6 +260,11 @@ export default function GrpcForm({
       </FormSection>
 
       <FormActions
+        middle={
+          formData.host.trim()
+            ? `Every ${formData.interval_seconds}s · gRPC check ${formData.host.trim()}:${formData.port}${formData.use_tls ? ' (TLS)' : ''} · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`
+            : undefined
+        }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Update monitor' : 'Create monitor',

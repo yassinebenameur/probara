@@ -23,6 +23,7 @@ import Link from 'next/link';
 import {
   ComposedChart,
   Area,
+  CartesianGrid,
   Line,
   XAxis,
   YAxis,
@@ -55,6 +56,14 @@ type TrendPoint = { date: string; uptime: number | null; responseTime: number | 
 
 const DASHBOARD_RANGE_OPTIONS = ['1h', '24h', '7d', '30d', '90d'] as const;
 type DashboardPageRange = (typeof DASHBOARD_RANGE_OPTIONS)[number];
+
+const DASHBOARD_RANGE_LABELS: Record<DashboardPageRange, string> = {
+  '1h': 'Last hour',
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
+};
 
 const DASHBOARD_LIST_LIMIT: Record<DashboardPageRange, number> = {
   '1h': 10,
@@ -200,11 +209,17 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
     : uptimeMid
       ? 'bg-amber-400'
       : 'bg-rose-400';
+  const trackColor = uptimeGood
+    ? 'bg-slate-800/80'
+    : uptimeMid
+      ? 'bg-amber-500/10'
+      : 'bg-rose-500/10';
   const uptimeTextColor = uptimeGood
     ? 'text-emerald-400'
     : uptimeMid
       ? 'text-amber-400'
       : 'text-rose-400';
+  const barWidth = uptimePct > 0 ? Math.max(uptimePct, 2) : 0;
 
   const infoEntries: PopoverEntry[] = [
     { label: 'Failures', value: monitor.failure_count },
@@ -215,7 +230,7 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
   ];
 
   return (
-    <div className="py-3.5">
+    <div className="-mx-2 rounded-lg px-2 py-3.5 transition-colors hover:bg-white/[0.025]">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start gap-2">
@@ -229,10 +244,10 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
           </div>
           <div className="mt-2.5 flex items-center gap-3">
             {/* Uptime bar */}
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800/80">
+            <div className={`h-1.5 flex-1 overflow-hidden rounded-full ${trackColor}`}>
               <div
                 className={`h-full rounded-full ${barColor} transition-all`}
-                style={{ width: `${uptimePct}%` }}
+                style={{ width: `${barWidth}%` }}
               />
             </div>
             <span className={`shrink-0 text-xs font-medium tabular-nums ${uptimeTextColor}`}>
@@ -252,17 +267,37 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
 
 // ─── Chart Tooltip ─────────────────────────────────────────────────────────────
 
+const TOOLTIP_SERIES: Record<string, { label: string; dot: string; unit: string }> = {
+  uptime: { label: 'Uptime', dot: 'bg-emerald-400', unit: '%' },
+  responseTime: { label: 'Response time', dot: 'bg-sky-400', unit: 'ms' },
+};
+
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 shadow-xl">
-      <p className="mb-1 text-xs text-slate-400">{label}</p>
-      {payload.map((entry: any, idx: number) => (
-        <p key={idx} className="text-sm font-medium text-white">
-          {typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value}
-          {entry.name === 'uptime' ? '%' : entry.name === 'responseTime' ? 'ms' : ''}
-        </p>
-      ))}
+    <div className="rounded-lg border border-white/10 bg-slate-900/95 px-3.5 py-2.5 shadow-2xl backdrop-blur">
+      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-slate-500">{label}</p>
+      <div className="space-y-1">
+        {payload.map((entry: any, idx: number) => {
+          const series = TOOLTIP_SERIES[entry.name] ?? { label: entry.name, dot: 'bg-slate-400', unit: '' };
+          return (
+            <div key={idx} className="flex items-center justify-between gap-4">
+              <span className="flex items-center gap-1.5 text-xs text-slate-400">
+                <span className={`h-1.5 w-1.5 rounded-full ${series.dot}`} />
+                {series.label}
+              </span>
+              <span className="text-sm font-semibold tabular-nums text-white">
+                {typeof entry.value === 'number'
+                  ? entry.name === 'responseTime'
+                    ? Math.round(entry.value)
+                    : entry.value.toFixed(2)
+                  : entry.value}
+                {series.unit}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -330,36 +365,43 @@ function SectionCard({
 }
 
 function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
-  const toneStyles: Record<OperationalSummary['tone'], { ring: string; icon: string; text: string; iconBg: string }> = {
+  const toneStyles: Record<OperationalSummary['tone'], { ring: string; icon: string; text: string; iconBg: string; glow: string }> = {
     critical: {
       ring: 'border-rose-500/20',
       icon: 'text-rose-300',
       text: 'text-rose-300',
       iconBg: 'bg-rose-500/10',
+      glow: 'rgba(244, 63, 94, 0.08)',
     },
     attention: {
       ring: 'border-amber-500/20',
       icon: 'text-amber-300',
       text: 'text-amber-300',
       iconBg: 'bg-amber-500/10',
+      glow: 'rgba(245, 158, 11, 0.07)',
     },
     stable: {
       ring: 'border-emerald-500/20',
       icon: 'text-emerald-300',
       text: 'text-emerald-300',
       iconBg: 'bg-emerald-500/10',
+      glow: 'rgba(16, 185, 129, 0.07)',
     },
     clean: {
       ring: 'border-emerald-500/20',
       icon: 'text-emerald-300',
       text: 'text-emerald-300',
       iconBg: 'bg-emerald-500/10',
+      glow: 'rgba(16, 185, 129, 0.07)',
     },
   };
   const tone = toneStyles[summary.tone];
 
   return (
-    <section className={`overflow-hidden rounded-xl border ${tone.ring} bg-slate-900/60 shadow-[0_18px_45px_rgba(0,0,0,0.2)]`}>
+    <section
+      className={`overflow-hidden rounded-xl border ${tone.ring} bg-slate-900/60 shadow-[0_18px_45px_rgba(0,0,0,0.2)]`}
+      style={{ backgroundImage: `radial-gradient(ellipse 60% 90% at 8% 0%, ${tone.glow}, transparent)` }}
+    >
       <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
           <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-current/25 ${tone.iconBg} ${tone.icon}`}>
@@ -371,7 +413,12 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className={`h-2.5 w-2.5 rounded-full ${summary.tone === 'critical' ? 'bg-rose-400' : summary.tone === 'attention' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+              <span className="relative flex h-2.5 w-2.5">
+                {summary.tone === 'critical' && (
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-60" />
+                )}
+                <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${summary.tone === 'critical' ? 'bg-rose-400' : summary.tone === 'attention' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+              </span>
               <h2 className={`text-lg font-semibold tracking-tight ${tone.text}`}>{summary.label}</h2>
             </div>
             <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{summary.description}</p>
@@ -401,7 +448,7 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
                     ? 'text-emerald-300'
                     : 'text-white';
             return (
-              <div key={metric.label} className="min-h-24 rounded-lg border border-white/[0.06] bg-slate-950/35 p-4">
+              <div key={metric.label} className="min-h-24 rounded-lg border border-white/[0.06] bg-slate-950/35 p-4 transition-colors hover:border-white/[0.12]">
                 <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{metric.label}</p>
                 <p className={`mt-2 text-2xl font-semibold tabular-nums ${metricTone}`}>{metric.value}</p>
                 {metric.detail && <p className="mt-1 text-xs text-slate-500">{metric.detail}</p>}
@@ -449,6 +496,16 @@ function UptimeResponseChart({
   setTimeRange: (range: DashboardPageRange) => void;
   noMatchingMonitors: boolean;
 }) {
+  const uptimeDomain = useMemo<[number, number]>(() => {
+    const values = trendData
+      .map((point) => point.uptime)
+      .filter((value): value is number => typeof value === 'number');
+    if (values.length === 0) return [98.5, 100];
+    const min = Math.min(...values);
+    const padded = min - Math.max(0.25, (100 - min) * 0.08);
+    return [Math.max(0, Math.floor(padded * 10) / 10), 100];
+  }, [trendData]);
+
   return (
     <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-[0_18px_45px_rgba(0,0,0,0.18)]">
       <div className="flex flex-col gap-3 border-b border-white/[0.05] bg-slate-950/20 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
@@ -483,12 +540,47 @@ function UptimeResponseChart({
                     <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis yAxisId="uptime" domain={[98.5, 100]} width={58} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-                <YAxis yAxisId="latency" orientation="right" width={48} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={(v) => `${v}ms`} />
-                <Tooltip content={<CustomTooltip />} />
-                <Area yAxisId="uptime" type="monotone" dataKey="uptime" stroke="#34d399" strokeWidth={2} fill="url(#combinedUptimeGradient)" name="uptime" />
-                <Line yAxisId="latency" type="monotone" dataKey="responseTime" stroke="#60a5fa" strokeWidth={2} dot={false} name="responseTime" />
+                <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} minTickGap={24} />
+                <YAxis
+                  yAxisId="uptime"
+                  domain={uptimeDomain}
+                  width={58}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#64748b', fontSize: 11 }}
+                  tickFormatter={(v) => `${Number(v).toFixed(1).replace(/\.0$/, '')}%`}
+                />
+                <YAxis
+                  yAxisId="latency"
+                  orientation="right"
+                  width={48}
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: '#64748b', fontSize: 11 }}
+                  tickFormatter={(v) => `${Math.round(Number(v))}ms`}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(148,163,184,0.25)', strokeDasharray: '3 3' }} />
+                <Area
+                  yAxisId="uptime"
+                  type="monotone"
+                  dataKey="uptime"
+                  stroke="#34d399"
+                  strokeWidth={2}
+                  fill="url(#combinedUptimeGradient)"
+                  name="uptime"
+                  activeDot={{ r: 3.5, fill: '#34d399', stroke: '#022c22', strokeWidth: 2 }}
+                />
+                <Line
+                  yAxisId="latency"
+                  type="monotone"
+                  dataKey="responseTime"
+                  stroke="#60a5fa"
+                  strokeWidth={2}
+                  dot={false}
+                  name="responseTime"
+                  activeDot={{ r: 3.5, fill: '#60a5fa', stroke: '#0c1a3a', strokeWidth: 2 }}
+                />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -546,12 +638,12 @@ function NeedsAttentionPanel({
 function timelineIcon(item: ActivityTimelineItem) {
   const classes =
     item.tone === 'danger'
-      ? 'bg-rose-500 text-white'
+      ? 'border-rose-500/40 bg-rose-950 text-rose-300'
       : item.tone === 'warning'
-        ? 'bg-amber-500 text-white'
+        ? 'border-amber-500/40 bg-amber-950 text-amber-300'
         : item.tone === 'success'
-          ? 'bg-emerald-500 text-white'
-          : 'bg-sky-500 text-white';
+          ? 'border-emerald-500/40 bg-emerald-950 text-emerald-300'
+          : 'border-sky-500/40 bg-sky-950 text-sky-300';
 
   const Icon =
     item.tone === 'danger'
@@ -563,7 +655,7 @@ function timelineIcon(item: ActivityTimelineItem) {
           : Clock3;
 
   return (
-    <span className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${classes}`}>
+    <span className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${classes}`}>
       <Icon className="h-3.5 w-3.5" strokeWidth={2} />
     </span>
   );
@@ -764,8 +856,9 @@ export default function DashboardPage() {
       recentFailuresCount: recentFailures.length,
       overallUptime: stats?.overall_uptime || 0,
       avgResponseMs: stats?.avg_response_ms || 0,
+      rangeLabel: DASHBOARD_RANGE_LABELS[timeRange],
     }),
-    [opsSummary, problemMonitors.length, recentFailures.length, stats?.avg_response_ms, stats?.overall_uptime],
+    [opsSummary, problemMonitors.length, recentFailures.length, stats?.avg_response_ms, stats?.overall_uptime, timeRange],
   );
   const needsAttention = useMemo(() => sortNeedsAttention(problemMonitors), [problemMonitors]);
   const timelineItems = useMemo(
@@ -854,9 +947,11 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <OperationalSummaryCard summary={operationalSummary} />
+      <div className="dash-enter">
+        <OperationalSummaryCard summary={operationalSummary} />
+      </div>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
+      <div className="dash-enter grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]" style={{ animationDelay: '80ms' }}>
         <UptimeResponseChart
           trendData={trendData}
           hasEnoughTrendData={hasEnoughTrendData}
@@ -871,7 +966,7 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
+      <div className="dash-enter grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]" style={{ animationDelay: '160ms' }}>
         <ServiceGroupsPanel
           groupTags={dashboard?.group_tags ?? []}
           groups={dashboard?.groups ?? []}

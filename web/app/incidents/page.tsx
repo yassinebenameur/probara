@@ -6,8 +6,9 @@ import { getIncidents, getUsers } from '@/lib/api';
 import type { AdminUser, IncidentDetail, IncidentListItem } from '@/lib/types';
 import IncidentQuickCreateButton from '@/components/incidents/IncidentQuickCreateButton';
 import IncidentList from '@/components/incidents/IncidentList';
-import Toast from '@/components/ui/Toast';
+import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
+import Button from '@/components/ui/Button';
 
 export default function IncidentsPage() {
   const [incidents, setIncidents] = useState<IncidentListItem[]>([]);
@@ -16,7 +17,7 @@ export default function IncidentsPage() {
   const [usersLoading, setUsersLoading] = useState(true);
   const [error, setError] = useState('');
   const [usersError, setUsersError] = useState('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
 
   const loadIncidents = async () => {
     try {
@@ -53,7 +54,7 @@ export default function IncidentsPage() {
 
   const handleCreated = async (_incident: IncidentDetail) => {
     await loadIncidents();
-    setToast({ message: 'Incident created successfully', type: 'success' });
+    showToast('Incident created successfully', 'success');
   };
 
   return (
@@ -75,11 +76,11 @@ export default function IncidentsPage() {
           Loading users for incident ownership...
         </div>
       ) : usersError ? (
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          {usersError}
-          <button onClick={loadUsers} className="ml-2 underline hover:no-underline">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          <span>{usersError}</span>
+          <Button variant="ghost" size="xs" onClick={loadUsers}>
             Retry
-          </button>
+          </Button>
         </div>
       ) : users.length === 0 ? (
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
@@ -92,23 +93,16 @@ export default function IncidentsPage() {
           Loading incidents...
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          {error}
-          <button onClick={loadIncidents} className="ml-2 underline hover:no-underline">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          <span>{error}</span>
+          <Button variant="ghost" size="xs" onClick={loadIncidents}>
             Retry
-          </button>
+          </Button>
         </div>
       ) : (
         <IncidentList incidents={incidents} />
       )}
 
-      {toast ? (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      ) : null}
     </div>
   );
 }

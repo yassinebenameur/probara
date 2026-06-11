@@ -5,7 +5,7 @@ import { Suspense, useState } from 'react';
 import { CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
 import { createAlertChannel } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
-import Toast from '@/components/ui/Toast';
+import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 
@@ -22,23 +22,23 @@ function NewAlertChannelPageInner() {
   const searchParams = useSearchParams();
   const initialType = searchParams.get('type') || undefined;
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
 
   const handleSubmit = async (data: CreateAlertChannelRequest | UpdateAlertChannelRequest) => {
     if (!('type' in data) || !data.type) {
-      setToast({ message: 'Channel type is required', type: 'error' });
+      showToast('Channel type is required', 'error');
       return;
     }
 
     try {
       setLoading(true);
       await createAlertChannel(data as CreateAlertChannelRequest);
-      setToast({ message: 'Alert channel created successfully', type: 'success' });
+      showToast('Alert channel created successfully', 'success');
       setTimeout(() => {
         router.push('/alert-channels');
       }, 1000);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to create alert channel', type: 'error' });
+      showToast(err.message || 'Failed to create alert channel', 'error');
       setLoading(false);
     }
   };
@@ -60,13 +60,6 @@ function NewAlertChannelPageInner() {
         />
       </FormCard>
 
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
     </div>
   );
 }

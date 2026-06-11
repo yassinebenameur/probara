@@ -294,8 +294,8 @@ export default function StatusPageForm({
         </div>
       </CollapsibleSection>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
-        <div className="lg:sticky lg:top-4 lg:self-start">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
+        <div className="h-[440px] lg:sticky lg:top-4 lg:h-[calc(100vh-6rem)] lg:max-h-[900px] lg:self-start">
           <MonitorLibrary
             monitors={monitors}
             loading={monitorsLoading}

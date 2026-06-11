@@ -3,12 +3,10 @@
 import { useEffect, useState } from 'react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
-import Toast from '@/components/ui/Toast';
+import { useToast } from '@/components/ui/ToastProvider';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import { getNotificationSettings, updateNotificationSettings } from '@/lib/api';
 import type { ChannelAssignment, NotificationSettings } from '@/lib/types';
-
-type ToastState = { message: string; type: 'success' | 'error' } | null;
 
 const REMINDER_OPTIONS = [
   { label: 'off', value: 0 },
@@ -21,7 +19,7 @@ export function NotificationsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<ToastState>(null);
+  const { showToast } = useToast();
 
   const [defaultChannels, setDefaultChannels] = useState<ChannelAssignment[]>([]);
   const [reminderSeconds, setReminderSeconds] = useState(0);
@@ -54,12 +52,9 @@ export function NotificationsPanel() {
         alert_reminder_seconds: reminderSeconds,
         auto_create_incident: autoCreateIncident,
       });
-      setToast({ message: 'Notification settings saved', type: 'success' });
+      showToast('Notification settings saved', 'success');
     } catch (err: unknown) {
-      setToast({
-        message: err instanceof Error ? err.message : 'Failed to save notification settings',
-        type: 'error',
-      });
+      showToast(err instanceof Error ? err.message : 'Failed to save notification settings', 'error');
     } finally {
       setSaving(false);
     }
@@ -147,9 +142,6 @@ export function NotificationsPanel() {
         )}
       </Panel>
 
-      {toast && (
-        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
-      )}
     </>
   );
 }

@@ -256,6 +256,11 @@ export default function GroupForm({
       </FormSection>
 
       <FormActions
+        middle={
+          formData.monitor_ids.length > 0
+            ? `Status rolls up from ${formData.monitor_ids.length} member${formData.monitor_ids.length === 1 ? '' : 's'}`
+            : undefined
+        }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create group',

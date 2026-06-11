@@ -2,20 +2,14 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import Toast from '@/components/ui/Toast';
+import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import FormField from '@/components/ui/FormField';
 import FormActions from '@/components/ui/FormActions';
 import { getUser, updateUser } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
 import type { AdminUser } from '@/lib/types';
-
-type ToastState = { message: string; type: 'success' | 'error' } | null;
-
-function formatDate(value?: string): string {
-  if (!value) return '-';
-  return new Date(value).toLocaleString();
-}
 
 export default function EditUserPage() {
   const router = useRouter();
@@ -28,7 +22,7 @@ export default function EditUserPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [toast, setToast] = useState<ToastState>(null);
+  const { showToast } = useToast();
 
   useEffect(() => {
     const load = async () => {
@@ -54,7 +48,7 @@ export default function EditUserPage() {
     if (password) payload.password = password;
 
     if (!payload.username && !payload.password) {
-      setToast({ message: 'Provide at least one field to update', type: 'error' });
+      showToast('Provide at least one field to update', 'error');
       return;
     }
 
@@ -64,9 +58,9 @@ export default function EditUserPage() {
       setUser(updated);
       setUsername(updated.username);
       setPassword('');
-      setToast({ message: 'User updated successfully', type: 'success' });
+      showToast('User updated successfully', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update user', type: 'error' });
+      showToast(err.message || 'Failed to update user', 'error');
     } finally {
       setSaving(false);
     }
@@ -139,23 +133,20 @@ export default function EditUserPage() {
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">Created</dt>
-              <dd className="mt-1 text-sm text-slate-300">{formatDate(user.created_at)}</dd>
+              <dd className="mt-1 text-sm text-slate-300">{formatDateTime(user.created_at, "-")}</dd>
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">Last updated</dt>
-              <dd className="mt-1 text-sm text-slate-300">{formatDate(user.updated_at)}</dd>
+              <dd className="mt-1 text-sm text-slate-300">{formatDateTime(user.updated_at, "-")}</dd>
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">Last login</dt>
-              <dd className="mt-1 text-sm text-slate-300">{formatDate(user.last_login_at)}</dd>
+              <dd className="mt-1 text-sm text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
             </div>
           </dl>
         </FormCard>
       </div>
 
-      {toast && (
-        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
-      )}
     </div>
   );
 }

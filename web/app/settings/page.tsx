@@ -3,24 +3,19 @@
 import { useEffect, useState } from 'react';
 import { Copy, KeyRound, Plus, RefreshCw, X } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
-import Toast from '@/components/ui/Toast';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 import { ApiKey } from '@/lib/types';
 import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
+import { formatDateTime } from '@/lib/format';
 import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
 import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection';
 import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
-
-type ToastState = { message: string; type: 'success' | 'error' } | null;
-
-function formatDate(dateString?: string): string {
-  if (!dateString) return '-';
-  return new Date(dateString).toLocaleString();
-}
 
 function formatFingerprint(prefix: string | undefined): string {
   if (!prefix) return '-';
@@ -28,6 +23,7 @@ function formatFingerprint(prefix: string | undefined): string {
 }
 
 export default function SettingsPage() {
+  const { showToast } = useToast();
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -40,7 +36,8 @@ export default function SettingsPage() {
   const [newKeyName, setNewKeyName] = useState('');
   const [createdKey, setCreatedKey] = useState<ApiKey | null>(null);
   const [copiedField, setCopiedField] = useState('');
-  const [toast, setToast] = useState<ToastState>(null);
+  const [pendingRevoke, setPendingRevoke] = useState<ApiKey | null>(null);
+  const [revoking, setRevoking] = useState(false);
   const [browserKeyPresent, setBrowserKeyPresent] = useState(false);
   const [groupTags, setGroupTags] = useState<string[]>([]);
 
@@ -88,11 +85,11 @@ export default function SettingsPage() {
     const nextValue = trimmed === '' ? 0 : Number(trimmed);
 
     if (!Number.isInteger(nextValue)) {
-      setToast({ message: 'Retention must be an integer number of days', type: 'error' });
+      showToast('Retention must be an integer number of days', 'error');
       return;
     }
     if (nextValue !== 0 && (nextValue < 30 || nextValue > 3650)) {
-      setToast({ message: 'Retention must be 0 (Unlimited) or between 30 and 3650 days', type: 'error' });
+      showToast('Retention must be 0 (Unlimited) or between 30 and 3650 days', 'error');
       return;
     }
 
@@ -102,9 +99,9 @@ export default function SettingsPage() {
       const saved = updated.data_retention_days || 0;
       setRetentionDays(saved);
       setRetentionInput(saved === 0 ? '' : String(saved));
-      setToast({ message: saved === 0 ? 'Retention set to Unlimited' : `Retention set to ${saved} days`, type: 'success' });
+      showToast(saved === 0 ? 'Retention set to Unlimited' : `Retention set to ${saved} days`, 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update retention', type: 'error' });
+      showToast(err.message || 'Failed to update retention', 'error');
     } finally {
       setSavingRetention(false);
     }
@@ -120,7 +117,7 @@ export default function SettingsPage() {
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!newKeyName.trim()) {
-      setToast({ message: 'API key name is required', type: 'error' });
+      showToast('API key name is required', 'error');
       return;
     }
 
@@ -139,30 +136,31 @@ export default function SettingsPage() {
         });
       }
       setNewKeyName('');
-      setToast({ message: 'API key created', type: 'success' });
+      showToast('API key created', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to create API key', type: 'error' });
+      showToast(err.message || 'Failed to create API key', 'error');
     } finally {
       setCreating(false);
     }
   };
 
-  const handleRevoke = async (key: ApiKey) => {
-    if (!confirm(`Revoke API key "${key.name}"? This cannot be undone.`)) {
-      return;
-    }
-
+  const handleRevoke = async () => {
+    if (!pendingRevoke) return;
+    setRevoking(true);
     try {
-      await revokeApiKey(key.id);
+      await revokeApiKey(pendingRevoke.id);
       setApiKeys((prev) =>
         prev.map((item) =>
-          item.id === key.id ? { ...item, revoked_at: new Date().toISOString() } : item
+          item.id === pendingRevoke.id ? { ...item, revoked_at: new Date().toISOString() } : item
         )
       );
-      removeStoredApiKey(key.id);
-      setToast({ message: 'API key revoked', type: 'success' });
+      removeStoredApiKey(pendingRevoke.id);
+      showToast('API key revoked', 'success');
+      setPendingRevoke(null);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to revoke API key', type: 'error' });
+      showToast(err.message || 'Failed to revoke API key', 'error');
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -361,11 +359,11 @@ export default function SettingsPage() {
                     <div>
                       <p className="text-sm font-medium text-white">{key.name}</p>
                       <p className="text-xs text-slate-400">
-                        ID {key.id.slice(0, 8)} · Fingerprint {formatFingerprint(key.key_prefix)} · Created {formatDate(key.created_at)}
+                        ID {key.id.slice(0, 8)} · Fingerprint {formatFingerprint(key.key_prefix)} · Created {formatDateTime(key.created_at, '-')}
                       </p>
                       {key.revoked_at && (
                         <p className="text-xs text-rose-300">
-                          Revoked {formatDate(key.revoked_at)}
+                          Revoked {formatDateTime(key.revoked_at, '-')}
                         </p>
                       )}
                     </div>
@@ -378,7 +376,7 @@ export default function SettingsPage() {
                           variant="danger"
                           size="xs"
                           icon={<X strokeWidth={1.75} />}
-                          onClick={() => handleRevoke(key)}
+                          onClick={() => setPendingRevoke(key)}
                         >
                           Revoke
                         </Button>
@@ -392,9 +390,19 @@ export default function SettingsPage() {
         )}
       </Panel>
 
-      {toast && (
-        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
-      )}
+      <ConfirmDialog
+        open={pendingRevoke !== null}
+        title="Revoke API key"
+        description={
+          pendingRevoke
+            ? `“${pendingRevoke.name}” will stop working immediately for any agent or integration using it. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Revoke key"
+        loading={revoking}
+        onConfirm={handleRevoke}
+        onCancel={() => !revoking && setPendingRevoke(null)}
+      />
     </div>
   );
 }

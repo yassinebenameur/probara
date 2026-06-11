@@ -3,8 +3,10 @@
 import { FormEvent, useState } from 'react';
 
 import type { IncidentTimelineEntry } from '@/lib/types';
+import { formatDateTime, pluralize } from '@/lib/format';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Pill, { PillTone } from '@/components/ui/Pill';
 
 interface IncidentTimelineProps {
   entries: IncidentTimelineEntry[];
@@ -12,22 +14,14 @@ interface IncidentTimelineProps {
   onAddPublicUpdate: (message: string) => Promise<void>;
 }
 
-function formatTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
-}
-
-function badgeClass(entryType: IncidentTimelineEntry['entry_type']): string {
+function entryTone(entryType: IncidentTimelineEntry['entry_type']): PillTone {
   switch (entryType) {
     case 'public_update':
-      return 'badge-warning';
+      return 'warning';
     case 'internal_note':
-      return 'badge-default';
+      return 'neutral';
     default:
-      return 'badge-danger';
+      return 'danger';
   }
 }
 
@@ -68,7 +62,7 @@ export default function IncidentTimeline({
   return (
     <Panel
       title="Timeline"
-      subtitle={`${entries.length} event${entries.length === 1 ? '' : 's'} recorded`}
+      subtitle={`${pluralize(entries.length, 'event')} recorded`}
       dotColor="var(--warning)"
     >
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
@@ -81,10 +75,10 @@ export default function IncidentTimeline({
             entries.map((entry) => (
               <div key={entry.id} className="rounded-xl border border-white/[0.06] bg-slate-950/40 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
-                  <span className={`badge ${badgeClass(entry.entry_type)}`}>
+                  <Pill tone={entryTone(entry.entry_type)} size="xs" className="capitalize">
                     {entry.entry_type.replace('_', ' ')}
-                  </span>
-                  <span className="text-xs text-slate-500">{formatTimestamp(entry.created_at)}</span>
+                  </Pill>
+                  <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
                 </div>
                 <p className="mt-3 text-sm text-slate-200">{entry.message}</p>
               </div>
