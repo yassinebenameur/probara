@@ -1,3 +1,21 @@
+# [1.0.0-alpha.54](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.53...v1.0.0-alpha.54) (2026-06-11)
+
+
+### Bug Fixes
+
+* **dashboard:** polish dashboard UI and fix chart axis rendering ([369e50b](https://github.com/yassinebenameur/probara/commit/369e50b6a188e3703800cccd0f758beff47cbf5d))
+* **monitors:** pin detail panel while scrolling and make list responsive ([93ec020](https://github.com/yassinebenameur/probara/commit/93ec0209687a2f96b69a2d7c9a191ae7146ff33f))
+* **status-pages:** declutter and polish the status page form ([a35aa2e](https://github.com/yassinebenameur/probara/commit/a35aa2e68a2d9f0949a487bc50debaa9cc2bead5))
+* **web:** unify toasts, confirm dialogs, and fix clipped group actions menu ([28a8a7b](https://github.com/yassinebenameur/probara/commit/28a8a7ba93aa0b456fcde72d9757244a0f4e273b))
+* **worker:** make synthetic browser fill work on Chrome 149; bump CI actions to node24 ([f574904](https://github.com/yassinebenameur/probara/commit/f5749042a9997dc7a81784b82c88a56288739069))
+
+
+### Features
+
+* **monitors:** group-aware filtering and polished group UI ([7a0f214](https://github.com/yassinebenameur/probara/commit/7a0f214ca8f4aef784933a77cb803d088d59dc15))
+* **monitors:** redesign monitor form type picker and unify form layout ([5492194](https://github.com/yassinebenameur/probara/commit/5492194408d9356bce5df695ba7995e23839e871))
+* **status-page:** collapsible sections, denser compact/kiosk modes, refined bars ([dcb9ce9](https://github.com/yassinebenameur/probara/commit/dcb9ce970a99b852a7af5c153ffcbd2e0dbeaae8))
+
 # [1.0.0-alpha.53](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.52...v1.0.0-alpha.53) (2026-06-10)
 
 
