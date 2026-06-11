@@ -6,7 +6,7 @@ toolchain go1.23.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/chromedp/chromedp v0.13.4
+	github.com/chromedp/chromedp v0.13.7
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/golang-migrate/migrate/v4 v4.19.0
@@ -34,7 +34,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/chromedp/cdproto v0.0.0-20250401205909-91afd104e2b8 // indirect
+	github.com/chromedp/cdproto v0.0.0-20250403032234-65de8f5d025b // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/containerd/containerd v1.7.12 // indirect
 	github.com/containerd/log v0.1.0 // indirect

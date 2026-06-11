@@ -364,9 +364,12 @@ func executeSyntheticBrowserStep(
 		if strings.TrimSpace(resolvedValue) == "" {
 			return fmt.Errorf("step %s requires value for fill action", step.ID)
 		}
+		// Clear via JS instead of chromedp.SetValue(sel, ""): SetValue's
+		// round-trip verification rejects empty strings on Chrome >= 149.
+		clearScript := fmt.Sprintf(`(() => { const el = document.querySelector(%q); if (el) { el.value = ""; } })()`, resolvedSelector)
 		if err := chromedp.Run(ctx,
 			chromedp.WaitVisible(resolvedSelector, chromedp.ByQuery),
-			chromedp.SetValue(resolvedSelector, "", chromedp.ByQuery),
+			chromedp.Evaluate(clearScript, nil),
 			chromedp.SendKeys(resolvedSelector, resolvedValue, chromedp.ByQuery),
 		); err != nil {
 			return newSyntheticBrowserStepFailure("step %s fill failed: %v", step.ID, err)
