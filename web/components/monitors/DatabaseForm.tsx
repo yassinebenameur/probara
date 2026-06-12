@@ -586,12 +586,13 @@ export default function DatabaseForm({
               </FormField>
             </div>
 
+            {/* Hints go below the inputs here (not via FormField's description,
+                which sits above) so the two inputs stay vertically aligned. */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField
                 label={meta.usernameRequired ? 'Username' : 'Username (optional)'}
                 required={meta.usernameRequired}
                 error={errors.username}
-                description={type === 'redis' ? 'ACL user — leave blank for the default user' : undefined}
               >
                 <input
                   type="text"
@@ -601,12 +602,11 @@ export default function DatabaseForm({
                   autoComplete="off"
                   className="input"
                 />
+                {type === 'redis' && (
+                  <p className="mt-1 text-xs text-slate-500">ACL user — leave blank for the default user</p>
+                )}
               </FormField>
-              <FormField
-                label="Password"
-                error={errors.password}
-                description={hasStoredPassword ? 'Leave blank to keep the current password' : 'Stored encrypted, never displayed'}
-              >
+              <FormField label="Password" error={errors.password}>
                 <SecretInput
                   value={formData.password}
                   onChange={(v) => setFormData({ ...formData, password: v })}
@@ -615,6 +615,11 @@ export default function DatabaseForm({
                   placeholder="••••••••"
                   storedPlaceholder="Unchanged"
                 />
+                {!errors.password && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    {hasStoredPassword ? 'Leave blank to keep the current password' : 'Stored encrypted, never displayed'}
+                  </p>
+                )}
               </FormField>
             </div>
 
