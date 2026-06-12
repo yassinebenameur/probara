@@ -30,6 +30,62 @@ func configMap(t *testing.T, raw json.RawMessage) map[string]any {
 	return m
 }
 
+func TestEnvKeyProvider_Rotation(t *testing.T) {
+	key1 := make([]byte, 32)
+	key2 := make([]byte, 32)
+	rand.Read(key1)
+	rand.Read(key2)
+	t.Setenv("PROBARA_SECRETS_KEY", base64.StdEncoding.EncodeToString(key1))
+
+	// Single key: v1 is current.
+	kp, err := NewEnvKeyProvider()
+	if err != nil {
+		t.Fatalf("NewEnvKeyProvider: %v", err)
+	}
+	encV1 := NewAESGCMEncryptor(kp)
+	ct, err := encV1.Encrypt("secret")
+	if err != nil {
+		t.Fatalf("encrypt v1: %v", err)
+	}
+	if v, ok := EnvelopeVersion(ct); !ok || v != 1 {
+		t.Fatalf("envelope version = %d (%v), want 1", v, ok)
+	}
+
+	// Add v2: new writes use v2, old v1 envelopes still decrypt.
+	t.Setenv("PROBARA_SECRETS_KEY_V2", base64.StdEncoding.EncodeToString(key2))
+	kp2, err := NewEnvKeyProvider()
+	if err != nil {
+		t.Fatalf("NewEnvKeyProvider with v2: %v", err)
+	}
+	encV2 := NewAESGCMEncryptor(kp2)
+
+	plain, err := encV2.Decrypt(ct)
+	if err != nil || plain != "secret" {
+		t.Fatalf("v1 envelope with rotated provider: %q, %v", plain, err)
+	}
+	ct2, err := encV2.Encrypt("secret")
+	if err != nil {
+		t.Fatalf("encrypt v2: %v", err)
+	}
+	if v, _ := EnvelopeVersion(ct2); v != 2 {
+		t.Fatalf("new envelope version = %d, want 2", v)
+	}
+
+	// Retire v1 entirely: v2 still works, v1 envelopes fail loudly.
+	t.Setenv("PROBARA_SECRETS_KEY", "")
+	kp3, err := NewEnvKeyProvider()
+	if err != nil {
+		t.Fatalf("NewEnvKeyProvider v2-only: %v", err)
+	}
+	encV2Only := NewAESGCMEncryptor(kp3)
+	if _, err := encV2Only.Decrypt(ct2); err != nil {
+		t.Fatalf("v2 envelope with v2-only provider: %v", err)
+	}
+	if _, err := encV2Only.Decrypt(ct); err == nil {
+		t.Fatal("v1 envelope should fail after v1 is retired")
+	}
+}
+
 func TestEncryptDecryptMonitorConfig_RoundTrip(t *testing.T) {
 	enc := monitorTestEncryptor(t)
 	raw := json.RawMessage(`{"host":"db.internal","port":5432,"username":"probe","password":"s3cret"}`)

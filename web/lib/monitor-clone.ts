@@ -11,6 +11,7 @@ import {
   MongoDBMonitorConfig,
   PingMonitorConfig,
   PostgresMonitorConfig,
+  RabbitMQMonitorConfig,
   RedisMonitorConfig,
   PushMonitorConfig,
   SIPMonitorConfig,
@@ -96,14 +97,16 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
     }
     case 'redis':
     case 'postgres':
-    case 'mongodb': {
+    case 'mongodb':
+    case 'rabbitmq': {
       // Secrets come back masked from the API and can't carry over to a new
       // monitor — drop them so the clone starts with a clean credential slate.
       const cfg = cloneObject(
-        (monitor.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig | undefined) || {}
+        (monitor.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig | undefined) || {}
       );
       if (cfg.password === MASKED_SECRET) delete cfg.password;
       if (cfg.connection_string === MASKED_SECRET) delete cfg.connection_string;
+      if (cfg.tls_client_key_pem === MASKED_SECRET) delete cfg.tls_client_key_pem;
       return cfg;
     }
     case 'synthetic_api': {

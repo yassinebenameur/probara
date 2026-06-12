@@ -57,6 +57,20 @@ func LooksLikeEnvelope(value string) bool {
 	return env.Alg != "" && env.CT != ""
 }
 
+// EnvelopeVersion returns the key version stamped into a ciphertext envelope,
+// or false when the value is not an envelope. Used by rotation tooling to
+// skip rows already encrypted with the current key.
+func EnvelopeVersion(value string) (int, bool) {
+	if !LooksLikeEnvelope(value) {
+		return 0, false
+	}
+	var env envelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &env); err != nil {
+		return 0, false
+	}
+	return env.V, true
+}
+
 // AESGCMEncryptor performs AES-256-GCM with a key supplied by a KeyProvider.
 type AESGCMEncryptor struct {
 	keys KeyProvider

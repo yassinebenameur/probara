@@ -45,6 +45,10 @@ func (m *portableMonitorServiceMock) CreateMonitor(ctx context.Context, tenantID
 	return monitor, nil
 }
 
+func (m *portableMonitorServiceMock) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, monitorID *uuid.UUID, monitorType models.MonitorType, config json.RawMessage) (json.RawMessage, error) {
+	return config, nil
+}
+
 func (m *portableMonitorServiceMock) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
 	monitor, ok := m.getMonitors[monitorID]
 	if !ok {

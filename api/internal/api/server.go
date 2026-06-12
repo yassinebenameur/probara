@@ -205,6 +205,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			r.Route("/monitors", func(r chi.Router) {
 				r.Post("/", monitorHandlers.CreateMonitor)
 				r.Get("/", monitorHandlers.ListMonitors)
+				r.Post("/test", monitorHandlers.TestMonitorConfig)
 				// Import endpoints (must be before /{id} to avoid conflicts)
 				r.Get("/export", importHdlrs.Export)
 				r.Post("/import/preview", importHdlrs.Preview)

@@ -491,7 +491,6 @@ func (r *PostgresRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID
 	return memberIDs, nil
 }
 
-
 // ReplaceMonitorChannels atomically replaces all channel assignments for a monitor.
 // Each channel is validated against alert_channels to prevent cross-tenant assignments.
 func (r *PostgresRepository) ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error {

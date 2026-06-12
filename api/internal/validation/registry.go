@@ -90,6 +90,7 @@ func NewDefaultValidatorRegistry() *ValidatorRegistry {
 	registry.Register(models.MonitorTypeRedis, &RedisConfigValidator{})
 	registry.Register(models.MonitorTypePostgres, &PostgresConfigValidator{})
 	registry.Register(models.MonitorTypeMongoDB, &MongoDBConfigValidator{})
+	registry.Register(models.MonitorTypeRabbitMQ, &RabbitMQConfigValidator{})
 
 	return registry
 }

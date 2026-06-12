@@ -93,7 +93,8 @@ export type MonitorType =
   | "synthetic_browser"
   | "redis"
   | "postgres"
-  | "mongodb";
+  | "mongodb"
+  | "rabbitmq";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -230,8 +231,19 @@ export interface RedisMonitorConfig extends DBTLSMaterial {
   db?: number;
   tls_enabled?: boolean;
   tls_skip_verify?: boolean;
+  expected_role?: "master" | "replica";
   max_latency_ms?: number;
+  warn_latency_ms?: number;
 }
+
+export type DBQueryValueOp =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "number_gt"
+  | "number_gte"
+  | "number_lt"
+  | "number_lte";
 
 export interface PostgresMonitorConfig extends DBTLSMaterial {
   connection_string?: string; // secret, write-only
@@ -242,7 +254,10 @@ export interface PostgresMonitorConfig extends DBTLSMaterial {
   password?: string; // secret, write-only
   ssl_mode?: "disable" | "require" | "verify-full";
   query?: string;
+  query_value_op?: DBQueryValueOp;
+  query_value?: string;
   max_latency_ms?: number;
+  warn_latency_ms?: number;
 }
 
 export interface MongoDBMonitorConfig extends DBTLSMaterial {
@@ -254,8 +269,37 @@ export interface MongoDBMonitorConfig extends DBTLSMaterial {
   auth_source?: string;
   tls_enabled?: boolean;
   tls_skip_verify?: boolean;
+  replica_set?: string;
   max_latency_ms?: number;
+  warn_latency_ms?: number;
 }
+
+export interface RabbitMQMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string; // secret, write-only
+  vhost?: string;
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+// Per-check metrics recorded by the database/broker checkers, keyed by
+// monitor type in metrics_data (e.g. {"redis": {...}}).
+export interface DBMetrics {
+  server_version?: string;
+  product?: string;
+  role?: string;
+  replica_set?: string;
+  connected_clients?: number;
+  used_memory_bytes?: number;
+  latency_warn_ms?: number;
+}
+
+export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "mongodb" | "rabbitmq", DBMetrics>>;
 
 export type SyntheticFailureMode = "fail_fast" | "continue";
 
@@ -346,7 +390,8 @@ export type MonitorConfig =
   | SyntheticBrowserMonitorConfig
   | RedisMonitorConfig
   | PostgresMonitorConfig
-  | MongoDBMonitorConfig;
+  | MongoDBMonitorConfig
+  | RabbitMQMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 

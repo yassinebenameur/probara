@@ -16,6 +16,9 @@ import {
   RedisMonitorConfig,
   PostgresMonitorConfig,
   MongoDBMonitorConfig,
+  RabbitMQMonitorConfig,
+  DBMetrics,
+  DBMetricsEnvelope,
 } from '@/lib/types';
 import { getMonitorResults, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
@@ -115,16 +118,26 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
     return null;
   };
 
-  // Shared shape for redis/postgres/mongodb. Secret fields arrive masked
+  const isDatabaseType = (t: string): t is 'redis' | 'postgres' | 'mongodb' | 'rabbitmq' =>
+    t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq';
+
+  // Shared shape for the database/broker types. Secret fields arrive masked
   // ("***") from the API and are never displayed.
   const getDatabaseConfig = (
     mon: Monitor
-  ): (RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig) | null => {
-    if (mon.type !== 'redis' && mon.type !== 'postgres' && mon.type !== 'mongodb') return null;
+  ): (RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig) | null => {
+    if (!isDatabaseType(mon.type)) return null;
     if (mon.config && typeof mon.config === 'object') {
-      return mon.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig;
+      return mon.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig;
     }
     return null;
+  };
+
+  const getDBMetrics = (mon: Monitor | null, result?: CheckResult): DBMetrics | null => {
+    if (!mon || !isDatabaseType(mon.type)) return null;
+    const md = result?.metrics_data as unknown;
+    if (!md || typeof md !== 'object') return null;
+    return (md as DBMetricsEnvelope)[mon.type] || null;
   };
 
   const getSyntheticAPIConfig = (mon: Monitor): SyntheticAPIMonitorConfig | null => {
@@ -181,6 +194,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
     : undefined;
   const latestSyntheticBrowserMetrics = getSyntheticBrowserMetrics(latestSyntheticBrowserResult);
   const latestGRPCMetrics = monitor?.type === 'grpc' ? getGRPCMetrics(latestOperationalResult) : null;
+  const latestDBMetrics = getDBMetrics(monitor, latestOperationalResult);
   const latestSyntheticBrowserScreenshot = latestSyntheticBrowserMetrics?.artifacts?.screenshot_path;
   const syntheticBrowserScreenshotURL = monitor && latestSyntheticBrowserScreenshot
     ? getSyntheticBrowserScreenshotUrl(monitor.id, monitor.tenant_id, latestSyntheticBrowserScreenshot)
@@ -479,10 +493,11 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   </>
                 );
               })()}
-              {(monitor.type === 'redis' || monitor.type === 'postgres' || monitor.type === 'mongodb') && (() => {
+              {isDatabaseType(monitor.type) && (() => {
                 const dbConfig = getDatabaseConfig(monitor);
                 if (!dbConfig) return null;
-                const defaultPort = monitor.type === 'redis' ? 6379 : monitor.type === 'postgres' ? 5432 : 27017;
+                const defaultPort =
+                  monitor.type === 'redis' ? 6379 : monitor.type === 'postgres' ? 5432 : monitor.type === 'rabbitmq' ? 5672 : 27017;
                 const tls = monitor.type === 'postgres'
                   ? (dbConfig.ssl_mode || 'prefer')
                   : dbConfig.tls_enabled
@@ -522,10 +537,36 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                         </span>
                       </li>
                     )}
-                    {dbConfig.max_latency_ms ? (
+                    {(dbConfig.max_latency_ms || dbConfig.warn_latency_ms) ? (
                       <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
                         <span className="text-muted">Latency</span>
-                        <span className="text-[#e5e7eb]">≤ {dbConfig.max_latency_ms}ms</span>
+                        <span className="text-[#e5e7eb]">
+                          {dbConfig.warn_latency_ms ? `warn > ${dbConfig.warn_latency_ms}ms` : ''}
+                          {dbConfig.warn_latency_ms && dbConfig.max_latency_ms ? ' · ' : ''}
+                          {dbConfig.max_latency_ms ? `fail > ${dbConfig.max_latency_ms}ms` : ''}
+                        </span>
+                      </li>
+                    ) : null}
+                    {latestDBMetrics && (latestDBMetrics.server_version || latestDBMetrics.role) && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Server</span>
+                        <span className="truncate text-right text-[#e5e7eb]">
+                          {[
+                            [latestDBMetrics.product, latestDBMetrics.server_version].filter(Boolean).join(' '),
+                            latestDBMetrics.role,
+                            latestDBMetrics.replica_set ? `set ${latestDBMetrics.replica_set}` : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      </li>
+                    )}
+                    {latestDBMetrics?.latency_warn_ms ? (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-amber-500/30 bg-amber-500/[0.07] px-2 py-1.5">
+                        <span className="text-amber-400">Warning</span>
+                        <span className="text-amber-300">
+                          last check exceeded {latestDBMetrics.latency_warn_ms}ms warn threshold
+                        </span>
                       </li>
                     ) : null}
                   </>

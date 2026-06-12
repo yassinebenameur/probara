@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
@@ -51,9 +52,15 @@ func (c *MongoDBChecker) Check(ctx context.Context, configRaw json.RawMessage, t
 			port = 27017
 		}
 		opts.SetHosts([]string{net.JoinHostPort(config.Host, strconv.Itoa(port))})
-		// Direct connection: probe the configured host, not whatever
-		// topology it advertises.
-		opts.SetDirect(true)
+		if config.ReplicaSet != "" {
+			// Replica-set mode: discover the topology from the seed host and
+			// assert a reachable primary (the set can serve writes).
+			opts.SetReplicaSet(config.ReplicaSet)
+		} else {
+			// Direct connection: probe the configured host, not whatever
+			// topology it advertises.
+			opts.SetDirect(true)
+		}
 		if config.Username != "" {
 			authSource := config.AuthSource
 			if authSource == "" {
@@ -101,10 +108,36 @@ func (c *MongoDBChecker) Check(ctx context.Context, configRaw json.RawMessage, t
 	}()
 
 	err = client.Ping(ctx, readpref.Primary())
-	latencyMs := time.Since(startTime).Milliseconds()
 	if err != nil {
+		latencyMs := time.Since(startTime).Milliseconds()
 		return dbErrorResult(classifyDBError(err), err, &latencyMs)
 	}
 
-	return dbLatencyResult(latencyMs, config.MaxLatencyMs)
+	// Best-effort enrichment for the detail panel: hello (role, set name) and
+	// buildInfo (version) are cheap and need no special privileges; users
+	// restricted from them still get a working ping monitor.
+	metrics := &dbMetrics{}
+	var hello struct {
+		IsWritablePrimary bool   `bson:"isWritablePrimary"`
+		SetName           string `bson:"setName"`
+	}
+	if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello); err == nil {
+		metrics.ReplicaSet = hello.SetName
+		if hello.SetName != "" || config.ReplicaSet != "" {
+			if hello.IsWritablePrimary {
+				metrics.Role = "primary"
+			} else {
+				metrics.Role = "secondary"
+			}
+		}
+	}
+	var buildInfo struct {
+		Version string `bson:"version"`
+	}
+	if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Decode(&buildInfo); err == nil {
+		metrics.ServerVersion = buildInfo.Version
+	}
+	latencyMs := time.Since(startTime).Milliseconds()
+
+	return dbLatencyResult("mongodb", latencyMs, config.MaxLatencyMs, config.WarnLatencyMs, metrics)
 }

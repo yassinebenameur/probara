@@ -2,6 +2,7 @@ package monitors
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/google/uuid"
 
@@ -31,6 +32,11 @@ type MonitorService interface {
 
 	// DeleteMonitorHistory clears check, alert, and analytics history while preserving the monitor.
 	DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error
+
+	// ResolveTestConfig resolves write-only secret placeholders in a config
+	// against a stored monitor (nil monitorID = no merge) for test-connection
+	// requests. The result may contain ciphertext envelopes for kept secrets.
+	ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, monitorID *uuid.UUID, monitorType models.MonitorType, config json.RawMessage) (json.RawMessage, error)
 
 	// BulkUpdateAlerting applies notification-routing fields to many monitors.
 	BulkUpdateAlerting(

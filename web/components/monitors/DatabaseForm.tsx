@@ -11,17 +11,35 @@ import {
   RedisMonitorConfig,
   PostgresMonitorConfig,
   MongoDBMonitorConfig,
+  RabbitMQMonitorConfig,
+  DBQueryValueOp,
   MASKED_SECRET,
 } from '@/lib/types';
-import { ChevronDown, ChevronRight, Eye, EyeOff, KeyRound, ShieldCheck } from 'lucide-react';
+import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Loader2,
+  PlugZap,
+  ShieldCheck,
+  X,
+  XCircle,
+} from 'lucide-react';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 
-export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb';
+export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb' | 'rabbitmq';
 
-type DatabaseConfig = RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig;
+type DatabaseConfig = RedisMonitorConfig &
+  PostgresMonitorConfig &
+  MongoDBMonitorConfig &
+  RabbitMQMonitorConfig;
 
 type ConnectionMode = 'fields' | 'connection_string';
 
@@ -30,40 +48,84 @@ const DB_TYPE_META: Record<
   {
     label: string;
     defaultPort: number;
+    hostPlaceholder: string;
     csPlaceholder: string;
     csHint: string;
+    csSchemes: string[];
+    csAllowsKeyValueDSN: boolean;
     supportsTLSToggle: boolean;
+    usernameRequired: boolean;
+    checkVerb: string;
   }
 > = {
   redis: {
     label: 'Redis',
     defaultPort: 6379,
+    hostPlaceholder: 'redis.internal',
     csPlaceholder: 'redis://user:password@redis.internal:6379/0',
     csHint: 'redis:// or rediss:// (TLS) URI. May include username, password, and DB index.',
+    csSchemes: ['redis://', 'rediss://'],
+    csAllowsKeyValueDSN: false,
     supportsTLSToggle: true,
+    usernameRequired: false,
+    checkVerb: 'connect + PING',
   },
   postgres: {
     label: 'PostgreSQL',
     defaultPort: 5432,
+    hostPlaceholder: 'db.internal',
     csPlaceholder: 'postgres://user:password@db.internal:5432/mydb?sslmode=require',
     csHint: 'postgres:// URI or key=value DSN. TLS is controlled by sslmode in the string.',
+    csSchemes: ['postgres://', 'postgresql://'],
+    csAllowsKeyValueDSN: true,
     supportsTLSToggle: false,
+    usernameRequired: true,
+    checkVerb: 'connect + ping',
   },
   mongodb: {
     label: 'MongoDB',
     defaultPort: 27017,
+    hostPlaceholder: 'mongo.internal',
     csPlaceholder: 'mongodb://user:password@mongo.internal:27017/?authSource=admin',
     csHint: 'mongodb:// or mongodb+srv:// URI. May include credentials and options like tls=true.',
+    csSchemes: ['mongodb://', 'mongodb+srv://'],
+    csAllowsKeyValueDSN: false,
     supportsTLSToggle: true,
+    usernameRequired: false,
+    checkVerb: 'connect + ping',
+  },
+  rabbitmq: {
+    label: 'RabbitMQ',
+    defaultPort: 5672,
+    hostPlaceholder: 'mq.internal',
+    csPlaceholder: 'amqp://user:password@mq.internal:5672/vhost',
+    csHint: 'amqp:// or amqps:// (TLS) URI. May include credentials and the vhost path.',
+    csSchemes: ['amqp://', 'amqps://'],
+    csAllowsKeyValueDSN: false,
+    supportsTLSToggle: true,
+    usernameRequired: true,
+    checkVerb: 'AMQP handshake',
   },
 };
 
+const QUERY_VALUE_OPS: { value: DBQueryValueOp; label: string }[] = [
+  { value: 'equals', label: 'equals' },
+  { value: 'not_equals', label: 'does not equal' },
+  { value: 'contains', label: 'contains' },
+  { value: 'number_gt', label: '> (number)' },
+  { value: 'number_gte', label: '≥ (number)' },
+  { value: 'number_lt', label: '< (number)' },
+  { value: 'number_lte', label: '≤ (number)' },
+];
+
 // Write-only secret input: the API never returns stored secrets (only "***"),
 // so in edit mode an untouched blank field means "keep the current value".
+// onClear (when provided) lets the user drop the stored secret entirely.
 function SecretInput({
   value,
   onChange,
   hasStored,
+  onClear,
   placeholder,
   storedPlaceholder,
   mono = false,
@@ -72,6 +134,7 @@ function SecretInput({
   value: string;
   onChange: (value: string) => void;
   hasStored: boolean;
+  onClear?: () => void;
   placeholder: string;
   storedPlaceholder: string;
   mono?: boolean;
@@ -87,13 +150,24 @@ function SecretInput({
           onChange={(e) => onChange(e.target.value)}
           placeholder={hasStored ? storedPlaceholder : placeholder}
           autoComplete="new-password"
-          className={`input pr-16 ${mono ? 'font-mono text-xs' : ''}`}
+          className={`input pr-20 ${mono ? 'font-mono text-xs' : ''}`}
         />
         <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
           {hasStored && !value && (
-            <span className="flex items-center gap-1 rounded-md bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-400" title="A value is stored. Leave blank to keep it.">
+            <span className="flex items-center gap-1 rounded-md bg-cyan-500/10 py-0.5 pl-1.5 pr-1 text-[10px] font-medium text-cyan-400" title="A value is stored. Leave blank to keep it.">
               <KeyRound className="h-3 w-3" strokeWidth={1.75} />
               set
+              {onClear && (
+                <button
+                  type="button"
+                  onClick={onClear}
+                  className="rounded p-0.5 text-cyan-400/70 transition-colors hover:bg-cyan-500/20 hover:text-cyan-300"
+                  aria-label="Clear stored value"
+                  title="Clear the stored value"
+                >
+                  <X className="h-3 w-3" strokeWidth={2} />
+                </button>
+              )}
             </span>
           )}
           <button
@@ -148,6 +222,12 @@ function ToggleRow({
   );
 }
 
+type TestState =
+  | { phase: 'idle' }
+  | { phase: 'running' }
+  | { phase: 'done'; result: TestMonitorConfigResponse }
+  | { phase: 'request_failed'; message: string };
+
 interface DatabaseFormProps {
   type: DatabaseMonitorType;
   monitor?: Monitor;
@@ -177,9 +257,9 @@ export default function DatabaseForm({
   // The API masks stored secrets as "***" — that tells us one exists without
   // revealing it. Cloned monitors carry the mask too, but a clone can't reuse
   // another monitor's secret, so treat it as unset there.
-  const hasStoredPassword = isEditMode && existingConfig.password === MASKED_SECRET;
-  const hasStoredConnString = isEditMode && existingConfig.connection_string === MASKED_SECRET;
-  const hasStoredClientKey = isEditMode && existingConfig.tls_client_key_pem === MASKED_SECRET;
+  const storedPassword = isEditMode && existingConfig.password === MASKED_SECRET;
+  const storedConnString = isEditMode && existingConfig.connection_string === MASKED_SECRET;
+  const storedClientKey = isEditMode && existingConfig.tls_client_key_pem === MASKED_SECRET;
 
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
@@ -192,6 +272,8 @@ export default function DatabaseForm({
     database: existingConfig.database || '',
     ssl_mode: existingConfig.ssl_mode || ('' as '' | 'disable' | 'require' | 'verify-full'),
     auth_source: existingConfig.auth_source || '',
+    replica_set: existingConfig.replica_set || '',
+    vhost: existingConfig.vhost || '',
     db_index: existingConfig.db ?? 0,
     tls_enabled: existingConfig.tls_enabled ?? false,
     tls_skip_verify: existingConfig.tls_skip_verify ?? false,
@@ -199,7 +281,11 @@ export default function DatabaseForm({
     tls_client_cert_pem: existingConfig.tls_client_cert_pem || '',
     tls_client_key_pem: '',
     query: existingConfig.query || '',
+    query_value_op: existingConfig.query_value_op || ('' as '' | DBQueryValueOp),
+    query_value: existingConfig.query_value || '',
+    expected_role: existingConfig.expected_role || ('' as '' | 'master' | 'replica'),
     max_latency_ms: existingConfig.max_latency_ms ? String(existingConfig.max_latency_ms) : '',
+    warn_latency_ms: existingConfig.warn_latency_ms ? String(existingConfig.warn_latency_ms) : '',
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
     timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
@@ -209,10 +295,18 @@ export default function DatabaseForm({
     notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
   });
 
+  // Explicitly dropped stored secrets ("Clear" on the set-chip): the field is
+  // then omitted from the submitted config, which clears it server-side.
+  const [cleared, setCleared] = useState({ password: false, clientKey: false });
+  const hasStoredPassword = storedPassword && !cleared.password;
+  const hasStoredClientKey = storedClientKey && !cleared.clientKey;
+  const hasStoredConnString = storedConnString;
+
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [certsOpen, setCertsOpen] = useState(
-    Boolean(formData.tls_ca_pem || formData.tls_client_cert_pem || hasStoredClientKey)
+    Boolean(formData.tls_ca_pem || formData.tls_client_cert_pem || storedClientKey)
   );
+  const [test, setTest] = useState<TestState>({ phase: 'idle' });
 
   const usingConnString = formData.connection_mode === 'connection_string';
   // PEM material only makes sense when the connection can use TLS.
@@ -225,20 +319,33 @@ export default function DatabaseForm({
     formData.tls_ca_pem.trim() || formData.tls_client_cert_pem.trim() || formData.tls_client_key_pem.trim() || hasStoredClientKey
   );
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrors({});
+  const validateConnectionString = (value: string): string | undefined => {
+    if (!value) return undefined;
+    if (value.includes('://')) {
+      if (!meta.csSchemes.some((s) => value.startsWith(s))) {
+        return `Must start with ${meta.csSchemes.join(' or ')}`;
+      }
+      return undefined;
+    }
+    if (meta.csAllowsKeyValueDSN && value.includes('=')) return undefined;
+    return `Must start with ${meta.csSchemes.join(' or ')}`;
+  };
 
+  const validate = (): Record<string, string> => {
     const newErrors: Record<string, string> = {};
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (usingConnString) {
-      if (!formData.connection_string.trim() && !hasStoredConnString) {
+      const cs = formData.connection_string.trim();
+      if (!cs && !hasStoredConnString) {
         newErrors.connection_string = 'Connection string is required';
+      } else if (cs) {
+        const schemeError = validateConnectionString(cs);
+        if (schemeError) newErrors.connection_string = schemeError;
       }
     } else {
       if (!formData.host.trim()) newErrors.host = 'Host is required';
       if (formData.port < 1 || formData.port > 65535) newErrors.port = 'Port must be between 1 and 65535';
-      if (type === 'postgres' && !formData.username.trim()) newErrors.username = 'Username is required';
+      if (meta.usernameRequired && !formData.username.trim()) newErrors.username = 'Username is required';
       if (type === 'mongodb' && formData.username.trim() && !formData.password && !hasStoredPassword) {
         newErrors.password = 'Password is required when a username is set';
       }
@@ -248,19 +355,32 @@ export default function DatabaseForm({
     if (tlsMaterialRelevant && certProvided && !keyProvided) {
       newErrors.tls_client_key_pem = 'Client key is required alongside a client certificate';
     }
+    if (type === 'postgres' && formData.query_value_op) {
+      if (!formData.query.trim()) {
+        newErrors.query = 'A query is required for a value assertion';
+      }
+      if (formData.query_value_op.startsWith('number_') && formData.query_value.trim() !== '' && !Number.isFinite(Number(formData.query_value))) {
+        newErrors.query_value = 'Must be a number for numeric comparisons';
+      }
+    }
     const maxLatency = formData.max_latency_ms.trim() ? parseInt(formData.max_latency_ms, 10) : undefined;
+    const warnLatency = formData.warn_latency_ms.trim() ? parseInt(formData.warn_latency_ms, 10) : undefined;
     if (formData.max_latency_ms.trim() && (!Number.isFinite(maxLatency) || (maxLatency as number) <= 0)) {
       newErrors.max_latency_ms = 'Must be a positive number of milliseconds';
+    }
+    if (formData.warn_latency_ms.trim() && (!Number.isFinite(warnLatency) || (warnLatency as number) <= 0)) {
+      newErrors.warn_latency_ms = 'Must be a positive number of milliseconds';
+    }
+    if (maxLatency && warnLatency && warnLatency >= maxLatency) {
+      newErrors.warn_latency_ms = 'Must be lower than max latency';
     }
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
+    return newErrors;
+  };
 
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      return;
-    }
-
+  const buildConfig = (): DatabaseConfig => {
     const config: DatabaseConfig = {};
 
     if (usingConnString) {
@@ -281,7 +401,11 @@ export default function DatabaseForm({
         if (formData.database.trim()) config.database = formData.database.trim();
         if (formData.ssl_mode) config.ssl_mode = formData.ssl_mode;
       }
-      if (type === 'mongodb' && formData.auth_source.trim()) config.auth_source = formData.auth_source.trim();
+      if (type === 'mongodb') {
+        if (formData.auth_source.trim()) config.auth_source = formData.auth_source.trim();
+        if (formData.replica_set.trim()) config.replica_set = formData.replica_set.trim();
+      }
+      if (type === 'rabbitmq' && formData.vhost.trim()) config.vhost = formData.vhost.trim();
       if (meta.supportsTLSToggle && formData.tls_enabled) {
         config.tls_enabled = true;
         if (formData.tls_skip_verify) config.tls_skip_verify = true;
@@ -290,20 +414,61 @@ export default function DatabaseForm({
 
     if (tlsMaterialRelevant) {
       if (formData.tls_ca_pem.trim()) config.tls_ca_pem = formData.tls_ca_pem.trim();
-      if (certProvided) {
+      if (formData.tls_client_cert_pem.trim()) {
         config.tls_client_cert_pem = formData.tls_client_cert_pem.trim();
         // Blank + previously stored = keep the stored key (write-only).
         config.tls_client_key_pem = formData.tls_client_key_pem.trim() || MASKED_SECRET;
       }
     }
 
-    if (type === 'postgres' && formData.query.trim()) config.query = formData.query.trim();
+    if (type === 'redis' && formData.expected_role) config.expected_role = formData.expected_role;
+    if (type === 'postgres' && formData.query.trim()) {
+      config.query = formData.query.trim();
+      if (formData.query_value_op) {
+        config.query_value_op = formData.query_value_op;
+        config.query_value = formData.query_value;
+      }
+    }
+    const maxLatency = formData.max_latency_ms.trim() ? parseInt(formData.max_latency_ms, 10) : undefined;
+    const warnLatency = formData.warn_latency_ms.trim() ? parseInt(formData.warn_latency_ms, 10) : undefined;
     if (maxLatency) config.max_latency_ms = maxLatency;
+    if (warnLatency) config.warn_latency_ms = warnLatency;
+
+    return config;
+  };
+
+  const handleTestConnection = async () => {
+    // Test cares about connection validity, not monitor naming.
+    const connectionErrors = validate();
+    delete connectionErrors.name;
+    delete connectionErrors.timeout_seconds;
+    setErrors(connectionErrors);
+    if (Object.keys(connectionErrors).length > 0) return;
+
+    setTest({ phase: 'running' });
+    try {
+      const result = await testMonitorConfig({
+        type,
+        config: buildConfig(),
+        timeout_seconds: Math.min(formData.timeout_seconds || 10, 30),
+        ...(isEditMode && monitor ? { monitor_id: monitor.id } : {}),
+      });
+      setTest({ phase: 'done', result });
+    } catch (err) {
+      setTest({ phase: 'request_failed', message: err instanceof Error ? err.message : 'Test request failed' });
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const newErrors = validate();
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
 
     const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
       name: formData.name.trim(),
       type: type as MonitorType,
-      config,
+      config: buildConfig(),
       interval_seconds: formData.interval_seconds,
       timeout_seconds: formData.timeout_seconds,
       enabled: formData.enabled,
@@ -328,7 +493,7 @@ export default function DatabaseForm({
         ? `${meta.label} ${formData.host.trim()}:${formData.port}${formData.tls_enabled ? ' (TLS)' : ''}`
         : null;
     if (!target) return undefined;
-    const check = type === 'postgres' && formData.query.trim() ? 'run query' : 'connect + ping';
+    const check = type === 'postgres' && formData.query.trim() ? 'run query' : meta.checkVerb;
     return `Every ${formData.interval_seconds}s · ${check} ${target} · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`;
   })();
 
@@ -405,7 +570,7 @@ export default function DatabaseForm({
                   type="text"
                   value={formData.host}
                   onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                  placeholder={`${type === 'postgres' ? 'db' : type === 'redis' ? 'redis' : 'mongo'}.internal`}
+                  placeholder={meta.hostPlaceholder}
                   className="input"
                 />
               </FormField>
@@ -423,8 +588,8 @@ export default function DatabaseForm({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField
-                label={type === 'postgres' ? 'Username' : 'Username (optional)'}
-                required={type === 'postgres'}
+                label={meta.usernameRequired ? 'Username' : 'Username (optional)'}
+                required={meta.usernameRequired}
                 error={errors.username}
                 description={type === 'redis' ? 'ACL user — leave blank for the default user' : undefined}
               >
@@ -432,7 +597,7 @@ export default function DatabaseForm({
                   type="text"
                   value={formData.username}
                   onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  placeholder={type === 'postgres' ? 'monitoring' : ''}
+                  placeholder={meta.usernameRequired ? 'monitoring' : ''}
                   autoComplete="off"
                   className="input"
                 />
@@ -446,6 +611,7 @@ export default function DatabaseForm({
                   value={formData.password}
                   onChange={(v) => setFormData({ ...formData, password: v })}
                   hasStored={hasStoredPassword}
+                  onClear={() => setCleared({ ...cleared, password: true })}
                   placeholder="••••••••"
                   storedPlaceholder="Unchanged"
                 />
@@ -492,12 +658,35 @@ export default function DatabaseForm({
             )}
 
             {type === 'mongodb' && (
-              <FormField label="Auth source" description="Database to authenticate against. Default: admin">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="Auth source" description="Database to authenticate against. Default: admin">
+                  <input
+                    type="text"
+                    value={formData.auth_source}
+                    onChange={(e) => setFormData({ ...formData, auth_source: e.target.value })}
+                    placeholder="admin"
+                    className="input"
+                  />
+                </FormField>
+                <FormField label="Replica set (optional)" description="Discover the topology and assert a reachable primary">
+                  <input
+                    type="text"
+                    value={formData.replica_set}
+                    onChange={(e) => setFormData({ ...formData, replica_set: e.target.value })}
+                    placeholder="rs0"
+                    className="input"
+                  />
+                </FormField>
+              </div>
+            )}
+
+            {type === 'rabbitmq' && (
+              <FormField label="Virtual host" description="Default: /">
                 <input
                   type="text"
-                  value={formData.auth_source}
-                  onChange={(e) => setFormData({ ...formData, auth_source: e.target.value })}
-                  placeholder="admin"
+                  value={formData.vhost}
+                  onChange={(e) => setFormData({ ...formData, vhost: e.target.value })}
+                  placeholder="/"
                   className="input"
                 />
               </FormField>
@@ -584,6 +773,15 @@ export default function DatabaseForm({
                         : 'Stored encrypted, never displayed again'
                     }
                   >
+                    {hasStoredClientKey && !formData.tls_client_key_pem && (
+                      <button
+                        type="button"
+                        onClick={() => setCleared({ ...cleared, clientKey: true })}
+                        className="mb-1.5 text-[11px] text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
+                      >
+                        Clear the stored key
+                      </button>
+                    )}
                     <textarea
                       rows={4}
                       value={formData.tls_client_key_pem}
@@ -598,38 +796,137 @@ export default function DatabaseForm({
             )}
           </div>
         )}
+
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+          <button
+            type="button"
+            onClick={handleTestConnection}
+            disabled={test.phase === 'running' || loading}
+            className="inline-flex items-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {test.phase === 'running' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
+            ) : (
+              <PlugZap className="h-3.5 w-3.5" strokeWidth={1.75} />
+            )}
+            {test.phase === 'running' ? 'Testing…' : 'Test connection'}
+          </button>
+          {test.phase === 'idle' && (
+            <p className="text-xs text-slate-500">Runs one check from a worker without saving anything.</p>
+          )}
+          {test.phase === 'done' && test.result.status === 'success' && (
+            <p className="flex items-center gap-1.5 text-xs text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Connected{typeof test.result.latency_ms === 'number' ? ` in ${test.result.latency_ms}ms` : ''}
+            </p>
+          )}
+          {test.phase === 'done' && test.result.status !== 'success' && (
+            <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-400">
+              <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+              <span className="truncate" title={test.result.error_message}>
+                {test.result.error_message || 'Check failed'}
+              </span>
+            </p>
+          )}
+          {test.phase === 'request_failed' && (
+            <p className="flex min-w-0 items-center gap-1.5 text-xs text-amber-400">
+              <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+              <span className="truncate" title={test.message}>{test.message}</span>
+            </p>
+          )}
+        </div>
       </FormSection>
 
       <FormSection title="Checks">
         {type === 'postgres' && (
-          <FormField
-            label="Assertion query (optional)"
-            error={errors.query}
-            description="Runs after connecting; the check fails if it errors or returns 0 rows. Example: SELECT 1"
-          >
-            <input
-              type="text"
-              value={formData.query}
-              onChange={(e) => setFormData({ ...formData, query: e.target.value })}
-              placeholder="SELECT 1"
-              className="input font-mono text-xs"
-            />
+          <>
+            <FormField
+              label="Assertion query (optional)"
+              error={errors.query}
+              description="Runs after connecting; the check fails if it errors or returns 0 rows. Example: SELECT 1"
+            >
+              <input
+                type="text"
+                value={formData.query}
+                onChange={(e) => setFormData({ ...formData, query: e.target.value })}
+                placeholder="SELECT 1"
+                className="input font-mono text-xs"
+              />
+            </FormField>
+            {formData.query.trim() !== '' && (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="Value assertion (optional)" description="Compare the first column of the first row">
+                  <select
+                    value={formData.query_value_op}
+                    onChange={(e) => setFormData({ ...formData, query_value_op: e.target.value as typeof formData.query_value_op })}
+                    className="input"
+                  >
+                    <option value="">Row count only (≥ 1 row)</option>
+                    {QUERY_VALUE_OPS.map((op) => (
+                      <option key={op.value} value={op.value}>
+                        Value {op.label}
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+                {formData.query_value_op && (
+                  <FormField label="Expected value" error={errors.query_value}>
+                    <input
+                      type="text"
+                      value={formData.query_value}
+                      onChange={(e) => setFormData({ ...formData, query_value: e.target.value })}
+                      placeholder={formData.query_value_op.startsWith('number_') ? '100' : 'ok'}
+                      className="input font-mono text-xs"
+                    />
+                  </FormField>
+                )}
+              </div>
+            )}
+          </>
+        )}
+        {type === 'redis' && (
+          <FormField label="Expected role (optional)" description="Fail if this node's replication role changes — catches monitoring the wrong node after a failover">
+            <select
+              value={formData.expected_role}
+              onChange={(e) => setFormData({ ...formData, expected_role: e.target.value as typeof formData.expected_role })}
+              className="input"
+            >
+              <option value="">Any role</option>
+              <option value="master">Master</option>
+              <option value="replica">Replica</option>
+            </select>
           </FormField>
         )}
-        <FormField
-          label="Max latency (ms, optional)"
-          error={errors.max_latency_ms}
-          description="Fail the check if the round trip takes longer than this"
-        >
-          <input
-            type="number"
-            value={formData.max_latency_ms}
-            onChange={(e) => setFormData({ ...formData, max_latency_ms: e.target.value })}
-            min={1}
-            placeholder="e.g. 250"
-            className="input"
-          />
-        </FormField>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField
+            label="Warn latency (ms, optional)"
+            error={errors.warn_latency_ms}
+            description="Flag the check with a warning above this — without failing it"
+          >
+            <input
+              type="number"
+              value={formData.warn_latency_ms}
+              onChange={(e) => setFormData({ ...formData, warn_latency_ms: e.target.value })}
+              min={1}
+              placeholder="e.g. 100"
+              className="input"
+            />
+          </FormField>
+          <FormField
+            label="Max latency (ms, optional)"
+            error={errors.max_latency_ms}
+            description="Fail the check if the round trip takes longer than this"
+          >
+            <input
+              type="number"
+              value={formData.max_latency_ms}
+              onChange={(e) => setFormData({ ...formData, max_latency_ms: e.target.value })}
+              min={1}
+              placeholder="e.g. 250"
+              className="input"
+            />
+          </FormField>
+        </div>
       </FormSection>
 
       <FormSection title="Schedule">

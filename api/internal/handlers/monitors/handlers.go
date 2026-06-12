@@ -30,6 +30,13 @@ type checkJobPublisher interface {
 	PublishJSON(ctx context.Context, subject string, v interface{}, headers map[string][]string) error
 }
 
+// checkRequester is the request-reply surface used for test-connection
+// checks. Satisfied by *queue.Client; detected via type assertion in
+// ConfigureCheckJobs so existing call sites don't change.
+type checkRequester interface {
+	Request(ctx context.Context, subject string, data []byte) ([]byte, error)
+}
+
 type groupMembershipService interface {
 	AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
 	RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
@@ -42,6 +49,7 @@ type Handlers struct {
 	groupService  groupMembershipService
 	resultService resultservice.ResultsService
 	jobPublisher  checkJobPublisher
+	jobRequester  checkRequester
 	checkSubject  string
 	artifactsDir  string
 	logger        *logger.Logger
@@ -67,9 +75,117 @@ func NewHandlers(service monitorservice.MonitorService, groupSvc groupMembership
 // ConfigureCheckJobs sets the publisher and subject used for on-demand monitor runs.
 func (h *Handlers) ConfigureCheckJobs(publisher checkJobPublisher, subject string) {
 	h.jobPublisher = publisher
+	if requester, ok := publisher.(checkRequester); ok {
+		h.jobRequester = requester
+	}
 	if strings.TrimSpace(subject) != "" {
 		h.checkSubject = strings.TrimSpace(subject)
 	}
+}
+
+// TestMonitorConfigRequest is the body for POST /api/v1/monitors/test.
+type TestMonitorConfigRequest struct {
+	Type           models.MonitorType `json:"type"`
+	Config         json.RawMessage    `json:"config"`
+	TimeoutSeconds int                `json:"timeout_seconds"`
+	// MonitorID resolves write-only secret placeholders ("***") against the
+	// stored monitor when testing an edit.
+	MonitorID *string `json:"monitor_id,omitempty"`
+}
+
+// TestMonitorConfig handles POST /api/v1/monitors/test — runs one ephemeral
+// check via a worker (NATS request-reply) so a config can be validated before
+// saving. Nothing is persisted.
+func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	if h.jobRequester == nil {
+		errors.WriteInternalError(w, "test checks are not available (queue not configured)")
+		return
+	}
+
+	var req TestMonitorConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return
+	}
+
+	if !validation.DefaultRegistry.Has(req.Type) {
+		errors.WriteValidationError(w, "unknown monitor type: "+string(req.Type))
+		return
+	}
+	if len(req.Config) == 0 {
+		errors.WriteValidationError(w, "config is required")
+		return
+	}
+	if err := validation.DefaultRegistry.Validate(req.Type, req.Config); err != nil {
+		errors.WriteValidationError(w, err.Error())
+		return
+	}
+	if req.TimeoutSeconds <= 0 {
+		req.TimeoutSeconds = 10
+	}
+	if req.TimeoutSeconds > 60 {
+		req.TimeoutSeconds = 60
+	}
+
+	var monitorID *uuid.UUID
+	if req.MonitorID != nil && *req.MonitorID != "" {
+		parsed, err := uuid.Parse(*req.MonitorID)
+		if err != nil {
+			errors.WriteValidationError(w, "invalid monitor_id")
+			return
+		}
+		monitorID = &parsed
+	}
+
+	config, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, monitorID, req.Type, req.Config)
+	if err != nil {
+		if err.Error() == "monitor not found" {
+			errors.WriteNotFoundError(w, "monitor not found")
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "tenant_id": tenantID}).Error("Failed to resolve test config")
+		errors.WriteInternalError(w, "failed to resolve config")
+		return
+	}
+
+	payload, err := json.Marshal(sharedmodels.CheckJobPayload{
+		Type:           string(req.Type),
+		Config:         config,
+		TimeoutSeconds: req.TimeoutSeconds,
+	})
+	if err != nil {
+		errors.WriteInternalError(w, "failed to encode test payload")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutSeconds+10)*time.Second)
+	defer cancel()
+	reply, err := h.jobRequester.Request(ctx, sharedmodels.TestCheckSubject, payload)
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "type": req.Type}).Warn("Test check request failed")
+		errors.WriteInternalError(w, "no worker answered the test request — is a worker running?")
+		return
+	}
+
+	var response sharedmodels.TestCheckResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		errors.WriteInternalError(w, "invalid worker response")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // CreateMonitor handles POST /api/v1/monitors

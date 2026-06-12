@@ -275,6 +275,32 @@ func (c *Client) DeleteConsumer(ctx context.Context, streamName string, consumer
 	return nil
 }
 
+// Request sends a core NATS request and waits for the reply (or ctx done).
+// Used for ephemeral RPC-style exchanges (e.g. test-connection checks) that
+// must not be persisted or retried by JetStream.
+func (c *Client) Request(ctx context.Context, subject string, data []byte) ([]byte, error) {
+	msg, err := c.nc.RequestWithContext(ctx, subject, data)
+	if err != nil {
+		return nil, err
+	}
+	return msg.Data, nil
+}
+
+// SubscribeRequestReply registers a queue-group subscription whose handler's
+// return value is sent back to the requester. Handlers run in their own
+// goroutine so a slow request (e.g. a check waiting out its timeout) never
+// blocks other requests on the same subscription.
+func (c *Client) SubscribeRequestReply(subject, queueGroup string, handler func(data []byte) []byte) (*nats.Subscription, error) {
+	return c.nc.QueueSubscribe(subject, queueGroup, func(msg *nats.Msg) {
+		go func() {
+			resp := handler(msg.Data)
+			if msg.Reply != "" {
+				_ = msg.Respond(resp)
+			}
+		}()
+	})
+}
+
 // Subscribe registers a core NATS subscription for live fan-out use cases.
 func (c *Client) Subscribe(subject string, handler func(*Message)) (*nats.Subscription, error) {
 	return c.nc.Subscribe(subject, func(msg *nats.Msg) {

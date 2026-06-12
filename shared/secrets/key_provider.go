@@ -25,32 +25,75 @@ type KeyProvider interface {
 // "fall back to NoOp" signal in dev.
 var ErrKeyNotConfigured = errors.New("secrets: PROBARA_SECRETS_KEY not set")
 
-// EnvKeyProvider loads a single key from the PROBARA_SECRETS_KEY environment
-// variable. Key rotation can be added later without breaking the interface
-// by extending this to read multiple keys (e.g. PROBARA_SECRETS_KEY_V2).
+// EnvKeyProvider loads versioned keys from the environment:
+//
+//	PROBARA_SECRETS_KEY     — version 1
+//	PROBARA_SECRETS_KEY_V2  — version 2
+//	PROBARA_SECRETS_KEY_V3  — version 3, …
+//
+// The highest version present is used for new ciphertexts; lower versions
+// stay available for decrypting envelopes written before a rotation.
+//
+// Rotation flow: add PROBARA_SECRETS_KEY_V<n+1> alongside the old key(s) and
+// restart → new writes use the new key while old rows still decrypt → run
+// `go run ./cmd/admin/reencrypt_monitor_configs` (and the channels variant)
+// → remove the old key once nothing references it.
 type EnvKeyProvider struct {
 	keys    map[int][]byte
 	current int
 }
 
-// NewEnvKeyProvider reads PROBARA_SECRETS_KEY (32 raw bytes, base64-encoded).
-// Returns ErrKeyNotConfigured if the variable is unset.
+// NewEnvKeyProvider reads PROBARA_SECRETS_KEY and any PROBARA_SECRETS_KEY_V<n>
+// variables (each 32 raw bytes, base64-encoded). Returns ErrKeyNotConfigured
+// when no key variable is set at all.
 func NewEnvKeyProvider() (*EnvKeyProvider, error) {
-	raw := os.Getenv("PROBARA_SECRETS_KEY")
-	if raw == "" {
+	keys := make(map[int][]byte)
+
+	decode := func(name, raw string) ([]byte, error) {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return nil, fmt.Errorf("secrets: decode %s: %w", name, err)
+		}
+		if len(key) != keyBytes {
+			return nil, fmt.Errorf("secrets: %s must be %d bytes, got %d", name, keyBytes, len(key))
+		}
+		return key, nil
+	}
+
+	if raw := os.Getenv("PROBARA_SECRETS_KEY"); raw != "" {
+		key, err := decode("PROBARA_SECRETS_KEY", raw)
+		if err != nil {
+			return nil, err
+		}
+		keys[1] = key
+	}
+
+	// Versions don't need to be contiguous: a retired v1 can be removed while
+	// v2 and v3 remain.
+	current := 0
+	for v := 2; v <= 100; v++ {
+		name := fmt.Sprintf("PROBARA_SECRETS_KEY_V%d", v)
+		raw := os.Getenv(name)
+		if raw == "" {
+			continue
+		}
+		key, err := decode(name, raw)
+		if err != nil {
+			return nil, err
+		}
+		keys[v] = key
+	}
+
+	for v := range keys {
+		if v > current {
+			current = v
+		}
+	}
+	if current == 0 {
 		return nil, ErrKeyNotConfigured
 	}
-	key, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		return nil, fmt.Errorf("secrets: decode PROBARA_SECRETS_KEY: %w", err)
-	}
-	if len(key) != keyBytes {
-		return nil, fmt.Errorf("secrets: PROBARA_SECRETS_KEY must be %d bytes, got %d", keyBytes, len(key))
-	}
-	return &EnvKeyProvider{
-		keys:    map[int][]byte{1: key},
-		current: 1,
-	}, nil
+
+	return &EnvKeyProvider{keys: keys, current: current}, nil
 }
 
 // CurrentKey returns the active key and its version.

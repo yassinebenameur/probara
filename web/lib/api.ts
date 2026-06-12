@@ -261,6 +261,27 @@ export async function createMonitor(data: CreateMonitorRequest): Promise<Monitor
   return apiRequest<Monitor>('POST', '/v1/monitors', data);
 }
 
+export interface TestMonitorConfigRequest {
+  type: string;
+  config: unknown;
+  timeout_seconds?: number;
+  // Resolves write-only "***" secret placeholders against the stored monitor
+  // when testing an edit.
+  monitor_id?: string;
+}
+
+export interface TestMonitorConfigResponse {
+  status: 'success' | 'failure' | 'error';
+  latency_ms?: number;
+  error_message?: string;
+}
+
+// Runs one ephemeral check on a worker so a config can be validated before
+// saving. Nothing is persisted.
+export async function testMonitorConfig(data: TestMonitorConfigRequest): Promise<TestMonitorConfigResponse> {
+  return apiRequest<TestMonitorConfigResponse>('POST', '/v1/monitors/test', data);
+}
+
 export async function updateMonitor(
   id: string,
   data: UpdateMonitorRequest

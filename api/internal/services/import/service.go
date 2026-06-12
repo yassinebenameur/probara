@@ -554,6 +554,7 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"redis":             true,
 		"postgres":          true,
 		"mongodb":           true,
+		"rabbitmq":          true,
 	}
 
 	// Common type aliases that map to supported types
@@ -589,6 +590,8 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"pg":         "postgres",
 		"pgsql":      "postgres",
 		"mongo":      "mongodb",
+		"amqp":       "rabbitmq",
+		"rabbit":     "rabbitmq",
 	}
 
 	for _, row := range rows {

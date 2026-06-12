@@ -85,6 +85,30 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 	}
 }
 
+// ResolveTestConfig resolves write-only secret placeholders ("***") in an
+// incoming config against the stored monitor's config so a test-connection
+// request can run with the real (still encrypted) secrets. With no monitorID
+// the config passes through after placeholder cleanup, dropping orphaned
+// placeholders.
+func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, monitorID *uuid.UUID, monitorType models.MonitorType, config json.RawMessage) (json.RawMessage, error) {
+	if !secrets.HasMonitorSecrets(string(monitorType)) {
+		return config, nil
+	}
+	var existing json.RawMessage
+	if monitorID != nil {
+		monitor, err := s.repo.GetByID(ctx, tenantID, *monitorID)
+		if err != nil {
+			return nil, err
+		}
+		existing = monitor.Config
+	}
+	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), config, existing)
+	if err != nil {
+		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	return merged, nil
+}
+
 // CreateMonitor creates a new monitor
 func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
 	now := time.Now()

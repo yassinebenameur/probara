@@ -15,10 +15,10 @@ import (
 
 // TestMonitorLifecycle_SoftDeleteIsFastAndImmediatelyInvisible proves three
 // of the four user-visible guarantees of the soft-delete design:
-//   1. DeleteMonitor returns in under 500ms even with child rows present.
-//   2. GetMonitor immediately returns "monitor not found".
-//   3. A new monitor with the same push_token can be created before the purger
-//      has run (partial unique index works).
+//  1. DeleteMonitor returns in under 500ms even with child rows present.
+//  2. GetMonitor immediately returns "monitor not found".
+//  3. A new monitor with the same push_token can be created before the purger
+//     has run (partial unique index works).
 //
 // The fourth guarantee (purger drains the row entirely) is covered by
 // TestPurger_RemovesChildRowsThenMonitor in scheduler/internal/scheduler/

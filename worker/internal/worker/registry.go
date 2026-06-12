@@ -73,6 +73,7 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	registry.Register("redis", NewRedisChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("postgres", NewPostgresChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("mongodb", NewMongoDBChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("rabbitmq", NewRabbitMQChecker(blockPrivateIPs, allowedCIDRs))
 
 	return registry
 }

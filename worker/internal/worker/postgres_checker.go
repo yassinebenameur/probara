@@ -30,14 +30,6 @@ func NewPostgresChecker(blockPrivateIPs bool, allowedCIDRs []*net.IPNet) *Postgr
 	}
 }
 
-type postgresMetrics struct {
-	ServerVersion string `json:"server_version,omitempty"`
-}
-
-type postgresMetricsEnvelope struct {
-	Postgres *postgresMetrics `json:"postgres,omitempty"`
-}
-
 // Check performs a PostgreSQL check
 func (c *PostgresChecker) Check(ctx context.Context, configRaw json.RawMessage, timeoutSeconds int) CheckResult {
 	var config models.PostgresMonitorConfig
@@ -90,6 +82,8 @@ func (c *PostgresChecker) Check(ctx context.Context, configRaw json.RawMessage, 
 	}
 	defer conn.Close(context.WithoutCancel(ctx))
 
+	metrics := &dbMetrics{ServerVersion: conn.PgConn().ParameterStatus("server_version")}
+
 	if config.Query != nil && strings.TrimSpace(*config.Query) != "" {
 		rows, err := conn.Query(ctx, *config.Query)
 		if err != nil {
@@ -97,7 +91,13 @@ func (c *PostgresChecker) Check(ctx context.Context, configRaw json.RawMessage, 
 			return dbErrorResult("query", err, &latencyMs)
 		}
 		rowCount := 0
+		firstValue := ""
 		for rows.Next() {
+			if rowCount == 0 {
+				if values, err := rows.Values(); err == nil && len(values) > 0 {
+					firstValue = fmt.Sprint(values[0])
+				}
+			}
 			rowCount++
 		}
 		rows.Close()
@@ -106,11 +106,16 @@ func (c *PostgresChecker) Check(ctx context.Context, configRaw json.RawMessage, 
 			return dbErrorResult("query", err, &latencyMs)
 		}
 		if rowCount == 0 {
-			errMsg := "query: returned 0 rows"
-			return CheckResult{
-				Status:       "failure",
-				LatencyMs:    &latencyMs,
-				ErrorMessage: &errMsg,
+			return dbFailureResult("postgres", latencyMs, metrics, "query: returned 0 rows")
+		}
+		if config.QueryValueOp != "" {
+			ok, err := evaluateValueAssertion(config.QueryValueOp, firstValue, config.QueryValue)
+			if err != nil {
+				return dbErrorResult("query_value", err, &latencyMs)
+			}
+			if !ok {
+				return dbFailureResult("postgres", latencyMs, metrics,
+					fmt.Sprintf("query_value: %q %s %q failed", firstValue, config.QueryValueOp, config.QueryValue))
 			}
 		}
 	} else if err := conn.Ping(ctx); err != nil {
@@ -119,15 +124,7 @@ func (c *PostgresChecker) Check(ctx context.Context, configRaw json.RawMessage, 
 	}
 
 	latencyMs := time.Since(startTime).Milliseconds()
-	result := dbLatencyResult(latencyMs, config.MaxLatencyMs)
-
-	if version := conn.PgConn().ParameterStatus("server_version"); version != "" {
-		if metricsJSON, err := json.Marshal(postgresMetricsEnvelope{Postgres: &postgresMetrics{ServerVersion: version}}); err == nil {
-			result.MetricsData = metricsJSON
-		}
-	}
-
-	return result
+	return dbLatencyResult("postgres", latencyMs, config.MaxLatencyMs, config.WarnLatencyMs, metrics)
 }
 
 // buildPostgresURI assembles a postgres:// URI from discrete config fields.

@@ -189,6 +189,16 @@ func (w *Worker) Start() error {
 		}(i)
 	}
 
+	// Test-connection requests (core NATS request-reply, no persistence):
+	// the API forwards "test this config before saving" requests here.
+	testSub, err := w.queue.SubscribeRequestReply(models.TestCheckSubject, "workers", w.handleTestCheck)
+	if err != nil {
+		w.logger.WithError(err).Warn("Failed to subscribe to test-check requests; test-connection will be unavailable")
+	} else {
+		defer func() { _ = testSub.Unsubscribe() }()
+		w.logger.WithField("subject", models.TestCheckSubject).Info("Test-check subscription ready")
+	}
+
 	// Wait for context cancellation
 	<-w.ctx.Done()
 	w.logger.Info("Worker context cancelled, waiting for goroutines to finish")
@@ -344,6 +354,55 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 
 	w.natsAckTotal.Inc()
 	return nil
+}
+
+// handleTestCheck runs an ephemeral check for a test-connection request and
+// returns the JSON-encoded TestCheckResponse. Nothing is persisted and no
+// monitor state advances — this exists so users can validate a config before
+// saving it.
+func (w *Worker) handleTestCheck(data []byte) []byte {
+	respond := func(resp models.TestCheckResponse) []byte {
+		b, err := json.Marshal(resp)
+		if err != nil {
+			return []byte(`{"status":"error","error_message":"worker: encode response"}`)
+		}
+		return b
+	}
+	errorResponse := func(msg string) []byte {
+		return respond(models.TestCheckResponse{Status: "error", ErrorMessage: &msg})
+	}
+
+	var payload models.CheckJobPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return errorResponse(fmt.Sprintf("invalid test payload: %v", err))
+	}
+	if payload.TimeoutSeconds <= 0 || payload.TimeoutSeconds > 120 {
+		return errorResponse("timeout_seconds must be between 1 and 120")
+	}
+	if w.passiveTypes[payload.Type] {
+		return errorResponse(fmt.Sprintf("monitor type %q is passive and cannot be tested", payload.Type))
+	}
+	checker, err := w.checkerRegistry.Get(payload.Type)
+	if err != nil {
+		return errorResponse(fmt.Sprintf("unknown monitor type: %s", payload.Type))
+	}
+
+	config, err := secrets.DecryptMonitorConfig(w.secretsEncryptor, payload.Type, payload.Config)
+	if err != nil {
+		w.logger.WithError(err).Error("Test check: failed to decrypt config")
+		return errorResponse(fmt.Sprintf("config_decrypt: %v", err))
+	}
+
+	ctx, cancel := context.WithTimeout(w.ctx, time.Duration(payload.TimeoutSeconds+5)*time.Second)
+	defer cancel()
+	result := checker.Check(ctx, config, payload.TimeoutSeconds)
+
+	return respond(models.TestCheckResponse{
+		Status:       result.Status,
+		LatencyMs:    result.LatencyMs,
+		ErrorMessage: result.ErrorMessage,
+		MetricsData:  result.MetricsData,
+	})
 }
 
 // persistResult persists the check result to the database (parses IDs then

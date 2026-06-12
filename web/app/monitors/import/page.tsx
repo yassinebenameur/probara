@@ -50,6 +50,7 @@ const SUPPORTED_TYPES = [
   { value: 'redis', label: 'Redis', description: 'Redis connect + PING checks' },
   { value: 'postgres', label: 'PostgreSQL', description: 'PostgreSQL connect + query checks' },
   { value: 'mongodb', label: 'MongoDB', description: 'MongoDB connect + ping checks' },
+  { value: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect + auth checks' },
 ];
 
 // Step indicator component

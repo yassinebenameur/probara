@@ -151,7 +151,7 @@ func typeIcon(kind string) string {
 		return "code"
 	case "synthetic_browser":
 		return "monitor-check"
-	case "redis", "postgres", "mongodb":
+	case "redis", "postgres", "mongodb", "rabbitmq":
 		return "database"
 	default:
 		return "activity"
@@ -680,6 +680,8 @@ func typeLabel(kind string) string {
 		return "PostgreSQL"
 	case "mongodb":
 		return "MongoDB"
+	case "rabbitmq":
+		return "RabbitMQ"
 	default:
 		return strings.ToUpper(kind)
 	}

@@ -66,6 +66,47 @@ func TestPostgresConfigValidator(t *testing.T) {
 		{"invalid json", `{`, true},
 		{"ca pem ok", `{"host":"db.internal","username":"probe","tls_ca_pem":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}`, false},
 		{"ca pem with ssl disabled", `{"host":"db.internal","username":"probe","ssl_mode":"disable","tls_ca_pem":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}`, true},
+		{"query value assertion", `{"host":"db.internal","username":"probe","query":"SELECT count(*) FROM jobs","query_value_op":"number_lt","query_value":"100"}`, false},
+		{"query value op without query", `{"host":"db.internal","username":"probe","query_value_op":"equals","query_value":"1"}`, true},
+		{"bad query value op", `{"host":"db.internal","username":"probe","query":"SELECT 1","query_value_op":"matches","query_value":"1"}`, true},
+		{"non-numeric value for numeric op", `{"host":"db.internal","username":"probe","query":"SELECT 1","query_value_op":"number_gt","query_value":"abc"}`, true},
+		{"warn below max ok", `{"host":"db.internal","username":"probe","warn_latency_ms":100,"max_latency_ms":500}`, false},
+		{"warn above max", `{"host":"db.internal","username":"probe","warn_latency_ms":600,"max_latency_ms":500}`, true},
+	})
+}
+
+func TestRabbitMQConfigValidator(t *testing.T) {
+	runConfigValidatorCases(t, &RabbitMQConfigValidator{}, []struct {
+		name    string
+		config  string
+		wantErr bool
+	}{
+		{"valid fields", `{"host":"mq.internal","username":"probe","password":"pw"}`, false},
+		{"valid full fields", `{"host":"mq.internal","port":5671,"username":"probe","password":"pw","vhost":"/prod","tls_enabled":true,"max_latency_ms":300}`, false},
+		{"valid connection string", `{"connection_string":"amqp://user:pw@mq.internal:5672/vhost"}`, false},
+		{"valid amqps scheme", `{"connection_string":"amqps://mq.internal:5671/"}`, false},
+		{"masked connection string passes", `{"connection_string":"***"}`, false},
+		{"wrong scheme", `{"connection_string":"mqtt://mq.internal"}`, true},
+		{"missing host and connection string", `{"username":"probe"}`, true},
+		{"missing username without connection string", `{"host":"mq.internal"}`, true},
+		{"invalid port", `{"host":"mq.internal","port":70000,"username":"probe"}`, true},
+		{"ca pem without tls", `{"host":"mq.internal","username":"probe","tls_ca_pem":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}`, true},
+		{"ca pem with tls", `{"host":"mq.internal","username":"probe","tls_enabled":true,"tls_ca_pem":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}`, false},
+		{"invalid json", `{`, true},
+	})
+}
+
+func TestRedisConfigValidator_RoleAndWarnLatency(t *testing.T) {
+	runConfigValidatorCases(t, &RedisConfigValidator{}, []struct {
+		name    string
+		config  string
+		wantErr bool
+	}{
+		{"valid master role", `{"host":"r","expected_role":"master"}`, false},
+		{"valid replica role", `{"host":"r","expected_role":"replica"}`, false},
+		{"bad role", `{"host":"r","expected_role":"slave"}`, true},
+		{"warn equals max", `{"host":"r","warn_latency_ms":100,"max_latency_ms":100}`, true},
+		{"warn without max ok", `{"host":"r","warn_latency_ms":100}`, false},
 	})
 }
 

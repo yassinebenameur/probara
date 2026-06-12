@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -90,5 +91,57 @@ func (c *RedisChecker) Check(ctx context.Context, configRaw json.RawMessage, tim
 		return dbErrorResult(classifyDBError(err), err, &latencyMs)
 	}
 
-	return dbLatencyResult(latencyMs, config.MaxLatencyMs)
+	// INFO is best-effort enrichment: role/version/clients/memory for the
+	// detail panel and the optional role assertion. ACL users without INFO
+	// permission still get a working PING monitor.
+	metrics := &dbMetrics{}
+	info, infoErr := client.Info(ctx, "server", "replication", "clients", "memory").Result()
+	if infoErr == nil {
+		fields := parseRedisInfo(info)
+		metrics.ServerVersion = fields["redis_version"]
+		metrics.Role = fields["role"]
+		if v, err := strconv.ParseInt(fields["connected_clients"], 10, 64); err == nil {
+			metrics.ConnectedClients = &v
+		}
+		if v, err := strconv.ParseInt(fields["used_memory"], 10, 64); err == nil {
+			metrics.UsedMemoryBytes = &v
+		}
+	}
+	latencyMs = time.Since(startTime).Milliseconds()
+
+	if config.ExpectedRole != "" {
+		if infoErr != nil {
+			return dbFailureResult("redis", latencyMs, metrics, fmt.Sprintf("role: expected %q but INFO failed: %v", config.ExpectedRole, infoErr))
+		}
+		// Redis 7 reports "master"/"slave"; accept the modern "replica" alias.
+		observed := metrics.Role
+		expected := config.ExpectedRole
+		if expected == "replica" {
+			expected = "slave"
+		}
+		if observed != expected {
+			display := observed
+			if display == "slave" {
+				display = "replica"
+			}
+			return dbFailureResult("redis", latencyMs, metrics, fmt.Sprintf("role: %s (expected %s)", display, config.ExpectedRole))
+		}
+	}
+
+	return dbLatencyResult("redis", latencyMs, config.MaxLatencyMs, config.WarnLatencyMs, metrics)
+}
+
+// parseRedisInfo extracts key:value lines from an INFO response.
+func parseRedisInfo(info string) map[string]string {
+	fields := make(map[string]string)
+	for _, line := range strings.Split(info, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if key, value, ok := strings.Cut(line, ":"); ok {
+			fields[key] = value
+		}
+	}
+	return fields
 }

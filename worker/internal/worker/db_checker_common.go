@@ -3,12 +3,49 @@ package worker
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/yassinebenameur/probara/shared/models"
 )
+
+// evaluateValueAssertion compares an observed value (stringified) against an
+// expectation. Shared by the Postgres query-value assertion; ops mirror the
+// HTTP JSON assertion subset that makes sense for scalar DB values.
+func evaluateValueAssertion(op, observed, expected string) (bool, error) {
+	switch op {
+	case "equals":
+		return observed == expected, nil
+	case "not_equals":
+		return observed != expected, nil
+	case "contains":
+		return strings.Contains(observed, expected), nil
+	case "number_gt", "number_gte", "number_lt", "number_lte":
+		got, err := strconv.ParseFloat(strings.TrimSpace(observed), 64)
+		if err != nil {
+			return false, fmt.Errorf("observed value %q is not numeric", observed)
+		}
+		want, err := strconv.ParseFloat(strings.TrimSpace(expected), 64)
+		if err != nil {
+			return false, fmt.Errorf("expected value %q is not numeric", expected)
+		}
+		switch op {
+		case "number_gt":
+			return got > want, nil
+		case "number_gte":
+			return got >= want, nil
+		case "number_lt":
+			return got < want, nil
+		default:
+			return got <= want, nil
+		}
+	default:
+		return false, fmt.Errorf("unknown op %q", op)
+	}
+}
 
 // applyDBTLSMaterial merges pasted PEM material (private CA, mTLS client
 // pair) into a TLS config. When material is present and base is nil, a config
@@ -91,19 +128,69 @@ func dbErrorResult(reason string, err error, latencyMs *int64) CheckResult {
 	}
 }
 
-// dbLatencyResult finishes a successful round trip, applying the optional
-// max-latency assertion.
-func dbLatencyResult(latencyMs int64, maxLatencyMs *int64) CheckResult {
+// dbMetrics is the per-check metrics blob shared by the database/broker
+// checkers; it lands in check_results.metrics_data keyed by monitor type,
+// e.g. {"redis": {"server_version": "7.2", "role": "master"}}.
+type dbMetrics struct {
+	ServerVersion    string `json:"server_version,omitempty"`
+	Product          string `json:"product,omitempty"` // e.g. RabbitMQ
+	Role             string `json:"role,omitempty"`    // redis: master/replica; mongo: primary/secondary
+	ReplicaSet       string `json:"replica_set,omitempty"`
+	ConnectedClients *int64 `json:"connected_clients,omitempty"`
+	UsedMemoryBytes  *int64 `json:"used_memory_bytes,omitempty"`
+	// LatencyWarnMs is set when the round trip exceeded warn_latency_ms but
+	// the check still succeeded — surfaced as a warning in the UI. The
+	// check-result status pipeline only knows success/failure/error, so this
+	// deliberately does not change the status.
+	LatencyWarnMs *int64 `json:"latency_warn_ms,omitempty"`
+}
+
+// dbLatencyResult finishes a round trip that reached the server: it applies
+// the max-latency (fail) and warn-latency (flag-only) assertions and attaches
+// the metrics envelope under the monitor type's key.
+func dbLatencyResult(monitorType string, latencyMs int64, maxLatencyMs, warnLatencyMs *int64, metrics *dbMetrics) CheckResult {
+	if metrics == nil {
+		metrics = &dbMetrics{}
+	}
+	if warnLatencyMs != nil && *warnLatencyMs > 0 && latencyMs > *warnLatencyMs {
+		metrics.LatencyWarnMs = warnLatencyMs
+	}
+
+	var metricsJSON json.RawMessage
+	if b, err := json.Marshal(map[string]*dbMetrics{monitorType: metrics}); err == nil {
+		metricsJSON = b
+	}
+
 	if maxLatencyMs != nil && *maxLatencyMs > 0 && latencyMs > *maxLatencyMs {
 		errMsg := fmt.Sprintf("latency: %dms > %dms", latencyMs, *maxLatencyMs)
 		return CheckResult{
 			Status:       "failure",
 			LatencyMs:    &latencyMs,
 			ErrorMessage: &errMsg,
+			MetricsData:  metricsJSON,
 		}
 	}
 	return CheckResult{
-		Status:    "success",
-		LatencyMs: &latencyMs,
+		Status:      "success",
+		LatencyMs:   &latencyMs,
+		MetricsData: metricsJSON,
+	}
+}
+
+// dbFailureResult finishes a check whose assertion failed after a successful
+// round trip, keeping the metrics envelope attached.
+func dbFailureResult(monitorType string, latencyMs int64, metrics *dbMetrics, errMsg string) CheckResult {
+	if metrics == nil {
+		metrics = &dbMetrics{}
+	}
+	var metricsJSON json.RawMessage
+	if b, err := json.Marshal(map[string]*dbMetrics{monitorType: metrics}); err == nil {
+		metricsJSON = b
+	}
+	return CheckResult{
+		Status:       "failure",
+		LatencyMs:    &latencyMs,
+		ErrorMessage: &errMsg,
+		MetricsData:  metricsJSON,
 	}
 }

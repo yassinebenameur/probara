@@ -176,7 +176,12 @@ type RedisMonitorConfig struct {
 	TLSEnabled       *bool  `json:"tls_enabled,omitempty"`
 	TLSSkipVerify    *bool  `json:"tls_skip_verify,omitempty"` // also applies on top of a rediss:// URI
 	DBTLSConfig
+	ExpectedRole string `json:"expected_role,omitempty"` // master | replica — catches monitoring the wrong node after failover
 	MaxLatencyMs *int64 `json:"max_latency_ms,omitempty"`
+	// WarnLatencyMs marks the check result with a latency warning (visible in
+	// the UI) without failing it. Must be lower than max_latency_ms when both
+	// are set.
+	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
 }
 
 // PostgresMonitorConfig represents configuration for PostgreSQL monitors.
@@ -192,8 +197,14 @@ type PostgresMonitorConfig struct {
 	Password         string `json:"password,omitempty"`
 	SSLMode          string `json:"ssl_mode,omitempty"` // disable | require | verify-full (default: prefer)
 	DBTLSConfig
-	Query        *string `json:"query,omitempty"` // optional assertion: must return >= 1 row
-	MaxLatencyMs *int64  `json:"max_latency_ms,omitempty"`
+	Query *string `json:"query,omitempty"` // optional assertion: must return >= 1 row
+	// QueryValueOp/QueryValue assert on the first column of the query's first
+	// row: equals | not_equals | contains | number_gt | number_gte |
+	// number_lt | number_lte. Empty op = row-count assertion only.
+	QueryValueOp  string `json:"query_value_op,omitempty"`
+	QueryValue    string `json:"query_value,omitempty"`
+	MaxLatencyMs  *int64 `json:"max_latency_ms,omitempty"`
+	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
 }
 
 // MongoDBMonitorConfig represents configuration for MongoDB monitors.
@@ -210,7 +221,32 @@ type MongoDBMonitorConfig struct {
 	TLSEnabled       *bool  `json:"tls_enabled,omitempty"`
 	TLSSkipVerify    *bool  `json:"tls_skip_verify,omitempty"` // also applies on top of a tls=true URI
 	DBTLSConfig
-	MaxLatencyMs *int64 `json:"max_latency_ms,omitempty"`
+	// ReplicaSet switches from a direct single-node probe to replica-set
+	// monitoring: the driver discovers the topology and the ping asserts a
+	// reachable primary (i.e. the set can elect and serve writes).
+	ReplicaSet    string `json:"replica_set,omitempty"`
+	MaxLatencyMs  *int64 `json:"max_latency_ms,omitempty"`
+	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
+}
+
+// RabbitMQMonitorConfig represents configuration for RabbitMQ monitors:
+// a full AMQP handshake (connect + auth + vhost access), which catches broker
+// failures a plain TCP probe can't see. Connection is configured either via
+// `connection_string` (amqp:// or amqps:// URI) or via the discrete fields.
+// `password`, `connection_string`, and `tls_client_key_pem` are secret fields
+// (see shared/secrets.MonitorSecretFields).
+type RabbitMQMonitorConfig struct {
+	ConnectionString string `json:"connection_string,omitempty"`
+	Host             string `json:"host,omitempty"`
+	Port             int    `json:"port,omitempty"` // default 5672 (5671 with TLS)
+	Username         string `json:"username,omitempty"`
+	Password         string `json:"password,omitempty"`
+	VHost            string `json:"vhost,omitempty"` // default "/"
+	TLSEnabled       *bool  `json:"tls_enabled,omitempty"`
+	TLSSkipVerify    *bool  `json:"tls_skip_verify,omitempty"` // also applies on top of an amqps:// URI
+	DBTLSConfig
+	MaxLatencyMs  *int64 `json:"max_latency_ms,omitempty"`
+	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
 }
 
 // CheckJobPayload represents the payload for a check job
@@ -219,4 +255,18 @@ type CheckJobPayload struct {
 	Type           string          `json:"type"`
 	Config         json.RawMessage `json:"config"`
 	TimeoutSeconds int             `json:"timeout_seconds"`
+}
+
+// TestCheckSubject is the core-NATS request-reply subject workers listen on
+// for ephemeral "test this config before saving" checks. Requests are regular
+// CheckJobPayloads (monitor_id may be empty); nothing is scheduled or
+// persisted and the result travels back on the reply subject.
+const TestCheckSubject = "checks.test"
+
+// TestCheckResponse is the worker's reply to a test check request.
+type TestCheckResponse struct {
+	Status       string          `json:"status"`
+	LatencyMs    *int64          `json:"latency_ms,omitempty"`
+	ErrorMessage *string         `json:"error_message,omitempty"`
+	MetricsData  json.RawMessage `json:"metrics_data,omitempty"`
 }

@@ -16,6 +16,7 @@ var MonitorSecretFields = map[string][]string{
 	"redis":    {"password", "connection_string", "tls_client_key_pem"},
 	"postgres": {"password", "connection_string", "tls_client_key_pem"},
 	"mongodb":  {"password", "connection_string", "tls_client_key_pem"},
+	"rabbitmq": {"password", "connection_string", "tls_client_key_pem"},
 }
 
 // HasMonitorSecrets reports whether a monitor type carries secret config fields.

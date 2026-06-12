@@ -4,7 +4,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { Clock, Settings as SettingsIcon, Trash2 } from 'lucide-react';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
@@ -19,6 +19,9 @@ import { useToast } from '@/components/ui/ToastProvider';
 import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
+
+const isDatabaseMonitorType = (t: string): boolean =>
+  t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq';
 type AgentTimeRange = '1h' | '6h' | '24h' | '7d';
 type OverviewTimeRange = MonitorAnalyticsRange;
 
@@ -770,6 +773,44 @@ export default function EditMonitorPage() {
                     {monitor.enabled ? 'Enabled' : 'Paused'}
                   </span>
                 </div>
+                {(() => {
+                  // Server facts reported by the database/broker checkers
+                  // (version, role, …) live in the latest result's metrics.
+                  if (!isDatabaseMonitorType(monitor.type)) return null;
+                  const latest = (results?.results || []).find((r) => {
+                    const md = r.metrics_data as DBMetricsEnvelope | undefined;
+                    return Boolean(md && md[monitor.type as keyof DBMetricsEnvelope]);
+                  });
+                  const dbMetrics = latest
+                    ? (latest.metrics_data as DBMetricsEnvelope)[monitor.type as keyof DBMetricsEnvelope]
+                    : null;
+                  if (!dbMetrics) return null;
+                  const server = [
+                    [dbMetrics.product, dbMetrics.server_version].filter(Boolean).join(' '),
+                    dbMetrics.role,
+                    dbMetrics.replica_set ? `set ${dbMetrics.replica_set}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <>
+                      {server && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Server</span>
+                          <span className="truncate text-right text-slate-300">{server}</span>
+                        </div>
+                      )}
+                      {dbMetrics.latency_warn_ms ? (
+                        <div className="flex justify-between">
+                          <span className="text-amber-400">Warning</span>
+                          <span className="text-right text-amber-300">
+                            latency over {dbMetrics.latency_warn_ms}ms threshold
+                          </span>
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
             </FormCard>
 

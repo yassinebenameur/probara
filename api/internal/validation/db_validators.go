@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
@@ -46,9 +47,15 @@ func validateDBConnectionString(cs string, schemes ...string) error {
 	return fmt.Errorf("connection_string scheme %q is not supported (expected %s)", u.Scheme, strings.Join(schemes, ", "))
 }
 
-func validateMaxLatency(maxLatencyMs *int64) error {
+func validateLatencyThresholds(maxLatencyMs, warnLatencyMs *int64) error {
 	if maxLatencyMs != nil && *maxLatencyMs <= 0 {
 		return fmt.Errorf("max_latency_ms must be greater than 0")
+	}
+	if warnLatencyMs != nil && *warnLatencyMs <= 0 {
+		return fmt.Errorf("warn_latency_ms must be greater than 0")
+	}
+	if maxLatencyMs != nil && warnLatencyMs != nil && *warnLatencyMs >= *maxLatencyMs {
+		return fmt.Errorf("warn_latency_ms must be lower than max_latency_ms")
 	}
 	return nil
 }
@@ -112,6 +119,10 @@ func (v *RedisConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		return fmt.Errorf("db must be between 0 and 15")
 	}
 
+	if config.ExpectedRole != "" && config.ExpectedRole != "master" && config.ExpectedRole != "replica" {
+		return fmt.Errorf("expected_role must be master or replica")
+	}
+
 	if err := validateDBTLSMaterial(config.DBTLSConfig); err != nil {
 		return err
 	}
@@ -120,7 +131,7 @@ func (v *RedisConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		return fmt.Errorf("tls certificates require tls_enabled")
 	}
 
-	return validateMaxLatency(config.MaxLatencyMs)
+	return validateLatencyThresholds(config.MaxLatencyMs, config.WarnLatencyMs)
 }
 
 // PostgresConfigValidator validates PostgreSQL monitor configuration
@@ -163,6 +174,20 @@ func (v *PostgresConfigValidator) ValidateConfig(configRaw json.RawMessage) erro
 		return fmt.Errorf("query cannot be empty")
 	}
 
+	if config.QueryValueOp != "" {
+		if config.Query == nil || strings.TrimSpace(*config.Query) == "" {
+			return fmt.Errorf("query_value_op requires a query")
+		}
+		if !validQueryValueOps[config.QueryValueOp] {
+			return fmt.Errorf("query_value_op must be one of: equals, not_equals, contains, number_gt, number_gte, number_lt, number_lte")
+		}
+		if strings.HasPrefix(config.QueryValueOp, "number_") {
+			if _, err := strconv.ParseFloat(strings.TrimSpace(config.QueryValue), 64); err != nil {
+				return fmt.Errorf("query_value must be numeric for %s", config.QueryValueOp)
+			}
+		}
+	}
+
 	if err := validateDBTLSMaterial(config.DBTLSConfig); err != nil {
 		return err
 	}
@@ -170,7 +195,17 @@ func (v *PostgresConfigValidator) ValidateConfig(configRaw json.RawMessage) erro
 		return fmt.Errorf("tls_ca_pem requires ssl_mode require or verify-full")
 	}
 
-	return validateMaxLatency(config.MaxLatencyMs)
+	return validateLatencyThresholds(config.MaxLatencyMs, config.WarnLatencyMs)
+}
+
+var validQueryValueOps = map[string]bool{
+	"equals":     true,
+	"not_equals": true,
+	"contains":   true,
+	"number_gt":  true,
+	"number_gte": true,
+	"number_lt":  true,
+	"number_lte": true,
 }
 
 // MongoDBConfigValidator validates MongoDB monitor configuration
@@ -206,5 +241,41 @@ func (v *MongoDBConfigValidator) ValidateConfig(configRaw json.RawMessage) error
 		return fmt.Errorf("tls certificates require tls_enabled")
 	}
 
-	return validateMaxLatency(config.MaxLatencyMs)
+	return validateLatencyThresholds(config.MaxLatencyMs, config.WarnLatencyMs)
+}
+
+// RabbitMQConfigValidator validates RabbitMQ monitor configuration
+type RabbitMQConfigValidator struct{}
+
+// ValidateConfig validates RabbitMQ monitor config
+func (v *RabbitMQConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
+	var config sharedmodels.RabbitMQMonitorConfig
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		return fmt.Errorf("invalid rabbitmq config: %w", err)
+	}
+
+	if config.ConnectionString != "" {
+		if err := validateDBConnectionString(config.ConnectionString, "amqp", "amqps"); err != nil {
+			return err
+		}
+	} else {
+		if err := validateDBHostPort(config.Host, config.Port); err != nil {
+			return err
+		}
+		// AMQP requires authentication; RabbitMQ has no anonymous handshake
+		// (the conventional default is guest/guest).
+		if strings.TrimSpace(config.Username) == "" {
+			return fmt.Errorf("username is required when no connection_string is set")
+		}
+	}
+
+	if err := validateDBTLSMaterial(config.DBTLSConfig); err != nil {
+		return err
+	}
+	if hasDBTLSMaterial(config.DBTLSConfig) && config.ConnectionString == "" &&
+		(config.TLSEnabled == nil || !*config.TLSEnabled) {
+		return fmt.Errorf("tls certificates require tls_enabled")
+	}
+
+	return validateLatencyThresholds(config.MaxLatencyMs, config.WarnLatencyMs)
 }

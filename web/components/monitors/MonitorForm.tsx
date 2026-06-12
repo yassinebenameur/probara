@@ -28,7 +28,7 @@ import {
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserStepConfig,
 } from '@/lib/types';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, type LucideIcon } from 'lucide-react';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -216,7 +216,7 @@ type MonitorTypeMeta = {
   namePlaceholder: string;
 };
 
-const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Databases', 'Infrastructure', 'Organization'] as const;
+const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Databases & Brokers', 'Infrastructure', 'Organization'] as const;
 
 const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   { type: 'http', label: 'HTTP', description: 'Check an HTTP endpoint', icon: Globe, category: 'Web & API', namePlaceholder: 'My API health check' },
@@ -226,9 +226,10 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   { type: 'dns', label: 'DNS', description: 'Resolve and verify records', icon: Search, category: 'Network', namePlaceholder: 'example.com DNS' },
   { type: 'grpc', label: 'gRPC', description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' },
   { type: 'sip', label: 'SIP', description: 'SIP OPTIONS availability', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' },
-  { type: 'postgres', label: 'PostgreSQL', description: 'Connect, auth, and query checks', icon: Database, category: 'Databases', namePlaceholder: 'Postgres production' },
-  { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases', namePlaceholder: 'Redis cache' },
-  { type: 'mongodb', label: 'MongoDB', description: 'Connect, auth, and ping', icon: Leaf, category: 'Databases', namePlaceholder: 'Mongo cluster' },
+  { type: 'postgres', label: 'PostgreSQL', description: 'Connect, auth, and query checks', icon: Database, category: 'Databases & Brokers', namePlaceholder: 'Postgres production' },
+  { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases & Brokers', namePlaceholder: 'Redis cache' },
+  { type: 'mongodb', label: 'MongoDB', description: 'Connect, auth, and ping', icon: Leaf, category: 'Databases & Brokers', namePlaceholder: 'Mongo cluster' },
+  { type: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect and auth checks', icon: MessageSquare, category: 'Databases & Brokers', namePlaceholder: 'RabbitMQ production' },
   { type: 'agent', label: 'Agent', description: 'Host metrics from an agent', icon: Server, category: 'Infrastructure', namePlaceholder: 'Production server' },
   { type: 'push', label: 'Push', description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure', namePlaceholder: 'My service health' },
   { type: 'group', label: 'Group', description: 'Roll up monitors into one status', icon: Folder, category: 'Organization', namePlaceholder: 'Production services' },
@@ -2005,7 +2006,7 @@ export default function MonitorForm({
     );
   }
 
-  if (monitorType === 'redis' || monitorType === 'postgres' || monitorType === 'mongodb') {
+  if (monitorType === 'redis' || monitorType === 'postgres' || monitorType === 'mongodb' || monitorType === 'rabbitmq') {
     return (
       <div className="space-y-4">
         {typePicker}
