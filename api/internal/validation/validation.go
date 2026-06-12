@@ -146,6 +146,9 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeGRPC:             true,
 	models.MonitorTypeSyntheticAPI:     true,
 	models.MonitorTypeSyntheticBrowser: true,
+	models.MonitorTypeRedis:            true,
+	models.MonitorTypePostgres:         true,
+	models.MonitorTypeMongoDB:          true,
 }
 
 // ValidateMonitor validates a CreateMonitorRequest

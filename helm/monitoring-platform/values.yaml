@@ -75,6 +75,11 @@ secrets:
   adminJwtSecret: "change-me-in-production-jwt-secret-minimum-32-chars"
   # Initial API key for first login - CHANGE IN PRODUCTION
   initialApiKey: "probara-initial-api-key-change-me"
+  # At-rest encryption key for monitor/channel config secrets (DB passwords,
+  # connection strings, webhook tokens). 32 random bytes, base64-encoded:
+  #   openssl rand -base64 32
+  # Empty = encryption disabled; secrets are stored in plaintext. SET IN PRODUCTION.
+  probaraSecretsKey: ""
 
 # =============================================================================
 # MIGRATIONS JOB

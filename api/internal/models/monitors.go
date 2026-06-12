@@ -21,6 +21,9 @@ const (
 	MonitorTypeSIP              MonitorType = "sip"
 	MonitorTypeSyntheticAPI     MonitorType = "synthetic_api"
 	MonitorTypeSyntheticBrowser MonitorType = "synthetic_browser"
+	MonitorTypeRedis            MonitorType = "redis"
+	MonitorTypePostgres         MonitorType = "postgres"
+	MonitorTypeMongoDB          MonitorType = "mongodb"
 )
 
 // MonitorChannelAssignment is one channel in a monitor's custom routing list.
@@ -314,4 +317,3 @@ type BulkDeleteMonitorsRequest struct {
 type BulkDeleteMonitorsResponse struct {
 	Deleted int64 `json:"deleted"`
 }
-

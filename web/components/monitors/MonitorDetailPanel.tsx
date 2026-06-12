@@ -13,6 +13,9 @@ import {
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserMetricsEnvelope,
+  RedisMonitorConfig,
+  PostgresMonitorConfig,
+  MongoDBMonitorConfig,
 } from '@/lib/types';
 import { getMonitorResults, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
@@ -108,6 +111,18 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
     if (mon.type !== 'grpc') return null;
     if (mon.config && typeof mon.config === 'object') {
       return mon.config as GRPCMonitorConfig;
+    }
+    return null;
+  };
+
+  // Shared shape for redis/postgres/mongodb. Secret fields arrive masked
+  // ("***") from the API and are never displayed.
+  const getDatabaseConfig = (
+    mon: Monitor
+  ): (RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig) | null => {
+    if (mon.type !== 'redis' && mon.type !== 'postgres' && mon.type !== 'mongodb') return null;
+    if (mon.config && typeof mon.config === 'object') {
+      return mon.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig;
     }
     return null;
   };
@@ -461,6 +476,58 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                         </span>
                       </li>
                     )}
+                  </>
+                );
+              })()}
+              {(monitor.type === 'redis' || monitor.type === 'postgres' || monitor.type === 'mongodb') && (() => {
+                const dbConfig = getDatabaseConfig(monitor);
+                if (!dbConfig) return null;
+                const defaultPort = monitor.type === 'redis' ? 6379 : monitor.type === 'postgres' ? 5432 : 27017;
+                const tls = monitor.type === 'postgres'
+                  ? (dbConfig.ssl_mode || 'prefer')
+                  : dbConfig.tls_enabled
+                    ? `enabled${dbConfig.tls_skip_verify ? ' · skip verify' : ''}`
+                    : 'disabled';
+                return (
+                  <>
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <span className="text-muted">Target</span>
+                      <span className="truncate text-right text-[#e5e7eb]">
+                        {dbConfig.connection_string
+                          ? 'connection string (hidden)'
+                          : `${dbConfig.host}:${dbConfig.port || defaultPort}`}
+                      </span>
+                    </li>
+                    {!dbConfig.connection_string && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">TLS</span>
+                        <span className="text-[#e5e7eb]">{tls}</span>
+                      </li>
+                    )}
+                    {dbConfig.username && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Auth</span>
+                        <span className="truncate text-right text-[#e5e7eb]">
+                          {dbConfig.username}
+                          {monitor.type === 'mongodb' ? ` @ ${dbConfig.auth_source || 'admin'}` : ''}
+                        </span>
+                      </li>
+                    )}
+                    {monitor.type === 'postgres' && (dbConfig.database || dbConfig.query) && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Check</span>
+                        <span className="truncate text-right text-[#e5e7eb]">
+                          {dbConfig.database || 'postgres'}
+                          {dbConfig.query ? ` · ${dbConfig.query}` : ' · ping'}
+                        </span>
+                      </li>
+                    )}
+                    {dbConfig.max_latency_ms ? (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Latency</span>
+                        <span className="text-[#e5e7eb]">≤ {dbConfig.max_latency_ms}ms</span>
+                      </li>
+                    ) : null}
                   </>
                 );
               })()}

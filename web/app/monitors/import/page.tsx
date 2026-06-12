@@ -47,6 +47,9 @@ const SUPPORTED_TYPES = [
   { value: 'sip', label: 'SIP', description: 'SIP endpoint checks' },
   { value: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API workflow checks' },
   { value: 'synthetic_browser', label: 'Synthetic Browser', description: 'Browser workflow checks' },
+  { value: 'redis', label: 'Redis', description: 'Redis connect + PING checks' },
+  { value: 'postgres', label: 'PostgreSQL', description: 'PostgreSQL connect + query checks' },
+  { value: 'mongodb', label: 'MongoDB', description: 'MongoDB connect + ping checks' },
 ];
 
 // Step indicator component

@@ -72,3 +72,4 @@ web/test-results/
 
 # Visual brainstorming sessions
 .superpowers/
+.dev-secrets.key

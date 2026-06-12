@@ -5,9 +5,13 @@ import {
   GRPCMonitorConfig,
   GroupMonitorConfig,
   HTTPMonitorConfig,
+  MASKED_SECRET,
   Monitor,
   MonitorConfig,
+  MongoDBMonitorConfig,
   PingMonitorConfig,
+  PostgresMonitorConfig,
+  RedisMonitorConfig,
   PushMonitorConfig,
   SIPMonitorConfig,
   SyntheticAPIMonitorConfig,
@@ -89,6 +93,18 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
         transport: cfg?.transport || 'udp',
         ...(cfg?.expected_status !== undefined ? { expected_status: cfg.expected_status } : {}),
       };
+    }
+    case 'redis':
+    case 'postgres':
+    case 'mongodb': {
+      // Secrets come back masked from the API and can't carry over to a new
+      // monitor — drop them so the clone starts with a clean credential slate.
+      const cfg = cloneObject(
+        (monitor.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig | undefined) || {}
+      );
+      if (cfg.password === MASKED_SECRET) delete cfg.password;
+      if (cfg.connection_string === MASKED_SECRET) delete cfg.connection_string;
+      return cfg;
     }
     case 'synthetic_api': {
       const cfg = (monitor.config as SyntheticAPIMonitorConfig | undefined) || { steps: [] };

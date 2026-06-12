@@ -88,6 +88,13 @@ spec:
         - name: PUBLIC_BASE_URL
           value: {{ . | quote }}
         {{- end }}
+        {{- if .Values.secrets.probaraSecretsKey }}
+        - name: PROBARA_SECRETS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: probara_secrets_key
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

@@ -94,6 +94,7 @@ func main() {
 	} else if cfg.NotificationsEnabled {
 		log.Warn("PROBARA_SECRETS_KEY not set; worker will only handle plaintext channel configs")
 	}
+	w.ConfigureEncryption(secretsEncryptor)
 
 	// Start notifications consumer if enabled — runs in its own goroutine and
 	// shares the queue client + db client with the check-worker loop.

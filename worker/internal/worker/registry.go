@@ -70,6 +70,9 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	registry.Register("sip", NewSIPChecker())
 	registry.Register("synthetic_api", NewSyntheticAPIChecker())
 	registry.Register("synthetic_browser", NewSyntheticBrowserChecker(syntheticArtifactsDir))
+	registry.Register("redis", NewRedisChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("postgres", NewPostgresChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("mongodb", NewMongoDBChecker(blockPrivateIPs, allowedCIDRs))
 
 	return registry
 }

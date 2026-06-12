@@ -12,7 +12,6 @@ import (
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
-	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
@@ -20,6 +19,7 @@ import (
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
 	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
+	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
@@ -29,7 +29,6 @@ import (
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
-	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
@@ -37,6 +36,7 @@ import (
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
+	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
@@ -193,6 +193,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			groupSvc := groupservice.NewService(dbClient)
 			monitorService := monitorservice.NewService(monitorservice.NewPostgresRepository(dbClient))
 			monitorService.ConfigureHistoryDependencies(groupSvc, monitorStatusNotifier{publisher: statusPublisher})
+			monitorService.ConfigureEncryption(secretsEncryptor)
 			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)

@@ -551,6 +551,9 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"sip":               true,
 		"synthetic_api":     true,
 		"synthetic_browser": true,
+		"redis":             true,
+		"postgres":          true,
+		"mongodb":           true,
 	}
 
 	// Common type aliases that map to supported types
@@ -581,6 +584,11 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"folder":     "group",
 		"category":   "group",
 		"collection": "group",
+		// Database aliases
+		"postgresql": "postgres",
+		"pg":         "postgres",
+		"pgsql":      "postgres",
+		"mongo":      "mongodb",
 	}
 
 	for _, row := range rows {

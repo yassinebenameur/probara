@@ -19,6 +19,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -46,6 +47,10 @@ type Worker struct {
 	// Checker registry for extensible monitor types
 	checkerRegistry *CheckerRegistry
 
+	// Decrypts secret config fields (DB passwords, …) just before a check
+	// runs; configs travel encrypted through the DB and NATS.
+	secretsEncryptor secrets.Encryptor
+
 	// Passive monitor types that don't need active checking
 	passiveTypes map[string]bool
 
@@ -64,15 +69,16 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Worker{
-		config:          cfg,
-		logger:          log,
-		metrics:         metricsRegistry,
-		db:              dbClient,
-		queue:           queueClient,
-		status:          statusPublisher,
-		ctx:             ctx,
-		cancel:          cancel,
-		checkerRegistry: NewDefaultRegistry(cfg.MaxBodySizeBytes, cfg.HTTPBlockPrivateIPs, cfg.HTTPAllowedCIDRs, cfg.SyntheticArtifactsDir),
+		config:           cfg,
+		logger:           log,
+		metrics:          metricsRegistry,
+		db:               dbClient,
+		queue:            queueClient,
+		status:           statusPublisher,
+		ctx:              ctx,
+		cancel:           cancel,
+		secretsEncryptor: secrets.NoOpEncryptor{},
+		checkerRegistry:  NewDefaultRegistry(cfg.MaxBodySizeBytes, cfg.HTTPBlockPrivateIPs, cfg.HTTPAllowedCIDRs, cfg.SyntheticArtifactsDir),
 		passiveTypes: map[string]bool{
 			"agent": true, // Agent monitors receive pushed metrics
 			"group": true, // Group monitors aggregate member results
@@ -124,6 +130,15 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 	w.dbWriteErrors = dbWriteErrorsCounter.With(prometheus.Labels{})
 
 	return w
+}
+
+// ConfigureEncryption wires the encryptor used to decrypt secret monitor
+// config fields. Without it the worker falls back to a NoOpEncryptor, which
+// passes plaintext through but refuses ciphertext envelopes.
+func (w *Worker) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		w.secretsEncryptor = encryptor
+	}
 }
 
 // RegisterChecker registers a custom checker for a monitor type
@@ -296,7 +311,18 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 	if payload.Type == "synthetic_browser" {
 		checkCtx = withSyntheticBrowserMonitorID(checkCtx, payload.MonitorID)
 	}
-	checkResult := checker.Check(checkCtx, payload.Config, payload.TimeoutSeconds)
+
+	var checkResult CheckResult
+	if checkConfig, err := secrets.DecryptMonitorConfig(w.secretsEncryptor, payload.Type, payload.Config); err != nil {
+		// A check that can't decrypt its secrets is an operator problem
+		// (missing/rotated PROBARA_SECRETS_KEY), not a target outage — but it
+		// still must surface as an errored check rather than vanish.
+		logEntry.WithError(err).Error("Failed to decrypt monitor config")
+		errMsg := fmt.Sprintf("config_decrypt: %v", err)
+		checkResult = CheckResult{Status: "error", ErrorMessage: &errMsg}
+	} else {
+		checkResult = checker.Check(checkCtx, checkConfig, payload.TimeoutSeconds)
+	}
 
 	// Persist result
 	if err := w.persistResult(ctx, &job, &payload, &checkResult, startTime); err != nil {

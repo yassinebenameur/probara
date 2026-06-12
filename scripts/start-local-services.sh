@@ -11,6 +11,18 @@ NATS_URL="${NATS_URL:-nats://localhost:4222}"
 REQUIRED_GO_VERSION="$(awk '/^go / { print $2; exit }' "$ROOT_DIR/go.mod")"
 REQUIRED_GO_MINOR="${REQUIRED_GO_VERSION%.*}"
 
+# Dev encryption key for monitor/channel config secrets. Persisted next to the
+# repo (gitignored) so envelopes written by one run stay readable after a
+# restart or reboot — a lost key makes stored secrets undecryptable.
+SECRETS_KEY_FILE="$ROOT_DIR/.dev-secrets.key"
+if [[ -z "${PROBARA_SECRETS_KEY:-}" ]]; then
+  if [[ ! -f "$SECRETS_KEY_FILE" ]]; then
+    openssl rand -base64 32 > "$SECRETS_KEY_FILE"
+  fi
+  PROBARA_SECRETS_KEY="$(cat "$SECRETS_KEY_FILE")"
+fi
+export PROBARA_SECRETS_KEY
+
 mkdir -p "$ARTIFACTS_DIR"
 mkdir -p "$BIN_DIR"
 : > "$STARTUP_LOG"

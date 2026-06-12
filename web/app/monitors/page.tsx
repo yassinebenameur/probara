@@ -156,6 +156,9 @@ const TYPE_LABELS: Record<string, { label: string; short: string }> = {
   sip: { label: 'SIP', short: 'SIP' },
   synthetic_api: { label: 'Synthetic API', short: 'SYN API' },
   synthetic_browser: { label: 'Synthetic Browser', short: 'SYN BROWSER' },
+  redis: { label: 'Redis', short: 'REDIS' },
+  postgres: { label: 'PostgreSQL', short: 'POSTGRES' },
+  mongodb: { label: 'MongoDB', short: 'MONGO' },
 };
 
 function monitorTypeLabel(type: string, variant: 'label' | 'short' = 'label') {
@@ -175,6 +178,9 @@ function TypeBadge({ type }: { type: string }) {
     sip: 'text-orange-400',
     synthetic_api: 'text-fuchsia-400',
     synthetic_browser: 'text-pink-400',
+    redis: 'text-red-400',
+    postgres: 'text-blue-400',
+    mongodb: 'text-green-400',
   };
   return (
     <span className={`text-[10px] font-medium uppercase ${colors[type] || 'text-slate-400'}`}>

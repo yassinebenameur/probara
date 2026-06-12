@@ -150,6 +150,69 @@ type SyntheticBrowserStepConfig struct {
 	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 }
 
+// DBTLSConfig holds PEM-pasted TLS material shared by the database monitor
+// types. CA PEM covers private-CA server verification; the client pair covers
+// mutual TLS / X.509 auth. PEMs are pasted (not file paths) because checks run
+// on shared workers with no tenant filesystem. `tls_client_key_pem` is a
+// secret field (see shared/secrets.MonitorSecretFields).
+type DBTLSConfig struct {
+	TLSCAPem         *string `json:"tls_ca_pem,omitempty"`
+	TLSClientCertPem *string `json:"tls_client_cert_pem,omitempty"`
+	TLSClientKeyPem  *string `json:"tls_client_key_pem,omitempty"`
+}
+
+// RedisMonitorConfig represents configuration for Redis monitors. Connection
+// is configured either via `connection_string` (redis:// or rediss:// URI) or
+// via the discrete host/port/credential fields. `password`,
+// `connection_string`, and `tls_client_key_pem` are secret fields (see
+// shared/secrets.MonitorSecretFields).
+type RedisMonitorConfig struct {
+	ConnectionString string `json:"connection_string,omitempty"`
+	Host             string `json:"host,omitempty"`
+	Port             int    `json:"port,omitempty"`     // default 6379
+	Username         string `json:"username,omitempty"` // ACL user; empty = default user
+	Password         string `json:"password,omitempty"`
+	DB               int    `json:"db,omitempty"`
+	TLSEnabled       *bool  `json:"tls_enabled,omitempty"`
+	TLSSkipVerify    *bool  `json:"tls_skip_verify,omitempty"` // also applies on top of a rediss:// URI
+	DBTLSConfig
+	MaxLatencyMs *int64 `json:"max_latency_ms,omitempty"`
+}
+
+// PostgresMonitorConfig represents configuration for PostgreSQL monitors.
+// Connection is configured either via `connection_string` (postgres:// URI or
+// key=value DSN) or via the discrete fields. `password` and
+// `connection_string` are secret fields (see shared/secrets.MonitorSecretFields).
+type PostgresMonitorConfig struct {
+	ConnectionString string `json:"connection_string,omitempty"`
+	Host             string `json:"host,omitempty"`
+	Port             int    `json:"port,omitempty"`     // default 5432
+	Database         string `json:"database,omitempty"` // default "postgres"
+	Username         string `json:"username,omitempty"`
+	Password         string `json:"password,omitempty"`
+	SSLMode          string `json:"ssl_mode,omitempty"` // disable | require | verify-full (default: prefer)
+	DBTLSConfig
+	Query        *string `json:"query,omitempty"` // optional assertion: must return >= 1 row
+	MaxLatencyMs *int64  `json:"max_latency_ms,omitempty"`
+}
+
+// MongoDBMonitorConfig represents configuration for MongoDB monitors.
+// Connection is configured either via `connection_string` (mongodb:// or
+// mongodb+srv:// URI) or via the discrete fields. `password` and
+// `connection_string` are secret fields (see shared/secrets.MonitorSecretFields).
+type MongoDBMonitorConfig struct {
+	ConnectionString string `json:"connection_string,omitempty"`
+	Host             string `json:"host,omitempty"`
+	Port             int    `json:"port,omitempty"` // default 27017
+	Username         string `json:"username,omitempty"`
+	Password         string `json:"password,omitempty"`
+	AuthSource       string `json:"auth_source,omitempty"` // default "admin"
+	TLSEnabled       *bool  `json:"tls_enabled,omitempty"`
+	TLSSkipVerify    *bool  `json:"tls_skip_verify,omitempty"` // also applies on top of a tls=true URI
+	DBTLSConfig
+	MaxLatencyMs *int64 `json:"max_latency_ms,omitempty"`
+}
+
 // CheckJobPayload represents the payload for a check job
 type CheckJobPayload struct {
 	MonitorID      string          `json:"monitor_id"`

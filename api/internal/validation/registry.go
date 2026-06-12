@@ -87,6 +87,9 @@ func NewDefaultValidatorRegistry() *ValidatorRegistry {
 	registry.Register(models.MonitorTypeSIP, &SIPConfigValidator{})
 	registry.Register(models.MonitorTypeSyntheticAPI, &SyntheticAPIConfigValidator{})
 	registry.Register(models.MonitorTypeSyntheticBrowser, &SyntheticBrowserConfigValidator{})
+	registry.Register(models.MonitorTypeRedis, &RedisConfigValidator{})
+	registry.Register(models.MonitorTypePostgres, &PostgresConfigValidator{})
+	registry.Register(models.MonitorTypeMongoDB, &MongoDBConfigValidator{})
 
 	return registry
 }

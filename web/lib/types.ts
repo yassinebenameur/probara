@@ -90,7 +90,15 @@ export type MonitorType =
   | "push"
   | "sip"
   | "synthetic_api"
-  | "synthetic_browser";
+  | "synthetic_browser"
+  | "redis"
+  | "postgres"
+  | "mongodb";
+
+// Secret config fields (passwords, connection strings) are write-only: the
+// API returns "***" in their place, and submitting "***" back keeps the
+// stored value unchanged.
+export const MASKED_SECRET = "***";
 
 export interface HTTPStatusRange {
   min: number;
@@ -204,6 +212,51 @@ export interface SIPMonitorConfig {
   expected_status?: number;
 }
 
+// Pasted TLS material shared by the database monitor types: CA PEM for
+// private-CA verification, client cert+key for mutual TLS. The client key is
+// a write-only secret.
+export interface DBTLSMaterial {
+  tls_ca_pem?: string;
+  tls_client_cert_pem?: string;
+  tls_client_key_pem?: string; // secret, write-only
+}
+
+export interface RedisMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string; // secret, write-only
+  db?: number;
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  max_latency_ms?: number;
+}
+
+export interface PostgresMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  password?: string; // secret, write-only
+  ssl_mode?: "disable" | "require" | "verify-full";
+  query?: string;
+  max_latency_ms?: number;
+}
+
+export interface MongoDBMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string; // secret, write-only
+  auth_source?: string;
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  max_latency_ms?: number;
+}
+
 export type SyntheticFailureMode = "fail_fast" | "continue";
 
 export type SyntheticAPIAssertionTarget = "status" | "header" | "body" | "json";
@@ -290,7 +343,10 @@ export type MonitorConfig =
   | PushMonitorConfig
   | SIPMonitorConfig
   | SyntheticAPIMonitorConfig
-  | SyntheticBrowserMonitorConfig;
+  | SyntheticBrowserMonitorConfig
+  | RedisMonitorConfig
+  | PostgresMonitorConfig
+  | MongoDBMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 

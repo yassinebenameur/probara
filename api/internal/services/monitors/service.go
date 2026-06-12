@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,13 +12,17 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// Service handles monitor business logic
+// Service handles monitor business logic. It is the encryption boundary for
+// secret monitor-config fields (DB passwords, …): secrets are encrypted before
+// INSERT/UPDATE and masked on every read so plaintext never leaves the process.
 type Service struct {
 	repo           Repository
 	groupResolver  GroupResolver
 	statusNotifier StatusNotifier
+	encryptor      secrets.Encryptor
 }
 
 type GroupResolver interface {
@@ -31,7 +36,16 @@ type StatusNotifier interface {
 // NewService creates a new monitor service
 func NewService(database Repository) *Service {
 	return &Service{
-		repo: database,
+		repo:      database,
+		encryptor: secrets.NoOpEncryptor{},
+	}
+}
+
+// ConfigureEncryption wires the encryptor used for secret config fields.
+// Without it the service falls back to a NoOpEncryptor (dev/test).
+func (s *Service) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		s.encryptor = encryptor
 	}
 }
 
@@ -41,10 +55,45 @@ func (s *Service) ConfigureHistoryDependencies(groupResolver GroupResolver, stat
 	s.statusNotifier = statusNotifier
 }
 
+// prepareConfigForWrite merges write-only secret placeholders ("***"/empty =
+// keep the stored value; pass nil existing on create) and encrypts secret
+// fields. Configs for types without secret fields pass through unchanged.
+func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
+	if !secrets.HasMonitorSecrets(string(monitorType)) {
+		return incoming, nil
+	}
+	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
+	if err != nil {
+		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt config secrets: %w", err)
+	}
+	return encrypted, nil
+}
+
+// maskSecrets replaces secret config fields with the "***" placeholder before
+// a monitor leaves the service. On marshal errors the config is left as-is —
+// stored values are ciphertext envelopes, so no plaintext can leak.
+func (s *Service) maskSecrets(monitor *models.Monitor) {
+	if monitor == nil || !secrets.HasMonitorSecrets(string(monitor.Type)) {
+		return
+	}
+	if masked, err := secrets.MaskMonitorConfig(string(monitor.Type), monitor.Config); err == nil {
+		monitor.Config = masked
+	}
+}
+
 // CreateMonitor creates a new monitor
 func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
 	now := time.Now()
 	monitorID := uuid.New()
+
+	config, err := s.prepareConfigForWrite(req.Type, req.Config, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	enabled := true
 	if req.Enabled != nil {
@@ -109,7 +158,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		TenantID:                     tenantID,
 		Name:                         req.Name,
 		Type:                         req.Type,
-		Config:                       req.Config,
+		Config:                       config,
 		IntervalSeconds:              req.IntervalSeconds,
 		TimeoutSeconds:               req.TimeoutSeconds,
 		AlertPolicyID:                alertPolicyID,
@@ -152,6 +201,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
 	}
 
+	s.maskSecrets(monitor)
 	return monitor, nil
 }
 
@@ -184,6 +234,7 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 		}
 	}
 
+	s.maskSecrets(monitor)
 	return monitor, nil
 }
 
@@ -226,6 +277,10 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 		}
 	}
 
+	for i := range monitors {
+		s.maskSecrets(&monitors[i])
+	}
+
 	return &models.MonitorListResponse{
 		Items:    monitors,
 		Page:     page,
@@ -236,8 +291,9 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 
 // UpdateMonitor updates a monitor (partial update)
 func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
-	// First, get the existing monitor to validate
-	existing, err := s.GetMonitor(ctx, tenantID, monitorID)
+	// Load straight from the repo: the stored (unmasked) config is needed to
+	// resolve write-only secret placeholders in the incoming config.
+	existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
 	if err != nil {
 		return nil, err
 	}
@@ -260,8 +316,16 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	}
 
 	if len(req.Config) > 0 {
+		effectiveType := existing.Type
+		if req.Type != nil {
+			effectiveType = *req.Type
+		}
+		config, err := s.prepareConfigForWrite(effectiveType, req.Config, existing.Config)
+		if err != nil {
+			return nil, err
+		}
 		setParts = append(setParts, fmt.Sprintf("config = $%d", argIndex))
-		args = append(args, req.Config)
+		args = append(args, config)
 		argIndex++
 	}
 
