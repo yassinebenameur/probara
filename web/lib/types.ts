@@ -426,6 +426,7 @@ export interface Monitor {
   agent_id?: string; // Unique identifier for agent monitors
   push_token?: string; // Unique token for push monitors
   member_ids?: string[]; // Populated for group monitors
+  depends_on_ids?: string[]; // Upstream monitors this one depends on
   created_at: string;
   updated_at: string;
   consecutive_failures_threshold: number;
@@ -454,6 +455,7 @@ export interface CreateMonitorRequest {
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
   notification_channels?: ChannelAssignment[];
+  depends_on_ids?: string[];
 }
 
 export interface UpdateMonitorRequest {
@@ -469,6 +471,7 @@ export interface UpdateMonitorRequest {
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
   notification_channels?: ChannelAssignment[];
+  depends_on_ids?: string[];
 }
 
 export interface MonitorListResponse {
@@ -476,6 +479,25 @@ export interface MonitorListResponse {
   page: number;
   page_size: number;
   total: number;
+}
+
+// Dependency graph types
+export interface DependencyMonitor {
+  id: string;
+  name: string;
+  type: MonitorType;
+  current_state: MonitorState;
+  last_state_change_at?: string;
+}
+
+export interface DependencyGraphEdge {
+  from: string; // downstream monitor (depends on `to`)
+  to: string; // upstream monitor
+}
+
+export interface DependencyGraph {
+  nodes: DependencyMonitor[];
+  edges: DependencyGraphEdge[];
 }
 
 // Alert types
@@ -492,10 +514,13 @@ export interface Alert {
   resolved_at?: string;
   failure_count: number;
   last_error?: string;
+  root_cause_monitor_id?: string;
+  root_cause_down_since?: string;
   created_at: string;
   updated_at: string;
   monitor_name?: string;
   policy_name?: string;
+  root_cause_monitor_name?: string;
 }
 
 export interface AlertListResponse {

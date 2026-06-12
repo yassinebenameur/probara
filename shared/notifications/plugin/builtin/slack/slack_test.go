@@ -112,6 +112,34 @@ func TestSend_MissingWebhookFails(t *testing.T) {
 	}
 }
 
+func TestBuildBlockKit_RootCauseAnnotation(t *testing.T) {
+	event := sampleEvent()
+	payload := buildBlockKit(plugin.DispatchRequest{Event: event})
+	if blocksContain(payload, "Likely Caused By") {
+		t.Fatal("root-cause field rendered without a root cause set")
+	}
+
+	name := "Postgres prod"
+	downSince := time.Date(2026, 5, 24, 11, 50, 0, 0, time.UTC)
+	event.Alert.RootCauseMonitorName = &name
+	event.Alert.RootCauseDownSince = &downSince
+	payload = buildBlockKit(plugin.DispatchRequest{Event: event})
+	if !blocksContain(payload, "Likely Caused By") || !blocksContain(payload, "Postgres prod") {
+		t.Fatalf("root-cause field missing from payload: %+v", payload.Blocks)
+	}
+}
+
+func blocksContain(payload slackPayload, substr string) bool {
+	for _, block := range payload.Blocks {
+		for _, field := range block.Fields {
+			if strings.Contains(field.Text, substr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func sampleEvent() notifications.AlertEvent {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	lastErr := "timeout"

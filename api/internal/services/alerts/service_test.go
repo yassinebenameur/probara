@@ -133,10 +133,12 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 			a.last_error, a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name
+			m.name as monitor_name, ap.name as policy_name,
+			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
@@ -146,6 +148,7 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
 			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
 			"last_error", "created_at", "updated_at", "monitor_name", "policy_name",
+			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
 		}))
 
 	svc := NewService(&db.Client{DB: sqlDB}, nil)
@@ -175,10 +178,12 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 			a.last_error, a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name
+			m.name as monitor_name, ap.name as policy_name,
+			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
@@ -191,6 +196,7 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
 			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
 			"last_error", "created_at", "updated_at", "monitor_name", "policy_name",
+			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
 		}))
 
 	svc := NewService(&db.Client{DB: sqlDB}, nil)

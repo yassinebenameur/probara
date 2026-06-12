@@ -79,3 +79,39 @@ func TestBuildAlertEvent_StatusAndTemplates(t *testing.T) {
 	}
 }
 
+func TestBuildAlertEvent_RootCause(t *testing.T) {
+	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
+	binding := policyBinding{
+		MonitorID: uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+		TenantID:  uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+	}
+	alert := &alertRecord{
+		ID:          uuid.MustParse("99999999-9999-9999-9999-999999999999"),
+		MonitorID:   binding.MonitorID,
+		TriggeredAt: now,
+	}
+
+	event := buildAlertEvent("created", binding, alert, nil, now)
+	if event.Alert.RootCauseMonitorID != nil || event.Alert.RootCauseMonitorName != nil || event.Alert.RootCauseDownSince != nil {
+		t.Fatalf("expected no root-cause fields, got %+v", event.Alert)
+	}
+
+	rcID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	rcName := "Postgres prod"
+	rcDownSince := now.Add(-5 * time.Minute)
+	alert.RootCauseMonitorID = &rcID
+	alert.RootCauseMonitorName = &rcName
+	alert.RootCauseDownSince = &rcDownSince
+
+	event = buildAlertEvent("created", binding, alert, nil, now)
+	if event.Alert.RootCauseMonitorID == nil || *event.Alert.RootCauseMonitorID != rcID.String() {
+		t.Fatalf("root cause id = %v, want %s", event.Alert.RootCauseMonitorID, rcID)
+	}
+	if event.Alert.RootCauseMonitorName == nil || *event.Alert.RootCauseMonitorName != rcName {
+		t.Fatalf("root cause name = %v, want %s", event.Alert.RootCauseMonitorName, rcName)
+	}
+	if event.Alert.RootCauseDownSince == nil || !event.Alert.RootCauseDownSince.Equal(rcDownSince) {
+		t.Fatalf("root cause down since = %v, want %s", event.Alert.RootCauseDownSince, rcDownSince)
+	}
+}
+

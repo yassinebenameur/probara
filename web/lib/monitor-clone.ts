@@ -136,5 +136,8 @@ export function buildClonedMonitorInitialData(monitor: Monitor): CreateMonitorRe
     timeout_seconds: monitor.timeout_seconds || 30,
     enabled: monitor.enabled ?? true,
     ...(monitor.tags && monitor.tags.length > 0 ? { tags: cloneObject(monitor.tags) } : {}),
+    ...(monitor.depends_on_ids && monitor.depends_on_ids.length > 0
+      ? { depends_on_ids: cloneObject(monitor.depends_on_ids) }
+      : {}),
   };
 }

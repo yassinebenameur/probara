@@ -11,6 +11,7 @@ import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
+import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import Button from '@/components/ui/Button';
@@ -813,6 +814,8 @@ export default function EditMonitorPage() {
                 })()}
               </div>
             </FormCard>
+
+            <MonitorDependenciesCard monitorId={monitor.id} monitorType={monitor.type} />
 
             {monitor.type === 'synthetic_browser' && (
               <FormCard className="p-4">

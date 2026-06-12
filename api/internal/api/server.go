@@ -32,6 +32,7 @@ import (
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
+	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
@@ -197,6 +198,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
+			monitorHandlers.ConfigureDependencies(depservice.NewService(dbClient))
 
 			// Import service and handlers
 			importSvc := importservice.NewService(dbClient, monitorService)
@@ -213,6 +215,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				// Bulk operations (must be before /{id} to avoid conflicts)
 				r.Post("/bulk/alerting", monitorHandlers.BulkUpdateAlerting)
 				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
+				// Dependency graph (must be before /{id} to avoid conflicts)
+				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
@@ -225,6 +229,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}/members", monitorHandlers.GetGroupMembers)
 				r.Post("/{id}/members", monitorHandlers.AddMonitorsToGroup)
 				r.Delete("/{id}/members", monitorHandlers.RemoveMonitorsFromGroup)
+				// Dependency endpoints
+				r.Get("/{id}/dependencies", monitorHandlers.GetMonitorDependencies)
+				r.Post("/{id}/dependencies", monitorHandlers.AddMonitorDependency)
+				r.Delete("/{id}/dependencies/{dependsOnId}", monitorHandlers.RemoveMonitorDependency)
+				r.Get("/{id}/dependents", monitorHandlers.GetMonitorDependents)
 				// Agent install endpoints
 				r.Get("/{id}/agent/install", agentHandlers.HandleGetInstallCommand)
 				r.Get("/{id}/agent/install/script.sh", agentHandlers.HandleGetInstallScript)

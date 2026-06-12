@@ -189,6 +189,13 @@ func DefaultBody(event notifications.AlertEvent) string {
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		lines = append(lines, fmt.Sprintf("Last Error: %s", *event.Alert.LastError))
 	}
+	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
+		line := fmt.Sprintf("Likely Caused By: %s", *event.Alert.RootCauseMonitorName)
+		if event.Alert.RootCauseDownSince != nil {
+			line = fmt.Sprintf("%s (down since %s)", line, event.Alert.RootCauseDownSince.Format(time.RFC3339))
+		}
+		lines = append(lines, line)
+	}
 	if event.Alert.ResolvedAt != nil {
 		lines = append(lines, fmt.Sprintf("Resolved At: %s", event.Alert.ResolvedAt.Format(time.RFC3339)))
 	}
@@ -215,6 +222,13 @@ func templateData(event notifications.AlertEvent) map[string]any {
 	if event.Alert.ResolvedAt != nil {
 		resolvedAt = event.Alert.ResolvedAt.Format(time.RFC3339)
 	}
+	var rootCauseName, rootCauseDownSince string
+	if event.Alert.RootCauseMonitorName != nil {
+		rootCauseName = *event.Alert.RootCauseMonitorName
+	}
+	if event.Alert.RootCauseDownSince != nil {
+		rootCauseDownSince = event.Alert.RootCauseDownSince.Format(time.RFC3339)
+	}
 	return map[string]any{
 		"alert_id":      event.Alert.ID,
 		"monitor_id":    event.Alert.MonitorID,
@@ -229,6 +243,9 @@ func templateData(event notifications.AlertEvent) map[string]any {
 		"tenant_id":     event.TenantID,
 		"event_type":    event.Type,
 		"timestamp":     event.Timestamp.Format(time.RFC3339),
+
+		"root_cause_monitor_name": rootCauseName,
+		"root_cause_down_since":   rootCauseDownSince,
 	}
 }
 

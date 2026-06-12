@@ -23,16 +23,19 @@ type AlertEvent struct {
 
 // AlertDetails represents alert details from the event
 type AlertDetails struct {
-	ID            string     `json:"id"`
-	MonitorID     string     `json:"monitor_id"`
-	MonitorName   string     `json:"monitor_name"`
-	AlertPolicyID string     `json:"alert_policy_id"`
-	PolicyName    string     `json:"policy_name"`
-	Status        string     `json:"status"`
-	TriggeredAt   time.Time  `json:"triggered_at"`
-	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
-	FailureCount  int        `json:"failure_count"`
-	LastError     *string    `json:"last_error,omitempty"`
+	ID                   string     `json:"id"`
+	MonitorID            string     `json:"monitor_id"`
+	MonitorName          string     `json:"monitor_name"`
+	AlertPolicyID        string     `json:"alert_policy_id"`
+	PolicyName           string     `json:"policy_name"`
+	Status               string     `json:"status"`
+	TriggeredAt          time.Time  `json:"triggered_at"`
+	ResolvedAt           *time.Time `json:"resolved_at,omitempty"`
+	FailureCount         int        `json:"failure_count"`
+	LastError            *string    `json:"last_error,omitempty"`
+	RootCauseMonitorID   *string    `json:"root_cause_monitor_id,omitempty"`
+	RootCauseMonitorName *string    `json:"root_cause_monitor_name,omitempty"`
+	RootCauseDownSince   *time.Time `json:"root_cause_down_since,omitempty"`
 }
 
 // Subscriber listens for alert events from NATS and broadcasts to SSE clients
@@ -168,6 +171,14 @@ func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertW
 		},
 		MonitorName: event.Alert.MonitorName,
 	}
+
+	if event.Alert.RootCauseMonitorID != nil {
+		if rcID, err := uuid.Parse(*event.Alert.RootCauseMonitorID); err == nil {
+			alert.RootCauseMonitorID = &rcID
+		}
+	}
+	alert.RootCauseMonitorName = event.Alert.RootCauseMonitorName
+	alert.RootCauseDownSince = event.Alert.RootCauseDownSince
 
 	if event.Alert.AlertPolicyID != "" {
 		if policyID, err := uuid.Parse(event.Alert.AlertPolicyID); err == nil {

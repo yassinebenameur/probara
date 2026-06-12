@@ -1,4 +1,4 @@
-import { CheckResult, Monitor } from './types';
+import { CheckResult, Monitor, MonitorState } from './types';
 
 export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
 export type MonitorDisplayStatus = MonitorHealthStatus | 'paused';
@@ -94,6 +94,23 @@ export function getEffectiveMonitorStatus(
   }
 
   return getLatestStatus(results);
+}
+
+/**
+ * Tailwind color classes for a monitor's current_state, used by the
+ * dependency UI (status dots, graph nodes). Tones match AlertTable.
+ */
+export function monitorStateColors(state?: MonitorState): { dot: string; text: string; border: string } {
+  switch (state) {
+    case 'up':
+      return { dot: 'bg-emerald-500', text: 'text-emerald-400', border: 'border-emerald-500/40' };
+    case 'suspect':
+      return { dot: 'bg-amber-500', text: 'text-amber-400', border: 'border-amber-500/40' };
+    case 'down':
+      return { dot: 'bg-rose-500', text: 'text-rose-400', border: 'border-rose-500/40' };
+    default:
+      return { dot: 'bg-slate-500', text: 'text-slate-400', border: 'border-slate-500/40' };
+  }
 }
 
 /**

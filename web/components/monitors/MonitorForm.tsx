@@ -29,11 +29,12 @@ import {
   SyntheticBrowserStepConfig,
 } from '@/lib/types';
 import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, type LucideIcon } from 'lucide-react';
-import { getMonitorResults, runMonitorNow } from '@/lib/api';
+import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import GroupForm from './GroupForm';
+import { MonitorMultiSelect } from './MonitorMultiSelect';
 import AgentForm from './AgentForm';
 import PushForm from './PushForm';
 import SipForm from './SipForm';
@@ -968,6 +969,7 @@ export default function MonitorForm({
     notification_channels: (monitor?.notification_channels ?? []) as ChannelAssignment[],
     enabled: sourceEnabled,
     tags: sourceTags.join(', '),
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -983,6 +985,21 @@ export default function MonitorForm({
   const [syntheticTestState, setSyntheticTestState] = useState<SyntheticTestState>({ phase: 'idle' });
   const testSequenceRef = useRef(0);
   const mountedRef = useRef(true);
+  const [availableMonitors, setAvailableMonitors] = useState<Monitor[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getMonitors({ page_size: 100 })
+      .then((res) => {
+        if (!cancelled) setAvailableMonitors(res.items || []);
+      })
+      .catch(() => {
+        // Dependency picker degrades to empty; not fatal for the form.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isSavedMonitor = Boolean(monitor?.id);
   const isSyntheticMonitor = monitorType === 'synthetic_api' || monitorType === 'synthetic_browser';
@@ -1943,6 +1960,7 @@ export default function MonitorForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
+    requestData.depends_on_ids = formData.depends_on_ids;
 
     await onSubmit(requestData);
   };
@@ -3517,6 +3535,39 @@ export default function MonitorForm({
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
+      </FormSection>
+
+      {/* Dependencies */}
+      <FormSection
+        title="Dependencies"
+        summary={
+          formData.depends_on_ids.length > 0
+            ? `${formData.depends_on_ids.length} selected`
+            : 'None'
+        }
+        collapsible
+        defaultOpen={formData.depends_on_ids.length > 0}
+        infoTip={{
+          title: 'Monitor dependencies',
+          entries: [
+            {
+              label: 'What it does',
+              value:
+                'When an upstream dependency is down, alerts for this monitor are annotated with the likely root cause.',
+            },
+          ],
+        }}
+      >
+        <p className="text-xs text-slate-400">
+          Upstream monitors this one depends on (e.g. the database behind this API).
+        </p>
+        <MonitorMultiSelect
+          monitors={availableMonitors}
+          selectedIds={formData.depends_on_ids}
+          onChange={(ids) => setFormData({ ...formData, depends_on_ids: ids })}
+          excludeIds={monitor ? [monitor.id] : []}
+        />
+        {errors.depends_on_ids && <p className="text-xs text-rose-400">{errors.depends_on_ids}</p>}
       </FormSection>
 
       {/* Meta */}

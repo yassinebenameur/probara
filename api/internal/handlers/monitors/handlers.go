@@ -18,6 +18,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
@@ -45,14 +46,21 @@ type groupMembershipService interface {
 
 // Handlers handles monitor HTTP requests
 type Handlers struct {
-	service       monitorservice.MonitorService
-	groupService  groupMembershipService
-	resultService resultservice.ResultsService
-	jobPublisher  checkJobPublisher
-	jobRequester  checkRequester
-	checkSubject  string
-	artifactsDir  string
-	logger        *logger.Logger
+	service           monitorservice.MonitorService
+	groupService      groupMembershipService
+	dependencyService *depservice.Service
+	resultService     resultservice.ResultsService
+	jobPublisher      checkJobPublisher
+	jobRequester      checkRequester
+	checkSubject      string
+	artifactsDir      string
+	logger            *logger.Logger
+}
+
+// ConfigureDependencies sets the service backing the monitor dependency
+// endpoints and the depends_on_ids create/update payload field.
+func (h *Handlers) ConfigureDependencies(svc *depservice.Service) {
+	h.dependencyService = svc
 }
 
 // NewHandlers creates a new monitors handler
@@ -253,6 +261,20 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 					}).Warn("Failed to add monitors to newly created group")
 				}
 			}
+		}
+	}
+
+	// Sync dependencies (best-effort, like group members: a brand-new monitor
+	// cannot create a cycle, so failures here are only bad target IDs).
+	if len(req.DependsOnIDs) > 0 && req.Type != models.MonitorTypeGroup {
+		if err := h.syncDependencies(r.Context(), tenantUUID, monitor.ID, req.DependsOnIDs); err != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"tenant_id":  tenantID,
+				"monitor_id": monitor.ID,
+			}).Warn("Failed to set dependencies on newly created monitor")
+		} else {
+			monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitor.ID)
 		}
 	}
 
@@ -494,6 +516,16 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	// Sync dependencies when the payload carries them (nil = unchanged).
+	// Cycles are user-fixable, so they surface as 409 instead of a warn log.
+	if req.DependsOnIDs != nil && existingMonitor.Type != models.MonitorTypeGroup {
+		if err := h.syncDependencies(r.Context(), tenantUUID, monitorID, *req.DependsOnIDs); err != nil {
+			h.writeDependencyError(w, tenantUUID, monitorID, err)
+			return
+		}
+		monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitorID)
 	}
 
 	h.logger.WithFields(map[string]interface{}{

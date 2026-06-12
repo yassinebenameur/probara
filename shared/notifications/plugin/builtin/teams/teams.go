@@ -151,6 +151,13 @@ func buildMessageCard(req plugin.DispatchRequest) messageCard {
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		facts = append(facts, fact{Name: "Last Error", Value: *event.Alert.LastError})
 	}
+	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
+		value := *event.Alert.RootCauseMonitorName
+		if event.Alert.RootCauseDownSince != nil {
+			value = fmt.Sprintf("%s (down since %s)", value, event.Alert.RootCauseDownSince.Format(time.RFC1123))
+		}
+		facts = append(facts, fact{Name: "Likely Caused By", Value: value})
+	}
 
 	return messageCard{
 		Type:    "MessageCard",

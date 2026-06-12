@@ -27,4 +27,10 @@ type AlertDetails struct {
 	LastError            *string    `json:"last_error,omitempty"`
 	EmailSubjectTemplate *string    `json:"email_subject_template,omitempty"`
 	EmailBodyTemplate    *string    `json:"email_body_template,omitempty"`
+
+	// Root-cause annotation: set when an upstream dependency of this alert's
+	// monitor is down, so notifications can say "likely caused by X".
+	RootCauseMonitorID   *string    `json:"root_cause_monitor_id,omitempty"`
+	RootCauseMonitorName *string    `json:"root_cause_monitor_name,omitempty"`
+	RootCauseDownSince   *time.Time `json:"root_cause_down_since,omitempty"`
 }

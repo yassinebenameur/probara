@@ -117,3 +117,31 @@ func sampleEvent() notifications.AlertEvent {
 		},
 	}
 }
+
+func TestBuildEmbed_RootCauseAnnotation(t *testing.T) {
+	event := sampleEvent()
+	payload := buildEmbed(plugin.DispatchRequest{Event: event})
+	if embedHasField(payload, "Likely Caused By") {
+		t.Fatal("root-cause field rendered without a root cause set")
+	}
+
+	name := "Postgres prod"
+	downSince := event.Timestamp.Add(-10 * time.Minute)
+	event.Alert.RootCauseMonitorName = &name
+	event.Alert.RootCauseDownSince = &downSince
+	payload = buildEmbed(plugin.DispatchRequest{Event: event})
+	if !embedHasField(payload, "Likely Caused By") {
+		t.Fatalf("root-cause field missing: %+v", payload.Embeds)
+	}
+}
+
+func embedHasField(payload discordPayload, name string) bool {
+	for _, embed := range payload.Embeds {
+		for _, f := range embed.Fields {
+			if f.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}

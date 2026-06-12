@@ -129,6 +129,10 @@ func (m *MockRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([
 	return m.members[groupID], nil
 }
 
+func (m *MockRepository) GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
 func (m *MockRepository) ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error {
 	return nil
 }

@@ -247,6 +247,12 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			return nil, err
 		}
 		monitor.MemberIDs = memberIDs
+	} else {
+		dependsOnIDs, err := s.repo.GetDependsOnIDs(ctx, monitorID)
+		if err != nil {
+			return nil, err
+		}
+		monitor.DependsOnIDs = dependsOnIDs
 	}
 
 	// Attach notification channels

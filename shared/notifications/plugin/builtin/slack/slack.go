@@ -120,9 +120,9 @@ type slackPayload struct {
 }
 
 type slackBlock struct {
-	Type   string         `json:"type"`
-	Text   *slackText     `json:"text,omitempty"`
-	Fields []slackText    `json:"fields,omitempty"`
+	Type      string      `json:"type"`
+	Text      *slackText  `json:"text,omitempty"`
+	Fields    []slackText `json:"fields,omitempty"`
 	Accessory any         `json:"accessory,omitempty"`
 }
 
@@ -145,6 +145,13 @@ func buildBlockKit(req plugin.DispatchRequest) slackPayload {
 	}
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*Last Error*\n%s", *event.Alert.LastError)})
+	}
+	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
+		text := *event.Alert.RootCauseMonitorName
+		if event.Alert.RootCauseDownSince != nil {
+			text = fmt.Sprintf("%s (down since %s)", text, event.Alert.RootCauseDownSince.Format(time.RFC1123))
+		}
+		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*Likely Caused By*\n%s", text)})
 	}
 
 	ts := event.Timestamp

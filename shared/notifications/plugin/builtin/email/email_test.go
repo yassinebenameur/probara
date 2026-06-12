@@ -174,3 +174,25 @@ func sampleEvent() notifications.AlertEvent {
 		},
 	}
 }
+
+func TestDefaultBody_RootCauseAnnotation(t *testing.T) {
+	event := sampleEvent()
+	if strings.Contains(DefaultBody(event), "Likely Caused By") {
+		t.Fatal("root-cause line rendered without a root cause set")
+	}
+
+	name := "Postgres prod"
+	downSince := event.Timestamp.Add(-10 * time.Minute)
+	event.Alert.RootCauseMonitorName = &name
+	event.Alert.RootCauseDownSince = &downSince
+
+	body := DefaultBody(event)
+	if !strings.Contains(body, "Likely Caused By: Postgres prod") {
+		t.Fatalf("root-cause line missing from body:\n%s", body)
+	}
+
+	data := templateData(event)
+	if data["root_cause_monitor_name"] != "Postgres prod" {
+		t.Fatalf("template variable root_cause_monitor_name = %v", data["root_cause_monitor_name"])
+	}
+}

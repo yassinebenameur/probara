@@ -27,15 +27,20 @@ type Alert struct {
 	ResolvedAt     *time.Time  `json:"resolved_at,omitempty"`
 	FailureCount   int         `json:"failure_count"`
 	LastError      *string     `json:"last_error,omitempty"`
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	// Root-cause annotation: the upstream dependency that was down when this
+	// alert fired (dependency-aware alerting).
+	RootCauseMonitorID *uuid.UUID `json:"root_cause_monitor_id,omitempty"`
+	RootCauseDownSince *time.Time `json:"root_cause_down_since,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // AlertWithDetails includes related entity names for display
 type AlertWithDetails struct {
 	Alert
-	MonitorName string  `json:"monitor_name"`
-	PolicyName  *string `json:"policy_name,omitempty"`
+	MonitorName          string  `json:"monitor_name"`
+	PolicyName           *string `json:"policy_name,omitempty"`
+	RootCauseMonitorName *string `json:"root_cause_monitor_name,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

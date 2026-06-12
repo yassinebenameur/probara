@@ -146,3 +146,45 @@ func TestTitlePrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildMessageCard_RootCauseAnnotation(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	event := notifications.AlertEvent{
+		Type:      "created",
+		TenantID:  "tenant-1",
+		Timestamp: now,
+		Alert: notifications.AlertDetails{
+			ID:           "a-1",
+			MonitorName:  "API health",
+			PolicyName:   "Critical",
+			Status:       "active",
+			TriggeredAt:  now,
+			FailureCount: 3,
+		},
+	}
+
+	card := buildMessageCard(plugin.DispatchRequest{Event: event})
+	if cardHasFact(card, "Likely Caused By") {
+		t.Fatal("root-cause fact rendered without a root cause set")
+	}
+
+	name := "Postgres prod"
+	downSince := now.Add(-10 * time.Minute)
+	event.Alert.RootCauseMonitorName = &name
+	event.Alert.RootCauseDownSince = &downSince
+	card = buildMessageCard(plugin.DispatchRequest{Event: event})
+	if !cardHasFact(card, "Likely Caused By") {
+		t.Fatalf("root-cause fact missing: %+v", card.Sections)
+	}
+}
+
+func cardHasFact(card messageCard, name string) bool {
+	for _, section := range card.Sections {
+		for _, f := range section.Facts {
+			if f.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}

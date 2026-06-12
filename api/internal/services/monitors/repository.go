@@ -29,6 +29,7 @@ type Repository interface {
 	GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
 	GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 	GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
+	GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
 	// monitor_channels management
 	ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error
 	DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error
@@ -489,6 +490,38 @@ func (r *PostgresRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID
 	}
 
 	return memberIDs, nil
+}
+
+// GetDependsOnIDs retrieves the upstream dependency IDs for a monitor,
+// excluding tombstoned targets.
+func (r *PostgresRepository) GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
+	query := `
+		SELECT md.depends_on_id
+		FROM monitor_dependencies md
+		JOIN monitors m ON m.id = md.depends_on_id
+		WHERE md.monitor_id = $1 AND m.deleted_at IS NULL
+		ORDER BY md.created_at
+	`
+	rows, err := r.db.QueryContext(ctx, query, monitorID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get monitor dependencies: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan dependency ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating dependency IDs: %w", err)
+	}
+
+	return ids, nil
 }
 
 // ReplaceMonitorChannels atomically replaces all channel assignments for a monitor.

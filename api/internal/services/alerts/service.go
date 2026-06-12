@@ -86,10 +86,12 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 			a.last_error, a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name
+			m.name as monitor_name, ap.name as policy_name,
+			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 		WHERE %s AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $%d OFFSET $%d
@@ -112,6 +114,7 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
 			&alert.MonitorName, &policyName,
+			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
@@ -140,10 +143,12 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 			a.last_error, a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name
+			m.name as monitor_name, ap.name as policy_name,
+			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 	`
 
@@ -154,6 +159,7 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
 		&alert.MonitorName, &policyName,
+		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 	)
 
 	if err != nil {
@@ -182,10 +188,12 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 			a.last_error, a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name
+			m.name as monitor_name, ap.name as policy_name,
+			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
@@ -206,6 +214,7 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
 			&alert.MonitorName, &policyName,
+			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
@@ -235,10 +244,12 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 			a.last_error, a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name
+			m.name as monitor_name, ap.name as policy_name,
+			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
@@ -262,6 +273,7 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
 			&alert.MonitorName, &policyName,
+			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
@@ -384,10 +396,12 @@ func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID 
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 			a.last_error, a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name
+			m.name as monitor_name, ap.name as policy_name,
+			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
 		JOIN monitors m ON a.monitor_id = m.id
 		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 	`
 
@@ -398,6 +412,7 @@ func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID 
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
 		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
 		&alert.MonitorName, &policyName,
+		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -417,7 +432,7 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 	query := `
 		SELECT id, tenant_id, monitor_id, alert_policy_id, status,
 			triggered_at, acknowledged_at, resolved_at, failure_count,
-			last_error, created_at, updated_at
+			last_error, root_cause_monitor_id, root_cause_down_since, created_at, updated_at
 		FROM alerts
 		WHERE tenant_id = $1 AND monitor_id = $2 AND status IN ('active', 'acknowledged')
 		ORDER BY triggered_at DESC
@@ -428,7 +443,8 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 	err := s.db.QueryRowContext(ctx, query, tenantID, monitorID).Scan(
 		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+		&alert.FailureCount, &alert.LastError, &alert.RootCauseMonitorID, &alert.RootCauseDownSince,
+		&alert.CreatedAt, &alert.UpdatedAt,
 	)
 
 	if err != nil {
@@ -496,4 +512,3 @@ func (s *Service) GetMonitorCountsByPolicy(ctx context.Context, tenantID uuid.UU
 
 	return counts, nil
 }
-

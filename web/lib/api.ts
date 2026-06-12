@@ -17,6 +17,8 @@ import type {
   StatusPageListResponse,
   MonitorResultsResponse,
   MonitorAnalyticsResponse,
+  DependencyGraph,
+  DependencyMonitor,
   DashboardOverviewResponse,
   DashboardSummaryResponse,
   DashboardGroupSparklineResponse,
@@ -291,6 +293,27 @@ export async function updateMonitor(
 
 export async function deleteMonitor(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/monitors/${id}`);
+}
+
+// Dependency API functions
+export async function getDependencyGraph(): Promise<DependencyGraph> {
+  return apiRequest<DependencyGraph>('GET', '/v1/monitors/dependency-graph');
+}
+
+export async function getMonitorDependencies(id: string): Promise<{ items: DependencyMonitor[] }> {
+  return apiRequest<{ items: DependencyMonitor[] }>('GET', `/v1/monitors/${id}/dependencies`);
+}
+
+export async function getMonitorDependents(id: string): Promise<{ items: DependencyMonitor[] }> {
+  return apiRequest<{ items: DependencyMonitor[] }>('GET', `/v1/monitors/${id}/dependents`);
+}
+
+export async function addMonitorDependency(id: string, dependsOnId: string): Promise<void> {
+  return apiRequest<void>('POST', `/v1/monitors/${id}/dependencies`, { depends_on_id: dependsOnId });
+}
+
+export async function removeMonitorDependency(id: string, dependsOnId: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/monitors/${id}/dependencies/${dependsOnId}`);
 }
 
 // Incident API functions

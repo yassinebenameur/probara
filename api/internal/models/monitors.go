@@ -50,8 +50,9 @@ type Monitor struct {
 	Tags                         []string                   `json:"tags,omitempty"`
 	NextRunAt                    *time.Time                 `json:"next_run_at,omitempty"`
 	AgentID                      *string                    `json:"agent_id,omitempty"`   // Unique identifier for agent monitors
-	PushToken                    *string                    `json:"push_token,omitempty"` // Unique token for push monitors
-	MemberIDs                    []uuid.UUID                `json:"member_ids,omitempty"` // Populated for group monitors
+	PushToken                    *string                    `json:"push_token,omitempty"`      // Unique token for push monitors
+	MemberIDs                    []uuid.UUID                `json:"member_ids,omitempty"`      // Populated for group monitors
+	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"`  // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
 	NotificationMode             string                     `json:"notification_mode"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
@@ -75,6 +76,7 @@ type CreateMonitorRequest struct {
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
+	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
 }
 
 // UpdateMonitorRequest represents a request to update a monitor
@@ -91,6 +93,7 @@ type UpdateMonitorRequest struct {
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
+	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
 }
 
 // MonitorListResponse represents a paginated list of monitors

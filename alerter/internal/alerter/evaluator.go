@@ -32,14 +32,17 @@ type policyBinding struct {
 }
 
 type alertRecord struct {
-	ID           uuid.UUID
-	TenantID     uuid.UUID
-	MonitorID    uuid.UUID
-	PolicyID     uuid.UUID
-	Status       string
-	TriggeredAt  time.Time
-	FailureCount int
-	LastError    *string
+	ID                   uuid.UUID
+	TenantID             uuid.UUID
+	MonitorID            uuid.UUID
+	PolicyID             uuid.UUID
+	Status               string
+	TriggeredAt          time.Time
+	FailureCount         int
+	LastError            *string
+	RootCauseMonitorID   *uuid.UUID
+	RootCauseMonitorName *string
+	RootCauseDownSince   *time.Time
 }
 
 type alertChannel struct {
@@ -1217,6 +1220,12 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 		status = "resolved"
 	}
 
+	var rootCauseID *string
+	if alert.RootCauseMonitorID != nil {
+		id := alert.RootCauseMonitorID.String()
+		rootCauseID = &id
+	}
+
 	return notifications.AlertEvent{
 		Type:      eventType,
 		TenantID:  binding.TenantID.String(),
@@ -1234,6 +1243,9 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			LastError:            alert.LastError,
 			EmailSubjectTemplate: binding.EmailSubjectTemplate,
 			EmailBodyTemplate:    binding.EmailBodyTemplate,
+			RootCauseMonitorID:   rootCauseID,
+			RootCauseMonitorName: alert.RootCauseMonitorName,
+			RootCauseDownSince:   alert.RootCauseDownSince,
 		},
 	}
 }
