@@ -12,6 +12,8 @@ function monitor(id: number): Monitor {
     interval_seconds: 60,
     timeout_seconds: 10,
     enabled: true,
+    consecutive_failures_threshold: 2,
+    notification_mode: 'default',
     created_at: '2026-05-21T00:00:00.000Z',
     updated_at: '2026-05-21T00:00:00.000Z',
   };
