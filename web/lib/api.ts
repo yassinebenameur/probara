@@ -55,6 +55,12 @@ import type {
   NotificationSettings,
   NotificationMode,
   ChannelAssignment,
+  MaintenanceWindow,
+  MaintenanceWindowListResponse,
+  MaintenanceWindowStatus,
+  CreateMaintenanceWindowRequest,
+  UpdateMaintenanceWindowRequest,
+  SnoozeMonitorRequest,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -293,6 +299,49 @@ export async function updateMonitor(
 
 export async function deleteMonitor(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/monitors/${id}`);
+}
+
+// Maintenance window API functions
+export async function getMaintenanceWindows(params?: {
+  status?: MaintenanceWindowStatus;
+  monitor_id?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<MaintenanceWindowListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.status) queryParams.append('status', params.status);
+  if (params?.monitor_id) queryParams.append('monitor_id', params.monitor_id);
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/maintenance-windows${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<MaintenanceWindowListResponse>('GET', path);
+}
+
+export async function createMaintenanceWindow(
+  data: CreateMaintenanceWindowRequest
+): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('POST', '/v1/maintenance-windows', data);
+}
+
+export async function updateMaintenanceWindow(
+  id: string,
+  data: UpdateMaintenanceWindowRequest
+): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('PATCH', `/v1/maintenance-windows/${id}`, data);
+}
+
+export async function deleteMaintenanceWindow(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/maintenance-windows/${id}`);
+}
+
+// Creates a single-monitor maintenance window from now until the given time.
+export async function snoozeMonitor(
+  monitorId: string,
+  data: SnoozeMonitorRequest
+): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('POST', `/v1/monitors/${monitorId}/snooze`, data);
 }
 
 // Dependency API functions

@@ -23,6 +23,7 @@ import {
   getSyntheticBrowserScreenshotUrl,
   toggleMonitorEnabled,
   exportMonitors,
+  snoozeMonitor,
 } from '@/lib/api';
 import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 import { getApiKey } from '@/lib/auth';
@@ -138,6 +139,7 @@ function StatusDot({ status }: { status: MonitorDisplayStatus }) {
     down: 'bg-rose-500',
     degraded: 'bg-amber-500',
     paused: 'bg-slate-500',
+    maintenance: 'bg-sky-500',
     unknown: 'bg-slate-500',
   };
   return <span className={`h-2 w-2 rounded-full ${colors[status]}`} />;
@@ -304,11 +306,13 @@ function MonitorActionsMenu({
   onToggleEnabled,
   monitorId,
   onDelete,
+  onSnooze,
 }: {
   monitor: Monitor;
   onToggleEnabled: (monitor: Monitor) => void;
   monitorId: string;
   onDelete: () => void;
+  onSnooze: (monitor: Monitor, durationMinutes: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -317,7 +321,7 @@ function MonitorActionsMenu({
   // The menu renders position:fixed so it can escape the group children's
   // overflow-y-auto container; anchor it to the trigger on open.
   const MENU_WIDTH = 144;
-  const MENU_HEIGHT = 140;
+  const MENU_HEIGHT = 196;
 
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -401,6 +405,28 @@ function MonitorActionsMenu({
           >
             {monitor.enabled ? 'Pause' : 'Start'}
           </button>
+          <div className="my-1 border-t border-white/[0.06] px-2.5 pt-1 text-[9px] uppercase tracking-wider text-slate-500">
+            Snooze alerts
+          </div>
+          <div className="flex gap-1 px-2.5 pb-1">
+            {[
+              { label: '1h', minutes: 60 },
+              { label: '4h', minutes: 240 },
+              { label: '24h', minutes: 1440 },
+            ].map(({ label, minutes }) => (
+              <button
+                key={label}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  onSnooze(monitor, minutes);
+                }}
+                className="flex-1 rounded border border-white/[0.08] px-1.5 py-1 text-[10px] text-slate-300 transition-colors hover:border-sky-500/40 hover:bg-sky-500/10 hover:text-sky-300"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -418,24 +444,26 @@ function MonitorActionsMenu({
 }
 
 // Compact monitor row component
-function MonitorRow({ 
-  monitor, 
-  results, 
-  isSelected, 
-  onClick, 
+function MonitorRow({
+  monitor,
+  results,
+  isSelected,
+  onClick,
   onDelete,
   onToggleEnabled,
+  onSnooze,
   isChecked,
   onToggleSelect,
   selectionMode,
   isChild = false,
-}: { 
+}: {
   monitor: Monitor;
   results: CheckResult[];
   isSelected: boolean;
   onClick: () => void;
   onDelete: () => void;
   onToggleEnabled: (monitor: Monitor) => void;
+  onSnooze: (monitor: Monitor, durationMinutes: number) => void;
   isChecked: boolean;
   onToggleSelect: () => void;
   selectionMode: boolean;
@@ -489,6 +517,18 @@ function MonitorRow({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
           <TypeBadge type={monitor.type} />
+          {status === 'maintenance' && (
+            <span
+              className="rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-300"
+              title={
+                monitor.maintenance_until
+                  ? `Alerts suppressed until ${new Date(monitor.maintenance_until).toLocaleString()}`
+                  : 'Alerts suppressed during maintenance'
+              }
+            >
+              Maintenance
+            </span>
+          )}
           {/* Tags */}
           {monitor.tags && monitor.tags.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
@@ -538,6 +578,7 @@ function MonitorRow({
           monitor={monitor}
           monitorId={monitor.id}
           onToggleEnabled={onToggleEnabled}
+          onSnooze={onSnooze}
           onDelete={onDelete}
         />
       </div>
@@ -556,6 +597,7 @@ function GroupCard({
   onClick,
   onDelete,
   onToggleEnabled,
+  onSnooze,
   isChecked,
   onToggleSelect,
   onToggleMonitorSelection,
@@ -578,6 +620,7 @@ function GroupCard({
   onClick: () => void;
   onDelete: () => void;
   onToggleEnabled: (monitor: Monitor) => void;
+  onSnooze: (monitor: Monitor, durationMinutes: number) => void;
   isChecked: boolean;
   onToggleSelect: () => void;
   onToggleMonitorSelection: (id: string) => void;
@@ -698,21 +741,18 @@ function GroupCard({
 
         {/* Member Status Dots */}
         <div className="hidden sm:flex items-center gap-1">
-          {members.slice(0, 8).map((m) => (
-            <div
-              key={m.id}
-              className={`h-2 w-2 rounded-full ${
-                getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'up'
-                  ? 'bg-emerald-500'
-                  : getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'paused'
-                    ? 'bg-slate-500'
-                    : getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'unknown'
-                    ? 'bg-slate-500'
-                    : 'bg-rose-500'
-              }`}
-              title={m.name}
-            />
-          ))}
+          {members.slice(0, 8).map((m) => {
+            const memberStatus = getEffectiveMonitorStatus(m, memberResults[m.id] || []);
+            const dotColor =
+              memberStatus === 'up'
+                ? 'bg-emerald-500'
+                : memberStatus === 'paused' || memberStatus === 'unknown'
+                  ? 'bg-slate-500'
+                  : memberStatus === 'maintenance'
+                    ? 'bg-sky-500'
+                    : 'bg-rose-500';
+            return <div key={m.id} className={`h-2 w-2 rounded-full ${dotColor}`} title={m.name} />;
+          })}
           {members.length > 8 && (
             <span className="text-[10px] text-slate-500">+{members.length - 8}</span>
           )}
@@ -727,6 +767,7 @@ function GroupCard({
             monitor={monitor}
             monitorId={monitor.id}
             onToggleEnabled={onToggleEnabled}
+            onSnooze={onSnooze}
             onDelete={onDelete}
           />
         </div>
@@ -756,6 +797,7 @@ function GroupCard({
                         onClick={() => onSelectMonitor(member.id)}
                         onDelete={() => onDeleteMonitor(member.id)}
                         onToggleEnabled={onToggleEnabled}
+                        onSnooze={onSnooze}
                         isChecked={selectedMonitorIds.has(member.id)}
                         onToggleSelect={() => onToggleMonitorSelection(member.id)}
                         selectionMode={selectionMode}
@@ -776,6 +818,7 @@ function GroupCard({
                       onClick={() => onSelectMonitor(member.id)}
                       onDelete={() => onDeleteMonitor(member.id)}
                       onToggleEnabled={onToggleEnabled}
+                      onSnooze={onSnooze}
                       isChecked={selectedMonitorIds.has(member.id)}
                       onToggleSelect={() => onToggleMonitorSelection(member.id)}
                       onToggleMonitorSelection={onToggleMonitorSelection}
@@ -803,6 +846,7 @@ function GroupCard({
                 onClick={() => onSelectMonitor(member.id)}
                 onDelete={() => onDeleteMonitor(member.id)}
                 onToggleEnabled={onToggleEnabled}
+                onSnooze={onSnooze}
                 isChecked={selectedMonitorIds.has(member.id)}
                 onToggleSelect={() => onToggleMonitorSelection(member.id)}
                 selectionMode={selectionMode}
@@ -932,7 +976,8 @@ function DetailPanel({
   const memberUp = memberStatuses.filter((s) => s === 'up').length;
   const memberDown = memberStatuses.filter((s) => s === 'down' || s === 'degraded').length;
   const memberPaused = memberStatuses.filter((s) => s === 'paused').length;
-  const memberOther = memberStatuses.length - memberUp - memberDown - memberPaused;
+  const memberMaintenance = memberStatuses.filter((s) => s === 'maintenance').length;
+  const memberOther = memberStatuses.length - memberUp - memberDown - memberPaused - memberMaintenance;
 
   const getUrl = () => {
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
@@ -990,6 +1035,9 @@ function DetailPanel({
                 {memberPaused > 0 && (
                   <div className="bg-slate-500" style={{ width: `${(memberPaused / members.length) * 100}%` }} />
                 )}
+                {memberMaintenance > 0 && (
+                  <div className="bg-sky-500" style={{ width: `${(memberMaintenance / members.length) * 100}%` }} />
+                )}
                 {memberOther > 0 && (
                   <div className="bg-slate-600" style={{ width: `${(memberOther / members.length) * 100}%` }} />
                 )}
@@ -999,6 +1047,7 @@ function DetailPanel({
                   `${memberUp} up`,
                   memberDown ? `${memberDown} down` : null,
                   memberPaused ? `${memberPaused} paused` : null,
+                  memberMaintenance ? `${memberMaintenance} maintenance` : null,
                   memberOther ? `${memberOther} unknown` : null,
                 ]
                   .filter(Boolean)
@@ -1468,6 +1517,24 @@ export default function MonitorsPage() {
     }
   };
 
+  const handleSnooze = async (monitor: Monitor, durationMinutes: number) => {
+    try {
+      const window = await snoozeMonitor(monitor.id, { duration_minutes: durationMinutes });
+      const updated: Monitor = { ...monitor, in_maintenance: true, maintenance_until: window.ends_at };
+      setMonitors((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setGroupMembersMap((prev) => {
+        const nextEntries = Object.entries(prev).map(([groupId, members]) => [
+          groupId,
+          members.map((member) => (member.id === updated.id ? updated : member)),
+        ] as const);
+        return Object.fromEntries(nextEntries);
+      });
+      showToast(`Alerts snoozed until ${new Date(window.ends_at).toLocaleTimeString()}`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to snooze monitor', 'error');
+    }
+  };
+
   const toggleMonitorSelection = (id: string) => {
     setSelectedMonitorIds((prev) => {
       const next = new Set(prev);
@@ -1552,7 +1619,8 @@ export default function MonitorsPage() {
     const matchesStatus = statusFilter === 'all' ||
       (statusFilter === 'up' && status === 'up') ||
       (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
-      (statusFilter === 'paused' && status === 'paused');
+      (statusFilter === 'paused' && status === 'paused') ||
+      (statusFilter === 'maintenance' && status === 'maintenance');
     const matchesTags = selectedTags.size === 0 ||
       Boolean(monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
     return matchesSearch && matchesType && matchesStatus && matchesTags;
@@ -1762,13 +1830,16 @@ export default function MonitorsPage() {
     return status === 'down' || status === 'degraded';
   }).length;
   const totalPaused = monitors.filter((m) => getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []) === 'paused').length;
+  const totalMaintenance = monitors.filter(
+    (m) => getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []) === 'maintenance'
+  ).length;
 
   return (
     <div className="space-y-5">
       {/* Header */}
       <PageHeader
         title="Monitors"
-        subtitle={`${monitors.length} monitors · ${totalUp} up · ${totalDown} down · ${totalPaused} paused`}
+        subtitle={`${monitors.length} monitors · ${totalUp} up · ${totalDown} down · ${totalPaused} paused${totalMaintenance ? ` · ${totalMaintenance} maintenance` : ''}`}
         action={
           <div className="flex items-center gap-2">
             <Button
@@ -1823,13 +1894,21 @@ export default function MonitorsPage() {
           </FilterChip>
 
           <div className="flex flex-wrap items-center gap-1.5">
-            {['all', 'up', 'down', 'paused'].map((status) => (
+            {['all', 'up', 'down', 'paused', 'maintenance'].map((status) => (
               <FilterChip
                 key={status}
                 selected={statusFilter === status}
                 onClick={() => setStatusFilter(status)}
               >
-                {status === 'all' ? 'All' : status === 'up' ? 'Up' : status === 'down' ? 'Down' : 'Paused'}
+                {status === 'all'
+                  ? 'All'
+                  : status === 'up'
+                  ? 'Up'
+                  : status === 'down'
+                  ? 'Down'
+                  : status === 'paused'
+                  ? 'Paused'
+                  : 'Maintenance'}
               </FilterChip>
             ))}
           </div>
@@ -2059,6 +2138,7 @@ export default function MonitorsPage() {
                     onToggleMonitorSelection={toggleMonitorSelection}
                     onDeleteMonitor={requestDeleteById}
                     onToggleEnabled={handleToggleEnabled}
+                    onSnooze={handleSnooze}
                     selectionMode={selectionMode}
                     onClick={() => setSelectedMonitorId(monitor.id)}
                     onDelete={() => requestDeleteById(monitor.id)}
@@ -2081,6 +2161,7 @@ export default function MonitorsPage() {
                     onClick={() => selectMonitor(monitor.id)}
                     onDelete={() => requestDeleteById(monitor.id)}
                     onToggleEnabled={handleToggleEnabled}
+                    onSnooze={handleSnooze}
                   />
                 )
               ))

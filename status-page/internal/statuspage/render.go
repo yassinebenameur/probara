@@ -56,6 +56,7 @@ type statusPageRenderView struct {
 	Sections            []statusPageSectionView
 	Monitors            []statusPageMonitorView
 	Incidents           []statusPageIncidentView
+	MaintenanceWindows  []statusPageMaintenanceView
 }
 
 const (
@@ -76,6 +77,15 @@ type statusPageIncidentView struct {
 	AffectedComponentsText string
 	LatestUpdate           string
 	ResolvedAtLabel        string
+}
+
+type statusPageMaintenanceView struct {
+	Title                  string
+	Description            string
+	StateLabel             string
+	IsActive               bool
+	TimeRangeText          string
+	AffectedComponentsText string
 }
 
 type statusPageSectionView struct {
@@ -280,8 +290,9 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 				view.IssueCount++
 				renderSection.DownCount++
 			case "maint":
+				// Planned maintenance is not an issue: it must not flip the
+				// header to "Issues detected".
 				view.MaintenanceCount++
-				view.IssueCount++
 				renderSection.MaintenanceCount++
 			default:
 				view.UnknownCount++
@@ -298,14 +309,24 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 		view.Incidents = append(view.Incidents, buildStatusPageIncidentView(incident))
 	}
 
+	for _, window := range data.MaintenanceWindows {
+		view.MaintenanceWindows = append(view.MaintenanceWindows, buildStatusPageMaintenanceView(window))
+	}
+
 	view.MonitorCount = len(view.Monitors)
 
-	if view.IssueCount > 0 {
+	switch {
+	case view.IssueCount > 0:
 		view.OverallStatus = "issues"
 		view.OverallTone = "warn"
 		view.OverallStatusLabel = "Issues detected"
 		view.OverallSummary = fmt.Sprintf("%d of %d services need attention", view.IssueCount, view.MonitorCount)
-	} else {
+	case view.MaintenanceCount > 0:
+		view.OverallStatus = "maintenance"
+		view.OverallTone = "maint"
+		view.OverallStatusLabel = "Maintenance in progress"
+		view.OverallSummary = fmt.Sprintf("%d of %d services under planned maintenance", view.MaintenanceCount, view.MonitorCount)
+	default:
 		view.OverallStatus = "operational"
 		view.OverallTone = "ok"
 		view.OverallStatusLabel = "All systems operational"
@@ -413,6 +434,37 @@ func buildStatusPageIncidentView(incident StatusPageIncident) statusPageIncident
 		AffectedComponentsText: affectedComponentsText,
 		LatestUpdate:           latestUpdate,
 		ResolvedAtLabel:        resolvedAtLabel,
+	}
+}
+
+// buildStatusPageMaintenanceView formats a maintenance window for the public
+// template. Times are rendered in UTC so the label is unambiguous for viewers
+// in any timezone.
+func buildStatusPageMaintenanceView(window StatusPageMaintenanceWindow) statusPageMaintenanceView {
+	stateLabel := "Scheduled"
+	if window.IsActive {
+		stateLabel = "In progress"
+	}
+
+	start := window.StartsAt.UTC()
+	end := window.EndsAt.UTC()
+	timeRangeText := fmt.Sprintf("%s – %s UTC", start.Format("Jan 2, 15:04"), end.Format("Jan 2, 15:04"))
+	if start.Format("2006-01-02") == end.Format("2006-01-02") {
+		timeRangeText = fmt.Sprintf("%s – %s UTC", start.Format("Jan 2, 15:04"), end.Format("15:04"))
+	}
+
+	affectedComponentsText := "Affected services: platform-wide"
+	if len(window.AffectedMonitors) > 0 {
+		affectedComponentsText = fmt.Sprintf("Affected services: %s", strings.Join(window.AffectedMonitors, ", "))
+	}
+
+	return statusPageMaintenanceView{
+		Title:                  strings.TrimSpace(window.Title),
+		Description:            strings.TrimSpace(window.Description),
+		StateLabel:             stateLabel,
+		IsActive:               window.IsActive,
+		TimeRangeText:          timeRangeText,
+		AffectedComponentsText: affectedComponentsText,
 	}
 }
 
@@ -1076,6 +1128,15 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       background: var(--red);
       box-shadow: 0 0 12px var(--red-glow);
     }
+    .overall-badge.maint {
+      background: var(--blue-a);
+      border-color: rgba(0, 229, 255, .2);
+      color: var(--blue);
+    }
+    .overall-badge.maint .pulse-dot {
+      background: var(--blue);
+      box-shadow: 0 0 12px var(--blue-glow);
+    }
     .hero h1 {
       font-size: clamp(2.4rem, 5vw, 3.3rem);
       font-weight: 600;
@@ -1637,6 +1698,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .inc-card.i-warn { border-left: 3px solid var(--yellow); }
     .inc-card.i-ok { border-left: 3px solid var(--green); }
     .inc-card.i-down { border-left: 3px solid var(--red); }
+    .inc-card.i-maint { border-left: 3px solid var(--blue); }
     .inc-card.i-unknown,
     .inc-card.i-empty { border-left: 3px solid var(--blue); }
     .inc-card::before {
@@ -1650,7 +1712,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
     .inc-card.i-ok::before { background: var(--green); }
     .inc-card.i-down::before { background: var(--red); }
     .inc-card.i-unknown::before,
-    .inc-card.i-empty::before { background: var(--blue); }
+    .inc-card.i-empty::before,
+    .inc-card.i-maint::before { background: var(--blue); }
     .inc-head {
       display: flex;
       justify-content: space-between;
@@ -2381,6 +2444,23 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       </div>
     </section>
 
+    <section class="incidents-section" id="maintenanceSection">
+      {{if .MaintenanceWindows}}
+      <div class="group-label">Scheduled Maintenance</div>
+      {{range .MaintenanceWindows}}
+        <article class="inc-card i-maint">
+          <div class="inc-head">
+            <h3 class="inc-title">{{.Title}}</h3>
+            <span class="inc-meta">{{.StateLabel}}</span>
+          </div>
+          {{if .Description}}<p class="inc-desc">{{.Description}}</p>{{end}}
+          <div class="inc-update">{{.TimeRangeText}}</div>
+          <div class="inc-update">{{.AffectedComponentsText}}</div>
+        </article>
+      {{end}}
+      {{end}}
+    </section>
+
     <section class="incidents-section" id="incidentsSection">
       <div class="group-label">Status Updates</div>
       {{if .Incidents}}
@@ -2954,7 +3034,8 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
           replaceLiveRegion('kioskGrid', nextDoc);
           replaceLiveRegion('statusHero', nextDoc);
           replaceLiveRegion('servicesList', nextDoc);
-          replaceLiveRegion('incidentsSection', nextDoc);
+          replaceLiveRegion('maintenanceSection', nextDoc);
+        replaceLiveRegion('incidentsSection', nextDoc);
 
           restoreOpenMonitorIds(expandedMonitorIds);
           applyTheme(body.dataset.theme || defaultTheme, false);

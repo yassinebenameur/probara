@@ -7,8 +7,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	alertsvc "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	alertsvc "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 

@@ -16,6 +16,7 @@ import (
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
 const (
@@ -684,7 +685,7 @@ func (s *Service) getMonitorHealth(ctx context.Context, tenantID uuid.UUID, dash
 // caller to fill from range-scoped data.
 func (s *Service) listMonitorHealthFromState(ctx context.Context, tenantID uuid.UUID, tags []string) ([]models.DashboardMonitorHealth, error) {
 	query := `
-		SELECT m.id, m.name, m.enabled, m.current_state
+		SELECT m.id, m.name, m.enabled, m.current_state, ` + maintenance.InMaintenancePredicate("m") + ` AS in_maintenance
 		FROM monitors m
 		WHERE m.tenant_id = $1 AND m.deleted_at IS NULL
 	`
@@ -705,7 +706,7 @@ func (s *Service) listMonitorHealthFromState(ctx context.Context, tenantID uuid.
 	for rows.Next() {
 		var row models.DashboardMonitorHealth
 		var currentState string
-		if err := rows.Scan(&row.MonitorID, &row.MonitorName, &row.Enabled, &currentState); err != nil {
+		if err := rows.Scan(&row.MonitorID, &row.MonitorName, &row.Enabled, &currentState, &row.InMaintenance); err != nil {
 			return nil, fmt.Errorf("failed to scan monitor health row: %w", err)
 		}
 		row.LatestStatus = monitorStateToStatus(currentState)
@@ -780,7 +781,8 @@ func (s *Service) getMonitorHealthRollupRange(ctx context.Context, tenantID uuid
 			m.name,
 			m.enabled,
 			m.current_state,
-			lr.latest_check_at
+			lr.latest_check_at,
+			%s AS in_maintenance
 		FROM monitors m
 		LEFT JOIN LATERAL (
 			SELECT mdr.latest_check_at
@@ -794,7 +796,7 @@ func (s *Service) getMonitorHealthRollupRange(ctx context.Context, tenantID uuid
 		) lr ON TRUE
 		%s
 		ORDER BY m.name
-	`, whereClause)
+	`, maintenance.InMaintenancePredicate("m"), whereClause)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -808,7 +810,7 @@ func (s *Service) getMonitorHealthRollupRange(ctx context.Context, tenantID uuid
 		var currentState string
 		var latestCheckAt sql.NullTime
 
-		if err := rows.Scan(&row.MonitorID, &row.MonitorName, &row.Enabled, &currentState, &latestCheckAt); err != nil {
+		if err := rows.Scan(&row.MonitorID, &row.MonitorName, &row.Enabled, &currentState, &latestCheckAt, &row.InMaintenance); err != nil {
 			return nil, fmt.Errorf("failed to scan monitor health row: %w", err)
 		}
 		row.LatestStatus = monitorStateToStatus(currentState)
@@ -836,6 +838,8 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 		switch {
 		case !row.Enabled:
 			summary.PausedMonitors++
+		case row.InMaintenance:
+			summary.MaintenanceMonitors++
 		case row.LatestStatus == nil:
 			continue
 		case *row.LatestStatus == "success":

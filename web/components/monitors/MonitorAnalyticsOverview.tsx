@@ -74,6 +74,8 @@ function StatusPill({ status }: { status: string }) {
           ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
           : status === 'paused'
             ? 'bg-slate-500/10 text-slate-300 border-slate-500/20'
+          : status === 'maintenance'
+            ? 'bg-sky-500/10 text-sky-300 border-sky-500/20'
           : 'bg-slate-500/10 text-slate-300 border-slate-500/20';
 
   const label = status === 'paused' ? 'paused' : status;

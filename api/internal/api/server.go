@@ -18,6 +18,7 @@ import (
 	dashboardhandlers "github.com/yassinebenameur/probara/api/internal/handlers/dashboard"
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
 	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
+	maintenancewindowhandlers "github.com/yassinebenameur/probara/api/internal/handlers/maintenancewindows"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
@@ -36,6 +37,7 @@ import (
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
+	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
@@ -204,6 +206,17 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			importSvc := importservice.NewService(dbClient, monitorService)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
 
+			// Maintenance windows
+			maintenanceService := maintenancewindowservice.NewService(dbClient)
+			maintenanceHandlers := maintenancewindowhandlers.NewHandlers(maintenanceService, log)
+			r.Route("/maintenance-windows", func(r chi.Router) {
+				r.Post("/", maintenanceHandlers.CreateMaintenanceWindow)
+				r.Get("/", maintenanceHandlers.ListMaintenanceWindows)
+				r.Get("/{id}", maintenanceHandlers.GetMaintenanceWindow)
+				r.Patch("/{id}", maintenanceHandlers.UpdateMaintenanceWindow)
+				r.Delete("/{id}", maintenanceHandlers.DeleteMaintenanceWindow)
+			})
+
 			r.Route("/monitors", func(r chi.Router) {
 				r.Post("/", monitorHandlers.CreateMonitor)
 				r.Get("/", monitorHandlers.ListMonitors)
@@ -242,6 +255,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}/agent/uninstall/script.ps1", agentHandlers.HandleGetWindowsUninstallScript)
 				// Push info endpoint
 				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
+				// Snooze: quick single-monitor maintenance window
+				r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
 			})
 
 			// Agent metrics endpoint

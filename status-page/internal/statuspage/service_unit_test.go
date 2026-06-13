@@ -81,8 +81,8 @@ func TestService_BatchCurrentStatus_UsesPerMonitorLateralLimit(t *testing.T) {
 	mock.ExpectQuery("(?s)JOIN monitors mon.*LEFT JOIN LATERAL.*ORDER BY cr\\.created_at DESC\\s+LIMIT 1").
 		WithArgs(sqlmock.AnyArg(), tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"monitor_id", "current_state", "status", "http_status", "latency_ms", "created_at", "metrics_data",
-		}).AddRow(monitorA, "down", "success", 200, 123, checkedAt, []byte("{}")))
+			"monitor_id", "current_state", "status", "http_status", "latency_ms", "created_at", "metrics_data", "in_maintenance",
+		}).AddRow(monitorA, "down", "success", 200, 123, checkedAt, []byte("{}"), false))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
 	statuses, err := svc.batchCurrentStatus(context.Background(), []uuid.UUID{monitorA}, tenantID)

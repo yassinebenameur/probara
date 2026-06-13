@@ -62,6 +62,7 @@ type DashboardOverviewResponse struct {
 //   - Stats are computed over an EXACT ROLLING window (now - 24h, now].
 //   - Trend and Activity24h are 24 HOUR-ALIGNED buckets ending in the current
 //     incomplete hour.
+//
 // As a consequence, summing Trend.TotalChecks or Activity24h.Checks is NOT
 // guaranteed to equal Stats over the same range — the chart represents hourly
 // history, the scalar represents the exact rolling window.
@@ -137,17 +138,19 @@ type DashboardMonitorHealth struct {
 	MonitorID     uuid.UUID  `json:"monitor_id"`
 	MonitorName   string     `json:"monitor_name"`
 	Enabled       bool       `json:"enabled"`
+	InMaintenance bool       `json:"in_maintenance"`
 	LatestStatus  *string    `json:"latest_status"`
 	LatestCheckAt *time.Time `json:"latest_check_at"`
 }
 
 // DashboardOpsSummary contains current operational counts for the fleet.
 type DashboardOpsSummary struct {
-	UpMonitors         int `json:"up_monitors"`
-	DownMonitors       int `json:"down_monitors"`
-	PausedMonitors     int `json:"paused_monitors"`
-	ActiveAlerts       int `json:"active_alerts"`
-	AcknowledgedAlerts int `json:"acknowledged_alerts"`
+	UpMonitors          int `json:"up_monitors"`
+	DownMonitors        int `json:"down_monitors"`
+	PausedMonitors      int `json:"paused_monitors"`
+	MaintenanceMonitors int `json:"maintenance_monitors"`
+	ActiveAlerts        int `json:"active_alerts"`
+	AcknowledgedAlerts  int `json:"acknowledged_alerts"`
 }
 
 // DashboardProblemMonitor represents a monitor that needs attention for the selected range.

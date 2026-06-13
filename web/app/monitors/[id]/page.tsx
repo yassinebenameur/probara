@@ -88,6 +88,7 @@ function StatusBadge({ status }: { status: MonitorDisplayStatus }) {
     down: { label: 'Down', bg: 'bg-rose-500/10', text: 'text-rose-400', dot: 'bg-rose-500' },
     degraded: { label: 'Degraded', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
     paused: { label: 'Paused', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
+    maintenance: { label: 'Maintenance', bg: 'bg-sky-500/10', text: 'text-sky-300', dot: 'bg-sky-500' },
     unknown: { label: 'Unknown', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
   };
   const { label, bg, text, dot } = config[status];
@@ -670,6 +671,18 @@ export default function EditMonitorPage() {
           <p className="text-sm text-amber-300">
             Data retention is set to {boundedRetentionDays} day{boundedRetentionDays === 1 ? '' : 's'}.
             Older history is deleted, so this view may be partial.
+          </p>
+        </div>
+      )}
+
+      {monitor.in_maintenance && (
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3">
+          <p className="text-sm text-sky-300">
+            Under maintenance
+            {monitor.maintenance_until
+              ? ` until ${new Date(monitor.maintenance_until).toLocaleString()}`
+              : ''}{' '}
+            — alerts are suppressed; checks keep running.
           </p>
         </div>
       )}

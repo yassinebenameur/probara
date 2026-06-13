@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
 // populatePageMonitors fills in status, uptime, latency, history and long-range analytics for
@@ -192,7 +193,8 @@ type uptimeSummary struct {
 // JOIN LATERAL) whose result columns are all NULL.
 func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID]*CurrentStatus, error) {
 	query := `
-		SELECT m.monitor_id, mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		SELECT m.monitor_id, mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data,
+			` + maintenance.InMaintenancePredicate("mon") + ` AS in_maintenance
 		FROM unnest($1::uuid[]) AS m(monitor_id)
 		JOIN monitors mon ON mon.id = m.monitor_id
 		LEFT JOIN LATERAL (
@@ -219,12 +221,16 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 		var httpStatus, latencyMS sql.NullInt64
 		var createdAt sql.NullTime
 		var metricsJSON []byte
-		if err := rows.Scan(&monitorID, &currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON); err != nil {
+		var inMaintenance bool
+		if err := rows.Scan(&monitorID, &currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON, &inMaintenance); err != nil {
 			return nil, fmt.Errorf("failed to scan batch current status: %w", err)
 		}
 
 		cs := &CurrentStatus{
 			Status: mapMonitorState(currentState),
+		}
+		if inMaintenance {
+			cs.Status = "maintenance"
 		}
 		if createdAt.Valid {
 			t := createdAt.Time

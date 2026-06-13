@@ -18,6 +18,7 @@ import (
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
 type fakeTenantSettingsReader struct{}
@@ -450,16 +451,16 @@ func TestService_GetMonitorHealth_24hStatusFromStateMachineNoLateral(t *testing.
 	monUnknown := uuid.New()   // current_state 'unknown'
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT m.id, m.name, m.enabled, m.current_state
+		SELECT m.id, m.name, m.enabled, m.current_state, ` + maintenance.InMaintenancePredicate("m") + ` AS in_maintenance
 		FROM monitors m
 		WHERE m.tenant_id = $1 AND m.deleted_at IS NULL
 	 ORDER BY m.name`)).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "current_state"}).
-			AddRow(monDown, "a-down", true, "down").
-			AddRow(monRecovered, "b-recovered", true, "up").
-			AddRow(monSuspect, "c-suspect", true, "suspect").
-			AddRow(monUnknown, "d-unknown", true, "unknown"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "current_state", "in_maintenance"}).
+			AddRow(monDown, "a-down", true, "down", false).
+			AddRow(monRecovered, "b-recovered", true, "up", false).
+			AddRow(monSuspect, "c-suspect", true, "suspect", false).
+			AddRow(monUnknown, "d-unknown", true, "unknown", false))
 
 	failure := "failure"
 	recoveredAt := time.Now().UTC().Add(-5 * time.Minute)
@@ -526,13 +527,13 @@ func TestService_GetMonitorHealth_1hBatchedLatestCheckAt(t *testing.T) {
 	lastCheckAt := rangeEnd.Add(-3 * time.Minute)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT m.id, m.name, m.enabled, m.current_state
+		SELECT m.id, m.name, m.enabled, m.current_state, ` + maintenance.InMaintenancePredicate("m") + ` AS in_maintenance
 		FROM monitors m
 		WHERE m.tenant_id = $1 AND m.deleted_at IS NULL
 	 ORDER BY m.name`)).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "current_state"}).
-			AddRow(monitorID, "api", true, "down"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "current_state", "in_maintenance"}).
+			AddRow(monitorID, "api", true, "down", false))
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT cr.monitor_id, MAX(cr.created_at) AS latest_check_at
@@ -592,7 +593,8 @@ func TestService_GetMonitorHealth_RollupRangeStatusFromState(t *testing.T) {
 			m.name,
 			m.enabled,
 			m.current_state,
-			lr.latest_check_at
+			lr.latest_check_at,
+			`+maintenance.InMaintenancePredicate("m")+` AS in_maintenance
 		FROM monitors m
 		LEFT JOIN LATERAL (
 			SELECT mdr.latest_check_at
@@ -608,8 +610,8 @@ func TestService_GetMonitorHealth_RollupRangeStatusFromState(t *testing.T) {
 		ORDER BY m.name
 	`)).
 		WithArgs(tenantID, rangeStart, rangeEnd).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "current_state", "latest_check_at"}).
-			AddRow(monitorID, "api", true, "suspect", rollupLatestAt))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "enabled", "current_state", "latest_check_at", "in_maintenance"}).
+			AddRow(monitorID, "api", true, "suspect", rollupLatestAt, false))
 
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{}, nil)
 	health, err := svc.getMonitorHealth(context.Background(), tenantID, models.DashboardRange30d, rangeStart, rangeEnd, nil, nil)

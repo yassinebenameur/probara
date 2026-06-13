@@ -25,11 +25,11 @@ import (
 )
 
 const (
-	pluginType       = "generic_webhook"
-	signatureHeader  = "X-Probara-Signature"
-	eventTypeHeader  = "X-Probara-Event-Type"
-	idempotencyHdr   = "X-Probara-Idempotency-Key"
-	signaturePrefix  = "sha256="
+	pluginType      = "generic_webhook"
+	signatureHeader = "X-Probara-Signature"
+	eventTypeHeader = "X-Probara-Event-Type"
+	idempotencyHdr  = "X-Probara-Idempotency-Key"
+	signaturePrefix = "sha256="
 )
 
 // Config is the channel config persisted in alert_channels.config.

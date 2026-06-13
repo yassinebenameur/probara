@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
 // runLifecycle is the transition-driven replacement for evaluateAlerts (spec §6):
@@ -119,7 +121,9 @@ func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 
 // openAlertsForDownMonitors creates the single outage alert for each down
 // monitor without one. The partial unique index idx_alerts_one_open_per_monitor
-// makes this race-safe across alerter replicas.
+// makes this race-safe across alerter replicas. Monitors in an active
+// maintenance window are skipped; if still down when the window ends, the next
+// tick opens the alert.
 func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT m.id, m.tenant_id, m.name, m.consecutive_failures,
@@ -129,6 +133,7 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 			rc.id, rc.name, rc.last_state_change_at
 		FROM monitors m`+rootCauseLateral("m.id")+`
 		WHERE m.current_state = 'down' AND m.enabled = TRUE AND m.deleted_at IS NULL
+		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM alerts al
 			WHERE al.monitor_id = m.id AND al.status IN ('active', 'acknowledged'))
@@ -360,7 +365,8 @@ func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID
 }
 
 // dispatchOpenAlerts fires due escalation tiers and reminders for open alerts.
-// Group members are suppressed: the group's own alert speaks for them.
+// Group members are suppressed: the group's own alert speaks for them. Monitors
+// in an active maintenance window are muted; dispatch resumes when it ends.
 func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.triggered_at, al.failure_count, al.last_error,
@@ -372,6 +378,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
 		WHERE al.status IN ('active', 'acknowledged')
 		  AND m.current_state = 'down' AND m.deleted_at IS NULL
+		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  AND NOT EXISTS (SELECT 1 FROM monitor_groups mg WHERE mg.monitor_id = al.monitor_id)
 	`)
 	if err != nil {

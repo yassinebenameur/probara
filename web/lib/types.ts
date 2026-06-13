@@ -410,6 +410,57 @@ export interface NotificationSettings {
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down';
 
+// Maintenance window types
+export type MaintenanceWindowStatus = 'active' | 'upcoming' | 'past';
+
+export interface MaintenanceWindowMonitorRef {
+  id: string;
+  name: string;
+  type: string;
+}
+
+export interface MaintenanceWindow {
+  id: string;
+  tenant_id: string;
+  title: string;
+  description: string;
+  starts_at: string;
+  ends_at: string;
+  monitor_ids: string[];
+  monitors?: MaintenanceWindowMonitorRef[];
+  status: MaintenanceWindowStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MaintenanceWindowListResponse {
+  items: MaintenanceWindow[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface CreateMaintenanceWindowRequest {
+  title: string;
+  description?: string;
+  starts_at: string;
+  ends_at: string;
+  monitor_ids: string[];
+}
+
+export interface UpdateMaintenanceWindowRequest {
+  title?: string;
+  description?: string;
+  starts_at?: string;
+  ends_at?: string;
+  monitor_ids?: string[];
+}
+
+export interface SnoozeMonitorRequest {
+  until?: string;
+  duration_minutes?: number;
+}
+
 export interface Monitor {
   id: string;
   tenant_id: string;
@@ -433,6 +484,8 @@ export interface Monitor {
   notification_mode: NotificationMode;
   notification_channels?: ChannelAssignment[];
   current_state?: MonitorState;
+  in_maintenance?: boolean;
+  maintenance_until?: string; // Latest ends_at among covering active windows
   // Old format fields (for backward compatibility during migration)
   url?: string;
   method?: string;
@@ -569,6 +622,7 @@ export interface DashboardMonitorHealth {
   monitor_id: string;
   monitor_name: string;
   enabled: boolean;
+  in_maintenance: boolean;
   latest_status: string | null;
   latest_check_at: string | null;
 }
@@ -577,6 +631,7 @@ export interface DashboardOpsSummary {
   up_monitors: number;
   down_monitors: number;
   paused_monitors: number;
+  maintenance_monitors: number;
   active_alerts: number;
   acknowledged_alerts: number;
 }

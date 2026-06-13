@@ -17,31 +17,33 @@ import (
 
 // StatusPageData represents the public status page data
 type StatusPageData struct {
-	ID                string                  `json:"id"`
-	Slug              string                  `json:"slug"`
-	Title             string                  `json:"title"`
-	Description       *string                 `json:"description,omitempty"`
-	LogoURL           *string                 `json:"logo_url,omitempty"`
-	HasLogo           bool                    `json:"-"` // For template use only - true if LogoURL is set and non-empty
-	PrimaryColor      *string                 `json:"primary_color,omitempty"`
-	SecondaryColor    *string                 `json:"secondary_color,omitempty"`
-	Sections          []StatusPageSectionData `json:"sections,omitempty"`
-	Monitors          []MonitorStatus         `json:"monitors"`
-	Incidents         []StatusPageIncident    `json:"incidents,omitempty"`
-	HasIssues         bool                    `json:"-"` // For template use only
-	ShowIncidents     bool                    `json:"-"` // For template use only
-	ShowUptimeHistory bool                    `json:"-"` // For template use only
-	ShowGlobalUptime  bool                    `json:"-"` // For template use only
-	ShowFooter        bool                    `json:"-"` // For template use only
-	CustomFooterText  *string                 `json:"-"` // For template use only
-	DefaultTheme      string                  `json:"-"` // For template use only
-	AllowThemeToggle  bool                    `json:"-"` // For template use only
-	ShowMonitorTags   bool                    `json:"-"` // For template use only
-	ShowMonitorURL    bool                    `json:"-"` // For template use only
-	ShowMonitorUptime bool                    `json:"-"` // For template use only
-	ShowMonitorTLS    bool                    `json:"-"` // For template use only
-	ShowLatencyCharts bool                    `json:"-"` // For template use only
-	ShowAgentMetrics  bool                    `json:"-"` // For template use only
+	ID                 string                        `json:"id"`
+	Slug               string                        `json:"slug"`
+	Title              string                        `json:"title"`
+	Description        *string                       `json:"description,omitempty"`
+	LogoURL            *string                       `json:"logo_url,omitempty"`
+	HasLogo            bool                          `json:"-"` // For template use only - true if LogoURL is set and non-empty
+	PrimaryColor       *string                       `json:"primary_color,omitempty"`
+	SecondaryColor     *string                       `json:"secondary_color,omitempty"`
+	Sections           []StatusPageSectionData       `json:"sections,omitempty"`
+	Monitors           []MonitorStatus               `json:"monitors"`
+	Incidents          []StatusPageIncident          `json:"incidents,omitempty"`
+	MaintenanceWindows []StatusPageMaintenanceWindow `json:"maintenance_windows,omitempty"`
+	HasMaintenance     bool                          `json:"-"` // For template use only
+	HasIssues          bool                          `json:"-"` // For template use only
+	ShowIncidents      bool                          `json:"-"` // For template use only
+	ShowUptimeHistory  bool                          `json:"-"` // For template use only
+	ShowGlobalUptime   bool                          `json:"-"` // For template use only
+	ShowFooter         bool                          `json:"-"` // For template use only
+	CustomFooterText   *string                       `json:"-"` // For template use only
+	DefaultTheme       string                        `json:"-"` // For template use only
+	AllowThemeToggle   bool                          `json:"-"` // For template use only
+	ShowMonitorTags    bool                          `json:"-"` // For template use only
+	ShowMonitorURL     bool                          `json:"-"` // For template use only
+	ShowMonitorUptime  bool                          `json:"-"` // For template use only
+	ShowMonitorTLS     bool                          `json:"-"` // For template use only
+	ShowLatencyCharts  bool                          `json:"-"` // For template use only
+	ShowAgentMetrics   bool                          `json:"-"` // For template use only
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
@@ -72,6 +74,17 @@ type StatusPageIncident struct {
 type StatusPageIncidentUpdate struct {
 	Message   string    `json:"message"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// StatusPageMaintenanceWindow is an active or upcoming maintenance window shown
+// to public viewers, scoped to windows affecting monitors on this page.
+type StatusPageMaintenanceWindow struct {
+	Title            string    `json:"title"`
+	Description      string    `json:"description"`
+	StartsAt         time.Time `json:"starts_at"`
+	EndsAt           time.Time `json:"ends_at"`
+	IsActive         bool      `json:"is_active"`
+	AffectedMonitors []string  `json:"affected_monitors,omitempty"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -369,6 +382,11 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	if err != nil {
 		return nil, fmt.Errorf("failed to get incidents: %w", err)
 	}
+	page.MaintenanceWindows, err = s.loadMaintenanceWindows(ctx, pageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get maintenance windows: %w", err)
+	}
+	page.HasMaintenance = len(page.MaintenanceWindows) > 0
 
 	// Determine if there are any issues
 	for _, monitor := range page.Monitors {
@@ -408,6 +426,54 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	}
 
 	return &page, nil
+}
+
+// loadMaintenanceWindows returns active and upcoming (next 14 days) maintenance
+// windows that affect at least one monitor on this status page, directly or via
+// a targeted group. Affected monitor names are page-scoped.
+func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageMaintenanceWindow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT mw.title, mw.description, mw.starts_at, mw.ends_at,
+			NOW() >= mw.starts_at AS is_active,
+			array_agg(DISTINCT pm.name) AS affected
+		FROM maintenance_windows mw
+		JOIN maintenance_window_monitors mwm ON mwm.maintenance_window_id = mw.id
+		JOIN monitors pm ON pm.tenant_id = mw.tenant_id AND pm.deleted_at IS NULL
+			AND (pm.id = mwm.monitor_id
+				OR pm.id IN (SELECT mg.monitor_id FROM monitor_groups mg WHERE mg.group_id = mwm.monitor_id))
+		WHERE mw.tenant_id = $2
+		  AND pm.id IN (
+			SELECT spsm.monitor_id
+			FROM status_page_section_monitors spsm
+			JOIN status_page_sections sps ON sps.id = spsm.section_id
+			WHERE sps.status_page_id = $1
+			UNION
+			SELECT spm.monitor_id FROM status_page_monitors spm WHERE spm.status_page_id = $1
+		  )
+		  AND mw.ends_at > NOW()
+		  AND mw.starts_at < NOW() + INTERVAL '14 days'
+		GROUP BY mw.id
+		ORDER BY mw.starts_at
+	`, statusPageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query maintenance windows: %w", err)
+	}
+	defer rows.Close()
+
+	windows := make([]StatusPageMaintenanceWindow, 0)
+	for rows.Next() {
+		var w StatusPageMaintenanceWindow
+		var affected []string
+		if err := rows.Scan(&w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, pq.Array(&affected)); err != nil {
+			return nil, fmt.Errorf("scan maintenance window: %w", err)
+		}
+		w.AffectedMonitors = affected
+		windows = append(windows, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate maintenance windows: %w", err)
+	}
+	return windows, nil
 }
 
 func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {

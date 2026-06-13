@@ -11,6 +11,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
 // Repository defines the interface for monitor data access
@@ -91,7 +92,9 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, current_state
+			consecutive_failures_threshold, notification_mode, current_state,
+			` + maintenance.InMaintenancePredicate("monitors") + ` AS in_maintenance,
+			` + maintenance.MaintenanceUntilExpr("monitors") + ` AS maintenance_until
 		FROM monitors
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
@@ -105,6 +108,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.CurrentState,
+		&monitor.InMaintenance, &monitor.MaintenanceUntil,
 	)
 
 	if err != nil {
@@ -152,12 +156,14 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, current_state
+			consecutive_failures_threshold, notification_mode, current_state,
+			%s AS in_maintenance,
+			%s AS maintenance_until
 		FROM monitors
 		%s
 		ORDER BY created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIndex, argIndex+1)
+	`, maintenance.InMaintenancePredicate("monitors"), maintenance.MaintenanceUntilExpr("monitors"), whereClause, argIndex, argIndex+1)
 
 	args = append(args, pageSize, offset)
 
@@ -178,6 +184,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			&monitor.AlertPolicyID, &monitor.Enabled,
 			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
 			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.CurrentState,
+			&monitor.InMaintenance, &monitor.MaintenanceUntil,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan monitor: %w", err)

@@ -8,9 +8,9 @@ import (
 
 type stubPlugin struct{ m Manifest }
 
-func (s *stubPlugin) Manifest() Manifest                              { return s.m }
-func (s *stubPlugin) Validate(json.RawMessage) error                  { return nil }
-func (s *stubPlugin) Send(context.Context, DispatchRequest) error     { return nil }
+func (s *stubPlugin) Manifest() Manifest                          { return s.m }
+func (s *stubPlugin) Validate(json.RawMessage) error              { return nil }
+func (s *stubPlugin) Send(context.Context, DispatchRequest) error { return nil }
 
 func TestRegistry_RegisterAndLookup(t *testing.T) {
 	r := NewRegistry()

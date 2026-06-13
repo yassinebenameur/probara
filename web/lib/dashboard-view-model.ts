@@ -59,6 +59,7 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
   const downMonitors = input.opsSummary?.down_monitors ?? 0;
   const activeAlerts = input.opsSummary?.active_alerts ?? 0;
   const pausedMonitors = input.opsSummary?.paused_monitors ?? 0;
+  const maintenanceMonitors = input.opsSummary?.maintenance_monitors ?? 0;
   const attentionCount = Math.max(input.problemMonitorsCount, downMonitors + activeAlerts);
   const actionNeeded = downMonitors > 0 || activeAlerts > 0;
   const hasRecentResolvedHistory = input.recentFailuresCount > 0 || input.problemMonitorsCount > 0;
@@ -105,7 +106,13 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
       {
         label: 'Attention',
         value: String(attentionCount),
-        detail: pausedMonitors > 0 ? `${pausedMonitors} paused` : 'Monitors',
+        detail:
+          [
+            pausedMonitors > 0 ? `${pausedMonitors} paused` : null,
+            maintenanceMonitors > 0 ? `${maintenanceMonitors} maintenance` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ') || 'Monitors',
         tone: attentionCount > 0 ? 'attention' : 'clean',
       },
       {

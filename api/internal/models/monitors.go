@@ -49,14 +49,16 @@ type Monitor struct {
 	Enabled                      bool                       `json:"enabled"`
 	Tags                         []string                   `json:"tags,omitempty"`
 	NextRunAt                    *time.Time                 `json:"next_run_at,omitempty"`
-	AgentID                      *string                    `json:"agent_id,omitempty"`   // Unique identifier for agent monitors
-	PushToken                    *string                    `json:"push_token,omitempty"`      // Unique token for push monitors
-	MemberIDs                    []uuid.UUID                `json:"member_ids,omitempty"`      // Populated for group monitors
-	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"`  // Upstream monitors this one depends on
+	AgentID                      *string                    `json:"agent_id,omitempty"`       // Unique identifier for agent monitors
+	PushToken                    *string                    `json:"push_token,omitempty"`     // Unique token for push monitors
+	MemberIDs                    []uuid.UUID                `json:"member_ids,omitempty"`     // Populated for group monitors
+	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
 	NotificationMode             string                     `json:"notification_mode"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
 	CurrentState                 string                     `json:"current_state"`
+	InMaintenance                bool                       `json:"in_maintenance"`
+	MaintenanceUntil             *time.Time                 `json:"maintenance_until,omitempty"` // Latest ends_at among covering active windows
 	CreatedAt                    time.Time                  `json:"created_at"`
 	UpdatedAt                    time.Time                  `json:"updated_at"`
 	DeletedAt                    *time.Time                 `json:"deleted_at,omitempty"`

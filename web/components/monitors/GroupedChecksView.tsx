@@ -5,7 +5,7 @@ import { Monitor, CheckResult } from '@/lib/types';
 import { getMonitorResults, getGroupMembers } from '@/lib/api';
 import Pill, { PillTone } from '@/components/ui/Pill';
 
-type StatusKey = 'up' | 'down' | 'degraded' | 'unknown' | 'paused';
+type StatusKey = 'up' | 'down' | 'degraded' | 'unknown' | 'paused' | 'maintenance';
 
 const STATUS_TONE: Record<StatusKey, PillTone> = {
   up: 'success',
@@ -13,6 +13,7 @@ const STATUS_TONE: Record<StatusKey, PillTone> = {
   degraded: 'warning',
   unknown: 'neutral',
   paused: 'neutral',
+  maintenance: 'info',
 };
 import { calculateUptime, countOperationalResults, getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
@@ -100,7 +101,7 @@ export default function GroupedChecksView() {
       if (status === 'up') upCount++;
       else if (status === 'down') downCount++;
       else if (status === 'degraded') downCount++;
-      else if (status === 'unknown' || status === 'paused') unknownCount++;
+      else if (status === 'unknown' || status === 'paused' || status === 'maintenance') unknownCount++;
     });
 
     if (upCount === members.length) return 'up';

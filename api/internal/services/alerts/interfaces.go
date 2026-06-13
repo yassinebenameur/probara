@@ -39,7 +39,6 @@ type AlertService interface {
 
 	// GetMonitorCountsByPolicy gets monitor counts grouped by policy
 	GetMonitorCountsByPolicy(ctx context.Context, tenantID uuid.UUID) (map[uuid.UUID]int, error)
-
 }
 
 // Ensure Service implements AlertService
