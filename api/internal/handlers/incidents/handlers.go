@@ -1,6 +1,7 @@
 package incidents
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -14,13 +15,29 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
 	"github.com/yassinebenameur/probara/api/internal/validation"
+	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
+// aiJobPublisher publishes the AI analysis job to NATS. Satisfied by
+// *queue.Client; kept as an interface so handlers stay testable.
+type aiJobPublisher interface {
+	PublishJSON(ctx context.Context, subject string, v interface{}, headers map[string][]string) error
+}
+
+// aiEnabledChecker reports whether AI analysis can run for a tenant (a usable
+// per-tenant config or the env fallback). Satisfied by *aisettings.Service.
+type aiEnabledChecker interface {
+	EffectiveEnabled(ctx context.Context, tenantID uuid.UUID) (bool, error)
+}
+
 // Handlers handles incident HTTP requests.
 type Handlers struct {
-	service incidentservice.IncidentService
-	logger  *logger.Logger
+	service     incidentservice.IncidentService
+	logger      *logger.Logger
+	aiPublisher aiJobPublisher
+	aiSubject   string
+	aiChecker   aiEnabledChecker
 }
 
 // NewHandlers creates a new incident handlers instance.
@@ -29,6 +46,15 @@ func NewHandlers(service incidentservice.IncidentService, log *logger.Logger) *H
 		service: service,
 		logger:  log,
 	}
+}
+
+// ConfigureAIAnalysis wires the NATS publisher + subject used to enqueue AI
+// root cause jobs, and the per-tenant enabled checker. When the checker reports
+// disabled (or the publisher is nil) the analysis endpoints return 503.
+func (h *Handlers) ConfigureAIAnalysis(publisher aiJobPublisher, subject string, checker aiEnabledChecker) {
+	h.aiPublisher = publisher
+	h.aiSubject = subject
+	h.aiChecker = checker
 }
 
 func tenantUUIDFromContext(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -209,6 +235,107 @@ func (h *Handlers) GetIncident(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(incident)
+}
+
+// RequestIncidentAIAnalysis handles POST /api/v1/incidents/{id}/ai-analysis.
+// It reserves a pending analysis row and enqueues a worker job, returning 202.
+func (h *Handlers) RequestIncidentAIAnalysis(w http.ResponseWriter, r *http.Request) {
+	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	if !ok {
+		return
+	}
+	incidentID, ok := incidentIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	if h.aiPublisher == nil || h.aiSubject == "" || h.aiChecker == nil {
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "AI analysis is not configured")
+		return
+	}
+	if enabled, err := h.aiChecker.EffectiveEnabled(r.Context(), tenantUUID); err != nil {
+		h.logger.WithError(err).Error("Failed to check AI analysis enablement")
+		apierrors.WriteInternalError(w, "failed to check AI analysis configuration")
+		return
+	} else if !enabled {
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "AI analysis is not configured for this workspace")
+		return
+	}
+
+	var requestedBy *uuid.UUID
+	if adminID, err := middleware.GetAdminID(r.Context()); err == nil {
+		if parsed, perr := uuid.Parse(adminID); perr == nil {
+			requestedBy = &parsed
+		}
+	}
+
+	analysis, err := h.service.RequestAIAnalysis(r.Context(), tenantUUID, incidentID, requestedBy)
+	if err != nil {
+		if isIncidentNotFoundError(err) {
+			apierrors.WriteNotFoundError(w, "incident not found")
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":       err.Error(),
+			"tenant_id":   tenantUUID.String(),
+			"incident_id": incidentID.String(),
+		}).Error("Failed to create AI analysis request")
+		apierrors.WriteInternalError(w, "failed to request AI analysis")
+		return
+	}
+
+	job := ai.AnalysisJob{
+		V:          ai.AnalysisJobVersion,
+		AnalysisID: analysis.ID,
+		IncidentID: incidentID,
+		TenantID:   tenantUUID,
+	}
+	if err := h.aiPublisher.PublishJSON(r.Context(), h.aiSubject, job, nil); err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":       err.Error(),
+			"analysis_id": analysis.ID.String(),
+		}).Error("Failed to enqueue AI analysis job")
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "enqueue_failed", "failed to enqueue AI analysis")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(analysis)
+}
+
+// GetIncidentAIAnalysis handles GET /api/v1/incidents/{id}/ai-analysis,
+// returning the latest analysis (used for polling), or JSON null when none has
+// been requested yet. The incident itself missing is a 404.
+func (h *Handlers) GetIncidentAIAnalysis(w http.ResponseWriter, r *http.Request) {
+	tenantUUID, ok := tenantUUIDFromContext(w, r)
+	if !ok {
+		return
+	}
+	incidentID, ok := incidentIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	analysis, err := h.service.GetLatestAIAnalysis(r.Context(), tenantUUID, incidentID)
+	if err != nil {
+		if isIncidentNotFoundError(err) {
+			apierrors.WriteNotFoundError(w, "incident not found")
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":       err.Error(),
+			"tenant_id":   tenantUUID.String(),
+			"incident_id": incidentID.String(),
+		}).Error("Failed to get AI analysis")
+		apierrors.WriteInternalError(w, "failed to get AI analysis")
+		return
+	}
+
+	// analysis may be nil (no run yet) — encodes as JSON null, which the client
+	// reads as "no analysis", avoiding error-path handling for the common case.
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(analysis)
 }
 
 // CreateIncident handles POST /api/v1/incidents

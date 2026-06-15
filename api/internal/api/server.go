@@ -20,6 +20,7 @@ import (
 	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
 	maintenancewindowhandlers "github.com/yassinebenameur/probara/api/internal/handlers/maintenancewindows"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
+	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
@@ -39,6 +40,7 @@ import (
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
+	aisettingsservice "github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
@@ -176,9 +178,22 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
 			agentHandlers := agenthandlers.NewHandler(agentService, log, cfg.PublicBaseURL)
 
+			// AI settings (per-tenant LLM config). envFallback is true when the
+			// LLM_* env defaults are set, so analysis works out of the box.
+			aiSettingsSvc := aisettingsservice.NewService(dbClient, secretsEncryptor, cfg.AIAnalysisEnabled)
+			aiSettingsHdlrs := aisettingshandlers.NewHandlers(aiSettingsSvc, log)
+			r.Route("/ai-settings", func(r chi.Router) {
+				r.Get("/", aiSettingsHdlrs.GetSettings)
+				r.Put("/", aiSettingsHdlrs.UpdateSettings)
+				r.Post("/test", aiSettingsHdlrs.TestConnection)
+			})
+
 			// Incident service and handlers
 			incidentService := incidentservice.NewService(dbClient, statusPublisher)
 			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
+			// AI root cause analysis: enqueue jobs onto the AI_RCA subject. The
+			// feature is gated per-tenant (config row or env fallback).
+			incidentHandlers.ConfigureAIAnalysis(checkJobQueue, cfg.AIRCASubject, aiSettingsSvc)
 
 			// Alert service and handlers (shared across alerts + dashboard routes)
 			alertSvc := alertservice.NewService(dbClient, incidentService)
@@ -298,6 +313,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Delete("/{id}/monitors/{monitorId}", incidentHandlers.DetachIncidentMonitor)
 				r.Put("/{id}/status-pages/{statusPageId}", incidentHandlers.PublishIncidentToStatusPage)
 				r.Delete("/{id}/status-pages/{statusPageId}", incidentHandlers.UnpublishIncidentFromStatusPage)
+				r.Post("/{id}/ai-analysis", incidentHandlers.RequestIncidentAIAnalysis)
+				r.Get("/{id}/ai-analysis", incidentHandlers.GetIncidentAIAnalysis)
 			})
 
 			// Alert policies — retired; all endpoints return 410 Gone.

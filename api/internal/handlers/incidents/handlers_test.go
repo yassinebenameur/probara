@@ -16,9 +16,105 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/ai"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
+
+type fakeAIPublisher struct {
+	subject string
+	payload interface{}
+	err     error
+	calls   int
+}
+
+func (f *fakeAIPublisher) PublishJSON(_ context.Context, subject string, v interface{}, _ map[string][]string) error {
+	f.calls++
+	f.subject = subject
+	f.payload = v
+	return f.err
+}
+
+type fakeAIChecker struct {
+	enabled bool
+	err     error
+}
+
+func (f *fakeAIChecker) EffectiveEnabled(context.Context, uuid.UUID) (bool, error) {
+	return f.enabled, f.err
+}
+
+func TestHandlers_RequestIncidentAIAnalysis_NotConfigured(t *testing.T) {
+	h := NewHandlers(&mockIncidentService{}, logger.New("test", "debug"))
+	// ConfigureAIAnalysis not called → feature disabled.
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/x/ai-analysis", nil)
+	req = withIncidentID(withTenantID(req), uuid.New())
+	w := httptest.NewRecorder()
+
+	h.RequestIncidentAIAnalysis(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlers_RequestIncidentAIAnalysis_Success(t *testing.T) {
+	incidentID := uuid.New()
+	analysisID := uuid.New()
+	svc := &mockIncidentService{
+		requestAIFn: func(ctx context.Context, tenantID, incID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error) {
+			return &models.IncidentAIAnalysis{ID: analysisID, IncidentID: incID, Status: models.IncidentAIAnalysisStatusPending}, nil
+		},
+	}
+	pub := &fakeAIPublisher{}
+	h := NewHandlers(svc, logger.New("test", "debug"))
+	h.ConfigureAIAnalysis(pub, "ai.rca.jobs", &fakeAIChecker{enabled: true})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/x/ai-analysis", nil)
+	req = withIncidentID(withTenantID(req), incidentID)
+	w := httptest.NewRecorder()
+
+	h.RequestIncidentAIAnalysis(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (%s)", w.Code, w.Body.String())
+	}
+	if pub.calls != 1 || pub.subject != "ai.rca.jobs" {
+		t.Fatalf("publisher calls = %d subject = %q", pub.calls, pub.subject)
+	}
+	// The enqueued job must reference the created analysis row.
+	raw, _ := json.Marshal(pub.payload)
+	var job ai.AnalysisJob
+	if err := json.Unmarshal(raw, &job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if job.AnalysisID != analysisID || job.IncidentID != incidentID || job.V != ai.AnalysisJobVersion {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestHandlers_GetIncidentAIAnalysis_Null(t *testing.T) {
+	svc := &mockIncidentService{
+		getLatestAIFn: func(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error) {
+			return nil, nil
+		},
+	}
+	h := NewHandlers(svc, logger.New("test", "debug"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/incidents/x/ai-analysis", nil)
+	req = withIncidentID(withTenantID(req), uuid.New())
+	w := httptest.NewRecorder()
+
+	h.GetIncidentAIAnalysis(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	if strings.TrimSpace(w.Body.String()) != "null" {
+		t.Fatalf("body = %q, want null", w.Body.String())
+	}
+}
 
 type mockIncidentService struct {
 	createFn         func(ctx context.Context, tenantID uuid.UUID, req *models.CreateIncidentRequest) (*models.IncidentDetail, error)
@@ -33,6 +129,22 @@ type mockIncidentService struct {
 	detachMonitorFn  func(ctx context.Context, tenantID, incidentID, monitorID uuid.UUID) (*models.IncidentDetail, error)
 	publishFn        func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID, req *models.UpsertIncidentPublicationRequest) (*models.IncidentDetail, error)
 	unpublishFn      func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error)
+	requestAIFn      func(ctx context.Context, tenantID, incidentID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error)
+	getLatestAIFn    func(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error)
+}
+
+func (m *mockIncidentService) RequestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error) {
+	if m.requestAIFn != nil {
+		return m.requestAIFn(ctx, tenantID, incidentID, requestedBy)
+	}
+	return nil, nil
+}
+
+func (m *mockIncidentService) GetLatestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error) {
+	if m.getLatestAIFn != nil {
+		return m.getLatestAIFn(ctx, tenantID, incidentID)
+	}
+	return nil, nil
 }
 
 func (m *mockIncidentService) CreateIncident(ctx context.Context, tenantID uuid.UUID, req *models.CreateIncidentRequest) (*models.IncidentDetail, error) {

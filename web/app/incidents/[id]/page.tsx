@@ -17,6 +17,7 @@ import {
   unpublishIncidentFromStatusPage,
 } from '@/lib/api';
 import type { Alert, IncidentDetail, IncidentState, Monitor } from '@/lib/types';
+import AIRootCausePanel from '@/components/incidents/AIRootCausePanel';
 import IncidentPublicationEditor from '@/components/incidents/IncidentPublicationEditor';
 import IncidentTimeline from '@/components/incidents/IncidentTimeline';
 import Panel from '@/components/ui/Panel';
@@ -374,6 +375,8 @@ export default function IncidentDetailPage() {
           </div>
         </Panel>
       </div>
+
+      <AIRootCausePanel incidentId={incident.id} initial={incident.ai_analysis ?? null} />
 
       <IncidentTimeline
         entries={incident.timeline || []}

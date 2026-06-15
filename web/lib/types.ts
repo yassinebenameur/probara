@@ -817,6 +817,64 @@ export interface IncidentDetail {
   monitors: IncidentMonitorSummary[];
   publications: IncidentStatusPagePublication[];
   timeline: IncidentTimelineEntry[];
+  ai_analysis?: IncidentAIAnalysis | null;
+}
+
+export type IncidentAIAnalysisStatus = 'pending' | 'ready' | 'failed';
+
+export interface IncidentAIAnalysis {
+  id: string;
+  tenant_id: string;
+  incident_id: string;
+  status: IncidentAIAnalysisStatus;
+  model?: string;
+  summary?: string;
+  probable_root_cause?: string;
+  contributing_factors?: string[];
+  recommended_actions?: string[];
+  confidence?: string;
+  evidence?: unknown;
+  error_message?: string;
+  requested_by?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface AISettings {
+  enabled: boolean;
+  provider: string;
+  base_url: string;
+  model: string;
+  json_mode: string;
+  max_tokens: number;
+  timeout_seconds: number;
+  has_api_key: boolean;
+}
+
+export interface AISettingsUpdate {
+  enabled?: boolean;
+  provider?: string;
+  base_url?: string;
+  model?: string;
+  json_mode?: string;
+  max_tokens?: number;
+  timeout_seconds?: number;
+  // api_key: omit to leave unchanged, "" to clear, value to set.
+  api_key?: string;
+}
+
+export interface AITestRequest {
+  provider: string;
+  base_url: string;
+  model: string;
+  json_mode: string;
+  api_key?: string;
+}
+
+export interface AITestResult {
+  ok: boolean;
+  model?: string;
+  message?: string;
 }
 
 export interface IncidentListResponse {

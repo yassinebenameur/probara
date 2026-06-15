@@ -27,6 +27,8 @@ type APIConfig struct {
 	AlertSubject          string
 	AlertConsumerName     string
 	CheckJobSubject       string
+	AIRCASubject          string
+	AIAnalysisEnabled     bool
 	AdminJWTSecret        string
 	AdminAccessTTLMinutes int
 	AdminRefreshTTLDays   int
@@ -70,6 +72,20 @@ type WorkerConfig struct {
 	HTTPBlockPrivateIPs   bool
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
+
+	// AI root cause analysis consumer + LLM provider settings. The consumer is
+	// enabled only when LLMBaseURL is set; otherwise the worker skips it and
+	// the feature degrades to "not configured".
+	AIRCAStream       string
+	AIRCASubject      string
+	AIRCAConsumerName string
+	LLMProvider       string
+	LLMBaseURL        string
+	LLMAPIKey         string
+	LLMModel          string
+	LLMJSONMode       string
+	LLMMaxTokens      int
+	LLMTimeoutSeconds int
 
 	// Notification dispatch consumer settings — only used when the alerter is
 	// publishing to the NOTIFICATIONS stream (ALERTER_ASYNC_DISPATCH=true).
@@ -213,6 +229,15 @@ func LoadAPIConfig() (*APIConfig, error) {
 	} else {
 		cfg.CheckJobSubject = checkJobSubject
 	}
+
+	// AI_RCA_SUBJECT — subject the API publishes AI root cause jobs to (the
+	// worker consumes them). Must match the worker's AI_RCA_SUBJECT.
+	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
+
+	// AI analysis is enabled when the same LLM endpoint the worker uses is
+	// configured here, so the API can gate the endpoint (the worker holds the
+	// actual provider client). Set LLM_BASE_URL on the api service too.
+	cfg.AIAnalysisEnabled = strings.TrimSpace(os.Getenv("LLM_BASE_URL")) != ""
 
 	// ADMIN_JWT_SECRET
 	adminJWTSecret := os.Getenv("ADMIN_JWT_SECRET")
@@ -546,6 +571,33 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	cfg.NotificationsStream = envOrDefault("NOTIFICATIONS_STREAM", "NOTIFICATIONS")
 	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
 	cfg.NotificationsConsumerName = envOrDefault("NOTIFICATIONS_CONSUMER_NAME", "notifications-worker")
+
+	// AI root cause analysis — provider-agnostic LLM, wired by env. The
+	// consumer self-disables when LLM_BASE_URL is unset.
+	cfg.AIRCAStream = envOrDefault("AI_RCA_STREAM", "AI_RCA")
+	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
+	cfg.AIRCAConsumerName = envOrDefault("AI_RCA_CONSUMER_NAME", "ai-rca-workers")
+	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
+	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
+	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
+	cfg.LLMMaxTokens = 1024
+	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
+		}
+		cfg.LLMMaxTokens = n
+	}
+	cfg.LLMTimeoutSeconds = 60
+	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.LLMTimeoutSeconds = n
+	}
 
 	// SMTP — only required when the email plugin is registered AND the
 	// notifications consumer is wired in. Otherwise these stay empty and the

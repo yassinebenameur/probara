@@ -16,6 +16,7 @@ import { formatDateTime } from '@/lib/format';
 import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
 import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection';
 import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
+import { AISettingsPanel } from '@/components/settings/AISettingsPanel';
 
 function formatFingerprint(prefix: string | undefined): string {
   if (!prefix) return '-';
@@ -176,6 +177,8 @@ export default function SettingsPage() {
       <PageHeader title="Settings" subtitle="Manage retention, API access, and integrations." />
 
       <NotificationsPanel />
+
+      <AISettingsPanel />
 
       <Panel
         title="Data retention"

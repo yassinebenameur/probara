@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -18,6 +20,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/worker/internal/airca"
 	"github.com/yassinebenameur/probara/worker/internal/worker"
 	"github.com/yassinebenameur/probara/worker/internal/worker/notifications"
 )
@@ -108,6 +111,36 @@ func main() {
 			}
 		}()
 	}
+
+	// Start the AI root cause consumer. It always runs (per-tenant ai_settings
+	// rows may configure an LLM even with no env default); the env LLM, when
+	// configured, is the fallback for tenants without their own row.
+	var envAnalyzer ai.RootCauseAnalyzer
+	switch a, aerr := ai.NewAnalyzer(ai.Config{
+		Provider:  cfg.LLMProvider,
+		BaseURL:   cfg.LLMBaseURL,
+		APIKey:    cfg.LLMAPIKey,
+		Model:     cfg.LLMModel,
+		JSONMode:  cfg.LLMJSONMode,
+		MaxTokens: cfg.LLMMaxTokens,
+		Timeout:   time.Duration(cfg.LLMTimeoutSeconds) * time.Second,
+	}); {
+	case aerr == nil:
+		envAnalyzer = a
+		log.Info("AI root cause analysis: env LLM default configured")
+	case errors.Is(aerr, ai.ErrNotConfigured):
+		log.Info("AI root cause analysis: no env LLM default; tenants may configure their own")
+	default:
+		log.WithError(aerr).Warn("AI root cause analysis: invalid env LLM config; ignoring env default")
+	}
+
+	aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer, secretsEncryptor)
+	go func() {
+		ctx := context.Background()
+		if err := aircaConsumer.Start(ctx); err != nil && err != context.Canceled {
+			log.WithError(err).Error("AI root cause consumer exited with error")
+		}
+	}()
 
 	// Start minimal HTTP server for health/metrics
 	go func() {

@@ -210,10 +210,16 @@ func (s *Service) GetIncident(ctx context.Context, tenantID, incidentID uuid.UUI
 		return nil, err
 	}
 
+	analysis, err := s.loadLatestAIAnalysis(ctx, tenantID, incidentID)
+	if err != nil {
+		return nil, err
+	}
+
 	detail.Alerts = alerts
 	detail.Monitors = monitors
 	detail.Publications = publications
 	detail.Timeline = timeline
+	detail.AIAnalysis = analysis
 
 	return &detail, nil
 }

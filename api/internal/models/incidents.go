@@ -117,6 +117,40 @@ type IncidentDetail struct {
 	Monitors     []IncidentMonitorSummary `json:"monitors"`
 	Publications []IncidentPublication    `json:"publications"`
 	Timeline     []IncidentTimelineEntry  `json:"timeline,omitempty"`
+	AIAnalysis   *IncidentAIAnalysis      `json:"ai_analysis,omitempty"`
+}
+
+// IncidentAIAnalysisStatus represents the lifecycle of an async AI analysis run.
+type IncidentAIAnalysisStatus string
+
+const (
+	// IncidentAIAnalysisStatusPending means the job is queued/running.
+	IncidentAIAnalysisStatusPending IncidentAIAnalysisStatus = "pending"
+	// IncidentAIAnalysisStatusReady means the diagnosis is available.
+	IncidentAIAnalysisStatusReady IncidentAIAnalysisStatus = "ready"
+	// IncidentAIAnalysisStatusFailed means the run errored; see ErrorMessage.
+	IncidentAIAnalysisStatusFailed IncidentAIAnalysisStatus = "failed"
+)
+
+// IncidentAIAnalysis is a single LLM-generated root cause analysis for an
+// incident. Results are produced asynchronously by the worker over the
+// incident's probe evidence and stored verbatim for the UI.
+type IncidentAIAnalysis struct {
+	ID                  uuid.UUID                `json:"id"`
+	TenantID            uuid.UUID                `json:"tenant_id"`
+	IncidentID          uuid.UUID                `json:"incident_id"`
+	Status              IncidentAIAnalysisStatus `json:"status"`
+	Model               string                   `json:"model,omitempty"`
+	Summary             string                   `json:"summary,omitempty"`
+	ProbableRootCause   string                   `json:"probable_root_cause,omitempty"`
+	ContributingFactors []string                 `json:"contributing_factors,omitempty"`
+	RecommendedActions  []string                 `json:"recommended_actions,omitempty"`
+	Confidence          string                   `json:"confidence,omitempty"`
+	Evidence            json.RawMessage          `json:"evidence,omitempty"`
+	ErrorMessage        string                   `json:"error_message,omitempty"`
+	RequestedBy         *uuid.UUID               `json:"requested_by,omitempty"`
+	CreatedAt           time.Time                `json:"created_at"`
+	CompletedAt         *time.Time               `json:"completed_at,omitempty"`
 }
 
 // IncidentListResponse represents a paginated list of incidents.

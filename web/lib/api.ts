@@ -45,6 +45,11 @@ import type {
   ApiKeyListResponse,
   CreateApiKeyRequest,
   IncidentListResponse,
+  AISettings,
+  AISettingsUpdate,
+  AITestRequest,
+  AITestResult,
+  IncidentAIAnalysis,
   IncidentDetail,
   CreateIncidentRequest,
   UpdateIncidentRequest,
@@ -385,6 +390,31 @@ export async function getIncident(id: string): Promise<IncidentDetail> {
 
 export async function createIncident(data: CreateIncidentRequest): Promise<IncidentDetail> {
   return apiRequest<IncidentDetail>('POST', '/v1/incidents', data);
+}
+
+// requestIncidentAIAnalysis enqueues an AI root cause analysis and returns the
+// pending record. Throws on 503 when the LLM provider is not configured.
+export async function requestIncidentAIAnalysis(id: string): Promise<IncidentAIAnalysis> {
+  return apiRequest<IncidentAIAnalysis>('POST', `/v1/incidents/${id}/ai-analysis`);
+}
+
+// getIncidentAIAnalysis returns the latest analysis, or null when none exists.
+export async function getIncidentAIAnalysis(id: string): Promise<IncidentAIAnalysis | null> {
+  return apiRequest<IncidentAIAnalysis | null>('GET', `/v1/incidents/${id}/ai-analysis`);
+}
+
+// --- AI settings (per-tenant LLM config) ---
+
+export async function getAISettings(): Promise<AISettings> {
+  return apiRequest<AISettings>('GET', '/v1/ai-settings');
+}
+
+export async function updateAISettings(data: AISettingsUpdate): Promise<AISettings> {
+  return apiRequest<AISettings>('PUT', '/v1/ai-settings', data);
+}
+
+export async function testAISettings(data: AITestRequest): Promise<AITestResult> {
+  return apiRequest<AITestResult>('POST', '/v1/ai-settings/test', data);
 }
 
 export async function updateIncident(id: string, data: UpdateIncidentRequest): Promise<IncidentDetail> {
