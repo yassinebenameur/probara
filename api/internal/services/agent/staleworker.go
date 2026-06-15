@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -161,24 +162,18 @@ func lastObservedAt(createdAt time.Time, lastCheck sql.NullTime) time.Time {
 }
 
 func (w *StaleWorker) insertStaleResult(ctx context.Context, monitorID, tenantID uuid.UUID, now time.Time) error {
-	const errorMessage = "Agent has not reported metrics within twice the expected interval"
+	errorMessage := "Agent has not reported metrics within twice the expected interval"
 
-	_, err := w.db.ExecContext(ctx,
-		`INSERT INTO check_results
-		 (id, monitor_id, tenant_id, job_id, status, result_source, error_message, created_at, started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		uuid.New(),
-		monitorID,
-		tenantID,
-		uuid.New(),
-		string(sharedmodels.ResultStatusFailure),
-		string(sharedmodels.ResultSourceMonitor),
-		errorMessage,
-		now,
-		now,
-		now,
-	)
-	if err != nil {
+	if _, err := monitorstate.Record(ctx, w.db, monitorstate.Result{
+		MonitorID:    monitorID,
+		TenantID:     tenantID,
+		JobID:        uuid.New(),
+		Status:       string(sharedmodels.ResultStatusFailure),
+		ResultSource: string(sharedmodels.ResultSourceMonitor),
+		ErrorMessage: &errorMessage,
+		StartedAt:    now,
+		CompletedAt:  now,
+	}); err != nil {
 		return fmt.Errorf("insert stale result: %w", err)
 	}
 	return nil

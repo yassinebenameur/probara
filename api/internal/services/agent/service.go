@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -71,25 +72,21 @@ func (s *Service) ProcessMetrics(ctx context.Context, payload models.AgentMetric
 	// Generate a job ID for this metrics report
 	jobID := uuid.New()
 
-	// Insert check result
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO check_results 
-		 (id, monitor_id, tenant_id, job_id, status, result_source, latency_ms, metrics_data, created_at, started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		uuid.New(),
-		monitorID,
-		tenantID,
-		jobID,
-		status,
-		string(models.ResultSourceMonitor),
-		latencyMs,
-		metricsJSON,
-		payload.Metrics.Timestamp,
-		payload.Metrics.Timestamp,
-		time.Now(),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert check result: %w", err)
+	// Insert the check result and advance the monitor state machine in one
+	// transaction so dashboard health reflects agent reports.
+	latency := int64(latencyMs)
+	if _, err := monitorstate.Record(ctx, s.db, monitorstate.Result{
+		MonitorID:    monitorID,
+		TenantID:     tenantID,
+		JobID:        jobID,
+		Status:       status,
+		ResultSource: string(models.ResultSourceMonitor),
+		LatencyMs:    &latency,
+		MetricsData:  metricsJSON,
+		StartedAt:    payload.Metrics.Timestamp,
+		CompletedAt:  time.Now(),
+	}); err != nil {
+		return fmt.Errorf("failed to record check result: %w", err)
 	}
 
 	s.publishStatusUpdate(monitorID, tenantID)

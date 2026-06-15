@@ -30,22 +30,34 @@ func TestStaleWorkerMarksAgentStaleAfterMissedMetricWindow(t *testing.T) {
 		WillReturnRows(agentStaleMonitorRows().
 			AddRow(monitorID, tenantID, "local agent", 60, now.Add(-10*time.Minute), sql.NullString{String: "success", Valid: true}, sql.NullTime{Time: lastSuccess, Valid: true}))
 
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO check_results
-		 (id, monitor_id, tenant_id, job_id, status, result_source, error_message, created_at, started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`)).
+	// monitorstate.Record wraps the insert in a transaction that locks the
+	// monitor row and advances its state machine.
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT current_state, consecutive_failures, consecutive_failures_threshold")).
+		WithArgs(monitorID).
+		WillReturnRows(sqlmock.NewRows([]string{"current_state", "consecutive_failures", "consecutive_failures_threshold"}).
+			AddRow("up", 0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO check_results")).
 		WithArgs(
-			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), // id
 			monitorID,
 			tenantID,
-			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), // job_id
 			string(sharedmodels.ResultStatusFailure),
 			string(sharedmodels.ResultSourceMonitor),
+			sqlmock.AnyArg(), // http_status
+			sqlmock.AnyArg(), // latency_ms
 			"Agent has not reported metrics within twice the expected interval",
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			sqlmock.AnyArg(), // metrics_data
+			sqlmock.AnyArg(), // created_at
+			sqlmock.AnyArg(), // started_at
+			sqlmock.AnyArg(), // completed_at
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE monitors")).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), monitorID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	worker := NewStaleWorker(sqlDB, logger.New("agent-test", "fatal"))
 	worker.checkStaleMonitorsAt(context.Background(), now)
