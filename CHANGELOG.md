@@ -1,3 +1,26 @@
+# [1.0.0-alpha.55](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.54...v1.0.0-alpha.55) (2026-06-15)
+
+
+### Bug Fixes
+
+* **alerts:** scan latency anomaly columns in remaining alert read paths ([ba45639](https://github.com/yassinebenameur/probara/commit/ba456398490be223aee3f2e4c93a78ede2d2761d))
+* **monitors:** advance state machine for agent and push results ([b5a457e](https://github.com/yassinebenameur/probara/commit/b5a457efeab7322cd9f2071fc5deef0319298852))
+* **web:** add required notification fields to monitor-list test fixture ([9c5497b](https://github.com/yassinebenameur/probara/commit/9c5497b11861cd8bdbd153e49954cd1479a9ec9e))
+* **web:** align username/password inputs in database monitor forms ([095e54e](https://github.com/yassinebenameur/probara/commit/095e54ee13801219b8f869dfa27f4b168c2e61bc))
+
+
+### Features
+
+* **alerts:** latency anomaly detection to catch degradation before hard-down ([6100c30](https://github.com/yassinebenameur/probara/commit/6100c30c53a2625883ed804418591935c38081bf))
+* **dependencies:** AI-suggested dependencies from co-firing alerts, tags, groups ([5bb5ba5](https://github.com/yassinebenameur/probara/commit/5bb5ba51b448bb4c53f0d5ad671454833848b377))
+* **incidents:** AI root cause analysis with per-tenant configurable LLM ([7ca2ef0](https://github.com/yassinebenameur/probara/commit/7ca2ef0aa06b1d44363a2bf567d6c4dac54b5faf))
+* **monitors:** add Redis, PostgreSQL, and MongoDB monitor types with encrypted config secrets ([6522dbc](https://github.com/yassinebenameur/probara/commit/6522dbc87bd064ecd81ca1387376c906f1097152))
+* **monitors:** add tcp monitor type ([bef0bf2](https://github.com/yassinebenameur/probara/commit/bef0bf2c3c54ed67487667b15e56af94497a1f41))
+* **monitors:** dependency graph with dependency-aware alert annotations ([7a42e95](https://github.com/yassinebenameur/probara/commit/7a42e9501f5efc1defcdddea90b60fdffdcc4e5a))
+* **monitors:** maintenance windows with alert suppression and snooze ([1989514](https://github.com/yassinebenameur/probara/commit/19895141e625300da0f3db2309672bae91bbfe70))
+* **monitors:** maintenance windows with alert suppression and snooze ([5387eaa](https://github.com/yassinebenameur/probara/commit/5387eaac0820d815a9cfa595b950f5b2139cb431))
+* **monitors:** RabbitMQ type, test-connection flow, richer DB assertions, key rotation ([51c13ae](https://github.com/yassinebenameur/probara/commit/51c13aec1967efe81ae7ab7c976da9c2acf9c5cd))
+
 # [1.0.0-alpha.54](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.53...v1.0.0-alpha.54) (2026-06-11)
 
 
