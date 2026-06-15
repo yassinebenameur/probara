@@ -169,7 +169,7 @@ func buildEmbed(req plugin.DispatchRequest) discordPayload {
 
 	return discordPayload{
 		Embeds: []discordEmbed{{
-			Title:     titleFor(eventType, event.Alert.MonitorName),
+			Title:     titleFor(eventType, event.Alert.MonitorName, event.Alert.IsLatencyAnomaly()),
 			Color:     colorFor(eventType),
 			Timestamp: ts.UTC().Format(time.RFC3339),
 			Footer:    &discordEmbedFooter{Text: fmt.Sprintf("event: %s · tenant: %s", eventType, event.TenantID)},
@@ -178,7 +178,19 @@ func buildEmbed(req plugin.DispatchRequest) discordPayload {
 	}
 }
 
-func titleFor(eventType, monitorName string) string {
+func titleFor(eventType, monitorName string, latency bool) string {
+	if latency {
+		switch eventType {
+		case "created":
+			return fmt.Sprintf("Latency Degraded: %s", monitorName)
+		case "resolved":
+			return fmt.Sprintf("Latency Recovered: %s", monitorName)
+		case "reminder":
+			return fmt.Sprintf("Latency Still Degraded: %s", monitorName)
+		default:
+			return fmt.Sprintf("Latency Anomaly: %s", monitorName)
+		}
+	}
 	switch eventType {
 	case "created":
 		return fmt.Sprintf("Alert Triggered: %s", monitorName)

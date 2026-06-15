@@ -27,6 +27,13 @@ type Alert struct {
 	ResolvedAt     *time.Time  `json:"resolved_at,omitempty"`
 	FailureCount   int         `json:"failure_count"`
 	LastError      *string     `json:"last_error,omitempty"`
+	// Kind distinguishes an availability outage ("availability") from a latency
+	// degradation ("latency_anomaly").
+	Kind string `json:"kind"`
+	// Latency-anomaly annotation: populated when Kind == "latency_anomaly".
+	BaselineLatencyMs *float64 `json:"baseline_latency_ms,omitempty"`
+	ObservedLatencyMs *float64 `json:"observed_latency_ms,omitempty"`
+	AnomalyScore      *float64 `json:"anomaly_score,omitempty"`
 	// Root-cause annotation: the upstream dependency that was down when this
 	// alert fired (dependency-aware alerting).
 	RootCauseMonitorID *uuid.UUID `json:"root_cause_monitor_id,omitempty"`

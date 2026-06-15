@@ -170,6 +170,12 @@ func RenderBody(event notifications.AlertEvent, templates Templates) (string, er
 
 // DefaultSubject is the subject line used when no override template is set.
 func DefaultSubject(event notifications.AlertEvent) string {
+	if event.Alert.IsLatencyAnomaly() {
+		if event.Type == "resolved" {
+			return fmt.Sprintf("[Latency Recovered] %s", event.Alert.MonitorName)
+		}
+		return fmt.Sprintf("[Latency Degraded] %s", event.Alert.MonitorName)
+	}
 	if event.Type == "resolved" {
 		return fmt.Sprintf("[Alert Resolved] %s", event.Alert.MonitorName)
 	}
@@ -185,6 +191,13 @@ func DefaultBody(event notifications.AlertEvent) string {
 		fmt.Sprintf("Triggered At: %s", event.Alert.TriggeredAt.Format(time.RFC3339)),
 		fmt.Sprintf("Failure Count: %d", event.Alert.FailureCount),
 		fmt.Sprintf("Tenant ID: %s", event.TenantID),
+	}
+	if event.Alert.IsLatencyAnomaly() && event.Alert.ObservedLatencyMs != nil && event.Alert.BaselineLatencyMs != nil {
+		line := fmt.Sprintf("Latency: %.0f ms observed vs ~%.0f ms baseline", *event.Alert.ObservedLatencyMs, *event.Alert.BaselineLatencyMs)
+		if event.Alert.AnomalyScore != nil {
+			line = fmt.Sprintf("%s (%.1fσ)", line, *event.Alert.AnomalyScore)
+		}
+		lines = append(lines, line)
 	}
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		lines = append(lines, fmt.Sprintf("Last Error: %s", *event.Alert.LastError))
@@ -229,12 +242,23 @@ func templateData(event notifications.AlertEvent) map[string]any {
 	if event.Alert.RootCauseDownSince != nil {
 		rootCauseDownSince = event.Alert.RootCauseDownSince.Format(time.RFC3339)
 	}
+	var baselineLatency, observedLatency, anomalyScore any
+	if event.Alert.BaselineLatencyMs != nil {
+		baselineLatency = *event.Alert.BaselineLatencyMs
+	}
+	if event.Alert.ObservedLatencyMs != nil {
+		observedLatency = *event.Alert.ObservedLatencyMs
+	}
+	if event.Alert.AnomalyScore != nil {
+		anomalyScore = *event.Alert.AnomalyScore
+	}
 	return map[string]any{
 		"alert_id":      event.Alert.ID,
 		"monitor_id":    event.Alert.MonitorID,
 		"monitor_name":  event.Alert.MonitorName,
 		"policy_id":     event.Alert.AlertPolicyID,
 		"policy_name":   event.Alert.PolicyName,
+		"kind":          event.Alert.Kind,
 		"status":        event.Alert.Status,
 		"triggered_at":  event.Alert.TriggeredAt.Format(time.RFC3339),
 		"resolved_at":   resolvedAt,
@@ -246,6 +270,10 @@ func templateData(event notifications.AlertEvent) map[string]any {
 
 		"root_cause_monitor_name": rootCauseName,
 		"root_cause_down_since":   rootCauseDownSince,
+
+		"baseline_latency_ms": baselineLatency,
+		"observed_latency_ms": observedLatency,
+		"anomaly_score":       anomalyScore,
 	}
 }
 

@@ -135,7 +135,11 @@ func buildBlockKit(req plugin.DispatchRequest) slackPayload {
 	event := req.Event
 	eventType := eventTypeOf(req)
 	emoji := emojiFor(eventType)
-	header := fmt.Sprintf("%s %s: %s", emoji, headerLabel(eventType), event.Alert.MonitorName)
+	label := headerLabel(eventType)
+	if event.Alert.IsLatencyAnomaly() {
+		label = latencyLabel(eventType)
+	}
+	header := fmt.Sprintf("%s %s: %s", emoji, label, event.Alert.MonitorName)
 
 	fields := []slackText{
 		{Type: "mrkdwn", Text: fmt.Sprintf("*Monitor*\n%s", event.Alert.MonitorName)},
@@ -190,6 +194,20 @@ func headerLabel(eventType string) string {
 		return "Alert Still Active"
 	default:
 		return "Alert"
+	}
+}
+
+// latencyLabel is the header label for latency_anomaly alerts.
+func latencyLabel(eventType string) string {
+	switch eventType {
+	case "created":
+		return "Latency Degraded"
+	case "resolved":
+		return "Latency Recovered"
+	case "reminder":
+		return "Latency Still Degraded"
+	default:
+		return "Latency Anomaly"
 	}
 }
 

@@ -415,7 +415,14 @@ export interface NotificationSettings {
   default_channels: ChannelAssignment[];
   alert_reminder_seconds: number;
   auto_create_incident: boolean;
+  latency_anomaly_enabled: boolean;
+  latency_baseline_window_hours: number;
+  latency_anomaly_sensitivity: number;
+  latency_anomaly_min_breach_seconds: number;
+  latency_anomaly_min_delta_pct: number;
 }
+
+export type AlertKind = 'availability' | 'latency_anomaly';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down';
 
@@ -576,6 +583,10 @@ export interface Alert {
   resolved_at?: string;
   failure_count: number;
   last_error?: string;
+  kind: AlertKind;
+  baseline_latency_ms?: number;
+  observed_latency_ms?: number;
+  anomaly_score?: number;
   root_cause_monitor_id?: string;
   root_cause_down_since?: string;
   created_at: string;

@@ -136,6 +136,9 @@ type fact struct {
 func buildMessageCard(req plugin.DispatchRequest) messageCard {
 	event := req.Event
 	prefix := titlePrefix(eventTypeOf(req))
+	if event.Alert.IsLatencyAnomaly() {
+		prefix = latencyTitlePrefix(eventTypeOf(req))
+	}
 	title := fmt.Sprintf("%s: %s", prefix, event.Alert.MonitorName)
 	timestamp := event.Timestamp
 	if timestamp.IsZero() {
@@ -182,6 +185,19 @@ func titlePrefix(eventType string) string {
 		return "Alert Still Active"
 	default:
 		return "Alert"
+	}
+}
+
+func latencyTitlePrefix(eventType string) string {
+	switch eventType {
+	case "created":
+		return "Latency Degraded"
+	case "resolved":
+		return "Latency Recovered"
+	case "reminder":
+		return "Latency Still Degraded"
+	default:
+		return "Latency Anomaly"
 	}
 }
 

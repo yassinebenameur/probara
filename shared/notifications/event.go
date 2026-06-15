@@ -20,6 +20,9 @@ type AlertDetails struct {
 	MonitorName          string     `json:"monitor_name"`
 	AlertPolicyID        string     `json:"alert_policy_id"`
 	PolicyName           string     `json:"policy_name"`
+	// Kind distinguishes an availability outage ("availability") from a latency
+	// degradation ("latency_anomaly"). Empty is treated as "availability".
+	Kind                 string     `json:"kind,omitempty"`
 	Status               string     `json:"status"`
 	TriggeredAt          time.Time  `json:"triggered_at"`
 	ResolvedAt           *time.Time `json:"resolved_at,omitempty"`
@@ -33,4 +36,36 @@ type AlertDetails struct {
 	RootCauseMonitorID   *string    `json:"root_cause_monitor_id,omitempty"`
 	RootCauseMonitorName *string    `json:"root_cause_monitor_name,omitempty"`
 	RootCauseDownSince   *time.Time `json:"root_cause_down_since,omitempty"`
+
+	// Latency-anomaly annotation: populated when Kind == "latency_anomaly" so
+	// notifications can report the degradation magnitude.
+	BaselineLatencyMs *float64 `json:"baseline_latency_ms,omitempty"`
+	ObservedLatencyMs *float64 `json:"observed_latency_ms,omitempty"`
+	AnomalyScore      *float64 `json:"anomaly_score,omitempty"`
+}
+
+// KindAvailability and KindLatencyAnomaly are the alert kinds.
+const (
+	KindAvailability   = "availability"
+	KindLatencyAnomaly = "latency_anomaly"
+)
+
+// IsLatencyAnomaly reports whether this alert is a latency degradation alert.
+func (d AlertDetails) IsLatencyAnomaly() bool {
+	return d.Kind == KindLatencyAnomaly
+}
+
+// Headline returns a short, kind-aware noun phrase for the alert condition,
+// e.g. "is down" or "latency degraded", suitable for notification titles.
+func (d AlertDetails) Headline() string {
+	if d.IsLatencyAnomaly() {
+		if d.Status == "resolved" {
+			return "latency recovered"
+		}
+		return "latency degraded"
+	}
+	if d.Status == "resolved" {
+		return "recovered"
+	}
+	return "is down"
 }

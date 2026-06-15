@@ -122,6 +122,7 @@ type AlerterConfig struct {
 	AlertReminderIntervalSeconds int
 	AlertGroupWindowSeconds      int
 	AlertGroupMaxChildren        int
+	LatencyAnomalyEnabled        bool
 	SMTPHost                     string
 	SMTPPort                     int
 	SMTPUsername                 string
@@ -705,6 +706,17 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 			return nil, fmt.Errorf("invalid ALERT_EVAL_INTERVAL_SECONDS: %w", err)
 		}
 		cfg.AlertEvalIntervalSeconds = val
+	}
+
+	// ALERTER_LATENCY_ANOMALY_ENABLED (default true): kill-switch for the
+	// latency anomaly detection step.
+	cfg.LatencyAnomalyEnabled = true
+	if v := os.Getenv("ALERTER_LATENCY_ANOMALY_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERTER_LATENCY_ANOMALY_ENABLED: %w", err)
+		}
+		cfg.LatencyAnomalyEnabled = enabled
 	}
 
 	// ALERT_REMINDER_INTERVAL_SECONDS

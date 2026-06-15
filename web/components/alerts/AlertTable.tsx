@@ -138,12 +138,26 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                 </span>
               </td>
               <td>
-                <Link 
+                <Link
                   href={`/monitors/${alert.monitor_id}`}
                   className="font-medium text-white hover:text-cyan-400"
                 >
                   {alert.monitor_name || alert.monitor_id}
                 </Link>
+                {alert.kind === 'latency_anomaly' && (
+                  <span
+                    className="ml-2 inline-flex items-center rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-300"
+                    title="Latency degraded relative to baseline"
+                  >
+                    latency
+                  </span>
+                )}
+                {alert.kind === 'latency_anomaly' && alert.observed_latency_ms != null && alert.baseline_latency_ms != null && (
+                  <p className="mt-0.5 text-[10px] text-violet-300/80">
+                    {Math.round(alert.observed_latency_ms)} ms vs ~{Math.round(alert.baseline_latency_ms)} ms baseline
+                    {alert.anomaly_score != null && ` (${alert.anomaly_score.toFixed(1)}σ)`}
+                  </p>
+                )}
                 {alert.last_error && (
                   <p className="mt-0.5 text-[10px] text-rose-400 truncate max-w-[200px]" title={alert.last_error}>
                     {alert.last_error}

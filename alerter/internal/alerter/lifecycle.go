@@ -25,6 +25,9 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.resolveAlertsForRecoveredMonitors(ctx); err != nil {
 		return err
 	}
+	if err := a.evaluateLatencyAnomalies(ctx); err != nil {
+		return err
+	}
 	if err := a.annotateOpenAlertRootCauses(ctx); err != nil {
 		return err
 	}
@@ -72,6 +75,7 @@ func (a *Alerter) annotateOpenAlertRootCauses(ctx context.Context) error {
 			SELECT al2.id AS alert_id, rc.id AS rc_id, rc.last_state_change_at AS rc_down_since
 			FROM alerts al2`+rootCauseLateral("al2.monitor_id")+`
 			WHERE al2.status IN ('active', 'acknowledged')
+			  AND al2.kind = 'availability'
 		) x
 		WHERE al.id = x.alert_id
 		  AND (al.root_cause_monitor_id IS DISTINCT FROM x.rc_id
@@ -136,7 +140,8 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM alerts al
-			WHERE al.monitor_id = m.id AND al.status IN ('active', 'acknowledged'))
+			WHERE al.monitor_id = m.id AND al.kind = 'availability'
+			  AND al.status IN ('active', 'acknowledged'))
 	`)
 	if err != nil {
 		return fmt.Errorf("query down monitors: %w", err)
@@ -222,11 +227,11 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 
 	var alertID uuid.UUID
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, status,
+		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
 			triggered_at, failure_count, last_error, root_cause_monitor_id, root_cause_down_since,
 			created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'active', NOW(), $4, $5, $6, $7, NOW(), NOW())
-		ON CONFLICT (monitor_id) WHERE status IN ('active', 'acknowledged') DO NOTHING
+		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), $4, $5, $6, $7, NOW(), NOW())
+		ON CONFLICT (monitor_id, kind) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
 	`, uuid.New(), dm.tenantID, dm.id, dm.failCount, lastError, rootCauseID, rootCauseDownSince).Scan(&alertID)
 	if err == sql.ErrNoRows {
@@ -273,6 +278,7 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 		JOIN monitors m ON m.id = al.monitor_id
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
 		WHERE al.status IN ('active', 'acknowledged')
+		  AND al.kind = 'availability'
 		  AND (m.current_state = 'up' OR m.deleted_at IS NOT NULL OR m.enabled = FALSE)
 	`)
 	if err != nil {
@@ -369,15 +375,20 @@ func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID
 // in an active maintenance window are muted; dispatch resumes when it ends.
 func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.triggered_at, al.failure_count, al.last_error,
+		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.kind, al.triggered_at, al.failure_count, al.last_error,
 			al.root_cause_monitor_id, al.root_cause_down_since, rcm.name,
+			al.baseline_latency_ms, al.observed_latency_ms, al.anomaly_score,
 			te.alert_reminder_seconds
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
 		WHERE al.status IN ('active', 'acknowledged')
-		  AND m.current_state = 'down' AND m.deleted_at IS NULL
+		  AND m.deleted_at IS NULL
+		  AND (
+			(al.kind = 'availability' AND m.current_state = 'down')
+			OR al.kind = 'latency_anomaly'
+		  )
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  AND NOT EXISTS (SELECT 1 FROM monitor_groups mg WHERE mg.monitor_id = al.monitor_id)
 	`)
@@ -398,15 +409,18 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		var rcID uuid.NullUUID
 		var rcDownSince sql.NullTime
 		var rcName sql.NullString
+		var baseline, observed, score sql.NullFloat64
 		if err := rows.Scan(&oa.record.ID, &oa.record.TenantID, &oa.record.MonitorID, &oa.monitorName,
-			&oa.record.TriggeredAt, &oa.record.FailureCount, &lastError,
-			&rcID, &rcDownSince, &rcName, &oa.reminderSeconds); err != nil {
+			&oa.record.Kind, &oa.record.TriggeredAt, &oa.record.FailureCount, &lastError,
+			&rcID, &rcDownSince, &rcName,
+			&baseline, &observed, &score, &oa.reminderSeconds); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
 		if lastError.Valid {
 			oa.record.LastError = &lastError.String
 		}
 		setRootCause(&oa.record, rcID, rcName, rcDownSince)
+		setLatencyMetrics(&oa.record, baseline, observed, score)
 		open = append(open, oa)
 	}
 	if err := rows.Err(); err != nil {

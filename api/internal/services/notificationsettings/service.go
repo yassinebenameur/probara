@@ -29,6 +29,13 @@ type Settings struct {
 	DefaultChannels      []ChannelAssignment `json:"default_channels"`
 	AlertReminderSeconds int                 `json:"alert_reminder_seconds"`
 	AutoCreateIncident   bool                `json:"auto_create_incident"`
+
+	// Latency anomaly detection (workspace-wide).
+	LatencyAnomalyEnabled          bool    `json:"latency_anomaly_enabled"`
+	LatencyBaselineWindowHours     int     `json:"latency_baseline_window_hours"`
+	LatencyAnomalySensitivity      float64 `json:"latency_anomaly_sensitivity"`
+	LatencyAnomalyMinBreachSeconds int     `json:"latency_anomaly_min_breach_seconds"`
+	LatencyAnomalyMinDeltaPct      float64 `json:"latency_anomaly_min_delta_pct"`
 }
 
 // UpdateRequest carries the fields to update; nil pointer fields are left unchanged.
@@ -36,6 +43,12 @@ type UpdateRequest struct {
 	DefaultChannels      []ChannelAssignment `json:"default_channels"`
 	AlertReminderSeconds *int                `json:"alert_reminder_seconds,omitempty"`
 	AutoCreateIncident   *bool               `json:"auto_create_incident,omitempty"`
+
+	LatencyAnomalyEnabled          *bool    `json:"latency_anomaly_enabled,omitempty"`
+	LatencyBaselineWindowHours     *int     `json:"latency_baseline_window_hours,omitempty"`
+	LatencyAnomalySensitivity      *float64 `json:"latency_anomaly_sensitivity,omitempty"`
+	LatencyAnomalyMinBreachSeconds *int     `json:"latency_anomaly_min_breach_seconds,omitempty"`
+	LatencyAnomalyMinDeltaPct      *float64 `json:"latency_anomaly_min_delta_pct,omitempty"`
 }
 
 // Service provides workspace notification settings CRUD.
@@ -48,8 +61,13 @@ func NewService(db *shareddb.Client) *Service { return &Service{db: db} }
 func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error) {
 	var settings Settings
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT alert_reminder_seconds, auto_create_incident FROM tenants WHERE id = $1
-	`, tenantID).Scan(&settings.AlertReminderSeconds, &settings.AutoCreateIncident); err != nil {
+		SELECT alert_reminder_seconds, auto_create_incident,
+			latency_anomaly_enabled, latency_baseline_window_hours, latency_anomaly_sensitivity,
+			latency_anomaly_min_breach_seconds, latency_anomaly_min_delta_pct
+		FROM tenants WHERE id = $1
+	`, tenantID).Scan(&settings.AlertReminderSeconds, &settings.AutoCreateIncident,
+		&settings.LatencyAnomalyEnabled, &settings.LatencyBaselineWindowHours, &settings.LatencyAnomalySensitivity,
+		&settings.LatencyAnomalyMinBreachSeconds, &settings.LatencyAnomalyMinDeltaPct); err != nil {
 		return nil, fmt.Errorf("load tenant alert settings: %w", err)
 	}
 
@@ -111,14 +129,37 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 			}
 		}
 	}
-	if req.AlertReminderSeconds != nil || req.AutoCreateIncident != nil {
+	if req.LatencyBaselineWindowHours != nil && *req.LatencyBaselineWindowHours <= 0 {
+		return nil, fmt.Errorf("latency_baseline_window_hours must be greater than 0")
+	}
+	if req.LatencyAnomalySensitivity != nil && *req.LatencyAnomalySensitivity <= 0 {
+		return nil, fmt.Errorf("latency_anomaly_sensitivity must be greater than 0")
+	}
+	if req.LatencyAnomalyMinBreachSeconds != nil && *req.LatencyAnomalyMinBreachSeconds < 0 {
+		return nil, fmt.Errorf("latency_anomaly_min_breach_seconds must be >= 0")
+	}
+	if req.LatencyAnomalyMinDeltaPct != nil && *req.LatencyAnomalyMinDeltaPct < 0 {
+		return nil, fmt.Errorf("latency_anomaly_min_delta_pct must be >= 0")
+	}
+
+	if req.AlertReminderSeconds != nil || req.AutoCreateIncident != nil ||
+		req.LatencyAnomalyEnabled != nil || req.LatencyBaselineWindowHours != nil ||
+		req.LatencyAnomalySensitivity != nil || req.LatencyAnomalyMinBreachSeconds != nil ||
+		req.LatencyAnomalyMinDeltaPct != nil {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE tenants SET
 				alert_reminder_seconds = COALESCE($1, alert_reminder_seconds),
 				auto_create_incident = COALESCE($2, auto_create_incident),
+				latency_anomaly_enabled = COALESCE($3, latency_anomaly_enabled),
+				latency_baseline_window_hours = COALESCE($4, latency_baseline_window_hours),
+				latency_anomaly_sensitivity = COALESCE($5, latency_anomaly_sensitivity),
+				latency_anomaly_min_breach_seconds = COALESCE($6, latency_anomaly_min_breach_seconds),
+				latency_anomaly_min_delta_pct = COALESCE($7, latency_anomaly_min_delta_pct),
 				updated_at = NOW()
-			WHERE id = $3
-		`, req.AlertReminderSeconds, req.AutoCreateIncident, tenantID); err != nil {
+			WHERE id = $8
+		`, req.AlertReminderSeconds, req.AutoCreateIncident,
+			req.LatencyAnomalyEnabled, req.LatencyBaselineWindowHours, req.LatencyAnomalySensitivity,
+			req.LatencyAnomalyMinBreachSeconds, req.LatencyAnomalyMinDeltaPct, tenantID); err != nil {
 			return nil, fmt.Errorf("update tenant alert settings: %w", err)
 		}
 	}

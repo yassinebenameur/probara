@@ -36,6 +36,7 @@ type alertRecord struct {
 	TenantID             uuid.UUID
 	MonitorID            uuid.UUID
 	PolicyID             uuid.UUID
+	Kind                 string
 	Status               string
 	TriggeredAt          time.Time
 	FailureCount         int
@@ -43,6 +44,9 @@ type alertRecord struct {
 	RootCauseMonitorID   *uuid.UUID
 	RootCauseMonitorName *string
 	RootCauseDownSince   *time.Time
+	BaselineLatencyMs    *float64
+	ObservedLatencyMs    *float64
+	AnomalyScore         *float64
 }
 
 type alertChannel struct {
@@ -1226,6 +1230,11 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 		rootCauseID = &id
 	}
 
+	kind := alert.Kind
+	if kind == "" {
+		kind = notifications.KindAvailability
+	}
+
 	return notifications.AlertEvent{
 		Type:      eventType,
 		TenantID:  binding.TenantID.String(),
@@ -1236,6 +1245,7 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			MonitorName:          binding.MonitorName,
 			AlertPolicyID:        binding.PolicyID.String(),
 			PolicyName:           binding.PolicyName,
+			Kind:                 kind,
 			Status:               status,
 			TriggeredAt:          alert.TriggeredAt,
 			ResolvedAt:           resolvedAt,
@@ -1246,6 +1256,9 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			RootCauseMonitorID:   rootCauseID,
 			RootCauseMonitorName: alert.RootCauseMonitorName,
 			RootCauseDownSince:   alert.RootCauseDownSince,
+			BaselineLatencyMs:    alert.BaselineLatencyMs,
+			ObservedLatencyMs:    alert.ObservedLatencyMs,
+			AnomalyScore:         alert.AnomalyScore,
 		},
 	}
 }

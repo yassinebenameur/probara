@@ -85,7 +85,8 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 	query := fmt.Sprintf(`
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.created_at, a.updated_at,
+			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+			a.created_at, a.updated_at,
 			m.name as monitor_name, ap.name as policy_name,
 			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
@@ -112,7 +113,8 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 		err := rows.Scan(
 			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+			&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
+			&alert.CreatedAt, &alert.UpdatedAt,
 			&alert.MonitorName, &policyName,
 			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		)
@@ -142,7 +144,8 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 	query := `
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.created_at, a.updated_at,
+			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+			a.created_at, a.updated_at,
 			m.name as monitor_name, ap.name as policy_name,
 			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
@@ -187,7 +190,8 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 	query := `
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.created_at, a.updated_at,
+			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+			a.created_at, a.updated_at,
 			m.name as monitor_name, ap.name as policy_name,
 			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
@@ -212,7 +216,8 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 		err := rows.Scan(
 			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+			&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
+			&alert.CreatedAt, &alert.UpdatedAt,
 			&alert.MonitorName, &policyName,
 			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		)
@@ -243,7 +248,8 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 	query := `
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.created_at, a.updated_at,
+			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+			a.created_at, a.updated_at,
 			m.name as monitor_name, ap.name as policy_name,
 			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
@@ -271,7 +277,8 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 		err := rows.Scan(
 			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-			&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+			&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
+			&alert.CreatedAt, &alert.UpdatedAt,
 			&alert.MonitorName, &policyName,
 			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		)
@@ -395,7 +402,8 @@ func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID 
 	query := `
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.created_at, a.updated_at,
+			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+			a.created_at, a.updated_at,
 			m.name as monitor_name, ap.name as policy_name,
 			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
@@ -432,7 +440,8 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 	query := `
 		SELECT id, tenant_id, monitor_id, alert_policy_id, status,
 			triggered_at, acknowledged_at, resolved_at, failure_count,
-			last_error, root_cause_monitor_id, root_cause_down_since, created_at, updated_at
+			last_error, kind, baseline_latency_ms, observed_latency_ms, anomaly_score,
+			root_cause_monitor_id, root_cause_down_since, created_at, updated_at
 		FROM alerts
 		WHERE tenant_id = $1 AND monitor_id = $2 AND status IN ('active', 'acknowledged')
 		ORDER BY triggered_at DESC
@@ -443,7 +452,8 @@ func (s *Service) GetActiveAlertForMonitor(ctx context.Context, tenantID, monito
 	err := s.db.QueryRowContext(ctx, query, tenantID, monitorID).Scan(
 		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-		&alert.FailureCount, &alert.LastError, &alert.RootCauseMonitorID, &alert.RootCauseDownSince,
+		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
+		&alert.RootCauseMonitorID, &alert.RootCauseDownSince,
 		&alert.CreatedAt, &alert.UpdatedAt,
 	)
 

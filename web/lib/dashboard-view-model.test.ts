@@ -108,6 +108,7 @@ test('buildActivityTimeline merges failures and alerts chronologically with clea
         monitor_id: 'm2',
         alert_policy_id: 'p1',
         status: 'active',
+        kind: 'availability',
         triggered_at: '2026-04-24T11:00:00.000Z',
         failure_count: 2,
         created_at: '2026-04-24T11:00:00.000Z',
