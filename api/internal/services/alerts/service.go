@@ -160,7 +160,8 @@ func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*m
 	err := s.db.QueryRowContext(ctx, query, alertID, tenantID).Scan(
 		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
+		&alert.CreatedAt, &alert.UpdatedAt,
 		&alert.MonitorName, &policyName,
 		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 	)
@@ -418,7 +419,8 @@ func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID 
 	err := tx.QueryRowContext(ctx, query, alertID, tenantID).Scan(
 		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
 		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-		&alert.FailureCount, &alert.LastError, &alert.CreatedAt, &alert.UpdatedAt,
+		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
+		&alert.CreatedAt, &alert.UpdatedAt,
 		&alert.MonitorName, &policyName,
 		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 	)

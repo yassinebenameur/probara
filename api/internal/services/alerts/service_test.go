@@ -132,7 +132,8 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.created_at, a.updated_at,
+			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+			a.created_at, a.updated_at,
 			m.name as monitor_name, ap.name as policy_name,
 			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
@@ -147,7 +148,8 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
 			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
-			"last_error", "created_at", "updated_at", "monitor_name", "policy_name",
+			"last_error", "kind", "baseline_latency_ms", "observed_latency_ms", "anomaly_score",
+			"created_at", "updated_at", "monitor_name", "policy_name",
 			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
 		}))
 
@@ -177,7 +179,8 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.created_at, a.updated_at,
+			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+			a.created_at, a.updated_at,
 			m.name as monitor_name, ap.name as policy_name,
 			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
 		FROM alerts a
@@ -195,7 +198,8 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
 			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
-			"last_error", "created_at", "updated_at", "monitor_name", "policy_name",
+			"last_error", "kind", "baseline_latency_ms", "observed_latency_ms", "anomaly_score",
+			"created_at", "updated_at", "monitor_name", "policy_name",
 			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
 		}))
 
