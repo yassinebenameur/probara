@@ -11,16 +11,17 @@ import (
 	"github.com/google/uuid"
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
+	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
 	dashboardhandlers "github.com/yassinebenameur/probara/api/internal/handlers/dashboard"
+	depsuggesthandlers "github.com/yassinebenameur/probara/api/internal/handlers/depsuggest"
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
 	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
 	maintenancewindowhandlers "github.com/yassinebenameur/probara/api/internal/handlers/maintenancewindows"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
-	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
@@ -30,22 +31,24 @@ import (
 	adminauthservice "github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
+	aisettingsservice "github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
+	depsuggestservice "github.com/yassinebenameur/probara/api/internal/services/depsuggest"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
-	aisettingsservice "github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
+	"github.com/yassinebenameur/probara/shared/ai"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -178,9 +181,21 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
 			agentHandlers := agenthandlers.NewHandler(agentService, log, cfg.PublicBaseURL)
 
-			// AI settings (per-tenant LLM config). envFallback is true when the
-			// LLM_* env defaults are set, so analysis works out of the box.
-			aiSettingsSvc := aisettingsservice.NewService(dbClient, secretsEncryptor, cfg.AIAnalysisEnabled)
+			// AI settings (per-tenant LLM config). The env LLM_* values are the
+			// global fallback so analysis works before a tenant configures a row.
+			aiEnvConfig := ai.Config{
+				Provider:  cfg.LLMProvider,
+				BaseURL:   cfg.LLMBaseURL,
+				APIKey:    cfg.LLMAPIKey,
+				Model:     cfg.LLMModel,
+				JSONMode:  cfg.LLMJSONMode,
+				MaxTokens: cfg.LLMMaxTokens,
+				Timeout:   time.Duration(cfg.LLMTimeoutSeconds) * time.Second,
+			}
+			aiSettingsSvc := aisettingsservice.NewService(dbClient, secretsEncryptor, aiEnvConfig)
+
+			// AI dependency suggestions (co-firing alerts -> proposed edges)
+			depSuggestHdlrs := depsuggesthandlers.NewHandlers(depsuggestservice.NewService(dbClient, aiSettingsSvc), log)
 			aiSettingsHdlrs := aisettingshandlers.NewHandlers(aiSettingsSvc, log)
 			r.Route("/ai-settings", func(r chi.Router) {
 				r.Get("/", aiSettingsHdlrs.GetSettings)
@@ -245,6 +260,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
 				// Dependency graph (must be before /{id} to avoid conflicts)
 				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
+				r.Post("/dependency-suggestions", depSuggestHdlrs.Suggest)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)

@@ -19,6 +19,7 @@ import type {
   MonitorAnalyticsResponse,
   DependencyGraph,
   DependencyMonitor,
+  DependencySuggestionResult,
   DashboardOverviewResponse,
   DashboardSummaryResponse,
   DashboardGroupSparklineResponse,
@@ -364,6 +365,10 @@ export async function getMonitorDependents(id: string): Promise<{ items: Depende
 
 export async function addMonitorDependency(id: string, dependsOnId: string): Promise<void> {
   return apiRequest<void>('POST', `/v1/monitors/${id}/dependencies`, { depends_on_id: dependsOnId });
+}
+
+export async function suggestDependencies(): Promise<DependencySuggestionResult> {
+  return apiRequest<DependencySuggestionResult>('POST', '/v1/monitors/dependency-suggestions');
 }
 
 export async function removeMonitorDependency(id: string, dependsOnId: string): Promise<void> {

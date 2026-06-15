@@ -840,6 +840,21 @@ export interface IncidentAIAnalysis {
   completed_at?: string;
 }
 
+export interface DependencySuggestion {
+  monitor_id: string;
+  monitor_name: string;
+  depends_on_id: string;
+  depends_on_name: string;
+  reason: string;
+  confidence: string;
+}
+
+export interface DependencySuggestionResult {
+  suggestions: DependencySuggestion[];
+  model?: string;
+  analyzed_pairs: number;
+}
+
 export interface AISettings {
   enabled: boolean;
   provider: string;

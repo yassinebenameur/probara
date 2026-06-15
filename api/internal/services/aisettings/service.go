@@ -89,18 +89,19 @@ func defaultRecord() record {
 
 // Service provides per-tenant AI settings CRUD plus a connectivity probe.
 type Service struct {
-	db          *shareddb.Client
-	encryptor   secrets.Encryptor
-	envFallback bool
+	db        *shareddb.Client
+	encryptor secrets.Encryptor
+	envConfig ai.Config // optional global fallback (LLM_* env); zero when unset
 }
 
-// NewService creates a Service. envFallback is true when the LLM_* environment
-// defaults are configured, so EffectiveEnabled returns true even without a row.
-func NewService(db *shareddb.Client, encryptor secrets.Encryptor, envFallback bool) *Service {
+// NewService creates a Service. envConfig is the global LLM fallback (from
+// LLM_* env); when its BaseURL is set, AI features work even without a
+// per-tenant row.
+func NewService(db *shareddb.Client, encryptor secrets.Encryptor, envConfig ai.Config) *Service {
 	if encryptor == nil {
 		encryptor = secrets.NoOpEncryptor{}
 	}
-	return &Service{db: db, encryptor: encryptor, envFallback: envFallback}
+	return &Service{db: db, encryptor: encryptor, envConfig: envConfig}
 }
 
 func (s *Service) loadRecord(ctx context.Context, tenantID uuid.UUID) (record, bool, error) {
@@ -229,14 +230,41 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 // EffectiveEnabled reports whether AI analysis can run for the tenant: either an
 // enabled, usable row exists, or the environment fallback is configured.
 func (s *Service) EffectiveEnabled(ctx context.Context, tenantID uuid.UUID) (bool, error) {
+	_, ok, err := s.EffectiveConfig(ctx, tenantID)
+	return ok, err
+}
+
+// EffectiveConfig returns the ai.Config to use for a tenant — the decrypted
+// per-tenant row when enabled and usable, otherwise the env fallback. The
+// bool is false (and Config zero) when neither is configured.
+func (s *Service) EffectiveConfig(ctx context.Context, tenantID uuid.UUID) (ai.Config, bool, error) {
 	rec, found, err := s.loadRecord(ctx, tenantID)
 	if err != nil {
-		return false, err
+		return ai.Config{}, false, err
 	}
 	if found && rec.Enabled && rec.BaseURL != "" && rec.Model != "" {
-		return true, nil
+		apiKey := ""
+		if rec.APIKeyEnc != "" {
+			if dec, derr := s.encryptor.Decrypt(rec.APIKeyEnc); derr == nil {
+				apiKey = dec
+			} else {
+				return ai.Config{}, false, derr
+			}
+		}
+		return ai.Config{
+			Provider:  rec.Provider,
+			BaseURL:   rec.BaseURL,
+			APIKey:    apiKey,
+			Model:     rec.Model,
+			JSONMode:  rec.JSONMode,
+			MaxTokens: rec.MaxTokens,
+			Timeout:   time.Duration(rec.TimeoutSeconds) * time.Second,
+		}, true, nil
 	}
-	return s.envFallback, nil
+	if s.envConfig.BaseURL != "" {
+		return s.envConfig, true, nil
+	}
+	return ai.Config{}, false, nil
 }
 
 // Test runs a connectivity probe against the provided config. When APIKey is

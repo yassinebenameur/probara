@@ -29,7 +29,16 @@ type APIConfig struct {
 	CheckJobSubject       string
 	AIRCASubject          string
 	AIAnalysisEnabled     bool
-	AdminJWTSecret        string
+	// LLM_* env defaults — optional global fallback used when a tenant has no
+	// ai_settings row. Mirrors the worker's fields.
+	LLMProvider       string
+	LLMBaseURL        string
+	LLMAPIKey         string
+	LLMModel          string
+	LLMJSONMode       string
+	LLMMaxTokens      int
+	LLMTimeoutSeconds int
+	AdminJWTSecret    string
 	AdminAccessTTLMinutes int
 	AdminRefreshTTLDays   int
 	AdminCookieSecure     bool
@@ -234,10 +243,31 @@ func LoadAPIConfig() (*APIConfig, error) {
 	// worker consumes them). Must match the worker's AI_RCA_SUBJECT.
 	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
 
-	// AI analysis is enabled when the same LLM endpoint the worker uses is
-	// configured here, so the API can gate the endpoint (the worker holds the
-	// actual provider client). Set LLM_BASE_URL on the api service too.
-	cfg.AIAnalysisEnabled = strings.TrimSpace(os.Getenv("LLM_BASE_URL")) != ""
+	// LLM_* env defaults — optional global fallback. When set, the API can build
+	// an analyzer/advisor and gate AI features even before a tenant configures
+	// its own ai_settings row.
+	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
+	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
+	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
+	cfg.LLMMaxTokens = 1024
+	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
+		}
+		cfg.LLMMaxTokens = n
+	}
+	cfg.LLMTimeoutSeconds = 60
+	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.LLMTimeoutSeconds = n
+	}
+	cfg.AIAnalysisEnabled = cfg.LLMBaseURL != ""
 
 	// ADMIN_JWT_SECRET
 	adminJWTSecret := os.Getenv("ADMIN_JWT_SECRET")
