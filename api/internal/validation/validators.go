@@ -358,6 +358,34 @@ func (v *GRPCConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	return nil
 }
 
+// TCPConfigValidator validates raw TCP connect monitor configuration
+type TCPConfigValidator struct{}
+
+// ValidateConfig validates TCP monitor config
+func (v *TCPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
+	var config sharedmodels.TCPMonitorConfig
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		return fmt.Errorf("invalid tcp config: %w", err)
+	}
+
+	host := strings.TrimSpace(config.Host)
+	if host == "" {
+		return fmt.Errorf("host is required")
+	}
+
+	if ip := net.ParseIP(host); ip == nil {
+		if !isValidHostname(host) {
+			return fmt.Errorf("host must be a valid IP address or hostname")
+		}
+	}
+
+	if config.Port < 1 || config.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+
+	return nil
+}
+
 // GroupConfigValidator validates group monitor configuration
 type GroupConfigValidator struct{}
 

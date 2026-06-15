@@ -41,6 +41,7 @@ const SUPPORTED_TYPES = [
   { value: 'ping', label: 'Ping', description: 'ICMP ping checks' },
   { value: 'dns', label: 'DNS', description: 'DNS record checks' },
   { value: 'grpc', label: 'gRPC', description: 'gRPC health checks' },
+  { value: 'tcp', label: 'TCP', description: 'TCP connect (host:port) checks' },
   { value: 'group', label: 'Group', description: 'Group of monitors' },
   { value: 'agent', label: 'Agent', description: 'Heartbeat checks from installed agents' },
   { value: 'push', label: 'Push', description: 'Token-based push heartbeat checks' },
@@ -303,6 +304,7 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                       type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
                       type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
                       type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
+                      type === 'tcp' ? 'bg-lime-500/20 text-lime-400' :
                       type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
                       type === 'agent' ? 'bg-amber-500/20 text-amber-400' :
                       'bg-slate-500/20 text-slate-400'
@@ -315,7 +317,9 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                       ? getFieldValue(row, 'host')
                       : type === 'grpc'
                         ? `${getFieldValue(row, 'host')}:${getFieldValue(row, 'port') === '-' ? '443' : getFieldValue(row, 'port')}`
-                        : getFieldValue(row, 'url')}
+                        : type === 'tcp'
+                          ? `${getFieldValue(row, 'host')}:${getFieldValue(row, 'port')}`
+                          : getFieldValue(row, 'url')}
                   </td>
                   <td className="px-4 py-3">
                     {supported ? (
@@ -377,6 +381,7 @@ function ResultsTable({ results }: { results: ImportRowResult[] }) {
                     result.type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
                     result.type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
                     result.type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
+                    result.type === 'tcp' ? 'bg-lime-500/20 text-lime-400' :
                     result.type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
                     'bg-slate-500/20 text-slate-400'
                   }`}>

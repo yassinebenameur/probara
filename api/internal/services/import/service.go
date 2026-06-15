@@ -1298,7 +1298,7 @@ func (s *Service) resolveMonitorType(row models.ImportRow, mapping models.FieldM
 
 func isSupportedMonitorType(monitorType string) bool {
 	switch monitorType {
-	case "http", "ping", "dns", "grpc", "group", "agent", "push", "sip", "synthetic_api", "synthetic_browser":
+	case "http", "ping", "dns", "grpc", "tcp", "group", "agent", "push", "sip", "synthetic_api", "synthetic_browser":
 		return true
 	default:
 		return false
@@ -1317,7 +1317,7 @@ func importDuplicateKey(name, monitorType string) string {
 func activeCheckType(monitorType models.MonitorType) bool {
 	switch monitorType {
 	case models.MonitorTypeHTTP, models.MonitorTypePing, models.MonitorTypeSIP, models.MonitorTypeDNS,
-		models.MonitorTypeGRPC, models.MonitorTypeSyntheticAPI, models.MonitorTypeSyntheticBrowser:
+		models.MonitorTypeGRPC, models.MonitorTypeTCP, models.MonitorTypeSyntheticAPI, models.MonitorTypeSyntheticBrowser:
 		return true
 	default:
 		return false

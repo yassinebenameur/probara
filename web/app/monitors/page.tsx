@@ -152,6 +152,7 @@ const TYPE_LABELS: Record<string, { label: string; short: string }> = {
   ping: { label: 'Ping', short: 'PING' },
   dns: { label: 'DNS', short: 'DNS' },
   grpc: { label: 'gRPC', short: 'GRPC' },
+  tcp: { label: 'TCP', short: 'TCP' },
   agent: { label: 'Agent', short: 'AGENT' },
   group: { label: 'Group', short: 'GROUP' },
   push: { label: 'Push', short: 'PUSH' },
@@ -175,6 +176,7 @@ function TypeBadge({ type }: { type: string }) {
     ping: 'text-violet-400',
     dns: 'text-sky-400',
     grpc: 'text-teal-400',
+    tcp: 'text-lime-400',
     agent: 'text-amber-400',
     group: 'text-indigo-400',
     push: 'text-emerald-400',
@@ -486,6 +488,10 @@ function MonitorRow({
         const port = cfg.port || (cfg.use_tls === false ? 80 : 443);
         return `${cfg.host}:${port}`;
       }
+    }
+    if (monitor.type === 'tcp' && monitor.config && 'host' in monitor.config) {
+      const cfg = monitor.config as { host?: string; port?: number };
+      if (cfg.host) return cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host;
     }
     if (monitor.url) return monitor.url;
     if (monitor.config && 'host' in monitor.config) return monitor.config.host;

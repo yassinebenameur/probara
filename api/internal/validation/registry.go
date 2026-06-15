@@ -91,6 +91,7 @@ func NewDefaultValidatorRegistry() *ValidatorRegistry {
 	registry.Register(models.MonitorTypePostgres, &PostgresConfigValidator{})
 	registry.Register(models.MonitorTypeMongoDB, &MongoDBConfigValidator{})
 	registry.Register(models.MonitorTypeRabbitMQ, &RabbitMQConfigValidator{})
+	registry.Register(models.MonitorTypeTCP, &TCPConfigValidator{})
 
 	return registry
 }

@@ -94,7 +94,8 @@ export type MonitorType =
   | "redis"
   | "postgres"
   | "mongodb"
-  | "rabbitmq";
+  | "rabbitmq"
+  | "tcp";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -189,6 +190,13 @@ export interface GRPCMonitorConfig {
   port?: number;
   service?: string;
   use_tls?: boolean;
+}
+
+export interface TCPMonitorConfig {
+  host: string;
+  port: number;
+  use_tls?: boolean;
+  tls_skip_verify?: boolean;
 }
 
 export interface GroupMonitorConfig {
@@ -382,6 +390,7 @@ export type MonitorConfig =
   | PingMonitorConfig
   | DNSMonitorConfig
   | GRPCMonitorConfig
+  | TCPMonitorConfig
   | GroupMonitorConfig
   | AgentMonitorConfig
   | PushMonitorConfig
@@ -999,6 +1008,7 @@ export interface CheckResult {
     | PushMetrics
     | HTTPMetricsEnvelope
     | GRPCMetricsEnvelope
+    | TCPMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
     | SyntheticBrowserMetricsEnvelope;
   created_at: string;
@@ -1069,6 +1079,17 @@ export interface GRPCMetrics {
   service?: string;
   use_tls?: boolean;
   serving_status?: string;
+}
+
+export interface TCPMetricsEnvelope {
+  tcp?: TCPMetrics;
+}
+
+export interface TCPMetrics {
+  host?: string;
+  port?: number;
+  use_tls?: boolean;
+  tls_version?: string;
 }
 
 export interface HTTPTimingInfo {

@@ -25,6 +25,7 @@ const (
 	MonitorTypePostgres         MonitorType = "postgres"
 	MonitorTypeMongoDB          MonitorType = "mongodb"
 	MonitorTypeRabbitMQ         MonitorType = "rabbitmq"
+	MonitorTypeTCP              MonitorType = "tcp"
 )
 
 // MonitorChannelAssignment is one channel in a monitor's custom routing list.

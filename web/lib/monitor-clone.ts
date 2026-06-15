@@ -17,6 +17,7 @@ import {
   SIPMonitorConfig,
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
+  TCPMonitorConfig,
 } from '@/lib/types';
 
 function cloneObject<T>(value: T): T {
@@ -63,6 +64,10 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
     }
     case 'grpc': {
       const cfg = (monitor.config as GRPCMonitorConfig | undefined) || { host: '', port: 443, use_tls: true };
+      return cloneObject(cfg);
+    }
+    case 'tcp': {
+      const cfg = (monitor.config as TCPMonitorConfig | undefined) || { host: '', port: 0 };
       return cloneObject(cfg);
     }
     case 'group': {

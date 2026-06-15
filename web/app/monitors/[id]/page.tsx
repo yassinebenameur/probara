@@ -4,7 +4,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { Clock, Settings as SettingsIcon, Trash2 } from 'lucide-react';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope } from '@/lib/types';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
@@ -497,6 +497,10 @@ export default function EditMonitorPage() {
     if (!monitor) return null;
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
     if (monitor.url) return monitor.url;
+    if ((monitor.type === 'tcp' || monitor.type === 'grpc') && monitor.config && 'host' in monitor.config) {
+      const cfg = monitor.config as { host?: string; port?: number };
+      if (cfg.host) return cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host;
+    }
     if (monitor.config && 'host' in monitor.config) return monitor.config.host;
     return null;
   };
@@ -822,6 +826,33 @@ export default function EditMonitorPage() {
                           </span>
                         </div>
                       ) : null}
+                    </>
+                  );
+                })()}
+                {monitor.type === 'tcp' && (() => {
+                  const cfg = monitor.config as TCPMonitorConfig | undefined;
+                  const latest = (results?.results || []).find((r) => {
+                    const md = r.metrics_data as TCPMetricsEnvelope | undefined;
+                    return Boolean(md && md.tcp);
+                  });
+                  const tcpMetrics = latest ? (latest.metrics_data as TCPMetricsEnvelope).tcp : null;
+                  const target = cfg?.host ? (cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host) : null;
+                  return (
+                    <>
+                      {target && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Target</span>
+                          <span className="truncate text-right text-slate-300">{target}</span>
+                        </div>
+                      )}
+                      {cfg?.use_tls && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">TLS</span>
+                          <span className="text-right text-slate-300">
+                            {tcpMetrics?.tls_version || 'Enabled'}
+                          </span>
+                        </div>
+                      )}
                     </>
                   );
                 })()}

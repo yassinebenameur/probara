@@ -53,6 +53,9 @@ func newMonitorPresenters() map[string]monitorPresenter {
 		"sip": regularMonitorPresenter{
 			urlExtractor: extractSIPTarget,
 		},
+		"tcp": regularMonitorPresenter{
+			urlExtractor: extractHostPortTarget,
+		},
 		"agent": regularMonitorPresenter{
 			urlExtractor: func(_ []byte) string { return "System Agent" },
 		},
@@ -86,6 +89,27 @@ func extractSIPTarget(configJSON []byte) string {
 	port, _ := config["port"].(float64)
 	if port == 0 {
 		port = 5060
+	}
+
+	return fmt.Sprintf("%s:%d", host, int(port))
+}
+
+// extractHostPortTarget renders a "host:port" target for raw connect checks
+// (TCP), falling back to just the host when no port is configured.
+func extractHostPortTarget(configJSON []byte) string {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return ""
+	}
+
+	host, _ := config["host"].(string)
+	if strings.TrimSpace(host) == "" {
+		return ""
+	}
+
+	port, _ := config["port"].(float64)
+	if port == 0 {
+		return host
 	}
 
 	return fmt.Sprintf("%s:%d", host, int(port))
