@@ -274,20 +274,20 @@ export default function AgentForm({
       : '';
     const linuxQuickInstallCommand = installCommand
       ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
-  "${installScriptUrl}" | bash`
+  "${installScriptUrl}" | sudo bash`
       : '';
     const linuxQuickInstallCopy = installCommand
-      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${installScriptUrl}" | bash`
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${installScriptUrl}" | sudo bash`
       : '';
     const windowsQuickInstallCommand = installCommand
       ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Headers @{Authorization='Bearer ${resolvedApiKey}'} -Uri '${windowsInstallScriptUrl}').Content"`
       : '';
     const linuxQuickUninstallCommand = installCommand
       ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
-  "${uninstallScriptUrl}" | bash`
+  "${uninstallScriptUrl}" | sudo bash`
       : '';
     const linuxQuickUninstallCopy = installCommand
-      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${uninstallScriptUrl}" | bash`
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${uninstallScriptUrl}" | sudo bash`
       : '';
     const windowsQuickUninstallCommand = installCommand
       ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Headers @{Authorization='Bearer ${resolvedApiKey}'} -Uri '${windowsUninstallScriptUrl}').Content"`

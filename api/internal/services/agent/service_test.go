@@ -56,9 +56,10 @@ func TestGenerateInstallCommandCreatesUnixServiceInstaller(t *testing.T) {
 		t.Fatalf("GenerateInstallCommand() error = %v", err)
 	}
 
-	assertContains(t, cmd.InstallScript, "install_systemd_user")
+	assertContains(t, cmd.InstallScript, "install_systemd_system")
+	assertContains(t, cmd.InstallScript, "Probara Agent must be installed as root.")
 	assertContains(t, cmd.InstallScript, "Restart=always")
-	assertContains(t, cmd.InstallScript, "systemctl --user enable --now probara-agent.service")
+	assertContains(t, cmd.InstallScript, "systemctl enable --now probara-agent.service")
 	assertContains(t, cmd.InstallScript, "install_launchd")
 	assertContains(t, cmd.InstallScript, "KeepAlive")
 	assertContains(t, cmd.InstallScript, "launchctl")
@@ -69,8 +70,8 @@ func TestGenerateInstallCommandCreatesUnixServiceInstaller(t *testing.T) {
 	assertContains(t, cmd.InstallScript, `-allow-remote-disable="$ALLOW_REMOTE_DISABLE"`)
 	assertContains(t, cmd.InstallScript, `UNINSTALL_SCRIPT="$RUNNER_DIR/uninstall-agent.sh"`)
 	assertContains(t, cmd.UninstallScript, "launchctl bootout")
-	assertContains(t, cmd.UninstallScript, `systemctl --user disable "${SERVICE_NAME}.service"`)
-	assertContains(t, cmd.UninstallScript, `systemctl --user stop "${SERVICE_NAME}.service"`)
+	assertContains(t, cmd.UninstallScript, `systemctl disable "${SERVICE_NAME}.service"`)
+	assertContains(t, cmd.UninstallScript, `systemctl stop "${SERVICE_NAME}.service"`)
 	assertContains(t, cmd.UninstallScript, `launchctl bootout "$BOOTOUT_TARGET"`)
 	assertNotContains(t, cmd.InstallScript, `-interval 30 &`)
 

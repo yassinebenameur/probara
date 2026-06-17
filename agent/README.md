@@ -14,14 +14,16 @@ A lightweight system metrics collector that reports CPU, memory, disk, network, 
 ### Quick Install (Linux/macOS)
 
 ```bash
-# Download and run the service installer from your Probara dashboard
+# Download and run the service installer from your Probara dashboard.
+# On Linux the agent installs as a system service, so run it as root.
 curl -fsSL -H "Authorization: Bearer YOUR_API_KEY" \
-  "https://your-backend-url/api/v1/monitors/{id}/agent/install/script.sh" | bash
+  "https://your-backend-url/api/v1/monitors/{id}/agent/install/script.sh" | sudo bash
 ```
 
-The installer configures the agent as a supervised service: `systemd --user` on
-Linux and `launchd` on macOS. The service restarts automatically if the agent
-exits and reconnects when the backend is available again.
+The installer configures the agent as a supervised service: a system `systemd`
+unit on Linux (installed under `/etc/systemd/system`, which requires root) and
+`launchd` on macOS. The service restarts automatically if the agent exits and
+reconnects when the backend is available again.
 
 Enable "Allow remote disable" in the install UI only when this machine should
 remove the local service automatically after the monitor is deleted in Probara.
@@ -34,7 +36,7 @@ binary, config, runner, state, and logs:
 
 ```bash
 curl -fsSL -H "Authorization: Bearer YOUR_API_KEY" \
-  "https://your-backend-url/api/v1/monitors/{id}/agent/uninstall/script.sh" | bash
+  "https://your-backend-url/api/v1/monitors/{id}/agent/uninstall/script.sh" | sudo bash
 ```
 
 ### Manual Installation

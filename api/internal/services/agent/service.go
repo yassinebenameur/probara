@@ -197,10 +197,30 @@ case "$OS" in
 esac
 
 DOWNLOAD_URL="${BACKEND_URL}/static/agent/probara-agent-${OS}-${ARCH}"
-INSTALL_DIR="$HOME/.local/bin"
-CONFIG_DIR="$HOME/.config/probara-agent"
-STATE_DIR="$HOME/.local/state/probara-agent"
-RUNNER_DIR="$HOME/.local/lib/probara-agent"
+
+# Probara Agent installs as a system service and must run as root. On a typical
+# Linux server, root over SSH has no per-user systemd/D-Bus session, so a
+# "systemctl --user" install fails with "Failed to connect to bus: No such file
+# or directory". Requiring root keeps the install seamless on bare-metal/VPS.
+if [ "$OS" = "linux" ]; then
+  if [ "$(id -u)" != "0" ]; then
+    echo "Probara Agent must be installed as root."
+    echo "Re-run with sudo:        curl ... | sudo bash"
+    echo "or switch to root first: su -"
+    exit 1
+  fi
+  INSTALL_DIR="/usr/local/bin"
+  CONFIG_DIR="/etc/probara-agent"
+  STATE_DIR="/var/lib/probara-agent"
+  RUNNER_DIR="/usr/local/lib/probara-agent"
+else
+  INSTALL_DIR="$HOME/.local/bin"
+  CONFIG_DIR="$HOME/.config/probara-agent"
+  STATE_DIR="$HOME/.local/state/probara-agent"
+  RUNNER_DIR="$HOME/.local/lib/probara-agent"
+fi
+
+AGENT_BIN="$INSTALL_DIR/probara-agent"
 RUNNER="$RUNNER_DIR/run-agent.sh"
 UNINSTALL_SCRIPT="$RUNNER_DIR/uninstall-agent.sh"
 CONFIG_FILE="$CONFIG_DIR/agent.env"
@@ -208,8 +228,8 @@ CONFIG_FILE="$CONFIG_DIR/agent.env"
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR" "$RUNNER_DIR"
 
 echo "Downloading agent for ${OS}-${ARCH}..."
-curl -fsSL -o "$INSTALL_DIR/probara-agent" "$DOWNLOAD_URL"
-chmod +x "$INSTALL_DIR/probara-agent"
+curl -fsSL -o "$AGENT_BIN" "$DOWNLOAD_URL"
+chmod +x "$AGENT_BIN"
 
 cat > "$CONFIG_FILE" <<PROBARA_ENV
 BACKEND_URL=$BACKEND_URL
@@ -227,11 +247,13 @@ __UNIX_UNINSTALL_SCRIPT__
 PROBARA_UNINSTALL
 chmod +x "$UNINSTALL_SCRIPT"
 
-cat > "$RUNNER" <<'PROBARA_RUNNER'
-#!/bin/sh
-set -eu
-. "$HOME/.config/probara-agent/agent.env"
-exec "$HOME/.local/bin/probara-agent" \
+# The first two lines bake in the resolved (mode-specific) binary and config
+# paths; the rest is sourced from the config file at runtime.
+{
+  printf '#!/bin/sh\nset -eu\nAGENT_BIN="%s"\nCONFIG_FILE="%s"\n' "$AGENT_BIN" "$CONFIG_FILE"
+  cat <<'PROBARA_RUNNER'
+. "$CONFIG_FILE"
+exec "$AGENT_BIN" \
   -backend-url "$BACKEND_URL" \
   -agent-id "$AGENT_ID" \
   -api-key "$API_KEY" \
@@ -240,19 +262,18 @@ exec "$HOME/.local/bin/probara-agent" \
   -allow-remote-disable="$ALLOW_REMOTE_DISABLE" \
   -remote-disable-command "$REMOTE_DISABLE_COMMAND"
 PROBARA_RUNNER
+} > "$RUNNER"
 chmod +x "$RUNNER"
 
-install_systemd_user() {
+install_systemd_system() {
   if ! command -v systemctl >/dev/null 2>&1; then
-    echo "systemctl is required to install Probara Agent as a Linux user service."
+    echo "systemctl is required to install Probara Agent as a Linux system service."
     exit 1
   fi
 
-  SYSTEMD_DIR="$HOME/.config/systemd/user"
-  UNIT_FILE="$SYSTEMD_DIR/probara-agent.service"
-  mkdir -p "$SYSTEMD_DIR"
+  UNIT_FILE="/etc/systemd/system/probara-agent.service"
 
-  cat > "$UNIT_FILE" <<'PROBARA_SYSTEMD'
+  cat > "$UNIT_FILE" <<PROBARA_SYSTEMD
 [Unit]
 Description=Probara Agent
 After=network-online.target
@@ -260,19 +281,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/lib/probara-agent/run-agent.sh
+ExecStart=$RUNNER
 Restart=always
 RestartSec=10
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 PROBARA_SYSTEMD
 
-  systemctl --user daemon-reload
-  systemctl --user enable --now probara-agent.service
-  echo "Probara Agent installed as a user systemd service."
-  echo "Status: systemctl --user status probara-agent.service"
-  echo "Logs: journalctl --user -u probara-agent.service -f"
+  systemctl daemon-reload
+  systemctl enable --now probara-agent.service
+  echo "Probara Agent installed as a system systemd service."
+  echo "Status: systemctl status probara-agent.service"
+  echo "Logs: journalctl -u probara-agent.service -f"
 }
 
 install_launchd() {
@@ -317,7 +338,7 @@ PROBARA_PLIST
 }
 
 case "$OS" in
-  linux) install_systemd_user ;;
+  linux) install_systemd_system ;;
   darwin) install_launchd ;;
 esac
 
@@ -422,27 +443,33 @@ LABEL="com.probara.agent"
 BOOTOUT_TARGET=""
 SYSTEMD_STOP=0
 
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl --user disable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
-  rm -f "$HOME/.config/systemd/user/${SERVICE_NAME}.service"
-  systemctl --user daemon-reload >/dev/null 2>&1 || true
+# Linux: system service installed as root.
+if command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+  systemctl disable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+  systemctl daemon-reload >/dev/null 2>&1 || true
   SYSTEMD_STOP=1
 fi
 
+# macOS: per-user launchd agent.
 PLIST_FILE="$HOME/Library/LaunchAgents/${LABEL}.plist"
 if command -v launchctl >/dev/null 2>&1 && [ -f "$PLIST_FILE" ]; then
   rm -f "$PLIST_FILE"
   BOOTOUT_TARGET="gui/$(id -u)/${LABEL}"
 fi
 
-rm -f "$HOME/.local/bin/probara-agent"
-rm -rf "$HOME/.local/lib/probara-agent" \
+rm -f "/usr/local/bin/probara-agent" "$HOME/.local/bin/probara-agent"
+rm -rf "/usr/local/lib/probara-agent" \
+       "/etc/probara-agent" \
+       "/var/lib/probara-agent" \
+       "$HOME/.local/lib/probara-agent" \
        "$HOME/.config/probara-agent" \
        "$HOME/.local/state/probara-agent" \
        "$HOME/Library/Logs/ProbaraAgent"
 
+# Stop last so the agent that invoked this uninstall (remote disable) can finish.
 if [ "$SYSTEMD_STOP" -eq 1 ]; then
-  systemctl --user stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  systemctl stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
 fi
 
 if [ -n "$BOOTOUT_TARGET" ]; then
