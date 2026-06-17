@@ -176,6 +176,9 @@ func DefaultSubject(event notifications.AlertEvent) string {
 		}
 		return fmt.Sprintf("[Latency Degraded] %s", event.Alert.MonitorName)
 	}
+	if event.Alert.IsHostMetric() {
+		return fmt.Sprintf("[%s] %s", event.Alert.HostMetricLabel(event.Type), event.Alert.MonitorName)
+	}
 	if event.Type == "resolved" {
 		return fmt.Sprintf("[Alert Resolved] %s", event.Alert.MonitorName)
 	}
@@ -198,6 +201,9 @@ func DefaultBody(event notifications.AlertEvent) string {
 			line = fmt.Sprintf("%s (%.1fσ)", line, *event.Alert.AnomalyScore)
 		}
 		lines = append(lines, line)
+	}
+	if summary := event.Alert.MetricSummary(); summary != "" {
+		lines = append(lines, fmt.Sprintf("%s: %s", event.Alert.MetricLabel(), summary))
 	}
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		lines = append(lines, fmt.Sprintf("Last Error: %s", *event.Alert.LastError))
@@ -252,6 +258,16 @@ func templateData(event notifications.AlertEvent) map[string]any {
 	if event.Alert.AnomalyScore != nil {
 		anomalyScore = *event.Alert.AnomalyScore
 	}
+	var metricName, metricValue, thresholdValue any
+	if event.Alert.MetricName != nil {
+		metricName = *event.Alert.MetricName
+	}
+	if event.Alert.MetricValue != nil {
+		metricValue = *event.Alert.MetricValue
+	}
+	if event.Alert.ThresholdValue != nil {
+		thresholdValue = *event.Alert.ThresholdValue
+	}
 	return map[string]any{
 		"alert_id":      event.Alert.ID,
 		"monitor_id":    event.Alert.MonitorID,
@@ -274,6 +290,10 @@ func templateData(event notifications.AlertEvent) map[string]any {
 		"baseline_latency_ms": baselineLatency,
 		"observed_latency_ms": observedLatency,
 		"anomaly_score":       anomalyScore,
+
+		"metric_name":     metricName,
+		"metric_value":    metricValue,
+		"threshold_value": thresholdValue,
 	}
 }
 

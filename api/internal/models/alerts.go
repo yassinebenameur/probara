@@ -34,6 +34,10 @@ type Alert struct {
 	BaselineLatencyMs *float64 `json:"baseline_latency_ms,omitempty"`
 	ObservedLatencyMs *float64 `json:"observed_latency_ms,omitempty"`
 	AnomalyScore      *float64 `json:"anomaly_score,omitempty"`
+	// Host-metric annotation: populated when Kind == "host_metric".
+	MetricName     *string  `json:"metric_name,omitempty"`
+	MetricValue    *float64 `json:"metric_value,omitempty"`
+	ThresholdValue *float64 `json:"threshold_value,omitempty"`
 	// Root-cause annotation: the upstream dependency that was down when this
 	// alert fired (dependency-aware alerting).
 	RootCauseMonitorID *uuid.UUID `json:"root_cause_monitor_id,omitempty"`

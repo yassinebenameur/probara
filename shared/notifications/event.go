@@ -1,6 +1,10 @@
 package notifications
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // AlertEvent is the canonical alert event published by the alerter to NATS and
 // consumed by the worker (async notification dispatch) and the API
@@ -15,11 +19,11 @@ type AlertEvent struct {
 
 // AlertDetails carries the alert payload for a single alert event.
 type AlertDetails struct {
-	ID                   string     `json:"id"`
-	MonitorID            string     `json:"monitor_id"`
-	MonitorName          string     `json:"monitor_name"`
-	AlertPolicyID        string     `json:"alert_policy_id"`
-	PolicyName           string     `json:"policy_name"`
+	ID            string `json:"id"`
+	MonitorID     string `json:"monitor_id"`
+	MonitorName   string `json:"monitor_name"`
+	AlertPolicyID string `json:"alert_policy_id"`
+	PolicyName    string `json:"policy_name"`
 	// Kind distinguishes an availability outage ("availability") from a latency
 	// degradation ("latency_anomaly"). Empty is treated as "availability".
 	Kind                 string     `json:"kind,omitempty"`
@@ -42,17 +46,83 @@ type AlertDetails struct {
 	BaselineLatencyMs *float64 `json:"baseline_latency_ms,omitempty"`
 	ObservedLatencyMs *float64 `json:"observed_latency_ms,omitempty"`
 	AnomalyScore      *float64 `json:"anomaly_score,omitempty"`
+
+	// Host-metric annotation: populated when Kind == "host_metric" so
+	// notifications can report which metric breached and by how much.
+	// MetricName is one of "cpu", "memory", "disk", "swap".
+	MetricName     *string  `json:"metric_name,omitempty"`
+	MetricValue    *float64 `json:"metric_value,omitempty"`
+	ThresholdValue *float64 `json:"threshold_value,omitempty"`
 }
 
-// KindAvailability and KindLatencyAnomaly are the alert kinds.
+// KindAvailability, KindLatencyAnomaly and KindHostMetric are the alert kinds.
 const (
 	KindAvailability   = "availability"
 	KindLatencyAnomaly = "latency_anomaly"
+	KindHostMetric     = "host_metric"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.
 func (d AlertDetails) IsLatencyAnomaly() bool {
 	return d.Kind == KindLatencyAnomaly
+}
+
+// IsHostMetric reports whether this alert is a host-metric threshold breach.
+func (d AlertDetails) IsHostMetric() bool {
+	return d.Kind == KindHostMetric
+}
+
+// MetricLabel returns a human-readable name for the breaching host metric,
+// e.g. "CPU" or "memory". Empty when this is not a host-metric alert.
+func (d AlertDetails) MetricLabel() string {
+	if d.MetricName == nil {
+		return ""
+	}
+	switch *d.MetricName {
+	case "cpu":
+		return "CPU"
+	case "memory":
+		return "memory"
+	case "disk":
+		return "disk"
+	case "swap":
+		return "swap"
+	default:
+		return *d.MetricName
+	}
+}
+
+// HostMetricLabel returns a title-cased header label for a host_metric alert,
+// e.g. "CPU Usage High" / "Memory Back to Normal", for use in notification
+// titles and headers.
+func (d AlertDetails) HostMetricLabel(eventType string) string {
+	label := d.MetricLabel()
+	if label == "" {
+		label = "Host metric"
+	} else {
+		label = strings.ToUpper(label[:1]) + label[1:]
+	}
+	switch eventType {
+	case "resolved":
+		return label + " Back to Normal"
+	case "reminder":
+		return label + " Still High"
+	default:
+		return label + " Usage High"
+	}
+}
+
+// MetricSummary renders the breach magnitude for a host_metric alert, e.g.
+// "94.2% (threshold 90%)". Empty when this is not a host-metric alert or no
+// value is available.
+func (d AlertDetails) MetricSummary() string {
+	if !d.IsHostMetric() || d.MetricValue == nil {
+		return ""
+	}
+	if d.ThresholdValue != nil {
+		return fmt.Sprintf("%.1f%% (threshold %.0f%%)", *d.MetricValue, *d.ThresholdValue)
+	}
+	return fmt.Sprintf("%.1f%%", *d.MetricValue)
 }
 
 // Headline returns a short, kind-aware noun phrase for the alert condition,
@@ -63,6 +133,16 @@ func (d AlertDetails) Headline() string {
 			return "latency recovered"
 		}
 		return "latency degraded"
+	}
+	if d.IsHostMetric() {
+		label := d.MetricLabel()
+		if label == "" {
+			label = "host metric"
+		}
+		if d.Status == "resolved" {
+			return label + " back to normal"
+		}
+		return label + " usage high"
 	}
 	if d.Status == "resolved" {
 		return "recovered"

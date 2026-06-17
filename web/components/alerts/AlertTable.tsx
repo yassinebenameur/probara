@@ -41,6 +41,21 @@ function getStatusBadgeClass(status: AlertStatus): string {
   }
 }
 
+function hostMetricLabel(metric?: string): string {
+  switch (metric) {
+    case 'cpu':
+      return 'CPU';
+    case 'memory':
+      return 'memory';
+    case 'disk':
+      return 'disk';
+    case 'swap':
+      return 'swap';
+    default:
+      return 'host metric';
+  }
+}
+
 function formatDuration(startDate: string, endDate?: string): string {
   const start = new Date(startDate);
   const end = endDate ? new Date(endDate) : new Date();
@@ -156,6 +171,20 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                   <p className="mt-0.5 text-[10px] text-violet-300/80">
                     {Math.round(alert.observed_latency_ms)} ms vs ~{Math.round(alert.baseline_latency_ms)} ms baseline
                     {alert.anomaly_score != null && ` (${alert.anomaly_score.toFixed(1)}σ)`}
+                  </p>
+                )}
+                {alert.kind === 'host_metric' && (
+                  <span
+                    className="ml-2 inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300"
+                    title="Host metric breached its configured threshold"
+                  >
+                    {hostMetricLabel(alert.metric_name)}
+                  </span>
+                )}
+                {alert.kind === 'host_metric' && alert.metric_value != null && (
+                  <p className="mt-0.5 text-[10px] text-amber-300/80">
+                    {alert.metric_value.toFixed(1)}%
+                    {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}%)`}
                   </p>
                 )}
                 {alert.last_error && (

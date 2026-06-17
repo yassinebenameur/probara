@@ -159,6 +159,9 @@ func buildEmbed(req plugin.DispatchRequest) discordPayload {
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		fields = append(fields, discordEmbedField{Name: "Last Error", Value: *event.Alert.LastError})
 	}
+	if summary := event.Alert.MetricSummary(); summary != "" {
+		fields = append(fields, discordEmbedField{Name: event.Alert.MetricLabel(), Value: summary, Inline: true})
+	}
 	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
 		value := *event.Alert.RootCauseMonitorName
 		if event.Alert.RootCauseDownSince != nil {
@@ -167,9 +170,14 @@ func buildEmbed(req plugin.DispatchRequest) discordPayload {
 		fields = append(fields, discordEmbedField{Name: "Likely Caused By", Value: value})
 	}
 
+	title := titleFor(eventType, event.Alert.MonitorName, event.Alert.IsLatencyAnomaly())
+	if event.Alert.IsHostMetric() {
+		title = fmt.Sprintf("%s: %s", event.Alert.HostMetricLabel(eventType), event.Alert.MonitorName)
+	}
+
 	return discordPayload{
 		Embeds: []discordEmbed{{
-			Title:     titleFor(eventType, event.Alert.MonitorName, event.Alert.IsLatencyAnomaly()),
+			Title:     title,
 			Color:     colorFor(eventType),
 			Timestamp: ts.UTC().Format(time.RFC3339),
 			Footer:    &discordEmbedFooter{Text: fmt.Sprintf("event: %s · tenant: %s", eventType, event.TenantID)},

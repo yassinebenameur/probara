@@ -28,6 +28,9 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateLatencyAnomalies(ctx); err != nil {
 		return err
 	}
+	if err := a.evaluateHostMetricThresholds(ctx); err != nil {
+		return err
+	}
 	if err := a.annotateOpenAlertRootCauses(ctx); err != nil {
 		return err
 	}
@@ -234,7 +237,7 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 			triggered_at, failure_count, last_error, root_cause_monitor_id, root_cause_down_since,
 			created_at, updated_at)
 		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), $4, $5, $6, $7, NOW(), NOW())
-		ON CONFLICT (monitor_id, kind) WHERE status IN ('active', 'acknowledged') DO NOTHING
+		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
 	`, uuid.New(), dm.tenantID, dm.id, dm.failCount, lastError, rootCauseID, rootCauseDownSince).Scan(&alertID)
 	if err == sql.ErrNoRows {
@@ -381,6 +384,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.kind, al.triggered_at, al.failure_count, al.last_error,
 			al.root_cause_monitor_id, al.root_cause_down_since, rcm.name,
 			al.baseline_latency_ms, al.observed_latency_ms, al.anomaly_score,
+			al.metric_name, al.metric_value, al.threshold_value,
 			te.alert_reminder_seconds
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
@@ -391,6 +395,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		  AND (
 			(al.kind = 'availability' AND m.current_state = 'down')
 			OR al.kind = 'latency_anomaly'
+			OR al.kind = 'host_metric'
 		  )
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  -- A 'per_monitor' group does not dispatch its own alert (if one is still
@@ -420,10 +425,13 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		var rcDownSince sql.NullTime
 		var rcName sql.NullString
 		var baseline, observed, score sql.NullFloat64
+		var metricName sql.NullString
+		var metricValue, thresholdValue sql.NullFloat64
 		if err := rows.Scan(&oa.record.ID, &oa.record.TenantID, &oa.record.MonitorID, &oa.monitorName,
 			&oa.record.Kind, &oa.record.TriggeredAt, &oa.record.FailureCount, &lastError,
 			&rcID, &rcDownSince, &rcName,
-			&baseline, &observed, &score, &oa.reminderSeconds); err != nil {
+			&baseline, &observed, &score,
+			&metricName, &metricValue, &thresholdValue, &oa.reminderSeconds); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
 		if lastError.Valid {
@@ -431,6 +439,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		}
 		setRootCause(&oa.record, rcID, rcName, rcDownSince)
 		setLatencyMetrics(&oa.record, baseline, observed, score)
+		setHostMetric(&oa.record, metricName, metricValue, thresholdValue)
 		open = append(open, oa)
 	}
 	if err := rows.Err(); err != nil {

@@ -138,6 +138,8 @@ func buildMessageCard(req plugin.DispatchRequest) messageCard {
 	prefix := titlePrefix(eventTypeOf(req))
 	if event.Alert.IsLatencyAnomaly() {
 		prefix = latencyTitlePrefix(eventTypeOf(req))
+	} else if event.Alert.IsHostMetric() {
+		prefix = event.Alert.HostMetricLabel(eventTypeOf(req))
 	}
 	title := fmt.Sprintf("%s: %s", prefix, event.Alert.MonitorName)
 	timestamp := event.Timestamp
@@ -153,6 +155,9 @@ func buildMessageCard(req plugin.DispatchRequest) messageCard {
 	}
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		facts = append(facts, fact{Name: "Last Error", Value: *event.Alert.LastError})
+	}
+	if summary := event.Alert.MetricSummary(); summary != "" {
+		facts = append(facts, fact{Name: event.Alert.MetricLabel(), Value: summary})
 	}
 	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
 		value := *event.Alert.RootCauseMonitorName

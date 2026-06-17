@@ -138,6 +138,8 @@ func buildBlockKit(req plugin.DispatchRequest) slackPayload {
 	label := headerLabel(eventType)
 	if event.Alert.IsLatencyAnomaly() {
 		label = latencyLabel(eventType)
+	} else if event.Alert.IsHostMetric() {
+		label = event.Alert.HostMetricLabel(eventType)
 	}
 	header := fmt.Sprintf("%s %s: %s", emoji, label, event.Alert.MonitorName)
 
@@ -149,6 +151,9 @@ func buildBlockKit(req plugin.DispatchRequest) slackPayload {
 	}
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*Last Error*\n%s", *event.Alert.LastError)})
+	}
+	if summary := event.Alert.MetricSummary(); summary != "" {
+		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n%s", event.Alert.MetricLabel(), summary)})
 	}
 	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
 		text := *event.Alert.RootCauseMonitorName

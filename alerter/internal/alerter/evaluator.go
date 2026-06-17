@@ -47,6 +47,9 @@ type alertRecord struct {
 	BaselineLatencyMs    *float64
 	ObservedLatencyMs    *float64
 	AnomalyScore         *float64
+	MetricName           *string
+	MetricValue          *float64
+	ThresholdValue       *float64
 }
 
 type alertChannel struct {
@@ -1259,6 +1262,9 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			BaselineLatencyMs:    alert.BaselineLatencyMs,
 			ObservedLatencyMs:    alert.ObservedLatencyMs,
 			AnomalyScore:         alert.AnomalyScore,
+			MetricName:           alert.MetricName,
+			MetricValue:          alert.MetricValue,
+			ThresholdValue:       alert.ThresholdValue,
 		},
 	}
 }

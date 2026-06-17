@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Download } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, AgentInstallCommand, ApiKey, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, MetricThresholdsConfig, AgentInstallCommand, ApiKey, NotificationMode, ChannelAssignment } from '@/lib/types';
 import { getAgentInstallCommand, getApiKeys } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
@@ -71,6 +71,11 @@ export default function AgentForm({
   const isEditMode = Boolean(monitor);
   const initialAgentConfig =
     !isEditMode && initialData?.type === 'agent' ? (initialData.config as AgentMonitorConfig) : undefined;
+  const initialThresholds: MetricThresholdsConfig =
+    (monitor && monitor.type === 'agent'
+      ? (monitor.config as AgentMonitorConfig).metric_thresholds
+      : initialAgentConfig?.metric_thresholds) || {};
+  const thresholdToString = (v?: number) => (v != null && v > 0 ? String(v) : '');
 
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
@@ -82,6 +87,10 @@ export default function AgentForm({
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
+    cpu_threshold: thresholdToString(initialThresholds.cpu_percent),
+    memory_threshold: thresholdToString(initialThresholds.memory_percent),
+    disk_threshold: thresholdToString(initialThresholds.disk_percent),
+    swap_threshold: thresholdToString(initialThresholds.swap_percent),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -99,15 +108,40 @@ export default function AgentForm({
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (formData.expected_interval_seconds < 10) newErrors.expected_interval_seconds = 'Minimum 10 seconds';
 
+    // Parse threshold inputs: blank = no threshold, otherwise must be 1-100.
+    const parseThreshold = (raw: string, field: string): number | undefined => {
+      const trimmed = raw.trim();
+      if (trimmed === '') return undefined;
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0 || n > 100) {
+        newErrors[field] = 'Enter a percentage between 1 and 100';
+        return undefined;
+      }
+      return n;
+    };
+    const cpu = parseThreshold(formData.cpu_threshold, 'cpu_threshold');
+    const memory = parseThreshold(formData.memory_threshold, 'memory_threshold');
+    const disk = parseThreshold(formData.disk_threshold, 'disk_threshold');
+    const swap = parseThreshold(formData.swap_threshold, 'swap_threshold');
+
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
 
+    const thresholds: MetricThresholdsConfig = {};
+    if (cpu != null) thresholds.cpu_percent = cpu;
+    if (memory != null) thresholds.memory_percent = memory;
+    if (disk != null) thresholds.disk_percent = disk;
+    if (swap != null) thresholds.swap_percent = swap;
+
     const config: AgentMonitorConfig = {
       agent_id: isEditMode ? monitor?.agent_id || '' : '',
       expected_interval_seconds: formData.expected_interval_seconds,
     };
+    if (Object.keys(thresholds).length > 0) {
+      config.metric_thresholds = thresholds;
+    }
 
     const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
       name: formData.name.trim(),
@@ -509,6 +543,34 @@ export default function AgentForm({
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
+      </FormSection>
+
+      <FormSection title="Host metric thresholds">
+        <p className="text-xs text-slate-500">
+          Open an alert when a reported metric stays at or above the threshold. Leave blank to disable.
+          Evaluated independently of up/down status.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {([
+            { key: 'cpu_threshold', label: 'CPU usage (%)', placeholder: 'e.g. 90' },
+            { key: 'memory_threshold', label: 'Memory usage (%)', placeholder: 'e.g. 90' },
+            { key: 'disk_threshold', label: 'Disk usage (%)', placeholder: 'e.g. 85' },
+            { key: 'swap_threshold', label: 'Swap usage (%)', placeholder: 'e.g. 80' },
+          ] as const).map((field) => (
+            <FormField key={field.key} label={field.label} error={errors[field.key]}>
+              <input
+                type="number"
+                value={formData[field.key]}
+                onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                placeholder={field.placeholder}
+                min={1}
+                max={100}
+                step={1}
+                className="input"
+              />
+            </FormField>
+          ))}
+        </div>
       </FormSection>
 
       <FormSection title="Status">

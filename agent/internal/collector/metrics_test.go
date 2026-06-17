@@ -1,6 +1,44 @@
 package collector
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
+func TestCollectPopulatesBaselineMetrics(t *testing.T) {
+	c := NewCollector("/")
+
+	metrics, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+
+	// CPU cores and uptime should be available on any normal host.
+	if metrics.CPUCores <= 0 {
+		t.Errorf("expected CPUCores > 0, got %d", metrics.CPUCores)
+	}
+	if metrics.UptimeSeconds == 0 {
+		t.Errorf("expected UptimeSeconds > 0, got %d", metrics.UptimeSeconds)
+	}
+
+	// Memory is collected as a critical metric, so it must be populated.
+	if metrics.MemoryTotal == 0 {
+		t.Errorf("expected MemoryTotal > 0, got %d", metrics.MemoryTotal)
+	}
+
+	// At least one real filesystem (the configured "/") should be discovered.
+	if len(metrics.DiskMounts) == 0 {
+		t.Errorf("expected at least one disk mount, got none")
+	}
+	for _, m := range metrics.DiskMounts {
+		if m.Path == "" {
+			t.Errorf("disk mount missing path: %+v", m)
+		}
+		if m.Total == 0 {
+			t.Errorf("disk mount %q has zero total", m.Path)
+		}
+	}
+}
 
 func TestParseDarwinCPUPercent(t *testing.T) {
 	topOutput := `

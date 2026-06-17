@@ -200,8 +200,19 @@ type GroupConfig struct {
 
 // AgentConfig represents the configuration for an agent monitor
 type AgentConfig struct {
-	AgentID                 string `json:"agent_id"`
-	ExpectedIntervalSeconds int    `json:"expected_interval_seconds"`
+	AgentID                 string                  `json:"agent_id"`
+	ExpectedIntervalSeconds int                     `json:"expected_interval_seconds"`
+	MetricThresholds        *MetricThresholdsConfig `json:"metric_thresholds,omitempty"`
+}
+
+// MetricThresholdsConfig holds the per-monitor host-metric alert thresholds
+// (percent, 0-100) evaluated by the alerter. A nil or non-positive value means
+// the metric has no threshold and is not alerted on.
+type MetricThresholdsConfig struct {
+	CPUPercent    *float64 `json:"cpu_percent,omitempty"`
+	MemoryPercent *float64 `json:"memory_percent,omitempty"`
+	DiskPercent   *float64 `json:"disk_percent,omitempty"`
+	SwapPercent   *float64 `json:"swap_percent,omitempty"`
 }
 
 // PushConfig represents the configuration for a push monitor

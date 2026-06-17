@@ -256,7 +256,7 @@ func (a *Alerter) openLatencyAnomalyAlert(ctx context.Context, c anomalyConfig, 
 			triggered_at, failure_count, baseline_latency_ms, observed_latency_ms, anomaly_score,
 			created_at, updated_at)
 		VALUES ($1, $2, $3, NULL, 'latency_anomaly', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
-		ON CONFLICT (monitor_id, kind) WHERE status IN ('active', 'acknowledged') DO NOTHING
+		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
 	`, uuid.New(), c.tenantID, c.monitorID, baseline, observed, score).Scan(&alertID)
 	if err == sql.ErrNoRows {

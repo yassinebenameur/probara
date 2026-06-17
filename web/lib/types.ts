@@ -203,9 +203,17 @@ export interface GroupMonitorConfig {
   monitor_ids: string[];
 }
 
+export interface MetricThresholdsConfig {
+  cpu_percent?: number;
+  memory_percent?: number;
+  disk_percent?: number;
+  swap_percent?: number;
+}
+
 export interface AgentMonitorConfig {
   agent_id: string;
   expected_interval_seconds: number;
+  metric_thresholds?: MetricThresholdsConfig;
 }
 
 export interface PushMonitorConfig {
@@ -427,7 +435,7 @@ export interface NotificationSettings {
   latency_anomaly_min_delta_pct: number;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down';
 
@@ -595,6 +603,9 @@ export interface Alert {
   baseline_latency_ms?: number;
   observed_latency_ms?: number;
   anomaly_score?: number;
+  metric_name?: string;
+  metric_value?: number;
+  threshold_value?: number;
   root_cause_monitor_id?: string;
   root_cause_down_since?: string;
   created_at: string;
@@ -1107,18 +1118,32 @@ export interface CheckResult {
 }
 
 // Agent Metrics types
+export interface AgentDiskMount {
+  path: string;
+  used: number;
+  total: number;
+  fstype: string;
+}
+
 export interface AgentMetrics {
   cpu_percent: number;
+  cpu_cores?: number;
   memory_used: number;
   memory_total: number;
+  swap_used?: number;
+  swap_total?: number;
   disk_used: number;
   disk_total: number;
+  disk_mounts?: AgentDiskMount[];
+  disk_read_bytes?: number;
+  disk_write_bytes?: number;
   network_bytes_in: number;
   network_bytes_out: number;
   load_avg_1: number;
   load_avg_5: number;
   load_avg_15: number;
   process_count: number;
+  uptime_seconds?: number;
   timestamp: string;
 }
 
