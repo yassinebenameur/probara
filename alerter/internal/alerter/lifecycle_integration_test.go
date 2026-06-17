@@ -147,6 +147,9 @@ func TestLifecycleGroupMemberIsSuppressed(t *testing.T) {
 	memberID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "member")
 	groupID := testutil.InsertGroupMonitor(ctx, t, dbClient, tenantID, "group")
 	testutil.AddMonitorToGroup(ctx, t, dbClient, memberID, groupID)
+	// Aggregate (composite-service) group: the group alert speaks for its members.
+	mustExec(ctx, t, dbClient,
+		`UPDATE monitors SET member_alert_rollup = 'group' WHERE id = $1`, groupID)
 	channelID := insertTestChannel(ctx, t, dbClient, tenantID, "teams")
 	mustExec(ctx, t, dbClient,
 		`INSERT INTO tenant_default_channels (tenant_id, channel_id) VALUES ($1, $2)`, tenantID, channelID)
@@ -167,6 +170,40 @@ func TestLifecycleGroupMemberIsSuppressed(t *testing.T) {
 	}
 	if !notificationStateExists(ctx, t, dbClient, groupID, channelID) {
 		t.Fatalf("group alert did not notify")
+	}
+}
+
+// A 'per_monitor' group (the default for new groups) is a visual/category
+// grouping: each member alerts on its own and the group emits no alert.
+func TestLifecyclePerMonitorGroupAlertsEachMember(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "lc")
+	memberID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "member")
+	groupID := testutil.InsertGroupMonitor(ctx, t, dbClient, tenantID, "group")
+	testutil.AddMonitorToGroup(ctx, t, dbClient, memberID, groupID)
+	// member_alert_rollup defaults to 'per_monitor' for newly-inserted monitors.
+	channelID := insertTestChannel(ctx, t, dbClient, tenantID, "teams")
+	mustExec(ctx, t, dbClient,
+		`INSERT INTO tenant_default_channels (tenant_id, channel_id) VALUES ($1, $2)`, tenantID, channelID)
+
+	a := newIntegrationAlerter(dbClient)
+	setStateForTest(ctx, t, dbClient, memberID, "down", time.Now().UTC())
+	if err := a.runLifecycle(ctx); err != nil {
+		t.Fatalf("runLifecycle error = %v", err)
+	}
+	if got := countAlerterAlertsByStatus(ctx, t, dbClient, memberID, "active"); got != 1 {
+		t.Fatalf("member active alerts = %d, want 1", got)
+	}
+	if got := countAlerterAlertsByStatus(ctx, t, dbClient, groupID, "active"); got != 0 {
+		t.Fatalf("group active alerts = %d, want 0 (per_monitor group emits no own alert)", got)
+	}
+	if !notificationStateExists(ctx, t, dbClient, memberID, channelID) {
+		t.Fatalf("member was not notified under per_monitor rollup")
+	}
+	if notificationStateExists(ctx, t, dbClient, groupID, channelID) {
+		t.Fatalf("group notified despite per_monitor rollup")
 	}
 }
 

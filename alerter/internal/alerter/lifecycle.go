@@ -138,6 +138,9 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 		FROM monitors m`+rootCauseLateral("m.id")+`
 		WHERE m.current_state = 'down' AND m.enabled = TRUE AND m.deleted_at IS NULL
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
+		  -- A 'per_monitor' group never emits its own derived-down alert; its
+		  -- members alert individually instead.
+		  AND NOT (m.type = 'group' AND m.member_alert_rollup = 'per_monitor')
 		  AND NOT EXISTS (
 			SELECT 1 FROM alerts al
 			WHERE al.monitor_id = m.id AND al.kind = 'availability'
@@ -390,7 +393,14 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			OR al.kind = 'latency_anomaly'
 		  )
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
-		  AND NOT EXISTS (SELECT 1 FROM monitor_groups mg WHERE mg.monitor_id = al.monitor_id)
+		  -- A 'per_monitor' group does not dispatch its own alert (if one is still
+		  -- open from before the mode was changed, stay quiet on it).
+		  AND NOT (m.type = 'group' AND m.member_alert_rollup = 'per_monitor')
+		  -- Suppress a member only when its group rolls members up into one alert.
+		  AND NOT EXISTS (
+			SELECT 1 FROM monitor_groups mg
+			JOIN monitors g ON g.id = mg.group_id AND g.deleted_at IS NULL
+			WHERE mg.monitor_id = al.monitor_id AND g.member_alert_rollup = 'group')
 	`)
 	if err != nil {
 		return fmt.Errorf("query open alerts: %w", err)

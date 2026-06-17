@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, GroupMonitorConfig, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, GroupMonitorConfig, NotificationMode, MemberAlertRollup, ChannelAssignment } from '@/lib/types';
 import { getMonitors } from '@/lib/api';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
@@ -37,6 +37,7 @@ export default function GroupForm({
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    member_alert_rollup: (monitor?.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
   });
 
@@ -55,6 +56,7 @@ export default function GroupForm({
         enabled: monitor.enabled ?? true,
         tags: monitor.tags?.join(', ') || '',
         notification_mode: (monitor.notification_mode ?? 'default') as NotificationMode,
+        member_alert_rollup: (monitor.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
         notification_channels: monitor.notification_channels ?? [],
       });
       setInitializedMonitorId(monitor.id);
@@ -65,6 +67,7 @@ export default function GroupForm({
         enabled: true,
         tags: '',
         notification_mode: 'default',
+        member_alert_rollup: 'per_monitor',
         notification_channels: [],
       });
       setInitializedMonitorId(null);
@@ -106,6 +109,7 @@ export default function GroupForm({
     };
 
     requestData.notification_mode = formData.notification_mode;
+    requestData.member_alert_rollup = formData.member_alert_rollup;
     requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
@@ -230,6 +234,8 @@ export default function GroupForm({
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          rollup={formData.member_alert_rollup}
+          onRollupChange={(r) => setFormData({ ...formData, member_alert_rollup: r })}
         />
       </FormSection>
 

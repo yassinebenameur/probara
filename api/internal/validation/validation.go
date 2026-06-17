@@ -194,7 +194,7 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 		}
 	}
 
-	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels); err != nil {
+	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
 
@@ -269,7 +269,7 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 		}
 	}
 
-	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels); err != nil {
+	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
 
@@ -278,12 +278,15 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 
 // ValidateMonitorNotificationFields validates the notification-routing fields that can be set
 // on both CreateMonitorRequest and UpdateMonitorRequest (spec §7.4).
-func ValidateMonitorNotificationFields(threshold *int, mode *string, channels []models.MonitorChannelAssignment) error {
+func ValidateMonitorNotificationFields(threshold *int, mode *string, rollup *string, channels []models.MonitorChannelAssignment) error {
 	if threshold != nil && (*threshold < 1 || *threshold > 10) {
 		return fmt.Errorf("consecutive_failures_threshold must be between 1 and 10")
 	}
 	if mode != nil && *mode != "default" && *mode != "custom" {
 		return fmt.Errorf("notification_mode must be 'default' or 'custom'")
+	}
+	if rollup != nil && *rollup != "per_monitor" && *rollup != "group" {
+		return fmt.Errorf("member_alert_rollup must be 'per_monitor' or 'group'")
 	}
 	for _, c := range channels {
 		if _, err := uuid.Parse(c.ChannelID); err != nil {

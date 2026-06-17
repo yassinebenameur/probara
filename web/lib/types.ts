@@ -404,6 +404,11 @@ export type MonitorConfig =
 
 export type NotificationMode = 'default' | 'custom';
 
+// How a group handles alerts when its members go down:
+//   'per_monitor' — each member alerts individually; the group emits no alert.
+//   'group'       — members are suppressed; one group-level alert speaks for them.
+export type MemberAlertRollup = 'per_monitor' | 'group';
+
 export interface ChannelAssignment {
   channel_id: string;
   channel_name?: string;
@@ -498,6 +503,7 @@ export interface Monitor {
   updated_at: string;
   consecutive_failures_threshold: number;
   notification_mode: NotificationMode;
+  member_alert_rollup?: MemberAlertRollup;
   notification_channels?: ChannelAssignment[];
   current_state?: MonitorState;
   in_maintenance?: boolean;
@@ -523,6 +529,7 @@ export interface CreateMonitorRequest {
   tags?: string[];
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
+  member_alert_rollup?: MemberAlertRollup;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
 }
@@ -539,6 +546,7 @@ export interface UpdateMonitorRequest {
   tags?: string[];
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
+  member_alert_rollup?: MemberAlertRollup;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
 }

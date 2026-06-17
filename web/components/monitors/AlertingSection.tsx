@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getNotificationSettings } from '@/lib/api';
-import type { ChannelAssignment, NotificationMode, NotificationSettings } from '@/lib/types';
+import type { ChannelAssignment, MemberAlertRollup, NotificationMode, NotificationSettings } from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 
 interface AlertingSectionProps {
@@ -15,6 +15,9 @@ interface AlertingSectionProps {
   onModeChange: (m: NotificationMode) => void;
   customChannels: ChannelAssignment[];
   onCustomChannelsChange: (next: ChannelAssignment[]) => void;
+  // Group-only: how alerts roll up across members. Omit for non-group monitors.
+  rollup?: MemberAlertRollup;
+  onRollupChange?: (r: MemberAlertRollup) => void;
 }
 
 function detectionHint(threshold: number, intervalSeconds: number): string {
@@ -29,6 +32,7 @@ function detectionHint(threshold: number, intervalSeconds: number): string {
 export function AlertingSection({
   isGroup, intervalSeconds, threshold, onThresholdChange,
   mode, onModeChange, customChannels, onCustomChannelsChange,
+  rollup, onRollupChange,
 }: AlertingSectionProps) {
   const [settings, setSettings] = useState<NotificationSettings | null>(null);
   useEffect(() => { getNotificationSettings().then(setSettings).catch(() => setSettings(null)); }, []);
@@ -47,8 +51,48 @@ export function AlertingSection({
     onModeChange('custom');
   };
 
+  const perMonitorRollup = isGroup && rollup === 'per_monitor';
+
   return (
     <div className="space-y-5">
+      {isGroup && rollup && onRollupChange && (
+        <div>
+          <label className="mb-2 block text-sm font-medium text-slate-200">
+            When monitors in this group go down
+          </label>
+          <div className="space-y-2">
+            <label className="flex items-start gap-2 text-sm text-slate-300">
+              <input
+                type="radio"
+                className="mt-0.5"
+                checked={rollup === 'per_monitor'}
+                onChange={() => onRollupChange('per_monitor')}
+              />
+              <span>
+                Alert me for each monitor
+                <span className="block text-xs text-slate-500">
+                  Each member notifies on its own. Best for grouping similar monitors (e.g. all ASRs).
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-slate-300">
+              <input
+                type="radio"
+                className="mt-0.5"
+                checked={rollup === 'group'}
+                onChange={() => onRollupChange('group')}
+              />
+              <span>
+                Send one alert for the whole group
+                <span className="block text-xs text-slate-500">
+                  Members are silenced; one group alert covers them. Best for a single service made of several monitors.
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
+
       {!isGroup && (
         <div>
           <div className="text-sm text-slate-300">
@@ -75,6 +119,11 @@ export function AlertingSection({
         </div>
       )}
 
+      {perMonitorRollup ? (
+        <p className="text-xs text-slate-500">
+          ⓘ Notifications are configured on each monitor individually. This group won&apos;t send its own alert.
+        </p>
+      ) : (
       <div>
         <label className="mb-2 block text-sm font-medium text-slate-200">Notifications</label>
         <div className="space-y-2">
@@ -111,6 +160,7 @@ export function AlertingSection({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

@@ -56,6 +56,7 @@ type Monitor struct {
 	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
 	NotificationMode             string                     `json:"notification_mode"`
+	MemberAlertRollup            string                     `json:"member_alert_rollup"` // 'per_monitor' | 'group'; only meaningful for group monitors
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
 	CurrentState                 string                     `json:"current_state"`
 	InMaintenance                bool                       `json:"in_maintenance"`
@@ -78,6 +79,7 @@ type CreateMonitorRequest struct {
 	Tags                         []string                   `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
 }
@@ -95,6 +97,7 @@ type UpdateMonitorRequest struct {
 	Tags                         *[]string                  `json:"tags,omitempty"`
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
 }

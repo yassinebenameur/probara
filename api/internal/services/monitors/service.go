@@ -176,6 +176,10 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.NotificationMode != nil {
 		notificationMode = *req.NotificationMode
 	}
+	memberAlertRollup := "per_monitor" // DB default
+	if req.MemberAlertRollup != nil {
+		memberAlertRollup = *req.MemberAlertRollup
+	}
 
 	monitor := &models.Monitor{
 		ID:                           monitorID,
@@ -196,6 +200,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		UpdatedAt:                    now,
 		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
 		NotificationMode:             notificationMode,
+		MemberAlertRollup:            memberAlertRollup,
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
@@ -449,6 +454,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	if req.NotificationMode != nil {
 		setParts = append(setParts, fmt.Sprintf("notification_mode = $%d", argIndex))
 		args = append(args, *req.NotificationMode)
+		argIndex++
+	}
+
+	if req.MemberAlertRollup != nil {
+		setParts = append(setParts, fmt.Sprintf("member_alert_rollup = $%d", argIndex))
+		args = append(args, *req.MemberAlertRollup)
 		argIndex++
 	}
 

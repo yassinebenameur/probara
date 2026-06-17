@@ -45,7 +45,7 @@ func (h *Handlers) BulkUpdateAlerting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validation.ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.NotificationChannels); err != nil {
+	if err := validation.ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, nil, req.NotificationChannels); err != nil {
 		errors.WriteValidationError(w, err.Error())
 		return
 	}
