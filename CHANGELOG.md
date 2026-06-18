@@ -1,3 +1,17 @@
+# [1.0.0-alpha.56](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.55...v1.0.0-alpha.56) (2026-06-18)
+
+
+### Bug Fixes
+
+* **agent:** install Linux agent as a root system service ([da5bae0](https://github.com/yassinebenameur/probara/commit/da5bae0c093790c0ec012461cf538656aba8f207))
+
+
+### Features
+
+* **alerts:** per-group alert roll-up (per-monitor vs one group alert) ([396a26f](https://github.com/yassinebenameur/probara/commit/396a26f5bd63962aa36a988c71774bd37dad23dd))
+* **host-metrics:** enterprise host metrics — richer collection, charts & threshold alerts ([58d19fa](https://github.com/yassinebenameur/probara/commit/58d19fa295750f81155e3c69b29e7cad95453e9f))
+* **status-page:** reveal full kiosk tile text in hover popover ([c525581](https://github.com/yassinebenameur/probara/commit/c525581d7dc33cf4768c9fd863b4b476a9008ae2))
+
 # [1.0.0-alpha.55](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.54...v1.0.0-alpha.55) (2026-06-15)
 
 
