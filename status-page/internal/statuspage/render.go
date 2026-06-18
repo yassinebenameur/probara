@@ -1685,6 +1685,37 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       text-transform: uppercase;
       letter-spacing: .04em;
     }
+    /* Popover revealing full kiosk tile text when names/meta are clipped. */
+    .name-pop {
+      position: fixed;
+      z-index: 320;
+      pointer-events: none;
+      max-width: min(420px, 80vw);
+      background: var(--surface-card);
+      border: 1px solid var(--border-hover);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+      opacity: 0;
+      transform: translate(-50%, -100%);
+      transition: opacity .12s var(--ease);
+    }
+    .name-pop.visible { opacity: 1; }
+    .name-pop .np-name {
+      font-size: .82rem;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .name-pop .np-sub {
+      margin-top: 3px;
+      font: .6rem var(--mono);
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      overflow-wrap: anywhere;
+    }
     .incidents-section { margin-bottom: 48px; }
     .inc-card {
       padding: 24px;
@@ -2686,6 +2717,66 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
         document.addEventListener('scroll', hideTip, true);
       }
 
+      // Reveals the full monitor name / meta line for kiosk tiles whose text is
+      // clipped, so a wall-display viewer can read it by hovering the card.
+      function setupKioskNamePopover() {
+        const pop = document.createElement('div');
+        pop.className = 'name-pop';
+        pop.setAttribute('aria-hidden', 'true');
+        const popName = document.createElement('div');
+        popName.className = 'np-name';
+        const popSub = document.createElement('div');
+        popSub.className = 'np-sub';
+        pop.appendChild(popName);
+        pop.appendChild(popSub);
+        document.body.appendChild(pop);
+
+        function hide() {
+          pop.classList.remove('visible');
+        }
+        function isClipped(el) {
+          return !!el && el.scrollWidth > el.clientWidth + 1;
+        }
+
+        document.addEventListener('mouseover', function (event) {
+          // Let the per-bar tooltip own hovers over the uptime strip.
+          if (event.target.closest('.js-strip')) {
+            hide();
+            return;
+          }
+          const tile = event.target.closest('.kiosk-tile');
+          if (!tile) {
+            hide();
+            return;
+          }
+          const nameEl = tile.querySelector('.k-tile-name');
+          const subEl = tile.querySelector('.k-tile-sub');
+          const nameClipped = isClipped(nameEl);
+          const subClipped = isClipped(subEl);
+          if (!nameClipped && !subClipped) {
+            hide();
+            return;
+          }
+          popName.textContent = nameEl ? nameEl.textContent : '';
+          popName.style.display = nameEl ? '' : 'none';
+          popSub.textContent = subEl ? subEl.textContent : '';
+          popSub.style.display = subEl ? '' : 'none';
+          pop.classList.add('visible');
+
+          const rect = (nameEl || tile).getBoundingClientRect();
+          const half = pop.offsetWidth / 2;
+          const left = Math.max(half + 8, Math.min(rect.left + rect.width / 2, window.innerWidth - half - 8));
+          pop.style.left = left + 'px';
+          pop.style.top = Math.max(rect.top - 8, pop.offsetHeight + 8) + 'px';
+        });
+        document.addEventListener('mouseout', function (event) {
+          if (!event.relatedTarget) {
+            hide();
+          }
+        });
+        document.addEventListener('scroll', hide, true);
+      }
+
       function applyRange(range, syncUrl) {
         const dom = getDom();
         const nextRange = isValidRange(range) ? range : defaultRange;
@@ -3078,6 +3169,7 @@ const publicStatusPageTemplate = `<!DOCTYPE html>
       setupShortcuts();
       setupClock();
       setupBarTooltip();
+      setupKioskNamePopover();
       applyViewState();
       setupLiveRefresh();
     })();
