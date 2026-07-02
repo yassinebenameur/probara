@@ -129,19 +129,8 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
-			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
-			a.metric_name, a.metric_value, a.threshold_value,
-			a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name,
-			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
-		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
-		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
+	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect + `
+		WHERE a.tenant_id = $1 AND ` + alertVisibleClause + `
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
 	`)).
@@ -153,6 +142,7 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 			"metric_name", "metric_value", "threshold_value",
 			"created_at", "updated_at", "monitor_name", "policy_name",
 			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
+			"source_location_id", "target_location_id", "source_location_name", "target_location_name",
 		}))
 
 	svc := NewService(&db.Client{DB: sqlDB}, nil)
@@ -178,18 +168,7 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
-			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
-			a.metric_name, a.metric_value, a.threshold_value,
-			a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name,
-			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
-		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
+	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect + `
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
@@ -205,6 +184,7 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 			"metric_name", "metric_value", "threshold_value",
 			"created_at", "updated_at", "monitor_name", "policy_name",
 			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
+			"source_location_id", "target_location_id", "source_location_name", "target_location_name",
 		}))
 
 	svc := NewService(&db.Client{DB: sqlDB}, nil)

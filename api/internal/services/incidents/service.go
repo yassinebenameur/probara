@@ -798,7 +798,7 @@ func (s *Service) EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tena
 	if tenantID == uuid.Nil {
 		return fmt.Errorf("tenant id is required")
 	}
-	if alert.TenantID == uuid.Nil || alert.ID == uuid.Nil || alert.MonitorID == uuid.Nil {
+	if alert.TenantID == uuid.Nil || alert.ID == uuid.Nil || alert.MonitorID == nil || *alert.MonitorID == uuid.Nil {
 		return fmt.Errorf("alert automation requires non-nil tenant, alert, and monitor ids")
 	}
 	// Lifecycle alerts (alert_policy_id = NULL) bypass policy-driven incident automation.
@@ -817,7 +817,7 @@ func (s *Service) EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tena
 		return nil
 	}
 
-	if err := s.lockAutoIncidentKeyTx(ctx, tx, tenantID, alert.MonitorID, *alert.AlertPolicyID); err != nil {
+	if err := s.lockAutoIncidentKeyTx(ctx, tx, tenantID, *alert.MonitorID, *alert.AlertPolicyID); err != nil {
 		return err
 	}
 
@@ -830,7 +830,7 @@ func (s *Service) EnsureIncidentForAlertTx(ctx context.Context, tx *sql.Tx, tena
 	if err != nil {
 		return err
 	}
-	monitorAttached, err := s.ensureIncidentMonitorLinkTx(ctx, tx, incidentID, alert.MonitorID)
+	monitorAttached, err := s.ensureIncidentMonitorLinkTx(ctx, tx, incidentID, *alert.MonitorID)
 	if err != nil {
 		return err
 	}
@@ -1024,7 +1024,11 @@ func (s *Service) findOrCreateAutoIncidentTx(ctx context.Context, tx *sql.Tx, te
 	if alert.PolicyName != nil {
 		policyNameStr = *alert.PolicyName
 	}
-	title, summary := buildAutoIncidentNarrative(alert.MonitorName, policyNameStr)
+	monitorNameStr := ""
+	if alert.MonitorName != nil {
+		monitorNameStr = *alert.MonitorName
+	}
+	title, summary := buildAutoIncidentNarrative(monitorNameStr, policyNameStr)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO incidents (
 			id, tenant_id, title, summary, state, is_auto_created, auto_monitor_id, auto_alert_policy_id, created_at, updated_at

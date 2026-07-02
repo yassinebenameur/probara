@@ -27,6 +27,7 @@ const (
 	retentionCleanupAdvisoryLock   = int64(901_337_401)
 	rollupMaintenanceTicker        = time.Minute
 	checkJobStreamMaxAge           = 24 * time.Hour
+	meshBatchTickerInterval        = 10 * time.Second
 
 	// suspectRecheckInterval is the fast cadence used while a monitor is in the
 	// suspect state, confirming or clearing a potential outage (spec §5).
@@ -91,10 +92,18 @@ type Scheduler struct {
 	rollupDuration    *prometheus.HistogramVec
 	rollupCursor      *prometheus.GaugeVec
 
+	meshEdgesScheduled *prometheus.CounterVec
+	meshPublishErrors  *prometheus.CounterVec
+
 	// applyRow applies one check result to the rollup tables inside the given
 	// transaction. It defaults to applyRollupRow and exists as a seam so tests
 	// can inject per-row failures.
 	applyRow func(ctx context.Context, tx *sql.Tx, row rollupCheckResult) error
+
+	// publish sends one job to the queue. It defaults to the NATS-backed
+	// implementation and exists as a seam (same pattern as applyRow) so tests
+	// can capture published jobs without a broker.
+	publish func(ctx context.Context, subject string, job *models.Job) error
 
 	purger *purger
 }
@@ -133,6 +142,16 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 	s.dbErrors = metricsRegistry.NewCounter(
 		"db_errors_total",
 		"Total number of database errors",
+		[]string{},
+	)
+	s.meshEdgesScheduled = metricsRegistry.NewCounter(
+		"mesh_edges_scheduled_total",
+		"Total number of mesh probe jobs published",
+		[]string{},
+	)
+	s.meshPublishErrors = metricsRegistry.NewCounter(
+		"mesh_publish_errors_total",
+		"Total number of mesh probe publish errors",
 		[]string{},
 	)
 	s.loopDuration = metricsRegistry.NewHistogram(
@@ -189,6 +208,9 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		[]string{},
 	)
 	s.applyRow = applyRollupRow
+	s.publish = func(ctx context.Context, subject string, job *models.Job) error {
+		return s.queue.PublishJSON(ctx, subject, job, nil)
+	}
 
 	purgerMetrics := &purgerMetrics{
 		runs: metricsRegistry.NewCounter(
@@ -252,11 +274,18 @@ func (s *Scheduler) Start() error {
 	defer rollupTicker.Stop()
 	purgeTicker := time.NewTicker(time.Duration(s.config.MonitorPurgeIntervalSeconds) * time.Second)
 	defer purgeTicker.Stop()
+	// The mesh tick just claims due edges; the per-edge cadence lives in
+	// location_mesh_state.next_run_at.
+	meshTicker := time.NewTicker(meshBatchTickerInterval)
+	defer meshTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
 	s.triggerRetentionCleanup()
 	s.triggerRollupMaintenance()
+	if s.config.MeshEnabled {
+		s.runMeshBatch(s.ctx)
+	}
 
 	for {
 		select {
@@ -274,6 +303,10 @@ func (s *Scheduler) Start() error {
 			s.triggerRollupMaintenance()
 		case <-purgeTicker.C:
 			s.triggerMonitorPurge()
+		case <-meshTicker.C:
+			if s.config.MeshEnabled {
+				s.runMeshBatch(s.ctx)
+			}
 		}
 	}
 }
@@ -372,6 +405,12 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, error) {
 			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s: %w", tenantID, err)
 		}
 		totalDeleted += deleted
+
+		meshDeleted, err := s.pruneTenantMeshResults(ctx, tenantID, retentionDays)
+		if err != nil {
+			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s mesh results: %w", tenantID, err)
+		}
+		totalDeleted += meshDeleted
 
 		if deleted > 0 {
 			s.logger.WithFields(logrus.Fields{
@@ -570,10 +609,9 @@ func (s *Scheduler) jobSubject(locationID string) string {
 	return models.CheckJobSubjectForLocation(s.config.CheckJobSubject, locationID)
 }
 
-// publishJob publishes a job to NATS
+// publishJob publishes a job to NATS (via the publish seam).
 func (s *Scheduler) publishJob(ctx context.Context, subject string, job *models.Job) error {
-	err := s.queue.PublishJSON(ctx, subject, job, nil)
-	if err != nil {
+	if err := s.publish(ctx, subject, job); err != nil {
 		return fmt.Errorf("failed to publish job: %w", err)
 	}
 	return nil

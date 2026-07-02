@@ -18,6 +18,9 @@ type Location struct {
 	// Connected is derived from LastSeenAt freshness (worker heartbeats).
 	Connected  bool       `json:"connected"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// MeshEndpoint (host:port) opts the location into the connectivity mesh:
+	// other locations probe this address's /mesh/echo. Empty = not in mesh.
+	MeshEndpoint *string `json:"mesh_endpoint,omitempty"`
 	// MonitorCount is how many live monitors currently target this location.
 	MonitorCount int       `json:"monitor_count"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -26,15 +29,18 @@ type Location struct {
 
 // CreateLocationRequest creates a location.
 type CreateLocationRequest struct {
-	Name        string  `json:"name"`
-	Description *string `json:"description,omitempty"`
+	Name         string  `json:"name"`
+	Description  *string `json:"description,omitempty"`
+	MeshEndpoint *string `json:"mesh_endpoint,omitempty"`
 }
 
-// UpdateLocationRequest renames or toggles a location.
+// UpdateLocationRequest renames or toggles a location. MeshEndpoint set to an
+// empty string clears it (opting the location out of the mesh).
 type UpdateLocationRequest struct {
-	Name        *string `json:"name,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
+	MeshEndpoint *string `json:"mesh_endpoint,omitempty"`
 }
 
 // LocationListResponse is a paginated list of locations.

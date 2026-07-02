@@ -72,6 +72,9 @@ import type {
   CreateLocationRequest,
   UpdateLocationRequest,
   LocationDeployInfo,
+  MeshResponse,
+  MeshEdgeHistoryPoint,
+  MeshProbeResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -862,6 +865,32 @@ export async function deleteLocation(id: string): Promise<{ monitors_detached: n
 
 export async function getLocationDeployInfo(id: string): Promise<LocationDeployInfo> {
   return apiRequest<LocationDeployInfo>('GET', `/v1/locations/${id}/deploy`);
+}
+
+// Inter-location connectivity mesh API functions
+
+export async function getMesh(): Promise<MeshResponse> {
+  return apiRequest<MeshResponse>('GET', '/v1/mesh');
+}
+
+export async function getMeshEdgeHistory(
+  sourceId: string,
+  targetId: string,
+  hours = 24
+): Promise<{ points: MeshEdgeHistoryPoint[] }> {
+  const params = new URLSearchParams({ source: sourceId, target: targetId, hours: String(hours) });
+  return apiRequest<{ points: MeshEdgeHistoryPoint[] }>('GET', `/v1/mesh/history?${params}`);
+}
+
+// Ephemeral probe of one directed edge via the source location's worker.
+export async function probeMeshEdge(
+  sourceId: string,
+  targetId: string
+): Promise<MeshProbeResponse> {
+  return apiRequest<MeshProbeResponse>('POST', '/v1/mesh/probe', {
+    source_location_id: sourceId,
+    target_location_id: targetId,
+  });
 }
 
 // Push API functions

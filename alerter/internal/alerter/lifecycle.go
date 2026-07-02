@@ -32,6 +32,9 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateHostMetricThresholds(ctx); err != nil {
 		return err
 	}
+	if err := a.evaluateMeshEdges(ctx); err != nil {
+		return err
+	}
 	if err := a.annotateOpenAlertRootCauses(ctx); err != nil {
 		return err
 	}

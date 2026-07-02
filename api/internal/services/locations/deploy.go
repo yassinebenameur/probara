@@ -36,9 +36,13 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
 	}
 
 	containerName := "probara-worker-" + location.Slug
+	// Port 8080 is the mesh echo endpoint (GET /mesh/echo). Publish it and set
+	// this host's reachable host:port as the location's "Mesh endpoint" to let
+	// other locations probe network connectivity to this one.
 	dockerRun := fmt.Sprintf(`docker run -d \
   --name %s \
   --restart unless-stopped \
+  -p 8080:8080 \
   -e NATS_URL=%q \
   -e WORKER_LOCATION_ID=%q \
   -e HTTP_PORT=8080 \
@@ -49,6 +53,9 @@ func (s *Service) GenerateDeployInfo(ctx context.Context, tenantID, locationID u
   worker-%s:
     image: %s
     restart: unless-stopped
+    ports:
+      # Mesh echo port — set this host's host:port as the location's Mesh endpoint.
+      - "8080:8080"
     environment:
       NATS_URL: %q
       WORKER_LOCATION_ID: %q

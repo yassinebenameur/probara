@@ -31,6 +31,15 @@ type CheckResultMessage struct {
 	MetricsData          json.RawMessage `json:"metrics_data,omitempty"`
 	StartedAt            time.Time       `json:"started_at"`
 	CompletedAt          time.Time       `json:"completed_at"`
+	// Mesh marks the result as an inter-location mesh probe (LocationID is the
+	// source). Ingest routes it to location_mesh_state/mesh_probe_results
+	// instead of the monitor pipeline — MonitorID is empty for these.
+	Mesh *MeshResultInfo `json:"mesh,omitempty"`
+}
+
+// MeshResultInfo carries the mesh-specific half of a probe result's edge key.
+type MeshResultInfo struct {
+	TargetLocationID string `json:"target_location_id"`
 }
 
 // DedupeID is the Nats-Msg-Id header value used for JetStream's publish-side

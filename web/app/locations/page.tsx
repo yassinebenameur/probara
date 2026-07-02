@@ -44,9 +44,11 @@ export default function LocationsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [newMeshEndpoint, setNewMeshEndpoint] = useState('');
   const [creating, setCreating] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [renameMeshValue, setRenameMeshValue] = useState('');
   const [savingRename, setSavingRename] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Location | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -91,9 +93,11 @@ export default function LocationsPage() {
       const created = await createLocation({
         name: newName.trim(),
         ...(newDescription.trim() ? { description: newDescription.trim() } : {}),
+        ...(newMeshEndpoint.trim() ? { mesh_endpoint: newMeshEndpoint.trim() } : {}),
       });
       setNewName('');
       setNewDescription('');
+      setNewMeshEndpoint('');
       setShowCreate(false);
       showToast('Location created', 'success');
       await loadLocations(false);
@@ -108,6 +112,7 @@ export default function LocationsPage() {
   const startRename = (location: Location) => {
     setRenamingId(location.id);
     setRenameValue(location.name);
+    setRenameMeshValue(location.mesh_endpoint || '');
   };
 
   const handleRename = async () => {
@@ -119,7 +124,11 @@ export default function LocationsPage() {
 
     try {
       setSavingRename(true);
-      const updated = await updateLocation(renamingId, { name: renameValue.trim() });
+      // mesh_endpoint is always sent: an emptied field opts out of the mesh.
+      const updated = await updateLocation(renamingId, {
+        name: renameValue.trim(),
+        mesh_endpoint: renameMeshValue.trim(),
+      });
       setLocations((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setRenamingId(null);
       showToast('Location renamed', 'success');
@@ -195,6 +204,18 @@ export default function LocationsPage() {
                 className="input"
               />
             </div>
+            <div className="flex-1">
+              <label className="mb-1.5 block text-xs font-medium text-slate-400">
+                Mesh endpoint (optional)
+              </label>
+              <input
+                type="text"
+                value={newMeshEndpoint}
+                onChange={(event) => setNewMeshEndpoint(event.target.value)}
+                placeholder="host:port reachable from your other locations"
+                className="input"
+              />
+            </div>
             <div className="flex items-center gap-2">
               <Button type="submit" variant="accent" size="sm" disabled={creating} loading={creating}>
                 {creating ? 'Creating…' : 'Create'}
@@ -249,6 +270,7 @@ export default function LocationsPage() {
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Slug</th>
                   <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Mesh</th>
                   <th className="px-3 py-2">Monitors</th>
                   <th className="px-3 py-2">Last seen</th>
                   <th className="px-3 py-2">Actions</th>
@@ -259,7 +281,7 @@ export default function LocationsPage() {
                   <tr key={location.id}>
                     <td className="px-3 py-3">
                       {renamingId === location.id ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <input
                             type="text"
                             value={renameValue}
@@ -273,6 +295,20 @@ export default function LocationsPage() {
                             }}
                             className="input max-w-[14rem]"
                             autoFocus
+                          />
+                          <input
+                            type="text"
+                            value={renameMeshValue}
+                            onChange={(event) => setRenameMeshValue(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                handleRename();
+                              }
+                              if (event.key === 'Escape') setRenamingId(null);
+                            }}
+                            placeholder="Mesh endpoint host:port (empty = off)"
+                            className="input max-w-[16rem]"
                           />
                           <Button
                             variant="accent"
@@ -303,6 +339,16 @@ export default function LocationsPage() {
                     </td>
                     <td className="px-3 py-3 font-mono text-xs text-slate-400">{location.slug}</td>
                     <td className="px-3 py-3">{connectionPill(location)}</td>
+                    <td className="px-3 py-3">
+                      {location.mesh_endpoint ? (
+                        <div className="flex items-center gap-1.5">
+                          <Pill tone="info" size="xs">Mesh</Pill>
+                          <span className="font-mono text-xs text-slate-400">{location.mesh_endpoint}</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-500">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-xs text-slate-400 tabular-nums">
                       {location.monitor_count}
                     </td>

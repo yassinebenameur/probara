@@ -1,0 +1,34 @@
+{{- /*
+Optional per-location Service exposing the mesh echo port (GET /mesh/echo) so
+OTHER locations can probe this one. Enable meshService on a location entry and
+set the location's mesh_endpoint (Locations page) to this Service's reachable
+address — e.g. an internal NLB address routable across your VPCs.
+*/}}
+{{- range .Values.worker.locations }}
+{{- if and .meshService .meshService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitoring-platform.fullname" $ }}-worker-{{ .name }}-mesh
+  labels:
+    {{- include "monitoring-platform.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker-location
+    probara.io/location: {{ .name | quote }}
+  {{- with .meshService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .meshService.type | default "ClusterIP" }}
+  ports:
+    - port: {{ $.Values.worker.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "monitoring-platform.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker-location
+    probara.io/location: {{ .name | quote }}
+---
+{{- end }}
+{{- end }}

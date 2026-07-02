@@ -22,6 +22,7 @@ import (
 	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
 	locationhandlers "github.com/yassinebenameur/probara/api/internal/handlers/locations"
 	maintenancewindowhandlers "github.com/yassinebenameur/probara/api/internal/handlers/maintenancewindows"
+	meshhandlers "github.com/yassinebenameur/probara/api/internal/handlers/mesh"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
@@ -44,6 +45,7 @@ import (
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
 	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
+	meshservice "github.com/yassinebenameur/probara/api/internal/services/mesh"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
@@ -248,6 +250,18 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Patch("/{id}", locationHandlers.UpdateLocation)
 				r.Delete("/{id}", locationHandlers.DeleteLocation)
 				r.Get("/{id}/deploy", locationHandlers.GetDeployInfo)
+			})
+
+			// Inter-location connectivity mesh
+			meshSvc := meshservice.NewService(dbClient, cfg.MeshProbeIntervalSeconds)
+			meshHdlrs := meshhandlers.NewHandlers(meshSvc, nil, cfg.MeshProbeTimeoutSeconds, log)
+			if checkJobQueue != nil {
+				meshHdlrs = meshhandlers.NewHandlers(meshSvc, checkJobQueue, cfg.MeshProbeTimeoutSeconds, log)
+			}
+			r.Route("/mesh", func(r chi.Router) {
+				r.Get("/", meshHdlrs.GetMesh)
+				r.Get("/history", meshHdlrs.GetEdgeHistory)
+				r.Post("/probe", meshHdlrs.ProbeNow)
 			})
 
 			// Maintenance windows

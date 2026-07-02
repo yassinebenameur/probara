@@ -478,6 +478,16 @@ func (w *Worker) publishResult(ctx context.Context, job *models.Job, payload *mo
 		StartedAt:            startedAt,
 		CompletedAt:          time.Now(),
 	}
+	if payload.Type == models.MonitorTypeMeshProbe {
+		var meshCfg models.MeshProbeConfig
+		if err := json.Unmarshal(payload.Config, &meshCfg); err != nil || meshCfg.TargetLocationID == "" {
+			// Without the edge key the result is unroutable; drop it rather
+			// than publish a message ingest can only discard.
+			w.logger.WithField("job_id", job.ID).Warn("Mesh probe result missing target location; dropping")
+			return nil
+		}
+		msg.Mesh = &models.MeshResultInfo{TargetLocationID: meshCfg.TargetLocationID}
+	}
 	return w.publishResultMessage(ctx, msg)
 }
 

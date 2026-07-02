@@ -210,7 +210,9 @@ export default function RecentAlerts({
                   <div className="flex items-center gap-2">
                     <div className={`h-2 w-2 rounded-full ${getStatusColor(alert.status)}`} />
                     <span className="truncate text-sm font-medium text-white">
-                      {alert.monitor_name || 'Unknown Monitor'}
+                      {alert.kind === 'mesh_edge'
+                        ? `mesh: ${alert.source_location_name || 'unknown'} → ${alert.target_location_name || 'unknown'}`
+                        : alert.monitor_name || 'Unknown Monitor'}
                     </span>
                   </div>
                   <div className="mt-1 flex items-center gap-2 text-xs">

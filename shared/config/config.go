@@ -55,6 +55,10 @@ type APIConfig struct {
 	// "nats://nats.example.com:4222"), baked into private-location worker
 	// deploy snippets. Empty renders a placeholder.
 	PublicNATSURL string
+	// Mesh knobs mirrored from the scheduler (same env vars) so edge
+	// staleness and probe-now timeouts agree with the actual probe cadence.
+	MeshProbeIntervalSeconds int
+	MeshProbeTimeoutSeconds  int
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -84,6 +88,14 @@ type SchedulerConfig struct {
 	MonitorPurgeIntervalSeconds int
 	MonitorPurgeBatchSize       int
 	MonitorPurgeMaxRowsPerRun   int
+	// Mesh: inter-location connectivity probing. Edges are derived from
+	// locations with a mesh_endpoint set; the threshold is platform-level for
+	// now because an edge has no monitor row to carry one.
+	MeshEnabled              bool
+	MeshProbeIntervalSeconds int
+	MeshProbeTimeoutSeconds  int
+	MeshFailureThreshold     int
+	MeshScheduleBatchSize    int
 }
 
 // WorkerConfig contains configuration for the worker service
@@ -266,6 +278,23 @@ func LoadAPIConfig() (*APIConfig, error) {
 	// AI_RCA_SUBJECT — subject the API publishes AI root cause jobs to (the
 	// worker consumes them). Must match the worker's AI_RCA_SUBJECT.
 	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
+
+	cfg.MeshProbeIntervalSeconds = 30
+	if v := os.Getenv("MESH_PROBE_INTERVAL_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_INTERVAL_SECONDS: %q", v)
+		}
+		cfg.MeshProbeIntervalSeconds = n
+	}
+	cfg.MeshProbeTimeoutSeconds = 5
+	if v := os.Getenv("MESH_PROBE_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.MeshProbeTimeoutSeconds = n
+	}
 
 	// LLM_* env defaults — optional global fallback. When set, the API can build
 	// an analyzer/advisor and gate AI features even before a tenant configures
@@ -537,6 +566,51 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 			return nil, fmt.Errorf("invalid MONITOR_PURGE_MAX_ROWS_PER_RUN: %q", v)
 		}
 		cfg.MonitorPurgeMaxRowsPerRun = n
+	}
+
+	cfg.MeshEnabled = true
+	if v := strings.TrimSpace(os.Getenv("MESH_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MESH_ENABLED: %w", err)
+		}
+		cfg.MeshEnabled = enabled
+	}
+
+	cfg.MeshProbeIntervalSeconds = 30
+	if v := os.Getenv("MESH_PROBE_INTERVAL_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_INTERVAL_SECONDS: %q", v)
+		}
+		cfg.MeshProbeIntervalSeconds = n
+	}
+
+	cfg.MeshProbeTimeoutSeconds = 5
+	if v := os.Getenv("MESH_PROBE_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.MeshProbeTimeoutSeconds = n
+	}
+
+	cfg.MeshFailureThreshold = 3
+	if v := os.Getenv("MESH_FAILURE_THRESHOLD"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_FAILURE_THRESHOLD: %q", v)
+		}
+		cfg.MeshFailureThreshold = n
+	}
+
+	cfg.MeshScheduleBatchSize = 500
+	if v := os.Getenv("MESH_SCHEDULE_BATCH_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_SCHEDULE_BATCH_SIZE: %q", v)
+		}
+		cfg.MeshScheduleBatchSize = n
 	}
 
 	return cfg, nil

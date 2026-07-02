@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/models"
 )
 
@@ -41,6 +42,66 @@ func newPublishTestWorker(spy *spyResultPublisher) *Worker {
 			CheckResultSubject: models.CheckResultSubject,
 		},
 		results: spy,
+		logger:  logger.New("worker-test", "error"),
+	}
+}
+
+func TestPublishResultMeshProbeCarriesTargetLocation(t *testing.T) {
+	spy := &spyResultPublisher{}
+	w := newPublishTestWorker(spy)
+
+	targetID := uuid.New().String()
+	job := &models.Job{ID: uuid.New().String(), TenantID: uuid.New().String()}
+	payload := &models.CheckJobPayload{
+		Type:       models.MonitorTypeMeshProbe,
+		LocationID: "loc-src",
+		Config:     json.RawMessage(`{"target_location_id":"` + targetID + `","endpoint":"10.0.0.1:8080"}`),
+	}
+	latency := int64(12)
+	result := &CheckResult{Status: "success", LatencyMs: &latency}
+
+	if err := w.publishResult(context.Background(), job, payload, result, time.Now()); err != nil {
+		t.Fatalf("publishResult: %v", err)
+	}
+
+	if len(spy.messages) != 1 {
+		t.Fatalf("published messages = %d, want 1", len(spy.messages))
+	}
+	msg := spy.messages[0]
+	if msg.Mesh == nil || msg.Mesh.TargetLocationID != targetID {
+		t.Fatalf("mesh info = %+v, want target %s", msg.Mesh, targetID)
+	}
+	if msg.LocationID != "loc-src" {
+		t.Fatalf("location_id = %q, want loc-src", msg.LocationID)
+	}
+}
+
+func TestPublishResultMeshProbeDropsWithoutTarget(t *testing.T) {
+	cases := []struct {
+		name   string
+		config json.RawMessage
+	}{
+		{"unparseable config", json.RawMessage(`{`)},
+		{"empty target", json.RawMessage(`{"endpoint":"10.0.0.1:8080"}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &spyResultPublisher{}
+			w := newPublishTestWorker(spy)
+
+			job := &models.Job{ID: uuid.New().String(), TenantID: uuid.New().String()}
+			payload := &models.CheckJobPayload{Type: models.MonitorTypeMeshProbe, Config: tc.config}
+			result := &CheckResult{Status: "success"}
+
+			// Without the edge key the result is unroutable: publish nothing,
+			// return nil.
+			if err := w.publishResult(context.Background(), job, payload, result, time.Now()); err != nil {
+				t.Fatalf("publishResult: %v", err)
+			}
+			if len(spy.messages) != 0 {
+				t.Fatalf("published messages = %d, want 0", len(spy.messages))
+			}
+		})
 	}
 }
 

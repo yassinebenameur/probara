@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/models"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/queue"
@@ -176,6 +177,7 @@ func main() {
 			w.Write([]byte("OK"))
 		})
 		mux.HandleFunc("/metrics", metricsRegistry.Handler().ServeHTTP)
+		mux.HandleFunc(models.MeshEchoPath, worker.MeshEchoHandler(cfg.LocationID))
 
 		server := &http.Server{
 			Addr:    fmt.Sprintf(":%d", cfg.MetricsPort),
@@ -186,6 +188,27 @@ func main() {
 			log.WithError(err).Fatal("Failed to start metrics server")
 		}
 	}()
+
+	// The mesh echo endpoint also gets a dedicated listener when HTTP_PORT
+	// differs from METRICS_PORT, so deployments can expose the echo across
+	// networks without exposing /metrics. Equal ports (the helm default)
+	// means the shared mux above already serves it.
+	if cfg.HTTPPort != cfg.MetricsPort {
+		go func() {
+			echoMux := http.NewServeMux()
+			echoMux.HandleFunc(models.MeshEchoPath, worker.MeshEchoHandler(cfg.LocationID))
+			echoMux.HandleFunc("/healthz", healthzHandler(queueClient))
+
+			server := &http.Server{
+				Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
+				Handler: echoMux,
+			}
+
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.WithError(err).Fatal("Failed to start mesh echo server")
+			}
+		}()
+	}
 
 	// Start worker in a goroutine
 	go func() {

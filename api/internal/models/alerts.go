@@ -17,9 +17,11 @@ const (
 
 // Alert represents an alert in the system
 type Alert struct {
-	ID             uuid.UUID   `json:"id"`
-	TenantID       uuid.UUID   `json:"tenant_id"`
-	MonitorID      uuid.UUID   `json:"monitor_id"`
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	// MonitorID is nil for mesh_edge alerts, whose subject is a directed
+	// location pair instead of a monitor.
+	MonitorID      *uuid.UUID  `json:"monitor_id,omitempty"`
 	AlertPolicyID  *uuid.UUID  `json:"alert_policy_id,omitempty"`
 	Status         AlertStatus `json:"status"`
 	TriggeredAt    time.Time   `json:"triggered_at"`
@@ -42,16 +44,22 @@ type Alert struct {
 	// alert fired (dependency-aware alerting).
 	RootCauseMonitorID *uuid.UUID `json:"root_cause_monitor_id,omitempty"`
 	RootCauseDownSince *time.Time `json:"root_cause_down_since,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// Mesh-edge annotation: the directed location pair, populated when
+	// Kind == "mesh_edge" (MonitorID is nil for these).
+	SourceLocationID *uuid.UUID `json:"source_location_id,omitempty"`
+	TargetLocationID *uuid.UUID `json:"target_location_id,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // AlertWithDetails includes related entity names for display
 type AlertWithDetails struct {
 	Alert
-	MonitorName          string  `json:"monitor_name"`
+	MonitorName          *string `json:"monitor_name,omitempty"`
 	PolicyName           *string `json:"policy_name,omitempty"`
 	RootCauseMonitorName *string `json:"root_cause_monitor_name,omitempty"`
+	SourceLocationName   *string `json:"source_location_name,omitempty"`
+	TargetLocationName   *string `json:"target_location_name,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

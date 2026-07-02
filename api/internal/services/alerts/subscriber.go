@@ -154,7 +154,14 @@ func (s *Subscriber) handleMessage(msg *queue.Message) error {
 func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertWithDetails {
 	alertID, _ := uuid.Parse(event.Alert.ID)
 	tenantID, _ := uuid.Parse(event.TenantID)
-	monitorID, _ := uuid.Parse(event.Alert.MonitorID)
+	var monitorID *uuid.UUID
+	if parsed, err := uuid.Parse(event.Alert.MonitorID); err == nil && parsed != uuid.Nil {
+		monitorID = &parsed
+	}
+	var monitorName *string
+	if event.Alert.MonitorName != "" {
+		monitorName = &event.Alert.MonitorName
+	}
 
 	alert := &models.AlertWithDetails{
 		Alert: models.Alert{
@@ -169,7 +176,7 @@ func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertW
 			CreatedAt:    event.Alert.TriggeredAt,
 			UpdatedAt:    event.Timestamp,
 		},
-		MonitorName: event.Alert.MonitorName,
+		MonitorName: monitorName,
 	}
 
 	if event.Alert.RootCauseMonitorID != nil {

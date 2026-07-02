@@ -916,11 +916,11 @@ func TestServiceEnsureIncidentForAlertCreatesAndReusesAutoIncident(t *testing.T)
 		Alert: models.Alert{
 			ID:            firstAlertID,
 			TenantID:      tenantID,
-			MonitorID:     monitorID,
+			MonitorID:     &monitorID,
 			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
-		MonitorName: "API",
+		MonitorName: strPtr("API"),
 		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
@@ -959,11 +959,11 @@ func TestServiceEnsureIncidentForAlertCreatesAndReusesAutoIncident(t *testing.T)
 		Alert: models.Alert{
 			ID:            secondAlertID,
 			TenantID:      tenantID,
-			MonitorID:     monitorID,
+			MonitorID:     &monitorID,
 			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
-		MonitorName: "API",
+		MonitorName: strPtr("API"),
 		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, secondAlert); err != nil {
@@ -1002,11 +1002,11 @@ func TestServiceEnsureIncidentForAlertRejectsTenantMismatch(t *testing.T) {
 		Alert: models.Alert{
 			ID:            uuid.New(),
 			TenantID:      otherTenantID,
-			MonitorID:     monitorID,
+			MonitorID:     &monitorID,
 			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
-		MonitorName: "API",
+		MonitorName: strPtr("API"),
 		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err == nil {
@@ -1035,11 +1035,11 @@ func TestServiceRecordAlertRecoveryIfNeededAppendsTimelineAfterFinalResolution(t
 		Alert: models.Alert{
 			ID:            firstAlertID,
 			TenantID:      tenantID,
-			MonitorID:     monitorID,
+			MonitorID:     &monitorID,
 			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
-		MonitorName: "API",
+		MonitorName: strPtr("API"),
 		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
@@ -1106,11 +1106,11 @@ func TestServiceRecordAlertRecoveryIfNeededSerializesConcurrentFinalResolutions(
 		Alert: models.Alert{
 			ID:            firstAlertID,
 			TenantID:      tenantID,
-			MonitorID:     monitorID,
+			MonitorID:     &monitorID,
 			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
-		MonitorName: "API",
+		MonitorName: strPtr("API"),
 		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, firstAlert); err != nil {
@@ -1197,11 +1197,11 @@ func TestServiceRecordAlertRecoveryIfNeededSkipsDuplicateAfterLaterNonRecoveryEn
 		Alert: models.Alert{
 			ID:            alertID,
 			TenantID:      tenantID,
-			MonitorID:     monitorID,
+			MonitorID:     &monitorID,
 			AlertPolicyID: &policyID,
 			Status:        models.AlertStatusActive,
 		},
-		MonitorName: "API",
+		MonitorName: strPtr("API"),
 		PolicyName:  strPtr("auto-policy"),
 	}
 	if err := svc.EnsureIncidentForAlert(ctx, tenantID, alert); err != nil {

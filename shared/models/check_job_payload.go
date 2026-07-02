@@ -259,6 +259,19 @@ type RabbitMQMonitorConfig struct {
 	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
 }
 
+// MonitorTypeMeshProbe is the CheckJobPayload.Type for inter-location mesh
+// probes. Mesh jobs carry no monitor (MonitorID stays empty) — the subject is
+// a directed (source location → target location) edge.
+const MonitorTypeMeshProbe = "mesh_probe"
+
+// MeshProbeConfig is the config payload for mesh_probe jobs: the source
+// location's worker performs GET http://<endpoint>/mesh/echo and asserts the
+// echoed location ID matches TargetLocationID (catching misrouted endpoints).
+type MeshProbeConfig struct {
+	TargetLocationID string `json:"target_location_id"`
+	Endpoint         string `json:"endpoint"` // host:port
+}
+
 // CheckJobPayload represents the payload for a check job
 type CheckJobPayload struct {
 	MonitorID      string          `json:"monitor_id"`

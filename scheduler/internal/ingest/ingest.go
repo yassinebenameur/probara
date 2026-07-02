@@ -53,6 +53,7 @@ type Ingest struct {
 	resultsIngested *prometheus.CounterVec
 	ingestErrors    *prometheus.CounterVec
 	duplicates      prometheus.Counter
+	meshIngested    prometheus.Counter
 }
 
 // New creates the ingest component. statusPub may be nil (status page updates
@@ -88,6 +89,12 @@ func New(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegistry *metri
 		[]string{},
 	)
 	i.duplicates = duplicatesCounter.With(prometheus.Labels{})
+	meshCounter := metricsRegistry.NewCounter(
+		"mesh_results_ingested_total",
+		"Total number of inter-location mesh probe results persisted",
+		[]string{},
+	)
+	i.meshIngested = meshCounter.With(prometheus.Labels{})
 
 	return i
 }
@@ -178,6 +185,12 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 	if m.Version != "v1" {
 		logEntry.WithField("version", m.Version).Error("Unsupported check result version")
 		return nil
+	}
+
+	// Mesh probes are edge results, not monitor results — they carry no
+	// monitor_id and never touch check_results or monitor state.
+	if m.Mesh != nil {
+		return i.handleMeshResult(ctx, m)
 	}
 
 	result, err := i.buildResult(m)

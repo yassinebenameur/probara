@@ -7,7 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +40,7 @@ func NewService(database *db.Client) *Service {
 
 const locationColumns = `
 	l.id, l.tenant_id, l.name, l.slug, l.description, l.enabled,
-	l.last_seen_at, l.created_at, l.updated_at,
+	l.last_seen_at, l.mesh_endpoint, l.created_at, l.updated_at,
 	(SELECT COUNT(*) FROM monitor_locations ml
 	 JOIN monitors m ON m.id = ml.monitor_id AND m.deleted_at IS NULL
 	 WHERE ml.location_id = l.id) AS monitor_count`
@@ -53,11 +55,16 @@ func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.Cr
 		return nil, fmt.Errorf("name must be at most 100 characters")
 	}
 
+	meshEndpoint, err := normalizeMeshEndpoint(req.MeshEndpoint)
+	if err != nil {
+		return nil, err
+	}
+
 	id := uuid.New()
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO locations (id, tenant_id, name, slug, description)
-		VALUES ($1, $2, $3, $4, $5)
-	`, id, tenantID, name, slugify(name), req.Description)
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO locations (id, tenant_id, name, slug, description, mesh_endpoint)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, id, tenantID, name, slugify(name), req.Description, meshEndpoint)
 	if err != nil {
 		if strings.Contains(err.Error(), "idx_locations_tenant_name") {
 			return nil, fmt.Errorf("a location named %q already exists", name)
@@ -163,12 +170,19 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID uuid.UUID, re
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	meshEndpoint := existing.MeshEndpoint
+	if req.MeshEndpoint != nil {
+		meshEndpoint, err = normalizeMeshEndpoint(req.MeshEndpoint)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE locations
-		SET name = $1, slug = $2, description = $3, enabled = $4, updated_at = NOW()
-		WHERE id = $5 AND tenant_id = $6 AND deleted_at IS NULL
-	`, name, slug, description, enabled, locationID, tenantID)
+		SET name = $1, slug = $2, description = $3, enabled = $4, mesh_endpoint = $5, updated_at = NOW()
+		WHERE id = $6 AND tenant_id = $7 AND deleted_at IS NULL
+	`, name, slug, description, enabled, meshEndpoint, locationID, tenantID)
 	if err != nil {
 		if strings.Contains(err.Error(), "idx_locations_tenant_name") {
 			return nil, fmt.Errorf("a location named %q already exists", name)
@@ -263,7 +277,7 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 	var l models.Location
 	if err := row.Scan(
 		&l.ID, &l.TenantID, &l.Name, &l.Slug, &l.Description, &l.Enabled,
-		&l.LastSeenAt, &l.CreatedAt, &l.UpdatedAt, &l.MonitorCount,
+		&l.LastSeenAt, &l.MeshEndpoint, &l.CreatedAt, &l.UpdatedAt, &l.MonitorCount,
 	); err != nil {
 		return nil, err
 	}
@@ -275,6 +289,30 @@ func scanLocation(row rowScanner) (*models.Location, error) {
 // the location as connected.
 func IsConnected(lastSeenAt *time.Time) bool {
 	return lastSeenAt != nil && time.Since(*lastSeenAt) < connectedWindow
+}
+
+// normalizeMeshEndpoint validates a host:port mesh endpoint. Nil or empty
+// clears it (NULL — the location leaves the mesh; the scheduler's edge sync
+// removes its edges next tick).
+func normalizeMeshEndpoint(raw *string) (*string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	endpoint := strings.TrimSpace(*raw)
+	if endpoint == "" {
+		return nil, nil
+	}
+	if len(endpoint) > 255 {
+		return nil, fmt.Errorf("mesh_endpoint must be at most 255 characters")
+	}
+	host, portStr, err := net.SplitHostPort(endpoint)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return nil, fmt.Errorf("mesh_endpoint must be host:port")
+	}
+	if port, err := strconv.Atoi(portStr); err != nil || port < 1 || port > 65535 {
+		return nil, fmt.Errorf("mesh_endpoint port must be between 1 and 65535")
+	}
+	return &endpoint, nil
 }
 
 var slugInvalidChars = regexp.MustCompile(`[^a-z0-9]+`)

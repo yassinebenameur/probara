@@ -51,6 +51,11 @@ type alertRecord struct {
 	MetricName           *string
 	MetricValue          *float64
 	ThresholdValue       *float64
+	// Mesh-edge subject (Kind == "mesh_edge"): MonitorID is the zero UUID.
+	SourceLocationID   *uuid.UUID
+	SourceLocationName *string
+	TargetLocationID   *uuid.UUID
+	TargetLocationName *string
 }
 
 type alertChannel struct {
@@ -1239,6 +1244,14 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 		kind = notifications.KindAvailability
 	}
 
+	uuidStr := func(id *uuid.UUID) *string {
+		if id == nil {
+			return nil
+		}
+		s := id.String()
+		return &s
+	}
+
 	return notifications.AlertEvent{
 		Type:      eventType,
 		TenantID:  binding.TenantID.String(),
@@ -1267,6 +1280,10 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			MetricName:           alert.MetricName,
 			MetricValue:          alert.MetricValue,
 			ThresholdValue:       alert.ThresholdValue,
+			SourceLocationID:     uuidStr(alert.SourceLocationID),
+			SourceLocationName:   alert.SourceLocationName,
+			TargetLocationID:     uuidStr(alert.TargetLocationID),
+			TargetLocationName:   alert.TargetLocationName,
 		},
 	}
 }

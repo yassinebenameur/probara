@@ -30,6 +30,49 @@ func NewService(db *db.Client, incidents incidentAutomation) *Service {
 	return &Service{db: db, incidents: incidents}
 }
 
+// alertDetailSelect is the shared projection for AlertWithDetails. Monitors
+// are LEFT JOINed because mesh_edge alerts have no monitor — their subject is
+// a directed location pair (sl → tl).
+const alertDetailSelect = `
+	SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
+		a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
+		a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
+		a.metric_name, a.metric_value, a.threshold_value,
+		a.created_at, a.updated_at,
+		m.name as monitor_name, ap.name as policy_name,
+		a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name,
+		a.source_location_id, a.target_location_id, sl.name, tl.name
+	FROM alerts a
+	LEFT JOIN monitors m ON a.monitor_id = m.id
+	LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
+	LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
+	LEFT JOIN locations sl ON sl.id = a.source_location_id
+	LEFT JOIN locations tl ON tl.id = a.target_location_id
+`
+
+// alertVisibleClause hides alerts of soft-deleted monitors while keeping
+// monitor-less (mesh) alerts visible.
+const alertVisibleClause = `(a.monitor_id IS NULL OR m.deleted_at IS NULL)`
+
+// scanAlertWithDetails scans one alertDetailSelect row.
+func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWithDetails, error) {
+	var alert models.AlertWithDetails
+	err := scan(
+		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
+		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
+		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
+		&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
+		&alert.CreatedAt, &alert.UpdatedAt,
+		&alert.MonitorName, &alert.PolicyName,
+		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
+		&alert.SourceLocationID, &alert.TargetLocationID, &alert.SourceLocationName, &alert.TargetLocationName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &alert, nil
+}
+
 // ListAlerts lists alerts with filtering and pagination
 func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams) (*models.AlertListResponse, error) {
 	if params.Page < 1 {
@@ -73,9 +116,9 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(*)
 		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		WHERE %s AND m.deleted_at IS NULL
-	`, whereClause)
+		LEFT JOIN monitors m ON a.monitor_id = m.id
+		WHERE %s AND %s
+	`, whereClause, alertVisibleClause)
 	var total int
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("failed to count alerts: %w", err)
@@ -83,21 +126,11 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 
 	// Get alerts with details
 	query := fmt.Sprintf(`
-		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
-			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
-			a.metric_name, a.metric_value, a.threshold_value,
-			a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name,
-			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
-		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
-		WHERE %s AND m.deleted_at IS NULL
+		%s
+		WHERE %s AND %s
 		ORDER BY a.triggered_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIndex, argIndex+1)
+	`, alertDetailSelect, whereClause, alertVisibleClause, argIndex, argIndex+1)
 
 	args = append(args, params.PageSize, offset)
 
@@ -109,24 +142,11 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 
 	var alerts []models.AlertWithDetails
 	for rows.Next() {
-		var alert models.AlertWithDetails
-		var policyName sql.NullString
-		err := rows.Scan(
-			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
-			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-			&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
-			&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
-			&alert.CreatedAt, &alert.UpdatedAt,
-			&alert.MonitorName, &policyName,
-			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
-		)
+		alert, err := scanAlertWithDetails(rows.Scan)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
 		}
-		if policyName.Valid {
-			alert.PolicyName = &policyName.String
-		}
-		alerts = append(alerts, alert)
+		alerts = append(alerts, *alert)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -143,44 +163,18 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 
 // GetAlert retrieves an alert by ID
 func (s *Service) GetAlert(ctx context.Context, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
-	query := `
-		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
-			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
-			a.metric_name, a.metric_value, a.threshold_value,
-			a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name,
-			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
-		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
-		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
-	`
+	query := alertDetailSelect + `
+		WHERE a.id = $1 AND a.tenant_id = $2 AND ` + alertVisibleClause
 
-	var alert models.AlertWithDetails
-	var policyName sql.NullString
-	err := s.db.QueryRowContext(ctx, query, alertID, tenantID).Scan(
-		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
-		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
-		&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
-		&alert.CreatedAt, &alert.UpdatedAt,
-		&alert.MonitorName, &policyName,
-		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
-	)
-
+	row := s.db.QueryRowContext(ctx, query, alertID, tenantID)
+	alert, err := scanAlertWithDetails(row.Scan)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("alert not found")
 		}
 		return nil, fmt.Errorf("failed to get alert: %w", err)
 	}
-
-	if policyName.Valid {
-		alert.PolicyName = &policyName.String
-	}
-	return &alert, nil
+	return alert, nil
 }
 
 // GetRecentAlerts retrieves the most recent alerts for dashboard
@@ -192,19 +186,8 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 		limit = 50
 	}
 
-	query := `
-		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
-			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
-			a.metric_name, a.metric_value, a.threshold_value,
-			a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name,
-			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
-		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
-		WHERE a.tenant_id = $1 AND m.deleted_at IS NULL
+	query := alertDetailSelect + `
+		WHERE a.tenant_id = $1 AND ` + alertVisibleClause + `
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
 	`
@@ -217,30 +200,22 @@ func (s *Service) GetRecentAlerts(ctx context.Context, tenantID uuid.UUID, limit
 
 	alerts := []models.AlertWithDetails{}
 	for rows.Next() {
-		var alert models.AlertWithDetails
-		var policyName sql.NullString
-		err := rows.Scan(
-			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
-			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-			&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
-			&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
-			&alert.CreatedAt, &alert.UpdatedAt,
-			&alert.MonitorName, &policyName,
-			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
-		)
+		alert, err := scanAlertWithDetails(rows.Scan)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
 		}
-		if policyName.Valid {
-			alert.PolicyName = &policyName.String
-		}
-		alerts = append(alerts, alert)
+		alerts = append(alerts, *alert)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating alerts: %w", err)
 	}
 
 	return alerts, nil
 }
 
-// GetRecentAlertsForTags retrieves recent alerts for monitors matching all selected tags.
+// GetRecentAlertsForTags retrieves recent alerts for monitors matching all
+// selected tags. Mesh alerts carry no monitor (and no tags), so the tag
+// filter naturally excludes them.
 func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID, tags []string, limit int) ([]models.AlertWithDetails, error) {
 	if len(tags) == 0 {
 		return s.GetRecentAlerts(ctx, tenantID, limit)
@@ -252,18 +227,7 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 		limit = 50
 	}
 
-	query := `
-		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
-			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
-			a.metric_name, a.metric_value, a.threshold_value,
-			a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name,
-			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
-		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
+	query := alertDetailSelect + `
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]
@@ -280,24 +244,11 @@ func (s *Service) GetRecentAlertsForTags(ctx context.Context, tenantID uuid.UUID
 
 	alerts := []models.AlertWithDetails{}
 	for rows.Next() {
-		var alert models.AlertWithDetails
-		var policyName sql.NullString
-		err := rows.Scan(
-			&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
-			&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-			&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
-			&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
-			&alert.CreatedAt, &alert.UpdatedAt,
-			&alert.MonitorName, &policyName,
-			&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
-		)
+		alert, err := scanAlertWithDetails(rows.Scan)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan alert: %w", err)
 		}
-		if policyName.Valid {
-			alert.PolicyName = &policyName.String
-		}
-		alerts = append(alerts, alert)
+		alerts = append(alerts, *alert)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating alerts: %w", err)
@@ -408,43 +359,18 @@ func (s *Service) CreateAlert(ctx context.Context, tenantID, monitorID, policyID
 }
 
 func (s *Service) getAlertTx(ctx context.Context, tx *sql.Tx, tenantID, alertID uuid.UUID) (*models.AlertWithDetails, error) {
-	query := `
-		SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
-			a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
-			a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
-			a.metric_name, a.metric_value, a.threshold_value,
-			a.created_at, a.updated_at,
-			m.name as monitor_name, ap.name as policy_name,
-			a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name
-		FROM alerts a
-		JOIN monitors m ON a.monitor_id = m.id
-		LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
-		WHERE a.id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
-	`
+	query := alertDetailSelect + `
+		WHERE a.id = $1 AND a.tenant_id = $2 AND ` + alertVisibleClause
 
-	var alert models.AlertWithDetails
-	var policyName sql.NullString
-	err := tx.QueryRowContext(ctx, query, alertID, tenantID).Scan(
-		&alert.ID, &alert.TenantID, &alert.MonitorID, &alert.AlertPolicyID,
-		&alert.Status, &alert.TriggeredAt, &alert.AcknowledgedAt, &alert.ResolvedAt,
-		&alert.FailureCount, &alert.LastError, &alert.Kind, &alert.BaselineLatencyMs, &alert.ObservedLatencyMs, &alert.AnomalyScore,
-		&alert.MetricName, &alert.MetricValue, &alert.ThresholdValue,
-		&alert.CreatedAt, &alert.UpdatedAt,
-		&alert.MonitorName, &policyName,
-		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
-	)
+	row := tx.QueryRowContext(ctx, query, alertID, tenantID)
+	alert, err := scanAlertWithDetails(row.Scan)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("alert not found")
 		}
 		return nil, fmt.Errorf("failed to get alert: %w", err)
 	}
-
-	if policyName.Valid {
-		alert.PolicyName = &policyName.String
-	}
-	return &alert, nil
+	return alert, nil
 }
 
 // GetActiveAlertForMonitor gets the active alert for a monitor if one exists

@@ -17,6 +17,7 @@ import {
   Workflow,
   Wrench,
   MapPin,
+  Network,
 } from 'lucide-react';
 import { getMonitors, getAlertChannels, getStatusPages, getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
@@ -48,6 +49,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'Monitors', href: '/monitors', icon: Activity, countKey: 'monitors' },
       { name: 'Locations', href: '/locations', icon: MapPin },
+      { name: 'Mesh', href: '/mesh', icon: Network },
       { name: 'Dependencies', href: '/dependencies', icon: Workflow },
       { name: 'Maintenance', href: '/maintenance', icon: Wrench },
       { name: 'Status Pages', href: '/status-pages', icon: FileText, countKey: 'statusPages' },

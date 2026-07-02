@@ -481,7 +481,7 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 			t.Fatalf("RecentFailures included monitor %s, want only %s", failure.MonitorID, monitorA)
 		}
 	}
-	if len(overview.RecentAlerts) != 1 || overview.RecentAlerts[0].MonitorID != monitorA {
+	if len(overview.RecentAlerts) != 1 || overview.RecentAlerts[0].MonitorID == nil || *overview.RecentAlerts[0].MonitorID != monitorA {
 		t.Fatalf("RecentAlerts = %+v, want only monitorA alert", overview.RecentAlerts)
 	}
 

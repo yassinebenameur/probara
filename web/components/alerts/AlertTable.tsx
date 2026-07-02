@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Bell } from 'lucide-react';
+import { Bell, Network } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
@@ -153,12 +153,31 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                 </span>
               </td>
               <td>
-                <Link
-                  href={`/monitors/${alert.monitor_id}`}
-                  className="font-medium text-white hover:text-cyan-400"
-                >
-                  {alert.monitor_name || alert.monitor_id}
-                </Link>
+                {alert.kind === 'mesh_edge' ? (
+                  <Link
+                    href="/mesh"
+                    className="inline-flex items-center gap-1.5 font-medium text-white hover:text-cyan-400"
+                    title="Inter-location mesh path down — view the connectivity matrix"
+                  >
+                    <Network className="h-3.5 w-3.5 text-slate-400" strokeWidth={1.75} />
+                    {alert.source_location_name || 'unknown'} → {alert.target_location_name || 'unknown'}
+                  </Link>
+                ) : (
+                  <Link
+                    href={`/monitors/${alert.monitor_id}`}
+                    className="font-medium text-white hover:text-cyan-400"
+                  >
+                    {alert.monitor_name || alert.monitor_id}
+                  </Link>
+                )}
+                {alert.kind === 'mesh_edge' && (
+                  <span
+                    className="ml-2 inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-300"
+                    title="Directed inter-location connectivity path"
+                  >
+                    mesh
+                  </span>
+                )}
                 {alert.kind === 'latency_anomaly' && (
                   <span
                     className="ml-2 inline-flex items-center rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-300"

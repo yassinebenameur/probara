@@ -63,11 +63,14 @@ spec:
         - name: metrics
           containerPort: {{ .Values.worker.metricsPort }}
           protocol: TCP
+        - name: http
+          containerPort: {{ .Values.worker.httpPort }}
+          protocol: TCP
         env:
         - name: SERVICE_NAME
           value: "worker"
         - name: HTTP_PORT
-          value: "{{ .Values.worker.metricsPort }}"
+          value: "{{ .Values.worker.httpPort }}"
         - name: METRICS_PORT
           value: "{{ .Values.worker.metricsPort }}"
         - name: LOG_LEVEL

@@ -435,7 +435,7 @@ export interface NotificationSettings {
   latency_anomaly_min_delta_pct: number;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
 
@@ -449,6 +449,8 @@ export interface Location {
   enabled: boolean;
   connected: boolean;
   last_seen_at?: string;
+  // host:port other locations probe; set = participates in the mesh.
+  mesh_endpoint?: string;
   monitor_count: number;
   created_at: string;
   updated_at: string;
@@ -464,12 +466,55 @@ export interface LocationListResponse {
 export interface CreateLocationRequest {
   name: string;
   description?: string;
+  mesh_endpoint?: string;
 }
 
 export interface UpdateLocationRequest {
   name?: string;
   description?: string;
   enabled?: boolean;
+  // Empty string clears the endpoint (opts the location out of the mesh).
+  mesh_endpoint?: string;
+}
+
+// Inter-location connectivity mesh
+
+export interface MeshLocation {
+  id: string;
+  name: string;
+  connected: boolean;
+  mesh_endpoint: string;
+}
+
+export type MeshEdgeState = 'unknown' | 'up' | 'suspect' | 'down';
+
+export interface MeshEdge {
+  source_location_id: string;
+  target_location_id: string;
+  state: MeshEdgeState;
+  last_latency_ms?: number;
+  last_check_at?: string;
+  last_error?: string;
+  stale: boolean;
+  alert_open: boolean;
+}
+
+export interface MeshResponse {
+  locations: MeshLocation[];
+  edges: MeshEdge[];
+  probe_interval_seconds: number;
+}
+
+export interface MeshEdgeHistoryPoint {
+  status: string;
+  latency_ms?: number;
+  created_at: string;
+}
+
+export interface MeshProbeResponse {
+  status: string;
+  latency_ms?: number;
+  error_message?: string;
 }
 
 export interface LocationDeployInfo {
@@ -648,7 +693,8 @@ export type AlertStatus = 'active' | 'acknowledged' | 'resolved';
 export interface Alert {
   id: string;
   tenant_id: string;
-  monitor_id: string;
+  // Absent for mesh_edge alerts (their subject is a location pair).
+  monitor_id?: string;
   alert_policy_id?: string;
   status: AlertStatus;
   triggered_at: string;
@@ -665,11 +711,16 @@ export interface Alert {
   threshold_value?: number;
   root_cause_monitor_id?: string;
   root_cause_down_since?: string;
+  // Mesh-edge subject (kind === 'mesh_edge').
+  source_location_id?: string;
+  target_location_id?: string;
   created_at: string;
   updated_at: string;
   monitor_name?: string;
   policy_name?: string;
   root_cause_monitor_name?: string;
+  source_location_name?: string;
+  target_location_name?: string;
 }
 
 export interface AlertListResponse {

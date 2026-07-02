@@ -156,6 +156,9 @@ worker:
   enabled: true
   replicas: 2
   metricsPort: 9090
+  # Mesh echo port (GET /mesh/echo), served on its own listener so it can be
+  # exposed across networks without exposing /metrics.
+  httpPort: 8080
   logLevel: "info"
   # Worker-specific configuration
   checkJobStream: "check-jobs"
@@ -184,6 +187,13 @@ worker:
   #     replicas: 1
   #     concurrency: "10"      # optional, defaults to worker.concurrency
   #     natsUrl: ""            # optional, defaults to the platform NATS URL
+  #     # Optional Service exposing the mesh echo port so OTHER locations can
+  #     # probe this one. Point the location's mesh_endpoint at its address
+  #     # (e.g. an internal NLB reachable across your VPCs).
+  #     meshService:
+  #       enabled: true
+  #       type: ClusterIP      # LoadBalancer for cross-VPC probing
+  #       annotations: {}      # e.g. internal NLB annotations
   locations: []
 
 # =============================================================================

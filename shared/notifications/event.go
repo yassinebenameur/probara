@@ -58,6 +58,15 @@ type AlertDetails struct {
 	// fired (refreshed while it stays open), so one page carries the full
 	// per-location breakdown instead of splitting it across N alerts.
 	FailingLocations []FailingLocation `json:"failing_locations,omitempty"`
+
+	// Mesh-edge annotation: populated when Kind == "mesh_edge". The alert's
+	// subject is the directed source→target location path (MonitorID is the
+	// zero UUID for these; MonitorName carries a readable "mesh: A → B" label
+	// so existing channel templates render something meaningful).
+	SourceLocationID   *string `json:"source_location_id,omitempty"`
+	SourceLocationName *string `json:"source_location_name,omitempty"`
+	TargetLocationID   *string `json:"target_location_id,omitempty"`
+	TargetLocationName *string `json:"target_location_name,omitempty"`
 }
 
 // FailingLocation is one down vantage point of a multi-location monitor.
@@ -67,11 +76,13 @@ type FailingLocation struct {
 	DownSince *time.Time `json:"down_since,omitempty"`
 }
 
-// KindAvailability, KindLatencyAnomaly and KindHostMetric are the alert kinds.
+// KindAvailability, KindLatencyAnomaly, KindHostMetric and KindMeshEdge are
+// the alert kinds.
 const (
 	KindAvailability   = "availability"
 	KindLatencyAnomaly = "latency_anomaly"
 	KindHostMetric     = "host_metric"
+	KindMeshEdge       = "mesh_edge"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.
@@ -82,6 +93,11 @@ func (d AlertDetails) IsLatencyAnomaly() bool {
 // IsHostMetric reports whether this alert is a host-metric threshold breach.
 func (d AlertDetails) IsHostMetric() bool {
 	return d.Kind == KindHostMetric
+}
+
+// IsMeshEdge reports whether this alert is an inter-location mesh edge outage.
+func (d AlertDetails) IsMeshEdge() bool {
+	return d.Kind == KindMeshEdge
 }
 
 // MetricLabel returns a human-readable name for the breaching host metric,
