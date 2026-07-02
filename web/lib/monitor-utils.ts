@@ -86,7 +86,7 @@ export function getLatestStatus(results: CheckResult[]): MonitorHealthStatus {
 }
 
 export function getEffectiveMonitorStatus(
-  monitor: Pick<Monitor, 'enabled' | 'in_maintenance'>,
+  monitor: Pick<Monitor, 'enabled' | 'in_maintenance' | 'current_state' | 'location_ids'>,
   results: CheckResult[]
 ): MonitorDisplayStatus {
   if (!monitor.enabled) {
@@ -94,6 +94,22 @@ export function getEffectiveMonitorStatus(
   }
   if (monitor.in_maintenance) {
     return 'maintenance';
+  }
+
+  // Multi-location monitors: the server's quorum verdict is authoritative —
+  // per-result derivation would misread a below-quorum location failure as down.
+  if (monitor.location_ids?.length && monitor.current_state) {
+    switch (monitor.current_state) {
+      case 'up':
+        return 'up';
+      case 'down':
+        return 'down';
+      case 'degraded':
+      case 'suspect':
+        return 'degraded';
+      default:
+        return 'unknown';
+    }
   }
 
   return getLatestStatus(results);
@@ -108,6 +124,8 @@ export function monitorStateColors(state?: MonitorState): { dot: string; text: s
     case 'up':
       return { dot: 'bg-emerald-500', text: 'text-emerald-400', border: 'border-emerald-500/40' };
     case 'suspect':
+      return { dot: 'bg-amber-500', text: 'text-amber-400', border: 'border-amber-500/40' };
+    case 'degraded':
       return { dot: 'bg-amber-500', text: 'text-amber-400', border: 'border-amber-500/40' };
     case 'down':
       return { dot: 'bg-rose-500', text: 'text-rose-400', border: 'border-rose-500/40' };

@@ -44,6 +44,7 @@ type alertRecord struct {
 	RootCauseMonitorID   *uuid.UUID
 	RootCauseMonitorName *string
 	RootCauseDownSince   *time.Time
+	FailingLocations     []notifications.FailingLocation
 	BaselineLatencyMs    *float64
 	ObservedLatencyMs    *float64
 	AnomalyScore         *float64
@@ -1259,6 +1260,7 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			RootCauseMonitorID:   rootCauseID,
 			RootCauseMonitorName: alert.RootCauseMonitorName,
 			RootCauseDownSince:   alert.RootCauseDownSince,
+			FailingLocations:     alert.FailingLocations,
 			BaselineLatencyMs:    alert.BaselineLatencyMs,
 			ObservedLatencyMs:    alert.ObservedLatencyMs,
 			AnomalyScore:         alert.AnomalyScore,

@@ -1198,7 +1198,7 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 			  %s
 			GROUP BY m.id, m.name, m.current_state, latest.latest_check_at
 			HAVING COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) > 0
-			    OR m.current_state = 'down'
+			    OR m.current_state IN ('down', 'degraded')
 			ORDER BY problem_checks DESC, name ASC
 			LIMIT $4
 		)
@@ -1318,13 +1318,15 @@ func scanProblemMonitorRows(rows *sql.Rows) ([]models.DashboardProblemMonitor, e
 
 // monitorStateToStatus maps the persisted state-machine value to the result-status vocabulary
 // used in CurrentStatus, keeping the existing API surface while deriving status from state.
-// down → "failure" (confirmed outage); suspect/up → "success"; unknown → nil (no data yet).
+// down → "failure" (confirmed outage); suspect/up/degraded → "success" (degraded is below
+// quorum, so not counted as an outage here — the raw state is exposed separately);
+// unknown → nil (no data yet).
 func monitorStateToStatus(state string) *string {
 	switch state {
 	case "down":
 		s := "failure"
 		return &s
-	case "up", "suspect":
+	case "up", "suspect", "degraded":
 		s := "success"
 		return &s
 	default:

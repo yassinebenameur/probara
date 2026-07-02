@@ -112,6 +112,11 @@ api:
   # when the API sits behind the Next.js frontend proxy or other reverse proxies).
   # Example: "https://probara.example.com"
   publicBaseURL: ""
+  # NATS address reachable from remote networks, baked into private-location
+  # worker deploy snippets. Expose NATS (LoadBalancer / TCP ingress) and enable
+  # NATS auth/TLS before pointing external locations at it.
+  # Example: "nats://nats.example.com:4222"
+  publicNatsURL: ""
   resources:
     requests:
       cpu: "100m"
@@ -169,6 +174,17 @@ worker:
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 80
+  # Private-location worker fleets running in THIS cluster. Each entry becomes
+  # its own Deployment consuming only that location's job subject. Locations
+  # outside the cluster use the deploy snippet from the Locations page instead
+  # (only NATS must be reachable from there — never Postgres).
+  # locations:
+  #   - name: eu-west          # DNS-safe suffix for the Deployment name
+  #     locationId: ""         # location UUID from the Locations page (required)
+  #     replicas: 1
+  #     concurrency: "10"      # optional, defaults to worker.concurrency
+  #     natsUrl: ""            # optional, defaults to the platform NATS URL
+  locations: []
 
 # =============================================================================
 # ALERTER SERVICE

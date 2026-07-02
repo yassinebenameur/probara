@@ -14,6 +14,7 @@ import {
   RabbitMQMonitorConfig,
   DBQueryValueOp,
   MASKED_SECRET,
+  Location,
 } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
 import {
@@ -33,6 +34,7 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
+import { LocationsSection } from './LocationsSection';
 
 export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb' | 'rabbitmq';
 
@@ -293,6 +295,8 @@ export default function DatabaseForm({
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
+    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
+    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
   });
 
   // Explicitly dropped stored secrets ("Clear" on the set-chip): the field is
@@ -307,6 +311,11 @@ export default function DatabaseForm({
     Boolean(formData.tls_ca_pem || formData.tls_client_cert_pem || storedClientKey)
   );
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
+  // List shared by the Locations section (via onLocationsLoaded) so the
+  // test-from picker can resolve location names.
+  const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
+  // '' = default fleet.
+  const [testLocationId, setTestLocationId] = useState('');
 
   const usingConnString = formData.connection_mode === 'connection_string';
   // PEM material only makes sense when the connection can use TLS.
@@ -445,6 +454,9 @@ export default function DatabaseForm({
     setErrors(connectionErrors);
     if (Object.keys(connectionErrors).length > 0) return;
 
+    // Ignore a stale pick if the location was deselected since.
+    const chosenLocationId = formData.location_ids.includes(testLocationId) ? testLocationId : '';
+
     setTest({ phase: 'running' });
     try {
       const result = await testMonitorConfig({
@@ -452,6 +464,7 @@ export default function DatabaseForm({
         config: buildConfig(),
         timeout_seconds: Math.min(formData.timeout_seconds || 10, 30),
         ...(isEditMode && monitor ? { monitor_id: monitor.id } : {}),
+        ...(chosenLocationId ? { location_id: chosenLocationId } : {}),
       });
       setTest({ phase: 'done', result });
     } catch (err) {
@@ -480,6 +493,11 @@ export default function DatabaseForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map((t) => t.trim()).filter((t) => t);
     }
+    requestData.location_ids = formData.location_ids;
+    requestData.location_quorum =
+      formData.location_ids.length >= 2
+        ? Math.min(formData.location_quorum, formData.location_ids.length)
+        : 1;
 
     await onSubmit(requestData);
   };
@@ -816,6 +834,21 @@ export default function DatabaseForm({
             )}
             {test.phase === 'running' ? 'Testing…' : 'Test connection'}
           </button>
+          {formData.location_ids.length > 0 && (
+            <select
+              aria-label="Test from location"
+              value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+              onChange={(e) => setTestLocationId(e.target.value)}
+              className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+            >
+              <option value="">Test from: default fleet</option>
+              {availableLocations
+                .filter((loc) => formData.location_ids.includes(loc.id))
+                .map((loc) => (
+                  <option key={loc.id} value={loc.id}>Test from: {loc.name}</option>
+                ))}
+            </select>
+          )}
           {test.phase === 'idle' && (
             <p className="text-xs text-slate-500">Runs one check from a worker without saving anything.</p>
           )}
@@ -956,6 +989,21 @@ export default function DatabaseForm({
             />
           </FormField>
         </div>
+      </FormSection>
+
+      <FormSection
+        title="Locations"
+        summary={formData.location_ids.length > 0 ? `${formData.location_ids.length} selected` : 'Default fleet'}
+        collapsible
+        defaultOpen={formData.location_ids.length > 0}
+      >
+        <LocationsSection
+          selectedIds={formData.location_ids}
+          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
+          quorum={formData.location_quorum}
+          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
+          onLocationsLoaded={setAvailableLocations}
+        />
       </FormSection>
 
       <FormSection title="Alerting">

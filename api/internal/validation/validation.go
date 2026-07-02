@@ -198,6 +198,10 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 		return err
 	}
 
+	if err := ValidateMonitorLocationFields(req.Type, req.LocationIDs, req.LocationQuorum); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -273,6 +277,38 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 		return err
 	}
 
+	var locationIDs []string
+	if req.LocationIDs != nil {
+		locationIDs = *req.LocationIDs
+	}
+	if req.LocationIDs != nil || req.LocationQuorum != nil {
+		if err := ValidateMonitorLocationFields(monitorType, locationIDs, req.LocationQuorum); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ValidateMonitorLocationFields validates private-location selection: only
+// active check types can be pinned to locations (group/agent/push never run
+// on workers), IDs must be UUIDs, and the quorum must be sane. Quorum
+// clamping to the selection size happens in the service.
+func ValidateMonitorLocationFields(monitorType models.MonitorType, locationIDs []string, quorum *int) error {
+	if len(locationIDs) > 0 && !activeCheckTypes[monitorType] {
+		return fmt.Errorf("locations cannot be set on %s monitors", monitorType)
+	}
+	for _, id := range locationIDs {
+		if id == "" {
+			continue
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			return fmt.Errorf("invalid location_id %q", id)
+		}
+	}
+	if quorum != nil && *quorum < 1 {
+		return fmt.Errorf("location_quorum must be at least 1")
+	}
 	return nil
 }
 

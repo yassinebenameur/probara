@@ -7,6 +7,7 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
+import { LocationsSection } from './LocationsSection';
 
 interface SipFormProps {
   monitor?: Monitor;
@@ -48,6 +49,8 @@ export default function SipForm({
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
+    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
+    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -95,6 +98,11 @@ export default function SipForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
+    requestData.location_ids = formData.location_ids;
+    requestData.location_quorum =
+      formData.location_ids.length >= 2
+        ? Math.min(formData.location_quorum, formData.location_ids.length)
+        : 1;
 
     await onSubmit(requestData);
   };
@@ -184,6 +192,20 @@ export default function SipForm({
             />
           </FormField>
         </div>
+      </FormSection>
+
+      <FormSection
+        title="Locations"
+        summary={formData.location_ids.length > 0 ? `${formData.location_ids.length} selected` : 'Default fleet'}
+        collapsible
+        defaultOpen={formData.location_ids.length > 0}
+      >
+        <LocationsSection
+          selectedIds={formData.location_ids}
+          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
+          quorum={formData.location_quorum}
+          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
+        />
       </FormSection>
 
       <FormSection title="Alerting">

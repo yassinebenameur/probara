@@ -12,6 +12,7 @@ import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
+import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import Button from '@/components/ui/Button';
@@ -669,6 +670,13 @@ export default function EditMonitorPage() {
           </button>
         ))}
       </div>
+
+      {monitor.locations && monitor.locations.length > 0 && (
+        <MonitorLocationStrip
+          locations={monitor.locations}
+          quorum={monitor.location_quorum ?? 1}
+        />
+      )}
 
       {showRetentionWarning && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">

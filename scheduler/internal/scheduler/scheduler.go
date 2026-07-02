@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
@@ -33,6 +34,9 @@ const (
 )
 
 // nextCheckDelay returns how long after now the monitor should run again.
+// Only 'suspect' (temporal, mid-confirmation) gets the fast recheck;
+// 'degraded' (spatial: some locations down, below quorum) can persist
+// indefinitely and runs at the normal interval.
 func nextCheckDelay(currentState string, intervalSeconds int) time.Duration {
 	interval := time.Duration(intervalSeconds) * time.Second
 	if currentState == "suspect" && suspectRecheckInterval < interval {
@@ -50,6 +54,8 @@ type Monitor struct {
 	IntervalSeconds int
 	TimeoutSeconds  int
 	CurrentState    string
+	// LocationIDs the monitor fans out to; empty = default platform fleet.
+	LocationIDs []uuid.UUID
 }
 
 // Scheduler represents the scheduler service
@@ -217,9 +223,22 @@ func (s *Scheduler) Start() error {
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
-	_, err := s.queue.EnsureWorkQueueStream(ctx, s.config.CheckJobStream, []string{s.config.CheckJobSubject}, checkJobStreamMaxAge)
+	// The stream carries the bare base subject (legacy, still valid for jobs
+	// in flight during rollout) plus the per-location hierarchy
+	// (<base>.default and <base>.loc.<id>).
+	subjects := []string{s.config.CheckJobSubject, s.config.CheckJobSubject + ".>"}
+	_, err := s.queue.EnsureWorkQueueStream(ctx, s.config.CheckJobStream, subjects, checkJobStreamMaxAge)
 	if err != nil {
 		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
+	}
+
+	// Work-queue streams forbid a filterless consumer coexisting with the
+	// filtered per-location consumers workers now create, so drop legacy
+	// filterless consumers (pre-locations worker fleets) if still present.
+	for _, name := range s.config.LegacyCheckConsumers {
+		if err := s.queue.DeleteConsumer(ctx, s.config.CheckJobStream, name); err == nil {
+			s.logger.WithField("consumer", name).Info("Deleted legacy filterless check-jobs consumer")
+		}
 	}
 
 	s.logger.WithField("stream", s.config.CheckJobStream).Info("JetStream stream ensured")
@@ -466,11 +485,59 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 		return nil, fmt.Errorf("error iterating monitors: %w", err)
 	}
 
+	if err := s.attachMonitorLocations(ctx, tx, monitors); err != nil {
+		return nil, err
+	}
+
 	return monitors, nil
 }
 
-// createCheckJob creates a check job for a monitor
-func (s *Scheduler) createCheckJob(monitor Monitor) (*models.Job, error) {
+// attachMonitorLocations loads the selected locations for a batch of monitors
+// in one query (enabled, non-deleted locations only — a disabled location's
+// workers may be gone, so no jobs are addressed to it).
+func (s *Scheduler) attachMonitorLocations(ctx context.Context, tx *sql.Tx, monitors []Monitor) error {
+	if len(monitors) == 0 {
+		return nil
+	}
+
+	ids := make([]string, len(monitors))
+	index := make(map[uuid.UUID]int, len(monitors))
+	for i, m := range monitors {
+		ids[i] = m.ID.String()
+		index[m.ID] = i
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT ml.monitor_id, ml.location_id
+		FROM monitor_locations ml
+		JOIN locations l ON l.id = ml.location_id
+			AND l.deleted_at IS NULL
+			AND l.enabled = TRUE
+		WHERE ml.monitor_id = ANY($1::uuid[])
+	`, pq.Array(ids))
+	if err != nil {
+		return fmt.Errorf("failed to query monitor locations: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monitorID, locationID uuid.UUID
+		if err := rows.Scan(&monitorID, &locationID); err != nil {
+			return fmt.Errorf("failed to scan monitor location: %w", err)
+		}
+		if i, ok := index[monitorID]; ok {
+			monitors[i].LocationIDs = append(monitors[i].LocationIDs, locationID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating monitor locations: %w", err)
+	}
+	return nil
+}
+
+// createCheckJob creates a check job for a monitor. locationID is empty for
+// the default platform fleet.
+func (s *Scheduler) createCheckJob(monitor Monitor, locationID string) (*models.Job, error) {
 	jobID := uuid.New().String()
 
 	payload := models.CheckJobPayload{
@@ -478,6 +545,7 @@ func (s *Scheduler) createCheckJob(monitor Monitor) (*models.Job, error) {
 		Type:           monitor.Type,
 		Config:         json.RawMessage(monitor.Config),
 		TimeoutSeconds: monitor.TimeoutSeconds,
+		LocationID:     locationID,
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -494,13 +562,61 @@ func (s *Scheduler) createCheckJob(monitor Monitor) (*models.Job, error) {
 	return job, nil
 }
 
+// jobSubject returns the per-location subject a job is published to.
+func (s *Scheduler) jobSubject(locationID string) string {
+	if locationID == "" {
+		return models.CheckJobSubjectDefault(s.config.CheckJobSubject)
+	}
+	return models.CheckJobSubjectForLocation(s.config.CheckJobSubject, locationID)
+}
+
 // publishJob publishes a job to NATS
-func (s *Scheduler) publishJob(ctx context.Context, job *models.Job) error {
-	err := s.queue.PublishJSON(ctx, s.config.CheckJobSubject, job, nil)
+func (s *Scheduler) publishJob(ctx context.Context, subject string, job *models.Job) error {
+	err := s.queue.PublishJSON(ctx, subject, job, nil)
 	if err != nil {
 		return fmt.Errorf("failed to publish job: %w", err)
 	}
 	return nil
+}
+
+// publishMonitorJobs fans a due monitor out to its locations (or the default
+// fleet when none are selected). It returns how many jobs were published; the
+// caller reschedules the monitor iff at least one publish succeeded, so a
+// NATS blip retries next tick without skipping an interval.
+func (s *Scheduler) publishMonitorJobs(ctx context.Context, monitor Monitor) (published, failed int) {
+	locationIDs := []string{""}
+	if len(monitor.LocationIDs) > 0 {
+		locationIDs = locationIDs[:0]
+		for _, id := range monitor.LocationIDs {
+			locationIDs = append(locationIDs, id.String())
+		}
+	}
+
+	for _, locationID := range locationIDs {
+		job, err := s.createCheckJob(monitor, locationID)
+		if err != nil {
+			s.logger.WithError(err).
+				WithField("monitor_id", monitor.ID).
+				WithField("tenant_id", monitor.TenantID).
+				Error("Failed to create check job")
+			failed++
+			continue
+		}
+
+		if err := s.publishJob(ctx, s.jobSubject(locationID), job); err != nil {
+			s.jobsPublishErrors.With(prometheus.Labels{}).Inc()
+			s.logger.WithError(err).
+				WithField("monitor_id", monitor.ID).
+				WithField("tenant_id", monitor.TenantID).
+				WithField("location_id", locationID).
+				WithField("job_id", job.ID).
+				Error("Failed to publish job")
+			failed++
+			continue
+		}
+		published++
+	}
+	return published, failed
 }
 
 // updateMonitorNextRunAt updates the next_run_at for a monitor within a transaction
@@ -562,27 +678,14 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 	publishErrors := 0
 
 	for _, monitor := range monitors {
-		// Create check job
-		job, err := s.createCheckJob(monitor)
-		if err != nil {
-			s.logger.WithError(err).
-				WithField("monitor_id", monitor.ID).
-				WithField("tenant_id", monitor.TenantID).
-				Error("Failed to create check job")
-			publishErrors++
-			continue
-		}
-
-		// Publish job to NATS (outside transaction, but we'll only update DB if publish succeeds)
-		if err := s.publishJob(ctx, job); err != nil {
-			s.jobsPublishErrors.With(prometheus.Labels{}).Inc()
-			s.logger.WithError(err).
-				WithField("monitor_id", monitor.ID).
-				WithField("tenant_id", monitor.TenantID).
-				WithField("job_id", job.ID).
-				Error("Failed to publish job")
-			publishErrors++
-			// Skip this monitor - don't update next_run_at if publish failed
+		// Fan out to the monitor's locations (or the default fleet) — jobs go
+		// to NATS outside the transaction; the DB reschedule below only
+		// happens when at least one job made it out.
+		published, failed := s.publishMonitorJobs(ctx, monitor)
+		publishErrors += failed
+		if published == 0 {
+			// Nothing published: leave next_run_at untouched so the monitor
+			// is retried on the next tick.
 			continue
 		}
 
@@ -596,17 +699,17 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 				WithField("monitor_id", monitor.ID).
 				WithField("tenant_id", monitor.TenantID).
 				Error("Failed to update monitor next_run_at")
-			// If DB update fails, we've already published the job
-			// This is acceptable - the monitor will be scheduled again, but the job is already queued
+			// If DB update fails, we've already published the job(s)
+			// This is acceptable - the monitor will be scheduled again, but the jobs are already queued
 			// We continue to process other monitors
 			continue
 		}
 
 		scheduledCount++
 		s.logger.WithFields(logrus.Fields{
-			"monitor_id": monitor.ID,
-			"tenant_id":  monitor.TenantID,
-			"job_id":     job.ID,
+			"monitor_id":     monitor.ID,
+			"tenant_id":      monitor.TenantID,
+			"jobs_published": published,
 		}).Debug("Scheduled monitor check")
 	}
 

@@ -642,7 +642,14 @@ function HttpResultsTable({ results }: { results: CheckResult[] }) {
                     onClick={() => setExpandedId(isExpanded ? null : result.id)}
                     className={`cursor-pointer border-b border-white/[0.03] transition-colors hover:bg-slate-800/40 ${rowBg}`}
                   >
-                    <td className="px-5 py-3 font-mono text-sm text-slate-400">{time}</td>
+                    <td className="px-5 py-3 font-mono text-sm text-slate-400">
+                      {time}
+                      {result.location_name && (
+                        <span className="ml-2 inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-2 py-0.5 font-sans text-[0.7rem] font-medium text-cyan-200">
+                          {result.location_name}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-5 py-3">
                       <span className={`inline-flex items-center gap-1.5 text-xs ${statusColor}`}>
                         <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />

@@ -84,6 +84,11 @@ export default function MonitorDetailHistory({
                     {failure.http_status && (
                       <span className="text-xs text-slate-500">HTTP {failure.http_status}</span>
                     )}
+                    {failure.location_name && (
+                      <span className="inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-2 py-0.5 text-xs font-medium text-cyan-200">
+                        {failure.location_name}
+                      </span>
+                    )}
                   </div>
                   {failure.error_message && (
                     <p className="mt-1 text-sm text-slate-500 truncate">{failure.error_message}</p>

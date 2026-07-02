@@ -53,6 +53,18 @@ type AlertDetails struct {
 	MetricName     *string  `json:"metric_name,omitempty"`
 	MetricValue    *float64 `json:"metric_value,omitempty"`
 	ThresholdValue *float64 `json:"threshold_value,omitempty"`
+
+	// Multi-location annotation: which locations were failing when the alert
+	// fired (refreshed while it stays open), so one page carries the full
+	// per-location breakdown instead of splitting it across N alerts.
+	FailingLocations []FailingLocation `json:"failing_locations,omitempty"`
+}
+
+// FailingLocation is one down vantage point of a multi-location monitor.
+type FailingLocation struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	DownSince *time.Time `json:"down_since,omitempty"`
 }
 
 // KindAvailability, KindLatencyAnomaly and KindHostMetric are the alert kinds.
@@ -123,6 +135,30 @@ func (d AlertDetails) MetricSummary() string {
 		return fmt.Sprintf("%.1f%% (threshold %.0f%%)", *d.MetricValue, *d.ThresholdValue)
 	}
 	return fmt.Sprintf("%.1f%%", *d.MetricValue)
+}
+
+// FailingLocationNames renders the failing locations as a comma-separated
+// list, e.g. "eu-west, us-east". Empty for location-less monitors.
+func (d AlertDetails) FailingLocationNames() string {
+	if len(d.FailingLocations) == 0 {
+		return ""
+	}
+	names := make([]string, len(d.FailingLocations))
+	for i, l := range d.FailingLocations {
+		names[i] = l.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+// FailingLocationsSummary renders the failing-locations breakdown for
+// plain-text notification bodies, e.g. "Failing Locations: eu-west, us-east".
+// Empty for location-less monitors.
+func (d AlertDetails) FailingLocationsSummary() string {
+	names := d.FailingLocationNames()
+	if names == "" {
+		return ""
+	}
+	return "Failing Locations: " + names
 }
 
 // Headline returns a short, kind-aware noun phrase for the alert condition,

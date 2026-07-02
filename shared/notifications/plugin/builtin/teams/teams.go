@@ -159,6 +159,9 @@ func buildMessageCard(req plugin.DispatchRequest) messageCard {
 	if summary := event.Alert.MetricSummary(); summary != "" {
 		facts = append(facts, fact{Name: event.Alert.MetricLabel(), Value: summary})
 	}
+	if names := event.Alert.FailingLocationNames(); names != "" {
+		facts = append(facts, fact{Name: "Failing Locations", Value: names})
+	}
 	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
 		value := *event.Alert.RootCauseMonitorName
 		if event.Alert.RootCauseDownSince != nil {

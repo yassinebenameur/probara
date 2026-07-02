@@ -27,12 +27,14 @@ import {
   SyntheticBrowserAction,
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserStepConfig,
+  Location,
 } from '@/lib/types';
 import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
+import { LocationsSection } from './LocationsSection';
 import GroupForm from './GroupForm';
 import { MonitorMultiSelect } from './MonitorMultiSelect';
 import AgentForm from './AgentForm';
@@ -972,6 +974,8 @@ export default function MonitorForm({
     enabled: sourceEnabled,
     tags: sourceTags.join(', '),
     depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
+    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
+    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -988,6 +992,9 @@ export default function MonitorForm({
   const testSequenceRef = useRef(0);
   const mountedRef = useRef(true);
   const [availableMonitors, setAvailableMonitors] = useState<Monitor[]>([]);
+  const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
+  // '' = fan out to all the monitor's locations (or default fleet when none).
+  const [testLocationId, setTestLocationId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -1087,6 +1094,8 @@ export default function MonitorForm({
   const startSyntheticLiveTest = async () => {
     if (!monitor?.id || !isSyntheticMonitor || isTestRunning) return;
 
+    // Ignore a stale pick if the location was deselected since.
+    const chosenLocationId = formData.location_ids.includes(testLocationId) ? testLocationId : '';
     const sequence = ++testSequenceRef.current;
     setSyntheticTestState({
       phase: 'queueing',
@@ -1094,7 +1103,10 @@ export default function MonitorForm({
     });
 
     try {
-      const runResponse = await runMonitorNow(monitor.id);
+      const runResponse = await runMonitorNow(
+        monitor.id,
+        chosenLocationId ? { location_id: chosenLocationId } : undefined
+      );
       if (!mountedRef.current || sequence !== testSequenceRef.current) return;
 
       const queuedAtISO = runResponse.queued_at || new Date().toISOString();
@@ -1114,6 +1126,7 @@ export default function MonitorForm({
 
         const response = await getMonitorResults(monitor.id, { limit: 10, since: queuedAtISO });
         const candidate = (response.results || []).find((result) => {
+          if (chosenLocationId && result.location_id !== chosenLocationId) return false;
           const resultMs = new Date(result.created_at).getTime();
           return resultMs >= queuedAtMs - 1500;
         });
@@ -1963,6 +1976,11 @@ export default function MonitorForm({
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
     requestData.depends_on_ids = formData.depends_on_ids;
+    requestData.location_ids = formData.location_ids;
+    requestData.location_quorum =
+      formData.location_ids.length >= 2
+        ? Math.min(formData.location_quorum, formData.location_ids.length)
+        : 1;
 
     await onSubmit(requestData);
   };
@@ -2278,14 +2296,31 @@ export default function MonitorForm({
                   <p className="text-sm font-medium text-white">Realtime Test</p>
                   <p className="text-xs text-slate-500">Runs the saved monitor immediately and streams the latest result state here.</p>
                 </div>
-                <button
-                  type="button"
-                  className={BTN_GHOST_SM}
-                  onClick={startSyntheticLiveTest}
-                  disabled={!isSavedMonitor || isTestRunning}
-                >
-                  {isTestRunning ? 'Testing...' : 'Test now'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {formData.location_ids.length > 0 && (
+                    <select
+                      aria-label="Run test from location"
+                      value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+                      onChange={(e) => setTestLocationId(e.target.value)}
+                      className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+                    >
+                      <option value="">Run from: all locations</option>
+                      {availableLocations
+                        .filter((loc) => formData.location_ids.includes(loc.id))
+                        .map((loc) => (
+                          <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
+                        ))}
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    className={BTN_GHOST_SM}
+                    onClick={startSyntheticLiveTest}
+                    disabled={!isSavedMonitor || isTestRunning}
+                  >
+                    {isTestRunning ? 'Testing...' : 'Test now'}
+                  </button>
+                </div>
               </div>
               {!isSavedMonitor && (
                 <p className="mt-2 text-xs text-amber-400">Save this monitor first to enable realtime tests.</p>
@@ -3178,14 +3213,31 @@ export default function MonitorForm({
                   <p className="text-sm font-medium text-white">Realtime Test</p>
                   <p className="text-xs text-slate-500">Runs the saved monitor immediately and streams the latest result state here.</p>
                 </div>
-                <button
-                  type="button"
-                  className={BTN_GHOST_SM}
-                  onClick={startSyntheticLiveTest}
-                  disabled={!isSavedMonitor || isTestRunning}
-                >
-                  {isTestRunning ? 'Testing...' : 'Test now'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {formData.location_ids.length > 0 && (
+                    <select
+                      aria-label="Run test from location"
+                      value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+                      onChange={(e) => setTestLocationId(e.target.value)}
+                      className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+                    >
+                      <option value="">Run from: all locations</option>
+                      {availableLocations
+                        .filter((loc) => formData.location_ids.includes(loc.id))
+                        .map((loc) => (
+                          <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
+                        ))}
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    className={BTN_GHOST_SM}
+                    onClick={startSyntheticLiveTest}
+                    disabled={!isSavedMonitor || isTestRunning}
+                  >
+                    {isTestRunning ? 'Testing...' : 'Test now'}
+                  </button>
+                </div>
               </div>
               {!isSavedMonitor && (
                 <p className="mt-2 text-xs text-amber-400">Save this monitor first to enable realtime tests.</p>
@@ -3532,6 +3584,26 @@ export default function MonitorForm({
             hint="Must be less than interval"
           />
         </div>
+      </FormSection>
+
+      {/* Locations */}
+      <FormSection
+        title="Locations"
+        summary={
+          formData.location_ids.length > 0
+            ? `${formData.location_ids.length} selected`
+            : 'Default fleet'
+        }
+        collapsible
+        defaultOpen={formData.location_ids.length > 0}
+      >
+        <LocationsSection
+          selectedIds={formData.location_ids}
+          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
+          quorum={formData.location_quorum}
+          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
+          onLocationsLoaded={setAvailableLocations}
+        />
       </FormSection>
 
       {/* Alerting */}

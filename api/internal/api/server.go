@@ -20,6 +20,7 @@ import (
 	depsuggesthandlers "github.com/yassinebenameur/probara/api/internal/handlers/depsuggest"
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
 	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
+	locationhandlers "github.com/yassinebenameur/probara/api/internal/handlers/locations"
 	maintenancewindowhandlers "github.com/yassinebenameur/probara/api/internal/handlers/maintenancewindows"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
@@ -41,6 +42,7 @@ import (
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
+	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
@@ -235,6 +237,18 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Import service and handlers
 			importSvc := importservice.NewService(dbClient, monitorService)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
+
+			// Private locations (remote worker deployments)
+			locationSvc := locationservice.NewService(dbClient)
+			locationHandlers := locationhandlers.NewHandlers(locationSvc, cfg.PublicNATSURL, log)
+			r.Route("/locations", func(r chi.Router) {
+				r.Post("/", locationHandlers.CreateLocation)
+				r.Get("/", locationHandlers.ListLocations)
+				r.Get("/{id}", locationHandlers.GetLocation)
+				r.Patch("/{id}", locationHandlers.UpdateLocation)
+				r.Delete("/{id}", locationHandlers.DeleteLocation)
+				r.Get("/{id}/deploy", locationHandlers.GetDeployInfo)
+			})
 
 			// Maintenance windows
 			maintenanceService := maintenancewindowservice.NewService(dbClient)

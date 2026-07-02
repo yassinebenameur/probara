@@ -19,7 +19,6 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
-	"github.com/yassinebenameur/probara/shared/statusupdates"
 	"github.com/yassinebenameur/probara/worker/internal/airca"
 	"github.com/yassinebenameur/probara/worker/internal/worker"
 	"github.com/yassinebenameur/probara/worker/internal/worker/notifications"
@@ -40,12 +39,19 @@ func main() {
 	// Initialize metrics
 	metricsRegistry := metrics.NewRegistry(cfg.ServiceName)
 
-	// Initialize database client
-	dbClient, err := db.NewClient(cfg.PostgresURL)
-	if err != nil {
-		log.WithError(err).Fatal("Failed to initialize database client")
+	// Initialize database client — optional. The check path publishes results
+	// over NATS and never touches Postgres; only the notifications and AI-RCA
+	// side consumers need a DB. Remote location workers run without one.
+	var dbClient *db.Client
+	if cfg.PostgresURL != "" {
+		dbClient, err = db.NewClient(cfg.PostgresURL)
+		if err != nil {
+			log.WithError(err).Fatal("Failed to initialize database client")
+		}
+		defer dbClient.Close()
+	} else {
+		log.Info("POSTGRES_URL not set; notifications and AI-RCA consumers disabled (expected for location workers)")
 	}
-	defer dbClient.Close()
 
 	// Initialize NATS queue client
 	queueClient, err := queue.NewClient(cfg.NATSURL)
@@ -54,16 +60,8 @@ func main() {
 	}
 	defer queueClient.Close()
 
-	// Initialize status update publisher (optional)
-	statusPublisher, err := statusupdates.NewPublisher(cfg.NATSURL)
-	if err != nil {
-		log.WithError(err).Warn("Failed to initialize status update publisher")
-	} else {
-		defer statusPublisher.Close()
-	}
-
 	// Create worker
-	w := worker.NewWorker(cfg, log, metricsRegistry, dbClient, queueClient, statusPublisher)
+	w := worker.NewWorker(cfg, log, metricsRegistry, queueClient)
 
 	// Wire SMTP backend into the email plugin so the notifications consumer
 	// can dispatch email alerts. No-op when SMTP is unset — email plugin Send
@@ -102,7 +100,10 @@ func main() {
 	// Start notifications consumer if enabled — runs in its own goroutine and
 	// shares the queue client + db client with the check-worker loop.
 	var notifConsumer *notifications.Consumer
-	if cfg.NotificationsEnabled {
+	if cfg.NotificationsEnabled && dbClient == nil {
+		log.Warn("NOTIFICATIONS_ENABLED is set but POSTGRES_URL is not; notifications consumer disabled")
+	}
+	if cfg.NotificationsEnabled && dbClient != nil {
 		notifConsumer = notifications.New(cfg, log, dbClient, queueClient, secretsEncryptor)
 		go func() {
 			ctx := context.Background()
@@ -134,13 +135,15 @@ func main() {
 		log.WithError(aerr).Warn("AI root cause analysis: invalid env LLM config; ignoring env default")
 	}
 
-	aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer, secretsEncryptor)
-	go func() {
-		ctx := context.Background()
-		if err := aircaConsumer.Start(ctx); err != nil && err != context.Canceled {
-			log.WithError(err).Error("AI root cause consumer exited with error")
-		}
-	}()
+	if dbClient != nil {
+		aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer, secretsEncryptor)
+		go func() {
+			ctx := context.Background()
+			if err := aircaConsumer.Start(ctx); err != nil && err != context.Canceled {
+				log.WithError(err).Error("AI root cause consumer exited with error")
+			}
+		}()
+	}
 
 	// Start minimal HTTP server for health/metrics
 	go func() {
@@ -150,12 +153,15 @@ func main() {
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer cancel()
 
-			// Check database connection
-			if err := dbClient.HealthCheck(ctx); err != nil {
-				log.WithError(err).Debug("Database health check failed")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				w.Write([]byte("Database unavailable"))
-				return
+			// Check database connection (only when configured — location
+			// workers run without Postgres)
+			if dbClient != nil {
+				if err := dbClient.HealthCheck(ctx); err != nil {
+					log.WithError(err).Debug("Database health check failed")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					w.Write([]byte("Database unavailable"))
+					return
+				}
 			}
 
 			// Check NATS connection

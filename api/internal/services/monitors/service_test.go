@@ -145,6 +145,18 @@ func (m *MockRepository) GetChannelsForMonitors(ctx context.Context, monitorIDs 
 	return make(map[uuid.UUID][]models.MonitorChannelAssignment), nil
 }
 
+func (m *MockRepository) SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error {
+	return nil
+}
+
+func (m *MockRepository) GetLocationIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	return make(map[uuid.UUID][]uuid.UUID), nil
+}
+
+func (m *MockRepository) GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error) {
+	return nil, nil
+}
+
 // ErrMonitorNotFound is returned when a monitor is not found
 var ErrMonitorNotFound = &NotFoundError{msg: "monitor not found"}
 

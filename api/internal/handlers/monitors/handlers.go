@@ -99,6 +99,10 @@ type TestMonitorConfigRequest struct {
 	// MonitorID resolves write-only secret placeholders ("***") against the
 	// stored monitor when testing an edit.
 	MonitorID *string `json:"monitor_id,omitempty"`
+	// LocationID routes the test to that private location's workers so it
+	// runs from the same vantage point as the scheduled checks. Empty =
+	// default platform fleet.
+	LocationID *string `json:"location_id,omitempty"`
 }
 
 // TestMonitorConfig handles POST /api/v1/monitors/test — runs one ephemeral
@@ -177,11 +181,25 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	testSubject := sharedmodels.TestCheckSubject
+	if req.LocationID != nil && *req.LocationID != "" {
+		locationID, err := uuid.Parse(*req.LocationID)
+		if err != nil {
+			errors.WriteValidationError(w, "invalid location_id")
+			return
+		}
+		testSubject = sharedmodels.TestCheckSubjectForLocation(locationID.String())
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutSeconds+10)*time.Second)
 	defer cancel()
-	reply, err := h.jobRequester.Request(ctx, sharedmodels.TestCheckSubject, payload)
+	reply, err := h.jobRequester.Request(ctx, testSubject, payload)
 	if err != nil {
-		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "type": req.Type}).Warn("Test check request failed")
+		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "type": req.Type, "subject": testSubject}).Warn("Test check request failed")
+		if testSubject != sharedmodels.TestCheckSubject {
+			errors.WriteInternalError(w, "no worker answered at this location — is its worker running and connected?")
+			return
+		}
 		errors.WriteInternalError(w, "no worker answered the test request — is a worker running?")
 		return
 	}
@@ -840,6 +858,43 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional body: {"location_id": "..."} narrows the run to one of the
+	// monitor's locations. Default: fan out exactly like the scheduler (all
+	// selected locations, or the default fleet when none).
+	var runReq struct {
+		LocationID *string `json:"location_id,omitempty"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&runReq) // empty body is fine
+	}
+
+	locationIDs := []string{""}
+	if len(monitor.LocationIDs) > 0 {
+		locationIDs = locationIDs[:0]
+		for _, id := range monitor.LocationIDs {
+			locationIDs = append(locationIDs, id.String())
+		}
+	}
+	if runReq.LocationID != nil && *runReq.LocationID != "" {
+		requested, err := uuid.Parse(*runReq.LocationID)
+		if err != nil {
+			errors.WriteValidationError(w, "invalid location_id")
+			return
+		}
+		found := false
+		for _, id := range monitor.LocationIDs {
+			if id == requested {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errors.WriteValidationError(w, "location is not selected on this monitor")
+			return
+		}
+		locationIDs = []string{requested.String()}
+	}
+
 	now := time.Now()
 	timeoutSeconds := monitor.TimeoutSeconds
 	if timeoutSeconds <= 0 {
@@ -847,36 +902,45 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := now.Add(time.Duration(2*timeoutSeconds) * time.Second)
 
-	payload := sharedmodels.CheckJobPayload{
-		MonitorID:      monitor.ID.String(),
-		Type:           string(monitor.Type),
-		Config:         monitor.Config,
-		TimeoutSeconds: timeoutSeconds,
-	}
+	var jobID string
+	for _, locationID := range locationIDs {
+		payload := sharedmodels.CheckJobPayload{
+			MonitorID:      monitor.ID.String(),
+			Type:           string(monitor.Type),
+			Config:         monitor.Config,
+			TimeoutSeconds: timeoutSeconds,
+			LocationID:     locationID,
+		}
 
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID.String(),
-		}).Error("Failed to marshal check payload")
-		errors.WriteInternalError(w, "failed to queue monitor run")
-		return
-	}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"tenant_id":  tenantID,
+				"monitor_id": monitorID.String(),
+			}).Error("Failed to marshal check payload")
+			errors.WriteInternalError(w, "failed to queue monitor run")
+			return
+		}
 
-	jobID := uuid.New().String()
-	job := sharedmodels.NewJob(jobID, tenantUUID.String(), sharedmodels.JobTypeCheck, "v1", payloadJSON).WithDeadline(deadline)
+		subject := sharedmodels.CheckJobSubjectDefault(h.checkSubject)
+		if locationID != "" {
+			subject = sharedmodels.CheckJobSubjectForLocation(h.checkSubject, locationID)
+		}
 
-	if err := h.jobPublisher.PublishJSON(r.Context(), h.checkSubject, job, nil); err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID.String(),
-			"subject":    h.checkSubject,
-		}).Error("Failed to publish on-demand monitor run job")
-		errors.WriteInternalError(w, "failed to queue monitor run")
-		return
+		jobID = uuid.New().String()
+		job := sharedmodels.NewJob(jobID, tenantUUID.String(), sharedmodels.JobTypeCheck, "v1", payloadJSON).WithDeadline(deadline)
+
+		if err := h.jobPublisher.PublishJSON(r.Context(), subject, job, nil); err != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"tenant_id":  tenantID,
+				"monitor_id": monitorID.String(),
+				"subject":    subject,
+			}).Error("Failed to publish on-demand monitor run job")
+			errors.WriteInternalError(w, "failed to queue monitor run")
+			return
+		}
 	}
 
 	resp := models.RunMonitorNowResponse{

@@ -88,6 +88,10 @@ spec:
         - name: PUBLIC_BASE_URL
           value: {{ . | quote }}
         {{- end }}
+        {{- with .Values.api.publicNatsURL }}
+        - name: PUBLIC_NATS_URL
+          value: {{ . | quote }}
+        {{- end }}
         {{- if .Values.secrets.probaraSecretsKey }}
         - name: PROBARA_SECRETS_KEY
           valueFrom:

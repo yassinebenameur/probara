@@ -58,6 +58,9 @@ type Monitor struct {
 	NotificationMode             string                     `json:"notification_mode"`
 	MemberAlertRollup            string                     `json:"member_alert_rollup"` // 'per_monitor' | 'group'; only meaningful for group monitors
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
+	LocationIDs                  []uuid.UUID                `json:"location_ids,omitempty"` // Private locations checks fan out to; empty = default fleet
+	LocationQuorum               int                        `json:"location_quorum"`        // Down when >= this many locations are down
+	Locations                    []MonitorLocationStatus    `json:"locations,omitempty"`    // Per-location breakdown (GetMonitor only)
 	CurrentState                 string                     `json:"current_state"`
 	InMaintenance                bool                       `json:"in_maintenance"`
 	MaintenanceUntil             *time.Time                 `json:"maintenance_until,omitempty"` // Latest ends_at among covering active windows
@@ -82,6 +85,8 @@ type CreateMonitorRequest struct {
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
+	LocationIDs                  []string                   `json:"location_ids,omitempty"`
+	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
 }
 
 // UpdateMonitorRequest represents a request to update a monitor
@@ -100,6 +105,8 @@ type UpdateMonitorRequest struct {
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
+	LocationIDs                  *[]string                  `json:"location_ids,omitempty"`   // nil = unchanged, empty = default fleet
+	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
 }
 
 // MonitorListResponse represents a paginated list of monitors
@@ -118,7 +125,9 @@ type CheckResult struct {
 	HTTPStatus   *int            `json:"http_status,omitempty"`
 	LatencyMS    *int            `json:"latency_ms,omitempty"`
 	ErrorMessage *string         `json:"error_message,omitempty"`
-	MetricsData  json.RawMessage `json:"metrics_data"` // Raw JSON for agent metrics
+	MetricsData  json.RawMessage `json:"metrics_data"`            // Raw JSON for agent metrics
+	LocationID   *uuid.UUID      `json:"location_id,omitempty"`   // Vantage point; nil = default fleet
+	LocationName *string         `json:"location_name,omitempty"` // Denormalized for display
 	CreatedAt    time.Time       `json:"created_at"`
 }
 

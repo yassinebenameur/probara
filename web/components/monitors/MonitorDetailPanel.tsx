@@ -684,7 +684,14 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                     key={result.id || idx}
                     className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5"
                   >
-                    <span className="text-muted">{formatTimeAgo(result.created_at)}</span>
+                    <span className="text-muted">
+                      {formatTimeAgo(result.created_at)}
+                      {result.location_name && (
+                        <span className="ml-1.5 inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-1.5 py-px text-[0.68rem] font-medium text-cyan-200">
+                          {result.location_name}
+                        </span>
+                      )}
+                    </span>
                     <span className="text-[#e5e7eb]">
                       {result.http_status || 'N/A'} · {result.latency_ms || 0} ms ·{' '}
                       <span

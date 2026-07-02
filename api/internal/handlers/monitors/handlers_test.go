@@ -623,8 +623,9 @@ func TestHandlers_RunMonitorNow(t *testing.T) {
 	if resp.JobID == "" {
 		t.Fatal("Expected non-empty job ID")
 	}
-	if mockPublisher.subject != "check.jobs" {
-		t.Fatalf("Expected publish subject check.jobs, got %s", mockPublisher.subject)
+	// A location-less monitor runs on the default fleet's subject.
+	if mockPublisher.subject != "check.jobs.default" {
+		t.Fatalf("Expected publish subject check.jobs.default, got %s", mockPublisher.subject)
 	}
 	if mockPublisher.job == nil {
 		t.Fatal("Expected published job")

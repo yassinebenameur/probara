@@ -7,29 +7,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
 	"github.com/yassinebenameur/probara/shared/config"
-	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
-	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
-	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
 const checkJobStreamMaxAge = 24 * time.Hour
 const consumerRestartBackoff = 2 * time.Second
 
-// statusPublisher is the minimal publishing surface the worker needs. It is
-// satisfied by *statusupdates.Publisher and by test spies.
-type statusPublisher interface {
-	Publish(event statusupdates.Event) error
+// resultPublisher is the minimal publishing surface the worker needs to hand
+// results back to the platform. Satisfied by *queue.Client and test spies.
+type resultPublisher interface {
+	PublishJSON(ctx context.Context, subject string, v interface{}, headers map[string][]string) error
 }
 
 // Worker represents the worker service
@@ -37,9 +33,8 @@ type Worker struct {
 	config  *config.WorkerConfig
 	logger  *logger.Logger
 	metrics *metrics.Registry
-	db      *db.Client
 	queue   *queue.Client
-	status  statusPublisher
+	results resultPublisher
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -61,20 +56,19 @@ type Worker struct {
 	httpErrors          *prometheus.CounterVec
 	natsAckTotal        prometheus.Counter
 	natsNakTotal        prometheus.Counter
-	dbWriteErrors       prometheus.Counter
+	resultPublishErrors prometheus.Counter
 }
 
 // NewWorker creates a new worker instance
-func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *metrics.Registry, dbClient *db.Client, queueClient *queue.Client, statusPublisher *statusupdates.Publisher) *Worker {
+func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *metrics.Registry, queueClient *queue.Client) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Worker{
 		config:           cfg,
 		logger:           log,
 		metrics:          metricsRegistry,
-		db:               dbClient,
 		queue:            queueClient,
-		status:           statusPublisher,
+		results:          queueClient,
 		ctx:              ctx,
 		cancel:           cancel,
 		secretsEncryptor: secrets.NoOpEncryptor{},
@@ -122,12 +116,12 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 	)
 	w.natsNakTotal = natsNakCounter.With(prometheus.Labels{})
 
-	dbWriteErrorsCounter := metricsRegistry.NewCounter(
-		"db_write_errors_total",
-		"Total number of database write errors",
+	resultPublishErrorsCounter := metricsRegistry.NewCounter(
+		"result_publish_errors_total",
+		"Total number of check result publish errors",
 		[]string{},
 	)
-	w.dbWriteErrors = dbWriteErrorsCounter.With(prometheus.Labels{})
+	w.resultPublishErrors = resultPublishErrorsCounter.With(prometheus.Labels{})
 
 	return w
 }
@@ -151,34 +145,78 @@ func (w *Worker) RegisterPassiveType(monitorType string) {
 	w.passiveTypes[monitorType] = true
 }
 
+// jobFilterSubject returns the per-location subject this worker consumes.
+func (w *Worker) jobFilterSubject() string {
+	if w.config.LocationID == "" {
+		return models.CheckJobSubjectDefault(w.config.CheckJobSubject)
+	}
+	return models.CheckJobSubjectForLocation(w.config.CheckJobSubject, w.config.LocationID)
+}
+
+// consumerName returns this worker fleet's durable consumer name. Each
+// location gets its own durable (with a matching filter subject); the default
+// fleet's name is suffixed too, so it can never collide with the legacy
+// filterless consumer the scheduler deletes on upgrade.
+func (w *Worker) consumerName() string {
+	if w.config.LocationID == "" {
+		return w.config.NATSConsumerName + "-default"
+	}
+	return w.config.NATSConsumerName + "-loc-" + w.config.LocationID
+}
+
+// testCheckSubject returns the request-reply subject for ephemeral test
+// checks served by this worker fleet.
+func (w *Worker) testCheckSubject() (subject, queueGroup string) {
+	if w.config.LocationID == "" {
+		return models.TestCheckSubject, "workers"
+	}
+	return models.TestCheckSubjectForLocation(w.config.LocationID), "workers-loc-" + w.config.LocationID
+}
+
 // Start starts the worker loop
 func (w *Worker) Start() error {
+	filterSubject := w.jobFilterSubject()
+	consumerName := w.consumerName()
+
 	w.logger.WithFields(logrus.Fields{
 		"worker_concurrency":  w.config.WorkerConcurrency,
-		"consumer_name":       w.config.NATSConsumerName,
+		"consumer_name":       consumerName,
 		"stream":              w.config.CheckJobStream,
-		"subject":             w.config.CheckJobSubject,
+		"subject":             filterSubject,
+		"location_id":         w.config.LocationID,
 		"registered_checkers": w.checkerRegistry.Types(),
 	}).Info("Starting worker service")
 
-	// Ensure JetStream stream exists
+	// Ensure JetStream stream exists. The subject set must match the
+	// scheduler's exactly (CreateOrUpdateStream applies whatever it is given):
+	// the bare base subject plus the per-location hierarchy.
 	ctx, cancel := context.WithTimeout(w.ctx, 10*time.Second)
 	defer cancel()
 
-	_, err := w.queue.EnsureWorkQueueStream(ctx, w.config.CheckJobStream, []string{w.config.CheckJobSubject}, checkJobStreamMaxAge)
+	jobSubjects := []string{w.config.CheckJobSubject, w.config.CheckJobSubject + ".>"}
+	_, err := w.queue.EnsureWorkQueueStream(ctx, w.config.CheckJobStream, jobSubjects, checkJobStreamMaxAge)
 	if err != nil {
 		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
 	}
 
-	w.logger.WithField("stream", w.config.CheckJobStream).Info("JetStream stream ensured")
+	// Results stream: the scheduler-side ingest consumer ensures it too, so
+	// ordering doesn't matter; ensuring here lets a worker start first.
+	_, err = w.queue.EnsureWorkQueueStream(ctx, w.config.CheckResultStream, []string{w.config.CheckResultSubject}, checkJobStreamMaxAge)
+	if err != nil {
+		return fmt.Errorf("failed to ensure results stream: %w", err)
+	}
 
-	// Create or get consumer
-	consumer, err := w.queue.CreateConsumer(ctx, w.config.CheckJobStream, w.config.NATSConsumerName)
+	w.logger.WithField("stream", w.config.CheckJobStream).Info("JetStream streams ensured")
+
+	// Create or get this fleet's durable consumer, filtered to its subject.
+	consumer, err := w.queue.CreateConsumerWithOptions(ctx, w.config.CheckJobStream, consumerName, queue.ConsumerOptions{
+		FilterSubject: filterSubject,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create consumer: %w", err)
 	}
 
-	w.logger.WithField("consumer", w.config.NATSConsumerName).Info("NATS consumer created")
+	w.logger.WithField("consumer", consumerName).Info("NATS consumer created")
 
 	// Spawn worker goroutines
 	for i := 0; i < w.config.WorkerConcurrency; i++ {
@@ -191,12 +229,25 @@ func (w *Worker) Start() error {
 
 	// Test-connection requests (core NATS request-reply, no persistence):
 	// the API forwards "test this config before saving" requests here.
-	testSub, err := w.queue.SubscribeRequestReply(models.TestCheckSubject, "workers", w.handleTestCheck)
+	// Location workers serve only their own subject — a test targeted at a
+	// location must run from that vantage point.
+	testSubject, testQueueGroup := w.testCheckSubject()
+	testSub, err := w.queue.SubscribeRequestReply(testSubject, testQueueGroup, w.handleTestCheck)
 	if err != nil {
 		w.logger.WithError(err).Warn("Failed to subscribe to test-check requests; test-connection will be unavailable")
 	} else {
 		defer func() { _ = testSub.Unsubscribe() }()
-		w.logger.WithField("subject", models.TestCheckSubject).Info("Test-check subscription ready")
+		w.logger.WithField("subject", testSubject).Info("Test-check subscription ready")
+	}
+
+	// Location workers heartbeat their liveness so the UI can show the
+	// location as connected.
+	if w.config.LocationID != "" {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			w.heartbeatLoop(w.ctx)
+		}()
 	}
 
 	// Wait for context cancellation
@@ -267,8 +318,9 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 	// Check deadline
 	if job.IsExpired() {
 		logEntry.Warn("Job expired, marking as error")
-		if err := w.persistExpiredJob(ctx, &job); err != nil {
-			logEntry.WithError(err).Error("Failed to persist expired job")
+		if err := w.publishExpiredJob(ctx, &job); err != nil {
+			logEntry.WithError(err).Error("Failed to publish expired job result")
+			w.resultPublishErrors.Inc()
 			w.natsNakTotal.Inc()
 			return err
 		}
@@ -334,10 +386,10 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		checkResult = checker.Check(checkCtx, checkConfig, payload.TimeoutSeconds)
 	}
 
-	// Persist result
-	if err := w.persistResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
-		logEntry.WithError(err).Error("Failed to persist result")
-		w.dbWriteErrors.Inc()
+	// Publish result for the platform-side ingest consumer to persist
+	if err := w.publishResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
+		logEntry.WithError(err).Error("Failed to publish result")
+		w.resultPublishErrors.Inc()
 		w.natsNakTotal.Inc()
 		return err
 	}
@@ -405,169 +457,67 @@ func (w *Worker) handleTestCheck(data []byte) []byte {
 	})
 }
 
-// persistResult persists the check result to the database (parses IDs then
-// delegates to persistResultAndState).
-func (w *Worker) persistResult(ctx context.Context, job *models.Job, payload *models.CheckJobPayload, checkResult *CheckResult, startedAt time.Time) error {
-	monitorID, err := uuid.Parse(payload.MonitorID)
-	if err != nil {
-		return fmt.Errorf("invalid monitor_id: %w", err)
+// publishResult hands the executed check back to the platform over NATS. The
+// scheduler-side ingest consumer persists it and advances the monitor's state
+// machine — the worker never touches Postgres, so remote location workers
+// only need NATS reachability.
+func (w *Worker) publishResult(ctx context.Context, job *models.Job, payload *models.CheckJobPayload, checkResult *CheckResult, startedAt time.Time) error {
+	msg := models.CheckResultMessage{
+		Version:              "v1",
+		JobID:                job.ID,
+		MonitorID:            payload.MonitorID,
+		TenantID:             job.TenantID,
+		LocationID:           payload.LocationID,
+		Status:               checkResult.Status,
+		ResultSource:         string(models.ResultSourceMonitor),
+		HTTPStatus:           checkResult.HTTPStatus,
+		LatencyMs:            checkResult.LatencyMs,
+		ErrorMessage:         checkResult.ErrorMessage,
+		MatchedBodySubstring: checkResult.MatchedBodySubstring,
+		MetricsData:          checkResult.MetricsData,
+		StartedAt:            startedAt,
+		CompletedAt:          time.Now(),
 	}
-	tenantID, err := uuid.Parse(job.TenantID)
-	if err != nil {
-		return fmt.Errorf("invalid tenant_id: %w", err)
-	}
-	jobID, err := uuid.Parse(job.ID)
-	if err != nil {
-		return fmt.Errorf("invalid job_id: %w", err)
-	}
-	transition, err := w.persistResultAndState(ctx, tenantID, monitorID, jobID, checkResult, startedAt)
-	if err != nil {
-		return err
-	}
-	// Only state transitions are published; per-result events flooded the
-	// status-page service (and connected browsers) with no visible change.
-	if transition.Changed {
-		w.publishStatusUpdate(monitorID, tenantID, "state_change")
-	}
-	return nil
+	return w.publishResultMessage(ctx, msg)
 }
 
-// persistResultAndState inserts the check result and advances the monitor's
-// state machine in one transaction. The monitor row is locked so concurrent
-// workers serialize their transitions (spec §5). It returns the applied
-// transition so callers can react to state changes (zero value on error).
-func (w *Worker) persistResultAndState(ctx context.Context, tenantID, monitorID, jobID uuid.UUID, checkResult *CheckResult, startedAt time.Time) (monitorstate.Transition, error) {
-	completedAt := time.Now()
-	metricsData := checkResult.MetricsData
-	if len(metricsData) == 0 {
-		metricsData = json.RawMessage("null")
-	}
-
-	tx, err := w.db.BeginTx(ctx, nil)
-	if err != nil {
-		return monitorstate.Transition{}, fmt.Errorf("begin result transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var snap monitorstate.Snapshot
-	var threshold int
-	err = tx.QueryRowContext(ctx, `
-		SELECT current_state, consecutive_failures, consecutive_failures_threshold
-		FROM monitors
-		WHERE id = $1
-		FOR UPDATE
-	`, monitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &threshold)
-	if err != nil {
-		return monitorstate.Transition{}, fmt.Errorf("lock monitor state: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, result_source, http_status,
-			latency_ms, error_message, matched_body_substring, metrics_data,
-			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`, uuid.New(), monitorID, tenantID, jobID, checkResult.Status,
-		string(models.ResultSourceMonitor), checkResult.HTTPStatus,
-		checkResult.LatencyMs, checkResult.ErrorMessage,
-		checkResult.MatchedBodySubstring, metricsData,
-		startedAt, startedAt, completedAt); err != nil {
-		return monitorstate.Transition{}, fmt.Errorf("failed to insert check result: %w", err)
-	}
-
-	transition := monitorstate.Apply(snap, monitorstate.IsFailureStatus(checkResult.Status), threshold)
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE monitors
-		SET current_state = $1,
-			consecutive_failures = $2,
-			last_state_change_at = CASE WHEN $3 THEN NOW() ELSE last_state_change_at END,
-			updated_at = NOW()
-		WHERE id = $4
-	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, monitorID); err != nil {
-		return monitorstate.Transition{}, fmt.Errorf("update monitor state: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return monitorstate.Transition{}, fmt.Errorf("commit result transaction: %w", err)
-	}
-	return transition, nil
-}
-
-// persistExpiredJob persists an expired job as an error result
-func (w *Worker) persistExpiredJob(ctx context.Context, job *models.Job) error {
+// publishExpiredJob publishes an expired job as a platform-sourced error
+// result. The ingest consumer inserts it without running the state machine —
+// an expired job never observed the target.
+func (w *Worker) publishExpiredJob(ctx context.Context, job *models.Job) error {
 	var payload models.CheckJobPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return nil
 	}
-
-	monitorID, err := uuid.Parse(payload.MonitorID)
-	if err != nil {
-		return nil
-	}
-
-	tenantID, err := uuid.Parse(job.TenantID)
-	if err != nil {
-		return nil
-	}
-
-	jobID, err := uuid.Parse(job.ID)
-	if err != nil {
+	if payload.MonitorID == "" {
 		return nil
 	}
 
 	errorMsg := "Job expired before processing"
 	now := time.Now()
-	metricsData := json.RawMessage("null")
-
-	query := `
-		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, result_source, http_status,
-			latency_ms, error_message, matched_body_substring, metrics_data,
-			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`
-
-	resultID := uuid.New()
-	_, err = w.db.ExecContext(ctx, query,
-		resultID,
-		monitorID,
-		tenantID,
-		jobID,
-		string(models.ResultStatusError),
-		string(models.ResultSourcePlatform),
-		nil,
-		nil,
-		&errorMsg,
-		false,
-		metricsData,
-		now,
-		now,
-		now,
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to insert expired job result: %w", err)
+	msg := models.CheckResultMessage{
+		Version:      "v1",
+		JobID:        job.ID,
+		MonitorID:    payload.MonitorID,
+		TenantID:     job.TenantID,
+		LocationID:   payload.LocationID,
+		Status:       string(models.ResultStatusError),
+		ResultSource: string(models.ResultSourcePlatform),
+		ErrorMessage: &errorMsg,
+		StartedAt:    now,
+		CompletedAt:  now,
 	}
-
-	// No status update is published here: platform-sourced results are
-	// excluded from public status queries and never run the state machine,
-	// so this event could never change what a status page shows.
-	return nil
+	return w.publishResultMessage(ctx, msg)
 }
 
-func (w *Worker) publishStatusUpdate(monitorID, tenantID uuid.UUID, eventType string) {
-	if w.status == nil {
-		return
+func (w *Worker) publishResultMessage(ctx context.Context, msg models.CheckResultMessage) error {
+	// Nats-Msg-Id enables JetStream's publish-side dedupe window; the durable
+	// dedupe is the unique index on check_results(job_id, result_source).
+	headers := map[string][]string{"Nats-Msg-Id": {msg.DedupeID()}}
+	if err := w.results.PublishJSON(ctx, w.config.CheckResultSubject, msg, headers); err != nil {
+		return fmt.Errorf("publish check result: %w", err)
 	}
-	event := statusupdates.Event{
-		Type:      eventType,
-		MonitorID: monitorID.String(),
-		TenantID:  tenantID.String(),
-		Timestamp: time.Now().UTC(),
-	}
-	if err := w.status.Publish(event); err != nil {
-		w.logger.WithError(err).Warn("Failed to publish status page update")
-	}
+	return nil
 }
 
 // Shutdown gracefully shuts down the worker

@@ -181,6 +181,12 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		memberAlertRollup = *req.MemberAlertRollup
 	}
 
+	locationIDs, err := parseLocationIDs(req.LocationIDs)
+	if err != nil {
+		return nil, err
+	}
+	locationQuorum := effectiveLocationQuorum(req.LocationQuorum, len(locationIDs))
+
 	monitor := &models.Monitor{
 		ID:                           monitorID,
 		TenantID:                     tenantID,
@@ -201,6 +207,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
 		NotificationMode:             notificationMode,
 		MemberAlertRollup:            memberAlertRollup,
+		LocationQuorum:               locationQuorum,
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
@@ -209,6 +216,13 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 
 	if err := s.repo.SetAlertPolicies(ctx, monitorID, alertPolicyIDs); err != nil {
 		return nil, err
+	}
+
+	if len(locationIDs) > 0 {
+		if err := s.repo.SetLocations(ctx, tenantID, monitorID, locationIDs); err != nil {
+			return nil, err
+		}
+		monitor.LocationIDs = locationIDs
 	}
 
 	// Persist custom channel assignments if mode is 'custom'
@@ -269,6 +283,16 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 		}
 	}
 
+	// Attach the private-location selection + per-location breakdown
+	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		monitor.LocationIDs = locationMap[monitorID]
+	}
+	if len(monitor.LocationIDs) > 0 {
+		if statuses, err := s.repo.GetLocationStatuses(ctx, monitorID); err == nil {
+			monitor.Locations = statuses
+		}
+	}
+
 	s.maskSecrets(monitor)
 	return monitor, nil
 }
@@ -309,6 +333,13 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 			} else {
 				monitors[i].NotificationChannels = []models.MonitorChannelAssignment{}
 			}
+		}
+	}
+
+	// Attach location selections
+	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, monitorIDs); err == nil {
+		for i := range monitors {
+			monitors[i].LocationIDs = locationMap[monitors[i].ID]
 		}
 	}
 
@@ -463,6 +494,34 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	// Location threading: when the set changes, the quorum is re-clamped to
+	// the new set size; an explicit quorum alone is clamped to the current set.
+	var newLocationIDs []uuid.UUID
+	if req.LocationIDs != nil {
+		parsed, err := parseLocationIDs(*req.LocationIDs)
+		if err != nil {
+			return nil, err
+		}
+		newLocationIDs = parsed
+
+		quorumReq := req.LocationQuorum
+		if quorumReq == nil {
+			existingQuorum := existing.LocationQuorum
+			quorumReq = &existingQuorum
+		}
+		setParts = append(setParts, fmt.Sprintf("location_quorum = $%d", argIndex))
+		args = append(args, effectiveLocationQuorum(quorumReq, len(parsed)))
+		argIndex++
+	} else if req.LocationQuorum != nil {
+		currentLocations, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID})
+		if err != nil {
+			return nil, err
+		}
+		setParts = append(setParts, fmt.Sprintf("location_quorum = $%d", argIndex))
+		args = append(args, effectiveLocationQuorum(req.LocationQuorum, len(currentLocations[monitorID])))
+		argIndex++
+	}
+
 	// Update next_run_at if interval changed
 	if req.IntervalSeconds != nil {
 		setParts = append(setParts, fmt.Sprintf("next_run_at = $%d", argIndex))
@@ -502,6 +561,15 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		monitor.AlertPolicyIDs = alertPolicyIDs
 	} else if policies, err := s.repo.GetAlertPolicyIDs(ctx, monitorID); err == nil {
 		monitor.AlertPolicyIDs = mergeAlertPolicyIDs(policies, derefUUID(monitor.AlertPolicyID))
+	}
+
+	if req.LocationIDs != nil {
+		if err := s.repo.SetLocations(ctx, tenantID, monitorID, newLocationIDs); err != nil {
+			return nil, err
+		}
+		monitor.LocationIDs = newLocationIDs
+	} else if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		monitor.LocationIDs = locationMap[monitorID]
 	}
 
 	// Handle notification channel updates
@@ -600,6 +668,45 @@ func derefUUID(id *uuid.UUID) uuid.UUID {
 		return uuid.Nil
 	}
 	return *id
+}
+
+func parseLocationIDs(ids []string) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	result := make([]uuid.UUID, 0, len(ids))
+	for _, raw := range ids {
+		if raw == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid location_id: %w", err)
+		}
+		if _, ok := seen[parsed]; ok {
+			continue
+		}
+		seen[parsed] = struct{}{}
+		result = append(result, parsed)
+	}
+	return result, nil
+}
+
+// effectiveLocationQuorum clamps a requested quorum to [1, locationCount].
+// A monitor with 0 or 1 locations always has quorum 1 (the legacy behavior).
+func effectiveLocationQuorum(requested *int, locationCount int) int {
+	quorum := 1
+	if requested != nil && *requested > 1 {
+		quorum = *requested
+	}
+	if locationCount > 0 && quorum > locationCount {
+		quorum = locationCount
+	}
+	if locationCount <= 1 {
+		quorum = 1
+	}
+	return quorum
 }
 
 // DeleteMonitor deletes a monitor

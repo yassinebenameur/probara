@@ -162,6 +162,9 @@ func buildEmbed(req plugin.DispatchRequest) discordPayload {
 	if summary := event.Alert.MetricSummary(); summary != "" {
 		fields = append(fields, discordEmbedField{Name: event.Alert.MetricLabel(), Value: summary, Inline: true})
 	}
+	if names := event.Alert.FailingLocationNames(); names != "" {
+		fields = append(fields, discordEmbedField{Name: "Failing Locations", Value: names})
+	}
 	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
 		value := *event.Alert.RootCauseMonitorName
 		if event.Alert.RootCauseDownSince != nil {

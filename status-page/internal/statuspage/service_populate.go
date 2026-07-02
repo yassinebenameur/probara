@@ -266,11 +266,14 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 // mapMonitorState maps the persisted state-machine value to the public status-page vocabulary.
 // "down" is the only confirmed-outage state and maps to "down".
 // "suspect" must NOT show as down (unconfirmed blip) — it maps to "up" to avoid public flapping.
-// "up" maps to "up" and "unknown" (no data yet) maps to "unknown".
+// "degraded" (some locations of a multi-location monitor down, below quorum) maps to the page's
+// existing "degraded" bucket. "up" maps to "up" and "unknown" (no data yet) maps to "unknown".
 func mapMonitorState(state string) string {
 	switch state {
 	case "down":
 		return "down"
+	case "degraded":
+		return "degraded"
 	case "up", "suspect":
 		return "up"
 	default: // "unknown" or anything unexpected

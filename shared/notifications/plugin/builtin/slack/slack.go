@@ -155,6 +155,9 @@ func buildBlockKit(req plugin.DispatchRequest) slackPayload {
 	if summary := event.Alert.MetricSummary(); summary != "" {
 		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n%s", event.Alert.MetricLabel(), summary)})
 	}
+	if names := event.Alert.FailingLocationNames(); names != "" {
+		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*Failing Locations*\n%s", names)})
+	}
 	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
 		text := *event.Alert.RootCauseMonitorName
 		if event.Alert.RootCauseDownSince != nil {

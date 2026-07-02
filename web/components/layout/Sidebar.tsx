@@ -16,6 +16,7 @@ import {
   Siren,
   Workflow,
   Wrench,
+  MapPin,
 } from 'lucide-react';
 import { getMonitors, getAlertChannels, getStatusPages, getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
@@ -46,6 +47,7 @@ const navGroups: NavGroup[] = [
     label: 'Monitoring',
     items: [
       { name: 'Monitors', href: '/monitors', icon: Activity, countKey: 'monitors' },
+      { name: 'Locations', href: '/locations', icon: MapPin },
       { name: 'Dependencies', href: '/dependencies', icon: Workflow },
       { name: 'Maintenance', href: '/maintenance', icon: Wrench },
       { name: 'Status Pages', href: '/status-pages', icon: FileText, countKey: 'statusPages' },

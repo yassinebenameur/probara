@@ -114,4 +114,3 @@ func TestBuildAlertEvent_RootCause(t *testing.T) {
 		t.Fatalf("root cause down since = %v, want %s", event.Alert.RootCauseDownSince, rcDownSince)
 	}
 }
-

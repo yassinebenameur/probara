@@ -43,11 +43,13 @@ func TestStaleWorkerMarksAgentStaleAfterMissedMetricWindow(t *testing.T) {
 			monitorID,
 			tenantID,
 			sqlmock.AnyArg(), // job_id
+			sqlmock.AnyArg(), // location_id (nil — agent results are location-less)
 			string(sharedmodels.ResultStatusFailure),
 			string(sharedmodels.ResultSourceMonitor),
 			sqlmock.AnyArg(), // http_status
 			sqlmock.AnyArg(), // latency_ms
 			"Agent has not reported metrics within twice the expected interval",
+			sqlmock.AnyArg(), // matched_body_substring
 			sqlmock.AnyArg(), // metrics_data
 			sqlmock.AnyArg(), // created_at
 			sqlmock.AnyArg(), // started_at

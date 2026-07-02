@@ -208,6 +208,9 @@ func DefaultBody(event notifications.AlertEvent) string {
 	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
 		lines = append(lines, fmt.Sprintf("Last Error: %s", *event.Alert.LastError))
 	}
+	if summary := event.Alert.FailingLocationsSummary(); summary != "" {
+		lines = append(lines, summary)
+	}
 	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
 		line := fmt.Sprintf("Likely Caused By: %s", *event.Alert.RootCauseMonitorName)
 		if event.Alert.RootCauseDownSince != nil {

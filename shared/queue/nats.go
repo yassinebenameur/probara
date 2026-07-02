@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -13,8 +14,13 @@ import (
 
 // Client wraps a NATS JetStream client
 type Client struct {
-	nc        *nats.Conn
-	js        jetstream.JetStream
+	nc *nats.Conn
+	js jetstream.JetStream
+
+	// mu guards the streams/consumers caches: multiple components sharing one
+	// client (e.g. the scheduler loop and the results-ingest consumer) ensure
+	// their streams concurrently at startup.
+	mu        sync.Mutex
 	streams   map[string]jetstream.Stream
 	consumers map[string]jetstream.Consumer
 }
@@ -75,6 +81,9 @@ func NewClient(natsURL string) (*Client, error) {
 
 // EnsureStream ensures a stream exists with the given configuration
 func (c *Client) EnsureStream(ctx context.Context, streamName string, subjects []string) (jetstream.Stream, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if stream, exists := c.streams[streamName]; exists {
 		return stream, nil
 	}
@@ -116,7 +125,9 @@ func (c *Client) EnsureWorkQueueStream(ctx context.Context, streamName string, s
 		return nil, fmt.Errorf("failed to create or update work queue stream: %w", err)
 	}
 
+	c.mu.Lock()
 	c.streams[streamName] = stream
+	c.mu.Unlock()
 	return stream, nil
 }
 
@@ -174,9 +185,12 @@ type ConsumerOptions struct {
 // schedule (10s, 30s, 2m, 10m, 30m) for transient webhook failures.
 func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, consumerName string, opts ConsumerOptions) (jetstream.Consumer, error) {
 	key := fmt.Sprintf("%s:%s", streamName, consumerName)
+	c.mu.Lock()
 	if consumer, exists := c.consumers[key]; exists {
+		c.mu.Unlock()
 		return consumer, nil
 	}
+	c.mu.Unlock()
 
 	stream, err := c.js.Stream(ctx, streamName)
 	if err != nil {
@@ -220,7 +234,9 @@ func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, cons
 		return nil, fmt.Errorf("failed to load consumer after validation: %w", err)
 	}
 
+	c.mu.Lock()
 	c.consumers[key] = consumer
+	c.mu.Unlock()
 	return consumer, nil
 }
 
@@ -271,8 +287,21 @@ func (c *Client) DeleteConsumer(ctx context.Context, streamName string, consumer
 		return fmt.Errorf("failed to delete consumer: %w", err)
 	}
 
+	c.mu.Lock()
 	delete(c.consumers, fmt.Sprintf("%s:%s", streamName, consumerName))
+	c.mu.Unlock()
 	return nil
+}
+
+// PublishCoreJSON publishes a JSON-encoded message over core NATS (no
+// JetStream stream required). Fire-and-forget fan-out — used for location
+// worker heartbeats, where losing one beat is harmless.
+func (c *Client) PublishCoreJSON(subject string, v interface{}) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+	return c.nc.Publish(subject, data)
 }
 
 // Request sends a core NATS request and waits for the reply (or ctx done).

@@ -265,6 +265,23 @@ type CheckJobPayload struct {
 	Type           string          `json:"type"`
 	Config         json.RawMessage `json:"config"`
 	TimeoutSeconds int             `json:"timeout_seconds"`
+	// LocationID pins the job to a private location's workers. Empty = the
+	// default platform fleet. Workers echo it into the result message so
+	// check_results carry the vantage point.
+	LocationID string `json:"location_id,omitempty"`
+}
+
+// CheckJobSubjectDefault is the subject the default platform worker fleet
+// consumes; monitors with no locations selected are published here.
+func CheckJobSubjectDefault(base string) string {
+	return base + ".default"
+}
+
+// CheckJobSubjectForLocation is the subject a private location's workers
+// consume. The location UUID (not a slug) keys the subject so tenants can
+// never collide.
+func CheckJobSubjectForLocation(base, locationID string) string {
+	return base + ".loc." + locationID
 }
 
 // TestCheckSubject is the core-NATS request-reply subject workers listen on
@@ -272,6 +289,12 @@ type CheckJobPayload struct {
 // CheckJobPayloads (monitor_id may be empty); nothing is scheduled or
 // persisted and the result travels back on the reply subject.
 const TestCheckSubject = "checks.test"
+
+// TestCheckSubjectForLocation is the per-location variant of TestCheckSubject,
+// served only by that location's workers.
+func TestCheckSubjectForLocation(locationID string) string {
+	return TestCheckSubject + ".loc." + locationID
+}
 
 // TestCheckResponse is the worker's reply to a test check request.
 type TestCheckResponse struct {

@@ -437,7 +437,57 @@ export interface NotificationSettings {
 
 export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric';
 
-export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down';
+export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
+
+// Private location types
+export interface Location {
+  id: string;
+  tenant_id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  enabled: boolean;
+  connected: boolean;
+  last_seen_at?: string;
+  monitor_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocationListResponse {
+  items: Location[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface CreateLocationRequest {
+  name: string;
+  description?: string;
+}
+
+export interface UpdateLocationRequest {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+}
+
+export interface LocationDeployInfo {
+  location_id: string;
+  nats_url: string;
+  docker_run_command: string;
+  docker_compose_yaml: string;
+  env: Record<string, string>;
+}
+
+export interface MonitorLocationStatus {
+  id: string;
+  name: string;
+  connected: boolean;
+  current_state: 'unknown' | 'up' | 'suspect' | 'down';
+  last_latency_ms?: number;
+  last_check_at?: string;
+}
 
 // Maintenance window types
 export type MaintenanceWindowStatus = 'active' | 'upcoming' | 'past';
@@ -507,6 +557,9 @@ export interface Monitor {
   push_token?: string; // Unique token for push monitors
   member_ids?: string[]; // Populated for group monitors
   depends_on_ids?: string[]; // Upstream monitors this one depends on
+  location_ids?: string[]; // Private locations; empty/absent = default fleet
+  location_quorum?: number; // Locations that must fail before the monitor is down
+  locations?: MonitorLocationStatus[]; // Embedded only on GET /v1/monitors/{id}
   created_at: string;
   updated_at: string;
   consecutive_failures_threshold: number;
@@ -540,6 +593,8 @@ export interface CreateMonitorRequest {
   member_alert_rollup?: MemberAlertRollup;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
+  location_ids?: string[];
+  location_quorum?: number;
 }
 
 export interface UpdateMonitorRequest {
@@ -557,6 +612,8 @@ export interface UpdateMonitorRequest {
   member_alert_rollup?: MemberAlertRollup;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
+  location_ids?: string[];
+  location_quorum?: number;
 }
 
 export interface MonitorListResponse {
@@ -1114,6 +1171,8 @@ export interface CheckResult {
     | TCPMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
     | SyntheticBrowserMetricsEnvelope;
+  location_id?: string; // Absent = default fleet
+  location_name?: string;
   created_at: string;
 }
 

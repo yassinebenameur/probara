@@ -73,6 +73,9 @@ services:
       ADMIN_REFRESH_TTL_DAYS: "30"
       ADMIN_COOKIE_SECURE: "false"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
+      # NATS address reachable from remote networks, baked into private-location
+      # worker deploy snippets (the host-exposed port in local dev).
+      PUBLIC_NATS_URL: "nats://localhost:4222"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -178,6 +181,33 @@ services:
     # Scale workers if needed
     deploy:
       replicas: 1
+
+  # Example private-location worker. To try multi-location checks locally:
+  #   1. Create a location in the UI (Locations page) and copy its UUID.
+  #   2. Paste it into WORKER_LOCATION_ID below and uncomment the service.
+  # Location workers are NATS-only: no POSTGRES_URL — results travel back over
+  # NATS and are persisted by the scheduler-side ingest consumer.
+  # worker-location-example:
+  #   build:
+  #     context: .
+  #     dockerfile: worker/Dockerfile
+  #   container_name: probara-worker-location-example
+  #   environment:
+  #     HTTP_PORT: "8085"
+  #     METRICS_PORT: "9095"
+  #     LOG_LEVEL: "info"
+  #     NATS_URL: "nats://nats:4222"
+  #     CHECK_JOB_STREAM: "check-jobs"
+  #     CHECK_JOB_SUBJECT: "check.job"
+  #     NATS_CONSUMER_NAME: "worker"
+  #     WORKER_LOCATION_ID: "<location-uuid-from-the-locations-page>"
+  #     WORKER_CONCURRENCY: "10"
+  #   depends_on:
+  #     nats:
+  #       condition: service_healthy
+  #   networks:
+  #     - probara-network
+  #   restart: unless-stopped
 
   status-page:
     build:

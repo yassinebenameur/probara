@@ -67,6 +67,11 @@ import type {
   CreateMaintenanceWindowRequest,
   UpdateMaintenanceWindowRequest,
   SnoozeMonitorRequest,
+  Location,
+  LocationListResponse,
+  CreateLocationRequest,
+  UpdateLocationRequest,
+  LocationDeployInfo,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -267,8 +272,15 @@ export async function getMonitor(id: string): Promise<Monitor> {
   return apiRequest<Monitor>('GET', `/v1/monitors/${id}`);
 }
 
-export async function runMonitorNow(id: string): Promise<RunMonitorNowResponse> {
-  return apiRequest<RunMonitorNowResponse>('POST', `/v1/monitors/${id}/run`);
+export async function runMonitorNow(
+  id: string,
+  opts?: { location_id?: string }
+): Promise<RunMonitorNowResponse> {
+  return apiRequest<RunMonitorNowResponse>(
+    'POST',
+    `/v1/monitors/${id}/run`,
+    opts?.location_id ? { location_id: opts.location_id } : undefined
+  );
 }
 
 export async function createMonitor(data: CreateMonitorRequest): Promise<Monitor> {
@@ -282,6 +294,8 @@ export interface TestMonitorConfigRequest {
   // Resolves write-only "***" secret placeholders against the stored monitor
   // when testing an edit.
   monitor_id?: string;
+  // Routes the ephemeral test to that private location's workers.
+  location_id?: string;
 }
 
 export interface TestMonitorConfigResponse {
@@ -814,6 +828,40 @@ export async function getAgentInstallCommand(
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${monitorId}/agent/install${queryString ? `?${queryString}` : ''}`;
   return apiRequest<AgentInstallCommand>('GET', path);
+}
+
+// Private location API functions
+export async function getLocations(params?: {
+  page?: number;
+  page_size?: number;
+}): Promise<LocationListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/locations${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<LocationListResponse>('GET', path);
+}
+
+export async function createLocation(data: CreateLocationRequest): Promise<Location> {
+  return apiRequest<Location>('POST', '/v1/locations', data);
+}
+
+export async function updateLocation(
+  id: string,
+  data: UpdateLocationRequest
+): Promise<Location> {
+  return apiRequest<Location>('PATCH', `/v1/locations/${id}`, data);
+}
+
+// Detaches the location from its monitors (their quorum is clamped server-side).
+export async function deleteLocation(id: string): Promise<{ monitors_detached: number }> {
+  return apiRequest<{ monitors_detached: number }>('DELETE', `/v1/locations/${id}`);
+}
+
+export async function getLocationDeployInfo(id: string): Promise<LocationDeployInfo> {
+  return apiRequest<LocationDeployInfo>('GET', `/v1/locations/${id}/deploy`);
 }
 
 // Push API functions

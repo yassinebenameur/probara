@@ -118,6 +118,13 @@ const STATE_STYLES: Record<string, {
     text: 'text-rose-400',
     card: 'border-rose-500/50 shadow-[0_0_28px_-4px_rgba(244,63,94,0.45)]',
   },
+  degraded: {
+    accent: 'bg-amber-400',
+    iconTile: 'bg-amber-500/10 text-amber-400',
+    dot: 'bg-amber-400',
+    text: 'text-amber-400',
+    card: 'border-amber-500/40 shadow-[0_0_24px_-6px_rgba(251,191,36,0.35)]',
+  },
   unknown: {
     accent: 'bg-slate-600',
     iconTile: 'bg-slate-500/10 text-slate-400',
@@ -134,6 +141,7 @@ function stateStyle(state?: MonitorState) {
 const EDGE_COLORS: Record<string, string> = {
   down: '#fb7185',
   suspect: '#fbbf24',
+  degraded: '#fbbf24',
   default: '#475569',
 };
 
@@ -146,7 +154,10 @@ type MonitorFlowNode = Node<MonitorNodeData, 'monitor'>;
 function MonitorNode({ id, data }: NodeProps<MonitorFlowNode>) {
   const s = stateStyle(data.current_state);
   const Icon = TYPE_ICONS[data.type] ?? Workflow;
-  const failing = data.current_state === 'down' || data.current_state === 'suspect';
+  const failing =
+    data.current_state === 'down' ||
+    data.current_state === 'suspect' ||
+    data.current_state === 'degraded';
   // While a connection is being dragged from another node, the whole card
   // becomes the drop target — dropping anywhere on it completes the link.
   const connection = useConnection();
@@ -264,7 +275,12 @@ const nodeTypes = { monitor: MonitorNode };
 const edgeTypes = { dependency: DependencyEdge };
 
 function styleEdge(from: string, to: string, upstreamState?: MonitorState): Edge {
-  const tone = upstreamState === 'down' ? 'down' : upstreamState === 'suspect' ? 'suspect' : 'default';
+  const tone =
+    upstreamState === 'down'
+      ? 'down'
+      : upstreamState === 'suspect' || upstreamState === 'degraded'
+        ? 'suspect'
+        : 'default';
   const color = EDGE_COLORS[tone];
   return {
     id: `${from}->${to}`,
@@ -323,6 +339,7 @@ function layoutGraph(graph: DependencyGraph): { nodes: MonitorFlowNode[]; edges:
 const LEGEND: Array<{ state: MonitorState; label: string }> = [
   { state: 'up', label: 'Up' },
   { state: 'suspect', label: 'Suspect' },
+  { state: 'degraded', label: 'Degraded' },
   { state: 'down', label: 'Down' },
   { state: 'unknown', label: 'Unknown' },
 ];
@@ -734,7 +751,7 @@ function GraphCanvas({ graph }: { graph: DependencyGraph }) {
               nodeColor={(node) => {
                 const state = (node.data as MonitorNodeData | undefined)?.current_state;
                 if (state === 'down') return '#f43f5e';
-                if (state === 'suspect') return '#fbbf24';
+                if (state === 'suspect' || state === 'degraded') return '#fbbf24';
                 if (state === 'up') return '#10b981';
                 return '#475569';
               }}

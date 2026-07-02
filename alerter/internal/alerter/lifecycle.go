@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
 // runLifecycle is the transition-driven replacement for evaluateAlerts (spec §6):
@@ -34,7 +35,57 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.annotateOpenAlertRootCauses(ctx); err != nil {
 		return err
 	}
+	if err := a.refreshAlertFailingLocations(ctx); err != nil {
+		return err
+	}
 	return a.dispatchOpenAlerts(ctx)
+}
+
+// failingLocationsSubquery selects the JSON breakdown of the monitor's
+// currently-down locations (NULL for location-less monitors). monitorCol is
+// the qualified monitor id column of the enclosing query.
+func failingLocationsSubquery(monitorCol string) string {
+	return fmt.Sprintf(`
+		(SELECT jsonb_agg(jsonb_build_object(
+			'id', l.id, 'name', l.name, 'down_since', mls.last_state_change_at
+		 ) ORDER BY l.name)
+		 FROM monitor_location_state mls
+		 JOIN locations l ON l.id = mls.location_id AND l.deleted_at IS NULL
+		 WHERE mls.monitor_id = %s AND mls.current_state = 'down')`, monitorCol)
+}
+
+// refreshAlertFailingLocations recomputes the failing-locations breakdown for
+// every open availability alert each tick, mirroring the root-cause
+// annotation: locations recover or join the outage while the alert stays open.
+func (a *Alerter) refreshAlertFailingLocations(ctx context.Context) error {
+	_, err := a.db.ExecContext(ctx, `
+		UPDATE alerts al
+		SET failing_locations = x.fl, updated_at = NOW()
+		FROM (
+			SELECT al2.id AS alert_id, `+failingLocationsSubquery("al2.monitor_id")+` AS fl
+			FROM alerts al2
+			WHERE al2.status IN ('active', 'acknowledged')
+			  AND al2.kind = 'availability'
+		) x
+		WHERE al.id = x.alert_id
+		  AND al.failing_locations IS DISTINCT FROM x.fl
+	`)
+	if err != nil {
+		return fmt.Errorf("refresh alert failing locations: %w", err)
+	}
+	return nil
+}
+
+// parseFailingLocations decodes the alerts.failing_locations JSONB column.
+func parseFailingLocations(raw []byte) []notifications.FailingLocation {
+	if len(raw) == 0 {
+		return nil
+	}
+	var locations []notifications.FailingLocation
+	if err := json.Unmarshal(raw, &locations); err != nil {
+		return nil
+	}
+	return locations
 }
 
 // rootCauseLateral returns a LATERAL subquery selecting the deepest
@@ -97,7 +148,7 @@ func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 		WITH member_states AS (
 			SELECT g.id AS group_id,
 				BOOL_OR(child.current_state = 'down') AS any_down,
-				BOOL_AND(child.current_state IN ('up', 'suspect')) AS all_known_up
+				BOOL_AND(child.current_state IN ('up', 'suspect', 'degraded')) AS all_known_up
 			FROM monitors g
 			JOIN monitor_groups mg ON mg.group_id = g.id
 			JOIN monitors child ON child.id = mg.monitor_id
@@ -137,7 +188,8 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 			(SELECT cr.error_message FROM check_results cr
 			 WHERE cr.monitor_id = m.id AND cr.status IN ('failure', 'error')
 			 ORDER BY cr.created_at DESC LIMIT 1) AS last_error,
-			rc.id, rc.name, rc.last_state_change_at
+			rc.id, rc.name, rc.last_state_change_at,
+			`+failingLocationsSubquery("m.id")+` AS failing_locations
 		FROM monitors m`+rootCauseLateral("m.id")+`
 		WHERE m.current_state = 'down' AND m.enabled = TRUE AND m.deleted_at IS NULL
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
@@ -158,7 +210,7 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 	for rows.Next() {
 		var dm downMonitor
 		if err := rows.Scan(&dm.id, &dm.tenantID, &dm.name, &dm.failCount, &dm.lastError,
-			&dm.rootCauseID, &dm.rootCauseName, &dm.rootCauseDownSince); err != nil {
+			&dm.rootCauseID, &dm.rootCauseName, &dm.rootCauseDownSince, &dm.failingLocations); err != nil {
 			return fmt.Errorf("scan down monitor: %w", err)
 		}
 		monitors = append(monitors, dm)
@@ -184,6 +236,7 @@ type downMonitor struct {
 	rootCauseID        uuid.NullUUID
 	rootCauseName      sql.NullString
 	rootCauseDownSince sql.NullTime
+	failingLocations   []byte // raw JSONB; nil for location-less monitors
 }
 
 // setRootCause copies nullable root-cause scan columns onto an alertRecord.
@@ -231,15 +284,20 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var failingLocations interface{}
+	if len(dm.failingLocations) > 0 {
+		failingLocations = dm.failingLocations
+	}
+
 	var alertID uuid.UUID
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
 			triggered_at, failure_count, last_error, root_cause_monitor_id, root_cause_down_since,
-			created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), $4, $5, $6, $7, NOW(), NOW())
+			failing_locations, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, 'availability', 'active', NOW(), $4, $5, $6, $7, $8, NOW(), NOW())
 		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
-	`, uuid.New(), dm.tenantID, dm.id, dm.failCount, lastError, rootCauseID, rootCauseDownSince).Scan(&alertID)
+	`, uuid.New(), dm.tenantID, dm.id, dm.failCount, lastError, rootCauseID, rootCauseDownSince, failingLocations).Scan(&alertID)
 	if err == sql.ErrNoRows {
 		return nil // another replica won the race
 	}
@@ -268,6 +326,7 @@ func (a *Alerter) openOutageAlert(ctx context.Context, dm downMonitor) error {
 		ID: alertID, TenantID: dm.tenantID, MonitorID: dm.id,
 		FailureCount: dm.failCount, LastError: lastError, TriggeredAt: time.Now(),
 		RootCauseMonitorID: rootCauseID, RootCauseMonitorName: rootCauseName, RootCauseDownSince: rootCauseDownSince,
+		FailingLocations: parseFailingLocations(dm.failingLocations),
 	}
 	binding := policyBinding{MonitorID: dm.id, TenantID: dm.tenantID, MonitorName: dm.name}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
@@ -384,7 +443,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.kind, al.triggered_at, al.failure_count, al.last_error,
 			al.root_cause_monitor_id, al.root_cause_down_since, rcm.name,
 			al.baseline_latency_ms, al.observed_latency_ms, al.anomaly_score,
-			al.metric_name, al.metric_value, al.threshold_value,
+			al.metric_name, al.metric_value, al.threshold_value, al.failing_locations,
 			te.alert_reminder_seconds
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
@@ -393,7 +452,9 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		WHERE al.status IN ('active', 'acknowledged')
 		  AND m.deleted_at IS NULL
 		  AND (
-			(al.kind = 'availability' AND m.current_state = 'down')
+			-- 'degraded' keeps an open alert's reminders flowing: the outage
+			-- shrank below quorum but has not fully recovered.
+			(al.kind = 'availability' AND m.current_state IN ('down', 'degraded'))
 			OR al.kind = 'latency_anomaly'
 			OR al.kind = 'host_metric'
 		  )
@@ -427,16 +488,18 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		var baseline, observed, score sql.NullFloat64
 		var metricName sql.NullString
 		var metricValue, thresholdValue sql.NullFloat64
+		var failingLocations []byte
 		if err := rows.Scan(&oa.record.ID, &oa.record.TenantID, &oa.record.MonitorID, &oa.monitorName,
 			&oa.record.Kind, &oa.record.TriggeredAt, &oa.record.FailureCount, &lastError,
 			&rcID, &rcDownSince, &rcName,
 			&baseline, &observed, &score,
-			&metricName, &metricValue, &thresholdValue, &oa.reminderSeconds); err != nil {
+			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
 		if lastError.Valid {
 			oa.record.LastError = &lastError.String
 		}
+		oa.record.FailingLocations = parseFailingLocations(failingLocations)
 		setRootCause(&oa.record, rcID, rcName, rcDownSince)
 		setLatencyMetrics(&oa.record, baseline, observed, score)
 		setHostMetric(&oa.record, metricName, metricValue, thresholdValue)

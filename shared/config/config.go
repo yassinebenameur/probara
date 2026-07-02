@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // BaseConfig contains common configuration for all services
@@ -23,22 +25,22 @@ type BaseConfig struct {
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
-	AlertStream           string
-	AlertSubject          string
-	AlertConsumerName     string
-	CheckJobSubject       string
-	AIRCASubject          string
-	AIAnalysisEnabled     bool
+	AlertStream       string
+	AlertSubject      string
+	AlertConsumerName string
+	CheckJobSubject   string
+	AIRCASubject      string
+	AIAnalysisEnabled bool
 	// LLM_* env defaults — optional global fallback used when a tenant has no
 	// ai_settings row. Mirrors the worker's fields.
-	LLMProvider       string
-	LLMBaseURL        string
-	LLMAPIKey         string
-	LLMModel          string
-	LLMJSONMode       string
-	LLMMaxTokens      int
-	LLMTimeoutSeconds int
-	AdminJWTSecret    string
+	LLMProvider           string
+	LLMBaseURL            string
+	LLMAPIKey             string
+	LLMModel              string
+	LLMJSONMode           string
+	LLMMaxTokens          int
+	LLMTimeoutSeconds     int
+	AdminJWTSecret        string
 	AdminAccessTTLMinutes int
 	AdminRefreshTTLDays   int
 	AdminCookieSecure     bool
@@ -49,15 +51,30 @@ type APIConfig struct {
 	// baked into agent install scripts and push webhook URLs, bypassing
 	// Host-header inspection which is unreliable behind reverse proxies.
 	PublicBaseURL string
+	// PublicNATSURL is the NATS address reachable from remote networks (e.g.
+	// "nats://nats.example.com:4222"), baked into private-location worker
+	// deploy snippets. Empty renders a placeholder.
+	PublicNATSURL string
 }
 
 // SchedulerConfig contains configuration for the scheduler service
 type SchedulerConfig struct {
 	BaseConfig
-	ScheduleIntervalSeconds       int
-	SchedulerBatchSize            int
-	CheckJobSubject               string
-	CheckJobStream                string
+	ScheduleIntervalSeconds int
+	SchedulerBatchSize      int
+	CheckJobSubject         string
+	CheckJobStream          string
+	// Results ingest: the scheduler hosts the consumer that persists check
+	// results published by workers over NATS (workers have no DB access).
+	CheckResultStream        string
+	CheckResultSubject       string
+	ResultIngestConsumerName string
+	ResultIngestConcurrency  int
+	ResultIngestEnabled      bool
+	// LegacyCheckConsumers are pre-locations filterless consumer names the
+	// scheduler deletes on startup: a work-queue stream can't host both a
+	// filterless consumer and the filtered per-location ones.
+	LegacyCheckConsumers          []string
 	RetentionCleanupEnabled       bool
 	RetentionCleanupHourUTC       int
 	RetentionCleanupBatchSize     int
@@ -72,10 +89,16 @@ type SchedulerConfig struct {
 // WorkerConfig contains configuration for the worker service
 type WorkerConfig struct {
 	BaseConfig
-	WorkerConcurrency     int
-	NATSConsumerName      string
-	CheckJobStream        string
-	CheckJobSubject       string
+	WorkerConcurrency  int
+	NATSConsumerName   string
+	CheckJobStream     string
+	CheckJobSubject    string
+	CheckResultStream  string
+	CheckResultSubject string
+	// LocationID pins this worker to a private location: it consumes only
+	// that location's job subject and heartbeats its liveness. Empty = the
+	// default platform fleet.
+	LocationID            string
 	MaxHTTPTimeoutSeconds int
 	MaxBodySizeBytes      int
 	HTTPBlockPrivateIPs   bool
@@ -336,6 +359,10 @@ func LoadAPIConfig() (*APIConfig, error) {
 	// agent install scripts and push webhook URLs. Trailing slash is stripped.
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/")
 
+	// PUBLIC_NATS_URL: externally-reachable NATS address baked into
+	// private-location worker deploy snippets.
+	cfg.PublicNATSURL = strings.TrimSpace(os.Getenv("PUBLIC_NATS_URL"))
+
 	return cfg, nil
 }
 
@@ -386,6 +413,37 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 		cfg.CheckJobStream = "CHECK_JOBS"
 	} else {
 		cfg.CheckJobStream = checkJobStream
+	}
+
+	// Results ingest — the scheduler-side consumer persisting worker results.
+	cfg.CheckResultStream = envOrDefault("CHECK_RESULT_STREAM", "CHECK_RESULTS")
+	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+	cfg.ResultIngestConsumerName = envOrDefault("RESULT_INGEST_CONSUMER_NAME", "result-ingest")
+	cfg.ResultIngestConcurrency = 10
+	if v := strings.TrimSpace(os.Getenv("RESULT_INGEST_CONCURRENCY")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid RESULT_INGEST_CONCURRENCY: %q", v)
+		}
+		cfg.ResultIngestConcurrency = n
+	}
+	cfg.ResultIngestEnabled = true
+	if v := strings.TrimSpace(os.Getenv("RESULT_INGEST_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RESULT_INGEST_ENABLED: %w", err)
+		}
+		cfg.ResultIngestEnabled = enabled
+	}
+
+	// CHECK_JOB_LEGACY_CONSUMERS — comma-separated filterless consumer names
+	// to delete on startup. Defaults cover the code default and the compose
+	// value used before per-location consumers existed.
+	legacyConsumers := envOrDefault("CHECK_JOB_LEGACY_CONSUMERS", "check-workers,worker")
+	for _, name := range strings.Split(legacyConsumers, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			cfg.LegacyCheckConsumers = append(cfg.LegacyCheckConsumers, name)
+		}
 	}
 
 	// RETENTION_CLEANUP_ENABLED
@@ -527,6 +585,20 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		cfg.CheckJobSubject = "check.jobs"
 	} else {
 		cfg.CheckJobSubject = checkJobSubject
+	}
+
+	// Results publishing — workers publish results here instead of writing
+	// Postgres, so remote location workers only need NATS reachability.
+	cfg.CheckResultStream = envOrDefault("CHECK_RESULT_STREAM", "CHECK_RESULTS")
+	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+
+	// WORKER_LOCATION_ID — pins this worker to a private location (UUID from
+	// the Locations page). Empty = default platform fleet.
+	cfg.LocationID = strings.TrimSpace(os.Getenv("WORKER_LOCATION_ID"))
+	if cfg.LocationID != "" {
+		if _, err := uuid.Parse(cfg.LocationID); err != nil {
+			return nil, fmt.Errorf("invalid WORKER_LOCATION_ID: %q is not a UUID", cfg.LocationID)
+		}
 	}
 
 	// MAX_HTTP_TIMEOUT_SECONDS
