@@ -6,7 +6,6 @@ import { CreateStatusPageRequest, UpdateStatusPageRequest } from '@/lib/types';
 import { createStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import PageHeader from '@/components/ui/PageHeader';
-import FormCard from '@/components/ui/FormCard';
 import { useToast } from '@/components/ui/ToastProvider';
 
 export default function NewStatusPagePage() {
@@ -29,21 +28,18 @@ export default function NewStatusPagePage() {
   };
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="space-y-6">
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: 'New' }]}
         title="Create status page"
         subtitle="Set up a public page to display your service status."
       />
 
-      <FormCard>
-        <StatusPageForm
-          onSubmit={handleSubmit}
-          onCancel={() => router.push('/status-pages')}
-          loading={loading}
-        />
-      </FormCard>
-
+      <StatusPageForm
+        onSubmit={handleSubmit}
+        onCancel={() => router.push('/status-pages')}
+        loading={loading}
+      />
     </div>
   );
 }

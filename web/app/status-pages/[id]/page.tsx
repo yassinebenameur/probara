@@ -8,8 +8,6 @@ import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import PageHeader from '@/components/ui/PageHeader';
-import FormCard from '@/components/ui/FormCard';
-import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Button from '@/components/ui/Button';
 import { useToast } from '@/components/ui/ToastProvider';
 
@@ -74,9 +72,6 @@ export default function EditStatusPagePage() {
   }
 
   const publicUrl = resolveStatusPagePublicUrl(statusPage);
-  const monitorCount = statusPage.sections?.reduce((count, section) => {
-    return count + (section.monitors?.length || 0);
-  }, 0) || statusPage.monitor_ids?.length || 0;
 
   return (
     <div className="space-y-6">
@@ -98,83 +93,12 @@ export default function EditStatusPagePage() {
         }
       />
 
-      <CollapsibleSection title="Page info" summary={publicUrl}>
-        <div className="grid gap-4 md:grid-cols-3">
-          <div>
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Public URL</h3>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
-              <code className="break-all text-xs text-cyan-300">{publicUrl}</code>
-            </div>
-          </div>
-
-          <div>
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Details</h3>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <span className="text-slate-500">ID</span>
-                <span className="min-w-0 truncate font-mono text-xs text-slate-400">{statusPage.id}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-slate-500">Monitors</span>
-                <span className="text-slate-300">{monitorCount}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-slate-500">Created</span>
-                <span className="text-xs text-slate-300">
-                  {new Date(statusPage.created_at).toLocaleDateString()}
-                </span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-slate-500">Updated</span>
-                <span className="text-xs text-slate-300">
-                  {new Date(statusPage.updated_at).toLocaleDateString()}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Preview</h3>
-            <div className="rounded-lg bg-[#0a0a0f] p-4">
-              <div className="flex items-center gap-3">
-                {statusPage.logo_url ? (
-                  <img
-                    src={statusPage.logo_url}
-                    alt="Logo"
-                    className="h-10 w-10 rounded-xl object-cover"
-                  />
-                ) : (
-                  <div
-                    className="flex h-10 w-10 items-center justify-center rounded-xl"
-                    style={{
-                      background: `linear-gradient(135deg, ${statusPage.primary_color || '#6366f1'} 0%, #06b6d4 100%)`,
-                      boxShadow: '0 0 20px rgba(99, 102, 241, 0.3)',
-                    }}
-                  >
-                    <div className="h-5 w-5 rounded-full border-2 border-white/20 bg-[#0a0a0f]" />
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-white">{statusPage.title}</div>
-                  <div className="truncate text-xs text-slate-500">
-                    {statusPage.description || 'System status'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </CollapsibleSection>
-
-      <FormCard>
-        <StatusPageForm
-          statusPage={statusPage}
-          onSubmit={handleSubmit}
-          onCancel={() => router.push('/status-pages')}
-          loading={saving}
-        />
-      </FormCard>
-
+      <StatusPageForm
+        statusPage={statusPage}
+        onSubmit={handleSubmit}
+        onCancel={() => router.push('/status-pages')}
+        loading={saving}
+      />
     </div>
   );
 }
