@@ -76,6 +76,8 @@ services:
       # NATS address reachable from remote networks, baked into private-location
       # worker deploy snippets (the host-exposed port in local dev).
       PUBLIC_NATS_URL: "nats://localhost:4222"
+      # Shared with the status-page service; see its definition below.
+      STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -222,6 +224,9 @@ services:
       NATS_URL: "nats://nats:4222"
       STATUS_PAGE_BASE_URL: "http://localhost:8082"
       STATUS_PAGE_API_BASE_URL: "http://api:8080"
+      # Shared with the api service; gates draft-template previews with a
+      # token minted by the API. Leave unset to allow open previews (dev).
+      STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
     ports:
       - "8082:8082"
       - "9093:9093"

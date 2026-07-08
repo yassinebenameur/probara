@@ -39,6 +39,23 @@ export function resolveStatusPagePublicUrl(input: StatusPageUrlInput): string {
   return resolved.toString();
 }
 
+// resolveStatusPageDraftPreviewUrl points at the public renderer's
+// draft-template preview route. token comes from the template API state and
+// is only required when the deployment sets STATUS_PAGE_PREVIEW_SECRET.
+export function resolveStatusPageDraftPreviewUrl(
+  input: StatusPageUrlInput,
+  token?: string
+): string {
+  const path = `/public/status/${input.slug}/preview/draft${
+    token ? `?token=${encodeURIComponent(token)}` : ''
+  }`;
+  const origin = resolveStatusPageOrigin();
+  if (!origin) {
+    return path;
+  }
+  return new URL(path, origin).toString();
+}
+
 function appendEditQuery(url: string): string {
   if (hasApiKey()) {
     return url;

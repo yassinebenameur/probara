@@ -1159,6 +1159,23 @@ export interface StatusPageSection {
   updated_at?: string;
 }
 
+export interface StatusPageSettings {
+  show_monitor_tags?: boolean;
+  show_monitor_url?: boolean;
+  show_monitor_uptime?: boolean;
+  show_monitor_tls?: boolean;
+  show_latency_charts?: boolean;
+  show_agent_metrics?: boolean;
+  show_global_uptime?: boolean;
+  show_footer?: boolean;
+  footer_text?: string;
+  default_theme?: string;
+  allow_theme_toggle?: boolean;
+  custom_css?: string;
+  custom_head_html?: string;
+  custom_footer_html?: string;
+}
+
 export interface StatusPage {
   id: string;
   tenant_id: string;
@@ -1171,8 +1188,43 @@ export interface StatusPage {
   secondary_color?: string;
   monitor_ids?: string[];
   sections?: StatusPageSection[];
+  settings?: StatusPageSettings;
   created_at: string;
   updated_at: string;
+}
+
+export interface StatusPageTemplateVersion {
+  version?: number;
+  status: 'draft' | 'published' | 'archived';
+  size_bytes: number;
+  created_at: string;
+  updated_at: string;
+  published_at?: string;
+}
+
+export interface StatusPageTemplateState {
+  has_custom: boolean;
+  published_version?: number;
+  draft_source?: string;
+  draft_updated_at?: string;
+  versions: StatusPageTemplateVersion[];
+  preview_token?: string;
+  max_size_bytes: number;
+}
+
+export interface StatusPageLibraryTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  source?: string; // omitted in list responses
+  size_bytes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StatusPageLibraryTemplateListResponse {
+  items: StatusPageLibraryTemplate[];
+  total: number;
 }
 
 export interface CreateStatusPageRequest {
@@ -1197,6 +1249,7 @@ export interface UpdateStatusPageRequest {
   monitor_ids?: string[];
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
+  settings?: StatusPageSettings;
 }
 
 export interface StatusPageListResponse {

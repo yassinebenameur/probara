@@ -44,6 +44,14 @@ type StatusPageData struct {
 	ShowMonitorTLS     bool                          `json:"-"` // For template use only
 	ShowLatencyCharts  bool                          `json:"-"` // For template use only
 	ShowAgentMetrics   bool                          `json:"-"` // For template use only
+	// Tenant-authored branding injections (settings JSONB) applied to the
+	// built-in template; custom templates can also reference them.
+	CustomCSS        string `json:"-"` // For template use only
+	CustomHeadHTML   string `json:"-"` // For template use only
+	CustomFooterHTML string `json:"-"` // For template use only
+	// Published custom template ("" = render with the built-in template).
+	CustomTemplateSource  string `json:"-"` // For template use only
+	CustomTemplateVersion int    `json:"-"` // For template use only
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
@@ -246,6 +254,9 @@ type statusPageSettingsPatch struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      *string `json:"default_theme,omitempty"`
 	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
+	CustomCSS         *string `json:"custom_css,omitempty"`
+	CustomHeadHTML    *string `json:"custom_head_html,omitempty"`
+	CustomFooterHTML  *string `json:"custom_footer_html,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -260,6 +271,9 @@ type statusPageSettingsStored struct {
 	FooterText        *string
 	DefaultTheme      string
 	AllowThemeToggle  bool
+	CustomCSS         string
+	CustomHeadHTML    string
+	CustomFooterHTML  string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -329,6 +343,15 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	if patch.AllowThemeToggle != nil {
 		stored.AllowThemeToggle = *patch.AllowThemeToggle
 	}
+	if patch.CustomCSS != nil {
+		stored.CustomCSS = strings.TrimSpace(*patch.CustomCSS)
+	}
+	if patch.CustomHeadHTML != nil {
+		stored.CustomHeadHTML = strings.TrimSpace(*patch.CustomHeadHTML)
+	}
+	if patch.CustomFooterHTML != nil {
+		stored.CustomFooterHTML = strings.TrimSpace(*patch.CustomFooterHTML)
+	}
 	return stored
 }
 
@@ -342,6 +365,58 @@ func (s *Service) GetTenantIDByStatusPageID(ctx context.Context, statusPageID uu
 		return uuid.UUID{}, fmt.Errorf("failed to get tenant id: %w", err)
 	}
 	return tenantID, nil
+}
+
+// getPublishedTemplate returns the published custom template for a page, or
+// ("", 0, nil) when the page renders with the built-in template. A missing
+// status_page_templates table (migration not yet applied) also means "no
+// custom template" — same tolerance as the section-table fallbacks.
+func (s *Service) getPublishedTemplate(ctx context.Context, pageID uuid.UUID) (string, int, error) {
+	var source string
+	var version int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT source, version
+		FROM status_page_templates
+		WHERE status_page_id = $1 AND status = 'published'
+	`, pageID).Scan(&source, &version)
+	if err != nil {
+		if err == sql.ErrNoRows || isUndefinedTableError(err) {
+			return "", 0, nil
+		}
+		return "", 0, err
+	}
+	return source, version, nil
+}
+
+// GetDraftTemplateBySlug resolves a slug to its page ID and draft template
+// source. hasDraft is false when the page exists but has no draft.
+func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (pageID uuid.UUID, source string, hasDraft bool, err error) {
+	var draftSource sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+		SELECT sp.id, t.source
+		FROM status_pages sp
+		LEFT JOIN status_page_templates t
+			ON t.status_page_id = sp.id AND t.status = 'draft'
+		WHERE sp.slug = $1
+	`, slug).Scan(&pageID, &draftSource)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return uuid.Nil, "", false, fmt.Errorf("status page not found")
+		}
+		if isUndefinedTableError(err) {
+			// Templates table missing: resolve the page alone so previews
+			// degrade to the live render instead of erroring.
+			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1`, slug).Scan(&pageID); err != nil {
+				if err == sql.ErrNoRows {
+					return uuid.Nil, "", false, fmt.Errorf("status page not found")
+				}
+				return uuid.Nil, "", false, fmt.Errorf("failed to get status page: %w", err)
+			}
+			return pageID, "", false, nil
+		}
+		return uuid.Nil, "", false, fmt.Errorf("failed to get draft template: %w", err)
+	}
+	return pageID, draftSource.String, draftSource.Valid, nil
 }
 
 // GetStatusPageBySlug retrieves a status page by slug
@@ -412,6 +487,16 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.ShowMonitorTLS = settings.ShowMonitorTLS
 	page.ShowLatencyCharts = settings.ShowLatencyCharts
 	page.ShowAgentMetrics = settings.ShowAgentMetrics
+	page.CustomCSS = settings.CustomCSS
+	page.CustomHeadHTML = settings.CustomHeadHTML
+	page.CustomFooterHTML = settings.CustomFooterHTML
+
+	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
+		return nil, fmt.Errorf("failed to get custom template: %w", err)
+	} else {
+		page.CustomTemplateSource = source
+		page.CustomTemplateVersion = version
+	}
 
 	// Fetch only short-range and rollup-backed global uptime to keep public page responses bounded.
 	// Rollup-backed ranges (7/30/90/365d) avoid large scans over check_results.

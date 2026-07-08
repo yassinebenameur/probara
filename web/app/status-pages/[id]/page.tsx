@@ -2,7 +2,7 @@
 
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowUpRight } from 'lucide-react';
+import { ArrowUpRight, Paintbrush } from 'lucide-react';
 import { StatusPage, UpdateStatusPageRequest } from '@/lib/types';
 import { getStatusPage, updateStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
@@ -80,16 +80,26 @@ export default function EditStatusPagePage() {
         title={statusPage.title}
         subtitle={`/${statusPage.slug}`}
         action={
-          <Button
-            variant="accent"
-            size="sm"
-            icon={<ArrowUpRight strokeWidth={1.75} />}
-            asChild
-          >
-            <a href={publicUrl} target="_blank" rel="noopener noreferrer">
-              Open public page
-            </a>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Paintbrush strokeWidth={1.75} />}
+              onClick={() => router.push(`/status-pages/${id}/template`)}
+            >
+              Customize template
+            </Button>
+            <Button
+              variant="accent"
+              size="sm"
+              icon={<ArrowUpRight strokeWidth={1.75} />}
+              asChild
+            >
+              <a href={publicUrl} target="_blank" rel="noopener noreferrer">
+                Open public page
+              </a>
+            </Button>
+          </div>
         }
       />
 

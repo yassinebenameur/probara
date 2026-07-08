@@ -2,6 +2,7 @@ package statuspage
 
 import (
 	"encoding/json"
+	statustemplate "github.com/yassinebenameur/probara/shared/statustemplate"
 	"html"
 	"math"
 	"regexp"
@@ -303,7 +304,7 @@ func TestRenderPublicStatusPage_RendersPublishedIncidentCards(t *testing.T) {
 }
 
 func TestPublicStatusPageDarkThemeDimTextMeetsContrastOnDarkSurfaces(t *testing.T) {
-	darkTheme := strings.Split(publicStatusPageTemplate, `body[data-theme="light"]`)[0]
+	darkTheme := strings.Split(statustemplate.DefaultSource, `body[data-theme="light"]`)[0]
 	textDim := extractCSSHexVariable(t, darkTheme, "--text-dim")
 	surfaceCard := extractCSSHexVariable(t, darkTheme, "--surface-card")
 	bg := extractCSSHexVariable(t, darkTheme, "--bg")

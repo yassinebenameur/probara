@@ -22,7 +22,7 @@ export default function DependenciesPage() {
         subtitle="How your monitors depend on each other — alerts use this map to point at the likely root cause"
       />
       <AISuggestions onAccepted={() => setRefreshKey((k) => k + 1)} />
-      <DependencyGraphView key={refreshKey} />
+      <DependencyGraphView refreshToken={refreshKey} />
     </div>
   );
 }

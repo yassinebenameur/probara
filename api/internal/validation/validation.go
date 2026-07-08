@@ -458,6 +458,15 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 			return fmt.Errorf("default_theme must be either dark or light")
 		}
 	}
+	if settings.CustomCSS != nil && len(*settings.CustomCSS) > 128*1024 {
+		return fmt.Errorf("custom_css must be 128KB or less")
+	}
+	if settings.CustomHeadHTML != nil && len(*settings.CustomHeadHTML) > 64*1024 {
+		return fmt.Errorf("custom_head_html must be 64KB or less")
+	}
+	if settings.CustomFooterHTML != nil && len(*settings.CustomFooterHTML) > 64*1024 {
+		return fmt.Errorf("custom_footer_html must be 64KB or less")
+	}
 	return nil
 }
 

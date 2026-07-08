@@ -412,7 +412,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			})
 
 			// Status pages
-			statusPageService := statuspageservice.NewService(dbClient)
+			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
 			r.Route("/status-pages", func(r chi.Router) {
 				r.Post("/", statusPageHandlers.CreateStatusPage)
@@ -420,6 +420,30 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", statusPageHandlers.GetStatusPage)
 				r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
 				r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
+
+				// Custom UI template lifecycle: export default, draft, publish,
+				// revert, reset. Sources are validated against the shared
+				// template contract before they are stored.
+				r.Route("/{id}/template", func(r chi.Router) {
+					r.Get("/", statusPageHandlers.GetTemplateState)
+					r.Delete("/", statusPageHandlers.ResetTemplate)
+					r.Get("/default", statusPageHandlers.GetDefaultTemplate)
+					r.Get("/versions/{version}/source", statusPageHandlers.GetTemplateVersionSource)
+					r.Put("/draft", statusPageHandlers.SaveTemplateDraft)
+					r.Delete("/draft", statusPageHandlers.DiscardTemplateDraft)
+					r.Post("/publish", statusPageHandlers.PublishTemplate)
+					r.Post("/revert", statusPageHandlers.RevertTemplate)
+				})
+			})
+
+			// Tenant-level library of reusable status page templates.
+			r.Route("/status-page-templates", func(r chi.Router) {
+				r.Get("/", statusPageHandlers.ListLibraryTemplates)
+				r.Post("/", statusPageHandlers.CreateLibraryTemplate)
+				r.Get("/{templateId}", statusPageHandlers.GetLibraryTemplate)
+				r.Get("/{templateId}/source", statusPageHandlers.GetLibraryTemplateSource)
+				r.Patch("/{templateId}", statusPageHandlers.UpdateLibraryTemplate)
+				r.Delete("/{templateId}", statusPageHandlers.DeleteLibraryTemplate)
 			})
 
 			// Tenants (admin only)

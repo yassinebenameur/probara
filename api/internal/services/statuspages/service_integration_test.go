@@ -33,7 +33,7 @@ func TestService_ListStatusPages_FallsBackToLegacyMonitorsWhenSectionMonitorTabl
 		t.Fatalf("drop status_page_section_monitors: %v", err)
 	}
 
-	svc := NewService(dbClient)
+	svc := NewService(dbClient, nil)
 	result, err := svc.ListStatusPages(ctx, tenantID, 1, 20)
 	if err != nil {
 		t.Fatalf("ListStatusPages() error = %v", err)

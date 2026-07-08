@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/statustemplate"
 )
 
 // statusPageBuildTimeout bounds a single load-and-render of a status page.
@@ -65,6 +67,12 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this is a draft template preview request
+	if strings.HasSuffix(path, "/preview/draft") {
+		h.HandleDraftPreview(w, r, strings.TrimSuffix(path, "/preview/draft"))
+		return
+	}
+
 	// Extract slug (remove trailing slash if any)
 	slug := strings.TrimSuffix(path, "/")
 	if slug == "" {
@@ -87,7 +95,14 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return "", err
 		}
-		return renderPublicStatusPage(data, h.config != nil && strings.TrimSpace(h.config.APIBaseURL) != "")
+		page, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
+		if customErr != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error": customErr.Error(),
+				"slug":  slug,
+			}).Warn("Custom status page template failed; serving built-in template")
+		}
+		return page, err
 	})
 	if err != nil {
 		if err.Error() == "status page not found" {
@@ -114,6 +129,89 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := w.Write([]byte(html)); err != nil {
 		h.logger.WithError(err).Error("Failed to write status page response")
+	}
+}
+
+func (h *Handlers) apiProxyEnabled() bool {
+	return h.config != nil && strings.TrimSpace(h.config.APIBaseURL) != ""
+}
+
+// previewSecretEnvVar guards the draft-preview route. When set (it must match
+// the API's value so minted tokens verify), previews require a ?token=
+// minted by the admin API; when unset previews are open, which is acceptable
+// because a draft only ever renders data already public on the live page.
+const previewSecretEnvVar = "STATUS_PAGE_PREVIEW_SECRET"
+
+// HandleDraftPreview handles GET /public/status/{slug}/preview/draft.
+// It renders the page's draft template against live data, uncached, so the
+// template editor can show authors exactly what a publish would produce. A
+// page with no draft renders normally (published custom or built-in), and a
+// broken draft returns its parse/execute error instead of falling back.
+func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, slug string) {
+	if slug == "" {
+		http.Error(w, "Status page not found", http.StatusNotFound)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), statusPageBuildTimeout)
+	defer cancel()
+
+	pageID, source, hasDraft, err := h.service.GetDraftTemplateBySlug(ctx, slug)
+	if err != nil {
+		if err.Error() == "status page not found" {
+			http.Error(w, "Status page not found", http.StatusNotFound)
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error": err.Error(),
+			"slug":  slug,
+		}).Error("Failed to load draft template")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if secret := strings.TrimSpace(os.Getenv(previewSecretEnvVar)); secret != "" {
+		if !statustemplate.VerifyPreviewToken(secret, pageID.String(), r.URL.Query().Get("token"), time.Now()) {
+			http.Error(w, "Invalid or expired preview token", http.StatusForbidden)
+			return
+		}
+	}
+
+	data, err := h.service.GetStatusPageBySlug(ctx, slug)
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error": err.Error(),
+			"slug":  slug,
+		}).Error("Failed to build draft preview")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var html string
+	if hasDraft {
+		html, err = renderStatusPageWithSource(data, h.apiProxyEnabled(), source)
+		if err != nil {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "Draft template error:\n\n"+err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+	} else {
+		html, err = renderPublicStatusPage(data, h.apiProxyEnabled())
+		if err != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error": err.Error(),
+				"slug":  slug,
+			}).Error("Failed to render draft preview")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := w.Write([]byte(html)); err != nil {
+		h.logger.WithError(err).Error("Failed to write draft preview response")
 	}
 }
 
