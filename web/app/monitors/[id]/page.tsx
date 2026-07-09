@@ -23,7 +23,7 @@ import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-u
 type TabType = 'overview' | 'history' | 'settings' | 'json';
 
 const isDatabaseMonitorType = (t: string): boolean =>
-  t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq';
+  t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq' || t === 'mysql';
 type AgentTimeRange = '1h' | '6h' | '24h' | '7d';
 type OverviewTimeRange = MonitorAnalyticsRange;
 

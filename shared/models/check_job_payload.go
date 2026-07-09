@@ -62,6 +62,10 @@ type DNSMonitorConfig struct {
 	Host            string   `json:"host"`
 	RecordType      string   `json:"record_type,omitempty"`      // A, AAAA, CNAME, TXT, MX, NS
 	ExpectedAnswers []string `json:"expected_answers,omitempty"` // Optional expected answers
+	// Nameserver targets a specific DNS server (host or host:port, default
+	// port 53) instead of the worker's system resolver — validates private
+	// zones and VPC resolvers the default resolver can't see.
+	Nameserver string `json:"nameserver,omitempty"`
 }
 
 // GRPCMonitorConfig represents configuration for gRPC health monitors
@@ -237,6 +241,46 @@ type MongoDBMonitorConfig struct {
 	ReplicaSet    string `json:"replica_set,omitempty"`
 	MaxLatencyMs  *int64 `json:"max_latency_ms,omitempty"`
 	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
+}
+
+// MySQLMonitorConfig represents configuration for MySQL/MariaDB monitors.
+// Connection is configured either via `connection_string` (mysql:// URI or a
+// go-sql-driver DSN like user:pass@tcp(host:3306)/db) or via the discrete
+// fields. `password` and `connection_string` are secret fields (see
+// shared/secrets.MonitorSecretFields).
+type MySQLMonitorConfig struct {
+	ConnectionString string `json:"connection_string,omitempty"`
+	Host             string `json:"host,omitempty"`
+	Port             int    `json:"port,omitempty"`     // default 3306
+	Database         string `json:"database,omitempty"` // optional; empty = no default schema
+	Username         string `json:"username,omitempty"`
+	Password         string `json:"password,omitempty"`
+	TLSEnabled       *bool  `json:"tls_enabled,omitempty"`
+	TLSSkipVerify    *bool  `json:"tls_skip_verify,omitempty"` // also applies on top of a tls-enabled URI/DSN
+	DBTLSConfig
+	Query *string `json:"query,omitempty"` // optional assertion: must return >= 1 row
+	// QueryValueOp/QueryValue assert on the first column of the query's first
+	// row — same ops as Postgres.
+	QueryValueOp  string `json:"query_value_op,omitempty"`
+	QueryValue    string `json:"query_value,omitempty"`
+	MaxLatencyMs  *int64 `json:"max_latency_ms,omitempty"`
+	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
+}
+
+// WebSocketMonitorConfig represents configuration for WebSocket monitors: a
+// full ws:// or wss:// upgrade handshake, optionally followed by sending a
+// message and asserting on the first reply.
+type WebSocketMonitorConfig struct {
+	URL           string            `json:"url"`
+	Headers       map[string]string `json:"headers,omitempty"` // handshake request headers (e.g. Authorization)
+	TLSSkipVerify *bool             `json:"tls_skip_verify,omitempty"`
+	// SendMessage is written as a text frame after the handshake. When
+	// ExpectedSubstring is set the checker waits (within the check timeout)
+	// for the first text/binary frame and fails unless it contains it.
+	SendMessage       *string `json:"send_message,omitempty"`
+	ExpectedSubstring *string `json:"expected_substring,omitempty"`
+	MaxLatencyMs      *int64  `json:"max_latency_ms,omitempty"`
+	WarnLatencyMs     *int64  `json:"warn_latency_ms,omitempty"`
 }
 
 // RabbitMQMonitorConfig represents configuration for RabbitMQ monitors:

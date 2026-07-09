@@ -12,6 +12,7 @@ import {
   PostgresMonitorConfig,
   MongoDBMonitorConfig,
   RabbitMQMonitorConfig,
+  MySQLMonitorConfig,
   DBQueryValueOp,
   MASKED_SECRET,
   Location,
@@ -36,12 +37,16 @@ import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
 
-export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb' | 'rabbitmq';
+export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb' | 'rabbitmq' | 'mysql';
 
 type DatabaseConfig = RedisMonitorConfig &
   PostgresMonitorConfig &
   MongoDBMonitorConfig &
-  RabbitMQMonitorConfig;
+  RabbitMQMonitorConfig &
+  MySQLMonitorConfig;
+
+// Types whose checker supports the optional assertion query + value assertion.
+const QUERY_CAPABLE_TYPES: DatabaseMonitorType[] = ['postgres', 'mysql'];
 
 type ConnectionMode = 'fields' | 'connection_string';
 
@@ -55,6 +60,8 @@ const DB_TYPE_META: Record<
     csHint: string;
     csSchemes: string[];
     csAllowsKeyValueDSN: boolean;
+    // Accepts the driver's native non-URI DSN (mysql: user:pw@tcp(host)/db).
+    csAllowsNativeDSN?: boolean;
     supportsTLSToggle: boolean;
     usernameRequired: boolean;
     checkVerb: string;
@@ -107,6 +114,19 @@ const DB_TYPE_META: Record<
     supportsTLSToggle: true,
     usernameRequired: true,
     checkVerb: 'AMQP handshake',
+  },
+  mysql: {
+    label: 'MySQL',
+    defaultPort: 3306,
+    hostPlaceholder: 'db.internal',
+    csPlaceholder: 'mysql://user:password@db.internal:3306/mydb',
+    csHint: 'mysql:// URI or a driver DSN like user:password@tcp(db.internal:3306)/mydb.',
+    csSchemes: ['mysql://'],
+    csAllowsKeyValueDSN: false,
+    csAllowsNativeDSN: true,
+    supportsTLSToggle: true,
+    usernameRequired: true,
+    checkVerb: 'connect + ping',
   },
 };
 
@@ -337,6 +357,7 @@ export default function DatabaseForm({
       return undefined;
     }
     if (meta.csAllowsKeyValueDSN && value.includes('=')) return undefined;
+    if (meta.csAllowsNativeDSN && value.includes('@')) return undefined;
     return `Must start with ${meta.csSchemes.join(' or ')}`;
   };
 
@@ -364,7 +385,7 @@ export default function DatabaseForm({
     if (tlsMaterialRelevant && certProvided && !keyProvided) {
       newErrors.tls_client_key_pem = 'Client key is required alongside a client certificate';
     }
-    if (type === 'postgres' && formData.query_value_op) {
+    if (QUERY_CAPABLE_TYPES.includes(type) && formData.query_value_op) {
       if (!formData.query.trim()) {
         newErrors.query = 'A query is required for a value assertion';
       }
@@ -415,6 +436,7 @@ export default function DatabaseForm({
         if (formData.replica_set.trim()) config.replica_set = formData.replica_set.trim();
       }
       if (type === 'rabbitmq' && formData.vhost.trim()) config.vhost = formData.vhost.trim();
+      if (type === 'mysql' && formData.database.trim()) config.database = formData.database.trim();
       if (meta.supportsTLSToggle && formData.tls_enabled) {
         config.tls_enabled = true;
         if (formData.tls_skip_verify) config.tls_skip_verify = true;
@@ -431,7 +453,7 @@ export default function DatabaseForm({
     }
 
     if (type === 'redis' && formData.expected_role) config.expected_role = formData.expected_role;
-    if (type === 'postgres' && formData.query.trim()) {
+    if (QUERY_CAPABLE_TYPES.includes(type) && formData.query.trim()) {
       config.query = formData.query.trim();
       if (formData.query_value_op) {
         config.query_value_op = formData.query_value_op;
@@ -511,7 +533,7 @@ export default function DatabaseForm({
         ? `${meta.label} ${formData.host.trim()}:${formData.port}${formData.tls_enabled ? ' (TLS)' : ''}`
         : null;
     if (!target) return undefined;
-    const check = type === 'postgres' && formData.query.trim() ? 'run query' : meta.checkVerb;
+    const check = QUERY_CAPABLE_TYPES.includes(type) && formData.query.trim() ? 'run query' : meta.checkVerb;
     return `Every ${formData.interval_seconds}s · ${check} ${target} · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`;
   })();
 
@@ -715,6 +737,18 @@ export default function DatabaseForm({
               </FormField>
             )}
 
+            {type === 'mysql' && (
+              <FormField label="Database (optional)" description="Default schema to select after connecting">
+                <input
+                  type="text"
+                  value={formData.database}
+                  onChange={(e) => setFormData({ ...formData, database: e.target.value })}
+                  placeholder="app"
+                  className="input"
+                />
+              </FormField>
+            )}
+
             {meta.supportsTLSToggle && (
               <div className="space-y-2">
                 <ToggleRow
@@ -876,7 +910,7 @@ export default function DatabaseForm({
       </FormSection>
 
       <FormSection title="Checks">
-        {type === 'postgres' && (
+        {QUERY_CAPABLE_TYPES.includes(type) && (
           <>
             <FormField
               label="Assertion query (optional)"

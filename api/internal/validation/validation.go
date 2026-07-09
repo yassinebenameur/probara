@@ -151,6 +151,8 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeMongoDB:          true,
 	models.MonitorTypeRabbitMQ:         true,
 	models.MonitorTypeTCP:              true,
+	models.MonitorTypeMySQL:            true,
+	models.MonitorTypeWebSocket:        true,
 }
 
 // ValidateMonitor validates a CreateMonitorRequest

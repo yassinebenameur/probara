@@ -128,3 +128,50 @@ func TestMongoDBConfigValidator(t *testing.T) {
 		{"invalid json", `{`, true},
 	})
 }
+
+func TestMySQLConfigValidator(t *testing.T) {
+	runConfigValidatorCases(t, &MySQLConfigValidator{}, []struct {
+		name    string
+		config  string
+		wantErr bool
+	}{
+		{"valid fields", `{"host":"db.internal","username":"probe"}`, false},
+		{"valid full fields", `{"host":"db.internal","port":3307,"database":"app","username":"probe","password":"pw","tls_enabled":true,"query":"SELECT 1","max_latency_ms":500}`, false},
+		{"valid uri connection string", `{"connection_string":"mysql://user:pw@db.internal:3306/app"}`, false},
+		{"valid native dsn", `{"connection_string":"user:pw@tcp(db.internal:3306)/app"}`, false},
+		{"masked connection string passes", `{"connection_string":"***"}`, false},
+		{"wrong scheme", `{"connection_string":"postgres://db.internal"}`, true},
+		{"missing username without connection string", `{"host":"db.internal"}`, true},
+		{"missing host and connection string", `{"username":"probe"}`, true},
+		{"invalid port", `{"host":"db.internal","username":"probe","port":70000}`, true},
+		{"empty query", `{"host":"db.internal","username":"probe","query":"  "}`, true},
+		{"query value assertion", `{"host":"db.internal","username":"probe","query":"SELECT count(*) FROM jobs","query_value_op":"number_lt","query_value":"100"}`, false},
+		{"query value op without query", `{"host":"db.internal","username":"probe","query_value_op":"equals","query_value":"1"}`, true},
+		{"bad query value op", `{"host":"db.internal","username":"probe","query":"SELECT 1","query_value_op":"matches","query_value":"1"}`, true},
+		{"non-numeric value for numeric op", `{"host":"db.internal","username":"probe","query":"SELECT 1","query_value_op":"number_gt","query_value":"abc"}`, true},
+		{"ca pem with tls enabled", `{"host":"db.internal","username":"probe","tls_enabled":true,"tls_ca_pem":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}`, false},
+		{"ca pem without tls", `{"host":"db.internal","username":"probe","tls_ca_pem":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"}`, true},
+		{"warn above max", `{"host":"db.internal","username":"probe","warn_latency_ms":600,"max_latency_ms":500}`, true},
+		{"invalid json", `{`, true},
+	})
+}
+
+func TestWebSocketConfigValidator(t *testing.T) {
+	runConfigValidatorCases(t, &WebSocketConfigValidator{}, []struct {
+		name    string
+		config  string
+		wantErr bool
+	}{
+		{"valid ws url", `{"url":"ws://api.internal/live"}`, false},
+		{"valid wss url", `{"url":"wss://api.example.com:8443/socket?room=1"}`, false},
+		{"valid with headers and assertions", `{"url":"wss://api.example.com/socket","headers":{"Authorization":"Bearer t"},"send_message":"ping","expected_substring":"pong","warn_latency_ms":100,"max_latency_ms":500}`, false},
+		{"missing url", `{}`, true},
+		{"http scheme", `{"url":"http://api.example.com"}`, true},
+		{"no host", `{"url":"ws:///path"}`, true},
+		{"empty header name", `{"url":"ws://api.internal","headers":{" ":"v"}}`, true},
+		{"empty expected substring", `{"url":"ws://api.internal","expected_substring":""}`, true},
+		{"invalid max latency", `{"url":"ws://api.internal","max_latency_ms":0}`, true},
+		{"warn above max", `{"url":"ws://api.internal","warn_latency_ms":600,"max_latency_ms":500}`, true},
+		{"invalid json", `{`, true},
+	})
+}

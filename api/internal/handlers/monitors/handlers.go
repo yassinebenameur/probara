@@ -895,6 +895,20 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 		locationIDs = []string{requested.String()}
 	}
 
+	// GetMonitor masks secret config fields ("***") for API responses; resolve
+	// the placeholders back to the stored (still encrypted) values so the
+	// worker can actually authenticate.
+	checkConfig, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, &monitorID, monitor.Type, monitor.Config)
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":      err.Error(),
+			"tenant_id":  tenantID,
+			"monitor_id": monitorID.String(),
+		}).Error("Failed to resolve monitor config for on-demand run")
+		errors.WriteInternalError(w, "failed to queue monitor run")
+		return
+	}
+
 	now := time.Now()
 	timeoutSeconds := monitor.TimeoutSeconds
 	if timeoutSeconds <= 0 {
@@ -907,7 +921,7 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 		payload := sharedmodels.CheckJobPayload{
 			MonitorID:      monitor.ID.String(),
 			Type:           string(monitor.Type),
-			Config:         monitor.Config,
+			Config:         checkConfig,
 			TimeoutSeconds: timeoutSeconds,
 			LocationID:     locationID,
 		}

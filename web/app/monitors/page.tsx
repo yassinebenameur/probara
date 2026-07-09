@@ -163,6 +163,8 @@ const TYPE_LABELS: Record<string, { label: string; short: string }> = {
   postgres: { label: 'PostgreSQL', short: 'POSTGRES' },
   mongodb: { label: 'MongoDB', short: 'MONGO' },
   rabbitmq: { label: 'RabbitMQ', short: 'RABBITMQ' },
+  mysql: { label: 'MySQL', short: 'MYSQL' },
+  websocket: { label: 'WebSocket', short: 'WS' },
 };
 
 function monitorTypeLabel(type: string, variant: 'label' | 'short' = 'label') {
@@ -187,6 +189,8 @@ function TypeBadge({ type }: { type: string }) {
     postgres: 'text-blue-400',
     mongodb: 'text-green-400',
     rabbitmq: 'text-orange-300',
+    mysql: 'text-sky-300',
+    websocket: 'text-purple-400',
   };
   return (
     <span className={`text-[10px] font-medium uppercase ${colors[type] || 'text-slate-400'}`}>

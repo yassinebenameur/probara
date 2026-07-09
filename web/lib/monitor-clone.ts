@@ -9,10 +9,12 @@ import {
   Monitor,
   MonitorConfig,
   MongoDBMonitorConfig,
+  MySQLMonitorConfig,
   PingMonitorConfig,
   PostgresMonitorConfig,
   RabbitMQMonitorConfig,
   RedisMonitorConfig,
+  WebSocketMonitorConfig,
   PushMonitorConfig,
   SIPMonitorConfig,
   SyntheticAPIMonitorConfig,
@@ -100,14 +102,19 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
         ...(cfg?.expected_status !== undefined ? { expected_status: cfg.expected_status } : {}),
       };
     }
+    case 'websocket': {
+      const cfg = (monitor.config as WebSocketMonitorConfig | undefined) || { url: '' };
+      return cloneObject(cfg);
+    }
     case 'redis':
     case 'postgres':
     case 'mongodb':
-    case 'rabbitmq': {
+    case 'rabbitmq':
+    case 'mysql': {
       // Secrets come back masked from the API and can't carry over to a new
       // monitor — drop them so the clone starts with a clean credential slate.
       const cfg = cloneObject(
-        (monitor.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig | undefined) || {}
+        (monitor.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig & MySQLMonitorConfig | undefined) || {}
       );
       if (cfg.password === MASKED_SECRET) delete cfg.password;
       if (cfg.connection_string === MASKED_SECRET) delete cfg.connection_string;

@@ -244,6 +244,62 @@ func (v *MongoDBConfigValidator) ValidateConfig(configRaw json.RawMessage) error
 	return validateLatencyThresholds(config.MaxLatencyMs, config.WarnLatencyMs)
 }
 
+// MySQLConfigValidator validates MySQL monitor configuration
+type MySQLConfigValidator struct{}
+
+// ValidateConfig validates MySQL monitor config
+func (v *MySQLConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
+	var config sharedmodels.MySQLMonitorConfig
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		return fmt.Errorf("invalid mysql config: %w", err)
+	}
+
+	if config.ConnectionString != "" {
+		// The driver also accepts native user:pass@tcp(host)/db DSNs; only
+		// URI forms are scheme-checked.
+		if strings.Contains(config.ConnectionString, "://") {
+			if err := validateDBConnectionString(config.ConnectionString, "mysql"); err != nil {
+				return err
+			}
+		}
+	} else {
+		if err := validateDBHostPort(config.Host, config.Port); err != nil {
+			return err
+		}
+		if strings.TrimSpace(config.Username) == "" {
+			return fmt.Errorf("username is required when no connection_string is set")
+		}
+	}
+
+	if config.Query != nil && strings.TrimSpace(*config.Query) == "" {
+		return fmt.Errorf("query cannot be empty")
+	}
+
+	if config.QueryValueOp != "" {
+		if config.Query == nil || strings.TrimSpace(*config.Query) == "" {
+			return fmt.Errorf("query_value_op requires a query")
+		}
+		if !validQueryValueOps[config.QueryValueOp] {
+			return fmt.Errorf("query_value_op must be one of: equals, not_equals, contains, number_gt, number_gte, number_lt, number_lte")
+		}
+		if strings.HasPrefix(config.QueryValueOp, "number_") {
+			if _, err := strconv.ParseFloat(strings.TrimSpace(config.QueryValue), 64); err != nil {
+				return fmt.Errorf("query_value must be numeric for %s", config.QueryValueOp)
+			}
+		}
+	}
+
+	if err := validateDBTLSMaterial(config.DBTLSConfig); err != nil {
+		return err
+	}
+	if hasDBTLSMaterial(config.DBTLSConfig) && config.ConnectionString == "" &&
+		(config.TLSEnabled == nil || !*config.TLSEnabled) {
+		return fmt.Errorf("tls certificates require tls_enabled")
+	}
+
+	return validateLatencyThresholds(config.MaxLatencyMs, config.WarnLatencyMs)
+}
+
 // RabbitMQConfigValidator validates RabbitMQ monitor configuration
 type RabbitMQConfigValidator struct{}
 

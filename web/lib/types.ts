@@ -95,7 +95,9 @@ export type MonitorType =
   | "postgres"
   | "mongodb"
   | "rabbitmq"
-  | "tcp";
+  | "tcp"
+  | "mysql"
+  | "websocket";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -183,6 +185,9 @@ export interface DNSMonitorConfig {
   host: string;
   record_type?: string;
   expected_answers?: string[];
+  // Query a specific DNS server (host or host:port, default port 53) instead
+  // of the worker's system resolver — for private zones and VPC resolvers.
+  nameserver?: string;
 }
 
 export interface GRPCMonitorConfig {
@@ -303,6 +308,32 @@ export interface RabbitMQMonitorConfig extends DBTLSMaterial {
   warn_latency_ms?: number;
 }
 
+export interface MySQLMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  password?: string; // secret, write-only
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  query?: string;
+  query_value_op?: DBQueryValueOp;
+  query_value?: string;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+export interface WebSocketMonitorConfig {
+  url: string;
+  headers?: Record<string, string>;
+  tls_skip_verify?: boolean;
+  send_message?: string;
+  expected_substring?: string;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
 // Per-check metrics recorded by the database/broker checkers, keyed by
 // monitor type in metrics_data (e.g. {"redis": {...}}).
 export interface DBMetrics {
@@ -315,7 +346,7 @@ export interface DBMetrics {
   latency_warn_ms?: number;
 }
 
-export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "mongodb" | "rabbitmq", DBMetrics>>;
+export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "mongodb" | "rabbitmq" | "mysql", DBMetrics>>;
 
 export type SyntheticFailureMode = "fail_fast" | "continue";
 
@@ -408,7 +439,9 @@ export type MonitorConfig =
   | RedisMonitorConfig
   | PostgresMonitorConfig
   | MongoDBMonitorConfig
-  | RabbitMQMonitorConfig;
+  | RabbitMQMonitorConfig
+  | MySQLMonitorConfig
+  | WebSocketMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 
@@ -1273,6 +1306,7 @@ export interface CheckResult {
     | HTTPMetricsEnvelope
     | GRPCMetricsEnvelope
     | TCPMetricsEnvelope
+    | WebSocketMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
     | SyntheticBrowserMetricsEnvelope;
   location_id?: string; // Absent = default fleet
@@ -1370,6 +1404,16 @@ export interface TCPMetrics {
   port?: number;
   use_tls?: boolean;
   tls_version?: string;
+}
+
+export interface WebSocketMetricsEnvelope {
+  websocket?: WebSocketMetrics;
+}
+
+export interface WebSocketMetrics {
+  subprotocol?: string;
+  tls_version?: string;
+  latency_warn_ms?: number;
 }
 
 export interface HTTPTimingInfo {

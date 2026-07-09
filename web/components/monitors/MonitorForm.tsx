@@ -29,7 +29,7 @@ import {
   SyntheticBrowserStepConfig,
   Location,
 } from '@/lib/types';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, type LucideIcon } from 'lucide-react';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -42,6 +42,7 @@ import PushForm from './PushForm';
 import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
+import WebsocketForm from './WebsocketForm';
 import DatabaseForm, { type DatabaseMonitorType } from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
 import CurlPreview from './CurlPreview';
@@ -224,6 +225,7 @@ const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Databases & Brokers', 
 
 const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   { type: 'http', label: 'HTTP', description: 'Check an HTTP endpoint', icon: Globe, category: 'Web & API', namePlaceholder: 'My API health check' },
+  { type: 'websocket', label: 'WebSocket', description: 'Upgrade handshake and reply checks', icon: Cable, category: 'Web & API', namePlaceholder: 'Live updates socket' },
   { type: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API journey', icon: Code, category: 'Web & API', namePlaceholder: 'Checkout API journey' },
   { type: 'synthetic_browser', label: 'Synthetic Browser', description: 'Real-browser user flow', icon: MousePointer2, category: 'Web & API', namePlaceholder: 'Login flow check' },
   { type: 'ping', label: 'Ping', description: 'ICMP reachability check', icon: Radio, category: 'Network', namePlaceholder: 'Edge gateway ping' },
@@ -232,6 +234,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   { type: 'tcp', label: 'TCP', description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' },
   { type: 'sip', label: 'SIP', description: 'SIP OPTIONS availability', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' },
   { type: 'postgres', label: 'PostgreSQL', description: 'Connect, auth, and query checks', icon: Database, category: 'Databases & Brokers', namePlaceholder: 'Postgres production' },
+  { type: 'mysql', label: 'MySQL', description: 'Connect, auth, and query checks', icon: Cylinder, category: 'Databases & Brokers', namePlaceholder: 'MySQL production' },
   { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases & Brokers', namePlaceholder: 'Redis cache' },
   { type: 'mongodb', label: 'MongoDB', description: 'Connect, auth, and ping', icon: Leaf, category: 'Databases & Brokers', namePlaceholder: 'Mongo cluster' },
   { type: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect and auth checks', icon: MessageSquare, category: 'Databases & Brokers', namePlaceholder: 'RabbitMQ production' },
@@ -945,6 +948,7 @@ export default function MonitorForm({
     host: initialPingConfig?.host || initialDNSConfig?.host || '',
     dns_record_type: initialDNSConfig?.record_type || 'A',
     dns_expected_answers: (initialDNSConfig?.expected_answers || []).join(', '),
+    dns_nameserver: initialDNSConfig?.nameserver || '',
     synthetic_api_base_url: initialSyntheticAPIConfig?.base_url || '',
     synthetic_api_failure_mode: initialSyntheticAPIConfig?.failure_mode || 'fail_fast',
     synthetic_api_variables: mapVariablesToRows(initialSyntheticAPIConfig?.variables),
@@ -1782,6 +1786,9 @@ export default function MonitorForm({
       if (dnsExpected.length > 0) {
         dnsConfig.expected_answers = dnsExpected;
       }
+      if (formData.dns_nameserver.trim()) {
+        dnsConfig.nameserver = formData.dns_nameserver.trim();
+      }
       config = dnsConfig;
     } else if (monitorType === 'synthetic_api') {
       const variables: Record<string, string> = {};
@@ -2053,7 +2060,16 @@ export default function MonitorForm({
     );
   }
 
-  if (monitorType === 'redis' || monitorType === 'postgres' || monitorType === 'mongodb' || monitorType === 'rabbitmq') {
+  if (monitorType === 'websocket') {
+    return (
+      <div className="space-y-4">
+        {typePicker}
+        <WebsocketForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+      </div>
+    );
+  }
+
+  if (monitorType === 'redis' || monitorType === 'postgres' || monitorType === 'mongodb' || monitorType === 'rabbitmq' || monitorType === 'mysql') {
     return (
       <div className="space-y-4">
         {typePicker}
@@ -2222,6 +2238,13 @@ export default function MonitorForm({
               hint="Comma or newline separated. Leave empty to accept any answer."
             />
           </div>
+          <FormInput
+            label="Nameserver (optional)"
+            value={formData.dns_nameserver}
+            onChange={(v) => setFormData({ ...formData, dns_nameserver: v })}
+            placeholder="10.0.0.2 or resolver.internal:53"
+            hint="Query this DNS server instead of the worker's system resolver — for private zones and VPC resolvers."
+          />
         </FormSection>
       )}
 
