@@ -17,12 +17,12 @@ import (
 type mockRepository struct {
 	listUsersFn               func(ctx context.Context, page, pageSize int) ([]models.AdminUser, int, error)
 	getUserFn                 func(ctx context.Context, userID uuid.UUID) (*models.AdminUser, error)
-	createUserFn              func(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error)
+	createUserFn              func(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error)
 	createFirstUserFn         func(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error)
-	updateUserFn              func(ctx context.Context, userID uuid.UUID, username, passwordHash *string, now time.Time) (*models.AdminUser, error)
+	updateUserFn              func(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error)
 	revokeSessionsByAdminIDFn func(ctx context.Context, adminID uuid.UUID) error
 	countActiveAdminsFn       func(ctx context.Context) (int, error)
-	countOtherAdminsFn        func(ctx context.Context, excludeUserID uuid.UUID) (int, error)
+	isLastActiveSuperadminFn  func(ctx context.Context, userID uuid.UUID) (bool, error)
 	deleteUserFn              func(ctx context.Context, userID uuid.UUID) error
 }
 
@@ -40,9 +40,9 @@ func (m *mockRepository) GetUser(ctx context.Context, userID uuid.UUID) (*models
 	return nil, nil
 }
 
-func (m *mockRepository) CreateUser(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+func (m *mockRepository) CreateUser(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error) {
 	if m.createUserFn != nil {
-		return m.createUserFn(ctx, id, username, passwordHash, now)
+		return m.createUserFn(ctx, id, username, email, passwordHash, platformRole, memberships, now)
 	}
 	return nil, nil
 }
@@ -54,9 +54,9 @@ func (m *mockRepository) CreateFirstUser(ctx context.Context, id uuid.UUID, user
 	return nil, nil
 }
 
-func (m *mockRepository) UpdateUser(ctx context.Context, userID uuid.UUID, username, passwordHash *string, now time.Time) (*models.AdminUser, error) {
+func (m *mockRepository) UpdateUser(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error) {
 	if m.updateUserFn != nil {
-		return m.updateUserFn(ctx, userID, username, passwordHash, now)
+		return m.updateUserFn(ctx, userID, username, email, passwordHash, platformRole, memberships, now)
 	}
 	return nil, nil
 }
@@ -75,11 +75,11 @@ func (m *mockRepository) CountActiveAdmins(ctx context.Context) (int, error) {
 	return 0, nil
 }
 
-func (m *mockRepository) CountOtherActiveAdmins(ctx context.Context, excludeUserID uuid.UUID) (int, error) {
-	if m.countOtherAdminsFn != nil {
-		return m.countOtherAdminsFn(ctx, excludeUserID)
+func (m *mockRepository) IsLastActiveSuperadmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	if m.isLastActiveSuperadminFn != nil {
+		return m.isLastActiveSuperadminFn(ctx, userID)
 	}
-	return 0, nil
+	return false, nil
 }
 
 func (m *mockRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error {
@@ -89,12 +89,20 @@ func (m *mockRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error
 	return nil
 }
 
+func (m *mockRepository) AttachMemberships(ctx context.Context, users []models.AdminUser) error {
+	return nil
+}
+
+func strPtr(s string) *string { return &s }
+
 func TestService_CreateUser_HashesPassword(t *testing.T) {
-	var capturedHash string
+	var capturedHash *string
+	var capturedRole string
 	svc := &Service{
 		repo: &mockRepository{
-			createUserFn: func(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+			createUserFn: func(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error) {
 				capturedHash = passwordHash
+				capturedRole = platformRole
 				return &models.AdminUser{
 					ID:        id,
 					Username:  username,
@@ -108,7 +116,7 @@ func TestService_CreateUser_HashesPassword(t *testing.T) {
 
 	req := &models.CreateAdminUserRequest{
 		Username: "  admin.user  ",
-		Password: "super-secure-password",
+		Password: strPtr("super-secure-password"),
 	}
 
 	user, err := svc.CreateUser(context.Background(), req)
@@ -118,18 +126,68 @@ func TestService_CreateUser_HashesPassword(t *testing.T) {
 	if user.Username != "admin.user" {
 		t.Fatalf("expected trimmed username, got %q", user.Username)
 	}
-	if capturedHash == "" {
+	if capturedRole != auth.PlatformRoleMember {
+		t.Fatalf("expected default platform role member, got %q", capturedRole)
+	}
+	if capturedHash == nil || *capturedHash == "" {
 		t.Fatal("expected password hash to be persisted")
 	}
-	if capturedHash == req.Password {
+	if *capturedHash == *req.Password {
 		t.Fatal("expected hashed password to differ from plaintext")
 	}
-	match, err := auth.ComparePassword(capturedHash, req.Password)
+	match, err := auth.ComparePassword(*capturedHash, *req.Password)
 	if err != nil {
 		t.Fatalf("ComparePassword returned error: %v", err)
 	}
 	if !match {
 		t.Fatal("expected stored password hash to match original password")
+	}
+}
+
+func TestService_CreateUser_OIDCOnlyHasNoHash(t *testing.T) {
+	var capturedHash *string
+	var capturedEmail *string
+	svc := &Service{
+		repo: &mockRepository{
+			createUserFn: func(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error) {
+				capturedHash = passwordHash
+				capturedEmail = email
+				return &models.AdminUser{ID: id, Username: username}, nil
+			},
+		},
+		bcryptCost: 4,
+	}
+
+	_, err := svc.CreateUser(context.Background(), &models.CreateAdminUserRequest{
+		Username: "sso.user",
+		Email:    strPtr("  SSO.User@Example.com "),
+	})
+	if err != nil {
+		t.Fatalf("CreateUser returned error: %v", err)
+	}
+	if capturedHash != nil {
+		t.Fatal("expected nil password hash for OIDC-only user")
+	}
+	if capturedEmail == nil || *capturedEmail != "sso.user@example.com" {
+		t.Fatalf("expected normalized email, got %v", capturedEmail)
+	}
+}
+
+func TestService_CreateUser_InvalidRoles(t *testing.T) {
+	svc := &Service{repo: &mockRepository{}, bcryptCost: 4}
+
+	if _, err := svc.CreateUser(context.Background(), &models.CreateAdminUserRequest{
+		Username:     "u1",
+		PlatformRole: "root",
+	}); err == nil {
+		t.Fatal("expected error for invalid platform role")
+	}
+
+	if _, err := svc.CreateUser(context.Background(), &models.CreateAdminUserRequest{
+		Username:    "u1",
+		Memberships: []models.MembershipInput{{TenantID: uuid.New(), Role: "owner"}},
+	}); err == nil {
+		t.Fatal("expected error for invalid tenant role")
 	}
 }
 
@@ -182,7 +240,7 @@ func TestService_GetUser(t *testing.T) {
 func TestService_CreateUser_DuplicateUsername(t *testing.T) {
 	svc := &Service{
 		repo: &mockRepository{
-			createUserFn: func(ctx context.Context, id uuid.UUID, username, passwordHash string, now time.Time) (*models.AdminUser, error) {
+			createUserFn: func(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error) {
 				return nil, &pq.Error{Code: "23505"}
 			},
 		},
@@ -191,10 +249,30 @@ func TestService_CreateUser_DuplicateUsername(t *testing.T) {
 
 	_, err := svc.CreateUser(context.Background(), &models.CreateAdminUserRequest{
 		Username: "admin",
-		Password: "super-secure-password",
+		Password: strPtr("super-secure-password"),
 	})
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("expected ErrUsernameTaken, got %v", err)
+	}
+}
+
+func TestService_CreateUser_DuplicateEmail(t *testing.T) {
+	svc := &Service{
+		repo: &mockRepository{
+			createUserFn: func(ctx context.Context, id uuid.UUID, username string, email, passwordHash *string, platformRole string, memberships []models.MembershipInput, now time.Time) (*models.AdminUser, error) {
+				return nil, &pq.Error{Code: "23505", Constraint: "idx_admin_users_email"}
+			},
+		},
+		bcryptCost: 4,
+	}
+
+	_, err := svc.CreateUser(context.Background(), &models.CreateAdminUserRequest{
+		Username: "admin2",
+		Email:    strPtr("dup@example.com"),
+		Password: strPtr("super-secure-password"),
+	})
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
 	}
 }
 
@@ -236,7 +314,7 @@ func TestService_CreateFirstUser(t *testing.T) {
 
 		user, err := svc.CreateFirstUser(context.Background(), &models.CreateAdminUserRequest{
 			Username: "  first-admin ",
-			Password: "very-secure-password",
+			Password: strPtr("very-secure-password"),
 		})
 		if err != nil {
 			t.Fatalf("CreateFirstUser returned error: %v", err)
@@ -265,10 +343,20 @@ func TestService_CreateFirstUser(t *testing.T) {
 
 		_, err := svc.CreateFirstUser(context.Background(), &models.CreateAdminUserRequest{
 			Username: "admin",
-			Password: "very-secure-password",
+			Password: strPtr("very-secure-password"),
 		})
 		if !errors.Is(err, ErrBootstrapClosed) {
 			t.Fatalf("expected ErrBootstrapClosed, got %v", err)
+		}
+	})
+
+	t.Run("password required", func(t *testing.T) {
+		svc := &Service{repo: &mockRepository{}, bcryptCost: 4}
+		_, err := svc.CreateFirstUser(context.Background(), &models.CreateAdminUserRequest{
+			Username: "admin",
+		})
+		if err == nil {
+			t.Fatal("expected error when bootstrapping without a password")
 		}
 	})
 }
@@ -279,7 +367,7 @@ func TestService_UpdateUser_PasswordResetRevokesSessions(t *testing.T) {
 
 	svc := &Service{
 		repo: &mockRepository{
-			updateUserFn: func(ctx context.Context, userID uuid.UUID, username, passwordHash *string, now time.Time) (*models.AdminUser, error) {
+			updateUserFn: func(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error) {
 				if userID != targetID {
 					t.Fatalf("unexpected target user id: %s", userID)
 				}
@@ -319,13 +407,38 @@ func TestService_UpdateUser_PasswordResetRevokesSessions(t *testing.T) {
 	}
 }
 
+func TestService_UpdateUser_DemoteLastSuperadminBlocked(t *testing.T) {
+	targetID := uuid.New()
+	member := "member"
+
+	svc := &Service{
+		repo: &mockRepository{
+			isLastActiveSuperadminFn: func(ctx context.Context, userID uuid.UUID) (bool, error) {
+				return true, nil
+			},
+			updateUserFn: func(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error) {
+				t.Fatal("update should not run when demote is blocked")
+				return nil, nil
+			},
+		},
+		bcryptCost: 4,
+	}
+
+	_, err := svc.UpdateUser(context.Background(), targetID, &models.UpdateAdminUserRequest{
+		PlatformRole: &member,
+	})
+	if !errors.Is(err, ErrCannotDemoteLastAdmin) {
+		t.Fatalf("expected ErrCannotDemoteLastAdmin, got %v", err)
+	}
+}
+
 func TestService_UpdateUser_DuplicateUsername(t *testing.T) {
 	targetID := uuid.New()
 	newUsername := "duplicate-name"
 
 	svc := &Service{
 		repo: &mockRepository{
-			updateUserFn: func(ctx context.Context, userID uuid.UUID, username, passwordHash *string, now time.Time) (*models.AdminUser, error) {
+			updateUserFn: func(ctx context.Context, userID uuid.UUID, username, email, passwordHash, platformRole *string, memberships *[]models.MembershipInput, now time.Time) (*models.AdminUser, error) {
 				return nil, &pq.Error{Code: "23505"}
 			},
 		},
@@ -355,11 +468,11 @@ func TestService_DeleteUser_GuardrailsAndDelete(t *testing.T) {
 		}
 	})
 
-	t.Run("reject deleting last active admin", func(t *testing.T) {
+	t.Run("reject deleting last active superadmin", func(t *testing.T) {
 		svc := &Service{
 			repo: &mockRepository{
-				countOtherAdminsFn: func(ctx context.Context, excludeUserID uuid.UUID) (int, error) {
-					return 0, nil
+				isLastActiveSuperadminFn: func(ctx context.Context, userID uuid.UUID) (bool, error) {
+					return true, nil
 				},
 			},
 		}
@@ -375,9 +488,6 @@ func TestService_DeleteUser_GuardrailsAndDelete(t *testing.T) {
 		sessions := map[uuid.UUID]int{targetID: 3}
 		svc := &Service{
 			repo: &mockRepository{
-				countOtherAdminsFn: func(ctx context.Context, excludeUserID uuid.UUID) (int, error) {
-					return 2, nil
-				},
 				deleteUserFn: func(ctx context.Context, userID uuid.UUID) error {
 					delete(users, userID)
 					delete(sessions, userID)
@@ -401,9 +511,6 @@ func TestService_DeleteUser_GuardrailsAndDelete(t *testing.T) {
 	t.Run("delete missing user", func(t *testing.T) {
 		svc := &Service{
 			repo: &mockRepository{
-				countOtherAdminsFn: func(ctx context.Context, excludeUserID uuid.UUID) (int, error) {
-					return 1, nil
-				},
 				deleteUserFn: func(ctx context.Context, userID uuid.UUID) error {
 					return sql.ErrNoRows
 				},

@@ -18,10 +18,12 @@ import {
   Wrench,
   MapPin,
   Network,
+  ScrollText,
 } from 'lucide-react';
 import { getMonitors, getAlertChannels, getStatusPages, getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { clearSelectedTenantId } from '@/lib/tenant';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import Pill from '@/components/ui/Pill';
 import Button from '@/components/ui/Button';
 
@@ -67,6 +69,7 @@ const navGroups: NavGroup[] = [
     label: 'Administration',
     items: [
       { name: 'Users', href: '/users', icon: Users },
+      { name: 'Audit Log', href: '/audit', icon: ScrollText },
       { name: 'Settings', href: '/settings', icon: Settings },
     ],
   },
@@ -137,10 +140,21 @@ export default function Sidebar() {
     return counts[countKey] ?? null;
   };
 
+  const { isSuperadmin, role, loading: userLoading } = useCurrentUser();
+
+  // /users is superadmin-only; /audit needs tenant admin (or superadmin).
+  // While identity is loading, hide gated items rather than flashing them.
+  const canSeeUsers = !apiKeyMode && !userLoading && isSuperadmin;
+  const canSeeAudit = !apiKeyMode && !userLoading && (isSuperadmin || role === 'admin');
+
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
-      items: apiKeyMode ? group.items.filter((item) => item.href !== '/users') : group.items,
+      items: group.items.filter((item) => {
+        if (item.href === '/users') return canSeeUsers;
+        if (item.href === '/audit') return canSeeAudit;
+        return true;
+      }),
     }))
     .filter((group) => group.items.length > 0);
 

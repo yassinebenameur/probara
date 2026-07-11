@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/ui/Button";
 import { clearApiKey } from "@/lib/auth";
+import { getOidcStatus } from "@/lib/api";
+import type { OidcStatus } from "@/lib/types";
 
 type BootstrapStatusResponse = {
   has_admin_users: boolean;
@@ -15,14 +17,51 @@ type ApiErrorResponse = {
 
 type AuthMode = "loading" | "login" | "bootstrap";
 
+const SSO_ERROR_MESSAGES: Record<string, string> = {
+  not_provisioned:
+    "No account is provisioned for this identity. Ask an administrator to invite you.",
+  state_mismatch: "The sign-in attempt expired or was tampered with. Please try again.",
+  exchange_failed: "Single sign-on failed while talking to the identity provider.",
+  provider_denied: "The identity provider rejected the sign-in.",
+  provider_unreachable: "The identity provider is unreachable. Try again later.",
+  internal: "Single sign-on failed unexpectedly. Please try again.",
+};
+
 export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [authMode, setAuthMode] = useState<AuthMode>("loading");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [oidc, setOidc] = useState<OidcStatus>({ enabled: false });
+
+  useEffect(() => {
+    const ssoError = searchParams.get("sso_error");
+    if (ssoError) {
+      setError(SSO_ERROR_MESSAGES[ssoError] || SSO_ERROR_MESSAGES.internal);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    let ignore = false;
+    getOidcStatus().then((status) => {
+      if (!ignore) setOidc(status);
+    });
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   useEffect(() => {
     let ignore = false;
@@ -323,6 +362,31 @@ export default function LoginPage() {
                     ? "Create admin and continue"
                     : "Continue to dashboard"}
               </Button>
+
+              {oidc.enabled && authMode === "login" && (
+                <>
+                  <div className="flex items-center gap-3">
+                    <div className="h-px flex-1 bg-white/[0.08]" />
+                    <span className="text-xs uppercase tracking-wider text-slate-500">
+                      or
+                    </span>
+                    <div className="h-px flex-1 bg-white/[0.08]" />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={loading}
+                    className="w-full justify-center"
+                    onClick={() => {
+                      clearApiKey();
+                      window.location.href = "/api/v1/auth/oidc/start";
+                    }}
+                  >
+                    Continue with {oidc.label || "SSO"}
+                  </Button>
+                </>
+              )}
             </form>
           )}
         </div>

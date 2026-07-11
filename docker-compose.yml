@@ -78,6 +78,14 @@ services:
       PUBLIC_NATS_URL: "nats://localhost:4222"
       # Shared with the status-page service; see its definition below.
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
+      # OIDC SSO (off by default; `docker compose --profile sso up` starts a
+      # dex test IdP matching these values — see infra/dex/config.yaml).
+      OIDC_ENABLED: "${OIDC_ENABLED:-false}"
+      OIDC_ISSUER_URL: "${OIDC_ISSUER_URL:-http://localhost:5556/dex}"
+      OIDC_CLIENT_ID: "${OIDC_CLIENT_ID:-probara}"
+      OIDC_CLIENT_SECRET: "${OIDC_CLIENT_SECRET:-probara-dex-secret}"
+      OIDC_REDIRECT_URL: "${OIDC_REDIRECT_URL:-http://localhost:3000/api/v1/auth/oidc/callback}"
+      AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-365}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -277,6 +285,21 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    networks:
+      - probara-network
+    restart: unless-stopped
+
+  # Test OIDC IdP for SSO development: docker compose --profile sso up
+  # Log in as admin@example.com / password (see infra/dex/config.yaml).
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    container_name: probara-dex
+    profiles: ["sso"]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./infra/dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
     networks:
       - probara-network
     restart: unless-stopped

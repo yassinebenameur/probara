@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/yassinebenameur/probara/shared/db"
@@ -81,45 +83,78 @@ func ExtractAPIKey(r *http.Request) (string, error) {
 	return key, nil
 }
 
-// ValidateAPIKey validates an API key and returns the tenant ID
-// Uses key_prefix for fast direct lookup, then verifies with bcrypt
-func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (string, error) {
+// APIKeyIdentity is the resolved identity of a validated API key.
+type APIKeyIdentity struct {
+	KeyID     string
+	TenantID  string
+	Name      string
+	Scope     string // ScopeRead or ScopeWrite
+	ExpiresAt *time.Time
+}
+
+// ValidateAPIKey validates an API key and returns its identity (tenant,
+// scope, expiry). Uses key_prefix for fast direct lookup, then verifies with
+// bcrypt. Expired keys are rejected at the SQL level.
+func ValidateAPIKey(ctx context.Context, dbClient *db.Client, key string) (*APIKeyIdentity, error) {
 	if key == "" {
-		return "", fmt.Errorf("API key cannot be empty")
+		return nil, fmt.Errorf("API key cannot be empty")
 	}
 
 	// Compute SHA256 prefix for fast lookup
 	sha256Hash := sha256.Sum256([]byte(key))
 	keyPrefix := hex.EncodeToString(sha256Hash[:])
 
-	// Direct lookup by key_prefix (single row query)
 	query := `
-		SELECT tenant_id, key_hash
+		SELECT id, tenant_id, name, key_hash, scope, expires_at
 		FROM api_keys
 		WHERE key_prefix = $1 AND revoked_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > NOW())
 		LIMIT 1
 	`
 
-	var tenantID string
+	identity := &APIKeyIdentity{}
 	var storedHash string
 
-	err := dbClient.QueryRowContext(ctx, query, keyPrefix).Scan(&tenantID, &storedHash)
+	err := dbClient.QueryRowContext(ctx, query, keyPrefix).
+		Scan(&identity.KeyID, &identity.TenantID, &identity.Name, &storedHash, &identity.Scope, &identity.ExpiresAt)
+	if isMissingColumn(err) {
+		// Deploy-ordering tolerance: this binary may run before the scope
+		// migration (post-upgrade job). Legacy keys behave as full-access.
+		legacy := `
+			SELECT id, tenant_id, name, key_hash
+			FROM api_keys
+			WHERE key_prefix = $1 AND revoked_at IS NULL
+			LIMIT 1
+		`
+		err = dbClient.QueryRowContext(ctx, legacy, keyPrefix).
+			Scan(&identity.KeyID, &identity.TenantID, &identity.Name, &storedHash)
+		identity.Scope = ScopeWrite
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return "", fmt.Errorf("invalid API key")
+			return nil, fmt.Errorf("invalid API key")
 		}
-		return "", fmt.Errorf("failed to query API key: %w", err)
+		return nil, fmt.Errorf("failed to query API key: %w", err)
 	}
 
 	// Verify the key matches the stored bcrypt hash
 	match, err := CompareAPIKey(storedHash, key)
 	if err != nil {
-		return "", fmt.Errorf("failed to compare API key: %w", err)
+		return nil, fmt.Errorf("failed to compare API key: %w", err)
 	}
 
 	if !match {
-		return "", fmt.Errorf("invalid API key")
+		return nil, fmt.Errorf("invalid API key")
 	}
 
-	return tenantID, nil
+	return identity, nil
+}
+
+// isMissingColumn reports Postgres undefined_column (42703).
+func isMissingColumn(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	return pqErr.Code == "42703"
 }

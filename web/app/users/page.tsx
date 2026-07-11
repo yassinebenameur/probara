@@ -6,11 +6,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, RefreshCw, Trash2, Users as UsersIcon } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { deleteUser, getUsers } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import type { AdminUser } from '@/lib/types';
@@ -20,6 +22,7 @@ const PAGE_SIZE = 20;
 export default function UsersPage() {
   const router = useRouter();
   const { showToast } = useToast();
+  const { isSuperadmin, loading: userLoading } = useCurrentUser();
   const [apiKeyMode, setApiKeyMode] = useState(false);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,6 +124,20 @@ export default function UsersPage() {
     );
   }
 
+  if (!userLoading && !isSuperadmin) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <Panel title="Superadmin required" subtitle="User management is restricted to platform superadmins.">
+          <p className="text-sm text-slate-300">
+            Your account does not have superadmin access. Ask a platform administrator if you
+            need to manage users.
+          </p>
+        </Panel>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {header}
@@ -154,8 +171,10 @@ export default function UsersPage() {
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-3 py-2">Username</th>
-                    <th className="px-3 py-2">Created</th>
-                    <th className="px-3 py-2">Updated</th>
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Role</th>
+                    <th className="px-3 py-2">Sign-in</th>
+                    <th className="px-3 py-2">Tenants</th>
                     <th className="px-3 py-2">Last login</th>
                     <th className="px-3 py-2">Actions</th>
                   </tr>
@@ -164,8 +183,24 @@ export default function UsersPage() {
                   {users.map((user) => (
                     <tr key={user.id}>
                       <td className="px-3 py-3">{user.username}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.created_at)}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.updated_at)}</td>
+                      <td className="px-3 py-3 text-xs text-slate-400">{user.email || '—'}</td>
+                      <td className="px-3 py-3">
+                        <Pill tone={user.platform_role === 'superadmin' ? 'info' : 'neutral'}>
+                          {user.platform_role === 'superadmin' ? 'Superadmin' : 'Member'}
+                        </Pill>
+                      </td>
+                      <td className="px-3 py-3">
+                        <Pill tone={user.auth_method === 'oidc' ? 'info' : 'neutral'}>
+                          {user.auth_method === 'oidc' ? 'SSO' : 'Password'}
+                        </Pill>
+                      </td>
+                      <td className="px-3 py-3 text-xs text-slate-400">
+                        {user.platform_role === 'superadmin'
+                          ? 'All'
+                          : (user.memberships || [])
+                              .map((m) => `${m.tenant_name || m.tenant_id} (${m.role})`)
+                              .join(', ') || '—'}
+                      </td>
                       <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.last_login_at)}</td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-1.5">

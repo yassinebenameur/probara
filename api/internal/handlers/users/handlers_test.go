@@ -440,7 +440,7 @@ func TestHandlers_DeleteUser(t *testing.T) {
 	})
 }
 
-func TestHandlers_UnauthorizedWhenRequireAdminApplied(t *testing.T) {
+func TestHandlers_UnauthorizedWhenRequireSuperadminApplied(t *testing.T) {
 	log := logger.New("test", "debug")
 	h := NewHandlers(&mockUserService{
 		listUsersFn: func(ctx context.Context, page, pageSize int) (*models.AdminUserListResponse, error) {
@@ -450,21 +450,63 @@ func TestHandlers_UnauthorizedWhenRequireAdminApplied(t *testing.T) {
 	}, log)
 
 	r := chi.NewRouter()
-	r.Use(apimiddleware.RequireAdmin)
+	r.Use(apimiddleware.RequireSuperadmin)
 	r.Get("/users", h.ListUsers)
 
-	req := httptest.NewRequest(http.MethodGet, "/users", nil)
-	req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
+	t.Run("api key gets 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/users", nil)
+		req = req.WithContext(ctxpkg.WithTenantID(req.Context(), uuid.New().String()))
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", w.Code)
+		}
 
-	var errResp apierrors.ErrorResponse
-	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
-		t.Fatalf("failed to decode error response: %v", err)
-	}
+		var errResp apierrors.ErrorResponse
+		if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+			t.Fatalf("failed to decode error response: %v", err)
+		}
+	})
+
+	t.Run("member admin gets 403", func(t *testing.T) {
+		ctx := ctxpkg.WithAdminID(context.Background(), uuid.New().String())
+		ctx = ctxpkg.WithPlatformRole(ctx, "member")
+		req := httptest.NewRequest(http.MethodGet, "/users", nil).WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d", w.Code)
+		}
+	})
+
+	t.Run("superadmin passes", func(t *testing.T) {
+		called := false
+		hOK := NewHandlers(&mockUserService{
+			listUsersFn: func(ctx context.Context, page, pageSize int) (*models.AdminUserListResponse, error) {
+				called = true
+				return &models.AdminUserListResponse{Items: []models.AdminUser{}}, nil
+			},
+		}, log)
+		rOK := chi.NewRouter()
+		rOK.Use(apimiddleware.RequireSuperadmin)
+		rOK.Get("/users", hOK.ListUsers)
+
+		ctx := ctxpkg.WithAdminID(context.Background(), uuid.New().String())
+		ctx = ctxpkg.WithPlatformRole(ctx, "superadmin")
+		req := httptest.NewRequest(http.MethodGet, "/users", nil).WithContext(ctx)
+
+		w := httptest.NewRecorder()
+		rOK.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if !called {
+			t.Fatal("expected service to be called for superadmin")
+		}
+	})
 }

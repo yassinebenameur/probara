@@ -92,6 +92,29 @@ spec:
         - name: PUBLIC_NATS_URL
           value: {{ . | quote }}
         {{- end }}
+        - name: AUDIT_RETENTION_DAYS
+          value: {{ .Values.auth.auditRetentionDays | quote }}
+        {{- if .Values.auth.oidc.enabled }}
+        - name: OIDC_ENABLED
+          value: "true"
+        - name: OIDC_ISSUER_URL
+          value: {{ .Values.auth.oidc.issuerUrl | quote }}
+        - name: OIDC_CLIENT_ID
+          value: {{ .Values.auth.oidc.clientId | quote }}
+        - name: OIDC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: oidc_client_secret
+        - name: OIDC_PROVIDER_LABEL
+          value: {{ .Values.auth.oidc.providerLabel | quote }}
+        - name: OIDC_JIT_PROVISION
+          value: {{ .Values.auth.oidc.jitProvision | quote }}
+        - name: OIDC_JIT_DEFAULT_ROLE
+          value: {{ .Values.auth.oidc.jitDefaultRole | quote }}
+        - name: OIDC_JIT_DEFAULT_TENANT_ID
+          value: {{ .Values.auth.oidc.jitDefaultTenantId | quote }}
+        {{- end }}
         {{- if .Values.secrets.probaraSecretsKey }}
         - name: PROBARA_SECRETS_KEY
           valueFrom:

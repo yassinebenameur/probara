@@ -18,8 +18,11 @@ type Tenant struct {
 	Name               string    `json:"name"`
 	DataRetentionDays  int       `json:"data_retention_days"`
 	DashboardGroupTags []string  `json:"dashboard_group_tags"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	// Role is the caller's membership role in this tenant ("admin" for
+	// superadmins); only set on list responses.
+	Role      string    `json:"role,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TenantListResponse represents a list of tenants.

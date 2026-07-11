@@ -14,10 +14,15 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
-var ErrAPIKeyNotFound = errors.New("api key not found")
+var (
+	ErrAPIKeyNotFound = errors.New("api key not found")
+	ErrInvalidScope   = errors.New("invalid scope (want read or write)")
+	ErrExpiryInPast   = errors.New("expires_at must be in the future")
+)
 
 // Service handles API key operations.
 type Service struct {
@@ -49,7 +54,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, tenantID uuid.UUID, page, pag
 	}
 
 	query := `
-		SELECT id, name, key_prefix, created_at, revoked_at
+		SELECT id, name, key_prefix, scope, expires_at, last_used_at, created_by, created_at, revoked_at
 		FROM api_keys
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -67,7 +72,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, tenantID uuid.UUID, page, pag
 		var item models.ApiKey
 		var keyPrefix sql.NullString
 		var revokedAt sql.NullTime
-		if err := rows.Scan(&item.ID, &item.Name, &keyPrefix, &item.CreatedAt, &revokedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &keyPrefix, &item.Scope, &item.ExpiresAt, &item.LastUsedAt, &item.CreatedBy, &item.CreatedAt, &revokedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan api key: %w", err)
 		}
 		if keyPrefix.Valid {
@@ -90,11 +95,32 @@ func (s *Service) ListAPIKeys(ctx context.Context, tenantID uuid.UUID, page, pag
 	}, nil
 }
 
-// CreateAPIKey creates a new API key for a tenant.
+// CreateAPIKey creates a new API key for a tenant. Scope defaults to write;
+// an expiry, when set, must be in the future. createdBy is the acting admin
+// (nil when created via another API key).
 func (s *Service) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, req *models.CreateApiKeyRequest) (*models.ApiKey, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return nil, fmt.Errorf("api key name is required")
+	}
+
+	scope := req.Scope
+	if scope == "" {
+		scope = auth.ScopeWrite
+	}
+	if !auth.ValidScope(scope) {
+		return nil, ErrInvalidScope
+	}
+
+	if req.ExpiresAt != nil && !req.ExpiresAt.After(time.Now()) {
+		return nil, ErrExpiryInPast
+	}
+
+	var createdBy *uuid.UUID
+	if adminID, ok := ctxpkg.GetAdminID(ctx); ok {
+		if parsed, err := uuid.Parse(adminID); err == nil {
+			createdBy = &parsed
+		}
 	}
 
 	plainKey, err := generateAPIKey()
@@ -111,11 +137,11 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, req *mod
 	keyID := uuid.New()
 
 	query := `
-		INSERT INTO api_keys (id, tenant_id, name, key_hash, key_prefix, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO api_keys (id, tenant_id, name, key_hash, key_prefix, scope, expires_at, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	if _, err := s.db.ExecContext(ctx, query, keyID, tenantID, name, hashResult.BcryptHash, hashResult.KeyPrefix, now); err != nil {
+	if _, err := s.db.ExecContext(ctx, query, keyID, tenantID, name, hashResult.BcryptHash, hashResult.KeyPrefix, scope, req.ExpiresAt, createdBy, now); err != nil {
 		return nil, fmt.Errorf("failed to create api key: %w", err)
 	}
 
@@ -124,6 +150,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, req *mod
 		Name:      name,
 		KeyPrefix: hashResult.KeyPrefix,
 		Key:       plainKey,
+		Scope:     scope,
+		ExpiresAt: req.ExpiresAt,
+		CreatedBy: createdBy,
 		CreatedAt: now,
 	}, nil
 }

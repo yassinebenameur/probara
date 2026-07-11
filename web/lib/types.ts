@@ -13,6 +13,9 @@ export interface ApiResponse<T> {
 export interface Tenant {
   id: string;
   name: string;
+  // Caller's membership role in this tenant ("admin" for superadmins);
+  // present on list responses.
+  role?: TenantRole;
   created_at: string;
   updated_at: string;
 }
@@ -31,10 +34,43 @@ export interface UpdateTenantSettingsRequest {
   dashboard_group_tags?: string[];
 }
 
+// RBAC types
+export type TenantRole = "admin" | "editor" | "viewer";
+export type PlatformRole = "superadmin" | "member";
+export type ApiKeyScope = "read" | "write";
+
+export interface TenantMembership {
+  tenant_id: string;
+  tenant_name?: string;
+  role: TenantRole;
+}
+
+// Effective identity of the current credential (cookie or API key),
+// from GET /v1/auth-context.
+export interface AuthContext {
+  actor_type: "admin_user" | "api_key" | "";
+  admin_id?: string;
+  api_key_id?: string;
+  tenant_id?: string;
+  platform_role?: PlatformRole;
+  role?: TenantRole;
+  scope?: ApiKeyScope;
+  can_write: boolean;
+}
+
+export interface OidcStatus {
+  enabled: boolean;
+  label?: string;
+}
+
 // Admin user types
 export interface AdminUser {
   id: string;
   username: string;
+  email?: string;
+  platform_role?: PlatformRole;
+  auth_method?: "password" | "oidc";
+  memberships?: TenantMembership[];
   created_at: string;
   updated_at: string;
   last_login_at?: string;
@@ -48,14 +84,26 @@ export interface AdminUserListResponse {
   total: number;
 }
 
+export interface MembershipInput {
+  tenant_id: string;
+  role: TenantRole;
+}
+
 export interface CreateAdminUserRequest {
   username: string;
-  password: string;
+  email?: string;
+  // Omitted = SSO-only user (requires email for IdP linking).
+  password?: string;
+  platform_role?: PlatformRole;
+  memberships?: MembershipInput[];
 }
 
 export interface UpdateAdminUserRequest {
   username?: string;
+  email?: string;
   password?: string;
+  platform_role?: PlatformRole;
+  memberships?: MembershipInput[];
 }
 
 // API Key types
@@ -64,6 +112,10 @@ export interface ApiKey {
   name: string;
   key_prefix: string;
   key?: string;
+  scope: ApiKeyScope;
+  expires_at?: string;
+  last_used_at?: string;
+  created_by?: string;
   created_at: string;
   revoked_at?: string;
 }
@@ -77,6 +129,35 @@ export interface ApiKeyListResponse {
 
 export interface CreateApiKeyRequest {
   name: string;
+  scope?: ApiKeyScope;
+  expires_at?: string;
+}
+
+// Audit log types
+export type AuditOutcome = "success" | "failure" | "denied";
+
+export interface AuditEvent {
+  id: number;
+  occurred_at: string;
+  tenant_id?: string;
+  actor_type: "admin_user" | "api_key" | "anonymous";
+  actor_id?: string;
+  actor_label: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  outcome: AuditOutcome;
+  status_code?: number;
+  ip: string;
+  user_agent: string;
+  details?: Record<string, unknown>;
+}
+
+export interface AuditListResponse {
+  items: AuditEvent[];
+  page: number;
+  page_size: number;
+  total: number;
 }
 
 // Monitor types

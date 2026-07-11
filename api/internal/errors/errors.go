@@ -34,6 +34,11 @@ func WriteUnauthorizedError(w http.ResponseWriter, message string) {
 	WriteError(w, http.StatusUnauthorized, "unauthorized", message)
 }
 
+// WriteForbiddenError writes a 403 forbidden error
+func WriteForbiddenError(w http.ResponseWriter, message string) {
+	WriteError(w, http.StatusForbidden, "forbidden", message)
+}
+
 // WriteNotFoundError writes a 404 not found error
 func WriteNotFoundError(w http.ResponseWriter, message string) {
 	WriteError(w, http.StatusNotFound, "not_found", message)

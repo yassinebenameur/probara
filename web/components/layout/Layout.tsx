@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { AlertStreamProvider } from '@/components/alerts/AlertStreamProvider';
+import { CurrentUserProvider } from '@/components/providers/CurrentUserProvider';
 import Sidebar from './Sidebar';
 import AuthGuard from './AuthGuard';
 
@@ -15,6 +16,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthGuard>
+      <CurrentUserProvider>
       <AlertStreamProvider>
         <div className="flex min-h-screen">
           <Sidebar />
@@ -27,6 +29,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </main>
         </div>
       </AlertStreamProvider>
+      </CurrentUserProvider>
     </AuthGuard>
   );
 }

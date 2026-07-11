@@ -48,6 +48,9 @@ import type {
   ApiKey,
   ApiKeyListResponse,
   CreateApiKeyRequest,
+  AuthContext,
+  OidcStatus,
+  AuditListResponse,
   IncidentListResponse,
   AISettings,
   AISettingsUpdate,
@@ -664,6 +667,49 @@ export async function updateUser(id: string, data: UpdateAdminUserRequest): Prom
 
 export async function deleteUser(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/users/${id}`);
+}
+
+// Auth context / SSO / audit log
+export async function getAuthContext(): Promise<AuthContext> {
+  return apiRequest<AuthContext>('GET', '/v1/auth-context');
+}
+
+// Unauthenticated: used by the login page before any session exists.
+export async function getOidcStatus(): Promise<OidcStatus> {
+  const response = await fetch(getApiUrl('/v1/auth/oidc/status'), { method: 'GET' });
+  if (!response.ok) {
+    return { enabled: false };
+  }
+  return (await response.json()) as OidcStatus;
+}
+
+export interface GetAuditLogParams {
+  action?: string;
+  outcome?: string;
+  actor_id?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export async function getAuditLog(params?: GetAuditLogParams): Promise<AuditListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.action) queryParams.append('action', params.action);
+  if (params?.outcome) queryParams.append('outcome', params.outcome);
+  if (params?.actor_id) queryParams.append('actor_id', params.actor_id);
+  if (params?.from) queryParams.append('from', params.from);
+  if (params?.to) queryParams.append('to', params.to);
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/audit-log${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<AuditListResponse>('GET', path);
+}
+
+export async function getAuditActions(): Promise<{ actions: string[] }> {
+  return apiRequest<{ actions: string[] }>('GET', '/v1/audit-log/actions');
 }
 
 export async function createStatusPage(

@@ -68,6 +68,28 @@ nats:
       memory: "256Mi"
 
 # =============================================================================
+# AUTH / ENTERPRISE
+# =============================================================================
+auth:
+  # How long audit_log rows are kept (days). 0 = keep forever. Separate from
+  # tenant data retention: audit data is compliance data.
+  auditRetentionDays: 365
+  # OIDC SSO (one IdP per install). The client secret lives under
+  # secrets.oidcClientSecret. Redirect URL defaults to
+  # <api.publicBaseURL>/api/v1/auth/oidc/callback — the IdP must allow it.
+  oidc:
+    enabled: false
+    issuerUrl: ""
+    clientId: ""
+    # Shown on the login button: "Continue with <providerLabel>"
+    providerLabel: "SSO"
+    # Create accounts on first SSO login (viewer in the default tenant).
+    # Disable to require pre-created users (matched by verified email).
+    jitProvision: true
+    jitDefaultRole: "viewer"
+    jitDefaultTenantId: "00000000-0000-0000-0000-000000000001"
+
+# =============================================================================
 # SECRETS
 # =============================================================================
 secrets:
@@ -80,6 +102,8 @@ secrets:
   #   openssl rand -base64 32
   # Empty = encryption disabled; secrets are stored in plaintext. SET IN PRODUCTION.
   probaraSecretsKey: ""
+  # OIDC client secret (required when auth.oidc.enabled)
+  oidcClientSecret: ""
 
 # =============================================================================
 # MIGRATIONS JOB

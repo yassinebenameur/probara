@@ -9,7 +9,10 @@ import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
-import { ApiKey } from '@/lib/types';
+import { ApiKey, ApiKeyScope } from '@/lib/types';
+import Select from '@/components/ui/Select';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
+import { SSOPanel } from '@/components/settings/SSOPanel';
 import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
@@ -23,8 +26,27 @@ function formatFingerprint(prefix: string | undefined): string {
   return prefix.slice(0, 8);
 }
 
+const EXPIRY_WARN_DAYS = 14;
+
+function expiryTone(expiresAt: string): 'danger' | 'warning' | 'neutral' {
+  const remainingMs = new Date(expiresAt).getTime() - Date.now();
+  if (remainingMs <= 0) return 'danger';
+  if (remainingMs < EXPIRY_WARN_DAYS * 24 * 60 * 60 * 1000) return 'warning';
+  return 'neutral';
+}
+
+function expiryLabel(expiresAt: string): string {
+  const remainingMs = new Date(expiresAt).getTime() - Date.now();
+  if (remainingMs <= 0) return 'Expired';
+  const days = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
+  return `Expires in ${days}d`;
+}
+
 export default function SettingsPage() {
   const { showToast } = useToast();
+  const { isSuperadmin, role, actorType } = useCurrentUser();
+  // Key create/revoke is tenant-admin gated server-side; mirror that here.
+  const canManageKeys = actorType !== 'api_key' && (isSuperadmin || role === 'admin');
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -35,6 +57,8 @@ export default function SettingsPage() {
   const [retentionInput, setRetentionInput] = useState('');
   const [creating, setCreating] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyScope, setNewKeyScope] = useState<ApiKeyScope>('write');
+  const [newKeyExpiry, setNewKeyExpiry] = useState('');
   const [createdKey, setCreatedKey] = useState<ApiKey | null>(null);
   const [copiedField, setCopiedField] = useState('');
   const [pendingRevoke, setPendingRevoke] = useState<ApiKey | null>(null);
@@ -122,9 +146,19 @@ export default function SettingsPage() {
       return;
     }
 
+    let expiresAt: string | undefined;
+    if (newKeyExpiry) {
+      const days = Number(newKeyExpiry);
+      expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    }
+
     try {
       setCreating(true);
-      const created = await createApiKey({ name: newKeyName.trim() });
+      const created = await createApiKey({
+        name: newKeyName.trim(),
+        scope: newKeyScope,
+        expires_at: expiresAt,
+      });
       setCreatedKey(created);
       setApiKeys((prev) => [created, ...prev]);
       if (created.key) {
@@ -179,6 +213,8 @@ export default function SettingsPage() {
       <NotificationsPanel />
 
       <AISettingsPanel />
+
+      {isSuperadmin && <SSOPanel />}
 
       <Panel
         title="Data retention"
@@ -302,6 +338,7 @@ export default function SettingsPage() {
               </div>
             </div>
 
+            {canManageKeys && (
             <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
               <div className="flex-1">
                 <label className="mb-1.5 block text-xs font-medium text-slate-400">API key name</label>
@@ -312,6 +349,28 @@ export default function SettingsPage() {
                   placeholder="e.g. Production agents"
                   className="input"
                 />
+              </div>
+              <div className="w-full lg:w-44">
+                <label className="mb-1.5 block text-xs font-medium text-slate-400">Scope</label>
+                <Select
+                  value={newKeyScope}
+                  onChange={(event) => setNewKeyScope(event.target.value as ApiKeyScope)}
+                >
+                  <option value="write">Read &amp; write</option>
+                  <option value="read">Read-only</option>
+                </Select>
+              </div>
+              <div className="w-full lg:w-44">
+                <label className="mb-1.5 block text-xs font-medium text-slate-400">Expires</label>
+                <Select
+                  value={newKeyExpiry}
+                  onChange={(event) => setNewKeyExpiry(event.target.value)}
+                >
+                  <option value="">Never</option>
+                  <option value="30">In 30 days</option>
+                  <option value="90">In 90 days</option>
+                  <option value="365">In 365 days</option>
+                </Select>
               </div>
               <Button
                 type="submit"
@@ -324,6 +383,7 @@ export default function SettingsPage() {
                 {creating ? 'Creating…' : 'Create API key'}
               </Button>
             </form>
+            )}
 
             {createdKey?.key && (
               <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
@@ -363,6 +423,7 @@ export default function SettingsPage() {
                       <p className="text-sm font-medium text-white">{key.name}</p>
                       <p className="text-xs text-slate-400">
                         ID {key.id.slice(0, 8)} · Fingerprint {formatFingerprint(key.key_prefix)} · Created {formatDateTime(key.created_at, '-')}
+                        {key.last_used_at && <> · Last used {formatDateTime(key.last_used_at, '-')}</>}
                       </p>
                       {key.revoked_at && (
                         <p className="text-xs text-rose-300">
@@ -371,10 +432,18 @@ export default function SettingsPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
+                      <Pill tone={key.scope === 'read' ? 'info' : 'neutral'} size="xs">
+                        {key.scope === 'read' ? 'Read-only' : 'Read & write'}
+                      </Pill>
+                      {key.expires_at && !key.revoked_at && (
+                        <Pill tone={expiryTone(key.expires_at)} size="xs">
+                          {expiryLabel(key.expires_at)}
+                        </Pill>
+                      )}
                       <Pill tone={key.revoked_at ? 'danger' : 'success'} size="xs" dot>
                         {key.revoked_at ? 'Revoked' : 'Active'}
                       </Pill>
-                      {!key.revoked_at && (
+                      {!key.revoked_at && canManageKeys && (
                         <Button
                           variant="danger"
                           size="xs"

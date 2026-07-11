@@ -14,6 +14,22 @@ const (
 	TenantIDKey contextKey = "tenant_id"
 	// AdminIDKey is the context key for admin ID
 	AdminIDKey contextKey = "admin_id"
+	// RoleKey is the context key for the effective tenant role (admin/editor/viewer)
+	RoleKey contextKey = "role"
+	// PlatformRoleKey is the context key for the platform role (superadmin/member)
+	PlatformRoleKey contextKey = "platform_role"
+	// ActorTypeKey is the context key for the credential type (admin_user/api_key)
+	ActorTypeKey contextKey = "actor_type"
+	// APIKeyIDKey is the context key for the authenticated API key ID
+	APIKeyIDKey contextKey = "api_key_id"
+	// AuthScopeKey is the context key for the API key scope (read/write)
+	AuthScopeKey contextKey = "auth_scope"
+)
+
+// Actor types stored under ActorTypeKey.
+const (
+	ActorTypeAdminUser = "admin_user"
+	ActorTypeAPIKey    = "api_key"
 )
 
 // WithRequestID adds a request ID to the context
@@ -64,4 +80,81 @@ func GetAdminID(ctx context.Context) (string, bool) {
 func IsAdmin(ctx context.Context) bool {
 	_, ok := GetAdminID(ctx)
 	return ok
+}
+
+// WithRole adds the effective tenant role to the context
+func WithRole(ctx context.Context, role string) context.Context {
+	return context.WithValue(ctx, RoleKey, role)
+}
+
+// GetRole retrieves the effective tenant role from the context
+func GetRole(ctx context.Context) (string, bool) {
+	role, ok := ctx.Value(RoleKey).(string)
+	return role, ok
+}
+
+// WithPlatformRole adds the platform role to the context
+func WithPlatformRole(ctx context.Context, platformRole string) context.Context {
+	return context.WithValue(ctx, PlatformRoleKey, platformRole)
+}
+
+// GetPlatformRole retrieves the platform role from the context
+func GetPlatformRole(ctx context.Context) (string, bool) {
+	platformRole, ok := ctx.Value(PlatformRoleKey).(string)
+	return platformRole, ok
+}
+
+// IsSuperadmin returns true if the context carries the superadmin platform role
+func IsSuperadmin(ctx context.Context) bool {
+	platformRole, ok := GetPlatformRole(ctx)
+	return ok && platformRole == "superadmin"
+}
+
+// WithActorType adds the credential type to the context
+func WithActorType(ctx context.Context, actorType string) context.Context {
+	return context.WithValue(ctx, ActorTypeKey, actorType)
+}
+
+// GetActorType retrieves the credential type from the context
+func GetActorType(ctx context.Context) (string, bool) {
+	actorType, ok := ctx.Value(ActorTypeKey).(string)
+	return actorType, ok
+}
+
+// WithAPIKeyID adds the authenticated API key ID to the context
+func WithAPIKeyID(ctx context.Context, keyID string) context.Context {
+	return context.WithValue(ctx, APIKeyIDKey, keyID)
+}
+
+// GetAPIKeyID retrieves the authenticated API key ID from the context
+func GetAPIKeyID(ctx context.Context) (string, bool) {
+	keyID, ok := ctx.Value(APIKeyIDKey).(string)
+	return keyID, ok
+}
+
+// WithAuthScope adds the API key scope to the context
+func WithAuthScope(ctx context.Context, scope string) context.Context {
+	return context.WithValue(ctx, AuthScopeKey, scope)
+}
+
+// GetAuthScope retrieves the API key scope from the context
+func GetAuthScope(ctx context.Context) (string, bool) {
+	scope, ok := ctx.Value(AuthScopeKey).(string)
+	return scope, ok
+}
+
+// CanWrite reports whether the request identity may perform mutations:
+// superadmins always, members with an admin/editor tenant role, and API keys
+// with write scope.
+func CanWrite(ctx context.Context) bool {
+	if IsSuperadmin(ctx) {
+		return true
+	}
+	if role, ok := GetRole(ctx); ok {
+		return role == "admin" || role == "editor"
+	}
+	if scope, ok := GetAuthScope(ctx); ok {
+		return scope == "write"
+	}
+	return false
 }

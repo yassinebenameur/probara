@@ -45,6 +45,14 @@ type APIConfig struct {
 	AdminRefreshTTLDays   int
 	AdminCookieSecure     bool
 	AdminBcryptCost       int
+	// AuditRetentionDays controls how long audit_log rows are kept.
+	// 0 disables pruning (keep forever). Audit retention is deliberately
+	// separate from tenants.data_retention_days: that governs monitoring
+	// telemetry, while audit data is compliance data with opposite pressure.
+	AuditRetentionDays int
+	// OIDC SSO (platform-level: one IdP per install). Read through this
+	// struct so a per-tenant DB-backed loader can be swapped in later.
+	OIDC OIDCConfig
 	SyntheticArtifactsDir string
 	// PublicBaseURL is the externally-reachable URL of this API (e.g.
 	// "https://probara.example.com"). When set, it is used as the BACKEND_URL
@@ -377,6 +385,17 @@ func LoadAPIConfig() (*APIConfig, error) {
 		cfg.AdminBcryptCost = cost
 	}
 
+	// AUDIT_RETENTION_DAYS (default 365; 0 = keep forever)
+	cfg.AuditRetentionDays = 365
+	if v := strings.TrimSpace(os.Getenv("AUDIT_RETENTION_DAYS")); v != "" {
+		days, err := strconv.Atoi(v)
+		if err != nil || days < 0 {
+			return nil, fmt.Errorf("invalid AUDIT_RETENTION_DAYS: %q", v)
+		}
+		cfg.AuditRetentionDays = days
+	}
+
+
 	// SYNTHETIC_BROWSER_ARTIFACTS_DIR
 	artifactsDir := strings.TrimSpace(os.Getenv("SYNTHETIC_BROWSER_ARTIFACTS_DIR"))
 	if artifactsDir == "" {
@@ -391,6 +410,84 @@ func LoadAPIConfig() (*APIConfig, error) {
 	// PUBLIC_NATS_URL: externally-reachable NATS address baked into
 	// private-location worker deploy snippets.
 	cfg.PublicNATSURL = strings.TrimSpace(os.Getenv("PUBLIC_NATS_URL"))
+
+	// OIDC_* — platform-level SSO configuration (needs PublicBaseURL for the
+	// default redirect URL, so it loads last).
+	oidcCfg, err := loadOIDCConfig(cfg.PublicBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.OIDC = *oidcCfg
+
+	return cfg, nil
+}
+
+// OIDCConfig is the platform-level OIDC SSO configuration.
+type OIDCConfig struct {
+	Enabled      bool
+	IssuerURL    string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	Scopes       []string
+	// ProviderLabel is shown on the login button ("Continue with <label>").
+	ProviderLabel string
+	// JITProvision creates users on first OIDC login when no matching
+	// account exists. Disable to require pre-created (invited) users.
+	JITProvision       bool
+	JITDefaultRole     string
+	JITDefaultTenantID string
+}
+
+func loadOIDCConfig(publicBaseURL string) (*OIDCConfig, error) {
+	cfg := &OIDCConfig{}
+
+	if v := strings.TrimSpace(os.Getenv("OIDC_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OIDC_ENABLED: %q", v)
+		}
+		cfg.Enabled = enabled
+	}
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+
+	cfg.IssuerURL = strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL"))
+	cfg.ClientID = strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID"))
+	cfg.ClientSecret = strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET"))
+	if cfg.IssuerURL == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
+		return nil, fmt.Errorf("OIDC_ISSUER_URL, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are required when OIDC_ENABLED=true")
+	}
+
+	cfg.RedirectURL = strings.TrimSpace(os.Getenv("OIDC_REDIRECT_URL"))
+	if cfg.RedirectURL == "" {
+		if publicBaseURL == "" {
+			return nil, fmt.Errorf("OIDC_REDIRECT_URL is required when PUBLIC_BASE_URL is not set")
+		}
+		cfg.RedirectURL = publicBaseURL + "/api/v1/auth/oidc/callback"
+	}
+
+	scopes := envOrDefault("OIDC_SCOPES", "openid profile email")
+	cfg.Scopes = strings.Fields(scopes)
+
+	cfg.ProviderLabel = envOrDefault("OIDC_PROVIDER_LABEL", "SSO")
+
+	cfg.JITProvision = true
+	if v := strings.TrimSpace(os.Getenv("OIDC_JIT_PROVISION")); v != "" {
+		jit, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OIDC_JIT_PROVISION: %q", v)
+		}
+		cfg.JITProvision = jit
+	}
+	cfg.JITDefaultRole = envOrDefault("OIDC_JIT_DEFAULT_ROLE", "viewer")
+	switch cfg.JITDefaultRole {
+	case "admin", "editor", "viewer":
+	default:
+		return nil, fmt.Errorf("invalid OIDC_JIT_DEFAULT_ROLE: %q", cfg.JITDefaultRole)
+	}
+	cfg.JITDefaultTenantID = envOrDefault("OIDC_JIT_DEFAULT_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 
 	return cfg, nil
 }

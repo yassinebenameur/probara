@@ -12,6 +12,7 @@ import (
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
 	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
+	audithandlers "github.com/yassinebenameur/probara/api/internal/handlers/audit"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
@@ -37,6 +38,7 @@ import (
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
+	auditservice "github.com/yassinebenameur/probara/api/internal/services/audit"
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 	depsuggestservice "github.com/yassinebenameur/probara/api/internal/services/depsuggest"
@@ -48,6 +50,7 @@ import (
 	meshservice "github.com/yassinebenameur/probara/api/internal/services/mesh"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
+	oidcauthservice "github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
@@ -75,6 +78,8 @@ type Server struct {
 	statusPublisher  *statusupdates.Publisher
 	pushStaleWorker  *pushservice.StaleWorker
 	agentStaleWorker *agentservice.StaleWorker
+	auditRecorder    *auditservice.Recorder
+	auditPruner      *auditservice.Pruner
 }
 
 type monitorStatusNotifier struct {
@@ -153,6 +158,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	alertHub := alertservice.NewHub()
 	alertSubscriber := alertservice.NewSubscriber(checkJobQueue, alertHub, cfg, log)
 
+	// Audit trail: async recorder + retention pruner (lifecycle on Server).
+	auditRecorder := auditservice.NewRecorder(dbClient, log)
+	auditPruner := auditservice.NewPruner(dbClient, log, cfg.AuditRetentionDays)
+	auditSvc := auditservice.NewService(dbClient)
+
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
 	r.Route("/api/v1/push", func(r chi.Router) {
 		r.Get("/{token}", pushHandlers.HandlePushGet)
@@ -162,16 +172,22 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
-		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log)
+		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder)
 
 		// Auth endpoints (no auth required)
 		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)
-		authHandlers := authhandlers.NewHandlers(authService, cfg, log)
+		oidcService := oidcauthservice.NewService(cfg.OIDC, dbClient, log)
+		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/login", authHandlers.Login)
 			r.Post("/refresh", authHandlers.Refresh)
 			r.Post("/logout", authHandlers.Logout)
 			r.Get("/me", authHandlers.Me)
+			r.Route("/oidc", func(r chi.Router) {
+				r.Get("/status", authHandlers.OIDCStatus)
+				r.Get("/start", authHandlers.OIDCStart)
+				r.Get("/callback", authHandlers.OIDCCallback)
+			})
 		})
 		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
 		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
@@ -180,6 +196,16 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Route("/", func(r chi.Router) {
 			// Apply auth middleware to all API routes
 			r.Use(apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret))
+			// Audit wraps the write gate so denied mutations are recorded too
+			// (RequireWrite 403s surface as outcome=denied).
+			r.Use(apimiddleware.AuditMutations(auditRecorder))
+			// Viewers and read-scope API keys are blocked from mutations here.
+			r.Use(apimiddleware.RequireWrite)
+
+			// Effective identity of the current credential (cookie or API key).
+			// Lives at /auth-context (not /auth/context) because the outer
+			// unauthenticated /auth subrouter shadows that subtree.
+			r.Get("/auth-context", authHandlers.AuthContext)
 
 			// Agent service and handlers (needed by monitors route)
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
@@ -404,11 +430,16 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 			// API keys
 			apiKeyService := apikeyservice.NewService(dbClient)
-			apiKeyHandlers := apikeyhandlers.NewHandlers(apiKeyService, log)
+			apiKeyHandlers := apikeyhandlers.NewHandlers(apiKeyService, log).WithAudit(auditRecorder)
 			r.Route("/api-keys", func(r chi.Router) {
-				r.Post("/", apiKeyHandlers.CreateAPIKey)
 				r.Get("/", apiKeyHandlers.ListAPIKeys)
-				r.Delete("/{id}", apiKeyHandlers.RevokeAPIKey)
+				// Key management is a tenant-admin capability: a viewer or
+				// editor must not be able to mint themselves a write key.
+				r.Group(func(r chi.Router) {
+					r.Use(apimiddleware.RequireTenantAdmin)
+					r.Post("/", apiKeyHandlers.CreateAPIKey)
+					r.Delete("/{id}", apiKeyHandlers.RevokeAPIKey)
+				})
 			})
 
 			// Status pages
@@ -446,20 +477,27 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Delete("/{templateId}", statusPageHandlers.DeleteLibraryTemplate)
 			})
 
-			// Tenants (admin only)
+			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
 			r.Route("/tenant-settings", func(r chi.Router) {
 				r.Get("/", tenantHandlers.GetTenantSettings)
-				r.Patch("/", tenantHandlers.UpdateTenantSettings)
+				r.With(apimiddleware.RequireTenantAdmin).Patch("/", tenantHandlers.UpdateTenantSettings)
 			})
 			r.Route("/tenants", func(r chi.Router) {
-				r.Use(apimiddleware.RequireAdmin)
 				r.Get("/", tenantHandlers.ListTenants)
 			})
 
-			// Users (admin only)
+			// Audit log (tenant admins and superadmins)
+			auditHandlers := audithandlers.NewHandlers(auditSvc, log)
+			r.Route("/audit-log", func(r chi.Router) {
+				r.Use(apimiddleware.RequireTenantAdmin)
+				r.Get("/", auditHandlers.List)
+				r.Get("/actions", auditHandlers.Actions)
+			})
+
+			// Users (superadmin only)
 			r.Route("/users", func(r chi.Router) {
-				r.Use(apimiddleware.RequireAdmin)
+				r.Use(apimiddleware.RequireSuperadmin)
 				r.Get("/", adminUsersHandlers.ListUsers)
 				r.Post("/", adminUsersHandlers.CreateUser)
 				r.Get("/{id}", adminUsersHandlers.GetUser)
@@ -488,6 +526,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		statusPublisher:  statusPublisher,
 		pushStaleWorker:  pushStaleWorker,
 		agentStaleWorker: agentStaleWorker,
+		auditRecorder:    auditRecorder,
+		auditPruner:      auditPruner,
 	}
 }
 
@@ -508,6 +548,12 @@ func (s *Server) Start() error {
 	if s.agentStaleWorker != nil {
 		s.agentStaleWorker.Start()
 	}
+	if s.auditRecorder != nil {
+		s.auditRecorder.Start()
+	}
+	if s.auditPruner != nil {
+		s.auditPruner.Start()
+	}
 
 	return s.http.ListenAndServe()
 }
@@ -523,6 +569,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.agentStaleWorker != nil {
 		s.agentStaleWorker.Stop()
+	}
+	if s.auditRecorder != nil {
+		s.auditRecorder.Stop()
+	}
+	if s.auditPruner != nil {
+		s.auditPruner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

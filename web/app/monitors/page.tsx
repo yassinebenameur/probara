@@ -27,6 +27,7 @@ import {
 } from '@/lib/api';
 import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 import { getApiKey } from '@/lib/auth';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import {
   calculateUptime,
   countOperationalResults,
@@ -1269,6 +1270,7 @@ function EmptyState() {
 }
 
 export default function MonitorsPage() {
+  const { canWrite } = useCurrentUser();
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -1862,12 +1864,16 @@ export default function MonitorsPage() {
             >
               {exporting ? 'Exporting…' : 'Export'}
             </Button>
-            <Button variant="ghost" size="sm" icon={<Upload strokeWidth={1.75} />} asChild>
-              <Link href="/monitors/import">Import</Link>
-            </Button>
-            <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-              <Link href="/monitors/new">Add monitor</Link>
-            </Button>
+            {canWrite && (
+              <Button variant="ghost" size="sm" icon={<Upload strokeWidth={1.75} />} asChild>
+                <Link href="/monitors/import">Import</Link>
+              </Button>
+            )}
+            {canWrite && (
+              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                <Link href="/monitors/new">Add monitor</Link>
+              </Button>
+            )}
           </div>
         }
       />

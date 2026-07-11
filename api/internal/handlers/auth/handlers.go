@@ -15,8 +15,11 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/adminauth"
+	"github.com/yassinebenameur/probara/api/internal/services/audit"
+	"github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/config"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -30,11 +33,30 @@ type Handlers struct {
 	service *adminauth.Service
 	cfg     *config.APIConfig
 	logger  *logger.Logger
+	audit   *audit.Recorder
+	oidc    *oidcauth.Service
 }
 
 // NewHandlers creates a new auth handler.
-func NewHandlers(service *adminauth.Service, cfg *config.APIConfig, log *logger.Logger) *Handlers {
-	return &Handlers{service: service, cfg: cfg, logger: log}
+func NewHandlers(service *adminauth.Service, cfg *config.APIConfig, log *logger.Logger, auditRecorder *audit.Recorder) *Handlers {
+	return &Handlers{service: service, cfg: cfg, logger: log, audit: auditRecorder}
+}
+
+// recordAuthEvent emits an explicit auth-lifecycle audit event. The auth
+// routes sit outside the audited subrouter, so these are the only records.
+func (h *Handlers) recordAuthEvent(r *http.Request, action, outcome, label string, actorID *uuid.UUID) {
+	if h.audit == nil {
+		return
+	}
+	event := audit.FromRequest(r)
+	event.Action = action
+	event.Outcome = outcome
+	event.ActorLabel = label
+	if actorID != nil {
+		event.ActorType = audit.ActorAdminUser
+		event.ActorID = actorID
+	}
+	h.audit.Record(event)
 }
 
 // Login handles POST /api/v1/auth/login
@@ -53,9 +75,11 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.service.Authenticate(r.Context(), req.Username, req.Password)
 	if err != nil {
+		h.recordAuthEvent(r, "auth.login", audit.OutcomeFailure, req.Username, nil)
 		errors.WriteUnauthorizedError(w, "invalid username or password")
 		return
 	}
+	h.recordAuthEvent(r, "auth.login", audit.OutcomeSuccess, user.Username, &user.ID)
 
 	if err := h.service.UpdateLastLogin(r.Context(), user.ID); err != nil {
 		h.logger.WithError(err).Warn("Failed to update admin last login")
@@ -128,6 +152,10 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 		_ = h.service.RevokeSession(r.Context(), hashToken(refreshToken))
 	}
 
+	if adminID, err := h.readAdminIDFromAccessCookie(r); err == nil {
+		h.recordAuthEvent(r, "auth.logout", audit.OutcomeSuccess, "", &adminID)
+	}
+
 	h.clearCookies(w)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -146,8 +174,48 @@ func (h *Handlers) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	memberships, err := h.service.GetMembershipsForAdmin(r.Context(), adminID)
+	if err != nil {
+		h.logger.WithError(err).Warn("Failed to load memberships for /me")
+	} else {
+		user.Memberships = memberships
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models.AdminAuthResponse{User: *user})
+}
+
+// AuthContext handles GET /api/v1/auth-context (authenticated subrouter).
+// It reports the effective identity for either credential type so the
+// frontend can gate UI affordances in both cookie and API-key modes.
+func (h *Handlers) AuthContext(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	resp := models.AuthContextResponse{CanWrite: ctxpkg.CanWrite(ctx)}
+	if actorType, ok := ctxpkg.GetActorType(ctx); ok {
+		resp.ActorType = actorType
+	}
+	if adminID, ok := ctxpkg.GetAdminID(ctx); ok {
+		resp.AdminID = &adminID
+	}
+	if keyID, ok := ctxpkg.GetAPIKeyID(ctx); ok {
+		resp.APIKeyID = &keyID
+	}
+	if tenantID, ok := ctxpkg.GetTenantID(ctx); ok {
+		resp.TenantID = &tenantID
+	}
+	if platformRole, ok := ctxpkg.GetPlatformRole(ctx); ok {
+		resp.PlatformRole = &platformRole
+	}
+	if role, ok := ctxpkg.GetRole(ctx); ok {
+		resp.Role = &role
+	}
+	if scope, ok := ctxpkg.GetAuthScope(ctx); ok {
+		resp.Scope = &scope
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handlers) issueSession(w http.ResponseWriter, r *http.Request, adminID uuid.UUID) error {

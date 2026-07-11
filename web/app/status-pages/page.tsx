@@ -12,9 +12,11 @@ import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 
 export default function StatusPagesPage() {
   const { showToast } = useToast();
+  const { canWrite } = useCurrentUser();
   const [statusPages, setStatusPages] = useState<StatusPage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -59,9 +61,11 @@ export default function StatusPagesPage() {
       title="Status pages"
       subtitle="Public pages to display your service status."
       action={
-        <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-          <Link href="/status-pages/new">Create status page</Link>
-        </Button>
+        canWrite ? (
+          <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+            <Link href="/status-pages/new">Create status page</Link>
+          </Button>
+        ) : undefined
       }
     />
   );
@@ -99,9 +103,11 @@ export default function StatusPagesPage() {
           title="No status pages yet"
           description="Create a public status page to display your service availability."
           action={
-            <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-              <Link href="/status-pages/new">Create status page</Link>
-            </Button>
+            canWrite ? (
+              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                <Link href="/status-pages/new">Create status page</Link>
+              </Button>
+            ) : undefined
           }
         />
       ) : (
