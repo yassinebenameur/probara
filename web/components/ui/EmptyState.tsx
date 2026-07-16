@@ -1,32 +1,28 @@
 import { ReactNode } from 'react';
-import Button from './Button';
 
 interface EmptyStateProps {
+  icon?: ReactNode;
   title: string;
   description?: string;
-  actionLabel?: string;
-  onAction?: () => void;
-  icon?: ReactNode;
+  action?: ReactNode;
 }
 
-export default function EmptyState({
-  title,
-  description,
-  actionLabel,
-  onAction,
-  icon,
-}: EmptyStateProps) {
+export default function EmptyState({ icon, title, description, action }: EmptyStateProps) {
   return (
-    <div className="text-center py-12">
-      {icon && <div className="text-6xl mb-4">{icon}</div>}
-      <h3 className="text-lg font-medium text-gray-900 mb-2">{title}</h3>
+    <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-slate-900/40 px-6 py-12 text-center">
+      {icon && (
+        <span
+          className="mb-4 inline-flex h-9 w-9 items-center justify-center text-slate-500"
+          aria-hidden="true"
+        >
+          {icon}
+        </span>
+      )}
+      <h3 className="text-base font-medium text-slate-200">{title}</h3>
       {description && (
-        <p className="text-sm text-gray-500 mb-6">{description}</p>
+        <p className="mt-1 max-w-sm text-sm text-slate-500">{description}</p>
       )}
-      {actionLabel && onAction && (
-        <Button onClick={onAction}>{actionLabel}</Button>
-      )}
+      {action && <div className="mt-5">{action}</div>}
     </div>
   );
 }
-

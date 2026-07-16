@@ -3,31 +3,34 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import { Pencil, Plus, RefreshCw, Trash2, Users as UsersIcon } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
-import Toast from '@/components/ui/Toast';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
+import PageHeader from '@/components/ui/PageHeader';
+import EmptyState from '@/components/ui/EmptyState';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { deleteUser, getUsers } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
 import type { AdminUser } from '@/lib/types';
-
-type ToastState = { message: string; type: 'success' | 'error' } | null;
 
 const PAGE_SIZE = 20;
 
-function formatDate(value?: string): string {
-  if (!value) return '-';
-  return new Date(value).toLocaleString();
-}
-
 export default function UsersPage() {
   const router = useRouter();
+  const { showToast } = useToast();
+  const { isSuperadmin, loading: userLoading } = useCurrentUser();
   const [apiKeyMode, setApiKeyMode] = useState(false);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [toast, setToast] = useState<ToastState>(null);
+  const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
 
@@ -59,20 +62,18 @@ export default function UsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDelete = async (user: AdminUser) => {
-    if (!confirm(`Delete user "${user.username}"? This action cannot be undone.`)) {
-      return;
-    }
-
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      setDeletingId(user.id);
-      await deleteUser(user.id);
+      await deleteUser(pendingDelete.id);
       await loadUsers(page);
-      setToast({ message: 'User deleted', type: 'success' });
+      showToast('User deleted', 'success');
+      setPendingDelete(null);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete user', type: 'error' });
+      showToast(err.message || 'Failed to delete user', 'error');
     } finally {
-      setDeletingId(null);
+      setDeleting(false);
     }
   };
 
@@ -81,22 +82,57 @@ export default function UsersPage() {
     router.push('/login');
   };
 
+  const header = (
+    <PageHeader
+      title="Users"
+      subtitle="Manage platform admin accounts."
+      action={
+        !apiKeyMode ? (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RefreshCw strokeWidth={1.75} />}
+              onClick={() => loadUsers(page)}
+            >
+              Refresh
+            </Button>
+            <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+              <Link href="/users/new">Add user</Link>
+            </Button>
+          </div>
+        ) : undefined
+      }
+    />
+  );
+
   if (apiKeyMode) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Users</h1>
-          <p className="text-sm text-muted">Manage platform admin accounts.</p>
-        </div>
-        <Panel title="Admin Session Required" subtitle="User management is available only for admin login mode.">
+        {header}
+        <Panel title="Admin session required" subtitle="User management is available only for admin login mode.">
           <div className="space-y-3">
             <p className="text-sm text-slate-300">
               You are currently connected with an API key. Switch to admin login to manage users.
             </p>
-            <button type="button" onClick={handleSwitchToAdmin} className="btn btn-primary btn-sm">
-              Go to Admin Login
-            </button>
+            <Button variant="ghost" size="sm" onClick={handleSwitchToAdmin}>
+              Go to admin login
+            </Button>
           </div>
+        </Panel>
+      </div>
+    );
+  }
+
+  if (!userLoading && !isSuperadmin) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <Panel title="Superadmin required" subtitle="User management is restricted to platform superadmins.">
+          <p className="text-sm text-slate-300">
+            Your account does not have superadmin access. Ask a platform administrator if you
+            need to manage users.
+          </p>
         </Panel>
       </div>
     );
@@ -104,36 +140,30 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-white">Users</h1>
-        <p className="text-sm text-muted">Manage platform admin accounts.</p>
-      </div>
+      {header}
 
       <Panel
-        title="Admin Users"
+        title="Admin users"
         subtitle="Create, update, and remove admin accounts."
-        actions={(
-          <div className="flex items-center gap-2">
-            <button onClick={() => loadUsers(page)} className="btn btn-secondary btn-sm">
-              Refresh
-            </button>
-            <Link href="/users/new" className="btn btn-primary btn-sm">
-              Add User
-            </Link>
-          </div>
-        )}
       >
         {loading ? (
-          <p className="text-sm text-muted">Loading users...</p>
+          <p className="text-sm text-slate-500">Loading users…</p>
         ) : error ? (
           <div className="space-y-3">
             <p className="text-sm text-rose-400">{error}</p>
-            <button onClick={() => loadUsers(page)} className="btn btn-danger btn-sm">
-              Retry
-            </button>
+            <Button variant="ghost" size="sm" onClick={() => loadUsers(page)}>Retry</Button>
           </div>
         ) : users.length === 0 ? (
-          <p className="text-sm text-muted">No users found.</p>
+          <EmptyState
+            icon={<UsersIcon strokeWidth={1.5} />}
+            title="No users yet"
+            description="Add admin accounts to allow more team members to log in."
+            action={
+              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                <Link href="/users/new">Add user</Link>
+              </Button>
+            }
+          />
         ) : (
           <div className="space-y-3">
             <div className="overflow-x-auto">
@@ -141,9 +171,11 @@ export default function UsersPage() {
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-3 py-2">Username</th>
-                    <th className="px-3 py-2">Created</th>
-                    <th className="px-3 py-2">Updated</th>
-                    <th className="px-3 py-2">Last Login</th>
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Role</th>
+                    <th className="px-3 py-2">Sign-in</th>
+                    <th className="px-3 py-2">Tenants</th>
+                    <th className="px-3 py-2">Last login</th>
                     <th className="px-3 py-2">Actions</th>
                   </tr>
                 </thead>
@@ -151,22 +183,38 @@ export default function UsersPage() {
                   {users.map((user) => (
                     <tr key={user.id}>
                       <td className="px-3 py-3">{user.username}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.created_at)}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.updated_at)}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDate(user.last_login_at)}</td>
+                      <td className="px-3 py-3 text-xs text-slate-400">{user.email || '—'}</td>
                       <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          <Link href={`/users/${user.id}`} className="btn btn-secondary btn-sm">
-                            Edit
-                          </Link>
-                          <button
-                            type="button"
-                            className="btn btn-danger btn-sm disabled:opacity-50"
-                            onClick={() => handleDelete(user)}
-                            disabled={deletingId === user.id}
+                        <Pill tone={user.platform_role === 'superadmin' ? 'info' : 'neutral'}>
+                          {user.platform_role === 'superadmin' ? 'Superadmin' : 'Member'}
+                        </Pill>
+                      </td>
+                      <td className="px-3 py-3">
+                        <Pill tone={user.auth_method === 'oidc' ? 'info' : 'neutral'}>
+                          {user.auth_method === 'oidc' ? 'SSO' : 'Password'}
+                        </Pill>
+                      </td>
+                      <td className="px-3 py-3 text-xs text-slate-400">
+                        {user.platform_role === 'superadmin'
+                          ? 'All'
+                          : (user.memberships || [])
+                              .map((m) => `${m.tenant_name || m.tenant_id} (${m.role})`)
+                              .join(', ') || '—'}
+                      </td>
+                      <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.last_login_at)}</td>
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <Button variant="ghost" size="xs" icon={<Pencil strokeWidth={1.75} />} asChild>
+                            <Link href={`/users/${user.id}`}>Edit</Link>
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="xs"
+                            icon={<Trash2 strokeWidth={1.75} />}
+                            onClick={() => setPendingDelete(user)}
                           >
-                            {deletingId === user.id ? 'Deleting...' : 'Delete'}
-                          </button>
+                            Delete
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -180,31 +228,41 @@ export default function UsersPage() {
                 Page {page} of {totalPages} ({total} users)
               </span>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   disabled={page <= 1}
                   onClick={() => loadUsers(page - 1)}
                 >
                   Previous
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   disabled={page >= totalPages}
                   onClick={() => loadUsers(page + 1)}
                 >
                   Next
-                </button>
+                </Button>
               </div>
             </div>
           </div>
         )}
       </Panel>
 
-      {toast && (
-        <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
-      )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete user"
+        description={
+          pendingDelete
+            ? `“${pendingDelete.username}” will lose access immediately. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete user"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      />
     </div>
   );
 }

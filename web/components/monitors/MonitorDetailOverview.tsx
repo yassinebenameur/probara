@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckResult, Monitor, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
+import { CheckResult, Monitor, MonitorAnalyticsResponse, MonitorAnalyticsRange, AgentMonitorConfig } from '@/lib/types';
 import AgentMetricsView from './AgentMetricsView';
 import type { TimeRange as AgentTimeRange } from './AgentMetricsView';
 import MonitorAnalyticsOverview from './MonitorAnalyticsOverview';
@@ -41,6 +41,7 @@ export default function MonitorDetailOverview({
         loading={loading}
         timeRange={agentTimeRange}
         onTimeRangeChange={onAgentTimeRangeChange}
+        thresholds={(monitor.config as AgentMonitorConfig | undefined)?.metric_thresholds}
       />
     );
   }

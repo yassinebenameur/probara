@@ -322,6 +322,21 @@ func (v *DNSConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		}
 	}
 
+	if ns := strings.TrimSpace(config.Nameserver); ns != "" {
+		nsHost := ns
+		if h, p, err := net.SplitHostPort(ns); err == nil {
+			nsHost = h
+			if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
+				return fmt.Errorf("nameserver port must be between 1 and 65535")
+			}
+		}
+		if ip := net.ParseIP(nsHost); ip == nil {
+			if !isValidHostname(nsHost) {
+				return fmt.Errorf("nameserver must be a valid IP address or hostname (host or host:port)")
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -353,6 +368,82 @@ func (v *GRPCConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 
 	if config.Service != "" && strings.TrimSpace(config.Service) == "" {
 		return fmt.Errorf("service cannot be empty")
+	}
+
+	return nil
+}
+
+// TCPConfigValidator validates raw TCP connect monitor configuration
+type TCPConfigValidator struct{}
+
+// ValidateConfig validates TCP monitor config
+func (v *TCPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
+	var config sharedmodels.TCPMonitorConfig
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		return fmt.Errorf("invalid tcp config: %w", err)
+	}
+
+	host := strings.TrimSpace(config.Host)
+	if host == "" {
+		return fmt.Errorf("host is required")
+	}
+
+	if ip := net.ParseIP(host); ip == nil {
+		if !isValidHostname(host) {
+			return fmt.Errorf("host must be a valid IP address or hostname")
+		}
+	}
+
+	if config.Port < 1 || config.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+
+	return nil
+}
+
+// WebSocketConfigValidator validates WebSocket monitor configuration
+type WebSocketConfigValidator struct{}
+
+// ValidateConfig validates WebSocket monitor config
+func (v *WebSocketConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
+	var config sharedmodels.WebSocketMonitorConfig
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		return fmt.Errorf("invalid websocket config: %w", err)
+	}
+
+	rawURL := strings.TrimSpace(config.URL)
+	if rawURL == "" {
+		return fmt.Errorf("url is required")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("url must be a valid URL")
+	}
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("url must use the ws:// or wss:// scheme")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("url must include a host")
+	}
+
+	for name := range config.Headers {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("header names cannot be empty")
+		}
+	}
+
+	if config.ExpectedSubstring != nil && *config.ExpectedSubstring == "" {
+		return fmt.Errorf("expected_substring cannot be empty")
+	}
+
+	if config.MaxLatencyMs != nil && *config.MaxLatencyMs <= 0 {
+		return fmt.Errorf("max_latency_ms must be greater than 0")
+	}
+	if config.WarnLatencyMs != nil && *config.WarnLatencyMs <= 0 {
+		return fmt.Errorf("warn_latency_ms must be greater than 0")
+	}
+	if config.MaxLatencyMs != nil && config.WarnLatencyMs != nil && *config.WarnLatencyMs >= *config.MaxLatencyMs {
+		return fmt.Errorf("warn_latency_ms must be lower than max_latency_ms")
 	}
 
 	return nil

@@ -103,6 +103,25 @@ make db-backup     # Backup database
 make db-restore    # Restore database
 ```
 
+## Private Location Workers
+
+Checks can run from remote networks ("private locations"). Register a location
+on the **Locations** page, then deploy a worker where the checks should run —
+the page generates a ready-to-paste `docker run` / compose snippet.
+
+Location workers are **NATS-only**:
+
+- Set `NATS_URL` (must be reachable from the remote network — enable NATS
+  auth/TLS before exposing it) and `WORKER_LOCATION_ID` (the location's UUID).
+- Do **not** set `POSTGRES_URL`. Results are published over NATS and persisted
+  by the scheduler-side ingest consumer; the worker never touches the database.
+- To try it locally, uncomment the `worker-location-example` service in
+  `docker-compose.yml` and paste a location UUID into `WORKER_LOCATION_ID`.
+
+Monitors select their locations in the monitor form; with 2+ locations a
+quorum ("locations required down") controls when the monitor counts as down —
+fewer failing locations show as **Degraded** (amber, no alert).
+
 ## Requirements
 
 - Docker & Docker Compose v2

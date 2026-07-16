@@ -2,9 +2,21 @@
 
 import { useState, useEffect } from 'react';
 import { Monitor, CheckResult } from '@/lib/types';
-import { getMonitors, getMonitorResults, getGroupMembers } from '@/lib/api';
-import StatusPill from '@/components/ui/StatusPill';
+import { getMonitorResults, getGroupMembers } from '@/lib/api';
+import Pill, { PillTone } from '@/components/ui/Pill';
+
+type StatusKey = 'up' | 'down' | 'degraded' | 'unknown' | 'paused' | 'maintenance';
+
+const STATUS_TONE: Record<StatusKey, PillTone> = {
+  up: 'success',
+  down: 'danger',
+  degraded: 'warning',
+  unknown: 'neutral',
+  paused: 'neutral',
+  maintenance: 'info',
+};
 import { calculateUptime, countOperationalResults, getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
+import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 
 export default function GroupedChecksView() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -21,8 +33,7 @@ export default function GroupedChecksView() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const response = await getMonitors({ page_size: 100 });
-      const allMonitors = response?.items || [];
+      const allMonitors = await getAllMonitors();
       
       // Separate groups from regular monitors
       const groupMonitors = allMonitors.filter(m => m.type === 'group');
@@ -63,7 +74,7 @@ export default function GroupedChecksView() {
       // Load group members if not already loaded
       if (!groupMembers[groupId]) {
         try {
-          const members = await getGroupMembers(groupId);
+          const members = sortMonitorsByName(await getGroupMembers(groupId));
           setGroupMembers({ ...groupMembers, [groupId]: members });
         } catch (error) {
           console.error(`Failed to load group members for ${groupId}:`, error);
@@ -90,7 +101,7 @@ export default function GroupedChecksView() {
       if (status === 'up') upCount++;
       else if (status === 'down') downCount++;
       else if (status === 'degraded') downCount++;
-      else if (status === 'unknown' || status === 'paused') unknownCount++;
+      else if (status === 'unknown' || status === 'paused' || status === 'maintenance') unknownCount++;
     });
 
     if (upCount === members.length) return 'up';
@@ -139,12 +150,9 @@ export default function GroupedChecksView() {
                     <div className="text-sm text-muted">
                       {operationalCount > 0 ? `${uptime.toFixed(2)}% uptime` : 'No data'}
                     </div>
-                    <StatusPill
-                      status={status}
-                      label={
-                        status === 'up' ? 'All Up' : status === 'down' ? 'All Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'
-                      }
-                    />
+                    <Pill tone={STATUS_TONE[status as StatusKey]} size="sm" dot>
+                      {status === 'up' ? 'All up' : status === 'down' ? 'All down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'}
+                    </Pill>
                   </div>
                 </div>
 
@@ -170,20 +178,9 @@ export default function GroupedChecksView() {
                             <div className="text-xs text-muted">
                               {memberOperationalCount > 0 ? `${memberUptime.toFixed(2)}%` : 'N/A'}
                             </div>
-                            <StatusPill
-                              status={memberStatus}
-                              label={
-                                memberStatus === 'up'
-                                  ? 'Up'
-                                  : memberStatus === 'down'
-                                  ? 'Down'
-                                  : memberStatus === 'paused'
-                                  ? 'Paused'
-                                  : memberStatus === 'unknown'
-                                  ? 'Unknown'
-                                  : 'Degraded'
-                              }
-                            />
+                            <Pill tone={STATUS_TONE[memberStatus as StatusKey]} size="sm" dot>
+                              {memberStatus === 'up' ? 'Up' : memberStatus === 'down' ? 'Down' : memberStatus === 'paused' ? 'Paused' : memberStatus === 'unknown' ? 'Unknown' : 'Degraded'}
+                            </Pill>
                           </div>
                         </div>
                       );
@@ -224,12 +221,9 @@ export default function GroupedChecksView() {
                     <div className="text-xs text-muted">
                       {operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}
                     </div>
-                    <StatusPill
-                      status={status}
-                      label={
-                        status === 'up' ? 'Up' : status === 'down' ? 'Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'
-                      }
-                    />
+                    <Pill tone={STATUS_TONE[status as StatusKey]} size="sm" dot>
+                      {status === 'up' ? 'Up' : status === 'down' ? 'Down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'}
+                    </Pill>
                   </div>
                 </div>
               );

@@ -38,6 +38,28 @@
   --radius-2xl: 24px;
 }
 
+/*
+ * Canonical design tokens (consumed by primitives in components/ui/).
+ *
+ *   Radii:     --radius-sm (8px)  → xs controls, tag chips
+ *              --radius-md (12px) → inputs, buttons
+ *              --radius-xl (20px) → panels, cards, form containers
+ *
+ *   Borders:   --border-subtle  → panel chrome
+ *              --border-default → inputs, buttons
+ *              --border-strong  → hover
+ *
+ *   Surfaces:  bg-slate-900/50  → panels
+ *              bg-slate-900/80  → inputs
+ *
+ *   Text:      --text-primary   (#f8fafc) → titles
+ *              --text-secondary (#94a3b8) → body
+ *              --text-muted     (#64748b) → hints
+ *
+ * Do NOT add new `.btn-*`, `.badge-*`, or `.status-pill` classes here.
+ * Use the React primitives in components/ui/ (Button, Pill, FilterChip, ...).
+ */
+
 * {
   box-sizing: border-box;
 }
@@ -202,33 +224,21 @@ body::before {
   animation: pulse-soft 2s ease-in-out infinite;
 }
 
-/* Status pill variants */
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 500;
+/* Staggered section entrance (delay set inline via animation-delay) */
+.dash-enter {
+  animation: slide-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
-.status-pill.up {
-  background: rgba(34, 197, 94, 0.15);
-  color: #86efac;
-  border: 1px solid rgba(34, 197, 94, 0.3);
-}
+@media (prefers-reduced-motion: reduce) {
 
-.status-pill.down {
-  background: rgba(239, 68, 68, 0.15);
-  color: #fca5a5;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.status-pill.degraded {
-  background: rgba(234, 179, 8, 0.15);
-  color: #fde047;
-  border: 1px solid rgba(234, 179, 8, 0.3);
+  .dash-enter,
+  .animate-fade-in,
+  .animate-slide-up,
+  .animate-pulse-soft,
+  .animate-gauge-fill,
+  .animate-gauge-glow-pulse {
+    animation: none;
+  }
 }
 
 /* Chart backgrounds */
@@ -268,117 +278,6 @@ body::before {
 
 .data-table tbody tr:hover {
   background: rgba(255, 255, 255, 0.02);
-}
-
-/* Button base */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  border-radius: var(--radius-md);
-  transition: all 0.2s ease;
-  cursor: pointer;
-  border: none;
-}
-
-.btn-primary {
-  background: var(--accent-cyan);
-  color: white;
-}
-
-.btn-primary:hover {
-  background: #22d3ee;
-  box-shadow: 0 4px 20px rgba(6, 182, 212, 0.3);
-}
-
-.btn-secondary {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-default);
-}
-
-.btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-}
-
-/* Button variants + sizes */
-.btn-outline {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border-default);
-}
-
-.btn-outline:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-}
-
-.btn-danger {
-  background: rgba(239, 68, 68, 0.15);
-  color: #fca5a5;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.btn-danger:hover {
-  background: rgba(239, 68, 68, 0.22);
-}
-
-.btn-warning {
-  background: rgba(234, 179, 8, 0.15);
-  color: #fde047;
-  border: 1px solid rgba(234, 179, 8, 0.3);
-}
-
-.btn-warning:hover {
-  background: rgba(234, 179, 8, 0.22);
-}
-
-.btn-success {
-  background: rgba(34, 197, 94, 0.15);
-  color: #86efac;
-  border: 1px solid rgba(34, 197, 94, 0.3);
-}
-
-.btn-success:hover {
-  background: rgba(34, 197, 94, 0.22);
-}
-
-.btn-sm {
-  padding: 6px 12px;
-  font-size: 0.75rem;
-  border-radius: var(--radius-sm);
-}
-
-.btn-xs {
-  padding: 4px 10px;
-  font-size: 0.7rem;
-  border-radius: 999px;
-}
-
-.btn-filter {
-  padding: 6px 12px;
-  font-size: 0.75rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
-  transition: all 0.2s ease;
-}
-
-.btn-filter:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
-}
-
-.btn-filter.is-active {
-  background: rgba(6, 182, 212, 0.18);
-  color: #67e8f9;
-  border-color: rgba(6, 182, 212, 0.35);
 }
 
 /* Table container */
@@ -442,43 +341,6 @@ body::before {
   padding: 4px 8px;
   font-size: 0.7rem;
   border-radius: var(--radius-sm);
-}
-
-/* Badge styles */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  font-size: 0.7rem;
-  font-weight: 500;
-  border-radius: 999px;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.badge-default {
-  background: rgba(148, 163, 184, 0.1);
-  color: var(--text-secondary);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.badge-success {
-  background: rgba(34, 197, 94, 0.1);
-  color: #86efac;
-  border: 1px solid rgba(34, 197, 94, 0.2);
-}
-
-.badge-danger {
-  background: rgba(239, 68, 68, 0.1);
-  color: #fca5a5;
-  border: 1px solid rgba(239, 68, 68, 0.2);
-}
-
-.badge-warning {
-  background: rgba(234, 179, 8, 0.1);
-  color: #fde047;
-  border: 1px solid rgba(234, 179, 8, 0.2);
 }
 
 /* ── Uptime gauge animations ───────────────────────────────────────────────── */

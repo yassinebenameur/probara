@@ -55,6 +55,17 @@ nats:
   externalUrl: ""
   # Embedded NATS configuration (used when enabled: true)
   image: nats:2.10-alpine
+  # Required before private-location workers can connect. The platform user is
+  # trusted for internal services; all other connections go through NATS auth
+  # callout and receive location-scoped subject permissions from the API.
+  auth:
+    enabled: false
+    platformUser: "probara-platform"
+    platformPassword: ""
+    # Generate an account seed/public key pair with nsc or nkeys. The seed is
+    # mounted only into the API; NATS receives only the public key.
+    locationIssuerPublicKey: ""
+    locationIssuerSeed: ""
   persistence:
     enabled: true
     size: 1Gi
@@ -68,6 +79,28 @@ nats:
       memory: "256Mi"
 
 # =============================================================================
+# AUTH / ENTERPRISE
+# =============================================================================
+auth:
+  # How long audit_log rows are kept (days). 0 = keep forever. Separate from
+  # tenant data retention: audit data is compliance data.
+  auditRetentionDays: 365
+  # OIDC SSO (one IdP per install). The client secret lives under
+  # secrets.oidcClientSecret. Redirect URL defaults to
+  # <api.publicBaseURL>/api/v1/auth/oidc/callback — the IdP must allow it.
+  oidc:
+    enabled: false
+    issuerUrl: ""
+    clientId: ""
+    # Shown on the login button: "Continue with <providerLabel>"
+    providerLabel: "SSO"
+    # Create accounts on first SSO login (viewer in the default tenant).
+    # Disable to require pre-created users (matched by verified email).
+    jitProvision: true
+    jitDefaultRole: "viewer"
+    jitDefaultTenantId: "00000000-0000-0000-0000-000000000001"
+
+# =============================================================================
 # SECRETS
 # =============================================================================
 secrets:
@@ -75,6 +108,13 @@ secrets:
   adminJwtSecret: "change-me-in-production-jwt-secret-minimum-32-chars"
   # Initial API key for first login - CHANGE IN PRODUCTION
   initialApiKey: "probara-initial-api-key-change-me"
+  # At-rest encryption key for monitor/channel config secrets (DB passwords,
+  # connection strings, webhook tokens). 32 random bytes, base64-encoded:
+  #   openssl rand -base64 32
+  # Empty = encryption disabled; secrets are stored in plaintext. SET IN PRODUCTION.
+  probaraSecretsKey: ""
+  # OIDC client secret (required when auth.oidc.enabled)
+  oidcClientSecret: ""
 
 # =============================================================================
 # MIGRATIONS JOB
@@ -102,6 +142,16 @@ api:
   httpPort: 8080
   metricsPort: 9090
   logLevel: "info"
+  # Externally-reachable URL of the API. Baked into agent install scripts and
+  # push webhook URLs in place of the request Host header (which is unreliable
+  # when the API sits behind the Next.js frontend proxy or other reverse proxies).
+  # Example: "https://probara.example.com"
+  publicBaseURL: ""
+  # NATS address reachable from remote networks, baked into private-location
+  # worker deploy snippets. Requires nats.auth.enabled; expose NATS through TLS
+  # before pointing external locations at it.
+  # Example: "tls://nats.example.com:4222"
+  publicNatsURL: ""
   resources:
     requests:
       cpu: "100m"
@@ -141,6 +191,9 @@ worker:
   enabled: true
   replicas: 2
   metricsPort: 9090
+  # Mesh echo port (GET /mesh/echo), served on its own listener so it can be
+  # exposed across networks without exposing /metrics.
+  httpPort: 8080
   logLevel: "info"
   # Worker-specific configuration
   checkJobStream: "check-jobs"
@@ -159,6 +212,25 @@ worker:
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 80
+  # Private-location worker fleets running in THIS cluster. Each entry becomes
+  # its own Deployment consuming only that location's job subject. Locations
+  # outside the cluster use the deploy snippet from the Locations page instead
+  # (only NATS must be reachable from there — never Postgres).
+  # locations:
+  #   - name: eu-west          # DNS-safe suffix for the Deployment name
+  #     locationId: ""         # location UUID from the Locations page (required)
+  #     credential: ""         # LOCATION_CREDENTIAL from deploy info (required)
+  #     replicas: 1
+  #     concurrency: "10"      # optional, defaults to worker.concurrency
+  #     natsUrl: ""            # authenticated NATS URL from deploy info (required)
+  #     # Optional Service exposing the mesh echo port so OTHER locations can
+  #     # probe this one. Point the location's mesh_endpoint at its address
+  #     # (e.g. an internal NLB reachable across your VPCs).
+  #     meshService:
+  #       enabled: true
+  #       type: ClusterIP      # LoadBalancer for cross-VPC probing
+  #       annotations: {}      # e.g. internal NLB annotations
+  locations: []
 
 # =============================================================================
 # ALERTER SERVICE

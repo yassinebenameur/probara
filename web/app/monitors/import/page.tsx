@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import PageHeader from '@/components/ui/PageHeader';
+import Button from '@/components/ui/Button';
 import { previewImport, executeImport } from '@/lib/api';
 import type { 
   ImportPreviewResponse, 
@@ -30,7 +31,6 @@ const TARGET_FIELDS = [
   { key: 'tags', label: 'Tags', required: false },
   { key: 'enabled', label: 'Enabled', required: false },
   { key: 'group_members', label: 'Group Members', required: false },
-  { key: 'alert_policy_names', label: 'Alert Policy Names', required: false },
 ];
 
 type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';
@@ -41,12 +41,17 @@ const SUPPORTED_TYPES = [
   { value: 'ping', label: 'Ping', description: 'ICMP ping checks' },
   { value: 'dns', label: 'DNS', description: 'DNS record checks' },
   { value: 'grpc', label: 'gRPC', description: 'gRPC health checks' },
+  { value: 'tcp', label: 'TCP', description: 'TCP connect (host:port) checks' },
   { value: 'group', label: 'Group', description: 'Group of monitors' },
   { value: 'agent', label: 'Agent', description: 'Heartbeat checks from installed agents' },
   { value: 'push', label: 'Push', description: 'Token-based push heartbeat checks' },
   { value: 'sip', label: 'SIP', description: 'SIP endpoint checks' },
   { value: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API workflow checks' },
   { value: 'synthetic_browser', label: 'Synthetic Browser', description: 'Browser workflow checks' },
+  { value: 'redis', label: 'Redis', description: 'Redis connect + PING checks' },
+  { value: 'postgres', label: 'PostgreSQL', description: 'PostgreSQL connect + query checks' },
+  { value: 'mongodb', label: 'MongoDB', description: 'MongoDB connect + ping checks' },
+  { value: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect + auth checks' },
 ];
 
 // Step indicator component
@@ -299,6 +304,7 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                       type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
                       type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
                       type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
+                      type === 'tcp' ? 'bg-lime-500/20 text-lime-400' :
                       type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
                       type === 'agent' ? 'bg-amber-500/20 text-amber-400' :
                       'bg-slate-500/20 text-slate-400'
@@ -311,7 +317,9 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                       ? getFieldValue(row, 'host')
                       : type === 'grpc'
                         ? `${getFieldValue(row, 'host')}:${getFieldValue(row, 'port') === '-' ? '443' : getFieldValue(row, 'port')}`
-                        : getFieldValue(row, 'url')}
+                        : type === 'tcp'
+                          ? `${getFieldValue(row, 'host')}:${getFieldValue(row, 'port')}`
+                          : getFieldValue(row, 'url')}
                   </td>
                   <td className="px-4 py-3">
                     {supported ? (
@@ -373,6 +381,7 @@ function ResultsTable({ results }: { results: ImportRowResult[] }) {
                     result.type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
                     result.type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
                     result.type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
+                    result.type === 'tcp' ? 'bg-lime-500/20 text-lime-400' :
                     result.type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
                     'bg-slate-500/20 text-slate-400'
                   }`}>
@@ -531,23 +540,12 @@ export default function ImportPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
-        <Link href="/monitors">
-          <button className="rounded-lg p-2 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-          </button>
-        </Link>
-        <div>
-          <h1 className="text-xl font-semibold text-white">Import Monitors</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Batch import monitors from JSON, YAML, or CSV files
-          </p>
-        </div>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <PageHeader
+        breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: 'Import' }]}
+        title="Import monitors"
+        subtitle="Batch import monitors from JSON, YAML, or CSV files."
+      />
 
       {/* Step Indicator */}
       <StepIndicator currentStep={step} />
@@ -702,23 +700,21 @@ export default function ImportPage() {
 
             {/* Actions */}
             <div className="flex items-center justify-between">
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   setStep('upload');
                   setPreviewData(null);
                   setMapping({});
                   setTypeMapping({});
                 }}
-                className="btn btn-secondary"
               >
                 Back
-              </button>
-              <button
-                onClick={() => setStep('review')}
-                className="btn btn-primary"
-              >
-                Continue to Review
-              </button>
+              </Button>
+              <Button variant="accent" size="sm" onClick={() => setStep('review')}>
+                Continue to review
+              </Button>
             </div>
           </div>
         )}
@@ -741,18 +737,12 @@ export default function ImportPage() {
 
             {/* Actions */}
             <div className="flex items-center justify-between mt-6">
-              <button
-                onClick={() => setStep('mapping')}
-                className="btn btn-secondary"
-              >
-                Back to Mapping
-              </button>
-              <button
-                onClick={handleImport}
-                className="btn btn-success"
-              >
-                Start Import
-              </button>
+              <Button variant="ghost" size="sm" onClick={() => setStep('mapping')}>
+                Back to mapping
+              </Button>
+              <Button variant="accent" size="sm" onClick={handleImport}>
+                Start import
+              </Button>
             </div>
           </div>
         )}
@@ -791,7 +781,9 @@ export default function ImportPage() {
 
             {/* Actions */}
             <div className="flex items-center justify-between mt-6">
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => {
                   setStep('upload');
                   setPreviewData(null);
@@ -799,16 +791,12 @@ export default function ImportPage() {
                   setTypeMapping({});
                   setImportResults(null);
                 }}
-                className="btn btn-secondary"
               >
-                Import More
-              </button>
-              <button
-                onClick={() => router.push('/monitors')}
-                className="btn btn-primary"
-              >
-                Go to Monitors
-              </button>
+                Import more
+              </Button>
+              <Button variant="accent" size="sm" onClick={() => router.push('/monitors')}>
+                Go to monitors
+              </Button>
             </div>
           </div>
         )}

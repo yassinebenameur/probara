@@ -1,11 +1,16 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getAlerts } from '@/lib/api';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import AlertTable from '@/components/alerts/AlertTable';
 import Panel from '@/components/ui/Panel';
+import Button from '@/components/ui/Button';
+import FilterChip from '@/components/ui/FilterChip';
+import Pill from '@/components/ui/Pill';
+import PageHeader from '@/components/ui/PageHeader';
 
 type TimeFilter = '1h' | '24h' | '7d' | '30d' | 'all';
 
@@ -117,58 +122,53 @@ export default function AlertsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header with Stats */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          {activeCount > 0 && (
-            <div className="badge badge-danger text-xs">
-              <span className="h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
-              <span>{activeCount} active</span>
-            </div>
-          )}
-          {acknowledgedCount > 0 && (
-            <div className="badge badge-warning text-xs">
-              <span className="h-2 w-2 rounded-full bg-amber-500" />
-              <span>{acknowledgedCount} acknowledged</span>
-            </div>
-          )}
-        </div>
-        <button
-          onClick={loadAlerts}
-          className="btn btn-secondary btn-sm"
-        >
-          Refresh
-        </button>
-      </div>
+      {/* Header */}
+      <PageHeader
+        title="Alerts"
+        subtitle={
+          activeCount > 0 || acknowledgedCount > 0
+            ? `${activeCount} active · ${acknowledgedCount} acknowledged`
+            : 'No active alerts'
+        }
+        action={
+          <div className="flex items-center gap-2">
+            {activeCount > 0 && <Pill tone="danger" size="sm" dot>{activeCount} active</Pill>}
+            {acknowledgedCount > 0 && <Pill tone="warning" size="sm" dot>{acknowledgedCount} acknowledged</Pill>}
+            <Button variant="ghost" size="sm" icon={<RefreshCw strokeWidth={1.75} />} onClick={loadAlerts}>
+              Refresh
+            </Button>
+          </div>
+        }
+      />
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
           <span className="text-xs text-slate-500">Status:</span>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1.5">
             {statusOptions.map(opt => (
-              <button
+              <FilterChip
                 key={opt.value}
+                selected={statusFilter === opt.value}
                 onClick={() => { setStatusFilter(opt.value); setPage(1); }}
-                className={`btn-filter ${statusFilter === opt.value ? 'is-active' : ''}`}
               >
                 {opt.label}
-              </button>
+              </FilterChip>
             ))}
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <span className="text-xs text-slate-500">Time:</span>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1.5">
             {timeOptions.map(opt => (
-              <button
+              <FilterChip
                 key={opt.value}
+                selected={timeFilter === opt.value}
                 onClick={() => { setTimeFilter(opt.value); setPage(1); }}
-                className={`btn-filter ${timeFilter === opt.value ? 'is-active' : ''}`}
               >
                 {opt.label}
-              </button>
+              </FilterChip>
             ))}
           </div>
         </div>
@@ -199,23 +199,25 @@ export default function AlertsPage() {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setPage(p => Math.max(1, p - 1))}
             disabled={page === 1}
-            className="btn btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Previous
-          </button>
+          </Button>
           <span className="text-sm text-slate-500">
             Page {page} of {totalPages}
           </span>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setPage(p => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}
-            className="btn btn-secondary btn-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Next
-          </button>
+          </Button>
         </div>
       )}
     </div>

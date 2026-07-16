@@ -50,6 +50,7 @@ nats_data/
 # Kubernetes secrets
 *.secret.yaml
 secrets/
+!shared/secrets/
 
 # Environment files
 .env
@@ -68,3 +69,7 @@ temp/
 # Test/report artifacts
 web/playwright-report/
 web/test-results/
+
+# Visual brainstorming sessions
+.superpowers/
+.dev-secrets.key

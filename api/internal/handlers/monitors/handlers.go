@@ -18,6 +18,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/errors"
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
+	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
@@ -30,6 +31,17 @@ type checkJobPublisher interface {
 	PublishJSON(ctx context.Context, subject string, v interface{}, headers map[string][]string) error
 }
 
+// checkRequester is the request-reply surface used for test-connection
+// checks. Satisfied by *queue.Client; detected via type assertion in
+// ConfigureCheckJobs so existing call sites don't change.
+type checkRequester interface {
+	Request(ctx context.Context, subject string, data []byte) ([]byte, error)
+}
+
+type locationConfigProtector interface {
+	ProtectMonitorConfigForWorker(ctx context.Context, tenantID, locationID uuid.UUID, monitorType string, config []byte) ([]byte, error)
+}
+
 type groupMembershipService interface {
 	AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
 	RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
@@ -38,13 +50,28 @@ type groupMembershipService interface {
 
 // Handlers handles monitor HTTP requests
 type Handlers struct {
-	service       monitorservice.MonitorService
-	groupService  groupMembershipService
-	resultService resultservice.ResultsService
-	jobPublisher  checkJobPublisher
-	checkSubject  string
-	artifactsDir  string
-	logger        *logger.Logger
+	service           monitorservice.MonitorService
+	groupService      groupMembershipService
+	dependencyService *depservice.Service
+	resultService     resultservice.ResultsService
+	jobPublisher      checkJobPublisher
+	jobRequester      checkRequester
+	locationProtector locationConfigProtector
+	checkSubject      string
+	artifactsDir      string
+	logger            *logger.Logger
+}
+
+// ConfigureLocationSecurity wires per-location config envelope protection for
+// test and on-demand jobs sent to private workers.
+func (h *Handlers) ConfigureLocationSecurity(protector locationConfigProtector) {
+	h.locationProtector = protector
+}
+
+// ConfigureDependencies sets the service backing the monitor dependency
+// endpoints and the depends_on_ids create/update payload field.
+func (h *Handlers) ConfigureDependencies(svc *depservice.Service) {
+	h.dependencyService = svc
 }
 
 // NewHandlers creates a new monitors handler
@@ -67,9 +94,145 @@ func NewHandlers(service monitorservice.MonitorService, groupSvc groupMembership
 // ConfigureCheckJobs sets the publisher and subject used for on-demand monitor runs.
 func (h *Handlers) ConfigureCheckJobs(publisher checkJobPublisher, subject string) {
 	h.jobPublisher = publisher
+	if requester, ok := publisher.(checkRequester); ok {
+		h.jobRequester = requester
+	}
 	if strings.TrimSpace(subject) != "" {
 		h.checkSubject = strings.TrimSpace(subject)
 	}
+}
+
+// TestMonitorConfigRequest is the body for POST /api/v1/monitors/test.
+type TestMonitorConfigRequest struct {
+	Type           models.MonitorType `json:"type"`
+	Config         json.RawMessage    `json:"config"`
+	TimeoutSeconds int                `json:"timeout_seconds"`
+	// MonitorID resolves write-only secret placeholders ("***") against the
+	// stored monitor when testing an edit.
+	MonitorID *string `json:"monitor_id,omitempty"`
+	// LocationID routes the test to that private location's workers so it
+	// runs from the same vantage point as the scheduled checks. Empty =
+	// default platform fleet.
+	LocationID *string `json:"location_id,omitempty"`
+}
+
+// TestMonitorConfig handles POST /api/v1/monitors/test — runs one ephemeral
+// check via a worker (NATS request-reply) so a config can be validated before
+// saving. Nothing is persisted.
+func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	if h.jobRequester == nil {
+		errors.WriteInternalError(w, "test checks are not available (queue not configured)")
+		return
+	}
+
+	var req TestMonitorConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return
+	}
+
+	if !validation.DefaultRegistry.Has(req.Type) {
+		errors.WriteValidationError(w, "unknown monitor type: "+string(req.Type))
+		return
+	}
+	if len(req.Config) == 0 {
+		errors.WriteValidationError(w, "config is required")
+		return
+	}
+	if err := validation.DefaultRegistry.Validate(req.Type, req.Config); err != nil {
+		errors.WriteValidationError(w, err.Error())
+		return
+	}
+	if req.TimeoutSeconds <= 0 {
+		req.TimeoutSeconds = 10
+	}
+	if req.TimeoutSeconds > 60 {
+		req.TimeoutSeconds = 60
+	}
+
+	var monitorID *uuid.UUID
+	if req.MonitorID != nil && *req.MonitorID != "" {
+		parsed, err := uuid.Parse(*req.MonitorID)
+		if err != nil {
+			errors.WriteValidationError(w, "invalid monitor_id")
+			return
+		}
+		monitorID = &parsed
+	}
+
+	config, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, monitorID, req.Type, req.Config)
+	if err != nil {
+		if err.Error() == "monitor not found" {
+			errors.WriteNotFoundError(w, "monitor not found")
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "tenant_id": tenantID}).Error("Failed to resolve test config")
+		errors.WriteInternalError(w, "failed to resolve config")
+		return
+	}
+
+	testSubject := sharedmodels.TestCheckSubject
+	if req.LocationID != nil && *req.LocationID != "" {
+		locationID, err := uuid.Parse(*req.LocationID)
+		if err != nil {
+			errors.WriteValidationError(w, "invalid location_id")
+			return
+		}
+		if h.locationProtector == nil {
+			errors.WriteInternalError(w, "private location security is unavailable")
+			return
+		}
+		config, err = h.locationProtector.ProtectMonitorConfigForWorker(r.Context(), tenantUUID, locationID, string(req.Type), config)
+		if err != nil {
+			h.logger.WithError(err).Warn("Failed to protect private-location test config")
+			errors.WriteInternalError(w, "failed to protect test config")
+			return
+		}
+		testSubject = sharedmodels.TestCheckSubjectForLocation(locationID.String())
+	}
+
+	payload, err := json.Marshal(sharedmodels.CheckJobPayload{
+		Type:           string(req.Type),
+		Config:         config,
+		TimeoutSeconds: req.TimeoutSeconds,
+	})
+	if err != nil {
+		errors.WriteInternalError(w, "failed to encode test payload")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutSeconds+10)*time.Second)
+	defer cancel()
+	reply, err := h.jobRequester.Request(ctx, testSubject, payload)
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{"error": err.Error(), "type": req.Type, "subject": testSubject}).Warn("Test check request failed")
+		if testSubject != sharedmodels.TestCheckSubject {
+			errors.WriteInternalError(w, "no worker answered at this location — is its worker running and connected?")
+			return
+		}
+		errors.WriteInternalError(w, "no worker answered the test request — is a worker running?")
+		return
+	}
+
+	var response sharedmodels.TestCheckResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		errors.WriteInternalError(w, "invalid worker response")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // CreateMonitor handles POST /api/v1/monitors
@@ -137,6 +300,20 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 					}).Warn("Failed to add monitors to newly created group")
 				}
 			}
+		}
+	}
+
+	// Sync dependencies (best-effort, like group members: a brand-new monitor
+	// cannot create a cycle, so failures here are only bad target IDs).
+	if len(req.DependsOnIDs) > 0 && req.Type != models.MonitorTypeGroup {
+		if err := h.syncDependencies(r.Context(), tenantUUID, monitor.ID, req.DependsOnIDs); err != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"tenant_id":  tenantID,
+				"monitor_id": monitor.ID,
+			}).Warn("Failed to set dependencies on newly created monitor")
+		} else {
+			monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitor.ID)
 		}
 	}
 
@@ -380,6 +557,16 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Sync dependencies when the payload carries them (nil = unchanged).
+	// Cycles are user-fixable, so they surface as 409 instead of a warn log.
+	if req.DependsOnIDs != nil && existingMonitor.Type != models.MonitorTypeGroup {
+		if err := h.syncDependencies(r.Context(), tenantUUID, monitorID, *req.DependsOnIDs); err != nil {
+			h.writeDependencyError(w, tenantUUID, monitorID, err)
+			return
+		}
+		monitor.DependsOnIDs, _ = h.dependencyService.GetDependsOnIDs(r.Context(), monitorID)
+	}
+
 	h.logger.WithFields(map[string]interface{}{
 		"tenant_id":  tenantID,
 		"monitor_id": monitor.ID,
@@ -432,6 +619,64 @@ func (h *Handlers) DeleteMonitor(w http.ResponseWriter, r *http.Request) {
 	}).Info("Monitor deleted")
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// BulkDeleteMonitors handles POST /api/v1/monitors/bulk/delete.
+// Soft-deletes the listed monitors; child rows are purged asynchronously.
+func (h *Handlers) BulkDeleteMonitors(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	var req models.BulkDeleteMonitorsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errors.WriteValidationError(w, "invalid request body: "+err.Error())
+		return
+	}
+	if len(req.MonitorIDs) == 0 {
+		errors.WriteValidationError(w, "monitor_ids is required and cannot be empty")
+		return
+	}
+
+	monitorIDs := make([]uuid.UUID, len(req.MonitorIDs))
+	for i, idStr := range req.MonitorIDs {
+		monitorID, err := uuid.Parse(idStr)
+		if err != nil {
+			errors.WriteValidationError(w, fmt.Sprintf("invalid monitor ID: %s", idStr))
+			return
+		}
+		monitorIDs[i] = monitorID
+	}
+
+	deleted, err := h.service.BulkDeleteMonitors(r.Context(), tenantUUID, monitorIDs)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found or do not belong to tenant") {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":     err.Error(),
+			"tenant_id": tenantID,
+		}).Error("Failed to bulk delete monitors")
+		errors.WriteInternalError(w, "failed to bulk delete monitors")
+		return
+	}
+
+	h.logger.WithFields(map[string]interface{}{
+		"tenant_id":   tenantID,
+		"deleted":     deleted,
+		"monitor_ids": req.MonitorIDs,
+	}).Info("Monitors bulk-deleted")
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(models.BulkDeleteMonitorsResponse{Deleted: deleted})
 }
 
 // DeleteMonitorHistory handles DELETE /api/v1/monitors/{id}/history
@@ -634,6 +879,57 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional body: {"location_id": "..."} narrows the run to one of the
+	// monitor's locations. Default: fan out exactly like the scheduler (all
+	// selected locations, or the default fleet when none).
+	var runReq struct {
+		LocationID *string `json:"location_id,omitempty"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&runReq) // empty body is fine
+	}
+
+	locationIDs := []string{""}
+	if len(monitor.LocationIDs) > 0 {
+		locationIDs = locationIDs[:0]
+		for _, id := range monitor.LocationIDs {
+			locationIDs = append(locationIDs, id.String())
+		}
+	}
+	if runReq.LocationID != nil && *runReq.LocationID != "" {
+		requested, err := uuid.Parse(*runReq.LocationID)
+		if err != nil {
+			errors.WriteValidationError(w, "invalid location_id")
+			return
+		}
+		found := false
+		for _, id := range monitor.LocationIDs {
+			if id == requested {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errors.WriteValidationError(w, "location is not selected on this monitor")
+			return
+		}
+		locationIDs = []string{requested.String()}
+	}
+
+	// GetMonitor masks secret config fields ("***") for API responses; resolve
+	// the placeholders back to the stored (still encrypted) values so the
+	// worker can actually authenticate.
+	checkConfig, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, &monitorID, monitor.Type, monitor.Config)
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":      err.Error(),
+			"tenant_id":  tenantID,
+			"monitor_id": monitorID.String(),
+		}).Error("Failed to resolve monitor config for on-demand run")
+		errors.WriteInternalError(w, "failed to queue monitor run")
+		return
+	}
+
 	now := time.Now()
 	timeoutSeconds := monitor.TimeoutSeconds
 	if timeoutSeconds <= 0 {
@@ -641,36 +937,65 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := now.Add(time.Duration(2*timeoutSeconds) * time.Second)
 
-	payload := sharedmodels.CheckJobPayload{
-		MonitorID:      monitor.ID.String(),
-		Type:           string(monitor.Type),
-		Config:         monitor.Config,
-		TimeoutSeconds: timeoutSeconds,
-	}
+	var jobID string
+	for _, locationID := range locationIDs {
+		locationConfig := checkConfig
+		if locationID != "" {
+			if h.locationProtector == nil {
+				errors.WriteInternalError(w, "private location security is unavailable")
+				return
+			}
+			parsedLocationID, err := uuid.Parse(locationID)
+			if err != nil {
+				errors.WriteInternalError(w, "invalid stored location ID")
+				return
+			}
+			locationConfig, err = h.locationProtector.ProtectMonitorConfigForWorker(
+				r.Context(), tenantUUID, parsedLocationID, string(monitor.Type), checkConfig,
+			)
+			if err != nil {
+				h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": locationID}).Error("Failed to protect private-location monitor config")
+				errors.WriteInternalError(w, "failed to protect monitor config")
+				return
+			}
+		}
+		payload := sharedmodels.CheckJobPayload{
+			MonitorID:      monitor.ID.String(),
+			Type:           string(monitor.Type),
+			Config:         locationConfig,
+			TimeoutSeconds: timeoutSeconds,
+			LocationID:     locationID,
+		}
 
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID.String(),
-		}).Error("Failed to marshal check payload")
-		errors.WriteInternalError(w, "failed to queue monitor run")
-		return
-	}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"tenant_id":  tenantID,
+				"monitor_id": monitorID.String(),
+			}).Error("Failed to marshal check payload")
+			errors.WriteInternalError(w, "failed to queue monitor run")
+			return
+		}
 
-	jobID := uuid.New().String()
-	job := sharedmodels.NewJob(jobID, tenantUUID.String(), sharedmodels.JobTypeCheck, "v1", payloadJSON).WithDeadline(deadline)
+		subject := sharedmodels.CheckJobSubjectDefault(h.checkSubject)
+		if locationID != "" {
+			subject = sharedmodels.CheckJobSubjectForLocation(h.checkSubject, locationID)
+		}
 
-	if err := h.jobPublisher.PublishJSON(r.Context(), h.checkSubject, job, nil); err != nil {
-		h.logger.WithFields(map[string]interface{}{
-			"error":      err.Error(),
-			"tenant_id":  tenantID,
-			"monitor_id": monitorID.String(),
-			"subject":    h.checkSubject,
-		}).Error("Failed to publish on-demand monitor run job")
-		errors.WriteInternalError(w, "failed to queue monitor run")
-		return
+		jobID = uuid.New().String()
+		job := sharedmodels.NewJob(jobID, tenantUUID.String(), sharedmodels.JobTypeCheck, "v1", payloadJSON).WithDeadline(deadline)
+
+		if err := h.jobPublisher.PublishJSON(r.Context(), subject, job, nil); err != nil {
+			h.logger.WithFields(map[string]interface{}{
+				"error":      err.Error(),
+				"tenant_id":  tenantID,
+				"monitor_id": monitorID.String(),
+				"subject":    subject,
+			}).Error("Failed to publish on-demand monitor run job")
+			errors.WriteInternalError(w, "failed to queue monitor run")
+			return
+		}
 	}
 
 	resp := models.RunMonitorNowResponse{

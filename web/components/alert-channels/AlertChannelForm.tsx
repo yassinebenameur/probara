@@ -1,521 +1,253 @@
 'use client';
 
-import { useState, type FormEvent, type ReactNode } from 'react';
-import { AlertChannel, AlertChannelType, CreateAlertChannelRequest, UpdateAlertChannelRequest } from '@/lib/types';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  AlertChannel,
+  CreateAlertChannelRequest,
+  PluginManifest,
+  UpdateAlertChannelRequest,
+} from '@/lib/types';
+import { getAlertChannelPlugins } from '@/lib/api';
+import FormField from '@/components/ui/FormField';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
+import PluginCatalog from './PluginCatalog';
+import SchemaForm from './SchemaForm';
 
 interface AlertChannelFormProps {
   channel?: AlertChannel;
+  initialType?: string;
   onSubmit: (data: CreateAlertChannelRequest | UpdateAlertChannelRequest) => Promise<void>;
   onCancel?: () => void;
   loading?: boolean;
 }
 
-const channelTypes: {
-  value: AlertChannelType;
-  label: string;
-  description: string;
-  icon: ReactNode;
-}[] = [
-  {
-    value: 'teams',
-    label: 'Microsoft Teams',
-    description: 'Send alerts to a Teams incoming webhook',
-    icon: (
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9h8m-8 4h5m-6 5h10a2 2 0 002-2V8a2 2 0 00-2-2H9l-4 4v8a2 2 0 002 2z" />
-      </svg>
-    ),
-  },
-  {
-    value: 'email',
-    label: 'Email',
-    description: 'Send alerts via SMTP to one or more recipients',
-    icon: (
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8m-18 8h18a2 2 0 002-2V8a2 2 0 00-2-2H3a2 2 0 00-2 2v6a2 2 0 002 2z" />
-      </svg>
-    ),
-  },
-];
-
-const emailTemplateTokens = [
-  'monitor_name',
-  'policy_name',
-  'status',
-  'failure_count',
-  'last_error',
-  'triggered_at',
-  'resolved_at',
-  'tenant_id',
-];
-
-const defaultEmailBodyTemplate =
-  'Monitor: {{monitor_name}}\nPolicy: {{policy_name}}\nStatus: {{status}}\nTriggered At: {{triggered_at}}\nFailure Count: {{failure_count}}\nLast Error: {{last_error}}';
-
-function extractEmailList(channel?: AlertChannel): string {
-  const raw = (channel?.config as any)?.to;
-  if (Array.isArray(raw)) {
-    return raw.join(', ');
-  }
-  if (typeof raw === 'string') {
-    return raw;
-  }
-  return '';
-}
-
-function extractEmailBody(channel?: AlertChannel): string {
-  const config = channel?.config as any;
-  if (!config) return '';
-  return config.body || config.email_body || config.body_template || '';
-}
-
-function splitEmails(value: string): string[] {
-  return value
-    .split(/[,\n;]+/)
-    .map((email) => email.trim())
-    .filter((email) => email.length > 0);
-}
-
-function normalizeEmails(emails: string[]): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-
-  emails.forEach((email) => {
-    if (!email.includes('@')) {
-      return;
-    }
-    const key = email.toLowerCase();
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    normalized.push(email);
-  });
-
-  return normalized;
-}
-
-function FormField({
-  label,
-  error,
-  hint,
-  children,
-}: {
-  label: string;
-  error?: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1.5">{label}</label>
-      {children}
-      {error && <p className="mt-1 text-xs text-rose-400">{error}</p>}
-      {hint && !error && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
-    </div>
-  );
-}
-
-function FormInput({
-  label,
-  type = 'text',
-  value,
-  onChange,
-  placeholder,
-  error,
-  hint,
-  ...props
-}: {
-  label: string;
-  type?: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  error?: string;
-  hint?: string;
-  [key: string]: any;
-}) {
-  return (
-    <FormField label={label} error={error} hint={hint}>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="input"
-        {...props}
-      />
-    </FormField>
-  );
-}
-
-function FormTextArea({
-  label,
-  value,
-  onChange,
-  placeholder,
-  rows = 4,
-  error,
-  hint,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  rows?: number;
-  error?: string;
-  hint?: string;
-}) {
-  return (
-    <FormField label={label} error={error} hint={hint}>
-      <textarea
-        className="input min-h-[120px] resize-y"
-        rows={rows}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-      />
-    </FormField>
-  );
-}
-
-function FormToggle({
-  label,
-  description,
-  checked,
-  onChange,
-}: {
-  label: string;
-  description?: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
-      <div>
-        <p className="text-sm font-medium text-white">{label}</p>
-        {description && <p className="text-xs text-slate-500">{description}</p>}
-      </div>
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 rounded-full transition-colors ${
-          checked ? 'bg-cyan-500' : 'bg-slate-700'
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-4' : ''
-          }`}
-        />
-      </button>
-    </div>
-  );
-}
-
-function SectionHeader({ title, description }: { title: string; description?: string }) {
-  return (
-    <div className="mb-4">
-      <h3 className="text-sm font-medium text-white">{title}</h3>
-      {description && <p className="text-xs text-slate-500 mt-0.5">{description}</p>}
-    </div>
-  );
-}
-
-function TypeCard({
-  icon,
-  label,
-  description,
-  selected,
-  onClick,
-  disabled,
-}: {
-  icon: ReactNode;
-  label: string;
-  description: string;
-  selected: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-all ${
-        selected
-          ? 'border-cyan-500/50 bg-cyan-500/10'
-          : 'border-white/[0.06] bg-slate-800/30 hover:border-white/[0.1] hover:bg-slate-800/50'
-      } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-    >
-      <div className={`rounded-lg p-2 ${selected ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400'}`}>
-        {icon}
-      </div>
-      <div>
-        <p className={`text-sm font-medium ${selected ? 'text-white' : 'text-slate-300'}`}>{label}</p>
-        <p className="text-xs text-slate-500 mt-0.5">{description}</p>
-      </div>
-    </button>
-  );
-}
-
 export default function AlertChannelForm({
   channel,
+  initialType,
   onSubmit,
   onCancel,
   loading = false,
 }: AlertChannelFormProps) {
-  const existingWebhook = (channel?.config as any)?.webhook_url || '';
-  const existingEmails = extractEmailList(channel);
-  const existingBody = extractEmailBody(channel);
+  const isEdit = !!channel;
 
-  const [formData, setFormData] = useState({
-    name: channel?.name || '',
-    type: (channel?.type || 'teams') as AlertChannelType,
-    webhook_url: existingWebhook,
-    email_to: existingEmails,
-    email_body: existingBody,
-    is_active: channel?.is_active ?? true,
-  });
-  const [showWebhook, setShowWebhook] = useState(false);
+  const [manifests, setManifests] = useState<PluginManifest[]>([]);
+  const [loadingManifests, setLoadingManifests] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [selectedType, setSelectedType] = useState<string>(channel?.type ?? initialType ?? '');
+  const [name, setName] = useState(channel?.name ?? '');
+  const [isActive, setIsActive] = useState(channel?.is_active ?? true);
+  const [configValue, setConfigValue] = useState<Record<string, unknown>>(
+    () => initialConfig(channel)
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const appendEmailToken = (token: string) => {
-    setFormData((prev) => ({
-      ...prev,
-      email_body: `${prev.email_body} {{${token}}}`.trim(),
-    }));
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingManifests(true);
+    getAlertChannelPlugins()
+      .then((list) => {
+        if (cancelled) return;
+        setManifests(list);
+        if (!selectedType && list.length > 0) {
+          // If initialType was provided and matches a known plugin, honor it;
+          // otherwise fall back to the first manifest so the form is usable.
+          const preselect =
+            (initialType && list.find((m) => m.type === initialType)?.type) || list[0].type;
+          setSelectedType(preselect);
+          const chosen = list.find((m) => m.type === preselect);
+          if (chosen) setConfigValue(defaultsFromManifest(chosen));
+        }
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setLoadError(err.message || 'Failed to load plugin catalog');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingManifests(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedManifest = useMemo(
+    () => manifests.find((m) => m.type === selectedType),
+    [manifests, selectedType]
+  );
+
+  const handleSelectPlugin = (m: PluginManifest) => {
+    if (isEdit) return;
+    setSelectedType(m.type);
+    setConfigValue(defaultsFromManifest(m));
+    setErrors({});
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setErrors({});
+    const newErrors = validate(name, selectedManifest, configValue, isEdit);
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
 
-    const newErrors: Record<string, string> = {};
-    if (!formData.name.trim()) {
-      newErrors.name = 'Name is required';
-    }
-    if (formData.type === 'teams' && !formData.webhook_url.trim()) {
-      newErrors.webhook_url = 'Webhook URL is required';
-    }
-    if (formData.type === 'email') {
-      const recipients = normalizeEmails(splitEmails(formData.email_to));
-      if (recipients.length === 0) {
-        newErrors.email_to = 'At least one valid email is required';
-      }
-    }
+    const submittableConfig = stripEmptySecrets(
+      configValue,
+      selectedManifest,
+      isEdit
+    );
 
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      return;
-    }
-
-    const config: Record<string, any> = {};
-    if (formData.type === 'teams') {
-      if (formData.webhook_url.trim()) {
-        config.webhook_url = formData.webhook_url.trim();
-      }
-    }
-    if (formData.type === 'email') {
-      config.to = normalizeEmails(splitEmails(formData.email_to));
-      if (formData.email_body.trim()) {
-        config.body = formData.email_body.trim();
-      }
-    }
-
-    let requestData: CreateAlertChannelRequest | UpdateAlertChannelRequest;
-    if (channel) {
+    if (isEdit) {
       const updateData: UpdateAlertChannelRequest = {
-        name: formData.name.trim(),
-        is_active: formData.is_active,
-        config,
+        name: name.trim(),
+        is_active: isActive,
+        config: submittableConfig,
       };
-      requestData = updateData;
+      await onSubmit(updateData);
     } else {
-      requestData = {
-        name: formData.name.trim(),
-        type: formData.type,
-        is_active: formData.is_active,
-        config,
+      const createData: CreateAlertChannelRequest = {
+        name: name.trim(),
+        type: selectedType,
+        is_active: isActive,
+        config: submittableConfig,
       };
+      await onSubmit(createData);
     }
-
-    await onSubmit(requestData);
   };
+
+  if (loadingManifests) {
+    return <p className="text-sm text-slate-400">Loading plugin catalog…</p>;
+  }
+  if (loadError) {
+    return <p className="text-sm text-rose-400">{loadError}</p>;
+  }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <div>
-        <SectionHeader title="Channel Type" description="Choose how alerts should be delivered" />
-        <div className="grid grid-cols-2 gap-3">
-          {channelTypes.map((opt) => (
-            <TypeCard
-              key={opt.value}
-              icon={opt.icon}
-              label={opt.label}
-              description={opt.description}
-              selected={formData.type === opt.value}
-              onClick={() => setFormData({ ...formData, type: opt.value })}
-              disabled={!!channel}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <SectionHeader title="Basic Information" />
-        <div className="space-y-4">
-          <FormInput
-            label="Channel Name"
-            value={formData.name}
-            onChange={(v) => setFormData({ ...formData, name: v })}
-            placeholder="Primary Teams Channel"
-            error={errors.name}
-            hint="A descriptive name for this channel"
-          />
-        </div>
-      </div>
-
-      <div>
-        <SectionHeader title="Configuration" description="Provide the details for the selected channel" />
-
-        {formData.type === 'teams' && (
-          <FormField
-            label="Webhook URL"
-            error={errors.webhook_url}
-            hint="Paste the Teams incoming webhook URL for this channel"
-          >
-            <div className="flex items-center gap-2">
-              <input
-                type={showWebhook ? 'text' : 'password'}
-                value={formData.webhook_url}
-                onChange={(e) => setFormData({ ...formData, webhook_url: e.target.value })}
-                placeholder="https://outlook.office.com/webhook/..."
-                className="input"
-              />
-              <button
-                type="button"
-                onClick={() => setShowWebhook(!showWebhook)}
-                className="btn btn-secondary btn-sm"
-              >
-                {showWebhook ? 'Hide' : 'Show'}
-              </button>
-            </div>
-          </FormField>
-        )}
-
-        {formData.type === 'email' && (
-          <div className="space-y-4">
-            <FormInput
-              label="Recipients"
-              value={formData.email_to}
-              onChange={(v) => setFormData({ ...formData, email_to: v })}
-              placeholder="oncall@example.com, team@example.com"
-              error={errors.email_to}
-              hint="Separate multiple emails with commas, semicolons, or new lines"
-            />
-            <div className="space-y-4 rounded-xl border border-white/[0.08] bg-slate-800/30 p-4">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Email Body Template (Optional)</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Customize the email content for this channel. Leave empty to use the default template.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap gap-2 text-xs">
-                {emailTemplateTokens.map((token) => (
-                  <span
-                    key={token}
-                    className="badge badge-default"
-                  >
-                    {`{{${token}}}`}
-                  </span>
-                ))}
-              </div>
-
-              <FormTextArea
-                label="Email Body"
-                value={formData.email_body}
-                onChange={(v) => setFormData({ ...formData, email_body: v })}
-                placeholder="Monitor: {{monitor_name}}"
-                rows={6}
-                hint="Use the variables below to include alert details."
-              />
-
-              <div className="flex flex-wrap gap-2 text-xs">
-                {emailTemplateTokens.map((token) => (
-                  <button
-                    key={token}
-                    type="button"
-                    onClick={() => appendEmailToken(token)}
-                    className="btn btn-outline btn-xs"
-                    aria-label={`Insert {{${token}}} into email body`}
-                  >
-                    {`{{${token}}}`}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      email_body: defaultEmailBodyTemplate,
-                    })
-                  }
-                  className="btn btn-secondary btn-sm"
-                >
-                  Use Default Template
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      email_body: '',
-                    })
-                  }
-                  className="btn btn-secondary btn-sm"
-                >
-                  Clear Template
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div>
-        <SectionHeader title="Status" />
-        <FormToggle
-          label="Channel Active"
-          description="Deliver alerts using this channel"
-          checked={formData.is_active}
-          onChange={(v) => setFormData({ ...formData, is_active: v })}
+      <FormSection title="Channel type" summary="How alerts are delivered">
+        <PluginCatalog
+          manifests={manifests}
+          selectedType={selectedType}
+          onSelect={handleSelectPlugin}
+          disabled={isEdit}
         />
-      </div>
+      </FormSection>
 
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-white/[0.06]">
-        {onCancel && (
+      <FormSection title="Basics">
+        <FormField label="Channel name" required error={errors.name}>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={selectedManifest?.display_name ?? 'Channel name'}
+            className="input"
+          />
+        </FormField>
+      </FormSection>
+
+      {selectedManifest && (
+        <FormSection title="Configuration" summary={selectedManifest.description}>
+          <SchemaForm
+            manifest={selectedManifest}
+            value={configValue}
+            onChange={setConfigValue}
+            errors={errors}
+            isEdit={isEdit}
+          />
+        </FormSection>
+      )}
+
+      <FormSection title="Status">
+        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-white">Channel active</p>
+            <p className="text-xs text-slate-500">Deliver alerts using this channel</p>
+          </div>
           <button
             type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className="btn btn-secondary btn-sm disabled:opacity-50"
+            onClick={() => setIsActive(!isActive)}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              isActive ? 'bg-cyan-500' : 'bg-slate-700'
+            }`}
+            aria-pressed={isActive}
+            aria-label="Toggle channel active"
           >
-            Cancel
+            <span
+              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                isActive ? 'translate-x-4' : ''
+              }`}
+            />
           </button>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary btn-sm disabled:opacity-50"
-        >
-          {loading ? 'Saving...' : channel ? 'Update Channel' : 'Create Channel'}
-        </button>
-      </div>
+        </div>
+      </FormSection>
+
+      <FormActions
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : isEdit ? 'Update channel' : 'Create channel',
+          loading,
+          disabled: loading || !selectedManifest,
+          type: 'submit',
+        }}
+      />
     </form>
   );
+}
+
+function initialConfig(channel?: AlertChannel): Record<string, unknown> {
+  if (!channel?.config) return {};
+  return { ...channel.config };
+}
+
+function defaultsFromManifest(m: PluginManifest): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of m.fields) {
+    if (f.default !== undefined) out[f.key] = f.default;
+  }
+  return out;
+}
+
+function validate(
+  name: string,
+  manifest: PluginManifest | undefined,
+  config: Record<string, unknown>,
+  isEdit: boolean
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!name.trim()) errors.name = 'Name is required';
+  if (!manifest) {
+    errors.type = 'Select a channel type';
+    return errors;
+  }
+  for (const field of manifest.fields) {
+    if (!field.required) continue;
+    // On edit, an empty secret means "keep existing" — don't flag it.
+    if (field.secret && isEdit && isEmpty(config[field.key])) continue;
+    if (isEmpty(config[field.key])) {
+      errors[field.key] = `${field.label} is required`;
+    }
+  }
+  return errors;
+}
+
+function isEmpty(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  if (Array.isArray(v)) return v.length === 0;
+  return false;
+}
+
+function stripEmptySecrets(
+  config: Record<string, unknown>,
+  manifest: PluginManifest | undefined,
+  isEdit: boolean
+): Record<string, unknown> {
+  if (!manifest) return config;
+  if (!isEdit) return config;
+  const out: Record<string, unknown> = { ...config };
+  for (const f of manifest.fields) {
+    if (f.secret && isEmpty(out[f.key])) {
+      delete out[f.key];
+    }
+  }
+  return out;
 }

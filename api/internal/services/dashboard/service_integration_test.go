@@ -27,14 +27,16 @@ func TestService_GetOverview_LongRangeParityMatchesMonitorAnalytics(t *testing.T
 	defer cleanup()
 
 	analyticsRepo := sharedanalytics.NewRepository(dbClient)
-	dashboardSvc := NewService(dbClient, nil, analyticsRepo)
+	dashboardSvc := NewService(dbClient, nil, analyticsRepo, &fakeTenantSettingsReader{}, nil)
 	groupSvc := groupservice.NewService(dbClient)
 	resultsSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-rollup")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
-	day1 := time.Date(2026, time.March, 5, 0, 0, 0, 0, time.UTC)
-	day2 := time.Date(2026, time.March, 6, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	day1 := today.AddDate(0, 0, -2)
+	day2 := today.AddDate(0, 0, -1)
 
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, day1, 10, 8, 1000, 10, "failure", day1.Add(22*time.Hour))
 	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monitorA, day2, 10, 10, 2000, 10, "success", day2.Add(11*time.Hour))
@@ -98,7 +100,7 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient))
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-action")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
@@ -108,6 +110,15 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 
 	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET enabled = FALSE WHERE id = $1`, monitorPaused); err != nil {
 		t.Fatalf("disable paused monitor: %v", err)
+	}
+	// Seed current_state via the persisted state machine: monitorA and monitorB are
+	// confirmed down, monitorC is up. Ops summary and monitor health derive from
+	// current_state (D1), not from rollup latest_status.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = ANY($1)`, pq.Array([]uuid.UUID{monitorA, monitorB})); err != nil {
+		t.Fatalf("set current_state down: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'up' WHERE id = $1`, monitorC); err != nil {
+		t.Fatalf("set current_state up: %v", err)
 	}
 
 	now := time.Now().UTC()
@@ -175,8 +186,12 @@ func TestService_GetOverview_ActionSummaryAndProblemMonitors(t *testing.T) {
 	if math.Abs(overview.ProblemMonitors[0].Uptime-70.0) > 0.0001 {
 		t.Fatalf("ProblemMonitors[0].Uptime = %.4f, want 70.0", overview.ProblemMonitors[0].Uptime)
 	}
-	if overview.ProblemMonitors[0].CurrentStatus == nil || *overview.ProblemMonitors[0].CurrentStatus != "error" {
-		t.Fatalf("ProblemMonitors[0].CurrentStatus = %v, want error", overview.ProblemMonitors[0].CurrentStatus)
+	// current_state='down' maps to CurrentStatus="failure" and CurrentState="down".
+	if overview.ProblemMonitors[0].CurrentStatus == nil || *overview.ProblemMonitors[0].CurrentStatus != "failure" {
+		t.Fatalf("ProblemMonitors[0].CurrentStatus = %v, want failure", overview.ProblemMonitors[0].CurrentStatus)
+	}
+	if overview.ProblemMonitors[0].CurrentState != "down" {
+		t.Fatalf("ProblemMonitors[0].CurrentState = %q, want down", overview.ProblemMonitors[0].CurrentState)
 	}
 	if overview.ProblemMonitors[1].MonitorID != monitorB {
 		t.Fatalf("ProblemMonitors[1].MonitorID = %s, want %s", overview.ProblemMonitors[1].MonitorID, monitorB)
@@ -194,7 +209,7 @@ func TestService_GetOverview_ActionSummaryEmptyTenant(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient))
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-empty")
 
 	overview, err := dashboardSvc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{
@@ -218,6 +233,172 @@ func TestService_GetOverview_ActionSummaryEmptyTenant(t *testing.T) {
 	}
 }
 
+func TestService_QueryMonitorsForGroups_NoCheckDataDoesNotScanNullAttention(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-groups-no-data")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-no-data")
+	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
+
+	now := time.Now().UTC()
+	rows, err := dashboardSvc.queryMonitorsForGroups(ctx, tenantID, models.DashboardRange24h, now.Add(-24*time.Hour), now, nil, nil)
+	if err != nil {
+		t.Fatalf("queryMonitorsForGroups() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows length = %d, want 1", len(rows))
+	}
+	if rows[0].AttentionCount != 0 {
+		t.Fatalf("AttentionCount = %d, want 0", rows[0].AttentionCount)
+	}
+}
+
+func TestService_LoadGroups_24hHourlyRollupIgnoresOutsideWindowRawRows(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-groups-24h-hybrid")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api-monitor")
+	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
+
+	// Use now-relative times so the exact-rolling window [now-24h, now) covers the data.
+	// Anchor on the current hour so rollup bucket boundaries are stable.
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	// rollup bucket: 16h ago (well inside the 24h rolling window)
+	rollupBucket := endHour.Add(-16 * time.Hour)
+	// rollup cursor: 2h ago — rollup_end = trunc_hour(cursor) so raw_complement covers [trunc_hour(cursor), now)
+	cursorAt := now.Add(-2 * time.Hour)
+	// raw row INSIDE raw_complement region: 1h ago (>= trunc_hour(cursorAt)), status=success
+	insideAt := now.Add(-1 * time.Hour)
+	// raw rows OUTSIDE window: >24h ago (before window start) and in the future (after now)
+	beforeWindow := now.Add(-26 * time.Hour)
+	afterWindow := now.Add(2 * time.Hour)
+
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitor_hourly_rollups (
+			tenant_id, monitor_id, bucket_hour, total_checks, success_checks,
+			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 16, 15, 1500, 15, 'failure', $4, NOW(), NOW())
+	`, tenantID, monitorID, rollupBucket, rollupBucket.Add(59*time.Minute)); err != nil {
+		t.Fatalf("insert hourly rollup: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO rollup_job_state (job_name, last_created_at, last_check_result_id, last_run_at, updated_at)
+		VALUES ('monitor_daily_rollups', $1, $2, NOW(), NOW())
+	`, cursorAt, uuid.New()); err != nil {
+		t.Fatalf("insert rollup state: %v", err)
+	}
+
+	// Rows before the window — should be ignored.
+	for i := 0; i < 4; i++ {
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, beforeWindow.Add(time.Duration(i)*time.Hour), "failure", "monitor", nil)
+	}
+	// Row inside the raw-complement region (after cursor, before now) — drives current_status.
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, insideAt, "success", "monitor", testutil.IntPtr(100))
+	// Rows after window end — should be ignored by the helper's w_end boundary.
+	for i := 0; i < 4; i++ {
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, afterWindow.Add(time.Duration(i)*time.Hour), "failure", "monitor", nil)
+	}
+
+	rangeStart := now.Add(-24 * time.Hour)
+	rangeEnd := now
+	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"}, nil)
+	if err != nil {
+		t.Fatalf("loadGroups() error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	}
+	// Rollup bucket (endHour-16h): 16 total, 15 success, 1 bad → needsAttention = true.
+	// Raw row at now-1h (success) falls in raw_complement [trunc_hour(cursor), now).
+	// Rows before w_start and after w_end are excluded.
+	// The rollup bad check drives AttentionCount=1.
+	if groups[0].AttentionCount != 1 {
+		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
+	}
+	if len(groups[0].Members) != 1 {
+		t.Fatalf("Members length = %d, want 1", len(groups[0].Members))
+	}
+	// current_status comes from latest check in the window: insideAt row (now-1h) = "success"
+	if groups[0].Members[0].CurrentStatus == nil || *groups[0].Members[0].CurrentStatus != "success" {
+		t.Fatalf("CurrentStatus = %v, want success", groups[0].Members[0].CurrentStatus)
+	}
+}
+
+func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	dashboardSvc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-groups-24h-hourly-lag")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "api-monitor")
+	setMonitorTags(ctx, t, dbClient, monitorID, []string{"api"})
+
+	// Use now-relative times for the exact-rolling window.
+	// Rollup covers a full hour inside the window; cursor is 2h ago;
+	// one raw failure row falls after the cursor (lag tail).
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	// rollup bucket: 10h ago — a complete hour well within the 24h window
+	rollupBucket := endHour.Add(-10 * time.Hour)
+	// cursor: 2h ago — rollup has processed up to this point
+	cursorAt := now.Add(-2 * time.Hour)
+	// raw lag-tail row: 1h ago (after cursor, inside window) — status=failure
+	lagTailAt := now.Add(-1 * time.Hour)
+
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitor_hourly_rollups (
+			tenant_id, monitor_id, bucket_hour, total_checks, success_checks,
+			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 23, 23, 2300, 23, 'success', $4, NOW(), NOW())
+	`, tenantID, monitorID, rollupBucket, rollupBucket.Add(59*time.Minute)); err != nil {
+		t.Fatalf("insert hourly rollup: %v", err)
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO rollup_job_state (job_name, last_created_at, last_check_result_id, last_run_at, updated_at)
+		VALUES ('monitor_daily_rollups', $1, $2, NOW(), NOW())
+	`, cursorAt, uuid.New()); err != nil {
+		t.Fatalf("insert rollup state: %v", err)
+	}
+	// Lag-tail failure row after cursor: should be included in raw_complement.
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, lagTailAt, "failure", "monitor", nil)
+
+	rangeStart := now.Add(-24 * time.Hour)
+	rangeEnd := now
+	groups, err := dashboardSvc.loadGroups(ctx, tenantID, models.DashboardRange24h, rangeStart, rangeEnd, nil, []string{"api"}, nil)
+	if err != nil {
+		t.Fatalf("loadGroups() error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	}
+	// Rollup: 23 total, 23 success. Raw lag-tail: 1 failure.
+	// Total = 24, success = 23 → 23/24 ≈ 95.83%.
+	assertDashboardClose(t, groups[0].Uptime, 95.8333333333)
+	if groups[0].AttentionCount != 1 {
+		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
+	}
+	// current_status: latest check is the lag-tail failure.
+	if groups[0].Members[0].CurrentStatus == nil || *groups[0].Members[0].CurrentStatus != "failure" {
+		t.Fatalf("CurrentStatus = %v, want failure", groups[0].Members[0].CurrentStatus)
+	}
+}
+
 func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -225,7 +406,7 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
 	defer cleanup()
 
-	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient), sharedanalytics.NewRepository(dbClient))
+	dashboardSvc := NewService(dbClient, alertservice.NewService(dbClient, nil), sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-tags")
 	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-a")
 	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "monitor-b")
@@ -234,6 +415,12 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	setMonitorTags(ctx, t, dbClient, monitorA, []string{"prod", "api"})
 	setMonitorTags(ctx, t, dbClient, monitorB, []string{"prod"})
 	setMonitorTags(ctx, t, dbClient, monitorC, []string{"api"})
+
+	// monitorA is confirmed down in the state machine; ops summary follows
+	// current_state (D1), not the rollup latest_status.
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, monitorA); err != nil {
+		t.Fatalf("set current_state down: %v", err)
+	}
 
 	now := time.Now().UTC()
 	bucketDay := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.UTC)
@@ -294,7 +481,7 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 			t.Fatalf("RecentFailures included monitor %s, want only %s", failure.MonitorID, monitorA)
 		}
 	}
-	if len(overview.RecentAlerts) != 1 || overview.RecentAlerts[0].MonitorID != monitorA {
+	if len(overview.RecentAlerts) != 1 || overview.RecentAlerts[0].MonitorID == nil || *overview.RecentAlerts[0].MonitorID != monitorA {
 		t.Fatalf("RecentAlerts = %+v, want only monitorA alert", overview.RecentAlerts)
 	}
 
@@ -359,5 +546,570 @@ func assertDashboardClose(t *testing.T, got, want float64) {
 	t.Helper()
 	if math.Abs(got-want) > 0.0001 {
 		t.Fatalf("value = %.6f, want %.6f", got, want)
+	}
+}
+
+func TestService_GetSummary_24hStatsExactRollingFromHourlyRollup(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "stats-24h-rolling")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "stats-mon")
+
+	// Seed only hourly rollups inside the rolling window (no raw rows), so the
+	// stats values must come from the rollup path or this test will read zeros.
+	now := time.Now().UTC()
+	// Build 20 full rollup hours inside (now-24h, now] (skipping the partial leading hour).
+	leadingEdgeEnd := now.Add(-24 * time.Hour).Truncate(time.Hour).Add(time.Hour)
+	for i := 0; i < 20; i++ {
+		bucket := leadingEdgeEnd.Add(time.Duration(i) * time.Hour)
+		testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 9, 900, 9, "success", bucket.Add(59*time.Minute))
+	}
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	// 20 buckets * (9 success / 10 total) = 90% uptime; latency 100ms/check.
+	if math.Abs(resp.Stats.OverallUptime-90) > 0.01 {
+		t.Fatalf("OverallUptime = %f, want 90", resp.Stats.OverallUptime)
+	}
+	if math.Abs(resp.Stats.AvgResponseMS-100) > 0.01 {
+		t.Fatalf("AvgResponseMS = %f, want 100", resp.Stats.AvgResponseMS)
+	}
+}
+
+func TestService_GetSummary_24hTrendHourAligned(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "trend-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "trend-mon")
+
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	bucketA := endHour.Add(-3 * time.Hour)
+	bucketB := endHour.Add(-1 * time.Hour)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucketA, 10, 10, 1000, 10, "success", bucketA.Add(59*time.Minute))
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucketB, 10, 5, 500, 5, "failure", bucketB.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	if len(resp.Trend) != 24 {
+		t.Fatalf("len(Trend) = %d, want 24", len(resp.Trend))
+	}
+	pointA := findTrendPoint(t, resp.Trend, bucketA)
+	if math.Abs(pointA.Uptime-100) > 0.01 {
+		t.Fatalf("Trend[bucketA].Uptime = %f, want 100", pointA.Uptime)
+	}
+	if pointA.TotalChecks != 10 {
+		t.Fatalf("Trend[bucketA].TotalChecks = %d, want 10", pointA.TotalChecks)
+	}
+	pointB := findTrendPoint(t, resp.Trend, bucketB)
+	if math.Abs(pointB.Uptime-50) > 0.01 {
+		t.Fatalf("Trend[bucketB].Uptime = %f, want 50", pointB.Uptime)
+	}
+}
+
+func TestService_GetSummary_24hActivityHourAligned(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "activity-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "activity-mon")
+
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	bucket := endHour.Add(-2 * time.Hour)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 7, 700, 7, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	if len(resp.Activity24h) != 24 {
+		t.Fatalf("len(Activity24h) = %d, want 24", len(resp.Activity24h))
+	}
+	var found *models.DashboardActivityHour
+	for i := range resp.Activity24h {
+		if resp.Activity24h[i].BucketStart.Equal(bucket) {
+			found = &resp.Activity24h[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("activity bucket %v not found", bucket)
+	}
+	if found.Checks != 10 || found.Failures != 3 {
+		t.Fatalf("activity[bucket] = {checks:%d, failures:%d}, want {10, 3}", found.Checks, found.Failures)
+	}
+}
+
+// fakeTenantSettingsWithTags is a test-local tenant settings reader that returns
+// a fixed set of dashboard_group_tags. Used when GetSummary must see specific tags.
+type fakeTenantSettingsWithTags struct {
+	tags []string
+}
+
+func (f *fakeTenantSettingsWithTags) GetTenantSettings(_ context.Context, _ uuid.UUID) (*models.TenantSettings, error) {
+	return &models.TenantSettings{DashboardGroupTags: f.tags}, nil
+}
+
+func TestService_LoadGroups_24hUsesExactRollingSummary(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "groups-24h-rolling")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "group-mon")
+	_, err := dbClient.ExecContext(ctx, `UPDATE monitors SET tags = ARRAY['team-a'] WHERE id = $1`, monitorID)
+	if err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	now := time.Now().UTC()
+	bucket := now.Truncate(time.Hour).Add(-1 * time.Hour)
+	// Rollup latest_status = failure, totals 5/10 → 50% uptime.
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 5, 500, 5, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsWithTags{tags: []string{"team-a"}}, nil)
+	resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetSummary() error = %v", err)
+	}
+	if len(resp.Groups) == 0 {
+		t.Fatalf("Groups empty")
+	}
+	g := resp.Groups[0]
+	if g.AttentionCount != 1 {
+		t.Fatalf("team-a AttentionCount = %d, want 1", g.AttentionCount)
+	}
+	if math.Abs(g.Uptime-50) > 0.01 {
+		t.Fatalf("team-a Uptime = %f, want 50", g.Uptime)
+	}
+}
+
+func TestService_GetGroupSparkline_24hHourAligned(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "sparkline-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "spark-mon")
+	_, err := dbClient.ExecContext(ctx, `UPDATE monitors SET tags = ARRAY['team-a'] WHERE id = $1`, monitorID)
+	if err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	now := time.Now().UTC()
+	bucket := now.Truncate(time.Hour).Add(-1 * time.Hour)
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 5, 500, 5, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	tag := "team-a"
+	resp, err := svc.GetGroupSparkline(ctx, tenantID, &models.DashboardGroupSparklineQuery{
+		Tag:   &tag,
+		Range: models.DashboardRange24h,
+	})
+	if err != nil {
+		t.Fatalf("GetGroupSparkline() error = %v", err)
+	}
+	if len(resp.Buckets) != 12 {
+		t.Fatalf("Buckets length = %d, want 12 (resampled)", len(resp.Buckets))
+	}
+	found50 := false
+	for _, v := range resp.Buckets {
+		if math.Abs(v-50) < 0.01 {
+			found50 = true
+			break
+		}
+	}
+	if !found50 {
+		t.Fatalf("no 50%% bucket in sparkline %v", resp.Buckets)
+	}
+}
+
+func TestService_GetProblemMonitors_24hCountsFromExactRollingSummary(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "problems-24h-rolling")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "problem-mon")
+
+	now := time.Now().UTC()
+	bucket := now.Truncate(time.Hour).Add(-2 * time.Hour)
+	// 10 checks / 3 success → 7 bad, all attributed to FailureChecks via rollup.
+	testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 3, 300, 3, "failure", bucket.Add(59*time.Minute))
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	resp, err := svc.GetProblemMonitors(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("GetProblemMonitors() error = %v", err)
+	}
+	if len(resp.ProblemMonitors) != 1 {
+		t.Fatalf("ProblemMonitors length = %d, want 1", len(resp.ProblemMonitors))
+	}
+	got := resp.ProblemMonitors[0]
+	if got.FailureCount+got.ErrorCount != 7 {
+		t.Fatalf("failures+errors = %d, want 7", got.FailureCount+got.ErrorCount)
+	}
+	if math.Abs(got.Uptime-30) > 0.01 {
+		t.Fatalf("Uptime = %f, want 30", got.Uptime)
+	}
+}
+
+func TestService_GetOverview_24hHourlyRollupSmoke(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "smoke-24h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "smoke-mon")
+
+	now := time.Now().UTC()
+	endHour := now.Truncate(time.Hour)
+	// Seed 5 hourly rollup rows in the past, each 10 total / 5 success.
+	for i := 1; i <= 5; i++ {
+		bucket := endHour.Add(time.Duration(-i) * time.Hour)
+		testutil.InsertHourlyRollup(ctx, t, dbClient, tenantID, monitorID, bucket, 10, 5, 500, 5, "failure", bucket.Add(59*time.Minute))
+	}
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-1*time.Minute), uuid.New())
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	resp, err := svc.GetOverview(ctx, tenantID, &models.DashboardOverviewQuery{Range: models.DashboardRange24h})
+	if err != nil {
+		t.Fatalf("GetOverview() error = %v", err)
+	}
+	// Per-monitor uptime = 25/50 = 50% (single monitor).
+	if math.Abs(resp.Stats.OverallUptime-50) > 0.01 {
+		t.Fatalf("OverallUptime = %f, want 50", resp.Stats.OverallUptime)
+	}
+	// Activity sums: 5 buckets * 10 checks = 50 checks; 5 * 5 failures = 25 failures.
+	totalChecks := 0
+	totalFailures := 0
+	for _, p := range resp.Activity24h {
+		totalChecks += p.Checks
+		totalFailures += p.Failures
+	}
+	if totalChecks != 50 {
+		t.Fatalf("activity check sum = %d, want 50", totalChecks)
+	}
+	if totalFailures != 25 {
+		t.Fatalf("activity failure sum = %d, want 25", totalFailures)
+	}
+	if len(resp.ProblemMonitors) != 1 {
+		t.Fatalf("ProblemMonitors length = %d, want 1", len(resp.ProblemMonitors))
+	}
+}
+
+func TestService_GetProblemMonitors_1hUsesNarrowWindowNotLast24h(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "problems-1h")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "problem-mon-1h")
+
+	now := time.Now().UTC()
+	// One failure 30 minutes ago (inside both 1h and 24h windows).
+	recent := now.Add(-30 * time.Minute)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, recent, "failure", "monitor", nil)
+	// One failure 12 hours ago (outside 1h window, inside 24h window).
+	old := now.Add(-12 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, old, "failure", "monitor", nil)
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	resp, err := svc.GetProblemMonitors(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange1h,
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("GetProblemMonitors() error = %v", err)
+	}
+	if len(resp.ProblemMonitors) != 1 {
+		t.Fatalf("ProblemMonitors length = %d, want 1", len(resp.ProblemMonitors))
+	}
+	got := resp.ProblemMonitors[0]
+	// 1h window must see only the recent failure, not the 12h-old one.
+	if got.FailureCount != 1 {
+		t.Fatalf("FailureCount = %d, want 1 (12h-old failure must be outside 1h window)", got.FailureCount)
+	}
+}
+
+func TestService_GetRecentFailures_ResolvedAtTagsLimitAndOrdering(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "recent-failures")
+	monitorA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "rf-monitor-a")
+	monitorB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "rf-monitor-b")
+	setMonitorTags(ctx, t, dbClient, monitorA, []string{"prod"})
+	setMonitorTags(ctx, t, dbClient, monitorB, []string{"api"})
+
+	now := time.Now().UTC().Truncate(time.Second)
+	// Monitor A timeline: success before any failure must NOT count as resolution;
+	// each failure resolves at the FIRST success strictly after it.
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-11*time.Hour), "success", "monitor", testutil.IntPtr(100))
+	failA1 := now.Add(-10 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, failA1, "failure", "monitor", nil)
+	succA1 := now.Add(-9 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, succA1, "success", "monitor", testutil.IntPtr(110))
+	failA2 := now.Add(-8 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, failA2, "failure", "monitor", nil)
+	succA2First := now.Add(-7*time.Hour - 30*time.Minute)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, succA2First, "success", "monitor", testutil.IntPtr(120))
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorA, now.Add(-7*time.Hour), "success", "monitor", testutil.IntPtr(130))
+	// Monitor B timeline: failure + error with no later success → still firing.
+	failB1 := now.Add(-6 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, failB1, "failure", "monitor", nil)
+	errB2 := now.Add(-5 * time.Hour)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorB, errB2, "error", "monitor", nil)
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+
+	resp, err := svc.GetRecentFailures(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("GetRecentFailures() error = %v", err)
+	}
+	if len(resp.RecentFailures) != 4 {
+		t.Fatalf("RecentFailures length = %d, want 4", len(resp.RecentFailures))
+	}
+
+	type expectation struct {
+		monitorID  uuid.UUID
+		status     string
+		occurredAt time.Time
+		resolvedAt *time.Time
+	}
+	expected := []expectation{
+		{monitorB, "error", errB2, nil},
+		{monitorB, "failure", failB1, nil},
+		{monitorA, "failure", failA2, &succA2First},
+		{monitorA, "failure", failA1, &succA1},
+	}
+	for i, want := range expected {
+		got := resp.RecentFailures[i]
+		if got.MonitorID != want.monitorID {
+			t.Fatalf("RecentFailures[%d].MonitorID = %s, want %s", i, got.MonitorID, want.monitorID)
+		}
+		if got.Status != want.status {
+			t.Fatalf("RecentFailures[%d].Status = %s, want %s", i, got.Status, want.status)
+		}
+		if !got.OccurredAt.Equal(want.occurredAt) {
+			t.Fatalf("RecentFailures[%d].OccurredAt = %s, want %s", i, got.OccurredAt, want.occurredAt)
+		}
+		if want.resolvedAt == nil {
+			if got.ResolvedAt != nil {
+				t.Fatalf("RecentFailures[%d].ResolvedAt = %v, want nil", i, got.ResolvedAt)
+			}
+			if got.State != models.DashboardFailureStateFiring {
+				t.Fatalf("RecentFailures[%d].State = %s, want firing", i, got.State)
+			}
+		} else {
+			if got.ResolvedAt == nil || !got.ResolvedAt.Equal(*want.resolvedAt) {
+				t.Fatalf("RecentFailures[%d].ResolvedAt = %v, want %s (first success after failure)", i, got.ResolvedAt, *want.resolvedAt)
+			}
+			if got.State != models.DashboardFailureStateResolved {
+				t.Fatalf("RecentFailures[%d].State = %s, want resolved", i, got.State)
+			}
+		}
+	}
+
+	// Limit smaller than total failures → newest N only, still desc.
+	limited, err := svc.GetRecentFailures(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("GetRecentFailures(limit=2) error = %v", err)
+	}
+	if len(limited.RecentFailures) != 2 {
+		t.Fatalf("limited RecentFailures length = %d, want 2", len(limited.RecentFailures))
+	}
+	if !limited.RecentFailures[0].OccurredAt.Equal(errB2) || !limited.RecentFailures[1].OccurredAt.Equal(failB1) {
+		t.Fatalf("limited RecentFailures = [%s, %s], want newest two [%s, %s]",
+			limited.RecentFailures[0].OccurredAt, limited.RecentFailures[1].OccurredAt, errB2, failB1)
+	}
+
+	// Tag filter → only monitorA failures, resolved_at still computed.
+	tagged, err := svc.GetRecentFailures(ctx, tenantID, &models.DashboardListQuery{
+		Range: models.DashboardRange24h,
+		Limit: 10,
+		Tags:  []string{"prod"},
+	})
+	if err != nil {
+		t.Fatalf("GetRecentFailures(tags=prod) error = %v", err)
+	}
+	if len(tagged.RecentFailures) != 2 {
+		t.Fatalf("tagged RecentFailures length = %d, want 2", len(tagged.RecentFailures))
+	}
+	for _, failure := range tagged.RecentFailures {
+		if failure.MonitorID != monitorA {
+			t.Fatalf("tagged RecentFailures included monitor %s, want only %s", failure.MonitorID, monitorA)
+		}
+	}
+	if tagged.RecentFailures[0].ResolvedAt == nil || !tagged.RecentFailures[0].ResolvedAt.Equal(succA2First) {
+		t.Fatalf("tagged RecentFailures[0].ResolvedAt = %v, want %s", tagged.RecentFailures[0].ResolvedAt, succA2First)
+	}
+}
+
+// TestService_GetSummary_MonitorHealthFollowsStateMachine pins D1 end-to-end:
+// for every range the monitor-health grid and ops summary derive displayed
+// status from monitors.current_state — including a recovered monitor whose
+// LAST in-window check failed, and a 'suspect' monitor — while latest_check_at
+// stays range-scoped (rolling totals for 24h, raw window for 1h, daily rollup
+// for 7d+).
+func TestService_GetSummary_MonitorHealthFollowsStateMachine(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	svc := NewService(dbClient, nil, sharedanalytics.NewRepository(dbClient), &fakeTenantSettingsReader{}, nil)
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "dashboard-state-machine")
+	monRecovered := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "a-recovered")
+	monSuspect := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "b-suspect")
+	monDown := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "c-down")
+	monPaused := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "d-paused")
+	monUnknown := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "e-unknown")
+
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET enabled = FALSE WHERE id = $1`, monPaused); err != nil {
+		t.Fatalf("disable paused monitor: %v", err)
+	}
+	for id, state := range map[uuid.UUID]string{
+		monRecovered: "up",
+		monSuspect:   "suspect",
+		monDown:      "down",
+	} {
+		if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = $2 WHERE id = $1`, id, state); err != nil {
+			t.Fatalf("set current_state %s: %v", state, err)
+		}
+	}
+
+	// Truncate to seconds so timestamps survive the Postgres µs round trip and
+	// time.Equal comparisons hold.
+	now := time.Now().UTC().Truncate(time.Second)
+	// monRecovered's LAST in-window check is a FAILURE, but the state machine has
+	// since confirmed recovery (current_state='up'): the dashboard must show up.
+	recoveredCheckAt := now.Add(-30 * time.Minute)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monRecovered, recoveredCheckAt, "failure", "monitor", nil)
+	downCheckAt := now.Add(-45 * time.Minute)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monDown, downCheckAt, "failure", "monitor", nil)
+	// Cursor 3h back so both raw rows are in the rolling raw tail regardless of
+	// where "now" falls within the hour.
+	testutil.InsertRollupJobState(ctx, t, dbClient, "monitor_daily_rollups", now.Add(-3*time.Hour), uuid.New())
+
+	// Daily rollup for the 7d path with a CONTRARY latest_status: status must
+	// still come from current_state, latest_check_at from the rollup.
+	bucketDay := time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.UTC)
+	rollupLatestAt := bucketDay.Add(23 * time.Hour)
+	testutil.InsertDailyRollup(ctx, t, dbClient, tenantID, monRecovered, bucketDay, 10, 8, 800, 8, "failure", rollupLatestAt)
+
+	healthByID := func(rows []models.DashboardMonitorHealth) map[uuid.UUID]models.DashboardMonitorHealth {
+		m := make(map[uuid.UUID]models.DashboardMonitorHealth, len(rows))
+		for _, r := range rows {
+			m[r.MonitorID] = r
+		}
+		return m
+	}
+	assertStatuses := func(t *testing.T, byID map[uuid.UUID]models.DashboardMonitorHealth) {
+		t.Helper()
+		if got := byID[monRecovered].LatestStatus; got == nil || *got != "success" {
+			t.Fatalf("recovered LatestStatus = %v, want success (state machine wins over failing last check)", got)
+		}
+		if got := byID[monSuspect].LatestStatus; got == nil || *got != "success" {
+			t.Fatalf("suspect LatestStatus = %v, want success", got)
+		}
+		if got := byID[monDown].LatestStatus; got == nil || *got != "failure" {
+			t.Fatalf("down LatestStatus = %v, want failure", got)
+		}
+		if got := byID[monUnknown].LatestStatus; got != nil {
+			t.Fatalf("unknown LatestStatus = %v, want nil", got)
+		}
+	}
+	assertOps := func(t *testing.T, ops models.DashboardOpsSummary) {
+		t.Helper()
+		if ops.UpMonitors != 2 {
+			t.Fatalf("UpMonitors = %d, want 2 (up + suspect)", ops.UpMonitors)
+		}
+		if ops.DownMonitors != 1 {
+			t.Fatalf("DownMonitors = %d, want 1", ops.DownMonitors)
+		}
+		if ops.PausedMonitors != 1 {
+			t.Fatalf("PausedMonitors = %d, want 1", ops.PausedMonitors)
+		}
+	}
+
+	for _, rangeValue := range []models.DashboardRange{models.DashboardRange24h, models.DashboardRange1h, models.DashboardRange7d} {
+		t.Run(string(rangeValue), func(t *testing.T) {
+			resp, err := svc.GetSummary(ctx, tenantID, &models.DashboardOverviewQuery{Range: rangeValue})
+			if err != nil {
+				t.Fatalf("GetSummary(%s) error = %v", rangeValue, err)
+			}
+			if len(resp.MonitorHealth) != 5 {
+				t.Fatalf("MonitorHealth length = %d, want 5", len(resp.MonitorHealth))
+			}
+			byID := healthByID(resp.MonitorHealth)
+			assertStatuses(t, byID)
+			assertOps(t, resp.OpsSummary)
+
+			switch rangeValue {
+			case models.DashboardRange24h, models.DashboardRange1h:
+				if got := byID[monRecovered].LatestCheckAt; got == nil || !got.Equal(recoveredCheckAt) {
+					t.Fatalf("recovered LatestCheckAt = %v, want %v", got, recoveredCheckAt)
+				}
+				if got := byID[monDown].LatestCheckAt; got == nil || !got.Equal(downCheckAt) {
+					t.Fatalf("down LatestCheckAt = %v, want %v", got, downCheckAt)
+				}
+				if got := byID[monUnknown].LatestCheckAt; got != nil {
+					t.Fatalf("unknown LatestCheckAt = %v, want nil", got)
+				}
+			case models.DashboardRange7d:
+				if got := byID[monRecovered].LatestCheckAt; got == nil || !got.Equal(rollupLatestAt) {
+					t.Fatalf("recovered LatestCheckAt = %v, want %v (daily rollup)", got, rollupLatestAt)
+				}
+			}
+		})
 	}
 }

@@ -5,13 +5,21 @@ import {
   GRPCMonitorConfig,
   GroupMonitorConfig,
   HTTPMonitorConfig,
+  MASKED_SECRET,
   Monitor,
   MonitorConfig,
+  MongoDBMonitorConfig,
+  MySQLMonitorConfig,
   PingMonitorConfig,
+  PostgresMonitorConfig,
+  RabbitMQMonitorConfig,
+  RedisMonitorConfig,
+  WebSocketMonitorConfig,
   PushMonitorConfig,
   SIPMonitorConfig,
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
+  TCPMonitorConfig,
 } from '@/lib/types';
 
 function cloneObject<T>(value: T): T {
@@ -60,6 +68,10 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
       const cfg = (monitor.config as GRPCMonitorConfig | undefined) || { host: '', port: 443, use_tls: true };
       return cloneObject(cfg);
     }
+    case 'tcp': {
+      const cfg = (monitor.config as TCPMonitorConfig | undefined) || { host: '', port: 0 };
+      return cloneObject(cfg);
+    }
     case 'group': {
       const cfg = monitor.config as GroupMonitorConfig | undefined;
       return {
@@ -90,6 +102,25 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
         ...(cfg?.expected_status !== undefined ? { expected_status: cfg.expected_status } : {}),
       };
     }
+    case 'websocket': {
+      const cfg = (monitor.config as WebSocketMonitorConfig | undefined) || { url: '' };
+      return cloneObject(cfg);
+    }
+    case 'redis':
+    case 'postgres':
+    case 'mongodb':
+    case 'rabbitmq':
+    case 'mysql': {
+      // Secrets come back masked from the API and can't carry over to a new
+      // monitor — drop them so the clone starts with a clean credential slate.
+      const cfg = cloneObject(
+        (monitor.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig & MySQLMonitorConfig | undefined) || {}
+      );
+      if (cfg.password === MASKED_SECRET) delete cfg.password;
+      if (cfg.connection_string === MASKED_SECRET) delete cfg.connection_string;
+      if (cfg.tls_client_key_pem === MASKED_SECRET) delete cfg.tls_client_key_pem;
+      return cfg;
+    }
     case 'synthetic_api': {
       const cfg = (monitor.config as SyntheticAPIMonitorConfig | undefined) || { steps: [] };
       return cloneObject(cfg);
@@ -108,7 +139,6 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
 
 export function buildClonedMonitorInitialData(monitor: Monitor): CreateMonitorRequest {
   const name = `${monitor.name} (Copy)`;
-  const alertPolicyIds = monitor.alert_policy_ids || (monitor.alert_policy_id ? [monitor.alert_policy_id] : []);
 
   return {
     name,
@@ -117,7 +147,9 @@ export function buildClonedMonitorInitialData(monitor: Monitor): CreateMonitorRe
     interval_seconds: monitor.interval_seconds || 60,
     timeout_seconds: monitor.timeout_seconds || 30,
     enabled: monitor.enabled ?? true,
-    ...(alertPolicyIds.length > 0 ? { alert_policy_ids: cloneObject(alertPolicyIds) } : {}),
     ...(monitor.tags && monitor.tags.length > 0 ? { tags: cloneObject(monitor.tags) } : {}),
+    ...(monitor.depends_on_ids && monitor.depends_on_ids.length > 0
+      ? { depends_on_ids: cloneObject(monitor.depends_on_ids) }
+      : {}),
   };
 }

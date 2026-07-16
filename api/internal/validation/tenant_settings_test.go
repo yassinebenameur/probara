@@ -1,6 +1,10 @@
 package validation
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestValidateTenantDataRetentionDays(t *testing.T) {
 	tests := []struct {
@@ -26,5 +30,52 @@ func TestValidateTenantDataRetentionDays(t *testing.T) {
 				t.Fatalf("expected validation error for %d", tt.days)
 			}
 		})
+	}
+}
+
+func TestValidateDashboardGroupTags_AcceptsEmpty(t *testing.T) {
+	if err := ValidateDashboardGroupTags([]string{}); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestValidateDashboardGroupTags_AcceptsTypicalTags(t *testing.T) {
+	if err := ValidateDashboardGroupTags([]string{"api", "payments", "internal"}); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestValidateDashboardGroupTags_RejectsEmptyString(t *testing.T) {
+	if err := ValidateDashboardGroupTags([]string{"api", ""}); err == nil {
+		t.Fatal("expected error for empty tag")
+	}
+}
+
+func TestValidateDashboardGroupTags_RejectsWhitespaceOnly(t *testing.T) {
+	if err := ValidateDashboardGroupTags([]string{"  "}); err == nil {
+		t.Fatal("expected error for whitespace-only tag")
+	}
+}
+
+func TestValidateDashboardGroupTags_RejectsDuplicates(t *testing.T) {
+	if err := ValidateDashboardGroupTags([]string{"api", "api"}); err == nil {
+		t.Fatal("expected error for duplicate tag")
+	}
+}
+
+func TestValidateDashboardGroupTags_RejectsTooLong(t *testing.T) {
+	long := strings.Repeat("a", 65)
+	if err := ValidateDashboardGroupTags([]string{long}); err == nil {
+		t.Fatal("expected error for tag longer than 64 chars")
+	}
+}
+
+func TestValidateDashboardGroupTags_RejectsTooMany(t *testing.T) {
+	var tags []string
+	for i := 0; i < 51; i++ {
+		tags = append(tags, fmt.Sprintf("t%d", i))
+	}
+	if err := ValidateDashboardGroupTags(tags); err == nil {
+		t.Fatal("expected error for >50 tags")
 	}
 }

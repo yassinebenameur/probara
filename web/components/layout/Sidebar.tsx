@@ -8,23 +8,30 @@ import {
   Activity,
   FileText,
   AlertTriangle,
-  Bell,
   Send,
   Users,
   Settings,
   LogOut,
   Zap,
-  CheckCircle2,
+  Siren,
+  Workflow,
+  Wrench,
+  MapPin,
+  Network,
+  ScrollText,
 } from 'lucide-react';
-import { getMonitors, getAlertChannels, getAlertPolicies, getStatusPages } from '@/lib/api';
+import { getMonitors, getAlertChannels, getStatusPages, getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { clearSelectedTenantId } from '@/lib/tenant';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
+import Pill from '@/components/ui/Pill';
+import Button from '@/components/ui/Button';
 
 type NavItem = {
   name: string;
   href: string;
   icon: React.ElementType;
-  countKey?: 'monitors' | 'statusPages' | 'alertPolicies' | 'alertChannels';
+  countKey?: 'monitors' | 'statusPages' | 'alertChannels' | 'incidents';
 };
 
 type NavGroup = {
@@ -43,6 +50,10 @@ const navGroups: NavGroup[] = [
     label: 'Monitoring',
     items: [
       { name: 'Monitors', href: '/monitors', icon: Activity, countKey: 'monitors' },
+      { name: 'Locations', href: '/locations', icon: MapPin },
+      { name: 'Mesh', href: '/mesh', icon: Network },
+      { name: 'Dependencies', href: '/dependencies', icon: Workflow },
+      { name: 'Maintenance', href: '/maintenance', icon: Wrench },
       { name: 'Status Pages', href: '/status-pages', icon: FileText, countKey: 'statusPages' },
     ],
   },
@@ -50,7 +61,7 @@ const navGroups: NavGroup[] = [
     label: 'Alerting',
     items: [
       { name: 'Alerts', href: '/alerts', icon: AlertTriangle },
-      { name: 'Alert Policies', href: '/alert-policies', icon: Bell, countKey: 'alertPolicies' },
+      { name: 'Incidents', href: '/incidents', icon: Siren, countKey: 'incidents' },
       { name: 'Alert Channels', href: '/alert-channels', icon: Send, countKey: 'alertChannels' },
     ],
   },
@@ -58,6 +69,7 @@ const navGroups: NavGroup[] = [
     label: 'Administration',
     items: [
       { name: 'Users', href: '/users', icon: Users },
+      { name: 'Audit Log', href: '/audit', icon: ScrollText },
       { name: 'Settings', href: '/settings', icon: Settings },
     ],
   },
@@ -70,7 +82,7 @@ export default function Sidebar() {
   const [counts, setCounts] = useState({
     monitors: 0,
     statusPages: 0,
-    alertPolicies: 0,
+    incidents: 0,
     alertChannels: 0,
   });
 
@@ -92,16 +104,16 @@ export default function Sidebar() {
 
   const loadCounts = useCallback(async () => {
     try {
-      const [monitorsRes, pagesRes, policiesRes, channelsRes] = await Promise.all([
+      const [monitorsRes, pagesRes, incidentsRes, channelsRes] = await Promise.all([
         getMonitors({ page_size: 1 }),
         getStatusPages({ page_size: 1 }),
-        getAlertPolicies({ page_size: 1 }),
+        getIncidents({ page_size: 1 }),
         getAlertChannels({ page_size: 1 }),
       ]);
       setCounts({
         monitors: monitorsRes.total || 0,
         statusPages: pagesRes.total || 0,
-        alertPolicies: policiesRes.total || 0,
+        incidents: incidentsRes.total || 0,
         alertChannels: channelsRes.total || 0,
       });
     } catch (error) {
@@ -128,15 +140,26 @@ export default function Sidebar() {
     return counts[countKey] ?? null;
   };
 
+  const { isSuperadmin, role, loading: userLoading } = useCurrentUser();
+
+  // /users is superadmin-only; /audit needs tenant admin (or superadmin).
+  // While identity is loading, hide gated items rather than flashing them.
+  const canSeeUsers = !apiKeyMode && !userLoading && isSuperadmin;
+  const canSeeAudit = !apiKeyMode && !userLoading && (isSuperadmin || role === 'admin');
+
   const visibleGroups = navGroups
     .map((group) => ({
       ...group,
-      items: apiKeyMode ? group.items.filter((item) => item.href !== '/users') : group.items,
+      items: group.items.filter((item) => {
+        if (item.href === '/users') return canSeeUsers;
+        if (item.href === '/audit') return canSeeAudit;
+        return true;
+      }),
     }))
     .filter((group) => group.items.length > 0);
 
   return (
-    <aside className="sticky top-0 flex h-screen w-60 flex-col border-r border-white/[0.06] bg-slate-950/50 backdrop-blur-xl">
+    <aside className="sticky top-0 hidden h-screen w-60 flex-col border-r border-white/[0.06] bg-slate-950/50 backdrop-blur-xl md:flex">
       {/* Logo */}
       <div className="flex h-14 items-center gap-3 border-b border-white/[0.06] px-4">
         <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-400 to-violet-500">
@@ -183,15 +206,9 @@ export default function Sidebar() {
                       <span className="font-medium">{item.name}</span>
                     </div>
                     {count !== null && count > 0 && (
-                      <span
-                        className={`min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[0.65rem] tabular-nums ${
-                          isActive
-                            ? 'bg-cyan-500/20 text-cyan-400'
-                            : 'bg-slate-800 text-slate-500'
-                        }`}
-                      >
+                      <Pill tone={isActive ? 'info' : 'neutral'} size="xs" className="tabular-nums">
                         {count}
-                      </span>
+                      </Pill>
                     )}
                   </Link>
                 );
@@ -203,23 +220,23 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-white/[0.06] px-4 py-3">
-        {/* System status */}
         <div className="mb-3 flex items-center gap-2">
-          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-emerald-400" strokeWidth={2} />
+          <Activity className="h-3.5 w-3.5 flex-shrink-0 text-cyan-400" strokeWidth={2} />
           <div className="min-w-0">
-            <p className="truncate text-[0.72rem] font-medium text-emerald-400">All systems operational</p>
+            <p className="truncate text-[0.72rem] font-medium text-slate-300">Monitoring workspace</p>
             <p className="text-[0.68rem] text-slate-600">{counts.monitors} monitor{counts.monitors !== 1 ? 's' : ''} active</p>
           </div>
         </div>
 
-        {/* Logout */}
-        <button
+        <Button
+          variant="subtle"
+          size="sm"
+          icon={<LogOut strokeWidth={1.75} />}
           onClick={handleLogout}
-          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm text-slate-500 transition-all hover:bg-white/[0.04] hover:text-slate-300"
+          className="w-full justify-start"
         >
-          <LogOut className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
-          <span className="font-medium">Logout</span>
-        </button>
+          Logout
+        </Button>
       </div>
     </aside>
   );

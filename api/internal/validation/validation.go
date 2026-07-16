@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/api/internal/models"
-	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
 const (
@@ -20,6 +20,123 @@ var (
 	slugRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 )
 
+// ValidateCreateIncident validates a manual incident creation request.
+func ValidateCreateIncident(req *models.CreateIncidentRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		return fmt.Errorf("title is required")
+	}
+	if strings.TrimSpace(req.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	if err := validateIncidentSeverity(req.Severity, true); err != nil {
+		return err
+	}
+	if err := validateUUIDString("owner user id", req.OwnerUserID, true); err != nil {
+		return err
+	}
+	if err := validateUUIDString("alert id", req.AlertID, true); err != nil {
+		return err
+	}
+	if err := validateUUIDString("monitor id", req.MonitorID, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ValidateIncidentStateTransition validates an incident state transition request.
+func ValidateIncidentStateTransition(req *models.TransitionIncidentStateRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	switch req.State {
+	case models.IncidentStateInvestigating, models.IncidentStateIdentified, models.IncidentStateMonitoring, models.IncidentStateResolved:
+		return nil
+	default:
+		return fmt.Errorf("invalid incident state")
+	}
+}
+
+// ValidateCreateIncidentTimelineEntry validates a timeline entry request.
+func ValidateCreateIncidentTimelineEntry(req *models.CreateIncidentTimelineEntryRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	switch req.EntryType {
+	case models.IncidentTimelineEntryTypeInternalNote, models.IncidentTimelineEntryTypePublicUpdate:
+	default:
+		return fmt.Errorf("invalid incident timeline entry type")
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		return fmt.Errorf("message is required")
+	}
+	return nil
+}
+
+// ValidateUpdateIncident validates a partial incident update request.
+func ValidateUpdateIncident(req *models.UpdateIncidentRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
+		return fmt.Errorf("title is required")
+	}
+	if req.Summary != nil && strings.TrimSpace(*req.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	if req.Severity != nil {
+		if err := validateIncidentSeverity(*req.Severity, false); err != nil {
+			return err
+		}
+	}
+	if req.OwnerUserID != nil {
+		if err := validateUUIDString("owner user id", *req.OwnerUserID, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateIncidentSeverity(severity models.IncidentSeverity, allowEmpty bool) error {
+	value := string(severity)
+	if value == "" {
+		if allowEmpty {
+			return nil
+		}
+		return fmt.Errorf("invalid incident severity")
+	}
+
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("invalid incident severity")
+	}
+
+	switch severity {
+	case models.IncidentSeverityCritical, models.IncidentSeverityHigh, models.IncidentSeverityMedium, models.IncidentSeverityLow:
+		return nil
+	default:
+		return fmt.Errorf("invalid incident severity")
+	}
+}
+
+func validateUUIDString(fieldName, value string, allowEmpty bool) error {
+	if value == "" {
+		if allowEmpty {
+			return nil
+		}
+		return fmt.Errorf("invalid %s", fieldName)
+	}
+
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("invalid %s", fieldName)
+	}
+	if _, err := uuid.Parse(value); err != nil {
+		return fmt.Errorf("invalid %s", fieldName)
+	}
+	return nil
+}
+
 // activeCheckTypes are monitor types that require timeout validation
 var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeHTTP:             true,
@@ -29,6 +146,13 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeGRPC:             true,
 	models.MonitorTypeSyntheticAPI:     true,
 	models.MonitorTypeSyntheticBrowser: true,
+	models.MonitorTypeRedis:            true,
+	models.MonitorTypePostgres:         true,
+	models.MonitorTypeMongoDB:          true,
+	models.MonitorTypeRabbitMQ:         true,
+	models.MonitorTypeTCP:              true,
+	models.MonitorTypeMySQL:            true,
+	models.MonitorTypeWebSocket:        true,
 }
 
 // ValidateMonitor validates a CreateMonitorRequest
@@ -70,6 +194,14 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 		if req.TimeoutSeconds >= req.IntervalSeconds {
 			return fmt.Errorf("timeout_seconds must be less than interval_seconds")
 		}
+	}
+
+	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
+		return err
+	}
+
+	if err := ValidateMonitorLocationFields(req.Type, req.LocationIDs, req.LocationQuorum); err != nil {
+		return err
 	}
 
 	return nil
@@ -143,6 +275,65 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 		}
 	}
 
+	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
+		return err
+	}
+
+	var locationIDs []string
+	if req.LocationIDs != nil {
+		locationIDs = *req.LocationIDs
+	}
+	if req.LocationIDs != nil || req.LocationQuorum != nil {
+		if err := ValidateMonitorLocationFields(monitorType, locationIDs, req.LocationQuorum); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ValidateMonitorLocationFields validates private-location selection: only
+// active check types can be pinned to locations (group/agent/push never run
+// on workers), IDs must be UUIDs, and the quorum must be sane. Quorum
+// clamping to the selection size happens in the service.
+func ValidateMonitorLocationFields(monitorType models.MonitorType, locationIDs []string, quorum *int) error {
+	if len(locationIDs) > 0 && !activeCheckTypes[monitorType] {
+		return fmt.Errorf("locations cannot be set on %s monitors", monitorType)
+	}
+	for _, id := range locationIDs {
+		if id == "" {
+			continue
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			return fmt.Errorf("invalid location_id %q", id)
+		}
+	}
+	if quorum != nil && *quorum < 1 {
+		return fmt.Errorf("location_quorum must be at least 1")
+	}
+	return nil
+}
+
+// ValidateMonitorNotificationFields validates the notification-routing fields that can be set
+// on both CreateMonitorRequest and UpdateMonitorRequest (spec §7.4).
+func ValidateMonitorNotificationFields(threshold *int, mode *string, rollup *string, channels []models.MonitorChannelAssignment) error {
+	if threshold != nil && (*threshold < 1 || *threshold > 10) {
+		return fmt.Errorf("consecutive_failures_threshold must be between 1 and 10")
+	}
+	if mode != nil && *mode != "default" && *mode != "custom" {
+		return fmt.Errorf("notification_mode must be 'default' or 'custom'")
+	}
+	if rollup != nil && *rollup != "per_monitor" && *rollup != "group" {
+		return fmt.Errorf("member_alert_rollup must be 'per_monitor' or 'group'")
+	}
+	for _, c := range channels {
+		if _, err := uuid.Parse(c.ChannelID); err != nil {
+			return fmt.Errorf("invalid channel_id %q", c.ChannelID)
+		}
+		if c.DelaySeconds < 0 {
+			return fmt.Errorf("delay_seconds must be >= 0")
+		}
+	}
 	return nil
 }
 
@@ -269,6 +460,15 @@ func validateStatusPageSettings(settings *models.StatusPageSettings) error {
 			return fmt.Errorf("default_theme must be either dark or light")
 		}
 	}
+	if settings.CustomCSS != nil && len(*settings.CustomCSS) > 128*1024 {
+		return fmt.Errorf("custom_css must be 128KB or less")
+	}
+	if settings.CustomHeadHTML != nil && len(*settings.CustomHeadHTML) > 64*1024 {
+		return fmt.Errorf("custom_head_html must be 64KB or less")
+	}
+	if settings.CustomFooterHTML != nil && len(*settings.CustomFooterHTML) > 64*1024 {
+		return fmt.Errorf("custom_footer_html must be 64KB or less")
+	}
 	return nil
 }
 
@@ -315,34 +515,26 @@ func validateStatusPageSections(sections []models.StatusPageSection) error {
 	return nil
 }
 
-// ValidateAlertChannel validates a CreateAlertChannelRequest
+// ValidateAlertChannel validates a CreateAlertChannelRequest by delegating
+// the type-specific config check to the registered plugin.
 func ValidateAlertChannel(req *models.CreateAlertChannelRequest) error {
 	if strings.TrimSpace(req.Name) == "" {
 		return fmt.Errorf("name is required")
 	}
+	if req.Type == "" {
+		return fmt.Errorf("type is required")
+	}
 
-	switch req.Type {
-	case models.AlertChannelTypeTeams, models.AlertChannelTypeEmail:
-		// ok
-	default:
-		return fmt.Errorf("invalid alert channel type")
+	p, ok := plugin.DefaultRegistry.Get(string(req.Type))
+	if !ok {
+		return fmt.Errorf("invalid alert channel type: %s", req.Type)
 	}
 
 	if len(req.Config) == 0 {
 		return fmt.Errorf("config is required")
 	}
 
-	if req.Type == models.AlertChannelTypeTeams {
-		if _, err := notifications.ParseTeamsWebhookConfig(req.Config); err != nil {
-			return err
-		}
-	} else if req.Type == models.AlertChannelTypeEmail {
-		if _, err := notifications.ParseEmailConfig(req.Config); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return p.Validate(req.Config)
 }
 
 // ValidateAlertChannelUpdate validates an UpdateAlertChannelRequest

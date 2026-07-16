@@ -75,7 +75,17 @@ spec:
         - name: POSTGRES_URL
           value: {{ include "monitoring-platform.postgresUrl" . | quote }}
         - name: NATS_URL
-          value: {{ include "monitoring-platform.natsUrl" . | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_url
+        {{- if .Values.secrets.probaraSecretsKey }}
+        - name: PROBARA_SECRETS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: probara_secrets_key
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

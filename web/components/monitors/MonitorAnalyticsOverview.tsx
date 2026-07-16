@@ -74,6 +74,8 @@ function StatusPill({ status }: { status: string }) {
           ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
           : status === 'paused'
             ? 'bg-slate-500/10 text-slate-300 border-slate-500/20'
+          : status === 'maintenance'
+            ? 'bg-sky-500/10 text-sky-300 border-sky-500/20'
           : 'bg-slate-500/10 text-slate-300 border-slate-500/20';
 
   const label = status === 'paused' ? 'paused' : status;
@@ -189,6 +191,7 @@ function RecentResultsTable({ results }: { results: CheckResult[] }) {
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">Time (UTC)</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">Status</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">Latency</th>
+              <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">Location</th>
               <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">Source</th>
             </tr>
           </thead>
@@ -200,12 +203,21 @@ function RecentResultsTable({ results }: { results: CheckResult[] }) {
                 </td>
                 <td className="px-5 py-3 text-sm text-slate-300">{result.status}</td>
                 <td className="px-5 py-3 text-sm text-slate-400">{formatLatency(result.latency_ms)}</td>
+                <td className="px-5 py-3 text-sm">
+                  {result.location_name ? (
+                    <span className="inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-2 py-0.5 text-[0.7rem] font-medium text-cyan-200">
+                      {result.location_name}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">Default</span>
+                  )}
+                </td>
                 <td className="px-5 py-3 text-sm text-slate-500">{result.result_source}</td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate-500">
+                <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate-500">
                   No raw results available yet
                 </td>
               </tr>

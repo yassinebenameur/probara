@@ -13,6 +13,9 @@ export interface ApiResponse<T> {
 export interface Tenant {
   id: string;
   name: string;
+  // Caller's membership role in this tenant ("admin" for superadmins);
+  // present on list responses.
+  role?: TenantRole;
   created_at: string;
   updated_at: string;
 }
@@ -23,16 +26,51 @@ export interface TenantListResponse {
 
 export interface TenantSettings {
   data_retention_days: number;
+  dashboard_group_tags: string[];
 }
 
 export interface UpdateTenantSettingsRequest {
   data_retention_days?: number;
+  dashboard_group_tags?: string[];
+}
+
+// RBAC types
+export type TenantRole = "admin" | "editor" | "viewer";
+export type PlatformRole = "superadmin" | "member";
+export type ApiKeyScope = "read" | "write";
+
+export interface TenantMembership {
+  tenant_id: string;
+  tenant_name?: string;
+  role: TenantRole;
+}
+
+// Effective identity of the current credential (cookie or API key),
+// from GET /v1/auth-context.
+export interface AuthContext {
+  actor_type: "admin_user" | "api_key" | "";
+  admin_id?: string;
+  api_key_id?: string;
+  tenant_id?: string;
+  platform_role?: PlatformRole;
+  role?: TenantRole;
+  scope?: ApiKeyScope;
+  can_write: boolean;
+}
+
+export interface OidcStatus {
+  enabled: boolean;
+  label?: string;
 }
 
 // Admin user types
 export interface AdminUser {
   id: string;
   username: string;
+  email?: string;
+  platform_role?: PlatformRole;
+  auth_method?: "password" | "oidc";
+  memberships?: TenantMembership[];
   created_at: string;
   updated_at: string;
   last_login_at?: string;
@@ -46,14 +84,26 @@ export interface AdminUserListResponse {
   total: number;
 }
 
+export interface MembershipInput {
+  tenant_id: string;
+  role: TenantRole;
+}
+
 export interface CreateAdminUserRequest {
   username: string;
-  password: string;
+  email?: string;
+  // Omitted = SSO-only user (requires email for IdP linking).
+  password?: string;
+  platform_role?: PlatformRole;
+  memberships?: MembershipInput[];
 }
 
 export interface UpdateAdminUserRequest {
   username?: string;
+  email?: string;
   password?: string;
+  platform_role?: PlatformRole;
+  memberships?: MembershipInput[];
 }
 
 // API Key types
@@ -62,6 +112,10 @@ export interface ApiKey {
   name: string;
   key_prefix: string;
   key?: string;
+  scope: ApiKeyScope;
+  expires_at?: string;
+  last_used_at?: string;
+  created_by?: string;
   created_at: string;
   revoked_at?: string;
 }
@@ -75,6 +129,35 @@ export interface ApiKeyListResponse {
 
 export interface CreateApiKeyRequest {
   name: string;
+  scope?: ApiKeyScope;
+  expires_at?: string;
+}
+
+// Audit log types
+export type AuditOutcome = "success" | "failure" | "denied";
+
+export interface AuditEvent {
+  id: number;
+  occurred_at: string;
+  tenant_id?: string;
+  actor_type: "admin_user" | "api_key" | "anonymous";
+  actor_id?: string;
+  actor_label: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  outcome: AuditOutcome;
+  status_code?: number;
+  ip: string;
+  user_agent: string;
+  details?: Record<string, unknown>;
+}
+
+export interface AuditListResponse {
+  items: AuditEvent[];
+  page: number;
+  page_size: number;
+  total: number;
 }
 
 // Monitor types
@@ -88,7 +171,19 @@ export type MonitorType =
   | "push"
   | "sip"
   | "synthetic_api"
-  | "synthetic_browser";
+  | "synthetic_browser"
+  | "redis"
+  | "postgres"
+  | "mongodb"
+  | "rabbitmq"
+  | "tcp"
+  | "mysql"
+  | "websocket";
+
+// Secret config fields (passwords, connection strings) are write-only: the
+// API returns "***" in their place, and submitting "***" back keeps the
+// stored value unchanged.
+export const MASKED_SECRET = "***";
 
 export interface HTTPStatusRange {
   min: number;
@@ -171,6 +266,9 @@ export interface DNSMonitorConfig {
   host: string;
   record_type?: string;
   expected_answers?: string[];
+  // Query a specific DNS server (host or host:port, default port 53) instead
+  // of the worker's system resolver — for private zones and VPC resolvers.
+  nameserver?: string;
 }
 
 export interface GRPCMonitorConfig {
@@ -180,13 +278,28 @@ export interface GRPCMonitorConfig {
   use_tls?: boolean;
 }
 
+export interface TCPMonitorConfig {
+  host: string;
+  port: number;
+  use_tls?: boolean;
+  tls_skip_verify?: boolean;
+}
+
 export interface GroupMonitorConfig {
   monitor_ids: string[];
+}
+
+export interface MetricThresholdsConfig {
+  cpu_percent?: number;
+  memory_percent?: number;
+  disk_percent?: number;
+  swap_percent?: number;
 }
 
 export interface AgentMonitorConfig {
   agent_id: string;
   expected_interval_seconds: number;
+  metric_thresholds?: MetricThresholdsConfig;
 }
 
 export interface PushMonitorConfig {
@@ -201,6 +314,120 @@ export interface SIPMonitorConfig {
   transport: "udp" | "tcp";
   expected_status?: number;
 }
+
+// Pasted TLS material shared by the database monitor types: CA PEM for
+// private-CA verification, client cert+key for mutual TLS. The client key is
+// a write-only secret.
+export interface DBTLSMaterial {
+  tls_ca_pem?: string;
+  tls_client_cert_pem?: string;
+  tls_client_key_pem?: string; // secret, write-only
+}
+
+export interface RedisMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string; // secret, write-only
+  db?: number;
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  expected_role?: "master" | "replica";
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+export type DBQueryValueOp =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "number_gt"
+  | "number_gte"
+  | "number_lt"
+  | "number_lte";
+
+export interface PostgresMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  password?: string; // secret, write-only
+  ssl_mode?: "disable" | "require" | "verify-full";
+  query?: string;
+  query_value_op?: DBQueryValueOp;
+  query_value?: string;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+export interface MongoDBMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string; // secret, write-only
+  auth_source?: string;
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  replica_set?: string;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+export interface RabbitMQMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string; // secret, write-only
+  vhost?: string;
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+export interface MySQLMonitorConfig extends DBTLSMaterial {
+  connection_string?: string; // secret, write-only
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  password?: string; // secret, write-only
+  tls_enabled?: boolean;
+  tls_skip_verify?: boolean;
+  query?: string;
+  query_value_op?: DBQueryValueOp;
+  query_value?: string;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+export interface WebSocketMonitorConfig {
+  url: string;
+  headers?: Record<string, string>;
+  tls_skip_verify?: boolean;
+  send_message?: string;
+  expected_substring?: string;
+  max_latency_ms?: number;
+  warn_latency_ms?: number;
+}
+
+// Per-check metrics recorded by the database/broker checkers, keyed by
+// monitor type in metrics_data (e.g. {"redis": {...}}).
+export interface DBMetrics {
+  server_version?: string;
+  product?: string;
+  role?: string;
+  replica_set?: string;
+  connected_clients?: number;
+  used_memory_bytes?: number;
+  latency_warn_ms?: number;
+}
+
+export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "mongodb" | "rabbitmq" | "mysql", DBMetrics>>;
 
 export type SyntheticFailureMode = "fail_fast" | "continue";
 
@@ -283,12 +510,194 @@ export type MonitorConfig =
   | PingMonitorConfig
   | DNSMonitorConfig
   | GRPCMonitorConfig
+  | TCPMonitorConfig
   | GroupMonitorConfig
   | AgentMonitorConfig
   | PushMonitorConfig
   | SIPMonitorConfig
   | SyntheticAPIMonitorConfig
-  | SyntheticBrowserMonitorConfig;
+  | SyntheticBrowserMonitorConfig
+  | RedisMonitorConfig
+  | PostgresMonitorConfig
+  | MongoDBMonitorConfig
+  | RabbitMQMonitorConfig
+  | MySQLMonitorConfig
+  | WebSocketMonitorConfig;
+
+export type NotificationMode = 'default' | 'custom';
+
+// How a group handles alerts when its members go down:
+//   'per_monitor' — each member alerts individually; the group emits no alert.
+//   'group'       — members are suppressed; one group-level alert speaks for them.
+export type MemberAlertRollup = 'per_monitor' | 'group';
+
+export interface ChannelAssignment {
+  channel_id: string;
+  channel_name?: string;
+  channel_type?: string;
+  delay_seconds: number;
+}
+
+export interface NotificationSettings {
+  default_channels: ChannelAssignment[];
+  alert_reminder_seconds: number;
+  auto_create_incident: boolean;
+  latency_anomaly_enabled: boolean;
+  latency_baseline_window_hours: number;
+  latency_anomaly_sensitivity: number;
+  latency_anomaly_min_breach_seconds: number;
+  latency_anomaly_min_delta_pct: number;
+}
+
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge';
+
+export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
+
+// Private location types
+export interface Location {
+  id: string;
+  tenant_id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  enabled: boolean;
+  connected: boolean;
+  last_seen_at?: string;
+  // host:port other locations probe; set = participates in the mesh.
+  mesh_endpoint?: string;
+  monitor_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocationListResponse {
+  items: Location[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface CreateLocationRequest {
+  name: string;
+  description?: string;
+  mesh_endpoint?: string;
+}
+
+export interface UpdateLocationRequest {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  // Empty string clears the endpoint (opts the location out of the mesh).
+  mesh_endpoint?: string;
+}
+
+// Inter-location connectivity mesh
+
+export interface MeshLocation {
+  id: string;
+  name: string;
+  connected: boolean;
+  mesh_endpoint: string;
+}
+
+export type MeshEdgeState = 'unknown' | 'up' | 'suspect' | 'down';
+
+export interface MeshEdge {
+  source_location_id: string;
+  target_location_id: string;
+  state: MeshEdgeState;
+  last_latency_ms?: number;
+  last_check_at?: string;
+  last_error?: string;
+  stale: boolean;
+  alert_open: boolean;
+}
+
+export interface MeshResponse {
+  locations: MeshLocation[];
+  edges: MeshEdge[];
+  probe_interval_seconds: number;
+}
+
+export interface MeshEdgeHistoryPoint {
+  status: string;
+  latency_ms?: number;
+  created_at: string;
+}
+
+export interface MeshProbeResponse {
+  status: string;
+  latency_ms?: number;
+  error_message?: string;
+}
+
+export interface LocationDeployInfo {
+  location_id: string;
+  nats_url: string;
+  docker_run_command: string;
+  docker_compose_yaml: string;
+  env: Record<string, string>;
+}
+
+export interface MonitorLocationStatus {
+  id: string;
+  name: string;
+  connected: boolean;
+  current_state: 'unknown' | 'up' | 'suspect' | 'down';
+  last_latency_ms?: number;
+  last_check_at?: string;
+}
+
+// Maintenance window types
+export type MaintenanceWindowStatus = 'active' | 'upcoming' | 'past';
+
+export interface MaintenanceWindowMonitorRef {
+  id: string;
+  name: string;
+  type: string;
+}
+
+export interface MaintenanceWindow {
+  id: string;
+  tenant_id: string;
+  title: string;
+  description: string;
+  starts_at: string;
+  ends_at: string;
+  monitor_ids: string[];
+  monitors?: MaintenanceWindowMonitorRef[];
+  status: MaintenanceWindowStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MaintenanceWindowListResponse {
+  items: MaintenanceWindow[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface CreateMaintenanceWindowRequest {
+  title: string;
+  description?: string;
+  starts_at: string;
+  ends_at: string;
+  monitor_ids: string[];
+}
+
+export interface UpdateMaintenanceWindowRequest {
+  title?: string;
+  description?: string;
+  starts_at?: string;
+  ends_at?: string;
+  monitor_ids?: string[];
+}
+
+export interface SnoozeMonitorRequest {
+  until?: string;
+  duration_minutes?: number;
+}
 
 export interface Monitor {
   id: string;
@@ -306,8 +715,19 @@ export interface Monitor {
   agent_id?: string; // Unique identifier for agent monitors
   push_token?: string; // Unique token for push monitors
   member_ids?: string[]; // Populated for group monitors
+  depends_on_ids?: string[]; // Upstream monitors this one depends on
+  location_ids?: string[]; // Private locations; empty/absent = default fleet
+  location_quorum?: number; // Locations that must fail before the monitor is down
+  locations?: MonitorLocationStatus[]; // Embedded only on GET /v1/monitors/{id}
   created_at: string;
   updated_at: string;
+  consecutive_failures_threshold: number;
+  notification_mode: NotificationMode;
+  member_alert_rollup?: MemberAlertRollup;
+  notification_channels?: ChannelAssignment[];
+  current_state?: MonitorState;
+  in_maintenance?: boolean;
+  maintenance_until?: string; // Latest ends_at among covering active windows
   // Old format fields (for backward compatibility during migration)
   url?: string;
   method?: string;
@@ -327,6 +747,13 @@ export interface CreateMonitorRequest {
   alert_policy_ids?: string[];
   enabled?: boolean;
   tags?: string[];
+  consecutive_failures_threshold?: number;
+  notification_mode?: NotificationMode;
+  member_alert_rollup?: MemberAlertRollup;
+  notification_channels?: ChannelAssignment[];
+  depends_on_ids?: string[];
+  location_ids?: string[];
+  location_quorum?: number;
 }
 
 export interface UpdateMonitorRequest {
@@ -339,6 +766,13 @@ export interface UpdateMonitorRequest {
   alert_policy_ids?: string[];
   enabled?: boolean;
   tags?: string[];
+  consecutive_failures_threshold?: number;
+  notification_mode?: NotificationMode;
+  member_alert_rollup?: MemberAlertRollup;
+  notification_channels?: ChannelAssignment[];
+  depends_on_ids?: string[];
+  location_ids?: string[];
+  location_quorum?: number;
 }
 
 export interface MonitorListResponse {
@@ -348,24 +782,59 @@ export interface MonitorListResponse {
   total: number;
 }
 
+// Dependency graph types
+export interface DependencyMonitor {
+  id: string;
+  name: string;
+  type: MonitorType;
+  current_state: MonitorState;
+  last_state_change_at?: string;
+}
+
+export interface DependencyGraphEdge {
+  from: string; // downstream monitor (depends on `to`)
+  to: string; // upstream monitor
+}
+
+export interface DependencyGraph {
+  nodes: DependencyMonitor[];
+  edges: DependencyGraphEdge[];
+}
+
 // Alert types
 export type AlertStatus = 'active' | 'acknowledged' | 'resolved';
 
 export interface Alert {
   id: string;
   tenant_id: string;
-  monitor_id: string;
-  alert_policy_id: string;
+  // Absent for mesh_edge alerts (their subject is a location pair).
+  monitor_id?: string;
+  alert_policy_id?: string;
   status: AlertStatus;
   triggered_at: string;
   acknowledged_at?: string;
   resolved_at?: string;
   failure_count: number;
   last_error?: string;
+  kind: AlertKind;
+  baseline_latency_ms?: number;
+  observed_latency_ms?: number;
+  anomaly_score?: number;
+  metric_name?: string;
+  metric_value?: number;
+  threshold_value?: number;
+  root_cause_monitor_id?: string;
+  root_cause_down_since?: string;
+  // Mesh-edge subject (kind === 'mesh_edge').
+  source_location_id?: string;
+  target_location_id?: string;
   created_at: string;
   updated_at: string;
   monitor_name?: string;
   policy_name?: string;
+  root_cause_monitor_name?: string;
+  source_location_name?: string;
+  target_location_name?: string;
 }
 
 export interface AlertListResponse {
@@ -383,7 +852,7 @@ export interface AlertStreamEvent {
   received_at: string;
 }
 
-export type DashboardRange = '24h' | '7d' | '30d' | '90d' | '365d';
+export type DashboardRange = '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
 export type DashboardFailureState = 'firing' | 'resolved';
 
 export interface DashboardStats {
@@ -414,6 +883,7 @@ export interface DashboardMonitorHealth {
   monitor_id: string;
   monitor_name: string;
   enabled: boolean;
+  in_maintenance: boolean;
   latest_status: string | null;
   latest_check_at: string | null;
 }
@@ -422,6 +892,7 @@ export interface DashboardOpsSummary {
   up_monitors: number;
   down_monitors: number;
   paused_monitors: number;
+  maintenance_monitors: number;
   active_alerts: number;
   acknowledged_alerts: number;
 }
@@ -463,50 +934,264 @@ export interface DashboardOverviewResponse {
   recent_alerts: Alert[];
 }
 
-// Alert Policy types
-export interface AlertPolicy {
+export interface DashboardSummaryResponse {
+  range: DashboardRange;
+  generated_at: string;
+  available_tags: string[];
+  group_tags: string[];
+  stats: DashboardStats;
+  trend: DashboardTrendPoint[];
+  activity_24h: DashboardActivityPoint[];
+  ops_summary: DashboardOpsSummary;
+  monitor_health: DashboardMonitorHealth[];
+  groups: DashboardGroup[];
+}
+
+export interface DashboardGroupMember {
+  monitor_id: string;
+  monitor_name: string;
+  uptime: number;
+  current_status: string | null;
+}
+
+export interface DashboardGroup {
+  tag: string | null;
+  monitor_count: number;
+  uptime: number;
+  attention_count: number;
+  worst_member: DashboardGroupMember | null;
+  members: DashboardGroupMember[];
+}
+
+export interface DashboardGroupSparklineResponse {
+  tag: string | null;
+  range: DashboardRange;
+  buckets: number[];
+}
+
+export interface DashboardProblemMonitorsResponse {
+  range: DashboardRange;
+  generated_at: string;
+  problem_monitors: DashboardProblemMonitor[];
+}
+
+export interface DashboardRecentFailuresResponse {
+  range: DashboardRange;
+  generated_at: string;
+  recent_failures: DashboardFailureEvent[];
+}
+
+export interface DashboardRecentAlertsResponse {
+  range: DashboardRange;
+  generated_at: string;
+  recent_alerts: Alert[];
+}
+
+// Incident types
+export type IncidentState = 'investigating' | 'identified' | 'monitoring' | 'resolved';
+export type IncidentSource = 'manual' | 'auto';
+export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export type IncidentTimelineEntryType = 'system' | 'internal_note' | 'public_update';
+
+export interface IncidentTimelineEntry {
+  id: string;
+  tenant_id: string;
+  incident_id: string;
+  entry_type: IncidentTimelineEntryType;
+  message: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface IncidentAlertSummary {
+  id: string;
+  monitor_id: string;
+  alert_policy_id?: string;
+  status: AlertStatus;
+  triggered_at: string;
+  acknowledged_at?: string;
+  resolved_at?: string;
+  failure_count: number;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+  monitor_name: string;
+  policy_name?: string;
+}
+
+export interface IncidentMonitorSummary {
   id: string;
   tenant_id: string;
   name: string;
-  description?: string;
-  failure_threshold: number;
-  failure_window_seconds: number;
-  channel_ids?: string[];
-  email_subject_template?: string;
-  email_body_template?: string;
+  type: MonitorType;
   created_at: string;
   updated_at: string;
 }
 
-export interface CreateAlertPolicyRequest {
-  name: string;
-  description?: string;
-  failure_threshold: number;
-  failure_window_seconds: number;
-  channel_ids?: string[];
-  email_subject_template?: string;
-  email_body_template?: string;
+export interface IncidentStatusPagePublication {
+  status_page_id: string;
+  status_page_slug: string;
+  status_page_title: string;
+  published_at: string;
+  unpublished_at?: string;
+  monitor_ids: string[];
 }
 
-export interface UpdateAlertPolicyRequest {
-  name?: string;
-  description?: string;
-  failure_threshold?: number;
-  failure_window_seconds?: number;
-  channel_ids?: string[];
-  email_subject_template?: string;
-  email_body_template?: string;
+export interface IncidentListItem {
+  id: string;
+  title: string;
+  state: IncidentState;
+  source: IncidentSource;
+  updated_at: string;
+  resolved_at?: string;
+  linked_alert_count: number;
+  linked_monitor_count: number;
+  publication_count: number;
 }
 
-export interface AlertPolicyListResponse {
-  items: AlertPolicy[];
+export interface IncidentDetail {
+  id: string;
+  tenant_id: string;
+  title: string;
+  summary: string;
+  severity: IncidentSeverity;
+  owner_user_id?: string;
+  owner_username?: string;
+  state: IncidentState;
+  resolved_at?: string;
+  is_auto_created: boolean;
+  auto_monitor_id?: string;
+  auto_alert_policy_id?: string;
+  created_at: string;
+  updated_at: string;
+  alerts: IncidentAlertSummary[];
+  monitors: IncidentMonitorSummary[];
+  publications: IncidentStatusPagePublication[];
+  timeline: IncidentTimelineEntry[];
+  ai_analysis?: IncidentAIAnalysis | null;
+}
+
+export type IncidentAIAnalysisStatus = 'pending' | 'ready' | 'failed';
+
+export interface IncidentAIAnalysis {
+  id: string;
+  tenant_id: string;
+  incident_id: string;
+  status: IncidentAIAnalysisStatus;
+  model?: string;
+  summary?: string;
+  probable_root_cause?: string;
+  contributing_factors?: string[];
+  recommended_actions?: string[];
+  confidence?: string;
+  evidence?: unknown;
+  error_message?: string;
+  requested_by?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface DependencySuggestion {
+  monitor_id: string;
+  monitor_name: string;
+  depends_on_id: string;
+  depends_on_name: string;
+  reason: string;
+  confidence: string;
+}
+
+export interface DependencySuggestionResult {
+  suggestions: DependencySuggestion[];
+  model?: string;
+  analyzed_pairs: number;
+}
+
+export interface AISettings {
+  enabled: boolean;
+  provider: string;
+  base_url: string;
+  model: string;
+  json_mode: string;
+  max_tokens: number;
+  timeout_seconds: number;
+  has_api_key: boolean;
+}
+
+export interface AISettingsUpdate {
+  enabled?: boolean;
+  provider?: string;
+  base_url?: string;
+  model?: string;
+  json_mode?: string;
+  max_tokens?: number;
+  timeout_seconds?: number;
+  // api_key: omit to leave unchanged, "" to clear, value to set.
+  api_key?: string;
+}
+
+export interface AITestRequest {
+  provider: string;
+  base_url: string;
+  model: string;
+  json_mode: string;
+  api_key?: string;
+}
+
+export interface AITestResult {
+  ok: boolean;
+  model?: string;
+  message?: string;
+}
+
+export interface IncidentListResponse {
+  items: IncidentListItem[];
   page: number;
   page_size: number;
   total: number;
 }
 
+export interface CreateIncidentRequest {
+  title: string;
+  summary?: string;
+  severity: IncidentSeverity;
+  owner_user_id: string;
+  alert_id?: string;
+  monitor_id?: string;
+}
+
+export interface UpdateIncidentRequest {
+  title?: string;
+  summary?: string;
+  severity?: IncidentSeverity;
+  owner_user_id?: string;
+}
+
+export interface UpdateIncidentStateRequest {
+  state: IncidentState;
+}
+
+export interface AttachIncidentAlertsRequest {
+  alert_ids: string[];
+}
+
+export interface AttachIncidentMonitorsRequest {
+  monitor_ids: string[];
+}
+
+export interface CreateIncidentTimelineEntryRequest {
+  entry_type: 'internal_note' | 'public_update';
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PublishIncidentToStatusPageRequest {
+  monitor_ids: string[];
+}
+
 // Alert Channel types
-export type AlertChannelType = 'teams' | 'email';
+// Plugin types are dynamic now (registry-driven), so this is a free-form string.
+export type AlertChannelType = string;
 
 export interface AlertChannel {
   id: string;
@@ -539,6 +1224,39 @@ export interface AlertChannelListResponse {
   total: number;
 }
 
+// Plugin manifest (mirrors shared/notifications/plugin.Manifest).
+export type PluginFieldType =
+  | 'string'
+  | 'url'
+  | 'email_list'
+  | 'textarea'
+  | 'secret'
+  | 'bool';
+
+export type PluginCapability = 'rendered_alert' | 'raw_event' | 'testable';
+
+export interface PluginField {
+  key: string;
+  label: string;
+  placeholder?: string;
+  help?: string;
+  type: PluginFieldType;
+  required?: boolean;
+  secret?: boolean;
+  default?: unknown;
+}
+
+export interface PluginManifest {
+  type: string;
+  display_name: string;
+  description: string;
+  icon_key: string;
+  docs_url?: string;
+  version: string;
+  capabilities: PluginCapability[];
+  fields: PluginField[];
+}
+
 // Status Page types
 export interface StatusPageSectionMonitor {
   monitor_id: string;
@@ -555,6 +1273,23 @@ export interface StatusPageSection {
   updated_at?: string;
 }
 
+export interface StatusPageSettings {
+  show_monitor_tags?: boolean;
+  show_monitor_url?: boolean;
+  show_monitor_uptime?: boolean;
+  show_monitor_tls?: boolean;
+  show_latency_charts?: boolean;
+  show_agent_metrics?: boolean;
+  show_global_uptime?: boolean;
+  show_footer?: boolean;
+  footer_text?: string;
+  default_theme?: string;
+  allow_theme_toggle?: boolean;
+  custom_css?: string;
+  custom_head_html?: string;
+  custom_footer_html?: string;
+}
+
 export interface StatusPage {
   id: string;
   tenant_id: string;
@@ -567,8 +1302,43 @@ export interface StatusPage {
   secondary_color?: string;
   monitor_ids?: string[];
   sections?: StatusPageSection[];
+  settings?: StatusPageSettings;
   created_at: string;
   updated_at: string;
+}
+
+export interface StatusPageTemplateVersion {
+  version?: number;
+  status: 'draft' | 'published' | 'archived';
+  size_bytes: number;
+  created_at: string;
+  updated_at: string;
+  published_at?: string;
+}
+
+export interface StatusPageTemplateState {
+  has_custom: boolean;
+  published_version?: number;
+  draft_source?: string;
+  draft_updated_at?: string;
+  versions: StatusPageTemplateVersion[];
+  preview_token?: string;
+  max_size_bytes: number;
+}
+
+export interface StatusPageLibraryTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  source?: string; // omitted in list responses
+  size_bytes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StatusPageLibraryTemplateListResponse {
+  items: StatusPageLibraryTemplate[];
+  total: number;
 }
 
 export interface CreateStatusPageRequest {
@@ -593,6 +1363,7 @@ export interface UpdateStatusPageRequest {
   monitor_ids?: string[];
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
+  settings?: StatusPageSettings;
 }
 
 export interface StatusPageListResponse {
@@ -615,24 +1386,42 @@ export interface CheckResult {
     | PushMetrics
     | HTTPMetricsEnvelope
     | GRPCMetricsEnvelope
+    | TCPMetricsEnvelope
+    | WebSocketMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
     | SyntheticBrowserMetricsEnvelope;
+  location_id?: string; // Absent = default fleet
+  location_name?: string;
   created_at: string;
 }
 
 // Agent Metrics types
+export interface AgentDiskMount {
+  path: string;
+  used: number;
+  total: number;
+  fstype: string;
+}
+
 export interface AgentMetrics {
   cpu_percent: number;
+  cpu_cores?: number;
   memory_used: number;
   memory_total: number;
+  swap_used?: number;
+  swap_total?: number;
   disk_used: number;
   disk_total: number;
+  disk_mounts?: AgentDiskMount[];
+  disk_read_bytes?: number;
+  disk_write_bytes?: number;
   network_bytes_in: number;
   network_bytes_out: number;
   load_avg_1: number;
   load_avg_5: number;
   load_avg_15: number;
   process_count: number;
+  uptime_seconds?: number;
   timestamp: string;
 }
 
@@ -641,6 +1430,9 @@ export interface AgentInstallCommand {
   agent_id: string;
   backend_url: string;
   install_script: string;
+  windows_install_script: string;
+  uninstall_script: string;
+  windows_uninstall_script: string;
   config_template: string;
   download_url: string;
   interval_seconds: number;
@@ -682,6 +1474,27 @@ export interface GRPCMetrics {
   service?: string;
   use_tls?: boolean;
   serving_status?: string;
+}
+
+export interface TCPMetricsEnvelope {
+  tcp?: TCPMetrics;
+}
+
+export interface TCPMetrics {
+  host?: string;
+  port?: number;
+  use_tls?: boolean;
+  tls_version?: string;
+}
+
+export interface WebSocketMetricsEnvelope {
+  websocket?: WebSocketMetrics;
+}
+
+export interface WebSocketMetrics {
+  subprotocol?: string;
+  tls_version?: string;
+  latency_warn_ms?: number;
 }
 
 export interface HTTPTimingInfo {
@@ -828,7 +1641,6 @@ export interface FieldMapping {
   tags?: string;
   enabled?: string;
   group_members?: string;
-  alert_policy_names?: string;
 }
 
 export interface ImportPreviewResponse {

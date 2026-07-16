@@ -1,13 +1,19 @@
 package scheduler
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
+	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
 func TestCreateCheckJob(t *testing.T) {
@@ -28,7 +34,7 @@ func TestCreateCheckJob(t *testing.T) {
 		TimeoutSeconds:  30,
 	}
 
-	job, err := s.createCheckJob(monitor)
+	job, err := s.createCheckJob(monitor, "")
 	if err != nil {
 		t.Fatalf("createCheckJob() error = %v", err)
 	}
@@ -106,7 +112,7 @@ func TestCreateCheckJob_DeadlineCalculation(t *testing.T) {
 			}
 
 			beforeCreate := time.Now()
-			job, err := s.createCheckJob(monitor)
+			job, err := s.createCheckJob(monitor, "")
 			afterCreate := time.Now()
 
 			if err != nil {
@@ -156,7 +162,7 @@ func TestCreateCheckJob_DifferentMonitorTypes(t *testing.T) {
 				TimeoutSeconds:  30,
 			}
 
-			job, err := s.createCheckJob(monitor)
+			job, err := s.createCheckJob(monitor, "")
 			if err != nil {
 				t.Fatalf("createCheckJob() error = %v", err)
 			}
@@ -193,7 +199,7 @@ func TestCreateCheckJob_UniqueJobIDs(t *testing.T) {
 	numJobs := 100
 
 	for i := 0; i < numJobs; i++ {
-		job, err := s.createCheckJob(monitor)
+		job, err := s.createCheckJob(monitor, "")
 		if err != nil {
 			t.Fatalf("createCheckJob() error = %v", err)
 		}
@@ -222,7 +228,7 @@ func TestCreateCheckJob_CreatedAtSet(t *testing.T) {
 	}
 
 	before := time.Now()
-	job, err := s.createCheckJob(monitor)
+	job, err := s.createCheckJob(monitor, "")
 	after := time.Now()
 
 	if err != nil {
@@ -231,6 +237,102 @@ func TestCreateCheckJob_CreatedAtSet(t *testing.T) {
 
 	if job.CreatedAt.Before(before) || job.CreatedAt.After(after) {
 		t.Errorf("Job CreatedAt %v should be between %v and %v", job.CreatedAt, before, after)
+	}
+}
+
+func TestCreateCheckJob_LocationThreading(t *testing.T) {
+	s := &Scheduler{}
+
+	monitor := Monitor{
+		ID:              uuid.New(),
+		TenantID:        uuid.New(),
+		Type:            "http",
+		Config:          []byte(`{}`),
+		IntervalSeconds: 60,
+		TimeoutSeconds:  30,
+	}
+
+	locationID := uuid.New().String()
+	credential := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	parsedLocationID := uuid.MustParse(locationID)
+	monitor.LocationCredentials = map[uuid.UUID]string{parsedLocationID: credential}
+	job, err := s.createCheckJob(monitor, locationID)
+	if err != nil {
+		t.Fatalf("createCheckJob() error = %v", err)
+	}
+
+	var payload models.CheckJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatalf("Failed to unmarshal payload: %v", err)
+	}
+	if payload.LocationID != locationID {
+		t.Errorf("Payload LocationID = %q, want %q", payload.LocationID, locationID)
+	}
+
+	// Default fleet: no location in the payload.
+	job, err = s.createCheckJob(monitor, "")
+	if err != nil {
+		t.Fatalf("createCheckJob() error = %v", err)
+	}
+	var defaultPayload models.CheckJobPayload
+	if err := json.Unmarshal(job.Payload, &defaultPayload); err != nil {
+		t.Fatalf("Failed to unmarshal payload: %v", err)
+	}
+	if defaultPayload.LocationID != "" {
+		t.Errorf("Payload LocationID = %q, want empty", defaultPayload.LocationID)
+	}
+}
+
+func TestCreateCheckJob_ReencryptsSecretsForLocation(t *testing.T) {
+	locationID := uuid.New()
+	credential := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	s := &Scheduler{secretsEncryptor: secrets.NoOpEncryptor{}}
+	monitor := Monitor{
+		ID:                  uuid.New(),
+		TenantID:            uuid.New(),
+		Type:                "redis",
+		Config:              []byte(`{"host":"redis.internal","password":"private"}`),
+		TimeoutSeconds:      10,
+		LocationCredentials: map[uuid.UUID]string{locationID: credential},
+	}
+	job, err := s.createCheckJob(monitor, locationID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload models.CheckJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload.Config) == string(monitor.Config) {
+		t.Fatal("location job contains plaintext monitor secret")
+	}
+	enc, err := locationauth.ConfigEncryptor(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := secrets.DecryptMonitorConfig(enc, "redis", payload.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(plain) || !containsJSONField(plain, "password", "private") {
+		t.Fatalf("decrypted config = %s", plain)
+	}
+}
+
+func containsJSONField(raw []byte, key, want string) bool {
+	var values map[string]any
+	return json.Unmarshal(raw, &values) == nil && values[key] == want
+}
+
+func TestJobSubjectPerLocation(t *testing.T) {
+	s := &Scheduler{config: &config.SchedulerConfig{CheckJobSubject: "check.jobs"}}
+
+	if got := s.jobSubject(""); got != "check.jobs.default" {
+		t.Errorf("jobSubject(\"\") = %q, want check.jobs.default", got)
+	}
+	locationID := uuid.New().String()
+	if got := s.jobSubject(locationID); got != "check.jobs.loc."+locationID {
+		t.Errorf("jobSubject(loc) = %q, want check.jobs.loc.%s", got, locationID)
 	}
 }
 
@@ -266,5 +368,49 @@ func TestMonitor_Struct(t *testing.T) {
 	}
 	if m.TimeoutSeconds != 30 {
 		t.Errorf("Monitor TimeoutSeconds = %v, want 30", m.TimeoutSeconds)
+	}
+}
+
+func TestScheduler_FetchDueMonitors_ExcludesSoftDeleted(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	t.Cleanup(cleanup)
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "")
+	live := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "live")
+	gone := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "gone")
+
+	if _, err := dbClient.ExecContext(ctx,
+		`UPDATE monitors SET deleted_at = NOW() WHERE id = $1`, gone,
+	); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+
+	s := &Scheduler{db: dbClient}
+	tx, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback()
+
+	monitors, err := s.fetchDueMonitors(ctx, tx, 10)
+	if err != nil {
+		t.Fatalf("fetchDueMonitors: %v", err)
+	}
+
+	var sawLive, sawGone bool
+	for _, m := range monitors {
+		if m.ID == live {
+			sawLive = true
+		}
+		if m.ID == gone {
+			sawGone = true
+		}
+	}
+	if !sawLive {
+		t.Error("expected live monitor in batch; not found")
+	}
+	if sawGone {
+		t.Error("soft-deleted monitor must NOT appear in batch")
 	}
 }

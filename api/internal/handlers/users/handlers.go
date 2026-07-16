@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	adminusers "github.com/yassinebenameur/probara/api/internal/services/adminusers"
+	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -32,6 +33,7 @@ var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 type Handlers struct {
 	service userService
 	logger  *logger.Logger
+	audit   *audit.Recorder
 }
 
 type userService interface {
@@ -50,6 +52,28 @@ func NewHandlers(service userService, log *logger.Logger) *Handlers {
 		service: service,
 		logger:  log,
 	}
+}
+
+// WithAudit attaches an audit recorder for explicit user-management events.
+func (h *Handlers) WithAudit(recorder *audit.Recorder) *Handlers {
+	h.audit = recorder
+	return h
+}
+
+// recordUserEvent emits a rich user-management audit event (the /users
+// subtree is excluded from the generic mutation middleware). The target
+// user's identity goes in resource fields/details, not the actor fields.
+func (h *Handlers) recordUserEvent(r *http.Request, action, outcome string, targetID string, details map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	event := audit.FromRequest(r)
+	event.Action = action
+	event.Outcome = outcome
+	event.ResourceType = "user"
+	event.ResourceID = targetID
+	event.Details = details
+	h.audit.Record(event)
 }
 
 // ListUsers handles GET /api/v1/users.
@@ -121,7 +145,7 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.service.CreateUser(r.Context(), &req)
 	if err != nil {
-		if errors.Is(err, adminusers.ErrUsernameTaken) {
+		if errors.Is(err, adminusers.ErrUsernameTaken) || errors.Is(err, adminusers.ErrEmailTaken) {
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		}
@@ -129,6 +153,13 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteInternalError(w, "failed to create user")
 		return
 	}
+
+	h.recordUserEvent(r, "user.create", audit.OutcomeSuccess, user.ID.String(), map[string]any{
+		"username":      user.Username,
+		"platform_role": user.PlatformRole,
+		"auth_method":   user.AuthMethod,
+		"memberships":   len(user.Memberships),
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -158,7 +189,7 @@ func (h *Handlers) BootstrapFirstUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateCreateRequest(&req); err != nil {
+	if err := validateBootstrapRequest(&req); err != nil {
 		apierrors.WriteValidationError(w, err.Error())
 		return
 	}
@@ -210,7 +241,9 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, adminusers.ErrUserNotFound):
 			apierrors.WriteNotFoundError(w, "user not found")
 			return
-		case errors.Is(err, adminusers.ErrUsernameTaken):
+		case errors.Is(err, adminusers.ErrUsernameTaken),
+			errors.Is(err, adminusers.ErrEmailTaken),
+			errors.Is(err, adminusers.ErrCannotDemoteLastAdmin):
 			apierrors.WriteValidationError(w, err.Error())
 			return
 		default:
@@ -222,6 +255,27 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	changed := make([]string, 0, 5)
+	if req.Username != nil {
+		changed = append(changed, "username")
+	}
+	if req.Email != nil {
+		changed = append(changed, "email")
+	}
+	if req.Password != nil {
+		changed = append(changed, "password")
+	}
+	if req.PlatformRole != nil {
+		changed = append(changed, "platform_role")
+	}
+	if req.Memberships != nil {
+		changed = append(changed, "memberships")
+	}
+	h.recordUserEvent(r, "user.update", audit.OutcomeSuccess, user.ID.String(), map[string]any{
+		"username": user.Username,
+		"changed":  changed,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(user)
@@ -268,6 +322,8 @@ func (h *Handlers) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.recordUserEvent(r, "user.delete", audit.OutcomeSuccess, targetUserID.String(), nil)
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -276,15 +332,40 @@ func validateCreateRequest(req *models.CreateAdminUserRequest) error {
 	if err := validateUsername(req.Username); err != nil {
 		return err
 	}
-	if err := validatePassword(req.Password); err != nil {
-		return err
+	hasPassword := req.Password != nil && *req.Password != ""
+	if hasPassword {
+		if err := validatePassword(*req.Password); err != nil {
+			return err
+		}
+	} else {
+		// OIDC-only user: the IdP identity is linked by email on first login.
+		if req.Email == nil || strings.TrimSpace(*req.Email) == "" {
+			return errors.New("password is required unless an email is set for SSO-only sign-in")
+		}
+	}
+	if req.Email != nil {
+		if err := validateEmail(*req.Email); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+// validateBootstrapRequest is stricter: the first admin always has a password.
+func validateBootstrapRequest(req *models.CreateAdminUserRequest) error {
+	req.Username = strings.TrimSpace(req.Username)
+	if err := validateUsername(req.Username); err != nil {
+		return err
+	}
+	if req.Password == nil {
+		return errors.New("password is required")
+	}
+	return validatePassword(*req.Password)
+}
+
 func validateUpdateRequest(req *models.UpdateAdminUserRequest) error {
-	if req.Username == nil && req.Password == nil {
-		return errors.New("at least one field (username or password) is required")
+	if req.Username == nil && req.Password == nil && req.Email == nil && req.PlatformRole == nil && req.Memberships == nil {
+		return errors.New("at least one field is required")
 	}
 
 	if req.Username != nil {
@@ -301,6 +382,23 @@ func validateUpdateRequest(req *models.UpdateAdminUserRequest) error {
 		}
 	}
 
+	if req.Email != nil {
+		if err := validateEmail(*req.Email); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateEmail(email string) error {
+	trimmed := strings.TrimSpace(email)
+	if trimmed == "" {
+		return nil
+	}
+	if len(trimmed) > 254 || !strings.Contains(trimmed, "@") {
+		return errors.New("invalid email address")
+	}
 	return nil
 }
 

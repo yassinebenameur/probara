@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
+
+	"github.com/yassinebenameur/probara/shared/models"
 )
 
 // CheckerRegistry manages registered checkers for different monitor types
@@ -70,6 +72,14 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	registry.Register("sip", NewSIPChecker())
 	registry.Register("synthetic_api", NewSyntheticAPIChecker())
 	registry.Register("synthetic_browser", NewSyntheticBrowserChecker(syntheticArtifactsDir))
+	registry.Register("redis", NewRedisChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("postgres", NewPostgresChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("mongodb", NewMongoDBChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("rabbitmq", NewRabbitMQChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("tcp", NewTCPChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("mysql", NewMySQLChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register("websocket", NewWebSocketChecker(blockPrivateIPs, allowedCIDRs))
+	registry.Register(models.MonitorTypeMeshProbe, NewMeshChecker(blockPrivateIPs, allowedCIDRs))
 
 	return registry
 }

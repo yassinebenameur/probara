@@ -26,6 +26,7 @@ type dnsMetricsEnvelope struct {
 type dnsMetrics struct {
 	RecordType string   `json:"record_type,omitempty"`
 	Answers    []string `json:"answers,omitempty"`
+	Nameserver string   `json:"nameserver,omitempty"`
 }
 
 // Check performs a DNS lookup check
@@ -57,8 +58,18 @@ func (c *DNSChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	nameserver := strings.TrimSpace(config.Nameserver)
+	resolver, err := buildDNSResolver(nameserver, timeout)
+	if err != nil {
+		errMsg := fmt.Sprintf("invalid nameserver: %v", err)
+		return CheckResult{
+			Status:       "error",
+			ErrorMessage: &errMsg,
+		}
+	}
+
 	startTime := time.Now()
-	answers, err := c.lookup(ctx, recordType, host)
+	answers, err := c.lookup(ctx, resolver, recordType, host)
 	latencyMs := time.Since(startTime).Milliseconds()
 
 	if err != nil {
@@ -109,6 +120,7 @@ func (c *DNSChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	metricsJSON, _ := json.Marshal(dnsMetricsEnvelope{DNS: &dnsMetrics{
 		RecordType: recordType,
 		Answers:    answers,
+		Nameserver: nameserver,
 	}})
 
 	return CheckResult{
@@ -118,9 +130,46 @@ func (c *DNSChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	}
 }
 
-func (c *DNSChecker) lookup(ctx context.Context, recordType, host string) ([]string, error) {
-	resolver := net.DefaultResolver
+// buildDNSResolver returns the resolver for a check: the system default, or a
+// Go-native resolver pinned to a specific nameserver (host or host:port,
+// default port 53) — the way to validate private zones and VPC resolvers.
+func buildDNSResolver(nameserver string, timeout time.Duration) (*net.Resolver, error) {
+	if nameserver == "" {
+		return net.DefaultResolver, nil
+	}
 
+	addr, err := normalizeNameserverAddr(nameserver)
+	if err != nil {
+		return nil, err
+	}
+
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: timeout}
+			return d.DialContext(ctx, network, addr)
+		},
+	}, nil
+}
+
+// normalizeNameserverAddr turns a nameserver value (host, host:port, bare
+// IPv6 literal) into a dialable host:port with a default port of 53.
+func normalizeNameserverAddr(nameserver string) (string, error) {
+	addr := nameserver
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		if ip := net.ParseIP(addr); ip != nil && ip.To4() == nil {
+			// Bare IPv6 literal — bracket it before appending the port.
+			addr = "[" + addr + "]"
+		}
+		addr = addr + ":53"
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return "", err
+	}
+	return addr, nil
+}
+
+func (c *DNSChecker) lookup(ctx context.Context, resolver *net.Resolver, recordType, host string) ([]string, error) {
 	switch recordType {
 	case "A":
 		ips, err := resolver.LookupIP(ctx, "ip4", host)

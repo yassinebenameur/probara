@@ -79,6 +79,13 @@ func (h *Hub) BroadcastAll(event SSEEvent) {
 	}
 }
 
+// HasAnyClients reports whether any client is connected for any slug.
+func (h *Hub) HasAnyClients() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients) > 0
+}
+
 // ClientCount returns the number of clients for a slug.
 func (h *Hub) ClientCount(slug string) int {
 	h.mu.RLock()

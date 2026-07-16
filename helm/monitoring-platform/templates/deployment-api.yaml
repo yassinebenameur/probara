@@ -78,12 +78,64 @@ spec:
         - name: POSTGRES_URL
           value: {{ include "monitoring-platform.postgresUrl" . | quote }}
         - name: NATS_URL
-          value: {{ include "monitoring-platform.natsUrl" . | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_url
+        - name: CHECK_JOB_STREAM
+          value: {{ .Values.scheduler.checkJobStream | quote }}
+        - name: CHECK_RESULT_SUBJECT
+          value: "check.results"
+        {{- if .Values.nats.auth.enabled }}
+        - name: NATS_LOCATION_AUTH_ISSUER_SEED
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_location_auth_issuer_seed
+        {{- end }}
         - name: ADMIN_JWT_SECRET
           valueFrom:
             secretKeyRef:
               name: {{ include "monitoring-platform.fullname" . }}-secret
               key: admin_jwt_secret
+        {{- with .Values.api.publicBaseURL }}
+        - name: PUBLIC_BASE_URL
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.api.publicNatsURL }}
+        - name: PUBLIC_NATS_URL
+          value: {{ . | quote }}
+        {{- end }}
+        - name: AUDIT_RETENTION_DAYS
+          value: {{ .Values.auth.auditRetentionDays | quote }}
+        {{- if .Values.auth.oidc.enabled }}
+        - name: OIDC_ENABLED
+          value: "true"
+        - name: OIDC_ISSUER_URL
+          value: {{ .Values.auth.oidc.issuerUrl | quote }}
+        - name: OIDC_CLIENT_ID
+          value: {{ .Values.auth.oidc.clientId | quote }}
+        - name: OIDC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: oidc_client_secret
+        - name: OIDC_PROVIDER_LABEL
+          value: {{ .Values.auth.oidc.providerLabel | quote }}
+        - name: OIDC_JIT_PROVISION
+          value: {{ .Values.auth.oidc.jitProvision | quote }}
+        - name: OIDC_JIT_DEFAULT_ROLE
+          value: {{ .Values.auth.oidc.jitDefaultRole | quote }}
+        - name: OIDC_JIT_DEFAULT_TENANT_ID
+          value: {{ .Values.auth.oidc.jitDefaultTenantId | quote }}
+        {{- end }}
+        {{- if .Values.secrets.probaraSecretsKey }}
+        - name: PROBARA_SECRETS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: probara_secrets_key
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

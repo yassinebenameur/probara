@@ -551,6 +551,10 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"sip":               true,
 		"synthetic_api":     true,
 		"synthetic_browser": true,
+		"redis":             true,
+		"postgres":          true,
+		"mongodb":           true,
+		"rabbitmq":          true,
 	}
 
 	// Common type aliases that map to supported types
@@ -581,6 +585,13 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"folder":     "group",
 		"category":   "group",
 		"collection": "group",
+		// Database aliases
+		"postgresql": "postgres",
+		"pg":         "postgres",
+		"pgsql":      "postgres",
+		"mongo":      "mongodb",
+		"amqp":       "rabbitmq",
+		"rabbit":     "rabbitmq",
 	}
 
 	for _, row := range rows {
@@ -637,7 +648,21 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 	// First pass: create non-group monitors and collect references for group resolution.
 	monitorNameToID := make(map[string]uuid.UUID)
 	monitorNameToIDs := make(map[string][]uuid.UUID)
+	importedKeys := make(map[string]struct{})
 	groupRows := make([]int, 0)
+
+	existingMonitors, err := s.loadAllMonitors(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, monitor := range existingMonitors {
+		key := importDuplicateKey(monitor.Name, string(monitor.Type))
+		if key != "" {
+			importedKeys[key] = struct{}{}
+		}
+		monitorNameToID[monitor.Name] = monitor.ID
+		monitorNameToIDs[monitor.Name] = append(monitorNameToIDs[monitor.Name], monitor.ID)
+	}
 
 	for i, row := range req.Rows {
 		result := models.ImportRowResult{
@@ -678,6 +703,15 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 			continue
 		}
 
+		duplicateKey := importDuplicateKey(name, monitorType)
+		if _, exists := importedKeys[duplicateKey]; exists {
+			result.Status = "skipped"
+			result.SkipReason = fmt.Sprintf("Monitor '%s' (%s) already exists", name, monitorType)
+			skippedCount++
+			results[i] = result
+			continue
+		}
+
 		// Defer group monitors to second pass
 		if monitorType == "group" {
 			groupRows = append(groupRows, i)
@@ -709,6 +743,7 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		results[i] = result
 
 		// Store name->ID mapping for group resolution
+		importedKeys[duplicateKey] = struct{}{}
 		monitorNameToID[name] = monitor.ID
 		monitorNameToIDs[name] = append(monitorNameToIDs[name], monitor.ID)
 	}
@@ -717,6 +752,15 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 	for _, i := range groupRows {
 		row := req.Rows[i]
 		result := results[i]
+
+		duplicateKey := importDuplicateKey(result.Name, result.Type)
+		if _, exists := importedKeys[duplicateKey]; exists {
+			result.Status = "skipped"
+			result.SkipReason = fmt.Sprintf("Monitor '%s' (%s) already exists", result.Name, result.Type)
+			skippedCount++
+			results[i] = result
+			continue
+		}
 
 		var (
 			monitor *models.Monitor
@@ -740,6 +784,7 @@ func (s *Service) ExecuteImport(ctx context.Context, tenantID uuid.UUID, req *mo
 		result.MonitorID = &monitorID
 		successCount++
 		results[i] = result
+		importedKeys[duplicateKey] = struct{}{}
 		monitorNameToID[result.Name] = monitor.ID
 		monitorNameToIDs[result.Name] = append(monitorNameToIDs[result.Name], monitor.ID)
 	}
@@ -1253,17 +1298,26 @@ func (s *Service) resolveMonitorType(row models.ImportRow, mapping models.FieldM
 
 func isSupportedMonitorType(monitorType string) bool {
 	switch monitorType {
-	case "http", "ping", "dns", "grpc", "group", "agent", "push", "sip", "synthetic_api", "synthetic_browser":
+	case "http", "ping", "dns", "grpc", "tcp", "group", "agent", "push", "sip", "synthetic_api", "synthetic_browser":
 		return true
 	default:
 		return false
 	}
 }
 
+func importDuplicateKey(name, monitorType string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	monitorType = strings.ToLower(strings.TrimSpace(monitorType))
+	if name == "" || monitorType == "" {
+		return ""
+	}
+	return monitorType + "\x00" + name
+}
+
 func activeCheckType(monitorType models.MonitorType) bool {
 	switch monitorType {
 	case models.MonitorTypeHTTP, models.MonitorTypePing, models.MonitorTypeSIP, models.MonitorTypeDNS,
-		models.MonitorTypeGRPC, models.MonitorTypeSyntheticAPI, models.MonitorTypeSyntheticBrowser:
+		models.MonitorTypeGRPC, models.MonitorTypeTCP, models.MonitorTypeSyntheticAPI, models.MonitorTypeSyntheticBrowser:
 		return true
 	default:
 		return false

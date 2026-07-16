@@ -42,6 +42,13 @@ func strPtr(v string) *string {
 	return &v
 }
 
+func errMsgForTest(msg *string) string {
+	if msg == nil {
+		return "<nil>"
+	}
+	return *msg
+}
+
 func TestSyntheticBrowserChecker_SuccessJourney(t *testing.T) {
 	requireBrowserForTest(t)
 
@@ -88,7 +95,7 @@ func TestSyntheticBrowserChecker_SuccessJourney(t *testing.T) {
 
 	result := checker.Check(context.Background(), configJSON, 30)
 	if result.Status != "success" {
-		t.Fatalf("expected success, got %s (err=%v)", result.Status, result.ErrorMessage)
+		t.Fatalf("expected success, got %s (err=%v)", result.Status, errMsgForTest(result.ErrorMessage))
 	}
 	if result.ErrorMessage != nil {
 		t.Fatalf("expected nil error, got %v", *result.ErrorMessage)
@@ -155,7 +162,7 @@ func TestSyntheticBrowserChecker_FailureModeContinueAndArtifacts(t *testing.T) {
 	ctx := withSyntheticBrowserMonitorID(context.Background(), "test-monitor-id")
 	result := checker.Check(ctx, configJSON, 45)
 	if result.Status != "failure" {
-		t.Fatalf("expected failure, got %s (err=%v)", result.Status, result.ErrorMessage)
+		t.Fatalf("expected failure, got %s (err=%v)", result.Status, errMsgForTest(result.ErrorMessage))
 	}
 	if result.ErrorMessage == nil || !strings.Contains(*result.ErrorMessage, "assert_visible failed") {
 		t.Fatalf("expected assert_visible error message, got %v", result.ErrorMessage)
@@ -254,7 +261,7 @@ func TestSyntheticBrowserChecker_UsesTemplatedStepValues(t *testing.T) {
 
 	result := checker.Check(context.Background(), configJSON, 30)
 	if result.Status != "success" {
-		t.Fatalf("expected success, got %s (err=%v)", result.Status, result.ErrorMessage)
+		t.Fatalf("expected success, got %s (err=%v)", result.Status, errMsgForTest(result.ErrorMessage))
 	}
 }
 
@@ -286,7 +293,7 @@ func TestSyntheticBrowserChecker_FailFastStopsAfterFirstFailure(t *testing.T) {
 
 	result := checker.Check(context.Background(), configJSON, 30)
 	if result.Status != "failure" {
-		t.Fatalf("expected failure, got %s (err=%v)", result.Status, result.ErrorMessage)
+		t.Fatalf("expected failure, got %s (err=%v)", result.Status, errMsgForTest(result.ErrorMessage))
 	}
 
 	var envelope syntheticBrowserMetricsTestEnvelope
@@ -344,7 +351,7 @@ func TestSyntheticBrowserChecker_RelativeGotoResolvesAgainstCurrentURL(t *testin
 
 	result := checker.Check(context.Background(), configJSON, 30)
 	if result.Status != "success" {
-		t.Fatalf("expected success, got %s (err=%v)", result.Status, result.ErrorMessage)
+		t.Fatalf("expected success, got %s (err=%v)", result.Status, errMsgForTest(result.ErrorMessage))
 	}
 
 	var envelope syntheticBrowserMetricsTestEnvelope

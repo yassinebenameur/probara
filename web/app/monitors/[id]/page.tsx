@@ -2,18 +2,28 @@
 
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
 import Image from 'next/image';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
+import { Clock, Settings as SettingsIcon, Trash2 } from 'lucide-react';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
+import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
+import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
+import PageHeader from '@/components/ui/PageHeader';
+import FormCard from '@/components/ui/FormCard';
+import Button from '@/components/ui/Button';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
 import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
+
+const isDatabaseMonitorType = (t: string): boolean =>
+  t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq' || t === 'mysql';
 type AgentTimeRange = '1h' | '6h' | '24h' | '7d';
 type OverviewTimeRange = MonitorAnalyticsRange;
 
@@ -35,6 +45,7 @@ const OVERVIEW_RANGE_MS: Record<OverviewTimeRange, number> = {
 };
 
 const NON_AGENT_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const NON_AGENT_OVERVIEW_RESULTS_LIMIT = 50;
 const MIN_CLIENT_RESULTS = 500;
 const MAX_CLIENT_RESULTS = 100000;
 const LIMIT_PADDING = 120;
@@ -78,6 +89,7 @@ function StatusBadge({ status }: { status: MonitorDisplayStatus }) {
     down: { label: 'Down', bg: 'bg-rose-500/10', text: 'text-rose-400', dot: 'bg-rose-500' },
     degraded: { label: 'Degraded', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
     paused: { label: 'Paused', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
+    maintenance: { label: 'Maintenance', bg: 'bg-sky-500/10', text: 'text-sky-300', dot: 'bg-sky-500' },
     unknown: { label: 'Unknown', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
   };
   const { label, bg, text, dot } = config[status];
@@ -191,8 +203,11 @@ export default function EditMonitorPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>('');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [results, setResults] = useState<MonitorResultsResponse | null>(null);
+  const [historyResults, setHistoryResults] = useState<MonitorResultsResponse | null>(null);
   const [analytics, setAnalytics] = useState<MonitorAnalyticsResponse | null>(null);
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
@@ -211,6 +226,10 @@ export default function EditMonitorPage() {
   useEffect(() => {
     resultsRef.current = results;
   }, [results]);
+
+  useEffect(() => {
+    setHistoryResults(null);
+  }, [id]);
 
   const loadMonitor = useCallback(async () => {
     try {
@@ -236,32 +255,41 @@ export default function EditMonitorPage() {
       const nowMs = Date.now();
       const currentResults = resultsRef.current;
       const latestKnownCreatedAt = currentResults?.results?.[0]?.created_at;
+      let maxResults = NON_AGENT_OVERVIEW_RESULTS_LIMIT;
+      let cutoffMs: number | null = null;
+      let requestParams: { limit?: number; since?: string };
 
-      const selectedWindowMs = isAgentMonitor
-        ? AGENT_RANGE_MS[range]
-        : NON_AGENT_HISTORY_WINDOW_MS;
-      const cutoffMs = nowMs - selectedWindowMs;
-      const cutoffISO = new Date(cutoffMs).toISOString();
-      const maxResults = estimateResultsLimit(
-        selectedWindowMs,
-        monitor?.interval_seconds,
-        isAgentMonitor ? 30 : 60
-      );
-
-      const requestParams =
-        opts?.silent && latestKnownCreatedAt
-          ? { since: latestKnownCreatedAt }
-          : { since: cutoffISO };
+      if (isAgentMonitor) {
+        const selectedWindowMs = AGENT_RANGE_MS[range];
+        cutoffMs = nowMs - selectedWindowMs;
+        const cutoffISO = new Date(cutoffMs).toISOString();
+        maxResults = estimateResultsLimit(
+          selectedWindowMs,
+          monitor?.interval_seconds,
+          30
+        );
+        requestParams =
+          opts?.silent && latestKnownCreatedAt
+            ? { since: latestKnownCreatedAt }
+            : { since: cutoffISO };
+      } else {
+        requestParams =
+          opts?.silent && latestKnownCreatedAt
+            ? { since: latestKnownCreatedAt }
+            : { limit: NON_AGENT_OVERVIEW_RESULTS_LIMIT };
+      }
 
       const data = await getMonitorResults(id, requestParams);
 
       if (opts?.silent && currentResults?.results?.length) {
-        const mergedResults = mergeAndSortResults(data.results, currentResults.results)
-          .filter((result) => {
+        let mergedResults = mergeAndSortResults(data.results, currentResults.results);
+        if (cutoffMs !== null) {
+          mergedResults = mergedResults.filter((result) => {
             const ts = Date.parse(result.created_at);
             return Number.isFinite(ts) && ts >= cutoffMs;
-          })
-          .slice(0, maxResults);
+          });
+        }
+        mergedResults = mergedResults.slice(0, maxResults);
 
         const mergedPayload: MonitorResultsResponse = {
           monitor_id: currentResults.monitor_id || data.monitor_id,
@@ -270,8 +298,12 @@ export default function EditMonitorPage() {
         resultsRef.current = mergedPayload;
         setResults(mergedPayload);
       } else {
-        resultsRef.current = data;
-        setResults(data);
+        const nextPayload: MonitorResultsResponse = {
+          monitor_id: data.monitor_id,
+          results: isAgentMonitor ? data.results : data.results.slice(0, NON_AGENT_OVERVIEW_RESULTS_LIMIT),
+        };
+        resultsRef.current = nextPayload;
+        setResults(nextPayload);
       }
     } catch (err: any) {
       console.error('Failed to load monitor results:', err);
@@ -281,6 +313,25 @@ export default function EditMonitorPage() {
       }
     }
   }, [id, monitor?.type, monitor?.interval_seconds, agentTimeRange]);
+
+  const loadHistoryResults = useCallback(async () => {
+    if (monitor?.type === 'agent') {
+      await loadResults();
+      return;
+    }
+
+    try {
+      setResultsLoading(true);
+      const cutoffISO = new Date(Date.now() - NON_AGENT_HISTORY_WINDOW_MS).toISOString();
+      const data = await getMonitorResults(id, { since: cutoffISO });
+      setHistoryResults(data);
+    } catch (err: any) {
+      console.error('Failed to load monitor history results:', err);
+      setHistoryResults(null);
+    } finally {
+      setResultsLoading(false);
+    }
+  }, [id, loadResults, monitor?.type]);
 
   const loadAnalytics = useCallback(async (range?: OverviewTimeRange) => {
     if (monitor?.type === 'agent') {
@@ -332,7 +383,7 @@ export default function EditMonitorPage() {
   }, [loadAnalytics]);
 
   useEffect(() => {
-    if (activeTab !== 'overview' && activeTab !== 'history') {
+    if (activeTab !== 'overview') {
       return;
     }
 
@@ -371,29 +422,36 @@ export default function EditMonitorPage() {
     };
   }, [activeTab, loadResults, monitor?.type]);
 
+  useEffect(() => {
+    if (activeTab !== 'history') {
+      return;
+    }
+    void loadHistoryResults();
+  }, [activeTab, loadHistoryResults]);
+
   const handleSubmit = async (data: UpdateMonitorRequest) => {
     try {
       setSaving(true);
       const updated = await updateMonitor(id, data);
       setMonitor(updated);
-      setToast({ message: 'Monitor updated successfully', type: 'success' });
+      showToast('Monitor updated successfully', 'success');
       loadResults();
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update monitor', type: 'error' });
+      showToast(err.message || 'Failed to update monitor', 'error');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!confirm('Delete this monitor? All check history will be removed.')) return;
-
+    setDeleting(true);
     try {
       await deleteMonitor(id);
-      setToast({ message: 'Monitor deleted', type: 'success' });
+      showToast('Monitor deleted', 'success');
       setTimeout(() => router.push('/monitors'), 1000);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete', type: 'error' });
+      showToast(err.message || 'Failed to delete', 'error');
+      setDeleting(false);
     }
   };
 
@@ -415,18 +473,21 @@ export default function EditMonitorPage() {
       setClearingHistory(true);
       await deleteMonitorHistory(id);
       setResults((current) => current ? { ...current, results: [] } : current);
+      setHistoryResults((current) => current ? { ...current, results: [] } : current);
       setAnalytics(null);
-      await Promise.all([loadMonitor(), loadResults(), loadAnalytics()]);
-      setToast({
-        message: monitor.type === 'group'
+      await Promise.all([
+        loadMonitor(),
+        loadResults(),
+        loadAnalytics(),
+        activeTab === 'history' ? loadHistoryResults() : Promise.resolve(),
+      ]);
+      showToast(monitor.type === 'group'
           ? 'Group history cleared for all member monitors'
-          : 'Monitor history cleared',
-        type: 'success',
-      });
+          : 'Monitor history cleared', 'success');
       setIsHistoryResetModalOpen(false);
       setHistoryResetConfirmation('');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to clear monitor history', type: 'error' });
+      showToast(err.message || 'Failed to clear monitor history', 'error');
     } finally {
       setClearingHistory(false);
     }
@@ -437,6 +498,10 @@ export default function EditMonitorPage() {
     if (!monitor) return null;
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
     if (monitor.url) return monitor.url;
+    if ((monitor.type === 'tcp' || monitor.type === 'grpc') && monitor.config && 'host' in monitor.config) {
+      const cfg = monitor.config as { host?: string; port?: number };
+      if (cfg.host) return cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host;
+    }
     if (monitor.config && 'host' in monitor.config) return monitor.config.host;
     return null;
   };
@@ -529,13 +594,11 @@ export default function EditMonitorPage() {
 
   if (error || !monitor) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-center">
+      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
         <p className="text-rose-400">{error || 'Monitor not found'}</p>
-        <Link href="/monitors">
-          <button className="mt-4 text-sm text-slate-400 hover:text-white">
-            ← Back to Monitors
-          </button>
-        </Link>
+        <Button variant="ghost" size="sm" onClick={() => router.push('/monitors')}>
+          ← Back to monitors
+        </Button>
       </div>
     );
   }
@@ -549,7 +612,9 @@ export default function EditMonitorPage() {
   const selectedWindowMs =
     monitor.type === 'agent'
       ? AGENT_RANGE_MS[agentTimeRange]
-      : OVERVIEW_RANGE_MS[overviewRange];
+      : activeTab === 'history'
+        ? NON_AGENT_HISTORY_WINDOW_MS
+        : OVERVIEW_RANGE_MS[overviewRange];
   const boundedRetentionDays =
     tenantRetentionDays && tenantRetentionDays > 0 ? tenantRetentionDays : null;
   const retentionWindowMs =
@@ -563,41 +628,31 @@ export default function EditMonitorPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          {/* Breadcrumb */}
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-3">
-            <Link href="/monitors" className="hover:text-slate-400">Monitors</Link>
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            <span className="text-slate-400">{monitor.name}</span>
-          </div>
-
-          {/* Title & Status */}
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold text-white">{monitor.name}</h1>
+      <PageHeader
+        breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: monitor.name }]}
+        title={
+          <span className="flex items-center gap-3">
+            <span>{monitor.name}</span>
             <StatusBadge status={status} />
-          </div>
-
-          {/* Subtitle */}
-          <p className="mt-1 text-sm text-slate-500">
+          </span>
+        }
+        subtitle={
+          <span>
             <span className="uppercase">{monitor.type}</span>
             {getUrl() && <span> · {getUrl()}</span>}
-          </p>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleDelete}
-            className="rounded-lg border border-rose-500/30 px-3 py-1.5 text-xs text-rose-400 transition-colors hover:bg-rose-500/10"
+          </span>
+        }
+        action={
+          <Button
+            variant="danger"
+            size="sm"
+            icon={<Trash2 strokeWidth={1.75} />}
+            onClick={() => setConfirmDelete(true)}
           >
             Delete
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       {/* Tabs */}
       <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-slate-900/50 p-1 w-fit">
@@ -616,11 +671,30 @@ export default function EditMonitorPage() {
         ))}
       </div>
 
+      {monitor.locations && monitor.locations.length > 0 && (
+        <MonitorLocationStrip
+          locations={monitor.locations}
+          quorum={monitor.location_quorum ?? 1}
+        />
+      )}
+
       {showRetentionWarning && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
           <p className="text-sm text-amber-300">
             Data retention is set to {boundedRetentionDays} day{boundedRetentionDays === 1 ? '' : 's'}.
             Older history is deleted, so this view may be partial.
+          </p>
+        </div>
+      )}
+
+      {monitor.in_maintenance && (
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3">
+          <p className="text-sm text-sky-300">
+            Under maintenance
+            {monitor.maintenance_until
+              ? ` until ${new Date(monitor.maintenance_until).toLocaleString()}`
+              : ''}{' '}
+            — alerts are suppressed; checks keep running.
           </p>
         </div>
       )}
@@ -649,19 +723,19 @@ export default function EditMonitorPage() {
           )}
           {activeTab === 'history' && (
             <MonitorDetailHistory
-              results={results?.results || []}
+              results={monitor.type === 'agent' ? (results?.results || []) : (historyResults?.results || [])}
               loading={resultsLoading}
             />
           )}
           {activeTab === 'settings' && (
-            <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+            <FormCard>
               <MonitorForm
                 monitor={monitor}
                 onSubmit={handleSubmit}
                 onCancel={() => router.push('/monitors')}
                 loading={saving}
               />
-            </div>
+            </FormCard>
           )}
           {activeTab === 'json' && (
             <MonitorDetailJson monitor={monitor} />
@@ -671,44 +745,41 @@ export default function EditMonitorPage() {
         {/* Sidebar - Quick Stats (visible on overview) */}
         {activeTab === 'overview' && (
           <div className="space-y-4">
-            {/* Quick Actions */}
-            <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-3">Quick Actions</h3>
+            <FormCard className="p-4">
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Quick actions</h3>
               <div className="space-y-2">
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<SettingsIcon strokeWidth={1.75} />}
+                  className="w-full justify-start"
                   onClick={() => setActiveTab('settings')}
-                  className="w-full flex items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
                 >
-                  <svg className="h-4 w-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  Edit Settings
-                </button>
-                <button
+                  Edit settings
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Clock strokeWidth={1.75} />}
+                  className="w-full justify-start"
                   onClick={() => setActiveTab('history')}
-                  className="w-full flex items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2.5 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800"
                 >
-                  <svg className="h-4 w-4 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  View History
-                </button>
-                <button
+                  View history
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon={<Trash2 strokeWidth={1.75} />}
+                  className="w-full justify-start"
                   onClick={openHistoryResetModal}
-                  className="w-full flex items-center gap-3 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2.5 text-left text-sm text-rose-300 transition-colors hover:bg-rose-500/15"
                 >
-                  <svg className="h-4 w-4 text-rose-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-7 0h8" />
-                  </svg>
-                  {monitor.type === 'group' ? 'Clear Group History' : 'Clear History'}
-                </button>
+                  {monitor.type === 'group' ? 'Clear group history' : 'Clear history'}
+                </Button>
               </div>
-            </div>
+            </FormCard>
 
-            {/* Config Summary */}
-            <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-3">Configuration</h3>
+            <FormCard className="p-4">
+              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Configuration</h3>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-slate-500">Type</span>
@@ -728,12 +799,79 @@ export default function EditMonitorPage() {
                     {monitor.enabled ? 'Enabled' : 'Paused'}
                   </span>
                 </div>
+                {(() => {
+                  // Server facts reported by the database/broker checkers
+                  // (version, role, …) live in the latest result's metrics.
+                  if (!isDatabaseMonitorType(monitor.type)) return null;
+                  const latest = (results?.results || []).find((r) => {
+                    const md = r.metrics_data as DBMetricsEnvelope | undefined;
+                    return Boolean(md && md[monitor.type as keyof DBMetricsEnvelope]);
+                  });
+                  const dbMetrics = latest
+                    ? (latest.metrics_data as DBMetricsEnvelope)[monitor.type as keyof DBMetricsEnvelope]
+                    : null;
+                  if (!dbMetrics) return null;
+                  const server = [
+                    [dbMetrics.product, dbMetrics.server_version].filter(Boolean).join(' '),
+                    dbMetrics.role,
+                    dbMetrics.replica_set ? `set ${dbMetrics.replica_set}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <>
+                      {server && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Server</span>
+                          <span className="truncate text-right text-slate-300">{server}</span>
+                        </div>
+                      )}
+                      {dbMetrics.latency_warn_ms ? (
+                        <div className="flex justify-between">
+                          <span className="text-amber-400">Warning</span>
+                          <span className="text-right text-amber-300">
+                            latency over {dbMetrics.latency_warn_ms}ms threshold
+                          </span>
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()}
+                {monitor.type === 'tcp' && (() => {
+                  const cfg = monitor.config as TCPMonitorConfig | undefined;
+                  const latest = (results?.results || []).find((r) => {
+                    const md = r.metrics_data as TCPMetricsEnvelope | undefined;
+                    return Boolean(md && md.tcp);
+                  });
+                  const tcpMetrics = latest ? (latest.metrics_data as TCPMetricsEnvelope).tcp : null;
+                  const target = cfg?.host ? (cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host) : null;
+                  return (
+                    <>
+                      {target && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Target</span>
+                          <span className="truncate text-right text-slate-300">{target}</span>
+                        </div>
+                      )}
+                      {cfg?.use_tls && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">TLS</span>
+                          <span className="text-right text-slate-300">
+                            {tcpMetrics?.tls_version || 'Enabled'}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
-            </div>
+            </FormCard>
+
+            <MonitorDependenciesCard monitorId={monitor.id} monitorType={monitor.type} />
 
             {monitor.type === 'synthetic_browser' && (
-              <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-                <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-3">Latest failure screenshot</h3>
+              <FormCard className="p-4">
+                <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Latest failure screenshot</h3>
                 {screenshotLoading ? (
                   <p className="text-xs text-slate-500">Loading screenshot...</p>
                 ) : screenshotBlobURL ? (
@@ -758,27 +896,25 @@ export default function EditMonitorPage() {
                     No screenshot available yet. A failed run with screenshot capture enabled is required.
                   </p>
                 )}
-              </div>
+              </FormCard>
             )}
           </div>
         )}
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed bottom-4 right-4 rounded-lg px-4 py-3 shadow-lg ${
-          toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-        }`}>
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-white">{toast.message}</p>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white">
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmDelete}
+        title={monitor?.type === 'group' ? 'Delete group' : 'Delete monitor'}
+        description={
+          monitor
+            ? `“${monitor.name}” will be removed along with all of its check history. This cannot be undone.`
+            : 'This monitor will be removed along with all of its check history. This cannot be undone.'
+        }
+        confirmLabel="Delete"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setConfirmDelete(false)}
+      />
 
       {monitor && isHistoryResetModalOpen && (
         <ConfirmHistoryResetModal

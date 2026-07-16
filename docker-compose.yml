@@ -73,6 +73,16 @@ services:
       ADMIN_REFRESH_TTL_DAYS: "30"
       ADMIN_COOKIE_SECURE: "false"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
+      # Shared with the status-page service; see its definition below.
+      STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
+      # OIDC SSO (off by default; `docker compose --profile sso up` starts a
+      # dex test IdP matching these values — see infra/dex/config.yaml).
+      OIDC_ENABLED: "${OIDC_ENABLED:-false}"
+      OIDC_ISSUER_URL: "${OIDC_ISSUER_URL:-http://localhost:5556/dex}"
+      OIDC_CLIENT_ID: "${OIDC_CLIENT_ID:-probara}"
+      OIDC_CLIENT_SECRET: "${OIDC_CLIENT_SECRET:-probara-dex-secret}"
+      OIDC_REDIRECT_URL: "${OIDC_REDIRECT_URL:-http://localhost:3000/api/v1/auth/oidc/callback}"
+      AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-365}"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -179,6 +189,33 @@ services:
     deploy:
       replicas: 1
 
+  # Example private-location worker. To try multi-location checks locally:
+  #   1. Create a location in the UI (Locations page) and copy its UUID.
+  #   2. Paste it into WORKER_LOCATION_ID below and uncomment the service.
+  # Location workers are NATS-only: no POSTGRES_URL — results travel back over
+  # NATS and are persisted by the scheduler-side ingest consumer.
+  # worker-location-example:
+  #   build:
+  #     context: .
+  #     dockerfile: worker/Dockerfile
+  #   container_name: probara-worker-location-example
+  #   environment:
+  #     HTTP_PORT: "8085"
+  #     METRICS_PORT: "9095"
+  #     LOG_LEVEL: "info"
+  #     NATS_URL: "nats://nats:4222"
+  #     CHECK_JOB_STREAM: "check-jobs"
+  #     CHECK_JOB_SUBJECT: "check.job"
+  #     NATS_CONSUMER_NAME: "worker"
+  #     WORKER_LOCATION_ID: "<location-uuid-from-the-locations-page>"
+  #     WORKER_CONCURRENCY: "10"
+  #   depends_on:
+  #     nats:
+  #       condition: service_healthy
+  #   networks:
+  #     - probara-network
+  #   restart: unless-stopped
+
   status-page:
     build:
       context: .
@@ -192,6 +229,9 @@ services:
       NATS_URL: "nats://nats:4222"
       STATUS_PAGE_BASE_URL: "http://localhost:8082"
       STATUS_PAGE_API_BASE_URL: "http://api:8080"
+      # Shared with the api service; gates draft-template previews with a
+      # token minted by the API. Leave unset to allow open previews (dev).
+      STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
     ports:
       - "8082:8082"
       - "9093:9093"
@@ -242,6 +282,21 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    networks:
+      - probara-network
+    restart: unless-stopped
+
+  # Test OIDC IdP for SSO development: docker compose --profile sso up
+  # Log in as admin@example.com / password (see infra/dex/config.yaml).
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    container_name: probara-dex
+    profiles: ["sso"]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./infra/dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
     networks:
       - probara-network
     restart: unless-stopped

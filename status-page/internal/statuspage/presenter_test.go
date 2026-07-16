@@ -25,6 +25,8 @@ func TestMonitorPresenter_ConfigureExtractsMonitorURLs(t *testing.T) {
 		{name: "ping", monitorType: "ping", configJSON: []byte(`{"host":"example.com"}`), wantURL: "example.com"},
 		{name: "dns", monitorType: "dns", configJSON: []byte(`{"host":"dns.example.com"}`), wantURL: "dns.example.com"},
 		{name: "sip", monitorType: "sip", configJSON: []byte(`{"host":"sip.example.com","port":5061}`), wantURL: "sip.example.com:5061"},
+		{name: "tcp", monitorType: "tcp", configJSON: []byte(`{"host":"db.example.com","port":5432}`), wantURL: "db.example.com:5432"},
+		{name: "tcp without port", monitorType: "tcp", configJSON: []byte(`{"host":"db.example.com"}`), wantURL: "db.example.com"},
 		{name: "agent", monitorType: "agent", configJSON: nil, wantURL: "System Agent"},
 		{name: "push", monitorType: "push", configJSON: nil, wantURL: "Push Monitor"},
 		{name: "group", monitorType: "group", configJSON: nil, wantURL: "Group Monitor"},
@@ -45,7 +47,7 @@ func TestMonitorPresenter_UnknownTypeFallsBackSafely(t *testing.T) {
 	svc := &Service{presenters: newMonitorPresenters()}
 	monitor := &MonitorStatus{}
 
-	svc.monitorPresenter("tcp").Configure(monitor, []byte(`{"host":"ignored"}`))
+	svc.monitorPresenter("totally_unknown_type").Configure(monitor, []byte(`{"host":"ignored"}`))
 
 	if monitor.URL != "" {
 		t.Fatalf("URL = %q, want empty string", monitor.URL)

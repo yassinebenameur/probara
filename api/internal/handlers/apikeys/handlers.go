@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	apikeysservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
+	"github.com/yassinebenameur/probara/api/internal/services/audit"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -21,6 +22,7 @@ import (
 type Handlers struct {
 	service *apikeysservice.Service
 	logger  *logger.Logger
+	audit   *audit.Recorder
 }
 
 // NewHandlers creates a new API key handler.
@@ -29,6 +31,26 @@ func NewHandlers(service *apikeysservice.Service, log *logger.Logger) *Handlers 
 		service: service,
 		logger:  log,
 	}
+}
+
+// WithAudit attaches an audit recorder for explicit key-management events
+// (the /api-keys subtree is excluded from the generic mutation middleware).
+func (h *Handlers) WithAudit(recorder *audit.Recorder) *Handlers {
+	h.audit = recorder
+	return h
+}
+
+func (h *Handlers) recordKeyEvent(r *http.Request, action string, keyID string, details map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	event := audit.FromRequest(r)
+	event.Action = action
+	event.Outcome = audit.OutcomeSuccess
+	event.ResourceType = "api_key"
+	event.ResourceID = keyID
+	event.Details = details
+	h.audit.Record(event)
 }
 
 // ListAPIKeys handles GET /api/v1/api-keys
@@ -100,6 +122,10 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	apiKey, err := h.service.CreateAPIKey(r.Context(), tenantUUID, &req)
 	if err != nil {
+		if errors.Is(err, apikeysservice.ErrInvalidScope) || errors.Is(err, apikeysservice.ErrExpiryInPast) {
+			apierrors.WriteValidationError(w, err.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
@@ -107,6 +133,12 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteInternalError(w, "failed to create api key")
 		return
 	}
+
+	details := map[string]any{"name": apiKey.Name, "scope": apiKey.Scope}
+	if apiKey.ExpiresAt != nil {
+		details["expires_at"] = apiKey.ExpiresAt
+	}
+	h.recordKeyEvent(r, "apikey.create", apiKey.ID.String(), details)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -147,6 +179,8 @@ func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteInternalError(w, "failed to revoke api key")
 		return
 	}
+
+	h.recordKeyEvent(r, "apikey.revoke", keyID.String(), nil)
 
 	w.WriteHeader(http.StatusNoContent)
 }

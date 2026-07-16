@@ -17,30 +17,41 @@ import (
 
 // StatusPageData represents the public status page data
 type StatusPageData struct {
-	ID                string                  `json:"id"`
-	Slug              string                  `json:"slug"`
-	Title             string                  `json:"title"`
-	Description       *string                 `json:"description,omitempty"`
-	LogoURL           *string                 `json:"logo_url,omitempty"`
-	HasLogo           bool                    `json:"-"` // For template use only - true if LogoURL is set and non-empty
-	PrimaryColor      *string                 `json:"primary_color,omitempty"`
-	SecondaryColor    *string                 `json:"secondary_color,omitempty"`
-	Sections          []StatusPageSectionData `json:"sections,omitempty"`
-	Monitors          []MonitorStatus         `json:"monitors"`
-	HasIssues         bool                    `json:"-"` // For template use only
-	ShowIncidents     bool                    `json:"-"` // For template use only
-	ShowUptimeHistory bool                    `json:"-"` // For template use only
-	ShowGlobalUptime  bool                    `json:"-"` // For template use only
-	ShowFooter        bool                    `json:"-"` // For template use only
-	CustomFooterText  *string                 `json:"-"` // For template use only
-	DefaultTheme      string                  `json:"-"` // For template use only
-	AllowThemeToggle  bool                    `json:"-"` // For template use only
-	ShowMonitorTags   bool                    `json:"-"` // For template use only
-	ShowMonitorURL    bool                    `json:"-"` // For template use only
-	ShowMonitorUptime bool                    `json:"-"` // For template use only
-	ShowMonitorTLS    bool                    `json:"-"` // For template use only
-	ShowLatencyCharts bool                    `json:"-"` // For template use only
-	ShowAgentMetrics  bool                    `json:"-"` // For template use only
+	ID                 string                        `json:"id"`
+	Slug               string                        `json:"slug"`
+	Title              string                        `json:"title"`
+	Description        *string                       `json:"description,omitempty"`
+	LogoURL            *string                       `json:"logo_url,omitempty"`
+	HasLogo            bool                          `json:"-"` // For template use only - true if LogoURL is set and non-empty
+	PrimaryColor       *string                       `json:"primary_color,omitempty"`
+	SecondaryColor     *string                       `json:"secondary_color,omitempty"`
+	Sections           []StatusPageSectionData       `json:"sections,omitempty"`
+	Monitors           []MonitorStatus               `json:"monitors"`
+	Incidents          []StatusPageIncident          `json:"incidents,omitempty"`
+	MaintenanceWindows []StatusPageMaintenanceWindow `json:"maintenance_windows,omitempty"`
+	HasMaintenance     bool                          `json:"-"` // For template use only
+	HasIssues          bool                          `json:"-"` // For template use only
+	ShowIncidents      bool                          `json:"-"` // For template use only
+	ShowUptimeHistory  bool                          `json:"-"` // For template use only
+	ShowGlobalUptime   bool                          `json:"-"` // For template use only
+	ShowFooter         bool                          `json:"-"` // For template use only
+	CustomFooterText   *string                       `json:"-"` // For template use only
+	DefaultTheme       string                        `json:"-"` // For template use only
+	AllowThemeToggle   bool                          `json:"-"` // For template use only
+	ShowMonitorTags    bool                          `json:"-"` // For template use only
+	ShowMonitorURL     bool                          `json:"-"` // For template use only
+	ShowMonitorUptime  bool                          `json:"-"` // For template use only
+	ShowMonitorTLS     bool                          `json:"-"` // For template use only
+	ShowLatencyCharts  bool                          `json:"-"` // For template use only
+	ShowAgentMetrics   bool                          `json:"-"` // For template use only
+	// Tenant-authored branding injections (settings JSONB) applied to the
+	// built-in template; custom templates can also reference them.
+	CustomCSS        string `json:"-"` // For template use only
+	CustomHeadHTML   string `json:"-"` // For template use only
+	CustomFooterHTML string `json:"-"` // For template use only
+	// Published custom template ("" = render with the built-in template).
+	CustomTemplateSource  string `json:"-"` // For template use only
+	CustomTemplateVersion int    `json:"-"` // For template use only
 	// Uptime history for different time ranges
 	UptimeHistory7   []DailyUptime  `json:"-"` // Last 7 days
 	UptimeHistory1h  []MinuteUptime `json:"-"` // Last 1 hour (5-min buckets)
@@ -55,6 +66,33 @@ type StatusPageSectionData struct {
 	Title    string          `json:"title"`
 	Position int             `json:"position"`
 	Monitors []MonitorStatus `json:"monitors"`
+}
+
+type StatusPageIncident struct {
+	ID                 string                     `json:"id"`
+	Title              string                     `json:"title"`
+	Summary            string                     `json:"summary"`
+	State              string                     `json:"state"`
+	PublishedAt        time.Time                  `json:"published_at"`
+	ResolvedAt         *time.Time                 `json:"resolved_at,omitempty"`
+	AffectedComponents []string                   `json:"affected_components,omitempty"`
+	Updates            []StatusPageIncidentUpdate `json:"updates,omitempty"`
+}
+
+type StatusPageIncidentUpdate struct {
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// StatusPageMaintenanceWindow is an active or upcoming maintenance window shown
+// to public viewers, scoped to windows affecting monitors on this page.
+type StatusPageMaintenanceWindow struct {
+	Title            string    `json:"title"`
+	Description      string    `json:"description"`
+	StartsAt         time.Time `json:"starts_at"`
+	EndsAt           time.Time `json:"ends_at"`
+	IsActive         bool      `json:"is_active"`
+	AffectedMonitors []string  `json:"affected_monitors,omitempty"`
 }
 
 // MonitorStatus represents a monitor's status on a status page
@@ -174,22 +212,34 @@ type HourlyUptime struct {
 	Uptime float64 `json:"uptime"`
 }
 
+// batchAnalyticsReader is the optional batched counterpart of sharedanalytics.Reader.
+// *sharedanalytics.Repository implements it; when available the status page resolves all
+// per-monitor long-range analytics with a constant number of queries instead of O(monitors).
+type batchAnalyticsReader interface {
+	GetScopeAnalyticsBatch(ctx context.Context, tenantID uuid.UUID, scopes []sharedanalytics.ScopeAnalyticsBatchRequest, ranges []sharedanalytics.Range, now time.Time) (map[uuid.UUID]map[sharedanalytics.Range]*sharedanalytics.Result, error)
+}
+
 // Service handles status page business logic
 type Service struct {
-	db         *db.Client
-	analytics  sharedanalytics.Reader
-	presenters map[string]monitorPresenter
-	now        func() time.Time
+	db             db.Querier
+	analytics      sharedanalytics.Reader
+	analyticsBatch batchAnalyticsReader
+	presenters     map[string]monitorPresenter
+	now            func() time.Time
 }
 
 // NewService creates a new status page service
-func NewService(db *db.Client, analytics sharedanalytics.Reader) *Service {
-	return &Service{
-		db:         db,
+func NewService(database db.Querier, analytics sharedanalytics.Reader) *Service {
+	svc := &Service{
+		db:         database,
 		analytics:  analytics,
 		presenters: newMonitorPresenters(),
 		now:        func() time.Time { return time.Now().UTC() },
 	}
+	if batch, ok := analytics.(batchAnalyticsReader); ok {
+		svc.analyticsBatch = batch
+	}
+	return svc
 }
 
 type statusPageSettingsPatch struct {
@@ -204,6 +254,9 @@ type statusPageSettingsPatch struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      *string `json:"default_theme,omitempty"`
 	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
+	CustomCSS         *string `json:"custom_css,omitempty"`
+	CustomHeadHTML    *string `json:"custom_head_html,omitempty"`
+	CustomFooterHTML  *string `json:"custom_footer_html,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -218,6 +271,9 @@ type statusPageSettingsStored struct {
 	FooterText        *string
 	DefaultTheme      string
 	AllowThemeToggle  bool
+	CustomCSS         string
+	CustomHeadHTML    string
+	CustomFooterHTML  string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -287,6 +343,15 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	if patch.AllowThemeToggle != nil {
 		stored.AllowThemeToggle = *patch.AllowThemeToggle
 	}
+	if patch.CustomCSS != nil {
+		stored.CustomCSS = strings.TrimSpace(*patch.CustomCSS)
+	}
+	if patch.CustomHeadHTML != nil {
+		stored.CustomHeadHTML = strings.TrimSpace(*patch.CustomHeadHTML)
+	}
+	if patch.CustomFooterHTML != nil {
+		stored.CustomFooterHTML = strings.TrimSpace(*patch.CustomFooterHTML)
+	}
 	return stored
 }
 
@@ -300,6 +365,58 @@ func (s *Service) GetTenantIDByStatusPageID(ctx context.Context, statusPageID uu
 		return uuid.UUID{}, fmt.Errorf("failed to get tenant id: %w", err)
 	}
 	return tenantID, nil
+}
+
+// getPublishedTemplate returns the published custom template for a page, or
+// ("", 0, nil) when the page renders with the built-in template. A missing
+// status_page_templates table (migration not yet applied) also means "no
+// custom template" — same tolerance as the section-table fallbacks.
+func (s *Service) getPublishedTemplate(ctx context.Context, pageID uuid.UUID) (string, int, error) {
+	var source string
+	var version int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT source, version
+		FROM status_page_templates
+		WHERE status_page_id = $1 AND status = 'published'
+	`, pageID).Scan(&source, &version)
+	if err != nil {
+		if err == sql.ErrNoRows || isUndefinedTableError(err) {
+			return "", 0, nil
+		}
+		return "", 0, err
+	}
+	return source, version, nil
+}
+
+// GetDraftTemplateBySlug resolves a slug to its page ID and draft template
+// source. hasDraft is false when the page exists but has no draft.
+func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (pageID uuid.UUID, source string, hasDraft bool, err error) {
+	var draftSource sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+		SELECT sp.id, t.source
+		FROM status_pages sp
+		LEFT JOIN status_page_templates t
+			ON t.status_page_id = sp.id AND t.status = 'draft'
+		WHERE sp.slug = $1
+	`, slug).Scan(&pageID, &draftSource)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return uuid.Nil, "", false, fmt.Errorf("status page not found")
+		}
+		if isUndefinedTableError(err) {
+			// Templates table missing: resolve the page alone so previews
+			// degrade to the live render instead of erroring.
+			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1`, slug).Scan(&pageID); err != nil {
+				if err == sql.ErrNoRows {
+					return uuid.Nil, "", false, fmt.Errorf("status page not found")
+				}
+				return uuid.Nil, "", false, fmt.Errorf("failed to get status page: %w", err)
+			}
+			return pageID, "", false, nil
+		}
+		return uuid.Nil, "", false, fmt.Errorf("failed to get draft template: %w", err)
+	}
+	return pageID, draftSource.String, draftSource.Valid, nil
 }
 
 // GetStatusPageBySlug retrieves a status page by slug
@@ -336,6 +453,15 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	}
 	page.Sections = sections
 	page.Monitors = flattenStatusPageSections(sections)
+	page.Incidents, err = s.loadPublishedIncidents(ctx, pageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get incidents: %w", err)
+	}
+	page.MaintenanceWindows, err = s.loadMaintenanceWindows(ctx, pageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get maintenance windows: %w", err)
+	}
+	page.HasMaintenance = len(page.MaintenanceWindows) > 0
 
 	// Determine if there are any issues
 	for _, monitor := range page.Monitors {
@@ -361,6 +487,16 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.ShowMonitorTLS = settings.ShowMonitorTLS
 	page.ShowLatencyCharts = settings.ShowLatencyCharts
 	page.ShowAgentMetrics = settings.ShowAgentMetrics
+	page.CustomCSS = settings.CustomCSS
+	page.CustomHeadHTML = settings.CustomHeadHTML
+	page.CustomFooterHTML = settings.CustomFooterHTML
+
+	if source, version, err := s.getPublishedTemplate(ctx, pageID); err != nil {
+		return nil, fmt.Errorf("failed to get custom template: %w", err)
+	} else {
+		page.CustomTemplateSource = source
+		page.CustomTemplateVersion = version
+	}
 
 	// Fetch only short-range and rollup-backed global uptime to keep public page responses bounded.
 	// Rollup-backed ranges (7/30/90/365d) avoid large scans over check_results.
@@ -375,6 +511,191 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	}
 
 	return &page, nil
+}
+
+// loadMaintenanceWindows returns active and upcoming (next 14 days) maintenance
+// windows that affect at least one monitor on this status page, directly or via
+// a targeted group. Affected monitor names are page-scoped.
+func (s *Service) loadMaintenanceWindows(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageMaintenanceWindow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT mw.title, mw.description, mw.starts_at, mw.ends_at,
+			NOW() >= mw.starts_at AS is_active,
+			array_agg(DISTINCT pm.name) AS affected
+		FROM maintenance_windows mw
+		JOIN maintenance_window_monitors mwm ON mwm.maintenance_window_id = mw.id
+		JOIN monitors pm ON pm.tenant_id = mw.tenant_id AND pm.deleted_at IS NULL
+			AND (pm.id = mwm.monitor_id
+				OR pm.id IN (SELECT mg.monitor_id FROM monitor_groups mg WHERE mg.group_id = mwm.monitor_id))
+		WHERE mw.tenant_id = $2
+		  AND pm.id IN (
+			SELECT spsm.monitor_id
+			FROM status_page_section_monitors spsm
+			JOIN status_page_sections sps ON sps.id = spsm.section_id
+			WHERE sps.status_page_id = $1
+			UNION
+			SELECT spm.monitor_id FROM status_page_monitors spm WHERE spm.status_page_id = $1
+		  )
+		  AND mw.ends_at > NOW()
+		  AND mw.starts_at < NOW() + INTERVAL '14 days'
+		GROUP BY mw.id
+		ORDER BY mw.starts_at
+	`, statusPageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query maintenance windows: %w", err)
+	}
+	defer rows.Close()
+
+	windows := make([]StatusPageMaintenanceWindow, 0)
+	for rows.Next() {
+		var w StatusPageMaintenanceWindow
+		var affected []string
+		if err := rows.Scan(&w.Title, &w.Description, &w.StartsAt, &w.EndsAt, &w.IsActive, pq.Array(&affected)); err != nil {
+			return nil, fmt.Errorf("scan maintenance window: %w", err)
+		}
+		w.AffectedMonitors = affected
+		windows = append(windows, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate maintenance windows: %w", err)
+	}
+	return windows, nil
+}
+
+func (s *Service) loadPublishedIncidents(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageIncident, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id, i.title, COALESCE(i.summary, ''), i.state, isp.published_at, i.resolved_at
+		FROM incident_status_page_publications isp
+		JOIN incidents i ON i.id = isp.incident_id AND i.tenant_id = isp.tenant_id
+		WHERE isp.status_page_id = $1 AND isp.tenant_id = $2 AND isp.unpublished_at IS NULL
+		ORDER BY CASE WHEN i.state = 'resolved' THEN 1 ELSE 0 END, i.updated_at DESC, isp.published_at DESC
+	`, statusPageID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query published incidents: %w", err)
+	}
+	defer rows.Close()
+
+	incidents := make([]StatusPageIncident, 0)
+	incidentIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var incident StatusPageIncident
+		var incidentID uuid.UUID
+		var resolvedAt sql.NullTime
+		if err := rows.Scan(&incidentID, &incident.Title, &incident.Summary, &incident.State, &incident.PublishedAt, &resolvedAt); err != nil {
+			return nil, fmt.Errorf("scan published incident: %w", err)
+		}
+		incident.ID = incidentID.String()
+		if resolvedAt.Valid {
+			resolvedTime := resolvedAt.Time.UTC()
+			incident.ResolvedAt = &resolvedTime
+		}
+
+		incidents = append(incidents, incident)
+		incidentIDs = append(incidentIDs, incidentID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate published incidents: %w", err)
+	}
+
+	componentsByIncident, err := s.batchIncidentAffectedComponents(ctx, statusPageID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+	updatesByIncident, err := s.batchIncidentPublicUpdates(ctx, tenantID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range incidents {
+		incidentID := incidentIDs[i]
+		if components, ok := componentsByIncident[incidentID]; ok {
+			incidents[i].AffectedComponents = components
+		} else {
+			incidents[i].AffectedComponents = make([]string, 0)
+		}
+		if updates, ok := updatesByIncident[incidentID]; ok {
+			incidents[i].Updates = updates
+		} else {
+			incidents[i].Updates = make([]StatusPageIncidentUpdate, 0)
+		}
+	}
+
+	return incidents, nil
+}
+
+// batchIncidentAffectedComponents fetches the affected component names for all
+// given incidents in a single query, keyed by incident ID. Per-incident
+// ordering (monitor name ASC) matches the previous per-incident query.
+func (s *Service) batchIncidentAffectedComponents(ctx context.Context, statusPageID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	result := make(map[uuid.UUID][]string, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ispm.incident_id, m.name
+		FROM incident_status_page_monitors ispm
+		JOIN monitors m ON m.id = ispm.monitor_id
+		WHERE ispm.incident_id = ANY($1) AND ispm.status_page_id = $2 AND m.deleted_at IS NULL
+		ORDER BY m.name ASC
+	`, pq.Array(incidentIDs), statusPageID)
+	if err != nil {
+		return nil, fmt.Errorf("query incident affected components: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var incidentID uuid.UUID
+		var name string
+		if err := rows.Scan(&incidentID, &name); err != nil {
+			return nil, fmt.Errorf("scan incident affected component: %w", err)
+		}
+		if strings.TrimSpace(name) != "" {
+			result[incidentID] = append(result[incidentID], strings.TrimSpace(name))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident affected components: %w", err)
+	}
+
+	return result, nil
+}
+
+// batchIncidentPublicUpdates fetches the public timeline updates for all given
+// incidents in a single query, keyed by incident ID. Per-incident ordering
+// (created_at DESC, id DESC) matches the previous per-incident query.
+func (s *Service) batchIncidentPublicUpdates(ctx context.Context, tenantID uuid.UUID, incidentIDs []uuid.UUID) (map[uuid.UUID][]StatusPageIncidentUpdate, error) {
+	result := make(map[uuid.UUID][]StatusPageIncidentUpdate, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT incident_id, message, created_at
+		FROM incident_timeline_entries
+		WHERE tenant_id = $1 AND incident_id = ANY($2) AND entry_type = 'public_update'
+		ORDER BY created_at DESC, id DESC
+	`, tenantID, pq.Array(incidentIDs))
+	if err != nil {
+		return nil, fmt.Errorf("query incident public updates: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var incidentID uuid.UUID
+		var update StatusPageIncidentUpdate
+		if err := rows.Scan(&incidentID, &update.Message, &update.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan incident public update: %w", err)
+		}
+		update.Message = strings.TrimSpace(update.Message)
+		if update.Message != "" {
+			result[incidentID] = append(result[incidentID], update)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incident public updates: %w", err)
+	}
+
+	return result, nil
 }
 
 // GetGlobal5MinuteUptime calculates 5-minute bucket uptime across all monitors in a status page for the last 1 hour
@@ -448,7 +769,21 @@ func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tena
 	return result, nil
 }
 
+// GetStatusPageSections loads the page's sections with their monitors fully populated
+// (status, uptime, history and analytics). Loading happens in two phases: cheap section
+// "skeletons" first, then a single batched metric pass across every monitor on the page.
 func (s *Service) GetStatusPageSections(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageSectionData, error) {
+	sections, err := s.loadStatusPageSectionSkeletons(ctx, statusPageID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.populatePageMonitors(ctx, tenantID, sections); err != nil {
+		return nil, err
+	}
+	return sections, nil
+}
+
+func (s *Service) loadStatusPageSectionSkeletons(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]StatusPageSectionData, error) {
 	type sectionRow struct {
 		ID       uuid.UUID
 		Title    string
@@ -477,6 +812,9 @@ func (s *Service) GetStatusPageSections(ctx context.Context, statusPageID, tenan
 		}
 		monitors, err := s.getStatusPageSectionMonitors(ctx, row.ID, tenantID)
 		if err != nil {
+			if isUndefinedTableError(err) {
+				return s.loadLegacyStatusPageSections(ctx, statusPageID, tenantID)
+			}
 			return nil, err
 		}
 		sections = append(sections, StatusPageSectionData{
@@ -509,7 +847,7 @@ func (s *Service) getStatusPageSectionMonitors(ctx context.Context, sectionID, t
 		SELECT m.id, m.name, spsm.display_name, m.type, m.config, m.tags
 		FROM monitors m
 		INNER JOIN status_page_section_monitors spsm ON m.id = spsm.monitor_id
-		WHERE spsm.section_id = $1 AND m.tenant_id = $2
+		WHERE spsm.section_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY spsm.position ASC, m.name
 	`
 	rows, err := s.db.QueryContext(ctx, query, sectionID, tenantID)
@@ -526,7 +864,7 @@ func (s *Service) loadLegacyStatusPageSections(ctx context.Context, statusPageID
 		SELECT m.id, m.name, spm.display_name, m.type, m.config, m.tags
 		FROM monitors m
 		INNER JOIN status_page_monitors spm ON m.id = spm.monitor_id
-		WHERE spm.status_page_id = $1 AND m.tenant_id = $2
+		WHERE spm.status_page_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY spm.position ASC, m.name
 	`, statusPageID, tenantID)
 	if err != nil {
@@ -571,9 +909,9 @@ func (s *Service) scanMonitorStatuses(ctx context.Context, rows *sql.Rows, tenan
 		}
 
 		presenter.Configure(&monitor, configJSON)
-		monitor.Uptime24hFormatted = ""
-		monitor.Uptime1hFormatted = ""
-		presenter.Populate(ctx, s, &monitor, monitorID, tenantID)
+		// Metrics (status, uptime, history, analytics) are populated in a single batched
+		// pass by populatePageMonitors after all section skeletons are loaded. Doing it here,
+		// per monitor, was the source of the N+1 query storm that timed out large pages.
 		monitors = append(monitors, monitor)
 	}
 	if err := rows.Err(); err != nil {
@@ -665,75 +1003,13 @@ func (s *Service) monitorPresenter(monitorType string) monitorPresenter {
 	return regularMonitorPresenter{}
 }
 
-func (s *Service) populateRegularMonitorStatus(ctx context.Context, monitor *MonitorStatus, monitorID, tenantID uuid.UUID) {
-	currentStatus, err := s.GetMonitorCurrentStatus(ctx, monitorID, tenantID)
-	if err != nil {
-		monitor.Status = "unknown"
-	} else {
-		monitor.Status = currentStatus.Status
-		monitor.LastCheckTime = currentStatus.LastCheckTime
-		monitor.LastHTTPStatus = currentStatus.LastHTTPStatus
-		monitor.LastLatency = currentStatus.LastLatency
-		monitor.TLSDaysUntilExpiry = currentStatus.TLSDaysUntilExpiry
-		monitor.TLSNotAfter = currentStatus.TLSNotAfter
-	}
-
-	uptime24h, err := s.CalculateUptime24h(ctx, monitorID, tenantID)
-	monitor.Uptime24h = uptime24h
-	monitor.Uptime24hFormatted = formatUptime(uptime24h, err)
-
-	uptime1h, err := s.CalculateUptime1h(ctx, monitorID, tenantID)
-	monitor.Uptime1h = uptime1h
-	monitor.Uptime1hFormatted = formatUptime(uptime1h, err)
-
-	avgLatency1h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "1 hour")
-	monitor.AvgLatency1h = avgLatency1h
-
-	avgLatency24h, _ := s.CalculateAvgLatency(ctx, monitorID, tenantID, "24 hours")
-	monitor.AvgLatency24h = avgLatency24h
-
-	hourlyUptime, err := s.GetMonitorHourlyUptime(ctx, monitorID, tenantID)
-	if err == nil {
-		monitor.HourlyUptime = hourlyUptime
-		monitor.UptimeHistory24h = hourlyUptime
-	}
-
-	uptimeHistory1h, err := s.GetMonitor5MinuteUptime(ctx, monitorID, tenantID)
-	if err == nil {
-		monitor.UptimeHistory1h = uptimeHistory1h
-	}
-
-	latencyHistory1h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "1 hour", 100)
-	if err == nil {
-		monitor.LatencyHistory1h = latencyHistory1h
-	}
-
-	latencyHistory24h, err := s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "24 hours", 100)
-	if err == nil {
-		monitor.LatencyHistory = latencyHistory24h
-	}
-
-	downtimePeriods1h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "1 hour")
-	if err == nil {
-		monitor.DowntimePeriods1h = downtimePeriods1h
-	}
-
-	downtimePeriods24h, err := s.GetMonitorDowntimePeriods(ctx, monitorID, tenantID, "24 hours")
-	if err == nil {
-		monitor.DowntimePeriods24h = downtimePeriods24h
-	}
-
-	history, err := s.GetMonitorHistory(ctx, monitorID, tenantID, 50, nil)
-	if err == nil {
-		monitor.History = history
-	}
-
-	s.applyMonitorLongRangeAnalytics(ctx, monitor, tenantID, []uuid.UUID{monitorID})
-}
-
-func (s *Service) populateGroupMonitorStatus(ctx context.Context, monitor *MonitorStatus, monitorID, tenantID uuid.UUID) {
-	memberIDs, err := s.getGroupMemberIDs(ctx, monitorID, tenantID)
-	if err != nil || len(memberIDs) == 0 {
+// populateGroupMonitorShortRange fills a group monitor's status, uptime, latency, hourly
+// strip and recent history by aggregating over its (pre-resolved) leaf member IDs. Long-range
+// analytics are applied separately by the batched pass. Per-monitor widgets that the public
+// page never renders (5-minute strip, raw latency series, short-range downtime) are
+// intentionally not populated.
+func (s *Service) populateGroupMonitorShortRange(ctx context.Context, monitor *MonitorStatus, memberIDs []uuid.UUID, tenantID uuid.UUID) {
+	if len(memberIDs) == 0 {
 		monitor.Status = "unknown"
 		monitor.Uptime24hFormatted = "N/A"
 		monitor.Uptime1hFormatted = "N/A"
@@ -769,37 +1045,10 @@ func (s *Service) populateGroupMonitorStatus(ctx context.Context, monitor *Monit
 		monitor.UptimeHistory24h = hourlyUptime
 	}
 
-	uptimeHistory1h, err := s.GetGroup5MinuteUptime(ctx, memberIDs, tenantID)
-	if err == nil {
-		monitor.UptimeHistory1h = uptimeHistory1h
-	}
-
-	latencyHistory1h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "1 hour", 100)
-	if err == nil {
-		monitor.LatencyHistory1h = latencyHistory1h
-	}
-
-	latencyHistory24h, err := s.GetGroupLatencyHistoryForRange(ctx, memberIDs, tenantID, "24 hours", 100)
-	if err == nil {
-		monitor.LatencyHistory = latencyHistory24h
-	}
-
-	downtimePeriods1h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "1 hour")
-	if err == nil {
-		monitor.DowntimePeriods1h = downtimePeriods1h
-	}
-
-	downtimePeriods24h, err := s.GetGroupDowntimePeriods(ctx, memberIDs, tenantID, "24 hours")
-	if err == nil {
-		monitor.DowntimePeriods24h = downtimePeriods24h
-	}
-
 	history, err := s.GetGroupHistory(ctx, memberIDs, tenantID, 50)
 	if err == nil {
 		monitor.History = history
 	}
-
-	s.applyMonitorLongRangeAnalytics(ctx, monitor, tenantID, memberIDs)
 }
 
 func formatUptime(uptime *float64, err error) string {
@@ -809,33 +1058,46 @@ func formatUptime(uptime *float64, err error) string {
 	return fmt.Sprintf("%.2f%%", *uptime)
 }
 
+// longRangeRanges are the rollup-backed ranges rendered per monitor on the status page.
+var longRangeRanges = []sharedanalytics.Range{sharedanalytics.Range7d, sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
+
+// applyMonitorLongRangeAnalytics is the per-monitor (unbatched) long-range path, retained as
+// a fallback for analytics readers that do not implement batched access.
 func (s *Service) applyMonitorLongRangeAnalytics(ctx context.Context, monitor *MonitorStatus, tenantID uuid.UUID, monitorIDs []uuid.UUID) {
-	ranges := []sharedanalytics.Range{sharedanalytics.Range7d, sharedanalytics.Range30d, sharedanalytics.Range90d, sharedanalytics.Range365d}
 	now := s.now()
-	for _, rangeValue := range ranges {
+	for _, rangeValue := range longRangeRanges {
 		result, err := s.analytics.GetScopeAnalytics(ctx, tenantID, monitorIDs, rangeValue, now)
 		if err != nil {
 			continue
 		}
-		uptimeHistory := mapDailySeries(result.Series)
-		latencyHistory := mapLatencySeries(result.Series, rangeValue)
-		downtime := mapDowntimePeriods(result.Downtime)
-		switch rangeValue {
-		case sharedanalytics.Range7d:
-			monitor.UptimeHistory7d = uptimeHistory
-		case sharedanalytics.Range30d:
-			monitor.UptimeHistory30d = uptimeHistory
-			monitor.LatencyHistory30d = latencyHistory
-			monitor.DowntimePeriods30d = downtime
-		case sharedanalytics.Range90d:
-			monitor.UptimeHistory90d = uptimeHistory
-			monitor.LatencyHistory90d = latencyHistory
-			monitor.DowntimePeriods90d = downtime
-		case sharedanalytics.Range365d:
-			monitor.UptimeHistory365d = uptimeHistory
-			monitor.LatencyHistory365d = latencyHistory
-			monitor.DowntimePeriods365d = downtime
-		}
+		assignLongRangeResult(monitor, rangeValue, result)
+	}
+}
+
+// assignLongRangeResult maps one analytics Result onto the monitor's range-specific fields.
+// Shared by the batched and unbatched long-range paths so they produce identical output.
+func assignLongRangeResult(monitor *MonitorStatus, rangeValue sharedanalytics.Range, result *sharedanalytics.Result) {
+	if result == nil {
+		return
+	}
+	uptimeHistory := mapDailySeries(result.Series)
+	latencyHistory := mapLatencySeries(result.Series, rangeValue)
+	downtime := mapDowntimePeriods(result.Downtime)
+	switch rangeValue {
+	case sharedanalytics.Range7d:
+		monitor.UptimeHistory7d = uptimeHistory
+	case sharedanalytics.Range30d:
+		monitor.UptimeHistory30d = uptimeHistory
+		monitor.LatencyHistory30d = latencyHistory
+		monitor.DowntimePeriods30d = downtime
+	case sharedanalytics.Range90d:
+		monitor.UptimeHistory90d = uptimeHistory
+		monitor.LatencyHistory90d = latencyHistory
+		monitor.DowntimePeriods90d = downtime
+	case sharedanalytics.Range365d:
+		monitor.UptimeHistory365d = uptimeHistory
+		monitor.LatencyHistory365d = latencyHistory
+		monitor.DowntimePeriods365d = downtime
 	}
 }
 
@@ -873,7 +1135,7 @@ func (s *Service) resolveStatusPageOperationalMonitorIDs(ctx context.Context, st
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT m.id, m.type
 		FROM monitors m
-		WHERE m.id = ANY($1) AND m.tenant_id = $2
+		WHERE m.id = ANY($1) AND m.tenant_id = $2 AND m.deleted_at IS NULL
 	`, pq.Array(monitorIDs), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list status page monitor ids: %w", err)
@@ -973,23 +1235,31 @@ type CurrentStatus struct {
 	TLSNotAfter        string
 }
 
-// GetMonitorCurrentStatus gets the latest check result for a monitor
+// GetMonitorCurrentStatus gets the current status derived from the monitor's persisted state and
+// the latest check result (for display fields). Status is derived from current_state, not the
+// raw result status, for consistency with batchCurrentStatus.
 func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenantID uuid.UUID) (*CurrentStatus, error) {
 	query := `
-		SELECT status, http_status, latency_ms, created_at, metrics_data
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2
-		ORDER BY created_at DESC
-		LIMIT 1
+		SELECT mon.current_state, cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+		FROM monitors mon
+		LEFT JOIN LATERAL (
+			SELECT cr.status, cr.http_status, cr.latency_ms, cr.created_at, cr.metrics_data
+			FROM check_results cr
+			WHERE cr.monitor_id = mon.id AND cr.tenant_id = $2
+			ORDER BY cr.created_at DESC
+			LIMIT 1
+		) cr ON TRUE
+		WHERE mon.id = $1
 	`
 
-	var status string
+	var currentState string
+	var resultStatus sql.NullString
 	var httpStatus sql.NullInt64
 	var latencyMS sql.NullInt64
-	var createdAt time.Time
+	var createdAt sql.NullTime
 	var metricsJSON []byte
 
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&status, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
+	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&currentState, &resultStatus, &httpStatus, &latencyMS, &createdAt, &metricsJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("no check results found")
@@ -998,8 +1268,11 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 	}
 
 	result := &CurrentStatus{
-		Status:        mapResultStatus(status),
-		LastCheckTime: &createdAt,
+		Status: mapMonitorState(currentState),
+	}
+	if createdAt.Valid {
+		t := createdAt.Time
+		result.LastCheckTime = &t
 	}
 
 	if httpStatus.Valid {
@@ -1496,35 +1769,60 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 		return []HourlyUptime{}, nil
 	}
 
+	// Read the rollup cursor first and pass all hour-strip bounds as parameters:
+	// bounds derived from a CTE join on rollup_job_state cannot be pushed into
+	// index conditions on check_results.created_at and forced a full sequential scan.
+	cursor, err := sharedanalytics.LoadRollupCursor(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	startHour := now.Truncate(time.Hour).Add(-23 * time.Hour)
+	endExclusive := now.Truncate(time.Hour).Add(time.Hour)
+	rawStart := cursor.RawStart(startHour)
+
 	query := `
-		WITH hours AS (
-			SELECT generate_series(
-				date_trunc('hour', NOW() - INTERVAL '23 hours'),
-				date_trunc('hour', NOW()),
-				INTERVAL '1 hour'
-			) AS hour
+		WITH rollup_per_hour AS (
+			SELECT
+				mhr.bucket_hour,
+				SUM(mhr.total_checks)::bigint AS total_checks,
+				SUM(mhr.success_checks)::bigint AS success_checks
+			FROM monitor_hourly_rollups mhr
+			WHERE mhr.tenant_id = $1
+			  AND mhr.monitor_id = ANY($2)
+			  AND mhr.bucket_hour >= $3
+			  AND mhr.bucket_hour < $4
+			GROUP BY mhr.bucket_hour
 		),
-		hourly_stats AS (
-			SELECT 
-				date_trunc('hour', cr.created_at) AS hour,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
+		raw_per_hour AS (
+			SELECT
+				date_trunc('hour', cr.created_at) AS bucket_hour,
+				COUNT(*)::bigint AS total_checks,
+				COUNT(*) FILTER (WHERE cr.status = 'success')::bigint AS success_checks
 			FROM check_results cr
-			WHERE cr.monitor_id = ANY($1)
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - INTERVAL '24 hours'
-			GROUP BY date_trunc('hour', cr.created_at)
+			WHERE cr.tenant_id = $1
+			  AND cr.monitor_id = ANY($2)
+			  AND cr.result_source <> 'platform'
+			  AND cr.created_at >= $5
+			  AND cr.created_at < $4
+			  AND (
+				$6::timestamptz IS NULL
+				OR (cr.created_at, cr.id) > ($6::timestamptz, $7::uuid)
+			  )
+			GROUP BY 1
 		)
-		SELECT 
-			h.hour,
-			COALESCE(hs.total, 0) AS total,
-			COALESCE(hs.successful, 0) AS successful
-		FROM hours h
-		LEFT JOIN hourly_stats hs ON h.hour = hs.hour
-		ORDER BY h.hour
+		SELECT
+			b.bucket_hour,
+			COALESCE(rh.total_checks, 0) + COALESCE(rwh.total_checks, 0) AS total_checks,
+			COALESCE(rh.success_checks, 0) + COALESCE(rwh.success_checks, 0) AS success_checks
+		FROM generate_series($3::timestamptz, $4::timestamptz - INTERVAL '1 hour', INTERVAL '1 hour') AS b(bucket_hour)
+		LEFT JOIN rollup_per_hour rh ON rh.bucket_hour = b.bucket_hour
+		LEFT JOIN raw_per_hour rwh ON rwh.bucket_hour = b.bucket_hour
+		ORDER BY b.bucket_hour
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID)
+	rows, err := s.db.QueryContext(ctx, query, tenantID, pq.Array(monitorIDs), startHour, endExclusive, rawStart, cursor.LastCreatedAt, cursor.LastCheckResultID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hourly uptime: %w", err)
 	}
@@ -1545,7 +1843,7 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 		}
 
 		result = append(result, HourlyUptime{
-			Hour:   hour.Format("2006-01-02T15:04"),
+			Hour:   hour.Format("15:04"),
 			Uptime: uptime,
 		})
 	}
@@ -1821,7 +2119,7 @@ func (s *Service) getGroupMemberIDs(ctx context.Context, groupID, tenantID uuid.
 			SELECT mg.monitor_id
 			FROM monitor_groups mg
 			JOIN monitors m ON m.id = mg.monitor_id
-			WHERE mg.group_id = $1 AND m.tenant_id = $2
+			WHERE mg.group_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 			UNION
 			SELECT mg.monitor_id
 			FROM member_tree mt
@@ -1829,12 +2127,15 @@ func (s *Service) getGroupMemberIDs(ctx context.Context, groupID, tenantID uuid.
 			JOIN monitor_groups mg ON mg.group_id = parent.id
 			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = $2
 			WHERE parent.type = 'group'
+			  AND parent.deleted_at IS NULL
+			  AND child.deleted_at IS NULL
 		)
 		SELECT m.id
 		FROM monitors m
 		JOIN member_tree mt ON mt.monitor_id = m.id
 		WHERE m.tenant_id = $2
 		  AND m.type <> 'group'
+		  AND m.deleted_at IS NULL
 		ORDER BY m.name
 	`
 

@@ -14,11 +14,15 @@ const (
 
 // Tenant represents a tenant.
 type Tenant struct {
-	ID                uuid.UUID `json:"id"`
-	Name              string    `json:"name"`
-	DataRetentionDays int       `json:"data_retention_days"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                 uuid.UUID `json:"id"`
+	Name               string    `json:"name"`
+	DataRetentionDays  int       `json:"data_retention_days"`
+	DashboardGroupTags []string  `json:"dashboard_group_tags"`
+	// Role is the caller's membership role in this tenant ("admin" for
+	// superadmins); only set on list responses.
+	Role      string    `json:"role,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TenantListResponse represents a list of tenants.
@@ -28,10 +32,12 @@ type TenantListResponse struct {
 
 // TenantSettings represents editable tenant-level settings.
 type TenantSettings struct {
-	DataRetentionDays int `json:"data_retention_days"`
+	DataRetentionDays  int      `json:"data_retention_days"`
+	DashboardGroupTags []string `json:"dashboard_group_tags"`
 }
 
 // UpdateTenantSettingsRequest represents a partial tenant settings update.
 type UpdateTenantSettingsRequest struct {
-	DataRetentionDays *int `json:"data_retention_days,omitempty"`
+	DataRetentionDays  *int      `json:"data_retention_days,omitempty"`
+	DashboardGroupTags *[]string `json:"dashboard_group_tags,omitempty"`
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,13 +12,17 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// Service handles monitor business logic
+// Service handles monitor business logic. It is the encryption boundary for
+// secret monitor-config fields (DB passwords, …): secrets are encrypted before
+// INSERT/UPDATE and masked on every read so plaintext never leaves the process.
 type Service struct {
 	repo           Repository
 	groupResolver  GroupResolver
 	statusNotifier StatusNotifier
+	encryptor      secrets.Encryptor
 }
 
 type GroupResolver interface {
@@ -31,7 +36,16 @@ type StatusNotifier interface {
 // NewService creates a new monitor service
 func NewService(database Repository) *Service {
 	return &Service{
-		repo: database,
+		repo:      database,
+		encryptor: secrets.NoOpEncryptor{},
+	}
+}
+
+// ConfigureEncryption wires the encryptor used for secret config fields.
+// Without it the service falls back to a NoOpEncryptor (dev/test).
+func (s *Service) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		s.encryptor = encryptor
 	}
 }
 
@@ -41,10 +55,69 @@ func (s *Service) ConfigureHistoryDependencies(groupResolver GroupResolver, stat
 	s.statusNotifier = statusNotifier
 }
 
+// prepareConfigForWrite merges write-only secret placeholders ("***"/empty =
+// keep the stored value; pass nil existing on create) and encrypts secret
+// fields. Configs for types without secret fields pass through unchanged.
+func (s *Service) prepareConfigForWrite(monitorType models.MonitorType, incoming, existing json.RawMessage) (json.RawMessage, error) {
+	if !secrets.HasMonitorSecrets(string(monitorType)) {
+		return incoming, nil
+	}
+	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), incoming, existing)
+	if err != nil {
+		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	encrypted, err := secrets.EncryptMonitorConfig(s.encryptor, string(monitorType), merged)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt config secrets: %w", err)
+	}
+	return encrypted, nil
+}
+
+// maskSecrets replaces secret config fields with the "***" placeholder before
+// a monitor leaves the service. On marshal errors the config is left as-is —
+// stored values are ciphertext envelopes, so no plaintext can leak.
+func (s *Service) maskSecrets(monitor *models.Monitor) {
+	if monitor == nil || !secrets.HasMonitorSecrets(string(monitor.Type)) {
+		return
+	}
+	if masked, err := secrets.MaskMonitorConfig(string(monitor.Type), monitor.Config); err == nil {
+		monitor.Config = masked
+	}
+}
+
+// ResolveTestConfig resolves write-only secret placeholders ("***") in an
+// incoming config against the stored monitor's config so a test-connection
+// request can run with the real (still encrypted) secrets. With no monitorID
+// the config passes through after placeholder cleanup, dropping orphaned
+// placeholders.
+func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, monitorID *uuid.UUID, monitorType models.MonitorType, config json.RawMessage) (json.RawMessage, error) {
+	if !secrets.HasMonitorSecrets(string(monitorType)) {
+		return config, nil
+	}
+	var existing json.RawMessage
+	if monitorID != nil {
+		monitor, err := s.repo.GetByID(ctx, tenantID, *monitorID)
+		if err != nil {
+			return nil, err
+		}
+		existing = monitor.Config
+	}
+	merged, err := secrets.MergeMonitorConfigSecrets(string(monitorType), config, existing)
+	if err != nil {
+		return nil, fmt.Errorf("merge config secrets: %w", err)
+	}
+	return merged, nil
+}
+
 // CreateMonitor creates a new monitor
 func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *models.CreateMonitorRequest) (*models.Monitor, error) {
 	now := time.Now()
 	monitorID := uuid.New()
+
+	config, err := s.prepareConfigForWrite(req.Type, req.Config, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	enabled := true
 	if req.Enabled != nil {
@@ -94,23 +167,47 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		pushToken = &token
 	}
 
+	// Apply defaults for notification fields
+	consecutiveFailuresThreshold := 2 // DB default
+	if req.ConsecutiveFailuresThreshold != nil {
+		consecutiveFailuresThreshold = *req.ConsecutiveFailuresThreshold
+	}
+	notificationMode := "default" // DB default
+	if req.NotificationMode != nil {
+		notificationMode = *req.NotificationMode
+	}
+	memberAlertRollup := "per_monitor" // DB default
+	if req.MemberAlertRollup != nil {
+		memberAlertRollup = *req.MemberAlertRollup
+	}
+
+	locationIDs, err := parseLocationIDs(req.LocationIDs)
+	if err != nil {
+		return nil, err
+	}
+	locationQuorum := effectiveLocationQuorum(req.LocationQuorum, len(locationIDs))
+
 	monitor := &models.Monitor{
-		ID:              monitorID,
-		TenantID:        tenantID,
-		Name:            req.Name,
-		Type:            req.Type,
-		Config:          req.Config,
-		IntervalSeconds: req.IntervalSeconds,
-		TimeoutSeconds:  req.TimeoutSeconds,
-		AlertPolicyID:   alertPolicyID,
-		AlertPolicyIDs:  alertPolicyIDs,
-		Enabled:         enabled,
-		Tags:            req.Tags,
-		AgentID:         agentID,
-		PushToken:       pushToken,
-		NextRunAt:       &nextRunAt,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                           monitorID,
+		TenantID:                     tenantID,
+		Name:                         req.Name,
+		Type:                         req.Type,
+		Config:                       config,
+		IntervalSeconds:              req.IntervalSeconds,
+		TimeoutSeconds:               req.TimeoutSeconds,
+		AlertPolicyID:                alertPolicyID,
+		AlertPolicyIDs:               alertPolicyIDs,
+		Enabled:                      enabled,
+		Tags:                         req.Tags,
+		AgentID:                      agentID,
+		PushToken:                    pushToken,
+		NextRunAt:                    &nextRunAt,
+		CreatedAt:                    now,
+		UpdatedAt:                    now,
+		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
+		NotificationMode:             notificationMode,
+		MemberAlertRollup:            memberAlertRollup,
+		LocationQuorum:               locationQuorum,
 	}
 
 	if err := s.repo.Create(ctx, monitor); err != nil {
@@ -121,6 +218,33 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		return nil, err
 	}
 
+	if len(locationIDs) > 0 {
+		if err := s.repo.SetLocations(ctx, tenantID, monitorID, locationIDs); err != nil {
+			return nil, err
+		}
+		monitor.LocationIDs = locationIDs
+	}
+
+	// Persist custom channel assignments if mode is 'custom'
+	if notificationMode == "custom" && len(req.NotificationChannels) > 0 {
+		if err := s.repo.ReplaceMonitorChannels(ctx, tenantID, monitorID, req.NotificationChannels); err != nil {
+			return nil, err
+		}
+		// Reload from DB to pick up channel name/type joined from alert_channels.
+		if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+			if channels, ok := channelMap[monitorID]; ok {
+				monitor.NotificationChannels = channels
+			} else {
+				monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+			}
+		} else {
+			monitor.NotificationChannels = req.NotificationChannels
+		}
+	} else {
+		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+	}
+
+	s.maskSecrets(monitor)
 	return monitor, nil
 }
 
@@ -142,8 +266,34 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			return nil, err
 		}
 		monitor.MemberIDs = memberIDs
+	} else {
+		dependsOnIDs, err := s.repo.GetDependsOnIDs(ctx, monitorID)
+		if err != nil {
+			return nil, err
+		}
+		monitor.DependsOnIDs = dependsOnIDs
 	}
 
+	// Attach notification channels
+	if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		if channels, ok := channelMap[monitorID]; ok {
+			monitor.NotificationChannels = channels
+		} else {
+			monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+		}
+	}
+
+	// Attach the private-location selection + per-location breakdown
+	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		monitor.LocationIDs = locationMap[monitorID]
+	}
+	if len(monitor.LocationIDs) > 0 {
+		if statuses, err := s.repo.GetLocationStatuses(ctx, monitorID); err == nil {
+			monitor.Locations = statuses
+		}
+	}
+
+	s.maskSecrets(monitor)
 	return monitor, nil
 }
 
@@ -175,6 +325,28 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 		}
 	}
 
+	// Attach notification channels for all monitors
+	if channelMap, err := s.repo.GetChannelsForMonitors(ctx, monitorIDs); err == nil {
+		for i := range monitors {
+			if channels, ok := channelMap[monitors[i].ID]; ok {
+				monitors[i].NotificationChannels = channels
+			} else {
+				monitors[i].NotificationChannels = []models.MonitorChannelAssignment{}
+			}
+		}
+	}
+
+	// Attach location selections
+	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, monitorIDs); err == nil {
+		for i := range monitors {
+			monitors[i].LocationIDs = locationMap[monitors[i].ID]
+		}
+	}
+
+	for i := range monitors {
+		s.maskSecrets(&monitors[i])
+	}
+
 	return &models.MonitorListResponse{
 		Items:    monitors,
 		Page:     page,
@@ -185,8 +357,9 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 
 // UpdateMonitor updates a monitor (partial update)
 func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UUID, req *models.UpdateMonitorRequest) (*models.Monitor, error) {
-	// First, get the existing monitor to validate
-	existing, err := s.GetMonitor(ctx, tenantID, monitorID)
+	// Load straight from the repo: the stored (unmasked) config is needed to
+	// resolve write-only secret placeholders in the incoming config.
+	existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,8 +382,16 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	}
 
 	if len(req.Config) > 0 {
+		effectiveType := existing.Type
+		if req.Type != nil {
+			effectiveType = *req.Type
+		}
+		config, err := s.prepareConfigForWrite(effectiveType, req.Config, existing.Config)
+		if err != nil {
+			return nil, err
+		}
 		setParts = append(setParts, fmt.Sprintf("config = $%d", argIndex))
-		args = append(args, req.Config)
+		args = append(args, config)
 		argIndex++
 	}
 
@@ -295,6 +476,52 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	if req.ConsecutiveFailuresThreshold != nil {
+		setParts = append(setParts, fmt.Sprintf("consecutive_failures_threshold = $%d", argIndex))
+		args = append(args, *req.ConsecutiveFailuresThreshold)
+		argIndex++
+	}
+
+	if req.NotificationMode != nil {
+		setParts = append(setParts, fmt.Sprintf("notification_mode = $%d", argIndex))
+		args = append(args, *req.NotificationMode)
+		argIndex++
+	}
+
+	if req.MemberAlertRollup != nil {
+		setParts = append(setParts, fmt.Sprintf("member_alert_rollup = $%d", argIndex))
+		args = append(args, *req.MemberAlertRollup)
+		argIndex++
+	}
+
+	// Location threading: when the set changes, the quorum is re-clamped to
+	// the new set size; an explicit quorum alone is clamped to the current set.
+	var newLocationIDs []uuid.UUID
+	if req.LocationIDs != nil {
+		parsed, err := parseLocationIDs(*req.LocationIDs)
+		if err != nil {
+			return nil, err
+		}
+		newLocationIDs = parsed
+
+		quorumReq := req.LocationQuorum
+		if quorumReq == nil {
+			existingQuorum := existing.LocationQuorum
+			quorumReq = &existingQuorum
+		}
+		setParts = append(setParts, fmt.Sprintf("location_quorum = $%d", argIndex))
+		args = append(args, effectiveLocationQuorum(quorumReq, len(parsed)))
+		argIndex++
+	} else if req.LocationQuorum != nil {
+		currentLocations, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID})
+		if err != nil {
+			return nil, err
+		}
+		setParts = append(setParts, fmt.Sprintf("location_quorum = $%d", argIndex))
+		args = append(args, effectiveLocationQuorum(req.LocationQuorum, len(currentLocations[monitorID])))
+		argIndex++
+	}
+
 	// Update next_run_at if interval changed
 	if req.IntervalSeconds != nil {
 		setParts = append(setParts, fmt.Sprintf("next_run_at = $%d", argIndex))
@@ -302,7 +529,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
-	if len(setParts) == 0 {
+	if len(setParts) == 0 && req.NotificationChannels == nil {
 		// No fields to update, return existing
 		return existing, nil
 	}
@@ -313,8 +540,18 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		TenantID: tenantID,
 	}
 
-	if err := s.repo.Update(ctx, monitor, setParts, args); err != nil {
-		return nil, err
+	if len(setParts) > 0 {
+		if err := s.repo.Update(ctx, monitor, setParts, args); err != nil {
+			return nil, err
+		}
+	} else {
+		// No DB column updates but we still need to handle monitor_channels below.
+		// Re-load so monitor has all fields populated.
+		loaded, err := s.repo.GetByID(ctx, tenantID, monitorID)
+		if err != nil {
+			return nil, err
+		}
+		*monitor = *loaded
 	}
 
 	if updatePolicies {
@@ -324,6 +561,53 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		monitor.AlertPolicyIDs = alertPolicyIDs
 	} else if policies, err := s.repo.GetAlertPolicyIDs(ctx, monitorID); err == nil {
 		monitor.AlertPolicyIDs = mergeAlertPolicyIDs(policies, derefUUID(monitor.AlertPolicyID))
+	}
+
+	if req.LocationIDs != nil {
+		if err := s.repo.SetLocations(ctx, tenantID, monitorID, newLocationIDs); err != nil {
+			return nil, err
+		}
+		monitor.LocationIDs = newLocationIDs
+	} else if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		monitor.LocationIDs = locationMap[monitorID]
+	}
+
+	// Handle notification channel updates
+	effectiveMode := monitor.NotificationMode
+	if req.NotificationMode != nil {
+		effectiveMode = *req.NotificationMode
+	}
+
+	if req.NotificationMode != nil && effectiveMode == "default" {
+		// Switching to default: remove all custom channels
+		if err := s.repo.DeleteMonitorChannels(ctx, monitorID); err != nil {
+			return nil, err
+		}
+		monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+	} else if req.NotificationChannels != nil {
+		// Replace channel set
+		if err := s.repo.ReplaceMonitorChannels(ctx, tenantID, monitorID, req.NotificationChannels); err != nil {
+			return nil, err
+		}
+		// Reload from DB to pick up channel name/type joined from alert_channels.
+		if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+			if channels, ok := channelMap[monitorID]; ok {
+				monitor.NotificationChannels = channels
+			} else {
+				monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+			}
+		} else {
+			monitor.NotificationChannels = req.NotificationChannels
+		}
+	} else {
+		// Load existing channels
+		if channelMap, err := s.repo.GetChannelsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+			if channels, ok := channelMap[monitorID]; ok {
+				monitor.NotificationChannels = channels
+			} else {
+				monitor.NotificationChannels = []models.MonitorChannelAssignment{}
+			}
+		}
 	}
 
 	return monitor, nil
@@ -386,6 +670,45 @@ func derefUUID(id *uuid.UUID) uuid.UUID {
 	return *id
 }
 
+func parseLocationIDs(ids []string) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	result := make([]uuid.UUID, 0, len(ids))
+	for _, raw := range ids {
+		if raw == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid location_id: %w", err)
+		}
+		if _, ok := seen[parsed]; ok {
+			continue
+		}
+		seen[parsed] = struct{}{}
+		result = append(result, parsed)
+	}
+	return result, nil
+}
+
+// effectiveLocationQuorum clamps a requested quorum to [1, locationCount].
+// A monitor with 0 or 1 locations always has quorum 1 (the legacy behavior).
+func effectiveLocationQuorum(requested *int, locationCount int) int {
+	quorum := 1
+	if requested != nil && *requested > 1 {
+		quorum = *requested
+	}
+	if locationCount > 0 && quorum > locationCount {
+		quorum = locationCount
+	}
+	if locationCount <= 1 {
+		quorum = 1
+	}
+	return quorum
+}
+
 // DeleteMonitor deletes a monitor
 func (s *Service) DeleteMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) error {
 	return s.repo.Delete(ctx, tenantID, monitorID)
@@ -424,6 +747,50 @@ func (s *Service) DeleteMonitorHistory(ctx context.Context, tenantID, monitorID 
 	}
 
 	return nil
+}
+
+// BulkDeleteMonitors soft-deletes the supplied monitors in one statement.
+// All monitors must belong to the tenant — if any don't, no rows are tombstoned.
+func (s *Service) BulkDeleteMonitors(
+	ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID,
+) (int64, error) {
+	if len(monitorIDs) == 0 {
+		return 0, fmt.Errorf("monitor_ids cannot be empty")
+	}
+	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
+		return 0, err
+	}
+	return s.repo.BulkSoftDelete(ctx, tenantID, monitorIDs)
+}
+
+// BulkUpdateAlerting applies alerting fields to many monitors in a tenant-scoped way.
+// Nil fields mean "leave unchanged". Returns the count of monitors updated.
+func (s *Service) BulkUpdateAlerting(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	monitorIDs []uuid.UUID,
+	threshold *int,
+	mode *string,
+	channels []models.MonitorChannelAssignment,
+) (int, error) {
+	if len(monitorIDs) == 0 {
+		return 0, fmt.Errorf("monitor_ids cannot be empty")
+	}
+	if err := s.repo.VerifyMonitorsBelongToTenant(ctx, tenantID, monitorIDs); err != nil {
+		return 0, err
+	}
+
+	for _, monitorID := range monitorIDs {
+		req := &models.UpdateMonitorRequest{
+			ConsecutiveFailuresThreshold: threshold,
+			NotificationMode:             mode,
+			NotificationChannels:         channels,
+		}
+		if _, err := s.UpdateMonitor(ctx, tenantID, monitorID, req); err != nil {
+			return 0, fmt.Errorf("failed to update monitor %s: %w", monitorID, err)
+		}
+	}
+	return len(monitorIDs), nil
 }
 
 // generatePushToken generates a unique token for push monitors

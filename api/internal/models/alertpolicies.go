@@ -14,6 +14,7 @@ type AlertPolicy struct {
 	Description          *string     `json:"description,omitempty"`
 	FailureThreshold     int         `json:"failure_threshold"`
 	FailureWindowSeconds int         `json:"failure_window_seconds"`
+	CreateIncidentOnFire bool        `json:"create_incident_on_fire"`
 	ChannelIDs           []uuid.UUID `json:"channel_ids,omitempty"`
 	EmailSubjectTemplate *string     `json:"email_subject_template,omitempty"`
 	EmailBodyTemplate    *string     `json:"email_body_template,omitempty"`
@@ -27,6 +28,7 @@ type CreateAlertPolicyRequest struct {
 	Description          *string  `json:"description,omitempty"`
 	FailureThreshold     int      `json:"failure_threshold"`
 	FailureWindowSeconds int      `json:"failure_window_seconds"`
+	CreateIncidentOnFire *bool    `json:"create_incident_on_fire,omitempty"`
 	ChannelIDs           []string `json:"channel_ids,omitempty"`
 	EmailSubjectTemplate *string  `json:"email_subject_template,omitempty"`
 	EmailBodyTemplate    *string  `json:"email_body_template,omitempty"`
@@ -38,6 +40,7 @@ type UpdateAlertPolicyRequest struct {
 	Description          *string   `json:"description,omitempty"`
 	FailureThreshold     *int      `json:"failure_threshold,omitempty"`
 	FailureWindowSeconds *int      `json:"failure_window_seconds,omitempty"`
+	CreateIncidentOnFire *bool     `json:"create_incident_on_fire,omitempty"`
 	ChannelIDs           *[]string `json:"channel_ids,omitempty"`
 	EmailSubjectTemplate *string   `json:"email_subject_template,omitempty"`
 	EmailBodyTemplate    *string   `json:"email_body_template,omitempty"`

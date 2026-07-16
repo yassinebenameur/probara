@@ -5,6 +5,7 @@ interface PanelProps {
   subtitle?: string;
   dotColor?: string;
   actions?: ReactNode;
+  allowOverflow?: boolean;
   children: ReactNode;
 }
 
@@ -13,10 +14,11 @@ export default function Panel({
   subtitle,
   dotColor = 'var(--success)',
   actions,
+  allowOverflow = false,
   children,
 }: PanelProps) {
   return (
-    <div className="relative overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
+    <div className={`relative ${allowOverflow ? 'overflow-visible' : 'overflow-hidden'} rounded-xl border border-white/[0.06] bg-slate-900/50 p-5`}>
       {/* Header */}
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>

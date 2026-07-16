@@ -3,10 +3,12 @@ package adminauth
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
@@ -34,7 +36,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	`
 
 	var user models.AdminUser
-	var passwordHash string
+	var passwordHash sql.NullString
 
 	err := s.db.QueryRowContext(ctx, query, username).Scan(
 		&user.ID,
@@ -52,7 +54,12 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		return nil, fmt.Errorf("failed to query admin user: %w", err)
 	}
 
-	match, err := auth.ComparePassword(passwordHash, password)
+	// OIDC-only users have no local password and cannot log in with one.
+	if !passwordHash.Valid || passwordHash.String == "" {
+		return nil, fmt.Errorf("invalid credentials")
+	}
+
+	match, err := auth.ComparePassword(passwordHash.String, password)
 	if err != nil {
 		return nil, err
 	}
@@ -63,24 +70,50 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	return &user, nil
 }
 
-// GetAdminByID retrieves an admin user by ID.
+// GetAdminByID retrieves an admin user by ID, including identity fields.
 func (s *Service) GetAdminByID(ctx context.Context, adminID uuid.UUID) (*models.AdminUser, error) {
 	query := `
-		SELECT id, username, created_at, updated_at, last_login_at, disabled_at
+		SELECT id, username, email, platform_role,
+		       CASE WHEN external_subject IS NOT NULL THEN 'oidc' ELSE 'password' END,
+		       created_at, updated_at, last_login_at, disabled_at
 		FROM admin_users
 		WHERE id = $1
 		LIMIT 1
 	`
 
 	var user models.AdminUser
-	if err := s.db.QueryRowContext(ctx, query, adminID).Scan(
+	err := s.db.QueryRowContext(ctx, query, adminID).Scan(
 		&user.ID,
 		&user.Username,
+		&user.Email,
+		&user.PlatformRole,
+		&user.AuthMethod,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,
 		&user.DisabledAt,
-	); err != nil {
+	)
+	if isMissingSchema(err) {
+		// Deploy-ordering tolerance: identity columns may not be migrated yet.
+		// Pre-migration every admin is a superadmin.
+		legacy := `
+			SELECT id, username, created_at, updated_at, last_login_at, disabled_at
+			FROM admin_users
+			WHERE id = $1
+			LIMIT 1
+		`
+		err = s.db.QueryRowContext(ctx, legacy, adminID).Scan(
+			&user.ID,
+			&user.Username,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+			&user.LastLoginAt,
+			&user.DisabledAt,
+		)
+		user.PlatformRole = auth.PlatformRoleSuperadmin
+		user.AuthMethod = "password"
+	}
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("admin user not found")
 		}
@@ -88,6 +121,49 @@ func (s *Service) GetAdminByID(ctx context.Context, adminID uuid.UUID) (*models.
 	}
 
 	return &user, nil
+}
+
+// GetMembershipsForAdmin returns the user's tenant memberships with tenant names.
+func (s *Service) GetMembershipsForAdmin(ctx context.Context, adminID uuid.UUID) ([]models.TenantMembership, error) {
+	query := `
+		SELECT m.tenant_id, t.name, m.role
+		FROM tenant_memberships m
+		JOIN tenants t ON t.id = m.tenant_id
+		WHERE m.admin_user_id = $1
+		ORDER BY t.name ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, adminID)
+	if err != nil {
+		if isMissingSchema(err) {
+			return []models.TenantMembership{}, nil
+		}
+		return nil, fmt.Errorf("failed to query memberships: %w", err)
+	}
+	defer rows.Close()
+
+	memberships := make([]models.TenantMembership, 0)
+	for rows.Next() {
+		var m models.TenantMembership
+		if err := rows.Scan(&m.TenantID, &m.TenantName, &m.Role); err != nil {
+			return nil, fmt.Errorf("failed to scan membership: %w", err)
+		}
+		memberships = append(memberships, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate memberships: %w", err)
+	}
+	return memberships, nil
+}
+
+// isMissingSchema reports whether err is Postgres undefined_table (42P01) or
+// undefined_column (42703) — this binary running ahead of the migrations job.
+func isMissingSchema(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	return pqErr.Code == "42P01" || pqErr.Code == "42703"
 }
 
 // UpdateLastLogin updates the admin user's last login timestamp.

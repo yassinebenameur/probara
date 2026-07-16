@@ -2,6 +2,39 @@ package config
 
 import "testing"
 
+func setRequiredAPIEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("HTTP_PORT", "8080")
+	t.Setenv("METRICS_PORT", "9090")
+	t.Setenv("ADMIN_JWT_SECRET", "test-secret")
+	t.Setenv("OIDC_ENABLED", "false")
+}
+
+func TestLoadAPIConfigRejectsPublicNATSWithoutLocationAuth(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("PUBLIC_NATS_URL", "tls://nats.example.test:4222")
+	t.Setenv("NATS_LOCATION_AUTH_ISSUER_SEED", "")
+	if _, err := LoadAPIConfig(); err == nil {
+		t.Fatal("expected public NATS URL without location authorization to fail")
+	}
+}
+
+func TestLoadAPIConfigLocationAuthSubjects(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("PUBLIC_NATS_URL", "")
+	t.Setenv("NATS_LOCATION_AUTH_ISSUER_SEED", "seed")
+	t.Setenv("PROBARA_SECRETS_KEY", "configured")
+	t.Setenv("CHECK_JOB_STREAM", "PRIVATE_JOBS")
+	t.Setenv("CHECK_RESULT_SUBJECT", "private.results")
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CheckJobStream != "PRIVATE_JOBS" || cfg.CheckResultSubject != "private.results" {
+		t.Fatalf("unexpected location auth subjects: %#v", cfg)
+	}
+}
+
 func TestLoadBaseConfig_MissingHTTPPort(t *testing.T) {
 	t.Setenv("HTTP_PORT", "")
 	t.Setenv("METRICS_PORT", "9090")

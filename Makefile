@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
+.PHONY: help up down restart logs build build-agent-static clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
 # Default target
 help:
@@ -10,6 +10,7 @@ help:
 	@echo "  make restart     - Restart all services"
 	@echo "  make logs        - View logs from all services"
 	@echo "  make build       - Build all Docker images"
+	@echo "  make build-agent-static - Build downloadable agent binaries"
 	@echo "  make rebuild     - Rebuild and restart all services"
 	@echo "  make clean       - Stop services and remove volumes"
 	@echo "  make ps          - Show running services"
@@ -72,6 +73,9 @@ logs-status:
 # Build images
 build:
 	docker compose build
+
+build-agent-static:
+	@bash scripts/build-agent.sh
 
 # Rebuild and restart
 rebuild:
@@ -181,6 +185,8 @@ start-all-local:
 	@bash scripts/start-local-services.sh check-go
 	@echo "Running database migrations locally..."
 	@POSTGRES_URL='postgres://probara:probara@localhost:5432/probara?sslmode=disable' MIGRATIONS_PATH='./shared/db/migrations' go run ./cmd/migrate
+	@echo "Building downloadable agent binaries..."
+	@bash scripts/build-agent.sh
 	@echo "Starting local Go services..."
 	@bash scripts/start-local-services.sh
 	@echo "Starting UI with nvm LTS..."

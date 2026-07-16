@@ -6,8 +6,9 @@ import {
   CreateMonitorRequest,
   UpdateMonitorRequest,
   CheckResult,
-  AlertPolicy,
   MonitorType,
+  NotificationMode,
+  ChannelAssignment,
   HTTPMonitorConfig,
   PingMonitorConfig,
   DNSMonitorConfig,
@@ -26,15 +27,27 @@ import {
   SyntheticBrowserAction,
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserStepConfig,
+  Location,
 } from '@/lib/types';
-import { getAlertPolicies, getMonitorResults, runMonitorNow } from '@/lib/api';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, type LucideIcon } from 'lucide-react';
+import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
+import { AlertingSection } from './AlertingSection';
+import { LocationsSection } from './LocationsSection';
 import GroupForm from './GroupForm';
+import { MonitorMultiSelect } from './MonitorMultiSelect';
 import AgentForm from './AgentForm';
 import PushForm from './PushForm';
 import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
+import TcpForm from './TcpForm';
+import WebsocketForm from './WebsocketForm';
+import DatabaseForm, { type DatabaseMonitorType } from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
-import HttpRequestFlowPreview from './HttpRequestFlowPreview';
+import CurlPreview from './CurlPreview';
+
+const BTN_GHOST_SM = 'inline-flex items-center justify-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -196,43 +209,155 @@ function SectionHeader({ title, description }: { title: string; description?: st
   );
 }
 
-// Monitor type card
-function TypeCard({
-  type,
-  icon,
-  label,
-  description,
-  selected,
-  onClick,
-  disabled,
-}: {
-  type: string;
-  icon: React.ReactNode;
+// Monitor type registry. Adding a new type (redis, postgres, websocket, …)
+// only requires a new entry here — the picker, categories, search, and
+// name placeholder all derive from it.
+type MonitorTypeMeta = {
+  type: MonitorType;
   label: string;
   description: string;
-  selected: boolean;
-  onClick: () => void;
-  disabled?: boolean;
+  icon: LucideIcon;
+  category: (typeof MONITOR_TYPE_CATEGORIES)[number];
+  namePlaceholder: string;
+};
+
+const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Databases & Brokers', 'Infrastructure', 'Organization'] as const;
+
+const MONITOR_TYPE_META: MonitorTypeMeta[] = [
+  { type: 'http', label: 'HTTP', description: 'Check an HTTP endpoint', icon: Globe, category: 'Web & API', namePlaceholder: 'My API health check' },
+  { type: 'websocket', label: 'WebSocket', description: 'Upgrade handshake and reply checks', icon: Cable, category: 'Web & API', namePlaceholder: 'Live updates socket' },
+  { type: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API journey', icon: Code, category: 'Web & API', namePlaceholder: 'Checkout API journey' },
+  { type: 'synthetic_browser', label: 'Synthetic Browser', description: 'Real-browser user flow', icon: MousePointer2, category: 'Web & API', namePlaceholder: 'Login flow check' },
+  { type: 'ping', label: 'Ping', description: 'ICMP reachability check', icon: Radio, category: 'Network', namePlaceholder: 'Edge gateway ping' },
+  { type: 'dns', label: 'DNS', description: 'Resolve and verify records', icon: Search, category: 'Network', namePlaceholder: 'example.com DNS' },
+  { type: 'grpc', label: 'gRPC', description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' },
+  { type: 'tcp', label: 'TCP', description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' },
+  { type: 'sip', label: 'SIP', description: 'SIP OPTIONS availability', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' },
+  { type: 'postgres', label: 'PostgreSQL', description: 'Connect, auth, and query checks', icon: Database, category: 'Databases & Brokers', namePlaceholder: 'Postgres production' },
+  { type: 'mysql', label: 'MySQL', description: 'Connect, auth, and query checks', icon: Cylinder, category: 'Databases & Brokers', namePlaceholder: 'MySQL production' },
+  { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases & Brokers', namePlaceholder: 'Redis cache' },
+  { type: 'mongodb', label: 'MongoDB', description: 'Connect, auth, and ping', icon: Leaf, category: 'Databases & Brokers', namePlaceholder: 'Mongo cluster' },
+  { type: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect and auth checks', icon: MessageSquare, category: 'Databases & Brokers', namePlaceholder: 'RabbitMQ production' },
+  { type: 'agent', label: 'Agent', description: 'Host metrics from an agent', icon: Server, category: 'Infrastructure', namePlaceholder: 'Production server' },
+  { type: 'push', label: 'Push', description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure', namePlaceholder: 'My service health' },
+  { type: 'group', label: 'Group', description: 'Roll up monitors into one status', icon: Folder, category: 'Organization', namePlaceholder: 'Production services' },
+];
+
+const getTypeMeta = (type: MonitorType): MonitorTypeMeta =>
+  MONITOR_TYPE_META.find((m) => m.type === type) ?? MONITOR_TYPE_META[0];
+
+function MonitorTypePicker({
+  value,
+  onSelect,
+  open,
+  onOpenChange,
+  locked,
+}: {
+  value: MonitorType;
+  onSelect: (type: MonitorType) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  locked: boolean;
 }) {
+  const [query, setQuery] = useState('');
+  const selected = getTypeMeta(value);
+  const SelectedIcon = selected.icon;
+  const q = query.trim().toLowerCase();
+  const matches = (m: MonitorTypeMeta) =>
+    !q ||
+    m.label.toLowerCase().includes(q) ||
+    m.description.toLowerCase().includes(q) ||
+    m.category.toLowerCase().includes(q);
+  const visible = MONITOR_TYPE_META.filter(matches);
+
+  if (locked || !open) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="shrink-0 rounded-lg bg-cyan-500/15 p-2 text-cyan-400">
+            <SelectedIcon className="h-4 w-4" strokeWidth={1.75} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-white">{selected.label} monitor</p>
+            <p className="truncate text-xs text-slate-500">{selected.description}</p>
+          </div>
+        </div>
+        {locked ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+            <Lock className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Type is fixed after creation
+          </span>
+        ) : (
+          <button type="button" onClick={() => onOpenChange(true)} className={BTN_GHOST_SM}>
+            Change type
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-all ${
-        selected
-          ? 'border-cyan-500/50 bg-cyan-500/10'
-          : 'border-white/[0.06] bg-slate-800/30 hover:border-white/[0.1] hover:bg-slate-800/50'
-      } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-    >
-      <div className={`rounded-lg p-2 ${selected ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400'}`}>
-        {icon}
+    <div className="rounded-xl border border-white/[0.06] bg-slate-900/40 p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-white">Monitor type</p>
+          <p className="text-xs text-slate-500">Pick what you want to watch. The type can&apos;t be changed later.</p>
+        </div>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search types…"
+            aria-label="Search monitor types"
+            className="h-8 w-48 rounded-lg border border-white/[0.08] bg-slate-950/60 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
+          />
+        </div>
       </div>
-      <div>
-        <p className={`text-sm font-medium ${selected ? 'text-white' : 'text-slate-300'}`}>{label}</p>
-        <p className="text-xs text-slate-500 mt-0.5">{description}</p>
+      <div className="space-y-4" role="radiogroup" aria-label="Monitor type">
+        {MONITOR_TYPE_CATEGORIES.map((category) => {
+          const items = visible.filter((m) => m.category === category);
+          if (items.length === 0) return null;
+          return (
+            <div key={category}>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">{category}</p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {items.map((m) => {
+                  const Icon = m.icon;
+                  const isSelected = m.type === value;
+                  return (
+                    <button
+                      key={m.type}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      onClick={() => onSelect(m.type)}
+                      className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all ${
+                        isSelected
+                          ? 'border-cyan-500/50 bg-cyan-500/10'
+                          : 'border-white/[0.06] bg-slate-800/30 hover:border-white/[0.12] hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div className={`shrink-0 rounded-lg p-1.5 ${isSelected ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400'}`}>
+                        <Icon className="h-4 w-4" strokeWidth={1.75} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className={`text-xs font-medium ${isSelected ? 'text-white' : 'text-slate-300'}`}>{m.label}</p>
+                        <p className="mt-0.5 text-[11px] leading-snug text-slate-500">{m.description}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {visible.length === 0 && (
+          <p className="py-2 text-center text-xs text-slate-500">No monitor types match &ldquo;{query}&rdquo;.</p>
+        )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -750,13 +875,9 @@ export default function MonitorForm({
   onCancel,
   loading = false,
 }: MonitorFormProps) {
-  const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
   const isEditMode = Boolean(monitor);
   const sourceType: MonitorType = monitor?.type || initialData?.type || 'http';
   const sourceConfig = monitor?.config || initialData?.config;
-  const sourceAlertPolicyIds =
-    monitor?.alert_policy_ids ||
-    (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []);
   const sourceTags = monitor?.tags || initialData?.tags || [];
   const sourceName = monitor?.name || initialData?.name || '';
   const sourceIntervalSeconds = monitor?.interval_seconds || initialData?.interval_seconds || 60;
@@ -827,6 +948,7 @@ export default function MonitorForm({
     host: initialPingConfig?.host || initialDNSConfig?.host || '',
     dns_record_type: initialDNSConfig?.record_type || 'A',
     dns_expected_answers: (initialDNSConfig?.expected_answers || []).join(', '),
+    dns_nameserver: initialDNSConfig?.nameserver || '',
     synthetic_api_base_url: initialSyntheticAPIConfig?.base_url || '',
     synthetic_api_failure_mode: initialSyntheticAPIConfig?.failure_mode || 'fail_fast',
     synthetic_api_variables: mapVariablesToRows(initialSyntheticAPIConfig?.variables),
@@ -850,13 +972,20 @@ export default function MonitorForm({
     synthetic_browser_guided_password: initialSyntheticBrowserGuided.password,
     interval_seconds: sourceIntervalSeconds,
     timeout_seconds: sourceTimeoutSeconds,
-    alert_policy_ids: sourceAlertPolicyIds,
+    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
+    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    notification_channels: (monitor?.notification_channels ?? []) as ChannelAssignment[],
     enabled: sourceEnabled,
     tags: sourceTags.join(', '),
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
+    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
+    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  // Expanded by default when creating so all types are discoverable up front.
+  const [typePickerOpen, setTypePickerOpen] = useState(!isEditMode);
   const [syntheticAPIMode, setSyntheticAPIMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserMode, setSyntheticBrowserMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserSetupMode, setSyntheticBrowserSetupMode] = useState<SyntheticBrowserSetupMode>(
@@ -866,6 +995,24 @@ export default function MonitorForm({
   const [syntheticTestState, setSyntheticTestState] = useState<SyntheticTestState>({ phase: 'idle' });
   const testSequenceRef = useRef(0);
   const mountedRef = useRef(true);
+  const [availableMonitors, setAvailableMonitors] = useState<Monitor[]>([]);
+  const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
+  // '' = fan out to all the monitor's locations (or default fleet when none).
+  const [testLocationId, setTestLocationId] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    getMonitors({ page_size: 100 })
+      .then((res) => {
+        if (!cancelled) setAvailableMonitors(res.items || []);
+      })
+      .catch(() => {
+        // Dependency picker degrades to empty; not fatal for the form.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isSavedMonitor = Boolean(monitor?.id);
   const isSyntheticMonitor = monitorType === 'synthetic_api' || monitorType === 'synthetic_browser';
@@ -951,6 +1098,8 @@ export default function MonitorForm({
   const startSyntheticLiveTest = async () => {
     if (!monitor?.id || !isSyntheticMonitor || isTestRunning) return;
 
+    // Ignore a stale pick if the location was deselected since.
+    const chosenLocationId = formData.location_ids.includes(testLocationId) ? testLocationId : '';
     const sequence = ++testSequenceRef.current;
     setSyntheticTestState({
       phase: 'queueing',
@@ -958,7 +1107,10 @@ export default function MonitorForm({
     });
 
     try {
-      const runResponse = await runMonitorNow(monitor.id);
+      const runResponse = await runMonitorNow(
+        monitor.id,
+        chosenLocationId ? { location_id: chosenLocationId } : undefined
+      );
       if (!mountedRef.current || sequence !== testSequenceRef.current) return;
 
       const queuedAtISO = runResponse.queued_at || new Date().toISOString();
@@ -978,6 +1130,7 @@ export default function MonitorForm({
 
         const response = await getMonitorResults(monitor.id, { limit: 10, since: queuedAtISO });
         const candidate = (response.results || []).find((result) => {
+          if (chosenLocationId && result.location_id !== chosenLocationId) return false;
           const resultMs = new Date(result.created_at).getTime();
           return resultMs >= queuedAtMs - 1500;
         });
@@ -1025,10 +1178,6 @@ export default function MonitorForm({
   };
 
   useEffect(() => {
-    loadAlertPolicies();
-  }, []);
-
-  useEffect(() => {
     if (initialSyntheticAPIConfig) {
       const hasAdvancedAPIConfig =
         Object.keys(initialSyntheticAPIConfig.variables || {}).length > 0 ||
@@ -1070,15 +1219,6 @@ export default function MonitorForm({
       setSyntheticBrowserGuidedStep(1);
     }
   }, [monitorType, isEditMode]);
-
-  const loadAlertPolicies = async () => {
-    try {
-      const response = await getAlertPolicies({ page_size: 100 });
-      setAlertPolicies(response?.items || []);
-    } catch (error) {
-      console.error('Failed to load alert policies:', error);
-    }
-  };
 
   const applySyntheticAPITemplate = (template: 'health_auth' | 'single_health') => {
     setFormData((prev) => {
@@ -1646,6 +1786,9 @@ export default function MonitorForm({
       if (dnsExpected.length > 0) {
         dnsConfig.expected_answers = dnsExpected;
       }
+      if (formData.dns_nameserver.trim()) {
+        dnsConfig.nameserver = formData.dns_nameserver.trim();
+      }
       config = dnsConfig;
     } else if (monitorType === 'synthetic_api') {
       const variables: Record<string, string> = {};
@@ -1832,112 +1975,41 @@ export default function MonitorForm({
       enabled: formData.enabled,
     };
 
-    requestData.alert_policy_ids = formData.alert_policy_ids;
+    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
+    requestData.notification_mode = formData.notification_mode;
+    requestData.notification_channels =
+      formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
+    requestData.depends_on_ids = formData.depends_on_ids;
+    requestData.location_ids = formData.location_ids;
+    requestData.location_quorum =
+      formData.location_ids.length >= 2
+        ? Math.min(formData.location_quorum, formData.location_ids.length)
+        : 1;
 
     await onSubmit(requestData);
   };
 
-  // Type icons
-    const typeIcons = {
-      http: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>,
-      ping: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" /></svg>,
-      dns: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5a7 7 0 105.196 11.95l3.427 3.428a1 1 0 001.414-1.414l-3.428-3.427A7 7 0 0011 5z" /></svg>,
-      group: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>,
-      agent: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" /></svg>,
-      push: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>,
-      sip: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>,
-      grpc: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h10M7 16h6M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2h-2l-4 0H5a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
-      synthetic_api: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
-      synthetic_browser: <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l6-3m-7-9h8m-8 4h6m-7-8h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>,
-    };
-
-    const monitorTypes: MonitorType[] = ['http', 'ping', 'dns', 'grpc', 'group', 'agent', 'push', 'sip', 'synthetic_api', 'synthetic_browser'];
-
-    const getTypeLabel = (type: MonitorType) => {
-      switch (type) {
-        case 'http':
-          return 'HTTP';
-        case 'ping':
-          return 'Ping';
-        case 'dns':
-          return 'DNS';
-        case 'grpc':
-          return 'gRPC';
-        case 'group':
-          return 'Group';
-        case 'agent':
-          return 'Agent';
-        case 'push':
-          return 'Push';
-        case 'sip':
-          return 'SIP';
-        case 'synthetic_api':
-          return 'Synthetic API';
-        case 'synthetic_browser':
-          return 'Synthetic Browser';
-        default:
-          return 'Monitor';
-      }
-    };
-
-    const getTypeDescription = (type: MonitorType) => {
-      switch (type) {
-        case 'http':
-          return 'Monitor HTTP endpoints';
-        case 'ping':
-          return 'ICMP ping checks';
-        case 'dns':
-          return 'DNS record checks';
-        case 'grpc':
-          return 'gRPC health checks';
-        case 'group':
-          return 'Group multiple monitors';
-        case 'agent':
-          return 'System metrics agent';
-        case 'push':
-          return 'Webhook-based monitoring';
-        case 'sip':
-          return 'SIP OPTIONS checks';
-        case 'synthetic_api':
-          return 'Simulate real API user flows';
-        case 'synthetic_browser':
-          return 'Simulate end-to-end browser journeys';
-        default:
-          return '';
-      }
-    };
-
-  // Compact type tab bar (shared across all delegated forms)
-  const TypeTabBar = () => (
-    <div className="mb-6">
-      <div className="flex flex-wrap gap-1.5 rounded-xl border border-white/[0.06] bg-slate-900/40 p-1.5">
-        {monitorTypes.map((type) => (
-          <button
-            key={type}
-            type="button"
-            disabled={isEditMode}
-            onClick={() => setMonitorType(type)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
-              monitorType === type
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent disabled:opacity-40'
-            }`}
-          >
-            {getTypeLabel(type)}
-          </button>
-        ))}
-      </div>
-    </div>
+  const typePicker = (
+    <MonitorTypePicker
+      value={monitorType}
+      onSelect={(type) => {
+        setMonitorType(type);
+        setTypePickerOpen(false);
+      }}
+      open={typePickerOpen}
+      onOpenChange={setTypePickerOpen}
+      locked={isEditMode}
+    />
   );
 
   // Delegate to specialized forms
   if (monitorType === 'group') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <GroupForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1946,7 +2018,7 @@ export default function MonitorForm({
   if (monitorType === 'agent') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <AgentForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1955,7 +2027,7 @@ export default function MonitorForm({
   if (monitorType === 'push') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <PushForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1964,7 +2036,7 @@ export default function MonitorForm({
   if (monitorType === 'sip') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <SipForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
@@ -1973,8 +2045,43 @@ export default function MonitorForm({
   if (monitorType === 'grpc') {
     return (
       <div className="space-y-4">
-        <TypeTabBar />
+        {typePicker}
         <GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+      </div>
+    );
+  }
+
+  if (monitorType === 'tcp') {
+    return (
+      <div className="space-y-4">
+        {typePicker}
+        <TcpForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+      </div>
+    );
+  }
+
+  if (monitorType === 'websocket') {
+    return (
+      <div className="space-y-4">
+        {typePicker}
+        <WebsocketForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
+      </div>
+    );
+  }
+
+  if (monitorType === 'redis' || monitorType === 'postgres' || monitorType === 'mongodb' || monitorType === 'rabbitmq' || monitorType === 'mysql') {
+    return (
+      <div className="space-y-4">
+        {typePicker}
+        <DatabaseForm
+          key={monitorType}
+          type={monitorType as DatabaseMonitorType}
+          monitor={monitor}
+          initialData={initialData}
+          onSubmit={onSubmit}
+          onCancel={onCancel}
+          loading={loading}
+        />
       </div>
     );
   }
@@ -1998,72 +2105,80 @@ export default function MonitorForm({
     collect_timing: formData.collect_timing,
   };
 
-  const activeHeaderCount = formData.request_headers.filter((h: HeaderKV) => h.key.trim()).length;
-  const assertionCount =
-    (formData.body_assertions?.length || 0) +
-    (formData.response_header_assertions?.length || 0) +
-    (formData.json_assertions?.length || 0);
-
-  const handleScrollToSection = (sectionId: string) => {
-    // Open the section if it's a collapsible one
-    setOpenSections((prev) => ({ ...prev, [sectionId]: true }));
-    // For the monitor name field, target its wrapper div
-    const targetId = sectionId === 'monitor-name' ? 'monitor-name-field' : sectionId;
-    setTimeout(() => {
-      const el = document.getElementById(targetId);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Plain-language summary of what this monitor will do, shown next to the
+  // form actions so misconfigurations are visible right before submitting.
+  const checkPlan = (() => {
+    const target = (() => {
+      switch (monitorType) {
+        case 'http': {
+          if (!formData.url.trim()) return null;
+          let host = formData.url.trim();
+          try {
+            const u = new URL(host.startsWith('http') ? host : `https://${host}`);
+            host = `${u.hostname}${u.pathname !== '/' ? u.pathname : ''}`;
+          } catch {
+            /* show as typed */
+          }
+          return `${formData.method} ${host} · expect ${formData.status_rules.trim() || '2xx'}`;
+        }
+        case 'ping':
+          return formData.host.trim() ? `ping ${formData.host.trim()}` : null;
+        case 'dns':
+          return formData.host.trim() ? `resolve ${formData.dns_record_type} for ${formData.host.trim()}` : null;
+        case 'synthetic_api': {
+          const steps = formData.synthetic_api_steps.length;
+          return `run ${steps}-step API journey`;
+        }
+        case 'synthetic_browser': {
+          const steps = isSyntheticBrowserGuidedMode
+            ? syntheticBrowserGuidedPreview.steps.length
+            : formData.synthetic_browser_steps.length;
+          return `run ${steps}-step browser journey`;
+        }
+        default:
+          return null;
       }
-    }, 80);
-  };
+    })();
+    if (!target) return null;
+    const fails = formData.consecutive_failures_threshold;
+    return `Every ${formData.interval_seconds}s · ${target} · down after ${fails} failed check${fails === 1 ? '' : 's'}`;
+  })();
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Compact type tab bar */}
-      <div className="flex flex-wrap gap-1.5 rounded-xl border border-white/[0.06] bg-slate-900/40 p-1.5">
-        {monitorTypes.map((type) => (
-          <button
-            key={type}
-            type="button"
-            disabled={isEditMode}
-            onClick={() => setMonitorType(type)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all disabled:cursor-not-allowed ${
-              monitorType === type
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent disabled:opacity-40'
-            }`}
-          >
-            {getTypeLabel(type)}
-          </button>
-        ))}
-      </div>
-
-      {/* Two-column layout for HTTP: form left, preview right */}
-      <div className={monitorType === 'http' ? 'grid grid-cols-1 xl:grid-cols-5 gap-6 items-start' : ''}>
-        {/* Form column */}
-        <div className={`space-y-6 ${monitorType === 'http' ? 'xl:col-span-3' : ''}`}>
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {typePicker}
 
       {/* Basic Info */}
-      <div className="space-y-4" id="monitor-name-field">
-        <FormInput
-          label="Monitor Name"
-          value={formData.name}
-          onChange={(v) => setFormData({ ...formData, name: v })}
-          placeholder="My API Health Check"
-          error={errors.name}
-          hint="A descriptive name for this monitor"
-        />
-
-        {/* HTTP URL + Method hero row */}
-        {monitorType === 'http' && (
-          <MethodUrlRow
-            method={formData.method}
-            url={formData.url}
-            onMethodChange={(v) => setFormData({ ...formData, method: v })}
-            onUrlChange={(v) => setFormData({ ...formData, url: v })}
-            error={errors.url}
+      <div id="monitor-name-field">
+        <FormSection title="Basics">
+          <FormInput
+            label="Monitor Name"
+            value={formData.name}
+            onChange={(v) => setFormData({ ...formData, name: v })}
+            placeholder={getTypeMeta(monitorType).namePlaceholder}
+            error={errors.name}
+            hint="A descriptive name for this monitor"
           />
-        )}
+
+          {/* HTTP URL + Method hero row */}
+          {monitorType === 'http' && (
+            <>
+              <MethodUrlRow
+                method={formData.method}
+                url={formData.url}
+                onMethodChange={(v) => setFormData({ ...formData, method: v })}
+                onUrlChange={(v) => setFormData({ ...formData, url: v })}
+                error={errors.url}
+              />
+              <CurlPreview
+                method={formData.method}
+                url={formData.url}
+                headers={formData.request_headers}
+                body={formData.body}
+              />
+            </>
+          )}
+        </FormSection>
       </div>
 
       {/* HTTP collapsible sections */}
@@ -2079,29 +2194,28 @@ export default function MonitorForm({
 
       {/* Ping Configuration */}
       {monitorType === 'ping' && (
-        <div>
-          <SectionHeader title="Ping Configuration" />
+        <FormSection title="Ping configuration">
           <FormInput
             label="Host"
             value={formData.host}
             onChange={(v) => setFormData({ ...formData, host: v })}
             placeholder="example.com or 8.8.8.8"
             error={errors.host}
+            hint="Hostname or IP address to ping"
           />
-        </div>
+        </FormSection>
       )}
 
       {monitorType === 'dns' && (
-        <div>
-          <SectionHeader title="DNS Configuration" description="Resolve DNS records and optionally verify answers" />
-          <div className="space-y-4">
-            <FormInput
-              label="Host"
-              value={formData.host}
-              onChange={(v) => setFormData({ ...formData, host: v })}
-              placeholder="example.com"
-              error={errors.host}
-            />
+        <FormSection title="DNS configuration">
+          <FormInput
+            label="Host"
+            value={formData.host}
+            onChange={(v) => setFormData({ ...formData, host: v })}
+            placeholder="example.com"
+            error={errors.host}
+          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormSelect
               label="Record Type"
               value={formData.dns_record_type}
@@ -2124,12 +2238,19 @@ export default function MonitorForm({
               hint="Comma or newline separated. Leave empty to accept any answer."
             />
           </div>
-        </div>
+          <FormInput
+            label="Nameserver (optional)"
+            value={formData.dns_nameserver}
+            onChange={(v) => setFormData({ ...formData, dns_nameserver: v })}
+            placeholder="10.0.0.2 or resolver.internal:53"
+            hint="Query this DNS server instead of the worker's system resolver — for private zones and VPC resolvers."
+          />
+        </FormSection>
       )}
 
       {monitorType === 'synthetic_api' && (
-        <div>
-          <SectionHeader title="Synthetic API Configuration" description="Build a multi-step API workflow with request, assertions, and extracts." />
+        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+          <SectionHeader title="Synthetic API configuration" description="Build a multi-step API workflow with request, assertions, and extracts." />
           <div className="space-y-4">
             <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2140,14 +2261,14 @@ export default function MonitorForm({
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticAPITemplate('single_health')}
                   >
                     Health Check
                   </button>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticAPITemplate('health_auth')}
                   >
                     Health + Auth Flow
@@ -2198,14 +2319,31 @@ export default function MonitorForm({
                   <p className="text-sm font-medium text-white">Realtime Test</p>
                   <p className="text-xs text-slate-500">Runs the saved monitor immediately and streams the latest result state here.</p>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
-                  onClick={startSyntheticLiveTest}
-                  disabled={!isSavedMonitor || isTestRunning}
-                >
-                  {isTestRunning ? 'Testing...' : 'Test now'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {formData.location_ids.length > 0 && (
+                    <select
+                      aria-label="Run test from location"
+                      value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+                      onChange={(e) => setTestLocationId(e.target.value)}
+                      className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+                    >
+                      <option value="">Run from: all locations</option>
+                      {availableLocations
+                        .filter((loc) => formData.location_ids.includes(loc.id))
+                        .map((loc) => (
+                          <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
+                        ))}
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    className={BTN_GHOST_SM}
+                    onClick={startSyntheticLiveTest}
+                    disabled={!isSavedMonitor || isTestRunning}
+                  >
+                    {isTestRunning ? 'Testing...' : 'Test now'}
+                  </button>
+                </div>
               </div>
               {!isSavedMonitor && (
                 <p className="mt-2 text-xs text-amber-400">Save this monitor first to enable realtime tests.</p>
@@ -2276,7 +2414,7 @@ export default function MonitorForm({
                     />
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm col-span-1"
+                      className={`${BTN_GHOST_SM} col-span-1`}
                       onClick={() => {
                         const next = [...formData.synthetic_api_variables];
                         if (next.length === 1) {
@@ -2295,7 +2433,7 @@ export default function MonitorForm({
               <div className="mt-2">
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -2315,7 +2453,7 @@ export default function MonitorForm({
                 <label className="block text-xs font-medium text-slate-400">Steps</label>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -2337,7 +2475,7 @@ export default function MonitorForm({
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         disabled={stepIdx === 0}
                         onClick={() => {
                           if (stepIdx === 0) return;
@@ -2350,7 +2488,7 @@ export default function MonitorForm({
                       </button>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         disabled={stepIdx === formData.synthetic_api_steps.length - 1}
                         onClick={() => {
                           if (stepIdx === formData.synthetic_api_steps.length - 1) return;
@@ -2363,7 +2501,7 @@ export default function MonitorForm({
                       </button>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           if (next.length === 1) {
@@ -2475,14 +2613,14 @@ export default function MonitorForm({
                                 next[stepIdx] = { ...next[stepIdx], headers };
                                 setFormData({ ...formData, synthetic_api_steps: next });
                               }}
-                              className="btn btn-secondary btn-sm col-span-1 disabled:opacity-50"
+                              className={`${BTN_GHOST_SM} col-span-1`}
                               title={showToggle ? (h.reveal ? 'Hide value' : 'Show value') : 'Add a value to show/hide'}
                             >
                               {h.reveal ? 'Hide' : 'Show'}
                             </button>
                             <button
                               type="button"
-                              className="btn btn-secondary btn-sm col-span-1"
+                              className={`${BTN_GHOST_SM} col-span-1`}
                               onClick={() => {
                                 const next = [...formData.synthetic_api_steps];
                                 const headers = [...next[stepIdx].headers];
@@ -2504,7 +2642,7 @@ export default function MonitorForm({
                     <div className="mt-2">
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           next[stepIdx] = { ...next[stepIdx], headers: [...next[stepIdx].headers, { key: '', value: '', reveal: false }] };
@@ -2573,7 +2711,7 @@ export default function MonitorForm({
                       <label className="block text-xs font-medium text-slate-400">Assertions (optional)</label>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           next[stepIdx] = { ...next[stepIdx], assertions: [...next[stepIdx].assertions, defaultSyntheticAPIAssertion()] };
@@ -2663,7 +2801,7 @@ export default function MonitorForm({
 
                             <button
                               type="button"
-                              className="btn btn-secondary btn-sm col-span-1"
+                              className={`${BTN_GHOST_SM} col-span-1`}
                               onClick={() => {
                                 const next = [...formData.synthetic_api_steps];
                                 const assertions = [...next[stepIdx].assertions];
@@ -2688,7 +2826,7 @@ export default function MonitorForm({
                       <label className="block text-xs font-medium text-slate-400">Extracts (optional)</label>
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className={BTN_GHOST_SM}
                         onClick={() => {
                           const next = [...formData.synthetic_api_steps];
                           next[stepIdx] = { ...next[stepIdx], extracts: [...next[stepIdx].extracts, defaultSyntheticAPIExtract()] };
@@ -2756,7 +2894,7 @@ export default function MonitorForm({
                           </label>
                           <button
                             type="button"
-                            className="btn btn-secondary btn-sm col-span-1"
+                            className={`${BTN_GHOST_SM} col-span-1`}
                             onClick={() => {
                               const next = [...formData.synthetic_api_steps];
                               const extracts = [...next[stepIdx].extracts];
@@ -2781,8 +2919,8 @@ export default function MonitorForm({
       )}
 
       {monitorType === 'synthetic_browser' && (
-        <div>
-          <SectionHeader title="Synthetic Browser Configuration" description="Guided setup for normal users, expert editor for full control." />
+        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+          <SectionHeader title="Synthetic Browser configuration" description="Guided setup for normal users, expert editor for full control." />
           <div className="space-y-4">
             <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3008,7 +3146,7 @@ export default function MonitorForm({
                   <div className="mt-4 flex items-center justify-between border-t border-white/[0.08] pt-3">
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm"
+                      className={BTN_GHOST_SM}
                       onClick={() => setSyntheticBrowserGuidedStep((prev) => (prev > 1 ? ((prev - 1) as SyntheticBrowserGuidedStep) : prev))}
                       disabled={syntheticBrowserGuidedStep === 1}
                     >
@@ -3016,7 +3154,7 @@ export default function MonitorForm({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm"
+                      className={BTN_GHOST_SM}
                       onClick={() =>
                         setSyntheticBrowserGuidedStep((prev) => (prev < 3 ? ((prev + 1) as SyntheticBrowserGuidedStep) : prev))
                       }
@@ -3040,14 +3178,14 @@ export default function MonitorForm({
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticBrowserTemplate('homepage_smoke')}
                   >
                     Homepage Smoke
                   </button>
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
+                    className={BTN_GHOST_SM}
                     onClick={() => applySyntheticBrowserTemplate('login_flow')}
                   >
                     Login Flow
@@ -3098,14 +3236,31 @@ export default function MonitorForm({
                   <p className="text-sm font-medium text-white">Realtime Test</p>
                   <p className="text-xs text-slate-500">Runs the saved monitor immediately and streams the latest result state here.</p>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm disabled:opacity-50"
-                  onClick={startSyntheticLiveTest}
-                  disabled={!isSavedMonitor || isTestRunning}
-                >
-                  {isTestRunning ? 'Testing...' : 'Test now'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {formData.location_ids.length > 0 && (
+                    <select
+                      aria-label="Run test from location"
+                      value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+                      onChange={(e) => setTestLocationId(e.target.value)}
+                      className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+                    >
+                      <option value="">Run from: all locations</option>
+                      {availableLocations
+                        .filter((loc) => formData.location_ids.includes(loc.id))
+                        .map((loc) => (
+                          <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
+                        ))}
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    className={BTN_GHOST_SM}
+                    onClick={startSyntheticLiveTest}
+                    disabled={!isSavedMonitor || isTestRunning}
+                  >
+                    {isTestRunning ? 'Testing...' : 'Test now'}
+                  </button>
+                </div>
               </div>
               {!isSavedMonitor && (
                 <p className="mt-2 text-xs text-amber-400">Save this monitor first to enable realtime tests.</p>
@@ -3214,7 +3369,7 @@ export default function MonitorForm({
                     />
                     <button
                       type="button"
-                      className="btn btn-secondary btn-sm col-span-1"
+                      className={`${BTN_GHOST_SM} col-span-1`}
                       onClick={() => {
                         const next = [...formData.synthetic_browser_variables];
                         if (next.length === 1) {
@@ -3233,7 +3388,7 @@ export default function MonitorForm({
               <div className="mt-2">
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -3253,7 +3408,7 @@ export default function MonitorForm({
                 <label className="block text-xs font-medium text-slate-400">Steps</label>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className={BTN_GHOST_SM}
                   onClick={() =>
                     setFormData({
                       ...formData,
@@ -3292,7 +3447,7 @@ export default function MonitorForm({
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="btn btn-secondary btn-sm"
+                          className={BTN_GHOST_SM}
                           disabled={stepIdx === 0}
                           onClick={() => {
                             if (stepIdx === 0) return;
@@ -3305,7 +3460,7 @@ export default function MonitorForm({
                         </button>
                         <button
                           type="button"
-                          className="btn btn-secondary btn-sm"
+                          className={BTN_GHOST_SM}
                           disabled={stepIdx === formData.synthetic_browser_steps.length - 1}
                           onClick={() => {
                             if (stepIdx === formData.synthetic_browser_steps.length - 1) return;
@@ -3318,7 +3473,7 @@ export default function MonitorForm({
                         </button>
                         <button
                           type="button"
-                          className="btn btn-secondary btn-sm"
+                          className={BTN_GHOST_SM}
                           onClick={() => {
                             const next = [...formData.synthetic_browser_steps];
                             if (next.length === 1) {
@@ -3431,8 +3586,7 @@ export default function MonitorForm({
       )}
 
       {/* Schedule */}
-      <div>
-        <SectionHeader title="Schedule" description="How often to run checks" />
+      <FormSection title="Schedule">
         <div className="grid grid-cols-2 gap-4">
           <FormInput
             label="Interval (seconds)"
@@ -3441,6 +3595,7 @@ export default function MonitorForm({
             onChange={(v) => setFormData({ ...formData, interval_seconds: parseInt(v) || 60 })}
             min={10}
             step={5}
+            hint="How often to check"
           />
           <FormInput
             label="Timeout (seconds)"
@@ -3449,115 +3604,105 @@ export default function MonitorForm({
             onChange={(v) => setFormData({ ...formData, timeout_seconds: parseInt(v) || 30 })}
             min={1}
             error={errors.timeout_seconds}
+            hint="Must be less than interval"
           />
         </div>
-      </div>
+      </FormSection>
 
-        </div>{/* end form column */}
-
-        {/* Preview panel — only shown for HTTP type */}
-        {monitorType === 'http' && (
-          <div className="hidden xl:block xl:col-span-2">
-            <div className="sticky top-6 rounded-2xl border border-white/[0.07] bg-slate-900/50 p-6">
-              <HttpRequestFlowPreview
-                monitorName={formData.name}
-                method={formData.method}
-                url={formData.url}
-                headers={formData.request_headers}
-                body={formData.body}
-                statusRules={formData.status_rules}
-                bodyAssertionCount={formData.body_assertions?.length || 0}
-                headerAssertionCount={formData.response_header_assertions?.length || 0}
-                jsonAssertionCount={formData.json_assertions?.length || 0}
-                maxLatencyMs={formData.max_latency_ms}
-                tlsSkipVerify={formData.tls_skip_verify}
-                tlsMinDaysValid={formData.tls_min_days_valid}
-                tlsServerName={formData.tls_server_name}
-                followRedirects={formData.follow_redirects}
-                maxRedirects={formData.max_redirects}
-                collectTiming={formData.collect_timing}
-                intervalSeconds={formData.interval_seconds}
-                timeoutSeconds={formData.timeout_seconds}
-                onScrollToSection={handleScrollToSection}
-              />
-            </div>
-          </div>
-        )}
-      </div>{/* end two-column grid */}
+      {/* Locations */}
+      <FormSection
+        title="Locations"
+        summary={
+          formData.location_ids.length > 0
+            ? `${formData.location_ids.length} selected`
+            : 'Default fleet'
+        }
+        collapsible
+        defaultOpen={formData.location_ids.length > 0}
+      >
+        <LocationsSection
+          selectedIds={formData.location_ids}
+          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
+          quorum={formData.location_quorum}
+          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
+          onLocationsLoaded={setAvailableLocations}
+        />
+      </FormSection>
 
       {/* Alerting */}
-      <div>
-        <SectionHeader title="Alerting" />
-        <div className="space-y-4">
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-200">Alert Policies</label>
-            <div className="space-y-2">
-              {alertPolicies.length === 0 ? (
-                <div className="text-sm text-slate-500">No alert policies configured.</div>
-              ) : (
-                alertPolicies.map((policy) => {
-                  const checked = formData.alert_policy_ids.includes(policy.id);
-                  return (
-                    <label key={policy.id} className="flex items-center gap-2 text-sm text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                            ? [...formData.alert_policy_ids, policy.id]
-                            : formData.alert_policy_ids.filter((id) => id !== policy.id);
-                          setFormData({ ...formData, alert_policy_ids: next });
-                        }}
-                      />
-                      {policy.name}
-                    </label>
-                  );
-                })
-              )}
-            </div>
-            <p className="mt-2 text-xs text-slate-500">Get notified when this monitor fails</p>
-          </div>
-          <FormInput
-            label="Tags"
-            value={formData.tags}
-            onChange={(v) => setFormData({ ...formData, tags: v })}
-            placeholder="production, api, critical"
-            hint="Comma-separated tags for filtering"
-          />
-        </div>
-      </div>
+      <FormSection title="Alerting">
+        <AlertingSection
+          isGroup={false}
+          intervalSeconds={formData.interval_seconds}
+          threshold={formData.consecutive_failures_threshold}
+          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          mode={formData.notification_mode}
+          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          customChannels={formData.notification_channels}
+          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+        />
+      </FormSection>
 
-      {/* Status */}
-      <div>
-        <SectionHeader title="Status" />
+      {/* Dependencies */}
+      <FormSection
+        title="Dependencies"
+        summary={
+          formData.depends_on_ids.length > 0
+            ? `${formData.depends_on_ids.length} selected`
+            : 'None'
+        }
+        collapsible
+        defaultOpen={formData.depends_on_ids.length > 0}
+        infoTip={{
+          title: 'Monitor dependencies',
+          entries: [
+            {
+              label: 'What it does',
+              value:
+                'When an upstream dependency is down, alerts for this monitor are annotated with the likely root cause.',
+            },
+          ],
+        }}
+      >
+        <p className="text-xs text-slate-400">
+          Upstream monitors this one depends on (e.g. the database behind this API).
+        </p>
+        <MonitorMultiSelect
+          monitors={availableMonitors}
+          selectedIds={formData.depends_on_ids}
+          onChange={(ids) => setFormData({ ...formData, depends_on_ids: ids })}
+          excludeIds={monitor ? [monitor.id] : []}
+        />
+        {errors.depends_on_ids && <p className="text-xs text-rose-400">{errors.depends_on_ids}</p>}
+      </FormSection>
+
+      {/* Meta */}
+      <FormSection title="Meta">
+        <FormInput
+          label="Tags"
+          value={formData.tags}
+          onChange={(v) => setFormData({ ...formData, tags: v })}
+          placeholder="production, api, critical"
+          hint="Comma-separated tags for filtering"
+        />
         <FormToggle
-          label="Monitor Enabled"
+          label="Monitor enabled"
           description="Run checks on the configured schedule"
           checked={formData.enabled}
           onChange={(v) => setFormData({ ...formData, enabled: v })}
         />
-      </div>
+      </FormSection>
 
-      {/* Actions */}
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-white/[0.06]">
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className="btn btn-secondary btn-sm disabled:opacity-50"
-          >
-            Cancel
-          </button>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary btn-sm disabled:opacity-50"
-        >
-          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Monitor'}
-        </button>
-      </div>
+      <FormActions
+        middle={checkPlan}
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+      />
     </form>
   );
 }

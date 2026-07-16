@@ -7,37 +7,45 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
 	"github.com/yassinebenameur/probara/shared/config"
-	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/queue"
-	"github.com/yassinebenameur/probara/shared/statusupdates"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 const checkJobStreamMaxAge = 24 * time.Hour
 const consumerRestartBackoff = 2 * time.Second
+
+// resultPublisher is the minimal publishing surface the worker needs to hand
+// results back to the platform. Satisfied by *queue.Client and test spies.
+type resultPublisher interface {
+	PublishJSON(ctx context.Context, subject string, v interface{}, headers map[string][]string) error
+}
 
 // Worker represents the worker service
 type Worker struct {
 	config  *config.WorkerConfig
 	logger  *logger.Logger
 	metrics *metrics.Registry
-	db      *db.Client
 	queue   *queue.Client
-	status  *statusupdates.Publisher
+	results resultPublisher
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 
 	// Checker registry for extensible monitor types
 	checkerRegistry *CheckerRegistry
+
+	// Decrypts secret config fields (DB passwords, …) just before a check
+	// runs; configs travel encrypted through the DB and NATS.
+	secretsEncryptor secrets.Encryptor
 
 	// Passive monitor types that don't need active checking
 	passiveTypes map[string]bool
@@ -49,23 +57,23 @@ type Worker struct {
 	httpErrors          *prometheus.CounterVec
 	natsAckTotal        prometheus.Counter
 	natsNakTotal        prometheus.Counter
-	dbWriteErrors       prometheus.Counter
+	resultPublishErrors prometheus.Counter
 }
 
 // NewWorker creates a new worker instance
-func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *metrics.Registry, dbClient *db.Client, queueClient *queue.Client, statusPublisher *statusupdates.Publisher) *Worker {
+func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *metrics.Registry, queueClient *queue.Client) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Worker{
-		config:          cfg,
-		logger:          log,
-		metrics:         metricsRegistry,
-		db:              dbClient,
-		queue:           queueClient,
-		status:          statusPublisher,
-		ctx:             ctx,
-		cancel:          cancel,
-		checkerRegistry: NewDefaultRegistry(cfg.MaxBodySizeBytes, cfg.HTTPBlockPrivateIPs, cfg.HTTPAllowedCIDRs, cfg.SyntheticArtifactsDir),
+		config:           cfg,
+		logger:           log,
+		metrics:          metricsRegistry,
+		queue:            queueClient,
+		results:          queueClient,
+		ctx:              ctx,
+		cancel:           cancel,
+		secretsEncryptor: secrets.NoOpEncryptor{},
+		checkerRegistry:  NewDefaultRegistry(cfg.MaxBodySizeBytes, cfg.HTTPBlockPrivateIPs, cfg.HTTPAllowedCIDRs, cfg.SyntheticArtifactsDir),
 		passiveTypes: map[string]bool{
 			"agent": true, // Agent monitors receive pushed metrics
 			"group": true, // Group monitors aggregate member results
@@ -109,14 +117,23 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 	)
 	w.natsNakTotal = natsNakCounter.With(prometheus.Labels{})
 
-	dbWriteErrorsCounter := metricsRegistry.NewCounter(
-		"db_write_errors_total",
-		"Total number of database write errors",
+	resultPublishErrorsCounter := metricsRegistry.NewCounter(
+		"result_publish_errors_total",
+		"Total number of check result publish errors",
 		[]string{},
 	)
-	w.dbWriteErrors = dbWriteErrorsCounter.With(prometheus.Labels{})
+	w.resultPublishErrors = resultPublishErrorsCounter.With(prometheus.Labels{})
 
 	return w
+}
+
+// ConfigureEncryption wires the encryptor used to decrypt secret monitor
+// config fields. Without it the worker falls back to a NoOpEncryptor, which
+// passes plaintext through but refuses ciphertext envelopes.
+func (w *Worker) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		w.secretsEncryptor = encryptor
+	}
 }
 
 // RegisterChecker registers a custom checker for a monitor type
@@ -129,34 +146,73 @@ func (w *Worker) RegisterPassiveType(monitorType string) {
 	w.passiveTypes[monitorType] = true
 }
 
+// jobFilterSubject returns the per-location subject this worker consumes.
+func (w *Worker) jobFilterSubject() string {
+	if w.config.LocationID == "" {
+		return models.CheckJobSubjectDefault(w.config.CheckJobSubject)
+	}
+	return models.CheckJobSubjectForLocation(w.config.CheckJobSubject, w.config.LocationID)
+}
+
+// consumerName returns this worker fleet's durable consumer name. Each
+// location gets its own durable (with a matching filter subject); the default
+// fleet's name is suffixed too, so it can never collide with the legacy
+// filterless consumer the scheduler deletes on upgrade.
+func (w *Worker) consumerName() string {
+	if w.config.LocationID == "" {
+		return w.config.NATSConsumerName + "-default"
+	}
+	return models.CheckJobConsumerForLocation(w.config.LocationID)
+}
+
+// testCheckSubject returns the request-reply subject for ephemeral test
+// checks served by this worker fleet.
+func (w *Worker) testCheckSubject() (subject, queueGroup string) {
+	if w.config.LocationID == "" {
+		return models.TestCheckSubject, "workers"
+	}
+	return models.TestCheckSubjectForLocation(w.config.LocationID), "workers-loc-" + w.config.LocationID
+}
+
 // Start starts the worker loop
 func (w *Worker) Start() error {
+	filterSubject := w.jobFilterSubject()
+	consumerName := w.consumerName()
+
 	w.logger.WithFields(logrus.Fields{
 		"worker_concurrency":  w.config.WorkerConcurrency,
-		"consumer_name":       w.config.NATSConsumerName,
+		"consumer_name":       consumerName,
 		"stream":              w.config.CheckJobStream,
-		"subject":             w.config.CheckJobSubject,
+		"subject":             filterSubject,
+		"location_id":         w.config.LocationID,
 		"registered_checkers": w.checkerRegistry.Types(),
 	}).Info("Starting worker service")
 
-	// Ensure JetStream stream exists
 	ctx, cancel := context.WithTimeout(w.ctx, 10*time.Second)
 	defer cancel()
 
-	_, err := w.queue.EnsureWorkQueueStream(ctx, w.config.CheckJobStream, []string{w.config.CheckJobSubject}, checkJobStreamMaxAge)
+	var consumer jetstream.Consumer
+	var err error
+	if w.config.LocationID != "" {
+		// Scheduler owns stream/consumer lifecycle. Remote workers only look up
+		// their pre-created durable, keeping their broker permissions consume-only.
+		consumer, err = w.queue.LookupConsumer(ctx, w.config.CheckJobStream, consumerName)
+	} else {
+		jobSubjects := []string{w.config.CheckJobSubject, w.config.CheckJobSubject + ".>"}
+		_, err = w.queue.EnsureWorkQueueStream(ctx, w.config.CheckJobStream, jobSubjects, checkJobStreamMaxAge)
+		if err == nil {
+			_, err = w.queue.EnsureWorkQueueStream(ctx, w.config.CheckResultStream,
+				[]string{w.config.CheckResultSubject, w.config.CheckResultSubject + ".loc.>"}, checkJobStreamMaxAge)
+		}
+		if err == nil {
+			consumer, err = w.queue.CreateConsumerWithOptions(ctx, w.config.CheckJobStream, consumerName, queue.ConsumerOptions{FilterSubject: filterSubject})
+		}
+	}
 	if err != nil {
-		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
+		return fmt.Errorf("failed to initialize consumer: %w", err)
 	}
 
-	w.logger.WithField("stream", w.config.CheckJobStream).Info("JetStream stream ensured")
-
-	// Create or get consumer
-	consumer, err := w.queue.CreateConsumer(ctx, w.config.CheckJobStream, w.config.NATSConsumerName)
-	if err != nil {
-		return fmt.Errorf("failed to create consumer: %w", err)
-	}
-
-	w.logger.WithField("consumer", w.config.NATSConsumerName).Info("NATS consumer created")
+	w.logger.WithField("consumer", consumerName).Info("NATS consumer created")
 
 	// Spawn worker goroutines
 	for i := 0; i < w.config.WorkerConcurrency; i++ {
@@ -165,6 +221,29 @@ func (w *Worker) Start() error {
 			defer w.wg.Done()
 			w.processMessages(w.ctx, consumer, workerID)
 		}(i)
+	}
+
+	// Test-connection requests (core NATS request-reply, no persistence):
+	// the API forwards "test this config before saving" requests here.
+	// Location workers serve only their own subject — a test targeted at a
+	// location must run from that vantage point.
+	testSubject, testQueueGroup := w.testCheckSubject()
+	testSub, err := w.queue.SubscribeRequestReply(testSubject, testQueueGroup, w.handleTestCheck)
+	if err != nil {
+		w.logger.WithError(err).Warn("Failed to subscribe to test-check requests; test-connection will be unavailable")
+	} else {
+		defer func() { _ = testSub.Unsubscribe() }()
+		w.logger.WithField("subject", testSubject).Info("Test-check subscription ready")
+	}
+
+	// Location workers heartbeat their liveness so the UI can show the
+	// location as connected.
+	if w.config.LocationID != "" {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			w.heartbeatLoop(w.ctx)
+		}()
 	}
 
 	// Wait for context cancellation
@@ -235,8 +314,9 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 	// Check deadline
 	if job.IsExpired() {
 		logEntry.Warn("Job expired, marking as error")
-		if err := w.persistExpiredJob(ctx, &job); err != nil {
-			logEntry.WithError(err).Error("Failed to persist expired job")
+		if err := w.publishExpiredJob(ctx, &job); err != nil {
+			logEntry.WithError(err).Error("Failed to publish expired job result")
+			w.resultPublishErrors.Inc()
 			w.natsNakTotal.Inc()
 			return err
 		}
@@ -289,12 +369,23 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 	if payload.Type == "synthetic_browser" {
 		checkCtx = withSyntheticBrowserMonitorID(checkCtx, payload.MonitorID)
 	}
-	checkResult := checker.Check(checkCtx, payload.Config, payload.TimeoutSeconds)
 
-	// Persist result
-	if err := w.persistResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
-		logEntry.WithError(err).Error("Failed to persist result")
-		w.dbWriteErrors.Inc()
+	var checkResult CheckResult
+	if checkConfig, err := secrets.DecryptMonitorConfig(w.secretsEncryptor, payload.Type, payload.Config); err != nil {
+		// A check that can't decrypt its secrets is an operator problem
+		// (missing/rotated PROBARA_SECRETS_KEY), not a target outage — but it
+		// still must surface as an errored check rather than vanish.
+		logEntry.WithError(err).Error("Failed to decrypt monitor config")
+		errMsg := fmt.Sprintf("config_decrypt: %v", err)
+		checkResult = CheckResult{Status: "error", ErrorMessage: &errMsg}
+	} else {
+		checkResult = checker.Check(checkCtx, checkConfig, payload.TimeoutSeconds)
+	}
+
+	// Publish result for the platform-side ingest consumer to persist
+	if err := w.publishResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
+		logEntry.WithError(err).Error("Failed to publish result")
+		w.resultPublishErrors.Inc()
 		w.natsNakTotal.Inc()
 		return err
 	}
@@ -313,138 +404,136 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 	return nil
 }
 
-// persistResult persists the check result to the database
-func (w *Worker) persistResult(ctx context.Context, job *models.Job, payload *models.CheckJobPayload, checkResult *CheckResult, startedAt time.Time) error {
-	monitorID, err := uuid.Parse(payload.MonitorID)
+// handleTestCheck runs an ephemeral check for a test-connection request and
+// returns the JSON-encoded TestCheckResponse. Nothing is persisted and no
+// monitor state advances — this exists so users can validate a config before
+// saving it.
+func (w *Worker) handleTestCheck(data []byte) []byte {
+	respond := func(resp models.TestCheckResponse) []byte {
+		b, err := json.Marshal(resp)
+		if err != nil {
+			return []byte(`{"status":"error","error_message":"worker: encode response"}`)
+		}
+		return b
+	}
+	errorResponse := func(msg string) []byte {
+		return respond(models.TestCheckResponse{Status: "error", ErrorMessage: &msg})
+	}
+
+	var payload models.CheckJobPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return errorResponse(fmt.Sprintf("invalid test payload: %v", err))
+	}
+	if payload.TimeoutSeconds <= 0 || payload.TimeoutSeconds > 120 {
+		return errorResponse("timeout_seconds must be between 1 and 120")
+	}
+	if w.passiveTypes[payload.Type] {
+		return errorResponse(fmt.Sprintf("monitor type %q is passive and cannot be tested", payload.Type))
+	}
+	checker, err := w.checkerRegistry.Get(payload.Type)
 	if err != nil {
-		return fmt.Errorf("invalid monitor_id: %w", err)
+		return errorResponse(fmt.Sprintf("unknown monitor type: %s", payload.Type))
 	}
 
-	tenantID, err := uuid.Parse(job.TenantID)
+	config, err := secrets.DecryptMonitorConfig(w.secretsEncryptor, payload.Type, payload.Config)
 	if err != nil {
-		return fmt.Errorf("invalid tenant_id: %w", err)
+		w.logger.WithError(err).Error("Test check: failed to decrypt config")
+		return errorResponse(fmt.Sprintf("config_decrypt: %v", err))
 	}
 
-	jobID, err := uuid.Parse(job.ID)
-	if err != nil {
-		return fmt.Errorf("invalid job_id: %w", err)
-	}
+	ctx, cancel := context.WithTimeout(w.ctx, time.Duration(payload.TimeoutSeconds+5)*time.Second)
+	defer cancel()
+	result := checker.Check(ctx, config, payload.TimeoutSeconds)
 
-	completedAt := time.Now()
-	metricsData := checkResult.MetricsData
-	if len(metricsData) == 0 {
-		// lib/pq rejects []byte(nil) for json/jsonb parameters ("invalid input syntax for type json").
-		// Use explicit JSON null when a checker doesn't emit metrics.
-		metricsData = json.RawMessage("null")
-	}
-
-	query := `
-		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, result_source, http_status,
-			latency_ms, error_message, matched_body_substring, metrics_data,
-			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`
-
-	resultID := uuid.New()
-	_, err = w.db.ExecContext(ctx, query,
-		resultID,
-		monitorID,
-		tenantID,
-		jobID,
-		checkResult.Status,
-		string(models.ResultSourceMonitor),
-		checkResult.HTTPStatus,
-		checkResult.LatencyMs,
-		checkResult.ErrorMessage,
-		checkResult.MatchedBodySubstring,
-		metricsData,
-		startedAt,
-		startedAt,
-		completedAt,
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to insert check result: %w", err)
-	}
-
-	w.publishStatusUpdate(monitorID, tenantID)
-	return nil
+	return respond(models.TestCheckResponse{
+		Status:       result.Status,
+		LatencyMs:    result.LatencyMs,
+		ErrorMessage: result.ErrorMessage,
+		MetricsData:  result.MetricsData,
+	})
 }
 
-// persistExpiredJob persists an expired job as an error result
-func (w *Worker) persistExpiredJob(ctx context.Context, job *models.Job) error {
+// publishResult hands the executed check back to the platform over NATS. The
+// scheduler-side ingest consumer persists it and advances the monitor's state
+// machine — the worker never touches Postgres, so remote location workers
+// only need NATS reachability.
+func (w *Worker) publishResult(ctx context.Context, job *models.Job, payload *models.CheckJobPayload, checkResult *CheckResult, startedAt time.Time) error {
+	msg := models.CheckResultMessage{
+		Version:              "v1",
+		JobID:                job.ID,
+		MonitorID:            payload.MonitorID,
+		TenantID:             job.TenantID,
+		LocationID:           payload.LocationID,
+		Status:               checkResult.Status,
+		ResultSource:         string(models.ResultSourceMonitor),
+		HTTPStatus:           checkResult.HTTPStatus,
+		LatencyMs:            checkResult.LatencyMs,
+		ErrorMessage:         checkResult.ErrorMessage,
+		MatchedBodySubstring: checkResult.MatchedBodySubstring,
+		MetricsData:          checkResult.MetricsData,
+		StartedAt:            startedAt,
+		CompletedAt:          time.Now(),
+	}
+	if payload.Type == models.MonitorTypeMeshProbe {
+		var meshCfg models.MeshProbeConfig
+		if err := json.Unmarshal(payload.Config, &meshCfg); err != nil || meshCfg.TargetLocationID == "" {
+			// Without the edge key the result is unroutable; drop it rather
+			// than publish a message ingest can only discard.
+			w.logger.WithField("job_id", job.ID).Warn("Mesh probe result missing target location; dropping")
+			return nil
+		}
+		msg.Mesh = &models.MeshResultInfo{TargetLocationID: meshCfg.TargetLocationID}
+	}
+	return w.publishResultMessage(ctx, msg)
+}
+
+// publishExpiredJob publishes an expired job as a platform-sourced error
+// result. The ingest consumer inserts it without running the state machine —
+// an expired job never observed the target.
+func (w *Worker) publishExpiredJob(ctx context.Context, job *models.Job) error {
 	var payload models.CheckJobPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return nil
 	}
-
-	monitorID, err := uuid.Parse(payload.MonitorID)
-	if err != nil {
-		return nil
-	}
-
-	tenantID, err := uuid.Parse(job.TenantID)
-	if err != nil {
-		return nil
-	}
-
-	jobID, err := uuid.Parse(job.ID)
-	if err != nil {
+	if payload.MonitorID == "" {
 		return nil
 	}
 
 	errorMsg := "Job expired before processing"
 	now := time.Now()
-	metricsData := json.RawMessage("null")
-
-	query := `
-		INSERT INTO check_results (
-			id, monitor_id, tenant_id, job_id, status, result_source, http_status,
-			latency_ms, error_message, matched_body_substring, metrics_data,
-			created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`
-
-	resultID := uuid.New()
-	_, err = w.db.ExecContext(ctx, query,
-		resultID,
-		monitorID,
-		tenantID,
-		jobID,
-		string(models.ResultStatusError),
-		string(models.ResultSourcePlatform),
-		nil,
-		nil,
-		&errorMsg,
-		false,
-		metricsData,
-		now,
-		now,
-		now,
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to insert expired job result: %w", err)
+	msg := models.CheckResultMessage{
+		Version:      "v1",
+		JobID:        job.ID,
+		MonitorID:    payload.MonitorID,
+		TenantID:     job.TenantID,
+		LocationID:   payload.LocationID,
+		Status:       string(models.ResultStatusError),
+		ResultSource: string(models.ResultSourcePlatform),
+		ErrorMessage: &errorMsg,
+		StartedAt:    now,
+		CompletedAt:  now,
 	}
-
-	w.publishStatusUpdate(monitorID, tenantID)
-	return nil
+	return w.publishResultMessage(ctx, msg)
 }
 
-func (w *Worker) publishStatusUpdate(monitorID, tenantID uuid.UUID) {
-	if w.status == nil {
-		return
+func (w *Worker) publishResultMessage(ctx context.Context, msg models.CheckResultMessage) error {
+	resultSubject := w.config.CheckResultSubject
+	if w.config.LocationID != "" {
+		msg.LocationSignature = ""
+		signature, err := locationauth.SignJSON(w.config.LocationCredential, msg)
+		if err != nil {
+			return fmt.Errorf("sign location result: %w", err)
+		}
+		msg.LocationSignature = signature
+		resultSubject = models.CheckResultSubjectForLocation(resultSubject, w.config.LocationID)
 	}
-	event := statusupdates.Event{
-		Type:      "check_result",
-		MonitorID: monitorID.String(),
-		TenantID:  tenantID.String(),
-		Timestamp: time.Now().UTC(),
+	// Nats-Msg-Id enables JetStream's publish-side dedupe window; the durable
+	// dedupe is the unique index on check_results(job_id, result_source).
+	headers := map[string][]string{"Nats-Msg-Id": {msg.DedupeID()}}
+	if err := w.results.PublishJSON(ctx, resultSubject, msg, headers); err != nil {
+		return fmt.Errorf("publish check result: %w", err)
 	}
-	if err := w.status.Publish(event); err != nil {
-		w.logger.WithError(err).Warn("Failed to publish status page update")
-	}
+	return nil
 }
 
 // Shutdown gracefully shuts down the worker

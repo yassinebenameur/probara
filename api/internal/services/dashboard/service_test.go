@@ -40,6 +40,14 @@ func TestNormalizeOverviewParams_ClampsAndFallbacks(t *testing.T) {
 }
 
 func TestNormalizeOverviewParams_ValidValues(t *testing.T) {
+	oneHour := models.DashboardRange("1h")
+	oneHourParams := normalizeOverviewParams(&models.DashboardOverviewQuery{
+		Range: oneHour,
+	})
+	if oneHourParams.Range != oneHour {
+		t.Fatalf("Range = %s, want %s", oneHourParams.Range, oneHour)
+	}
+
 	got := normalizeOverviewParams(&models.DashboardOverviewQuery{
 		Range:         models.DashboardRange365d,
 		FailuresLimit: 25,
@@ -54,6 +62,22 @@ func TestNormalizeOverviewParams_ValidValues(t *testing.T) {
 	}
 	if got.AlertsLimit != 50 {
 		t.Fatalf("AlertsLimit = %d, want 50", got.AlertsLimit)
+	}
+}
+
+func TestRangeBounds_OneHour(t *testing.T) {
+	start, end, bucket, err := rangeBounds(models.DashboardRange("1h"))
+	if err != nil {
+		t.Fatalf("rangeBounds(1h) error = %v", err)
+	}
+	if !start.Before(end) {
+		t.Fatalf("rangeBounds(1h) start must be before end")
+	}
+	if bucket != 5*time.Minute {
+		t.Fatalf("rangeBounds(1h) bucket = %v, want 5m", bucket)
+	}
+	if got := end.Sub(start); got != 55*time.Minute {
+		t.Fatalf("rangeBounds(1h) display span = %v, want 55m", got)
 	}
 }
 
@@ -99,5 +123,40 @@ func TestResolveFailureState(t *testing.T) {
 	now := time.Now().UTC()
 	if got := resolveFailureState(&now); got != models.DashboardFailureStateResolved {
 		t.Fatalf("resolveFailureState(non-nil) = %s, want %s", got, models.DashboardFailureStateResolved)
+	}
+}
+
+func TestNormalizeListParams_Defaults(t *testing.T) {
+	got := normalizeListParams(nil, problemMonitorLimit)
+
+	if got.Range != models.DashboardRange24h {
+		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange24h)
+	}
+	if got.Limit != problemMonitorLimit {
+		t.Fatalf("Limit = %d, want %d", got.Limit, problemMonitorLimit)
+	}
+}
+
+func TestNormalizeListParams_ClampsAndNormalizesTags(t *testing.T) {
+	got := normalizeListParams(&models.DashboardListQuery{
+		Range: models.DashboardRange365d,
+		Limit: 500,
+		Tags:  []string{" prod ", "", "api", "prod"},
+	}, defaultFailuresLimit)
+
+	if got.Range != models.DashboardRange365d {
+		t.Fatalf("Range = %s, want %s", got.Range, models.DashboardRange365d)
+	}
+	if got.Limit != maxListLimit {
+		t.Fatalf("Limit = %d, want %d", got.Limit, maxListLimit)
+	}
+	wantTags := []string{"api", "prod"}
+	if len(got.Tags) != len(wantTags) {
+		t.Fatalf("Tags length = %d, want %d", len(got.Tags), len(wantTags))
+	}
+	for i := range wantTags {
+		if got.Tags[i] != wantTags[i] {
+			t.Fatalf("Tags[%d] = %q, want %q", i, got.Tags[i], wantTags[i])
+		}
 	}
 }

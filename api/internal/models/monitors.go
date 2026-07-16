@@ -21,53 +21,94 @@ const (
 	MonitorTypeSIP              MonitorType = "sip"
 	MonitorTypeSyntheticAPI     MonitorType = "synthetic_api"
 	MonitorTypeSyntheticBrowser MonitorType = "synthetic_browser"
+	MonitorTypeRedis            MonitorType = "redis"
+	MonitorTypePostgres         MonitorType = "postgres"
+	MonitorTypeMongoDB          MonitorType = "mongodb"
+	MonitorTypeRabbitMQ         MonitorType = "rabbitmq"
+	MonitorTypeTCP              MonitorType = "tcp"
+	MonitorTypeMySQL            MonitorType = "mysql"
+	MonitorTypeWebSocket        MonitorType = "websocket"
 )
+
+// MonitorChannelAssignment is one channel in a monitor's custom routing list.
+type MonitorChannelAssignment struct {
+	ChannelID    string `json:"channel_id"`
+	DelaySeconds int    `json:"delay_seconds"`
+	ChannelName  string `json:"channel_name,omitempty"`
+	ChannelType  string `json:"channel_type,omitempty"`
+}
 
 // Monitor represents a monitor in the system
 type Monitor struct {
-	ID              uuid.UUID       `json:"id"`
-	TenantID        uuid.UUID       `json:"tenant_id"`
-	Name            string          `json:"name"`
-	Type            MonitorType     `json:"type"`
-	Config          json.RawMessage `json:"config"`
-	IntervalSeconds int             `json:"interval_seconds"`
-	TimeoutSeconds  int             `json:"timeout_seconds"`
-	AlertPolicyID   *uuid.UUID      `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs  []uuid.UUID     `json:"alert_policy_ids,omitempty"`
-	Enabled         bool            `json:"enabled"`
-	Tags            []string        `json:"tags,omitempty"`
-	NextRunAt       *time.Time      `json:"next_run_at,omitempty"`
-	AgentID         *string         `json:"agent_id,omitempty"`   // Unique identifier for agent monitors
-	PushToken       *string         `json:"push_token,omitempty"` // Unique token for push monitors
-	MemberIDs       []uuid.UUID     `json:"member_ids,omitempty"` // Populated for group monitors
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID                           uuid.UUID                  `json:"id"`
+	TenantID                     uuid.UUID                  `json:"tenant_id"`
+	Name                         string                     `json:"name"`
+	Type                         MonitorType                `json:"type"`
+	Config                       json.RawMessage            `json:"config"`
+	IntervalSeconds              int                        `json:"interval_seconds"`
+	TimeoutSeconds               int                        `json:"timeout_seconds"`
+	AlertPolicyID                *uuid.UUID                 `json:"alert_policy_id,omitempty"`
+	AlertPolicyIDs               []uuid.UUID                `json:"alert_policy_ids,omitempty"`
+	Enabled                      bool                       `json:"enabled"`
+	Tags                         []string                   `json:"tags,omitempty"`
+	NextRunAt                    *time.Time                 `json:"next_run_at,omitempty"`
+	AgentID                      *string                    `json:"agent_id,omitempty"`       // Unique identifier for agent monitors
+	PushToken                    *string                    `json:"push_token,omitempty"`     // Unique token for push monitors
+	MemberIDs                    []uuid.UUID                `json:"member_ids,omitempty"`     // Populated for group monitors
+	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
+	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
+	NotificationMode             string                     `json:"notification_mode"`
+	MemberAlertRollup            string                     `json:"member_alert_rollup"` // 'per_monitor' | 'group'; only meaningful for group monitors
+	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
+	LocationIDs                  []uuid.UUID                `json:"location_ids,omitempty"` // Private locations checks fan out to; empty = default fleet
+	LocationQuorum               int                        `json:"location_quorum"`        // Down when >= this many locations are down
+	Locations                    []MonitorLocationStatus    `json:"locations,omitempty"`    // Per-location breakdown (GetMonitor only)
+	CurrentState                 string                     `json:"current_state"`
+	InMaintenance                bool                       `json:"in_maintenance"`
+	MaintenanceUntil             *time.Time                 `json:"maintenance_until,omitempty"` // Latest ends_at among covering active windows
+	CreatedAt                    time.Time                  `json:"created_at"`
+	UpdatedAt                    time.Time                  `json:"updated_at"`
+	DeletedAt                    *time.Time                 `json:"deleted_at,omitempty"`
 }
 
 // CreateMonitorRequest represents a request to create a monitor
 type CreateMonitorRequest struct {
-	Name            string          `json:"name"`
-	Type            MonitorType     `json:"type"`
-	Config          json.RawMessage `json:"config"`
-	IntervalSeconds int             `json:"interval_seconds"`
-	TimeoutSeconds  int             `json:"timeout_seconds"`
-	AlertPolicyID   *string         `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs  []string        `json:"alert_policy_ids,omitempty"`
-	Enabled         *bool           `json:"enabled,omitempty"`
-	Tags            []string        `json:"tags,omitempty"`
+	Name                         string                     `json:"name"`
+	Type                         MonitorType                `json:"type"`
+	Config                       json.RawMessage            `json:"config"`
+	IntervalSeconds              int                        `json:"interval_seconds"`
+	TimeoutSeconds               int                        `json:"timeout_seconds"`
+	AlertPolicyID                *string                    `json:"alert_policy_id,omitempty"`
+	AlertPolicyIDs               []string                   `json:"alert_policy_ids,omitempty"`
+	Enabled                      *bool                      `json:"enabled,omitempty"`
+	Tags                         []string                   `json:"tags,omitempty"`
+	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
+	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
+	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
+	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
+	LocationIDs                  []string                   `json:"location_ids,omitempty"`
+	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
 }
 
 // UpdateMonitorRequest represents a request to update a monitor
 type UpdateMonitorRequest struct {
-	Name            *string         `json:"name,omitempty"`
-	Type            *MonitorType    `json:"type,omitempty"`
-	Config          json.RawMessage `json:"config,omitempty"`
-	IntervalSeconds *int            `json:"interval_seconds,omitempty"`
-	TimeoutSeconds  *int            `json:"timeout_seconds,omitempty"`
-	AlertPolicyID   *string         `json:"alert_policy_id,omitempty"`
-	AlertPolicyIDs  *[]string       `json:"alert_policy_ids,omitempty"`
-	Enabled         *bool           `json:"enabled,omitempty"`
-	Tags            *[]string       `json:"tags,omitempty"`
+	Name                         *string                    `json:"name,omitempty"`
+	Type                         *MonitorType               `json:"type,omitempty"`
+	Config                       json.RawMessage            `json:"config,omitempty"`
+	IntervalSeconds              *int                       `json:"interval_seconds,omitempty"`
+	TimeoutSeconds               *int                       `json:"timeout_seconds,omitempty"`
+	AlertPolicyID                *string                    `json:"alert_policy_id,omitempty"`
+	AlertPolicyIDs               *[]string                  `json:"alert_policy_ids,omitempty"`
+	Enabled                      *bool                      `json:"enabled,omitempty"`
+	Tags                         *[]string                  `json:"tags,omitempty"`
+	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
+	NotificationMode             *string                    `json:"notification_mode,omitempty"`
+	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
+	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
+	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
+	LocationIDs                  *[]string                  `json:"location_ids,omitempty"`   // nil = unchanged, empty = default fleet
+	LocationQuorum               *int                       `json:"location_quorum,omitempty"`
 }
 
 // MonitorListResponse represents a paginated list of monitors
@@ -86,7 +127,9 @@ type CheckResult struct {
 	HTTPStatus   *int            `json:"http_status,omitempty"`
 	LatencyMS    *int            `json:"latency_ms,omitempty"`
 	ErrorMessage *string         `json:"error_message,omitempty"`
-	MetricsData  json.RawMessage `json:"metrics_data"` // Raw JSON for agent metrics
+	MetricsData  json.RawMessage `json:"metrics_data"`            // Raw JSON for agent metrics
+	LocationID   *uuid.UUID      `json:"location_id,omitempty"`   // Vantage point; nil = default fleet
+	LocationName *string         `json:"location_name,omitempty"` // Denormalized for display
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
@@ -168,8 +211,19 @@ type GroupConfig struct {
 
 // AgentConfig represents the configuration for an agent monitor
 type AgentConfig struct {
-	AgentID                 string `json:"agent_id"`
-	ExpectedIntervalSeconds int    `json:"expected_interval_seconds"`
+	AgentID                 string                  `json:"agent_id"`
+	ExpectedIntervalSeconds int                     `json:"expected_interval_seconds"`
+	MetricThresholds        *MetricThresholdsConfig `json:"metric_thresholds,omitempty"`
+}
+
+// MetricThresholdsConfig holds the per-monitor host-metric alert thresholds
+// (percent, 0-100) evaluated by the alerter. A nil or non-positive value means
+// the metric has no threshold and is not alerted on.
+type MetricThresholdsConfig struct {
+	CPUPercent    *float64 `json:"cpu_percent,omitempty"`
+	MemoryPercent *float64 `json:"memory_percent,omitempty"`
+	DiskPercent   *float64 `json:"disk_percent,omitempty"`
+	SwapPercent   *float64 `json:"swap_percent,omitempty"`
 }
 
 // PushConfig represents the configuration for a push monitor
@@ -284,4 +338,14 @@ type AddMonitorsToGroupRequest struct {
 // RemoveMonitorsFromGroupRequest represents a request to remove monitors from a group
 type RemoveMonitorsFromGroupRequest struct {
 	MonitorIDs []string `json:"monitor_ids"`
+}
+
+// BulkDeleteMonitorsRequest is the body of POST /api/v1/monitors/bulk/delete.
+type BulkDeleteMonitorsRequest struct {
+	MonitorIDs []string `json:"monitor_ids"`
+}
+
+// BulkDeleteMonitorsResponse is the response to a bulk delete.
+type BulkDeleteMonitorsResponse struct {
+	Deleted int64 `json:"deleted"`
 }

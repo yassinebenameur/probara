@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,20 +13,43 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
-// Service handles alert channel business logic
+// Service handles alert channel business logic. It is the encryption boundary
+// for sensitive plugin config fields: secrets are encrypted before INSERT/UPDATE
+// and masked on every read so plaintext never leaves the process boundary.
 type Service struct {
-	db *db.Client
+	db        *db.Client
+	encryptor secrets.Encryptor
 }
 
-// NewService creates a new alert channel service
-func NewService(db *db.Client) *Service {
-	return &Service{db: db}
+// NewService creates a new alert channel service.
+func NewService(db *db.Client, encryptor secrets.Encryptor) *Service {
+	if encryptor == nil {
+		encryptor = secrets.NoOpEncryptor{}
+	}
+	return &Service{db: db, encryptor: encryptor}
 }
 
-// CreateAlertChannel creates a new alert channel
+// CreateAlertChannel creates a new alert channel, encrypting secret fields
+// per the plugin's manifest before persisting.
 func (s *Service) CreateAlertChannel(ctx context.Context, tenantID uuid.UUID, req *models.CreateAlertChannelRequest) (*models.AlertChannel, error) {
+	manifest := manifestFor(req.Type)
+	configMap, err := unmarshalConfig(req.Config)
+	if err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	encryptedMap, err := secrets.EncryptConfig(s.encryptor, manifest, configMap)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt config: %w", err)
+	}
+	encryptedRaw, err := marshalConfig(encryptedMap)
+	if err != nil {
+		return nil, fmt.Errorf("encode config: %w", err)
+	}
+
 	channelID := uuid.New()
 	isActive := true
 	if req.IsActive != nil {
@@ -40,23 +64,39 @@ func (s *Service) CreateAlertChannel(ctx context.Context, tenantID uuid.UUID, re
 	`
 
 	var channel models.AlertChannel
-	var configBytes []byte
-	err := s.db.QueryRowContext(ctx, query,
-		channelID, tenantID, req.Name, req.Type, req.Config, isActive,
+	err = s.db.QueryRowContext(
+		ctx, query,
+		channelID, tenantID, req.Name, req.Type, encryptedRaw, isActive,
 	).Scan(
-		&channel.ID, &channel.TenantID, &channel.Name, &channel.Type,
-		&configBytes, &channel.IsActive, &channel.CreatedAt, &channel.UpdatedAt,
+		&channel.ID, &channel.TenantID, &channel.Name,
+		&channel.Type, &channel.Config, &channel.IsActive,
+		&channel.CreatedAt, &channel.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create alert channel: %w", err)
 	}
-
-	channel.Config = json.RawMessage(configBytes)
+	if err := maskInPlace(&channel); err != nil {
+		return nil, err
+	}
 	return &channel, nil
 }
 
-// GetAlertChannel retrieves an alert channel by ID (tenant-scoped)
+// GetAlertChannel fetches a single alert channel for the tenant with secret
+// fields masked.
 func (s *Service) GetAlertChannel(ctx context.Context, tenantID, channelID uuid.UUID) (*models.AlertChannel, error) {
+	channel, err := s.fetchAlertChannelRaw(ctx, tenantID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	if err := maskInPlace(channel); err != nil {
+		return nil, err
+	}
+	return channel, nil
+}
+
+// fetchAlertChannelRaw returns the channel exactly as stored (ciphertext
+// preserved). Used internally where decryption is the next step.
+func (s *Service) fetchAlertChannelRaw(ctx context.Context, tenantID, channelID uuid.UUID) (*models.AlertChannel, error) {
 	query := `
 		SELECT id, tenant_id, name, type, config, is_active, created_at, updated_at
 		FROM alert_channels
@@ -64,158 +104,144 @@ func (s *Service) GetAlertChannel(ctx context.Context, tenantID, channelID uuid.
 	`
 
 	var channel models.AlertChannel
-	var configBytes []byte
 	err := s.db.QueryRowContext(ctx, query, channelID, tenantID).Scan(
-		&channel.ID, &channel.TenantID, &channel.Name, &channel.Type,
-		&configBytes, &channel.IsActive, &channel.CreatedAt, &channel.UpdatedAt,
+		&channel.ID, &channel.TenantID, &channel.Name,
+		&channel.Type, &channel.Config, &channel.IsActive,
+		&channel.CreatedAt, &channel.UpdatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("alert channel not found")
 		}
-		return nil, fmt.Errorf("failed to get alert channel: %w", err)
+		return nil, fmt.Errorf("failed to fetch alert channel: %w", err)
 	}
-
-	channel.Config = json.RawMessage(configBytes)
 	return &channel, nil
 }
 
-// ListAlertChannels lists alert channels with pagination
+// ListAlertChannels returns a paginated list with secret fields masked.
 func (s *Service) ListAlertChannels(ctx context.Context, tenantID uuid.UUID, page, pageSize int) (*models.AlertChannelListResponse, error) {
 	if page < 1 {
 		page = 1
 	}
-	if pageSize < 1 {
+	if pageSize <= 0 {
 		pageSize = 20
 	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-
 	offset := (page - 1) * pageSize
 
-	// Count total
 	countQuery := `SELECT COUNT(*) FROM alert_channels WHERE tenant_id = $1`
 	var total int
 	if err := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); err != nil {
 		return nil, fmt.Errorf("failed to count alert channels: %w", err)
 	}
 
-	query := `
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, name, type, config, is_active, created_at, updated_at
 		FROM alert_channels
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, tenantID, pageSize, offset)
+	`, tenantID, pageSize, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list alert channels: %w", err)
 	}
 	defer rows.Close()
 
-	var channels []models.AlertChannel
+	items := make([]models.AlertChannel, 0)
 	for rows.Next() {
-		var channel models.AlertChannel
-		var configBytes []byte
+		var ch models.AlertChannel
 		if err := rows.Scan(
-			&channel.ID, &channel.TenantID, &channel.Name, &channel.Type,
-			&configBytes, &channel.IsActive, &channel.CreatedAt, &channel.UpdatedAt,
+			&ch.ID, &ch.TenantID, &ch.Name,
+			&ch.Type, &ch.Config, &ch.IsActive,
+			&ch.CreatedAt, &ch.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan alert channel: %w", err)
 		}
-		channel.Config = json.RawMessage(configBytes)
-		channels = append(channels, channel)
+		if err := maskInPlace(&ch); err != nil {
+			return nil, err
+		}
+		items = append(items, ch)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating alert channels: %w", err)
+		return nil, fmt.Errorf("iterating alert channels: %w", err)
 	}
 
 	return &models.AlertChannelListResponse{
-		Items:    channels,
+		Items:    items,
 		Page:     page,
 		PageSize: pageSize,
 		Total:    total,
 	}, nil
 }
 
-// UpdateAlertChannel updates an alert channel (partial update)
+// UpdateAlertChannel updates an alert channel. When the incoming config omits
+// or empties a secret field, the existing ciphertext is preserved.
 func (s *Service) UpdateAlertChannel(ctx context.Context, tenantID, channelID uuid.UUID, req *models.UpdateAlertChannelRequest) (*models.AlertChannel, error) {
-	setParts := []string{}
-	args := []interface{}{}
-	argIndex := 1
+	existing, err := s.fetchAlertChannelRaw(ctx, tenantID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	manifest := manifestFor(existing.Type)
 
+	name := existing.Name
 	if req.Name != nil {
-		setParts = append(setParts, fmt.Sprintf("name = $%d", argIndex))
-		args = append(args, *req.Name)
-		argIndex++
+		name = *req.Name
 	}
-
-	if len(req.Config) > 0 {
-		setParts = append(setParts, fmt.Sprintf("config = $%d", argIndex))
-		args = append(args, req.Config)
-		argIndex++
-	}
-
+	isActive := existing.IsActive
 	if req.IsActive != nil {
-		setParts = append(setParts, fmt.Sprintf("is_active = $%d", argIndex))
-		args = append(args, *req.IsActive)
-		argIndex++
+		isActive = *req.IsActive
 	}
 
-	if len(setParts) == 0 {
-		return s.GetAlertChannel(ctx, tenantID, channelID)
-	}
-
-	setParts = append(setParts, "updated_at = NOW()")
-	whereArgIndex := argIndex
-	args = append(args, channelID, tenantID)
-
-	setClause := ""
-	for i, part := range setParts {
-		if i > 0 {
-			setClause += ", "
+	cfgRaw := existing.Config
+	if len(req.Config) > 0 {
+		incoming, err := unmarshalConfig(req.Config)
+		if err != nil {
+			return nil, fmt.Errorf("decode config: %w", err)
 		}
-		setClause += part
+		current, err := unmarshalConfig(existing.Config)
+		if err != nil {
+			return nil, fmt.Errorf("decode existing config: %w", err)
+		}
+		merged := secrets.MergePreserveSecrets(manifest, incoming, current)
+		encrypted, err := secrets.EncryptConfig(s.encryptor, manifest, merged)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt config: %w", err)
+		}
+		cfgRaw, err = marshalConfig(encrypted)
+		if err != nil {
+			return nil, fmt.Errorf("encode config: %w", err)
+		}
 	}
 
-	query := fmt.Sprintf(`
+	query := `
 		UPDATE alert_channels
-		SET %s
-		WHERE id = $%d AND tenant_id = $%d
+		SET name = $1, config = $2, is_active = $3, updated_at = NOW()
+		WHERE id = $4 AND tenant_id = $5
 		RETURNING id, tenant_id, name, type, config, is_active, created_at, updated_at
-	`, setClause, whereArgIndex, whereArgIndex+1)
-
-	var channel models.AlertChannel
-	var configBytes []byte
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&channel.ID, &channel.TenantID, &channel.Name, &channel.Type,
-		&configBytes, &channel.IsActive, &channel.CreatedAt, &channel.UpdatedAt,
+	`
+	var ch models.AlertChannel
+	err = s.db.QueryRowContext(ctx, query, name, cfgRaw, isActive, channelID, tenantID).Scan(
+		&ch.ID, &ch.TenantID, &ch.Name,
+		&ch.Type, &ch.Config, &ch.IsActive,
+		&ch.CreatedAt, &ch.UpdatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("alert channel not found")
-		}
 		return nil, fmt.Errorf("failed to update alert channel: %w", err)
 	}
-
-	channel.Config = json.RawMessage(configBytes)
-	return &channel, nil
+	if err := maskInPlace(&ch); err != nil {
+		return nil, err
+	}
+	return &ch, nil
 }
 
-// DeleteAlertChannel deletes an alert channel
+// DeleteAlertChannel removes an alert channel.
 func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uuid.UUID) error {
-	query := `DELETE FROM alert_channels WHERE id = $1 AND tenant_id = $2`
-	result, err := s.db.ExecContext(ctx, query, channelID, tenantID)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM alert_channels WHERE id = $1 AND tenant_id = $2`, channelID, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to delete alert channel: %w", err)
 	}
-
-	rowsAffected, err := result.RowsAffected()
+	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
+		return fmt.Errorf("failed to get affected rows: %w", err)
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("alert channel not found")
@@ -223,29 +249,100 @@ func (s *Service) DeleteAlertChannel(ctx context.Context, tenantID, channelID uu
 	return nil
 }
 
-// TestAlertChannel sends a test notification for the given channel
+// TestAlertChannel sends a synthetic test notification through the channel's
+// plugin. Secrets are decrypted in-process and never returned to the caller.
 func (s *Service) TestAlertChannel(ctx context.Context, tenantID, channelID uuid.UUID) error {
-	channel, err := s.GetAlertChannel(ctx, tenantID, channelID)
+	channel, err := s.fetchAlertChannelRaw(ctx, tenantID, channelID)
 	if err != nil {
 		return err
 	}
 
-	if channel.Type != models.AlertChannelTypeTeams {
-		return fmt.Errorf("alert channel type not supported for tests")
+	p, ok := plugin.DefaultRegistry.Get(string(channel.Type))
+	if !ok {
+		return fmt.Errorf("alert channel type %q is not registered", channel.Type)
+	}
+	manifest := p.Manifest()
+	if !manifest.HasCapability(plugin.CapabilityTestable) {
+		return fmt.Errorf("alert channel type %q does not support test notifications", channel.Type)
 	}
 
-	config, err := notifications.ParseTeamsWebhookConfig(channel.Config)
+	cfgMap, err := unmarshalConfig(channel.Config)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode channel config: %w", err)
+	}
+	cfgMap, err = secrets.DecryptConfig(s.encryptor, manifest, cfgMap)
+	if err != nil {
+		return fmt.Errorf("decrypt channel config: %w", err)
 	}
 
-	message := notifications.TeamsMessage{
-		Type:    "MessageCard",
-		Context: "https://schema.org/extensions",
-		Summary: "Probara alert channel test",
-		Title:   "Probara alert channel test",
-		Text:    fmt.Sprintf("Test notification for channel **%s** at %s.", channel.Name, time.Now().Format(time.RFC1123)),
+	now := time.Now()
+	event := notifications.AlertEvent{
+		Type:      "created",
+		TenantID:  tenantID.String(),
+		Timestamp: now,
+		Alert: notifications.AlertDetails{
+			ID:           "test-" + uuid.NewString(),
+			MonitorName:  "Probara Test Notification",
+			PolicyName:   channel.Name,
+			Status:       "active",
+			TriggeredAt:  now,
+			FailureCount: 1,
+		},
 	}
 
-	return notifications.SendTeamsWebhook(ctx, config.WebhookURL, message)
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	return p.Send(sendCtx, plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{
+			ID:     channel.ID.String(),
+			Name:   channel.Name,
+			Config: cfgMap,
+		},
+		Event:     event,
+		EventType: "created",
+		Attempt:   1,
+	})
+}
+
+func manifestFor(t models.AlertChannelType) plugin.Manifest {
+	p, ok := plugin.DefaultRegistry.Get(string(t))
+	if !ok {
+		return plugin.Manifest{}
+	}
+	return p.Manifest()
+}
+
+func unmarshalConfig(raw json.RawMessage) (map[string]any, error) {
+	out := map[string]any{}
+	if len(raw) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func marshalConfig(m map[string]any) (json.RawMessage, error) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(b), nil
+}
+
+func maskInPlace(channel *models.AlertChannel) error {
+	manifest := manifestFor(channel.Type)
+	cfgMap, err := unmarshalConfig(channel.Config)
+	if err != nil {
+		return fmt.Errorf("decode config for masking: %w", err)
+	}
+	masked := secrets.MaskConfig(manifest, cfgMap)
+	raw, err := marshalConfig(masked)
+	if err != nil {
+		return fmt.Errorf("encode masked config: %w", err)
+	}
+	channel.Config = raw
+	return nil
 }

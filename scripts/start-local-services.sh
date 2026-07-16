@@ -11,6 +11,18 @@ NATS_URL="${NATS_URL:-nats://localhost:4222}"
 REQUIRED_GO_VERSION="$(awk '/^go / { print $2; exit }' "$ROOT_DIR/go.mod")"
 REQUIRED_GO_MINOR="${REQUIRED_GO_VERSION%.*}"
 
+# Dev encryption key for monitor/channel config secrets. Persisted next to the
+# repo (gitignored) so envelopes written by one run stay readable after a
+# restart or reboot — a lost key makes stored secrets undecryptable.
+SECRETS_KEY_FILE="$ROOT_DIR/.dev-secrets.key"
+if [[ -z "${PROBARA_SECRETS_KEY:-}" ]]; then
+  if [[ ! -f "$SECRETS_KEY_FILE" ]]; then
+    openssl rand -base64 32 > "$SECRETS_KEY_FILE"
+  fi
+  PROBARA_SECRETS_KEY="$(cat "$SECRETS_KEY_FILE")"
+fi
+export PROBARA_SECRETS_KEY
+
 mkdir -p "$ARTIFACTS_DIR"
 mkdir -p "$BIN_DIR"
 : > "$STARTUP_LOG"
@@ -25,6 +37,29 @@ fail() {
   log "ERROR: $message"
   bash "$ROOT_DIR/scripts/stop-local-services.sh" >/dev/null 2>&1 || true
   exit 1
+}
+
+ensure_port_available() {
+  local name="$1"
+  local port="$2"
+
+  local listener_pid
+  listener_pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sed -n '1p' || true)"
+  if [[ -z "$listener_pid" ]]; then
+    return 0
+  fi
+
+  local listener_cmd
+  listener_cmd="$(ps -p "$listener_pid" -o command= 2>/dev/null || true)"
+  if [[ "$listener_cmd" == *"/tmp/probara-bin/$name"* ]]; then
+    log "Port $port already in use by stale ${name} process ($listener_pid); stopping it"
+    kill "$listener_pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$listener_pid" 2>/dev/null || true
+    return 0
+  fi
+
+  fail "Port $port is already in use by pid $listener_pid ($listener_cmd). Stop that process and retry."
 }
 
 ensure_go_toolchain() {
@@ -51,6 +86,9 @@ start_service() {
   local log_file="/tmp/probara-${name}.log"
   local pid_file="/tmp/probara-${name}.pid"
   local bin_file="$BIN_DIR/${name}"
+
+  ensure_port_available "$name" "$http_port"
+  ensure_port_available "$name" "$metrics_port"
 
   if [[ -f "$pid_file" ]]; then
     local existing_pid

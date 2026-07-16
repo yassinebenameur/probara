@@ -9,16 +9,25 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
+	callout "github.com/synadia-io/callout.go"
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
+	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
-	"github.com/yassinebenameur/probara/api/internal/handlers/alertpolicies"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
+	audithandlers "github.com/yassinebenameur/probara/api/internal/handlers/audit"
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
 	dashboardhandlers "github.com/yassinebenameur/probara/api/internal/handlers/dashboard"
+	depsuggesthandlers "github.com/yassinebenameur/probara/api/internal/handlers/depsuggest"
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
+	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
+	locationhandlers "github.com/yassinebenameur/probara/api/internal/handlers/locations"
+	maintenancewindowhandlers "github.com/yassinebenameur/probara/api/internal/handlers/maintenancewindows"
+	meshhandlers "github.com/yassinebenameur/probara/api/internal/handlers/mesh"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
+	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
@@ -27,37 +36,57 @@ import (
 	adminauthservice "github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
+	aisettingsservice "github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
-	alertpolicyservice "github.com/yassinebenameur/probara/api/internal/services/alertpolicies"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
 	apikeyservice "github.com/yassinebenameur/probara/api/internal/services/apikeys"
+	auditservice "github.com/yassinebenameur/probara/api/internal/services/audit"
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
+	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
+	depsuggestservice "github.com/yassinebenameur/probara/api/internal/services/depsuggest"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
+	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
+	locationnatsauthservice "github.com/yassinebenameur/probara/api/internal/services/locationnatsauth"
+	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
+	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
+	meshservice "github.com/yassinebenameur/probara/api/internal/services/mesh"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
+	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
+	oidcauthservice "github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
+	"github.com/yassinebenameur/probara/shared/ai"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
 // Server represents the API HTTP server
 type Server struct {
-	config          *config.APIConfig
-	logger          *logger.Logger
-	metrics         *metrics.Registry
-	db              *db.Client
-	queue           *queue.Client
-	http            *http.Server
-	alertSubscriber *alertservice.Subscriber
-	statusPublisher *statusupdates.Publisher
+	config             *config.APIConfig
+	logger             *logger.Logger
+	metrics            *metrics.Registry
+	db                 *db.Client
+	queue              *queue.Client
+	http               *http.Server
+	alertSubscriber    *alertservice.Subscriber
+	statusPublisher    *statusupdates.Publisher
+	pushStaleWorker    *pushservice.StaleWorker
+	agentStaleWorker   *agentservice.StaleWorker
+	auditRecorder      *auditservice.Recorder
+	auditPruner        *auditservice.Pruner
+	locationAuthorizer *locationnatsauthservice.Service
+	locationAuth       *callout.AuthorizationService
+	locationAuthConn   *nats.Conn
+	locationAuthErr    error
 }
 
 type monitorStatusNotifier struct {
@@ -102,6 +131,33 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		http.StripPrefix("/static/", http.FileServer(staticDir)).ServeHTTP(w, r)
 	})
 
+	// Encryption for sensitive alert channel config fields. Falls back to a
+	// no-op encryptor in dev when PROBARA_SECRETS_KEY is not set — existing
+	// plaintext rows still serve, but new writes will be stored unencrypted.
+	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
+	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
+		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
+	} else if kerr != secrets.ErrKeyNotConfigured {
+		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
+	} else {
+		log.Warn("PROBARA_SECRETS_KEY not set; alert channel secrets will be stored unencrypted")
+	}
+
+	locationSvc := locationservice.NewService(dbClient)
+	locationSvc.ConfigureEncryption(secretsEncryptor)
+	var locationAuthorizer *locationnatsauthservice.Service
+	var locationAuthErr error
+	if cfg.NATSLocationAuthIssuerSeed != "" {
+		locationAuthorizer, locationAuthErr = locationnatsauthservice.New(
+			cfg.NATSLocationAuthIssuerSeed,
+			locationSvc,
+			locationnatsauthservice.Options{
+				CheckJobStream: cfg.CheckJobStream,
+				ResultSubject:  cfg.CheckResultSubject,
+			},
+		)
+	}
+
 	// Status update publisher (optional)
 	statusPublisher, err := statusupdates.NewPublisher(cfg.NATSURL)
 	if err != nil {
@@ -118,9 +174,16 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 
 	// Push service and handlers (created here to use in both public and authenticated routes)
 	pushSvc := pushservice.NewService(dbClient.DB, statusPublisher)
-	pushHandlers := pushhandlers.NewHandler(pushSvc, log)
+	pushHandlers := pushhandlers.NewHandler(pushSvc, log, cfg.PublicBaseURL)
+	pushStaleWorker := pushservice.NewStaleWorker(dbClient.DB, log)
+	agentStaleWorker := agentservice.NewStaleWorker(dbClient.DB, log, statusPublisher)
 	alertHub := alertservice.NewHub()
 	alertSubscriber := alertservice.NewSubscriber(checkJobQueue, alertHub, cfg, log)
+
+	// Audit trail: async recorder + retention pruner (lifecycle on Server).
+	auditRecorder := auditservice.NewRecorder(dbClient, log)
+	auditPruner := auditservice.NewPruner(dbClient, log, cfg.AuditRetentionDays)
+	auditSvc := auditservice.NewService(dbClient)
 
 	// Push webhook endpoints (no auth - uses token in URL for authentication)
 	r.Route("/api/v1/push", func(r chi.Router) {
@@ -131,16 +194,22 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
-		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log)
+		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder)
 
 		// Auth endpoints (no auth required)
 		authService := adminauthservice.NewService(dbClient, cfg.AdminBcryptCost)
-		authHandlers := authhandlers.NewHandlers(authService, cfg, log)
+		oidcService := oidcauthservice.NewService(cfg.OIDC, dbClient, log)
+		authHandlers := authhandlers.NewHandlers(authService, cfg, log, auditRecorder).WithOIDC(oidcService)
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/login", authHandlers.Login)
 			r.Post("/refresh", authHandlers.Refresh)
 			r.Post("/logout", authHandlers.Logout)
 			r.Get("/me", authHandlers.Me)
+			r.Route("/oidc", func(r chi.Router) {
+				r.Get("/status", authHandlers.OIDCStatus)
+				r.Get("/start", authHandlers.OIDCStart)
+				r.Get("/callback", authHandlers.OIDCCallback)
+			})
 		})
 		r.Get("/users/bootstrap/status", adminUsersHandlers.BootstrapStatus)
 		r.Post("/users/bootstrap/first", adminUsersHandlers.BootstrapFirstUser)
@@ -149,39 +218,125 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Route("/", func(r chi.Router) {
 			// Apply auth middleware to all API routes
 			r.Use(apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret))
+			// Audit wraps the write gate so denied mutations are recorded too
+			// (RequireWrite 403s surface as outcome=denied).
+			r.Use(apimiddleware.AuditMutations(auditRecorder))
+			// Viewers and read-scope API keys are blocked from mutations here.
+			r.Use(apimiddleware.RequireWrite)
+
+			// Effective identity of the current credential (cookie or API key).
+			// Lives at /auth-context (not /auth/context) because the outer
+			// unauthenticated /auth subrouter shadows that subtree.
+			r.Get("/auth-context", authHandlers.AuthContext)
 
 			// Agent service and handlers (needed by monitors route)
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
-			agentHandlers := agenthandlers.NewHandler(agentService, log)
+			agentHandlers := agenthandlers.NewHandler(agentService, log, cfg.PublicBaseURL)
+
+			// AI settings (per-tenant LLM config). The env LLM_* values are the
+			// global fallback so analysis works before a tenant configures a row.
+			aiEnvConfig := ai.Config{
+				Provider:  cfg.LLMProvider,
+				BaseURL:   cfg.LLMBaseURL,
+				APIKey:    cfg.LLMAPIKey,
+				Model:     cfg.LLMModel,
+				JSONMode:  cfg.LLMJSONMode,
+				MaxTokens: cfg.LLMMaxTokens,
+				Timeout:   time.Duration(cfg.LLMTimeoutSeconds) * time.Second,
+			}
+			aiSettingsSvc := aisettingsservice.NewService(dbClient, secretsEncryptor, aiEnvConfig)
+
+			// AI dependency suggestions (co-firing alerts -> proposed edges)
+			depSuggestHdlrs := depsuggesthandlers.NewHandlers(depsuggestservice.NewService(dbClient, aiSettingsSvc), log)
+			aiSettingsHdlrs := aisettingshandlers.NewHandlers(aiSettingsSvc, log)
+			r.Route("/ai-settings", func(r chi.Router) {
+				r.Get("/", aiSettingsHdlrs.GetSettings)
+				r.Put("/", aiSettingsHdlrs.UpdateSettings)
+				r.Post("/test", aiSettingsHdlrs.TestConnection)
+			})
+
+			// Incident service and handlers
+			incidentService := incidentservice.NewService(dbClient, statusPublisher)
+			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
+			// AI root cause analysis: enqueue jobs onto the AI_RCA subject. The
+			// feature is gated per-tenant (config row or env fallback).
+			incidentHandlers.ConfigureAIAnalysis(checkJobQueue, cfg.AIRCASubject, aiSettingsSvc)
 
 			// Alert service and handlers (shared across alerts + dashboard routes)
-			alertSvc := alertservice.NewService(dbClient)
+			alertSvc := alertservice.NewService(dbClient, incidentService)
 			analyticsRepo := sharedanalytics.NewRepository(dbClient)
 			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
 
+			// Tenant service (constructed early so dashboardSvc can read group tags)
+			tenantSvc := tenantservice.NewService(dbClient)
+
 			// Dashboard service and handlers
-			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc, analyticsRepo)
+			dashboardSvc := dashboardservice.NewService(dbClient, alertSvc, analyticsRepo, tenantSvc, log)
 			dashboardHandlers := dashboardhandlers.NewHandlers(dashboardSvc, log)
 
 			// Monitor services
 			groupSvc := groupservice.NewService(dbClient)
 			monitorService := monitorservice.NewService(monitorservice.NewPostgresRepository(dbClient))
 			monitorService.ConfigureHistoryDependencies(groupSvc, monitorStatusNotifier{publisher: statusPublisher})
+			monitorService.ConfigureEncryption(secretsEncryptor)
 			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
+			monitorHandlers.ConfigureLocationSecurity(locationSvc)
+			monitorHandlers.ConfigureDependencies(depservice.NewService(dbClient))
 
 			// Import service and handlers
 			importSvc := importservice.NewService(dbClient, monitorService)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
 
+			// Private locations (remote worker deployments)
+			locationHandlers := locationhandlers.NewHandlers(locationSvc, cfg.PublicNATSURL, log)
+			r.Route("/locations", func(r chi.Router) {
+				r.Post("/", locationHandlers.CreateLocation)
+				r.Get("/", locationHandlers.ListLocations)
+				r.Get("/{id}", locationHandlers.GetLocation)
+				r.Patch("/{id}", locationHandlers.UpdateLocation)
+				r.Delete("/{id}", locationHandlers.DeleteLocation)
+				r.Get("/{id}/deploy", locationHandlers.GetDeployInfo)
+			})
+
+			// Inter-location connectivity mesh
+			meshSvc := meshservice.NewService(dbClient, cfg.MeshProbeIntervalSeconds)
+			meshHdlrs := meshhandlers.NewHandlers(meshSvc, nil, cfg.MeshProbeTimeoutSeconds, log)
+			if checkJobQueue != nil {
+				meshHdlrs = meshhandlers.NewHandlers(meshSvc, checkJobQueue, cfg.MeshProbeTimeoutSeconds, log)
+			}
+			r.Route("/mesh", func(r chi.Router) {
+				r.Get("/", meshHdlrs.GetMesh)
+				r.Get("/history", meshHdlrs.GetEdgeHistory)
+				r.Post("/probe", meshHdlrs.ProbeNow)
+			})
+
+			// Maintenance windows
+			maintenanceService := maintenancewindowservice.NewService(dbClient)
+			maintenanceHandlers := maintenancewindowhandlers.NewHandlers(maintenanceService, log)
+			r.Route("/maintenance-windows", func(r chi.Router) {
+				r.Post("/", maintenanceHandlers.CreateMaintenanceWindow)
+				r.Get("/", maintenanceHandlers.ListMaintenanceWindows)
+				r.Get("/{id}", maintenanceHandlers.GetMaintenanceWindow)
+				r.Patch("/{id}", maintenanceHandlers.UpdateMaintenanceWindow)
+				r.Delete("/{id}", maintenanceHandlers.DeleteMaintenanceWindow)
+			})
+
 			r.Route("/monitors", func(r chi.Router) {
 				r.Post("/", monitorHandlers.CreateMonitor)
 				r.Get("/", monitorHandlers.ListMonitors)
+				r.Post("/test", monitorHandlers.TestMonitorConfig)
 				// Import endpoints (must be before /{id} to avoid conflicts)
 				r.Get("/export", importHdlrs.Export)
 				r.Post("/import/preview", importHdlrs.Preview)
 				r.Post("/import", importHdlrs.Execute)
+				// Bulk operations (must be before /{id} to avoid conflicts)
+				r.Post("/bulk/alerting", monitorHandlers.BulkUpdateAlerting)
+				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
+				// Dependency graph (must be before /{id} to avoid conflicts)
+				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
+				r.Post("/dependency-suggestions", depSuggestHdlrs.Suggest)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
@@ -194,11 +349,21 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}/members", monitorHandlers.GetGroupMembers)
 				r.Post("/{id}/members", monitorHandlers.AddMonitorsToGroup)
 				r.Delete("/{id}/members", monitorHandlers.RemoveMonitorsFromGroup)
+				// Dependency endpoints
+				r.Get("/{id}/dependencies", monitorHandlers.GetMonitorDependencies)
+				r.Post("/{id}/dependencies", monitorHandlers.AddMonitorDependency)
+				r.Delete("/{id}/dependencies/{dependsOnId}", monitorHandlers.RemoveMonitorDependency)
+				r.Get("/{id}/dependents", monitorHandlers.GetMonitorDependents)
 				// Agent install endpoints
 				r.Get("/{id}/agent/install", agentHandlers.HandleGetInstallCommand)
 				r.Get("/{id}/agent/install/script.sh", agentHandlers.HandleGetInstallScript)
+				r.Get("/{id}/agent/install/script.ps1", agentHandlers.HandleGetWindowsInstallScript)
+				r.Get("/{id}/agent/uninstall/script.sh", agentHandlers.HandleGetUninstallScript)
+				r.Get("/{id}/agent/uninstall/script.ps1", agentHandlers.HandleGetWindowsUninstallScript)
 				// Push info endpoint
 				r.Get("/{id}/push/info", pushHandlers.HandleGetPushInfo)
+				// Snooze: quick single-monitor maintenance window
+				r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
 			})
 
 			// Agent metrics endpoint
@@ -207,6 +372,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Dashboard
 			r.Route("/dashboard", func(r chi.Router) {
 				r.Get("/overview", dashboardHandlers.GetOverview)
+				r.Get("/summary", dashboardHandlers.GetSummary)
+				r.Get("/problem-monitors", dashboardHandlers.GetProblemMonitors)
+				r.Get("/recent-failures", dashboardHandlers.GetRecentFailures)
+				r.Get("/recent-alerts", dashboardHandlers.GetRecentAlerts)
+				r.Get("/group-sparkline", dashboardHandlers.GetGroupSparkline)
 			})
 
 			// Alerts
@@ -221,21 +391,41 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)
 			})
 
-			// Alert policies
-			alertPolicyService := alertpolicyservice.NewService(dbClient)
-			alertPolicyHandlers := alertpolicies.NewHandlers(alertPolicyService, log)
+			// Incidents
+			r.Route("/incidents", func(r chi.Router) {
+				r.Get("/", incidentHandlers.ListIncidents)
+				r.Post("/", incidentHandlers.CreateIncident)
+				r.Get("/{id}", incidentHandlers.GetIncident)
+				r.Patch("/{id}", incidentHandlers.UpdateIncident)
+				r.Post("/{id}/state", incidentHandlers.TransitionIncidentState)
+				r.Post("/{id}/timeline", incidentHandlers.CreateTimelineEntry)
+				r.Post("/{id}/alerts", incidentHandlers.AttachIncidentAlert)
+				r.Delete("/{id}/alerts/{alertId}", incidentHandlers.DetachIncidentAlert)
+				r.Post("/{id}/monitors", incidentHandlers.AttachIncidentMonitor)
+				r.Delete("/{id}/monitors/{monitorId}", incidentHandlers.DetachIncidentMonitor)
+				r.Put("/{id}/status-pages/{statusPageId}", incidentHandlers.PublishIncidentToStatusPage)
+				r.Delete("/{id}/status-pages/{statusPageId}", incidentHandlers.UnpublishIncidentFromStatusPage)
+				r.Post("/{id}/ai-analysis", incidentHandlers.RequestIncidentAIAnalysis)
+				r.Get("/{id}/ai-analysis", incidentHandlers.GetIncidentAIAnalysis)
+			})
+
+			// Alert policies — retired; all endpoints return 410 Gone.
+			// Use /notification-settings instead.
 			r.Route("/alert-policies", func(r chi.Router) {
-				r.Post("/", alertPolicyHandlers.CreateAlertPolicy)
-				r.Get("/", alertPolicyHandlers.ListAlertPolicies)
-				r.Get("/{id}/alerts", alertHandlers.GetAlertsByPolicy)
-				r.Get("/{id}/monitors", alertHandlers.GetMonitorsByPolicy)
-				r.Get("/{id}", alertPolicyHandlers.GetAlertPolicy)
-				r.Patch("/{id}", alertPolicyHandlers.UpdateAlertPolicy)
-				r.Delete("/{id}", alertPolicyHandlers.DeleteAlertPolicy)
+				gone := func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusGone)
+					_, _ = w.Write([]byte(`{"error":"alert policies were replaced by notification settings; see /notification-settings"}`))
+				}
+				r.Post("/", gone)
+				r.Get("/", gone)
+				r.Get("/{id}", gone)
+				r.Patch("/{id}", gone)
+				r.Delete("/{id}", gone)
 			})
 
 			// Alert channels
-			alertChannelService := alertchannelservice.NewService(dbClient)
+			alertChannelService := alertchannelservice.NewService(dbClient, secretsEncryptor)
 			alertChannelHandlers := alertchannelhandlers.NewHandlers(alertChannelService, log)
 			r.Route("/alert-channels", func(r chi.Router) {
 				r.Post("/", alertChannelHandlers.CreateAlertChannel)
@@ -246,17 +436,36 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/{id}/test", alertChannelHandlers.TestAlertChannel)
 			})
 
+			// Alert channel plugin catalog (manifests driving the UI form).
+			r.Route("/alert-channel-plugins", func(r chi.Router) {
+				r.Get("/", alertChannelHandlers.ListPlugins)
+				r.Get("/{type}", alertChannelHandlers.GetPlugin)
+			})
+
+			// Notification settings (workspace default routing, reminders, auto-incident)
+			notificationSettingsSvc := notificationsettingsservice.NewService(dbClient)
+			notificationSettingsHdlrs := notificationsettingshandlers.NewHandlers(notificationSettingsSvc, log)
+			r.Route("/notification-settings", func(r chi.Router) {
+				r.Get("/", notificationSettingsHdlrs.GetSettings)
+				r.Put("/", notificationSettingsHdlrs.UpdateSettings)
+			})
+
 			// API keys
 			apiKeyService := apikeyservice.NewService(dbClient)
-			apiKeyHandlers := apikeyhandlers.NewHandlers(apiKeyService, log)
+			apiKeyHandlers := apikeyhandlers.NewHandlers(apiKeyService, log).WithAudit(auditRecorder)
 			r.Route("/api-keys", func(r chi.Router) {
-				r.Post("/", apiKeyHandlers.CreateAPIKey)
 				r.Get("/", apiKeyHandlers.ListAPIKeys)
-				r.Delete("/{id}", apiKeyHandlers.RevokeAPIKey)
+				// Key management is a tenant-admin capability: a viewer or
+				// editor must not be able to mint themselves a write key.
+				r.Group(func(r chi.Router) {
+					r.Use(apimiddleware.RequireTenantAdmin)
+					r.Post("/", apiKeyHandlers.CreateAPIKey)
+					r.Delete("/{id}", apiKeyHandlers.RevokeAPIKey)
+				})
 			})
 
 			// Status pages
-			statusPageService := statuspageservice.NewService(dbClient)
+			statusPageService := statuspageservice.NewService(dbClient, statusPublisher)
 			statusPageHandlers := statuspagehandlers.NewHandlers(statusPageService, log)
 			r.Route("/status-pages", func(r chi.Router) {
 				r.Post("/", statusPageHandlers.CreateStatusPage)
@@ -264,23 +473,53 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", statusPageHandlers.GetStatusPage)
 				r.Patch("/{id}", statusPageHandlers.UpdateStatusPage)
 				r.Delete("/{id}", statusPageHandlers.DeleteStatusPage)
+
+				// Custom UI template lifecycle: export default, draft, publish,
+				// revert, reset. Sources are validated against the shared
+				// template contract before they are stored.
+				r.Route("/{id}/template", func(r chi.Router) {
+					r.Get("/", statusPageHandlers.GetTemplateState)
+					r.Delete("/", statusPageHandlers.ResetTemplate)
+					r.Get("/default", statusPageHandlers.GetDefaultTemplate)
+					r.Get("/versions/{version}/source", statusPageHandlers.GetTemplateVersionSource)
+					r.Put("/draft", statusPageHandlers.SaveTemplateDraft)
+					r.Delete("/draft", statusPageHandlers.DiscardTemplateDraft)
+					r.Post("/publish", statusPageHandlers.PublishTemplate)
+					r.Post("/revert", statusPageHandlers.RevertTemplate)
+				})
 			})
 
-			// Tenants (admin only)
-			tenantSvc := tenantservice.NewService(dbClient)
+			// Tenant-level library of reusable status page templates.
+			r.Route("/status-page-templates", func(r chi.Router) {
+				r.Get("/", statusPageHandlers.ListLibraryTemplates)
+				r.Post("/", statusPageHandlers.CreateLibraryTemplate)
+				r.Get("/{templateId}", statusPageHandlers.GetLibraryTemplate)
+				r.Get("/{templateId}/source", statusPageHandlers.GetLibraryTemplateSource)
+				r.Patch("/{templateId}", statusPageHandlers.UpdateLibraryTemplate)
+				r.Delete("/{templateId}", statusPageHandlers.DeleteLibraryTemplate)
+			})
+
+			// Tenants (membership-filtered for members, all for superadmins)
 			tenantHandlers := tenanthandlers.NewHandlers(tenantSvc, log)
 			r.Route("/tenant-settings", func(r chi.Router) {
 				r.Get("/", tenantHandlers.GetTenantSettings)
-				r.Patch("/", tenantHandlers.UpdateTenantSettings)
+				r.With(apimiddleware.RequireTenantAdmin).Patch("/", tenantHandlers.UpdateTenantSettings)
 			})
 			r.Route("/tenants", func(r chi.Router) {
-				r.Use(apimiddleware.RequireAdmin)
 				r.Get("/", tenantHandlers.ListTenants)
 			})
 
-			// Users (admin only)
+			// Audit log (tenant admins and superadmins)
+			auditHandlers := audithandlers.NewHandlers(auditSvc, log)
+			r.Route("/audit-log", func(r chi.Router) {
+				r.Use(apimiddleware.RequireTenantAdmin)
+				r.Get("/", auditHandlers.List)
+				r.Get("/actions", auditHandlers.Actions)
+			})
+
+			// Users (superadmin only)
 			r.Route("/users", func(r chi.Router) {
-				r.Use(apimiddleware.RequireAdmin)
+				r.Use(apimiddleware.RequireSuperadmin)
 				r.Get("/", adminUsersHandlers.ListUsers)
 				r.Post("/", adminUsersHandlers.CreateUser)
 				r.Get("/{id}", adminUsersHandlers.GetUser)
@@ -299,14 +538,20 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	}
 
 	return &Server{
-		config:          cfg,
-		logger:          log,
-		metrics:         metricsRegistry,
-		db:              dbClient,
-		queue:           checkJobQueue,
-		http:            httpServer,
-		alertSubscriber: alertSubscriber,
-		statusPublisher: statusPublisher,
+		config:             cfg,
+		logger:             log,
+		metrics:            metricsRegistry,
+		db:                 dbClient,
+		queue:              checkJobQueue,
+		http:               httpServer,
+		alertSubscriber:    alertSubscriber,
+		statusPublisher:    statusPublisher,
+		pushStaleWorker:    pushStaleWorker,
+		agentStaleWorker:   agentStaleWorker,
+		auditRecorder:      auditRecorder,
+		auditPruner:        auditPruner,
+		locationAuthorizer: locationAuthorizer,
+		locationAuthErr:    locationAuthErr,
 	}
 }
 
@@ -315,11 +560,43 @@ func (s *Server) Start() error {
 	s.logger.WithFields(map[string]interface{}{
 		"port": s.config.HTTPPort,
 	}).Info("Starting HTTP server")
+	if s.locationAuthErr != nil {
+		return fmt.Errorf("configure NATS location authorization: %w", s.locationAuthErr)
+	}
+	if s.locationAuthorizer != nil {
+		nc, err := nats.Connect(s.config.NATSURL,
+			nats.RetryOnFailedConnect(true),
+			nats.MaxReconnects(-1),
+			nats.ReconnectWait(2*time.Second),
+		)
+		if err != nil {
+			return fmt.Errorf("connect NATS location authorization service: %w", err)
+		}
+		auth, err := s.locationAuthorizer.Start(nc)
+		if err != nil {
+			nc.Close()
+			return fmt.Errorf("start NATS location authorization service: %w", err)
+		}
+		s.locationAuthConn = nc
+		s.locationAuth = auth
+	}
 
 	if s.alertSubscriber != nil {
 		if err := s.alertSubscriber.Start(context.Background()); err != nil {
 			return fmt.Errorf("start alert subscriber: %w", err)
 		}
+	}
+	if s.pushStaleWorker != nil {
+		s.pushStaleWorker.Start()
+	}
+	if s.agentStaleWorker != nil {
+		s.agentStaleWorker.Start()
+	}
+	if s.auditRecorder != nil {
+		s.auditRecorder.Start()
+	}
+	if s.auditPruner != nil {
+		s.auditPruner.Start()
 	}
 
 	return s.http.ListenAndServe()
@@ -328,8 +605,28 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down HTTP server")
+	if s.locationAuth != nil {
+		if err := s.locationAuth.Stop(); err != nil {
+			s.logger.WithError(err).Warn("Failed to stop NATS location authorization service")
+		}
+	}
+	if s.locationAuthConn != nil {
+		s.locationAuthConn.Close()
+	}
 	if s.alertSubscriber != nil {
 		s.alertSubscriber.Stop()
+	}
+	if s.pushStaleWorker != nil {
+		s.pushStaleWorker.Stop()
+	}
+	if s.agentStaleWorker != nil {
+		s.agentStaleWorker.Stop()
+	}
+	if s.auditRecorder != nil {
+		s.auditRecorder.Stop()
+	}
+	if s.auditPruner != nil {
+		s.auditPruner.Stop()
 	}
 	if s.statusPublisher != nil {
 		s.statusPublisher.Close()

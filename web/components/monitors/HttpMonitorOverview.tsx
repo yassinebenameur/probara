@@ -4,6 +4,7 @@ import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { CheckResult, Monitor, HTTPMetricsEnvelope, HTTPTimingInfo, HTTPTLSInfo } from '@/lib/types';
 import { calculateUptime, calculateLatencyStats, getOperationalResults } from '@/lib/monitor-utils';
 import { UptimeHeroGauge, SLA_TARGET } from './UptimeHeroGauge';
+import Pill from '@/components/ui/Pill';
 
 export type TimeRange = '1h' | '6h' | '24h' | '7d';
 
@@ -641,7 +642,14 @@ function HttpResultsTable({ results }: { results: CheckResult[] }) {
                     onClick={() => setExpandedId(isExpanded ? null : result.id)}
                     className={`cursor-pointer border-b border-white/[0.03] transition-colors hover:bg-slate-800/40 ${rowBg}`}
                   >
-                    <td className="px-5 py-3 font-mono text-sm text-slate-400">{time}</td>
+                    <td className="px-5 py-3 font-mono text-sm text-slate-400">
+                      {time}
+                      {result.location_name && (
+                        <span className="ml-2 inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-2 py-0.5 font-sans text-[0.7rem] font-medium text-cyan-200">
+                          {result.location_name}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-5 py-3">
                       <span className={`inline-flex items-center gap-1.5 text-xs ${statusColor}`}>
                         <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />
@@ -987,9 +995,7 @@ export default function HttpMonitorOverview({
           <span className="text-xs text-slate-500">Tags:</span>
           <div className="flex flex-wrap gap-1.5">
             {monitor.tags.map((tag) => (
-              <span key={tag} className="badge badge-default text-xs">
-                {tag}
-              </span>
+              <Pill key={tag} tone="neutral" size="xs">{tag}</Pill>
             ))}
           </div>
         </div>

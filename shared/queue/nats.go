@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -12,8 +14,13 @@ import (
 
 // Client wraps a NATS JetStream client
 type Client struct {
-	nc        *nats.Conn
-	js        jetstream.JetStream
+	nc *nats.Conn
+	js jetstream.JetStream
+
+	// mu guards the streams/consumers caches: multiple components sharing one
+	// client (e.g. the scheduler loop and the results-ingest consumer) ensure
+	// their streams concurrently at startup.
+	mu        sync.Mutex
 	streams   map[string]jetstream.Stream
 	consumers map[string]jetstream.Consumer
 }
@@ -28,9 +35,32 @@ type Message struct {
 	InProgress func() error
 }
 
-// NewClient creates a new NATS JetStream client
+// reconnectOptions keeps the connection retrying forever. The nats.go
+// default gives up after 60 attempts (~2 minutes) and leaves the connection
+// permanently CLOSED, which froze every worker/alerter when the NATS pod
+// moved nodes. Keep in sync with shared/statusupdates.
+func reconnectOptions() []nats.Option {
+	return []nats.Option{
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2 * time.Second),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			log.Printf("nats: disconnected: %v", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			log.Printf("nats: reconnected to %s", nc.ConnectedUrl())
+		}),
+		nats.ClosedHandler(func(_ *nats.Conn) {
+			log.Printf("nats: connection permanently closed")
+		}),
+	}
+}
+
+// NewClient creates a new NATS JetStream client. The connection retries
+// forever (initial connect and reconnects) so a NATS outage never leaves
+// the client permanently disconnected.
 func NewClient(natsURL string) (*Client, error) {
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(natsURL, reconnectOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
@@ -51,6 +81,9 @@ func NewClient(natsURL string) (*Client, error) {
 
 // EnsureStream ensures a stream exists with the given configuration
 func (c *Client) EnsureStream(ctx context.Context, streamName string, subjects []string) (jetstream.Stream, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if stream, exists := c.streams[streamName]; exists {
 		return stream, nil
 	}
@@ -92,7 +125,9 @@ func (c *Client) EnsureWorkQueueStream(ctx context.Context, streamName string, s
 		return nil, fmt.Errorf("failed to create or update work queue stream: %w", err)
 	}
 
+	c.mu.Lock()
 	c.streams[streamName] = stream
+	c.mu.Unlock()
 	return stream, nil
 }
 
@@ -132,22 +167,74 @@ func (c *Client) PublishJSON(ctx context.Context, subject string, v interface{},
 
 // CreateConsumer creates or gets a consumer for the given stream
 func (c *Client) CreateConsumer(ctx context.Context, streamName string, consumerName string) (jetstream.Consumer, error) {
+	return c.CreateConsumerWithOptions(ctx, streamName, consumerName, ConsumerOptions{})
+}
+
+// LookupConsumer loads an existing durable without attempting any stream or
+// consumer management operation. Remote private-location workers use this so
+// their broker account can have consume-only JetStream permissions.
+func (c *Client) LookupConsumer(ctx context.Context, streamName, consumerName string) (jetstream.Consumer, error) {
 	key := fmt.Sprintf("%s:%s", streamName, consumerName)
+	c.mu.Lock()
 	if consumer, exists := c.consumers[key]; exists {
+		c.mu.Unlock()
 		return consumer, nil
 	}
+	c.mu.Unlock()
+	consumer, err := c.js.Consumer(ctx, streamName, consumerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load consumer: %w", err)
+	}
+	c.mu.Lock()
+	c.consumers[key] = consumer
+	c.mu.Unlock()
+	return consumer, nil
+}
+
+// ConsumerOptions tunes a JetStream consumer. Zero values fall back to the
+// defaults previously hardcoded in CreateConsumer (AckWait=30s, MaxDeliver=3,
+// no BackOff array, no FilterSubject).
+type ConsumerOptions struct {
+	AckWait       time.Duration
+	MaxDeliver    int
+	BackOff       []time.Duration
+	FilterSubject string
+}
+
+// CreateConsumerWithOptions creates or gets a consumer with custom retry
+// policy. Used by the notifications worker to install an exponential backoff
+// schedule (10s, 30s, 2m, 10m, 30m) for transient webhook failures.
+func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, consumerName string, opts ConsumerOptions) (jetstream.Consumer, error) {
+	key := fmt.Sprintf("%s:%s", streamName, consumerName)
+	c.mu.Lock()
+	if consumer, exists := c.consumers[key]; exists {
+		c.mu.Unlock()
+		return consumer, nil
+	}
+	c.mu.Unlock()
 
 	stream, err := c.js.Stream(ctx, streamName)
 	if err != nil {
 		return nil, fmt.Errorf("stream not found: %w", err)
 	}
 
+	ackWait := opts.AckWait
+	if ackWait <= 0 {
+		ackWait = 30 * time.Second
+	}
+	maxDeliver := opts.MaxDeliver
+	if maxDeliver <= 0 {
+		maxDeliver = 3
+	}
+
 	cfg := jetstream.ConsumerConfig{
-		Name:       consumerName,
-		Durable:    consumerName,
-		AckPolicy:  jetstream.AckExplicitPolicy,
-		AckWait:    30 * time.Second,
-		MaxDeliver: 3,
+		Name:          consumerName,
+		Durable:       consumerName,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       ackWait,
+		MaxDeliver:    maxDeliver,
+		BackOff:       opts.BackOff,
+		FilterSubject: opts.FilterSubject,
 	}
 
 	consumer, err := stream.CreateConsumer(ctx, cfg)
@@ -159,8 +246,55 @@ func (c *Client) CreateConsumer(ctx context.Context, streamName string, consumer
 		}
 	}
 
+	if err := c.resetStaleConsumer(ctx, stream, consumerName, consumer); err != nil {
+		return nil, err
+	}
+
+	consumer, err = stream.Consumer(ctx, consumerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load consumer after validation: %w", err)
+	}
+
+	c.mu.Lock()
 	c.consumers[key] = consumer
+	c.mu.Unlock()
 	return consumer, nil
+}
+
+func (c *Client) resetStaleConsumer(ctx context.Context, stream jetstream.Stream, consumerName string, consumer jetstream.Consumer) error {
+	streamInfo, err := stream.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load stream info: %w", err)
+	}
+
+	consumerInfo, err := consumer.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load consumer info: %w", err)
+	}
+
+	if !consumerStateRequiresReset(streamInfo, consumerInfo) {
+		return nil
+	}
+
+	if err := stream.DeleteConsumer(ctx, consumerName); err != nil {
+		return fmt.Errorf("failed to delete stale consumer: %w", err)
+	}
+
+	cfg := consumerInfo.Config
+	if _, err := stream.CreateConsumer(ctx, cfg); err != nil {
+		return fmt.Errorf("failed to recreate consumer: %w", err)
+	}
+
+	return nil
+}
+
+func consumerStateRequiresReset(streamInfo *jetstream.StreamInfo, consumerInfo *jetstream.ConsumerInfo) bool {
+	if streamInfo == nil || consumerInfo == nil {
+		return false
+	}
+
+	lastSeq := streamInfo.State.LastSeq
+	return consumerInfo.Delivered.Stream > lastSeq || consumerInfo.AckFloor.Stream > lastSeq
 }
 
 // DeleteConsumer deletes a consumer for the given stream.
@@ -174,8 +308,47 @@ func (c *Client) DeleteConsumer(ctx context.Context, streamName string, consumer
 		return fmt.Errorf("failed to delete consumer: %w", err)
 	}
 
+	c.mu.Lock()
 	delete(c.consumers, fmt.Sprintf("%s:%s", streamName, consumerName))
+	c.mu.Unlock()
 	return nil
+}
+
+// PublishCoreJSON publishes a JSON-encoded message over core NATS (no
+// JetStream stream required). Fire-and-forget fan-out — used for location
+// worker heartbeats, where losing one beat is harmless.
+func (c *Client) PublishCoreJSON(subject string, v interface{}) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+	return c.nc.Publish(subject, data)
+}
+
+// Request sends a core NATS request and waits for the reply (or ctx done).
+// Used for ephemeral RPC-style exchanges (e.g. test-connection checks) that
+// must not be persisted or retried by JetStream.
+func (c *Client) Request(ctx context.Context, subject string, data []byte) ([]byte, error) {
+	msg, err := c.nc.RequestWithContext(ctx, subject, data)
+	if err != nil {
+		return nil, err
+	}
+	return msg.Data, nil
+}
+
+// SubscribeRequestReply registers a queue-group subscription whose handler's
+// return value is sent back to the requester. Handlers run in their own
+// goroutine so a slow request (e.g. a check waiting out its timeout) never
+// blocks other requests on the same subscription.
+func (c *Client) SubscribeRequestReply(subject, queueGroup string, handler func(data []byte) []byte) (*nats.Subscription, error) {
+	return c.nc.QueueSubscribe(subject, queueGroup, func(msg *nats.Msg) {
+		go func() {
+			resp := handler(msg.Data)
+			if msg.Reply != "" {
+				_ = msg.Respond(resp)
+			}
+		}()
+	})
 }
 
 // Subscribe registers a core NATS subscription for live fan-out use cases.
@@ -279,4 +452,11 @@ func (c *Client) Close() {
 	if c.nc != nil {
 		c.nc.Close()
 	}
+}
+
+// Closed reports whether the underlying connection is permanently closed
+// and will never reconnect. Liveness probes use this so Kubernetes restarts
+// pods holding a dead connection instead of leaving them as zombies.
+func (c *Client) Closed() bool {
+	return c.nc == nil || c.nc.IsClosed()
 }

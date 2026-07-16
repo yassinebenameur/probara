@@ -11,6 +11,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/maintenance"
 )
 
 // Repository defines the interface for monitor data access
@@ -20,12 +21,24 @@ type Repository interface {
 	List(ctx context.Context, tenantID uuid.UUID, tag *string, enabled *bool, page, pageSize int) ([]models.Monitor, int, error)
 	Update(ctx context.Context, monitor *models.Monitor, fields []string, values []interface{}) error
 	Delete(ctx context.Context, tenantID, monitorID uuid.UUID) error
+	BulkSoftDelete(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error)
 	DeleteHistory(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
+	HardDelete(ctx context.Context, monitorID uuid.UUID) error
 	VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error
+	VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error
 	SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error
 	GetAlertPolicyIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
 	GetAlertPolicyIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 	GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
+	GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error)
+	// monitor_channels management
+	ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error
+	DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error
+	GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error)
+	// monitor_locations management
+	SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error
+	GetLocationIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
+	GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error)
 }
 
 // PostgresRepository implements Repository for PostgreSQL
@@ -44,11 +57,13 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, $16, $17, $18, $19)
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state
 	`
 
 	var tags []string
@@ -58,11 +73,13 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 		monitor.IntervalSeconds, monitor.TimeoutSeconds, monitor.AlertPolicyID,
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
 		monitor.CreatedAt, monitor.UpdatedAt,
+		monitor.ConsecutiveFailuresThreshold, monitor.NotificationMode, monitor.MemberAlertRollup, monitor.LocationQuorum,
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
-		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
 	)
 
 	if err != nil {
@@ -78,9 +95,12 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 	query := `
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state,
+			` + maintenance.InMaintenancePredicate("monitors") + ` AS in_maintenance,
+			` + maintenance.MaintenanceUntilExpr("monitors") + ` AS maintenance_until
 		FROM monitors
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
 
 	var monitor models.Monitor
@@ -90,7 +110,9 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
-		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
+		&monitor.InMaintenance, &monitor.MaintenanceUntil,
 	)
 
 	if err != nil {
@@ -109,7 +131,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 	offset := (page - 1) * pageSize
 
 	// Build query with filters
-	whereClause := "WHERE tenant_id = $1"
+	whereClause := "WHERE tenant_id = $1 AND deleted_at IS NULL"
 	args := []interface{}{tenantID}
 	argIndex := 2
 
@@ -137,12 +159,15 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state,
+			%s AS in_maintenance,
+			%s AS maintenance_until
 		FROM monitors
 		%s
 		ORDER BY created_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIndex, argIndex+1)
+	`, maintenance.InMaintenancePredicate("monitors"), maintenance.MaintenanceUntilExpr("monitors"), whereClause, argIndex, argIndex+1)
 
 	args = append(args, pageSize, offset)
 
@@ -161,7 +186,9 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 			&monitor.AlertPolicyID, &monitor.Enabled,
-			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
+			&monitor.InMaintenance, &monitor.MaintenanceUntil,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan monitor: %w", err)
@@ -205,10 +232,11 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 	query := fmt.Sprintf(`
 		UPDATE monitors
 		SET %s
-		WHERE id = $%d AND tenant_id = $%d
+		WHERE id = $%d AND tenant_id = $%d AND deleted_at IS NULL
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
-			agent_id, push_token, next_run_at, created_at, updated_at
+			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state
 	`, setClause, whereArgIndex, whereArgIndex+1)
 
 	var tags []string
@@ -217,7 +245,8 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
-		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
 	)
 
 	if err != nil {
@@ -231,23 +260,55 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 	return nil
 }
 
-// Delete removes a monitor from the database
+// Delete marks a monitor as deleted (soft delete). The background purger
+// removes child rows and the monitor row itself.
 func (r *PostgresRepository) Delete(ctx context.Context, tenantID, monitorID uuid.UUID) error {
-	query := `DELETE FROM monitors WHERE id = $1 AND tenant_id = $2`
+	query := `UPDATE monitors SET deleted_at = NOW(), updated_at = NOW()
+	          WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`
 	result, err := r.db.ExecContext(ctx, query, monitorID, tenantID)
 	if err != nil {
-		return fmt.Errorf("failed to delete monitor: %w", err)
+		return fmt.Errorf("failed to soft delete monitor: %w", err)
 	}
-
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
-
 	if rowsAffected == 0 {
 		return fmt.Errorf("monitor not found")
 	}
+	return nil
+}
 
+// BulkSoftDelete tombstones every monitor in monitorIDs that belongs to the
+// tenant and is not already deleted. Returns the number of newly tombstoned rows.
+func (r *PostgresRepository) BulkSoftDelete(
+	ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID,
+) (int64, error) {
+	if len(monitorIDs) == 0 {
+		return 0, nil
+	}
+	query := `UPDATE monitors SET deleted_at = NOW(), updated_at = NOW()
+	          WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL`
+	result, err := r.db.ExecContext(ctx, query, tenantID, pq.Array(monitorIDs))
+	if err != nil {
+		return 0, fmt.Errorf("failed to bulk soft delete monitors: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rows, nil
+}
+
+// HardDelete removes the monitor row itself. Used by the purger after it has
+// drained all child tables. Tenant-agnostic because the caller already loaded
+// the row.
+func (r *PostgresRepository) HardDelete(ctx context.Context, monitorID uuid.UUID) error {
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM monitors WHERE id = $1`, monitorID,
+	); err != nil {
+		return fmt.Errorf("failed to hard delete monitor: %w", err)
+	}
 	return nil
 }
 
@@ -270,6 +331,7 @@ func (r *PostgresRepository) DeleteHistory(ctx context.Context, tenantID uuid.UU
 		`DELETE FROM alerts WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_downtime_open WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_downtime_periods WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		`DELETE FROM monitor_hourly_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_daily_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM check_results WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 	}
@@ -297,6 +359,25 @@ func (r *PostgresRepository) VerifyAlertPolicy(ctx context.Context, tenantID, po
 			return fmt.Errorf("alert policy not found or does not belong to tenant")
 		}
 		return fmt.Errorf("failed to verify alert policy: %w", err)
+	}
+	return nil
+}
+
+// VerifyMonitorsBelongToTenant returns nil only if every provided monitor ID
+// exists and belongs to the tenant. Otherwise it returns a descriptive error
+// whose message contains "not found or do not belong to tenant".
+func (r *PostgresRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
+	if len(monitorIDs) == 0 {
+		return fmt.Errorf("monitor IDs cannot be empty")
+	}
+	var count int
+	query := `SELECT COUNT(*) FROM monitors
+	          WHERE id = ANY($1) AND tenant_id = $2 AND deleted_at IS NULL`
+	if err := r.db.QueryRowContext(ctx, query, pq.Array(monitorIDs), tenantID).Scan(&count); err != nil {
+		return fmt.Errorf("failed to verify monitors: %w", err)
+	}
+	if count != len(monitorIDs) {
+		return fmt.Errorf("one or more monitors not found or do not belong to tenant")
 	}
 	return nil
 }
@@ -391,13 +472,14 @@ func (r *PostgresRepository) GetAlertPolicyIDsForMonitors(ctx context.Context, m
 	return result, nil
 }
 
-// GetMemberIDs retrieves all member IDs for a group monitor
+// GetMemberIDs retrieves all member IDs for a group monitor, excluding tombstoned members.
 func (r *PostgresRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
 	query := `
-		SELECT monitor_id
-		FROM monitor_groups
-		WHERE group_id = $1
-		ORDER BY created_at
+		SELECT mg.monitor_id
+		FROM monitor_groups mg
+		JOIN monitors m ON m.id = mg.monitor_id
+		WHERE mg.group_id = $1 AND m.deleted_at IS NULL
+		ORDER BY mg.created_at
 	`
 	rows, err := r.db.QueryContext(ctx, query, groupID)
 	if err != nil {
@@ -419,6 +501,257 @@ func (r *PostgresRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID
 	}
 
 	return memberIDs, nil
+}
+
+// GetDependsOnIDs retrieves the upstream dependency IDs for a monitor,
+// excluding tombstoned targets.
+func (r *PostgresRepository) GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
+	query := `
+		SELECT md.depends_on_id
+		FROM monitor_dependencies md
+		JOIN monitors m ON m.id = md.depends_on_id
+		WHERE md.monitor_id = $1 AND m.deleted_at IS NULL
+		ORDER BY md.created_at
+	`
+	rows, err := r.db.QueryContext(ctx, query, monitorID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get monitor dependencies: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan dependency ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating dependency IDs: %w", err)
+	}
+
+	return ids, nil
+}
+
+// ReplaceMonitorChannels atomically replaces all channel assignments for a monitor.
+// Each channel is validated against alert_channels to prevent cross-tenant assignments.
+func (r *PostgresRepository) ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_channels WHERE monitor_id = $1`, monitorID); err != nil {
+		return fmt.Errorf("failed to clear monitor channels: %w", err)
+	}
+
+	for _, c := range channels {
+		channelID, err := uuid.Parse(c.ChannelID)
+		if err != nil {
+			return fmt.Errorf("invalid channel_id %q: %w", c.ChannelID, err)
+		}
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO monitor_channels (monitor_id, channel_id, delay_seconds)
+			SELECT $1, $2, $3
+			WHERE EXISTS (SELECT 1 FROM alert_channels WHERE id = $2 AND tenant_id = $4)
+		`, monitorID, channelID, c.DelaySeconds, tenantID)
+		if err != nil {
+			return fmt.Errorf("failed to insert monitor channel: %w", err)
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed to check rows affected: %w", err)
+		}
+		if n == 0 {
+			return fmt.Errorf("channel %s not found or does not belong to tenant", c.ChannelID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit monitor channels: %w", err)
+	}
+	return nil
+}
+
+// DeleteMonitorChannels removes all channel assignments for a monitor.
+func (r *PostgresRepository) DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM monitor_channels WHERE monitor_id = $1`, monitorID); err != nil {
+		return fmt.Errorf("failed to delete monitor channels: %w", err)
+	}
+	return nil
+}
+
+// GetChannelsForMonitors loads monitor_channels rows for a set of monitors,
+// returning a map keyed by monitor ID.
+func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error) {
+	result := make(map[uuid.UUID][]models.MonitorChannelAssignment)
+	if len(monitorIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT mc.monitor_id, mc.channel_id, ac.name, ac.type, mc.delay_seconds
+		FROM monitor_channels mc
+		JOIN alert_channels ac ON ac.id = mc.channel_id
+		WHERE mc.monitor_id = ANY($1)
+		ORDER BY mc.monitor_id, mc.channel_id
+	`, pq.Array(monitorIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query monitor channels: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var channelID uuid.UUID
+		var channelName string
+		var channelType string
+		var delaySeconds int
+		if err := rows.Scan(&monitorID, &channelID, &channelName, &channelType, &delaySeconds); err != nil {
+			return nil, fmt.Errorf("failed to scan monitor channel: %w", err)
+		}
+		result[monitorID] = append(result[monitorID], models.MonitorChannelAssignment{
+			ChannelID:    channelID.String(),
+			DelaySeconds: delaySeconds,
+			ChannelName:  channelName,
+			ChannelType:  channelType,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating monitor channels: %w", err)
+	}
+	return result, nil
+}
+
+// SetLocations atomically replaces a monitor's private-location set. Every
+// location must be a live location of the tenant. Per-location state rows for
+// removed locations are deleted so they can never resurface in the quorum
+// aggregate; when the set becomes empty, the monitor returns to the default
+// fleet and restarts the legacy state machine from 'unknown'.
+func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if len(locationIDs) > 0 {
+		var count int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM locations
+			WHERE id = ANY($1) AND tenant_id = $2 AND deleted_at IS NULL
+		`, pq.Array(locationIDs), tenantID).Scan(&count); err != nil {
+			return fmt.Errorf("failed to validate locations: %w", err)
+		}
+		if count != len(locationIDs) {
+			return fmt.Errorf("one or more locations not found")
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM monitor_locations WHERE monitor_id = $1 AND location_id != ALL($2)
+	`, monitorID, pq.Array(locationIDs)); err != nil {
+		return fmt.Errorf("failed to clear monitor locations: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM monitor_location_state WHERE monitor_id = $1 AND location_id != ALL($2)
+	`, monitorID, pq.Array(locationIDs)); err != nil {
+		return fmt.Errorf("failed to clear monitor location state: %w", err)
+	}
+
+	for _, locationID := range locationIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO monitor_locations (monitor_id, location_id)
+			VALUES ($1, $2) ON CONFLICT DO NOTHING
+		`, monitorID, locationID); err != nil {
+			return fmt.Errorf("failed to add monitor location: %w", err)
+		}
+	}
+
+	if len(locationIDs) == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE monitors
+			SET current_state = 'unknown', consecutive_failures = 0, updated_at = NOW()
+			WHERE id = $1 AND tenant_id = $2
+		`, monitorID, tenantID); err != nil {
+			return fmt.Errorf("failed to reset monitor state: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit monitor locations: %w", err)
+	}
+	return nil
+}
+
+// GetLocationIDsForMonitors loads the selected location IDs for a set of
+// monitors, keyed by monitor ID. Deleted locations are excluded.
+func (r *PostgresRepository) GetLocationIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	result := make(map[uuid.UUID][]uuid.UUID)
+	if len(monitorIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT ml.monitor_id, ml.location_id
+		FROM monitor_locations ml
+		JOIN locations l ON l.id = ml.location_id AND l.deleted_at IS NULL
+		WHERE ml.monitor_id = ANY($1)
+		ORDER BY ml.created_at
+	`, pq.Array(monitorIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list monitor locations: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monitorID, locationID uuid.UUID
+		if err := rows.Scan(&monitorID, &locationID); err != nil {
+			return nil, fmt.Errorf("failed to scan monitor location: %w", err)
+		}
+		result[monitorID] = append(result[monitorID], locationID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating monitor locations: %w", err)
+	}
+	return result, nil
+}
+
+// GetLocationStatuses loads the per-location breakdown for one monitor:
+// each selected location with its connection freshness and check state.
+func (r *PostgresRepository) GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT l.id, l.name,
+			l.last_seen_at IS NOT NULL AND l.last_seen_at > NOW() - INTERVAL '60 seconds',
+			COALESCE(mls.current_state, 'unknown'),
+			mls.last_latency_ms, mls.last_check_at
+		FROM monitor_locations ml
+		JOIN locations l ON l.id = ml.location_id AND l.deleted_at IS NULL
+		LEFT JOIN monitor_location_state mls
+			ON mls.monitor_id = ml.monitor_id AND mls.location_id = ml.location_id
+		WHERE ml.monitor_id = $1
+		ORDER BY l.name
+	`, monitorID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list location statuses: %w", err)
+	}
+	defer rows.Close()
+
+	var statuses []models.MonitorLocationStatus
+	for rows.Next() {
+		var s models.MonitorLocationStatus
+		if err := rows.Scan(&s.ID, &s.Name, &s.Connected, &s.CurrentState, &s.LastLatencyMs, &s.LastCheckAt); err != nil {
+			return nil, fmt.Errorf("failed to scan location status: %w", err)
+		}
+		statuses = append(statuses, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating location statuses: %w", err)
+	}
+	return statuses, nil
 }
 
 // Ensure PostgresRepository implements Repository

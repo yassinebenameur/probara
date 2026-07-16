@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import {
   Monitor,
   CheckResult,
-  AlertPolicy,
   HTTPMonitorConfig,
   PingMonitorConfig,
   DNSMonitorConfig,
@@ -14,8 +13,14 @@ import {
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
   SyntheticBrowserMetricsEnvelope,
+  RedisMonitorConfig,
+  PostgresMonitorConfig,
+  MongoDBMonitorConfig,
+  RabbitMQMonitorConfig,
+  DBMetrics,
+  DBMetricsEnvelope,
 } from '@/lib/types';
-import { getMonitorResults, getAlertPolicy, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
+import { getMonitorResults, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import {
   calculateUptime,
@@ -25,7 +30,7 @@ import {
   calculateLatencyStats,
   getOperationalResults,
 } from '@/lib/monitor-utils';
-import TagPill from '@/components/ui/TagPill';
+import Pill from '@/components/ui/Pill';
 
 interface MonitorDetailPanelProps {
   monitor: Monitor | null;
@@ -33,7 +38,6 @@ interface MonitorDetailPanelProps {
 
 export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps) {
   const [checkResults, setCheckResults] = useState<CheckResult[]>([]);
-  const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
   const [loading, setLoading] = useState(false);
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
@@ -114,6 +118,28 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
     return null;
   };
 
+  const isDatabaseType = (t: string): t is 'redis' | 'postgres' | 'mongodb' | 'rabbitmq' =>
+    t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq';
+
+  // Shared shape for the database/broker types. Secret fields arrive masked
+  // ("***") from the API and are never displayed.
+  const getDatabaseConfig = (
+    mon: Monitor
+  ): (RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig) | null => {
+    if (!isDatabaseType(mon.type)) return null;
+    if (mon.config && typeof mon.config === 'object') {
+      return mon.config as RedisMonitorConfig & PostgresMonitorConfig & MongoDBMonitorConfig & RabbitMQMonitorConfig;
+    }
+    return null;
+  };
+
+  const getDBMetrics = (mon: Monitor | null, result?: CheckResult): DBMetrics | null => {
+    if (!mon || !isDatabaseType(mon.type)) return null;
+    const md = result?.metrics_data as unknown;
+    if (!md || typeof md !== 'object') return null;
+    return (md as DBMetricsEnvelope)[mon.type] || null;
+  };
+
   const getSyntheticAPIConfig = (mon: Monitor): SyntheticAPIMonitorConfig | null => {
     if (mon.type !== 'synthetic_api') return null;
     if (mon.config && typeof mon.config === 'object') {
@@ -133,34 +159,14 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
   useEffect(() => {
     if (!monitor) {
       setCheckResults([]);
-      setAlertPolicies([]);
       return;
     }
 
     const fetchData = async () => {
       setLoading(true);
       try {
-        // Fetch check results
         const resultsResponse = await getMonitorResults(monitor.id, { limit: 100 });
         setCheckResults(resultsResponse.results || []);
-
-        const policyIDs = monitor.alert_policy_ids?.length
-          ? monitor.alert_policy_ids
-          : monitor.alert_policy_id
-            ? [monitor.alert_policy_id]
-            : [];
-
-        if (policyIDs.length > 0) {
-          try {
-            const policies = await Promise.all(policyIDs.map((id) => getAlertPolicy(id)));
-            setAlertPolicies(policies);
-          } catch (err) {
-            console.error('Failed to fetch alert policies:', err);
-            setAlertPolicies([]);
-          }
-        } else {
-          setAlertPolicies([]);
-        }
       } catch (err) {
         console.error('Failed to fetch monitor details:', err);
         setCheckResults([]);
@@ -188,6 +194,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
     : undefined;
   const latestSyntheticBrowserMetrics = getSyntheticBrowserMetrics(latestSyntheticBrowserResult);
   const latestGRPCMetrics = monitor?.type === 'grpc' ? getGRPCMetrics(latestOperationalResult) : null;
+  const latestDBMetrics = getDBMetrics(monitor, latestOperationalResult);
   const latestSyntheticBrowserScreenshot = latestSyntheticBrowserMetrics?.artifacts?.screenshot_path;
   const syntheticBrowserScreenshotURL = monitor && latestSyntheticBrowserScreenshot
     ? getSyntheticBrowserScreenshotUrl(monitor.id, monitor.tenant_id, latestSyntheticBrowserScreenshot)
@@ -279,9 +286,9 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
               {monitor.type.toUpperCase()} · {monitor.enabled ? 'Active' : 'Disabled'}
             </span>
           </div>
-          <span className={monitor.enabled ? 'badge badge-success' : 'badge badge-default'}>
+          <Pill tone={monitor.enabled ? 'success' : 'neutral'} size="xs" dot>
             {monitor.enabled ? 'Alerts enabled' : 'Alerts disabled'}
-          </span>
+          </Pill>
         </div>
         <div className="text-xs text-muted">
           {monitor.tags && monitor.tags.length > 0
@@ -486,6 +493,85 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   </>
                 );
               })()}
+              {isDatabaseType(monitor.type) && (() => {
+                const dbConfig = getDatabaseConfig(monitor);
+                if (!dbConfig) return null;
+                const defaultPort =
+                  monitor.type === 'redis' ? 6379 : monitor.type === 'postgres' ? 5432 : monitor.type === 'rabbitmq' ? 5672 : 27017;
+                const tls = monitor.type === 'postgres'
+                  ? (dbConfig.ssl_mode || 'prefer')
+                  : dbConfig.tls_enabled
+                    ? `enabled${dbConfig.tls_skip_verify ? ' · skip verify' : ''}`
+                    : 'disabled';
+                return (
+                  <>
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <span className="text-muted">Target</span>
+                      <span className="truncate text-right text-[#e5e7eb]">
+                        {dbConfig.connection_string
+                          ? 'connection string (hidden)'
+                          : `${dbConfig.host}:${dbConfig.port || defaultPort}`}
+                      </span>
+                    </li>
+                    {!dbConfig.connection_string && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">TLS</span>
+                        <span className="text-[#e5e7eb]">{tls}</span>
+                      </li>
+                    )}
+                    {dbConfig.username && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Auth</span>
+                        <span className="truncate text-right text-[#e5e7eb]">
+                          {dbConfig.username}
+                          {monitor.type === 'mongodb' ? ` @ ${dbConfig.auth_source || 'admin'}` : ''}
+                        </span>
+                      </li>
+                    )}
+                    {monitor.type === 'postgres' && (dbConfig.database || dbConfig.query) && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Check</span>
+                        <span className="truncate text-right text-[#e5e7eb]">
+                          {dbConfig.database || 'postgres'}
+                          {dbConfig.query ? ` · ${dbConfig.query}` : ' · ping'}
+                        </span>
+                      </li>
+                    )}
+                    {(dbConfig.max_latency_ms || dbConfig.warn_latency_ms) ? (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Latency</span>
+                        <span className="text-[#e5e7eb]">
+                          {dbConfig.warn_latency_ms ? `warn > ${dbConfig.warn_latency_ms}ms` : ''}
+                          {dbConfig.warn_latency_ms && dbConfig.max_latency_ms ? ' · ' : ''}
+                          {dbConfig.max_latency_ms ? `fail > ${dbConfig.max_latency_ms}ms` : ''}
+                        </span>
+                      </li>
+                    ) : null}
+                    {latestDBMetrics && (latestDBMetrics.server_version || latestDBMetrics.role) && (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                        <span className="text-muted">Server</span>
+                        <span className="truncate text-right text-[#e5e7eb]">
+                          {[
+                            [latestDBMetrics.product, latestDBMetrics.server_version].filter(Boolean).join(' '),
+                            latestDBMetrics.role,
+                            latestDBMetrics.replica_set ? `set ${latestDBMetrics.replica_set}` : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      </li>
+                    )}
+                    {latestDBMetrics?.latency_warn_ms ? (
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-amber-500/30 bg-amber-500/[0.07] px-2 py-1.5">
+                        <span className="text-amber-400">Warning</span>
+                        <span className="text-amber-300">
+                          last check exceeded {latestDBMetrics.latency_warn_ms}ms warn threshold
+                        </span>
+                      </li>
+                    ) : null}
+                  </>
+                );
+              })()}
               {monitor.type === 'synthetic_api' && (() => {
                 const synConfig = getSyntheticAPIConfig(monitor);
                 if (!synConfig) return null;
@@ -540,32 +626,11 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   <span className="text-muted">Tags</span>
                   <span className="flex flex-wrap gap-1">
                     {monitor.tags.map((tag) => (
-                      <TagPill key={tag}>{tag}</TagPill>
+                      <Pill key={tag} tone="neutral" size="xs">{tag}</Pill>
                     ))}
                   </span>
                 </li>
               )}
-            </ul>
-          </div>
-
-          {/* Alerting */}
-          <div className="mt-2.5 border-t border-dashed border-[rgba(255,255,255,0.06)] pt-2">
-            <div className="mb-1.5 text-[0.78rem] uppercase tracking-wide text-muted">
-              Alerting
-            </div>
-            <ul className="flex flex-col gap-1.5 text-xs">
-              <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
-                <span className="text-muted">Policies</span>
-                <span className="text-[#e5e7eb]">
-                  {alertPolicies.length > 0
-                    ? alertPolicies.map((policy) => (
-                        <div key={policy.id}>
-                          {policy.name} ({policy.failure_threshold} fails in {policy.failure_window_seconds}s)
-                        </div>
-                      ))
-                    : 'No policy configured'}
-                </span>
-              </li>
             </ul>
           </div>
 
@@ -619,7 +684,14 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                     key={result.id || idx}
                     className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5"
                   >
-                    <span className="text-muted">{formatTimeAgo(result.created_at)}</span>
+                    <span className="text-muted">
+                      {formatTimeAgo(result.created_at)}
+                      {result.location_name && (
+                        <span className="ml-1.5 inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-1.5 py-px text-[0.68rem] font-medium text-cyan-200">
+                          {result.location_name}
+                        </span>
+                      )}
+                    </span>
                     <span className="text-[#e5e7eb]">
                       {result.http_status || 'N/A'} · {result.latency_ms || 0} ms ·{' '}
                       <span

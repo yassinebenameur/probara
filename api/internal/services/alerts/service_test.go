@@ -1,9 +1,15 @@
 package alerts
 
 import (
+	"context"
+	"regexp"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
+
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/db"
 )
 
 // TestAlertListParams_Normalization tests the parameter clamping logic
@@ -116,40 +122,85 @@ func normalizeRecentAlertsLimit(limit int) int {
 	return limit
 }
 
-// TestAlertsByPolicyLimit_Normalization tests the limit clamping for GetAlertsByPolicy
-func TestAlertsByPolicyLimit_Normalization(t *testing.T) {
-	tests := []struct {
-		name          string
-		inputLimit    int
-		expectedLimit int
-	}{
-		{"limit 0 defaults to 10", 0, 10},
-		{"limit -1 defaults to 10", -1, 10},
-		{"limit 1 stays 1", 1, 1},
-		{"limit 10 stays 10", 10, 10},
-		{"limit 100 stays 100", 100, 100},
-		// Note: GetAlertsByPolicy has no upper limit in the current implementation
-		{"limit 1000 stays 1000", 1000, 1000},
+func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
 	}
+	defer sqlDB.Close()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeAlertsByPolicyLimit(tt.inputLimit)
+	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect + `
+		WHERE a.tenant_id = $1 AND ` + alertVisibleClause + `
+		ORDER BY a.triggered_at DESC
+		LIMIT $2
+	`)).
+		WithArgs(uuid.Nil, 10).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
+			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
+			"last_error", "kind", "baseline_latency_ms", "observed_latency_ms", "anomaly_score",
+			"metric_name", "metric_value", "threshold_value",
+			"created_at", "updated_at", "monitor_name", "policy_name",
+			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
+			"source_location_id", "target_location_id", "source_location_name", "target_location_name",
+		}))
 
-			if result != tt.expectedLimit {
-				t.Errorf("normalizeAlertsByPolicyLimit(%d) = %d, want %d", tt.inputLimit, result, tt.expectedLimit)
-			}
-		})
+	svc := NewService(&db.Client{DB: sqlDB}, nil)
+	alerts, err := svc.GetRecentAlerts(context.Background(), uuid.Nil, 10)
+	if err != nil {
+		t.Fatalf("GetRecentAlerts() error = %v", err)
+	}
+	if alerts == nil {
+		t.Fatalf("GetRecentAlerts() returned nil slice, want empty slice")
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("len(alerts) = %d, want 0", len(alerts))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
-// normalizeAlertsByPolicyLimit applies the same normalization as GetAlertsByPolicy
-func normalizeAlertsByPolicyLimit(limit int) int {
-	if limit < 1 {
-		limit = 10
+func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
 	}
-	// Note: Current implementation has no upper limit
-	return limit
+	defer sqlDB.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect + `
+		WHERE a.tenant_id = $1
+		  AND m.tenant_id = $1
+		  AND m.tags @> $2::text[]
+		  AND m.deleted_at IS NULL
+		ORDER BY a.triggered_at DESC
+		LIMIT $3
+	`)).
+		WithArgs(uuid.Nil, sqlmock.AnyArg(), 10).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "tenant_id", "monitor_id", "alert_policy_id", "status",
+			"triggered_at", "acknowledged_at", "resolved_at", "failure_count",
+			"last_error", "kind", "baseline_latency_ms", "observed_latency_ms", "anomaly_score",
+			"metric_name", "metric_value", "threshold_value",
+			"created_at", "updated_at", "monitor_name", "policy_name",
+			"root_cause_monitor_id", "root_cause_down_since", "root_cause_monitor_name",
+			"source_location_id", "target_location_id", "source_location_name", "target_location_name",
+		}))
+
+	svc := NewService(&db.Client{DB: sqlDB}, nil)
+	alerts, err := svc.GetRecentAlertsForTags(context.Background(), uuid.Nil, []string{"prod"}, 10)
+	if err != nil {
+		t.Fatalf("GetRecentAlertsForTags() error = %v", err)
+	}
+	if alerts == nil {
+		t.Fatalf("GetRecentAlertsForTags() returned nil slice, want empty slice")
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("len(alerts) = %d, want 0", len(alerts))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
 }
 
 // TestAlertListParams_OffsetCalculation tests the offset calculation

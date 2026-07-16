@@ -110,7 +110,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 			m.next_run_at, m.created_at, m.updated_at
 		FROM monitors m
 		INNER JOIN monitor_groups mg ON m.id = mg.monitor_id
-		WHERE mg.group_id = $1 AND m.tenant_id = $2
+		WHERE mg.group_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY m.name
 	`
 
@@ -162,7 +162,7 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 			SELECT mg.monitor_id
 			FROM monitor_groups mg
 			JOIN monitors m ON m.id = mg.monitor_id
-			WHERE mg.group_id = $1 AND m.tenant_id = $2
+			WHERE mg.group_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 			UNION
 			SELECT mg.monitor_id
 			FROM member_tree mt
@@ -170,13 +170,15 @@ func (s *Service) GetGroupLeafMembers(ctx context.Context, tenantID, groupID uui
 			JOIN monitor_groups mg ON mg.group_id = parent.id
 			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = $2
 			WHERE parent.type = 'group'
+			  AND parent.deleted_at IS NULL
+			  AND child.deleted_at IS NULL
 		)
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
 			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
 			m.next_run_at, m.created_at, m.updated_at
 		FROM monitors m
 		JOIN member_tree mt ON mt.monitor_id = m.id
-		WHERE m.tenant_id = $2 AND m.type <> 'group'
+		WHERE m.tenant_id = $2 AND m.type <> 'group' AND m.deleted_at IS NULL
 		ORDER BY m.name
 	`
 
@@ -226,7 +228,7 @@ func (s *Service) GetMonitorGroups(ctx context.Context, tenantID, monitorID uuid
 			m.next_run_at, m.created_at, m.updated_at
 		FROM monitors m
 		INNER JOIN monitor_groups mg ON m.id = mg.group_id
-		WHERE mg.monitor_id = $1 AND m.tenant_id = $2
+		WHERE mg.monitor_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY m.name
 	`
 
@@ -342,7 +344,7 @@ func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID,
 			SELECT mg.monitor_id
 			FROM monitor_groups mg
 			JOIN monitors m ON m.id = mg.monitor_id
-			WHERE mg.group_id = $1 AND m.tenant_id = $2
+			WHERE mg.group_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
 			UNION
 			SELECT mg.monitor_id
 			FROM descendants d
@@ -350,6 +352,8 @@ func (s *Service) wouldCreateCycle(ctx context.Context, tenantID, parentGroupID,
 			JOIN monitor_groups mg ON mg.group_id = parent.id
 			JOIN monitors child ON child.id = mg.monitor_id AND child.tenant_id = $2
 			WHERE parent.type = 'group'
+			  AND parent.deleted_at IS NULL
+			  AND child.deleted_at IS NULL
 		)
 		SELECT EXISTS (
 			SELECT 1
@@ -372,7 +376,7 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
 
 	var monitor models.Monitor

@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getRecentAlerts, acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
 
 interface RecentAlertsProps {
   limit?: number;
@@ -167,9 +169,7 @@ export default function RecentAlerts({
           <div className="flex items-center gap-2">
             <h3 className="font-medium text-white">Recent Alerts</h3>
             {activeCount > 0 && (
-              <span className="badge badge-danger min-w-[20px] justify-center">
-                {activeCount}
-              </span>
+              <Pill tone="danger" size="xs">{activeCount}</Pill>
             )}
           </div>
           <p className="text-xs text-slate-500">
@@ -210,7 +210,9 @@ export default function RecentAlerts({
                   <div className="flex items-center gap-2">
                     <div className={`h-2 w-2 rounded-full ${getStatusColor(alert.status)}`} />
                     <span className="truncate text-sm font-medium text-white">
-                      {alert.monitor_name || 'Unknown Monitor'}
+                      {alert.kind === 'mesh_edge'
+                        ? `mesh: ${alert.source_location_name || 'unknown'} → ${alert.target_location_name || 'unknown'}`
+                        : alert.monitor_name || 'Unknown Monitor'}
                     </span>
                   </div>
                   <div className="mt-1 flex items-center gap-2 text-xs">
@@ -225,25 +227,38 @@ export default function RecentAlerts({
                       {alert.last_error}
                     </p>
                   )}
+                  {alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id && (
+                    <Link
+                      href={`/monitors/${alert.root_cause_monitor_id}`}
+                      className="mt-1 inline-flex max-w-full items-center gap-1 truncate rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400 hover:border-amber-500/40"
+                      title={`Likely caused by ${alert.root_cause_monitor_name}`}
+                    >
+                      likely caused by: {alert.root_cause_monitor_name}
+                    </Link>
+                  )}
                 </div>
                 {showActions && alert.status !== 'resolved' && (
                   <div className="flex gap-1">
                     {alert.status === 'active' && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         onClick={() => handleAcknowledge(alert.id)}
                         disabled={processingId === alert.id}
-                        className="btn btn-xs btn-warning disabled:opacity-50 disabled:cursor-not-allowed"
+                        loading={processingId === alert.id}
                       >
-                        {processingId === alert.id ? '...' : 'Ack'}
-                      </button>
+                        {processingId === alert.id ? '…' : 'Ack'}
+                      </Button>
                     )}
-                    <button
+                    <Button
+                      variant="accent"
+                      size="xs"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}
-                      className="btn btn-xs btn-success disabled:opacity-50 disabled:cursor-not-allowed"
+                      loading={processingId === alert.id}
                     >
-                      {processingId === alert.id ? '...' : 'Resolve'}
-                    </button>
+                      {processingId === alert.id ? '…' : 'Resolve'}
+                    </Button>
                   </div>
                 )}
               </div>

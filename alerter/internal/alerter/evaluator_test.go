@@ -5,103 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/yassinebenameur/probara/shared/config"
 )
-
-func TestUniquePolicyIDs_DedupPreservesOrder(t *testing.T) {
-	policyA := uuid.MustParse("11111111-1111-1111-1111-111111111111")
-	policyB := uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	policyC := uuid.MustParse("33333333-3333-3333-3333-333333333333")
-
-	bindings := []policyBinding{
-		{PolicyID: policyA},
-		{PolicyID: policyB},
-		{PolicyID: policyA},
-		{PolicyID: policyC},
-		{PolicyID: policyB},
-	}
-
-	ids := uniquePolicyIDs(bindings)
-	if len(ids) != 3 {
-		t.Fatalf("expected 3 unique policy IDs, got %d", len(ids))
-	}
-	if ids[0] != policyA || ids[1] != policyB || ids[2] != policyC {
-		t.Fatalf("unexpected policy order: %v", ids)
-	}
-}
-
-func TestEvaluateGroupFailures_NoMembers(t *testing.T) {
-	alert := newTestAlerter()
-	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
-	binding := policyBinding{FailureWindowSeconds: 300}
-
-	count, lastError, detail := alert.evaluateGroupFailures(now, binding, nil, nil)
-	if count != 0 {
-		t.Fatalf("expected 0 failures, got %d", count)
-	}
-	if lastError != nil {
-		t.Fatalf("expected nil lastError, got %v", *lastError)
-	}
-	if detail != nil {
-		t.Fatalf("expected nil detail, got %#v", detail)
-	}
-}
-
-func TestEvaluateGroupFailures_WindowAndLimit(t *testing.T) {
-	alert := newTestAlerter()
-	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
-	binding := policyBinding{FailureWindowSeconds: 600}
-
-	memberA := groupMember{ID: uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), Name: "api-a"}
-	memberB := groupMember{ID: uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), Name: "api-b"}
-	memberC := groupMember{ID: uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"), Name: "api-c"}
-
-	results := map[uuid.UUID]checkSummary{
-		memberA.ID: {Status: "failure", Error: ptrString("timeout"), CreatedAt: now.Add(-2 * time.Minute)},
-		memberB.ID: {Status: "error", Error: nil, CreatedAt: now.Add(-4 * time.Minute)},
-		memberC.ID: {Status: "failure", Error: ptrString("bad gateway"), CreatedAt: now.Add(-9 * time.Minute)},
-	}
-
-	count, lastError, detail := alert.evaluateGroupFailures(now, binding, []groupMember{memberA, memberB, memberC}, results)
-	if count != 3 {
-		t.Fatalf("expected 3 failures, got %d", count)
-	}
-	if lastError == nil || *lastError != "timeout" {
-		t.Fatalf("expected lastError timeout, got %v", lastError)
-	}
-	if detail == nil {
-		t.Fatalf("expected group detail, got nil")
-	}
-	if len(detail.Failures) != 2 {
-		t.Fatalf("expected 2 failures in detail, got %d", len(detail.Failures))
-	}
-	if detail.Failures[0].Name != "api-a" || detail.Failures[1].Name != "api-b" {
-		t.Fatalf("unexpected failure ordering: %#v", detail.Failures)
-	}
-	if detail.ExtraCount != 1 {
-		t.Fatalf("expected extraCount 1, got %d", detail.ExtraCount)
-	}
-}
-
-func TestEvaluateGroupFailures_LastErrorFallback(t *testing.T) {
-	alert := newTestAlerter()
-	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
-	binding := policyBinding{FailureWindowSeconds: 300}
-
-	member := groupMember{ID: uuid.MustParse("dddddddd-dddd-dddd-dddd-dddddddddddd"), Name: "api-d"}
-	results := map[uuid.UUID]checkSummary{
-		member.ID: {Status: "error", Error: nil, CreatedAt: now.Add(-1 * time.Minute)},
-	}
-
-	count, lastError, _ := alert.evaluateGroupFailures(now, binding, []groupMember{member}, results)
-	if count != 1 {
-		t.Fatalf("expected 1 failure, got %d", count)
-	}
-	if lastError == nil || *lastError != "api-d reported error" {
-		t.Fatalf("expected fallback lastError, got %v", lastError)
-	}
-}
 
 func TestShouldSendNotification(t *testing.T) {
 	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
@@ -175,15 +79,38 @@ func TestBuildAlertEvent_StatusAndTemplates(t *testing.T) {
 	}
 }
 
-func newTestAlerter() *Alerter {
-	return &Alerter{
-		config: &config.AlerterConfig{
-			AlertGroupWindowSeconds: 300,
-			AlertGroupMaxChildren:   2,
-		},
+func TestBuildAlertEvent_RootCause(t *testing.T) {
+	now := time.Date(2026, 2, 4, 12, 0, 0, 0, time.UTC)
+	binding := policyBinding{
+		MonitorID: uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+		TenantID:  uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
 	}
-}
+	alert := &alertRecord{
+		ID:          uuid.MustParse("99999999-9999-9999-9999-999999999999"),
+		MonitorID:   binding.MonitorID,
+		TriggeredAt: now,
+	}
 
-func ptrString(value string) *string {
-	return &value
+	event := buildAlertEvent("created", binding, alert, nil, now)
+	if event.Alert.RootCauseMonitorID != nil || event.Alert.RootCauseMonitorName != nil || event.Alert.RootCauseDownSince != nil {
+		t.Fatalf("expected no root-cause fields, got %+v", event.Alert)
+	}
+
+	rcID := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	rcName := "Postgres prod"
+	rcDownSince := now.Add(-5 * time.Minute)
+	alert.RootCauseMonitorID = &rcID
+	alert.RootCauseMonitorName = &rcName
+	alert.RootCauseDownSince = &rcDownSince
+
+	event = buildAlertEvent("created", binding, alert, nil, now)
+	if event.Alert.RootCauseMonitorID == nil || *event.Alert.RootCauseMonitorID != rcID.String() {
+		t.Fatalf("root cause id = %v, want %s", event.Alert.RootCauseMonitorID, rcID)
+	}
+	if event.Alert.RootCauseMonitorName == nil || *event.Alert.RootCauseMonitorName != rcName {
+		t.Fatalf("root cause name = %v, want %s", event.Alert.RootCauseMonitorName, rcName)
+	}
+	if event.Alert.RootCauseDownSince == nil || !event.Alert.RootCauseDownSince.Equal(rcDownSince) {
+		t.Fatalf("root cause down since = %v, want %s", event.Alert.RootCauseDownSince, rcDownSince)
+	}
 }

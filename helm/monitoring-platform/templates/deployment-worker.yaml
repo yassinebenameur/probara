@@ -63,11 +63,14 @@ spec:
         - name: metrics
           containerPort: {{ .Values.worker.metricsPort }}
           protocol: TCP
+        - name: http
+          containerPort: {{ .Values.worker.httpPort }}
+          protocol: TCP
         env:
         - name: SERVICE_NAME
           value: "worker"
         - name: HTTP_PORT
-          value: "{{ .Values.worker.metricsPort }}"
+          value: "{{ .Values.worker.httpPort }}"
         - name: METRICS_PORT
           value: "{{ .Values.worker.metricsPort }}"
         - name: LOG_LEVEL
@@ -75,7 +78,10 @@ spec:
         - name: POSTGRES_URL
           value: {{ include "monitoring-platform.postgresUrl" . | quote }}
         - name: NATS_URL
-          value: {{ include "monitoring-platform.natsUrl" . | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_url
         - name: CHECK_JOB_STREAM
           value: "{{ .Values.worker.checkJobStream }}"
         - name: CHECK_JOB_SUBJECT
@@ -84,6 +90,13 @@ spec:
           value: "{{ .Values.worker.consumerName }}"
         - name: WORKER_CONCURRENCY
           value: "{{ .Values.worker.concurrency }}"
+        {{- if .Values.secrets.probaraSecretsKey }}
+        - name: PROBARA_SECRETS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: probara_secrets_key
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

@@ -14,6 +14,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
 type statusPageSettingsStored struct {
@@ -28,6 +29,9 @@ type statusPageSettingsStored struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      string  `json:"default_theme"`
 	AllowThemeToggle  bool    `json:"allow_theme_toggle"`
+	CustomCSS         *string `json:"custom_css,omitempty"`
+	CustomHeadHTML    *string `json:"custom_head_html,omitempty"`
+	CustomFooterHTML  *string `json:"custom_footer_html,omitempty"`
 }
 
 type statusPageSectionInput struct {
@@ -110,6 +114,15 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.AllowThemeToggle != nil {
 		s.AllowThemeToggle = *patch.AllowThemeToggle
 	}
+	if patch.CustomCSS != nil {
+		s.CustomCSS = trimOptionalString(patch.CustomCSS)
+	}
+	if patch.CustomHeadHTML != nil {
+		s.CustomHeadHTML = trimOptionalString(patch.CustomHeadHTML)
+	}
+	if patch.CustomFooterHTML != nil {
+		s.CustomFooterHTML = trimOptionalString(patch.CustomFooterHTML)
+	}
 	return s
 }
 
@@ -148,17 +161,31 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 		FooterText:        s.FooterText,
 		DefaultTheme:      &defaultTheme,
 		AllowThemeToggle:  &allowThemeToggle,
+		CustomCSS:         s.CustomCSS,
+		CustomHeadHTML:    s.CustomHeadHTML,
+		CustomFooterHTML:  s.CustomFooterHTML,
 	}
+}
+
+// statusPagePublisher publishes cache-invalidation events for the public
+// renderer. *statusupdates.Publisher implements it; nil disables publishing.
+type statusPagePublisher interface {
+	Publish(event statusupdates.Event) error
 }
 
 // Service handles status page business logic
 type Service struct {
-	db *db.Client
+	db        *db.Client
+	publisher statusPagePublisher
 }
 
-// NewService creates a new status page service
-func NewService(db *db.Client) *Service {
-	return &Service{db: db}
+// NewService creates a new status page service. publisher may be nil.
+func NewService(db *db.Client, publisher *statusupdates.Publisher) *Service {
+	svc := &Service{db: db}
+	if publisher != nil {
+		svc.publisher = publisher
+	}
+	return svc
 }
 
 // CreateStatusPage creates a new status page.
@@ -408,6 +435,10 @@ func (s *Service) UpdateStatusPage(ctx context.Context, tenantID, pageID uuid.UU
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	// Invalidate the public renderer's cached HTML so branding/settings edits
+	// show up immediately instead of after the render-cache TTL.
+	s.notifyStatusPage(tenantID, pageID, "status_page_updated")
+
 	return s.GetStatusPage(ctx, tenantID, pageID)
 }
 
@@ -512,6 +543,9 @@ func (s *Service) loadStatusPageSections(ctx context.Context, pageID uuid.UUID) 
 		section.UpdatedAt = &updatedAt
 		monitors, err := s.loadStatusPageSectionMonitors(ctx, sectionID)
 		if err != nil {
+			if isUndefinedTableError(err) {
+				return s.loadLegacyStatusPageSections(ctx, pageID)
+			}
 			return nil, err
 		}
 		section.Monitors = monitors
@@ -734,7 +768,7 @@ func (s *Service) validateAndParseMonitorIDs(ctx context.Context, dbtx statusPag
 
 	query := `
 		SELECT id FROM monitors
-		WHERE id = ANY($1) AND tenant_id = $2
+		WHERE id = ANY($1) AND tenant_id = $2 AND deleted_at IS NULL
 	`
 	rows, err := dbtx.QueryContext(ctx, query, pq.Array(monitorUUIDs), tenantID)
 	if err != nil {

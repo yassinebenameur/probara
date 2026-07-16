@@ -2,6 +2,7 @@ package statusupdates
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"time"
 
@@ -15,10 +16,32 @@ const (
 
 // Event represents a status page update signal.
 type Event struct {
-	Type      string    `json:"type"`
-	MonitorID string    `json:"monitor_id,omitempty"`
-	TenantID  string    `json:"tenant_id,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Type         string    `json:"type"`
+	MonitorID    string    `json:"monitor_id,omitempty"`
+	StatusPageID string    `json:"status_page_id,omitempty"`
+	TenantID     string    `json:"tenant_id,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+}
+
+// reconnectOptions keeps the connection retrying forever. The nats.go
+// default gives up after 60 attempts (~2 minutes) and leaves the connection
+// permanently CLOSED, silently breaking status page live updates after a
+// NATS outage. Keep in sync with shared/queue.
+func reconnectOptions() []nats.Option {
+	return []nats.Option{
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2 * time.Second),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			log.Printf("nats: disconnected: %v", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			log.Printf("nats: reconnected to %s", nc.ConnectedUrl())
+		}),
+		nats.ClosedHandler(func(_ *nats.Conn) {
+			log.Printf("nats: connection permanently closed")
+		}),
+	}
 }
 
 // SubjectFromEnv returns the configured subject or the default.
@@ -42,7 +65,7 @@ func NewPublisher(natsURL string) (*Publisher, error) {
 
 // NewPublisherWithSubject creates a new publisher with the given subject.
 func NewPublisherWithSubject(natsURL, subject string) (*Publisher, error) {
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(natsURL, reconnectOptions()...)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +105,7 @@ func NewSubscriber(natsURL string) (*Subscriber, error) {
 
 // NewSubscriberWithSubject creates a new subscriber with the given subject.
 func NewSubscriberWithSubject(natsURL, subject string) (*Subscriber, error) {
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(natsURL, reconnectOptions()...)
 	if err != nil {
 		return nil, err
 	}

@@ -4,12 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
+)
+
+var (
+	ErrAgentUnavailable = errors.New("agent monitor not found")
+	ErrAgentDisabled    = errors.New("agent monitor disabled")
 )
 
 // Service handles agent-related business logic
@@ -28,16 +36,20 @@ func (s *Service) ProcessMetrics(ctx context.Context, payload models.AgentMetric
 	// Verify that the agent exists and belongs to the tenant
 	var monitorID uuid.UUID
 	var monitorName string
+	var enabled bool
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name FROM monitors 
-		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND enabled = true`,
+		`SELECT id, name, enabled FROM monitors
+		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
 		payload.AgentID, tenantID,
-	).Scan(&monitorID, &monitorName)
+	).Scan(&monitorID, &monitorName, &enabled)
 	if err == sql.ErrNoRows {
-		return fmt.Errorf("agent not found or disabled: %s", payload.AgentID)
+		return fmt.Errorf("%w: %s", ErrAgentUnavailable, payload.AgentID)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to lookup agent: %w", err)
+	}
+	if !enabled {
+		return fmt.Errorf("%w: %s", ErrAgentDisabled, payload.AgentID)
 	}
 
 	// Determine status based on metrics
@@ -60,25 +72,21 @@ func (s *Service) ProcessMetrics(ctx context.Context, payload models.AgentMetric
 	// Generate a job ID for this metrics report
 	jobID := uuid.New()
 
-	// Insert check result
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO check_results 
-		 (id, monitor_id, tenant_id, job_id, status, result_source, latency_ms, metrics_data, created_at, started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		uuid.New(),
-		monitorID,
-		tenantID,
-		jobID,
-		status,
-		string(models.ResultSourceMonitor),
-		latencyMs,
-		metricsJSON,
-		payload.Metrics.Timestamp,
-		payload.Metrics.Timestamp,
-		time.Now(),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert check result: %w", err)
+	// Insert the check result and advance the monitor state machine in one
+	// transaction so dashboard health reflects agent reports.
+	latency := int64(latencyMs)
+	if _, err := monitorstate.Record(ctx, s.db, monitorstate.Result{
+		MonitorID:    monitorID,
+		TenantID:     tenantID,
+		JobID:        jobID,
+		Status:       status,
+		ResultSource: string(models.ResultSourceMonitor),
+		LatencyMs:    &latency,
+		MetricsData:  metricsJSON,
+		StartedAt:    payload.Metrics.Timestamp,
+		CompletedAt:  time.Now(),
+	}); err != nil {
+		return fmt.Errorf("failed to record check result: %w", err)
 	}
 
 	s.publishStatusUpdate(monitorID, tenantID)
@@ -104,8 +112,8 @@ func (s *Service) publishStatusUpdate(monitorID, tenantID uuid.UUID) {
 func (s *Service) GetMonitorByAgentID(ctx context.Context, agentID string, tenantID uuid.UUID) (uuid.UUID, error) {
 	var monitorID uuid.UUID
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM monitors 
-		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent'`,
+		`SELECT id FROM monitors
+		 WHERE agent_id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
 		agentID, tenantID,
 	).Scan(&monitorID)
 	if err != nil {
@@ -115,13 +123,13 @@ func (s *Service) GetMonitorByAgentID(ctx context.Context, agentID string, tenan
 }
 
 // GenerateInstallCommand generates installation instructions for an agent
-func (s *Service) GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string) (*models.AgentInstallCommand, error) {
+func (s *Service) GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string, allowRemoteDisable bool) (*models.AgentInstallCommand, error) {
 	// Get monitor details
 	var agentID sql.NullString
 	var intervalSeconds int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT agent_id, interval_seconds FROM monitors 
-		 WHERE id = $1 AND tenant_id = $2 AND type = 'agent'`,
+		`SELECT agent_id, interval_seconds FROM monitors
+		 WHERE id = $1 AND tenant_id = $2 AND type = 'agent' AND deleted_at IS NULL`,
 		monitorID, tenantID,
 	).Scan(&agentID, &intervalSeconds)
 	if err != nil {
@@ -132,48 +140,10 @@ func (s *Service) GenerateInstallCommand(ctx context.Context, monitorID, tenantI
 		return nil, fmt.Errorf("monitor does not have an agent_id")
 	}
 
-	// Generate installation script
-	installScript := fmt.Sprintf(`#!/bin/bash
-set -e
-
-# Probara Agent Installation Script
-echo "Installing Probara Agent..."
-
-# Detect OS and architecture
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
-
-case "$ARCH" in
-    x86_64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
-esac
-
-# Download URL
-DOWNLOAD_URL="%s/static/agent/probara-agent-${OS}-${ARCH}"
-
-# Create install directory
-INSTALL_DIR="$HOME/.local/bin"
-mkdir -p "$INSTALL_DIR"
-
-# Download agent binary
-echo "Downloading agent for ${OS}-${ARCH}..."
-curl -sSL -o "$INSTALL_DIR/probara-agent" "${DOWNLOAD_URL}"
-chmod +x "$INSTALL_DIR/probara-agent"
-
-echo "Agent installed successfully to $INSTALL_DIR/probara-agent"
-echo ""
-echo "Starting agent..."
-"$INSTALL_DIR/probara-agent" \
-  -backend-url "%s" \
-  -agent-id "%s" \
-  -api-key "%s" \
-  -interval %d &
-
-echo ""
-echo "Agent is running in the background!"
-echo "To run as a service, see the documentation."
-`, backendURL, backendURL, agentID.String, apiKey, intervalSeconds)
+	installScript := buildUnixInstallScript(backendURL, agentID.String, apiKey, intervalSeconds, allowRemoteDisable)
+	windowsInstallScript := buildWindowsInstallScript(backendURL, agentID.String, apiKey, intervalSeconds, allowRemoteDisable)
+	uninstallScript := buildUnixUninstallScript()
+	windowsUninstallScript := buildWindowsUninstallScript()
 
 	// Generate config template
 	configTemplate := fmt.Sprintf(`# Probara Agent Configuration
@@ -185,11 +155,351 @@ DISK_PATH=/
 `, backendURL, agentID.String, apiKey, intervalSeconds)
 
 	return &models.AgentInstallCommand{
-		AgentID:         agentID.String,
-		BackendURL:      backendURL,
-		InstallScript:   installScript,
-		ConfigTemplate:  configTemplate,
-		DownloadURL:     fmt.Sprintf("%s/static/agent/", backendURL),
-		IntervalSeconds: intervalSeconds,
+		AgentID:                agentID.String,
+		BackendURL:             backendURL,
+		InstallScript:          installScript,
+		WindowsInstallScript:   windowsInstallScript,
+		UninstallScript:        uninstallScript,
+		WindowsUninstallScript: windowsUninstallScript,
+		ConfigTemplate:         configTemplate,
+		DownloadURL:            fmt.Sprintf("%s/static/agent/", backendURL),
+		IntervalSeconds:        intervalSeconds,
 	}, nil
+}
+
+func buildUnixInstallScript(backendURL, agentID, apiKey string, intervalSeconds int, allowRemoteDisable bool) string {
+	template := `#!/bin/bash
+set -euo pipefail
+
+SERVICE_NAME="probara-agent"
+LABEL="com.probara.agent"
+BACKEND_URL="__BACKEND_URL__"
+AGENT_ID="__AGENT_ID__"
+API_KEY="__API_KEY__"
+INTERVAL="__INTERVAL__"
+ALLOW_REMOTE_DISABLE="__ALLOW_REMOTE_DISABLE__"
+DISK_PATH="/"
+
+echo "Installing Probara Agent..."
+
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+
+case "$ARCH" in
+  x86_64) ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
+case "$OS" in
+  linux|darwin) ;;
+  *) echo "Unsupported operating system: $OS"; exit 1 ;;
+esac
+
+DOWNLOAD_URL="${BACKEND_URL}/static/agent/probara-agent-${OS}-${ARCH}"
+
+# Probara Agent installs as a system service and must run as root. On a typical
+# Linux server, root over SSH has no per-user systemd/D-Bus session, so a
+# "systemctl --user" install fails with "Failed to connect to bus: No such file
+# or directory". Requiring root keeps the install seamless on bare-metal/VPS.
+if [ "$OS" = "linux" ]; then
+  if [ "$(id -u)" != "0" ]; then
+    echo "Probara Agent must be installed as root."
+    echo "Re-run with sudo:        curl ... | sudo bash"
+    echo "or switch to root first: su -"
+    exit 1
+  fi
+  INSTALL_DIR="/usr/local/bin"
+  CONFIG_DIR="/etc/probara-agent"
+  STATE_DIR="/var/lib/probara-agent"
+  RUNNER_DIR="/usr/local/lib/probara-agent"
+else
+  INSTALL_DIR="$HOME/.local/bin"
+  CONFIG_DIR="$HOME/.config/probara-agent"
+  STATE_DIR="$HOME/.local/state/probara-agent"
+  RUNNER_DIR="$HOME/.local/lib/probara-agent"
+fi
+
+AGENT_BIN="$INSTALL_DIR/probara-agent"
+RUNNER="$RUNNER_DIR/run-agent.sh"
+UNINSTALL_SCRIPT="$RUNNER_DIR/uninstall-agent.sh"
+CONFIG_FILE="$CONFIG_DIR/agent.env"
+
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR" "$RUNNER_DIR"
+
+echo "Downloading agent for ${OS}-${ARCH}..."
+curl -fsSL -o "$AGENT_BIN" "$DOWNLOAD_URL"
+chmod +x "$AGENT_BIN"
+
+cat > "$CONFIG_FILE" <<PROBARA_ENV
+BACKEND_URL=$BACKEND_URL
+AGENT_ID=$AGENT_ID
+API_KEY=$API_KEY
+INTERVAL=$INTERVAL
+DISK_PATH=$DISK_PATH
+ALLOW_REMOTE_DISABLE=$ALLOW_REMOTE_DISABLE
+REMOTE_DISABLE_COMMAND=$UNINSTALL_SCRIPT
+PROBARA_ENV
+chmod 600 "$CONFIG_FILE"
+
+cat > "$UNINSTALL_SCRIPT" <<'PROBARA_UNINSTALL'
+__UNIX_UNINSTALL_SCRIPT__
+PROBARA_UNINSTALL
+chmod +x "$UNINSTALL_SCRIPT"
+
+# The first two lines bake in the resolved (mode-specific) binary and config
+# paths; the rest is sourced from the config file at runtime.
+{
+  printf '#!/bin/sh\nset -eu\nAGENT_BIN="%s"\nCONFIG_FILE="%s"\n' "$AGENT_BIN" "$CONFIG_FILE"
+  cat <<'PROBARA_RUNNER'
+. "$CONFIG_FILE"
+exec "$AGENT_BIN" \
+  -backend-url "$BACKEND_URL" \
+  -agent-id "$AGENT_ID" \
+  -api-key "$API_KEY" \
+  -interval "$INTERVAL" \
+  -disk-path "$DISK_PATH" \
+  -allow-remote-disable="$ALLOW_REMOTE_DISABLE" \
+  -remote-disable-command "$REMOTE_DISABLE_COMMAND"
+PROBARA_RUNNER
+} > "$RUNNER"
+chmod +x "$RUNNER"
+
+install_systemd_system() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl is required to install Probara Agent as a Linux system service."
+    exit 1
+  fi
+
+  UNIT_FILE="/etc/systemd/system/probara-agent.service"
+
+  cat > "$UNIT_FILE" <<PROBARA_SYSTEMD
+[Unit]
+Description=Probara Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$RUNNER
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+PROBARA_SYSTEMD
+
+  systemctl daemon-reload
+  systemctl enable --now probara-agent.service
+  echo "Probara Agent installed as a system systemd service."
+  echo "Status: systemctl status probara-agent.service"
+  echo "Logs: journalctl -u probara-agent.service -f"
+}
+
+install_launchd() {
+  PLIST_DIR="$HOME/Library/LaunchAgents"
+  LOG_DIR="$HOME/Library/Logs/ProbaraAgent"
+  PLIST_FILE="$PLIST_DIR/${LABEL}.plist"
+  mkdir -p "$PLIST_DIR" "$LOG_DIR"
+
+  launchctl bootout "gui/$(id -u)" "$PLIST_FILE" >/dev/null 2>&1 || launchctl unload "$PLIST_FILE" >/dev/null 2>&1 || true
+
+  cat > "$PLIST_FILE" <<PROBARA_PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${RUNNER}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${LOG_DIR}/agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>${LOG_DIR}/agent.err.log</string>
+  <key>WorkingDirectory</key>
+  <string>${HOME}</string>
+</dict>
+</plist>
+PROBARA_PLIST
+
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_FILE" || launchctl load "$PLIST_FILE"
+  launchctl enable "gui/$(id -u)/${LABEL}" >/dev/null 2>&1 || true
+  launchctl kickstart -k "gui/$(id -u)/${LABEL}" || launchctl start "$LABEL"
+  echo "Probara Agent installed as a launchd service."
+  echo "Status: launchctl print gui/$(id -u)/${LABEL}"
+  echo "Logs: tail -f ${LOG_DIR}/agent.log"
+}
+
+case "$OS" in
+  linux) install_systemd_system ;;
+  darwin) install_launchd ;;
+esac
+
+echo "Installation complete. Probara Agent will restart automatically if it exits."
+`
+
+	return strings.NewReplacer(
+		"__BACKEND_URL__", backendURL,
+		"__AGENT_ID__", agentID,
+		"__API_KEY__", apiKey,
+		"__INTERVAL__", fmt.Sprintf("%d", intervalSeconds),
+		"__ALLOW_REMOTE_DISABLE__", fmt.Sprintf("%t", allowRemoteDisable),
+		"__UNIX_UNINSTALL_SCRIPT__", buildUnixUninstallScript(),
+	).Replace(template)
+}
+
+func buildWindowsInstallScript(backendURL, agentID, apiKey string, intervalSeconds int, allowRemoteDisable bool) string {
+	template := `#Requires -RunAsAdministrator
+$ErrorActionPreference = "Stop"
+
+$CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$CurrentPrincipal = New-Object Security.Principal.WindowsPrincipal($CurrentIdentity)
+if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "Run this installer from an elevated PowerShell window."
+}
+
+$ServiceName = "ProbaraAgent"
+$BackendURL = "__BACKEND_URL__"
+$AgentID = "__AGENT_ID__"
+$ApiKey = "__API_KEY__"
+$Interval = "__INTERVAL__"
+$AllowRemoteDisable = "__ALLOW_REMOTE_DISABLE__"
+$InstallDir = Join-Path $env:ProgramFiles "ProbaraAgent"
+$LogDir = Join-Path $env:ProgramData "ProbaraAgent\logs"
+$AgentPath = Join-Path $InstallDir "probara-agent.exe"
+$NssmPath = Join-Path $InstallDir "nssm.exe"
+$UninstallScript = Join-Path $InstallDir "uninstall-probara-agent.ps1"
+$AgentDownloadURL = "$BackendURL/static/agent/probara-agent-windows-amd64.exe"
+$NssmURL = "https://nssm.cc/release/nssm-2.24.zip"
+
+Write-Host "Installing Probara Agent..."
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+Write-Host "Downloading agent..."
+Invoke-WebRequest -UseBasicParsing -Uri $AgentDownloadURL -OutFile $AgentPath
+
+@'
+__WINDOWS_UNINSTALL_SCRIPT__
+'@ | Set-Content -Path $UninstallScript -Encoding UTF8
+
+if (-not (Test-Path $NssmPath)) {
+  $NssmZip = Join-Path $env:TEMP "nssm-2.24.zip"
+  $NssmExtract = Join-Path $env:TEMP "nssm-2.24"
+  Write-Host "Downloading NSSM service wrapper..."
+  Invoke-WebRequest -UseBasicParsing -Uri $NssmURL -OutFile $NssmZip
+  if (Test-Path $NssmExtract) {
+    Remove-Item -Recurse -Force $NssmExtract
+  }
+  Expand-Archive -Path $NssmZip -DestinationPath $env:TEMP -Force
+  Copy-Item (Join-Path $NssmExtract "win64\nssm.exe") $NssmPath -Force
+}
+
+if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+  & $NssmPath stop $ServiceName 2>$null | Out-Null
+  & $NssmPath remove $ServiceName confirm 2>$null | Out-Null
+}
+
+$AppParameters = '-backend-url "' + $BackendURL + '" -agent-id "' + $AgentID + '" -api-key "' + $ApiKey + '" -interval ' + $Interval + ' -allow-remote-disable=' + $AllowRemoteDisable + ' -remote-disable-command "' + $UninstallScript + '"'
+
+& $NssmPath install $ServiceName $AgentPath
+& $NssmPath set $ServiceName AppDirectory $InstallDir
+& $NssmPath set $ServiceName AppParameters $AppParameters
+& $NssmPath set $ServiceName AppStdout (Join-Path $LogDir "agent.log")
+& $NssmPath set $ServiceName AppStderr (Join-Path $LogDir "agent.err.log")
+& $NssmPath set $ServiceName AppRotateFiles 1
+& $NssmPath set $ServiceName AppRotateOnline 1
+& $NssmPath set $ServiceName AppRestartDelay 10000
+& $NssmPath set $ServiceName Start SERVICE_AUTO_START
+
+Start-Service -Name $ServiceName
+Write-Host "Installation complete. Probara Agent is running as Windows service '$ServiceName'."
+Write-Host "Logs: $LogDir"
+`
+
+	return strings.NewReplacer(
+		"__BACKEND_URL__", backendURL,
+		"__AGENT_ID__", agentID,
+		"__API_KEY__", apiKey,
+		"__INTERVAL__", fmt.Sprintf("%d", intervalSeconds),
+		"__ALLOW_REMOTE_DISABLE__", fmt.Sprintf("%t", allowRemoteDisable),
+		"__WINDOWS_UNINSTALL_SCRIPT__", buildWindowsUninstallScript(),
+	).Replace(template)
+}
+
+func buildUnixUninstallScript() string {
+	return `#!/bin/sh
+set -eu
+
+SERVICE_NAME="probara-agent"
+LABEL="com.probara.agent"
+BOOTOUT_TARGET=""
+SYSTEMD_STOP=0
+
+# Linux: system service installed as root.
+if command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+  systemctl disable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  SYSTEMD_STOP=1
+fi
+
+# macOS: per-user launchd agent.
+PLIST_FILE="$HOME/Library/LaunchAgents/${LABEL}.plist"
+if command -v launchctl >/dev/null 2>&1 && [ -f "$PLIST_FILE" ]; then
+  rm -f "$PLIST_FILE"
+  BOOTOUT_TARGET="gui/$(id -u)/${LABEL}"
+fi
+
+rm -f "/usr/local/bin/probara-agent" "$HOME/.local/bin/probara-agent"
+rm -rf "/usr/local/lib/probara-agent" \
+       "/etc/probara-agent" \
+       "/var/lib/probara-agent" \
+       "$HOME/.local/lib/probara-agent" \
+       "$HOME/.config/probara-agent" \
+       "$HOME/.local/state/probara-agent" \
+       "$HOME/Library/Logs/ProbaraAgent"
+
+# Stop last so the agent that invoked this uninstall (remote disable) can finish.
+if [ "$SYSTEMD_STOP" -eq 1 ]; then
+  systemctl stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+fi
+
+if [ -n "$BOOTOUT_TARGET" ]; then
+  launchctl bootout "$BOOTOUT_TARGET" >/dev/null 2>&1 || launchctl remove "$LABEL" >/dev/null 2>&1 || true
+fi
+
+echo "Probara Agent uninstalled."
+`
+}
+
+func buildWindowsUninstallScript() string {
+	return `$ErrorActionPreference = "SilentlyContinue"
+
+$ServiceName = "ProbaraAgent"
+$InstallDir = Join-Path $env:ProgramFiles "ProbaraAgent"
+$LogDir = Join-Path $env:ProgramData "ProbaraAgent\logs"
+$NssmPath = Join-Path $InstallDir "nssm.exe"
+
+if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+  if (Test-Path $NssmPath) {
+    & $NssmPath stop $ServiceName | Out-Null
+    & $NssmPath remove $ServiceName confirm | Out-Null
+  } else {
+    Stop-Service -Name $ServiceName -Force
+    sc.exe delete $ServiceName | Out-Null
+  }
+}
+
+Remove-Item -Recurse -Force $InstallDir
+Remove-Item -Recurse -Force $LogDir
+Write-Host "Probara Agent uninstalled."
+`
 }

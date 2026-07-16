@@ -3,6 +3,7 @@ package monitors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,16 @@ type MockRepository struct {
 	members           map[uuid.UUID][]uuid.UUID
 	policies          map[uuid.UUID][]uuid.UUID
 	deletedHistoryIDs []uuid.UUID
+
+	// Controllable error/return fields for bulk alert policy tests.
+	verifyAlertPolicyErr error
+	verifyMonitorsErr    error
+
+	// Soft-delete tracking.
+	bulkSoftDeleted   []uuid.UUID
+	bulkSoftDeleteN   int64 // override return value; if zero, returns len(monitorIDs)
+	bulkSoftDeleteErr error
+	hardDeletedID     *uuid.UUID
 }
 
 func NewMockRepository() *MockRepository {
@@ -68,8 +79,33 @@ func (m *MockRepository) DeleteHistory(ctx context.Context, tenantID uuid.UUID, 
 	return nil
 }
 
-func (m *MockRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error {
+func (m *MockRepository) BulkSoftDelete(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error) {
+	if m.bulkSoftDeleteErr != nil {
+		return 0, m.bulkSoftDeleteErr
+	}
+	m.bulkSoftDeleted = append([]uuid.UUID(nil), monitorIDs...)
+	for _, id := range monitorIDs {
+		delete(m.monitors, id)
+	}
+	if m.bulkSoftDeleteN > 0 {
+		return m.bulkSoftDeleteN, nil
+	}
+	return int64(len(monitorIDs)), nil
+}
+
+func (m *MockRepository) HardDelete(ctx context.Context, monitorID uuid.UUID) error {
+	id := monitorID
+	m.hardDeletedID = &id
+	delete(m.monitors, monitorID)
 	return nil
+}
+
+func (m *MockRepository) VerifyAlertPolicy(ctx context.Context, tenantID, policyID uuid.UUID) error {
+	return m.verifyAlertPolicyErr
+}
+
+func (m *MockRepository) VerifyMonitorsBelongToTenant(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) error {
+	return m.verifyMonitorsErr
 }
 
 func (m *MockRepository) SetAlertPolicies(ctx context.Context, monitorID uuid.UUID, policyIDs []uuid.UUID) error {
@@ -91,6 +127,34 @@ func (m *MockRepository) GetAlertPolicyIDsForMonitors(ctx context.Context, monit
 
 func (m *MockRepository) GetMemberIDs(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
 	return m.members[groupID], nil
+}
+
+func (m *MockRepository) GetDependsOnIDs(ctx context.Context, monitorID uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
+func (m *MockRepository) ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error {
+	return nil
+}
+
+func (m *MockRepository) DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error {
+	return nil
+}
+
+func (m *MockRepository) GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error) {
+	return make(map[uuid.UUID][]models.MonitorChannelAssignment), nil
+}
+
+func (m *MockRepository) SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error {
+	return nil
+}
+
+func (m *MockRepository) GetLocationIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	return make(map[uuid.UUID][]uuid.UUID), nil
+}
+
+func (m *MockRepository) GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error) {
+	return nil, nil
 }
 
 // ErrMonitorNotFound is returned when a monitor is not found
@@ -333,5 +397,51 @@ func TestService_DeleteMonitorHistory_GroupMonitorWithoutMembers(t *testing.T) {
 	}
 	if len(repo.deletedHistoryIDs) != 1 || repo.deletedHistoryIDs[0] != groupID {
 		t.Fatalf("deletedHistoryIDs = %v, want [%s]", repo.deletedHistoryIDs, groupID)
+	}
+}
+
+func TestService_BulkDeleteMonitors(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+
+	repo := NewMockRepository()
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	for _, id := range ids {
+		repo.monitors[id] = &models.Monitor{ID: id, TenantID: tenantID}
+	}
+
+	svc := NewService(repo)
+
+	deleted, err := svc.BulkDeleteMonitors(ctx, tenantID, ids)
+	if err != nil {
+		t.Fatalf("BulkDeleteMonitors: %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("deleted = %d, want 3", deleted)
+	}
+	if got, want := len(repo.bulkSoftDeleted), 3; got != want {
+		t.Fatalf("mock saw %d ids, want %d", got, want)
+	}
+}
+
+func TestService_BulkDeleteMonitors_RejectsEmpty(t *testing.T) {
+	svc := NewService(NewMockRepository())
+	if _, err := svc.BulkDeleteMonitors(context.Background(), uuid.New(), nil); err == nil {
+		t.Fatal("BulkDeleteMonitors(nil) should reject empty input")
+	}
+}
+
+func TestService_BulkDeleteMonitors_VerifyFailsBlocks(t *testing.T) {
+	repo := NewMockRepository()
+	repo.verifyMonitorsErr = fmt.Errorf("one or more monitors not found or do not belong to tenant")
+	svc := NewService(repo)
+
+	_, err := svc.BulkDeleteMonitors(context.Background(), uuid.New(),
+		[]uuid.UUID{uuid.New()})
+	if err == nil {
+		t.Fatal("BulkDeleteMonitors should propagate verify error")
+	}
+	if len(repo.bulkSoftDeleted) != 0 {
+		t.Fatal("must not call BulkSoftDelete when verify fails")
 	}
 }

@@ -1,10 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AlertPolicy, AgentMonitorConfig, AgentInstallCommand, ApiKey } from '@/lib/types';
-import { getAlertPolicies, getAgentInstallCommand, getApiKeys } from '@/lib/api';
+import { Download } from 'lucide-react';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, MetricThresholdsConfig, AgentInstallCommand, ApiKey, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { getAgentInstallCommand, getApiKeys } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
+import FormField from '@/components/ui/FormField';
+import FormSection from '@/components/ui/FormSection';
+import FormActions from '@/components/ui/FormActions';
+import Button from '@/components/ui/Button';
+import { AlertingSection } from './AlertingSection';
 
 type ServerType =
   | 'linux-amd64'
@@ -16,24 +22,18 @@ type ServerType =
 type ServerTypeOption = {
   value: ServerType;
   label: string;
-  os: 'linux' | 'darwin' | 'windows';
-  arch: 'amd64' | 'arm64';
-  binaryExt: string;
   family: 'unix' | 'windows';
 };
 
 const SERVER_TYPE_OPTIONS: ServerTypeOption[] = [
-  { value: 'linux-amd64', label: 'Linux (x86_64)', os: 'linux', arch: 'amd64', binaryExt: '', family: 'unix' },
-  { value: 'linux-arm64', label: 'Linux (ARM64)', os: 'linux', arch: 'arm64', binaryExt: '', family: 'unix' },
-  { value: 'macos-amd64', label: 'macOS (Intel)', os: 'darwin', arch: 'amd64', binaryExt: '', family: 'unix' },
-  { value: 'macos-arm64', label: 'macOS (Apple Silicon)', os: 'darwin', arch: 'arm64', binaryExt: '', family: 'unix' },
-  { value: 'windows-amd64', label: 'Windows (x86_64)', os: 'windows', arch: 'amd64', binaryExt: '.exe', family: 'windows' },
+  { value: 'linux-amd64', label: 'Linux (x86_64)', family: 'unix' },
+  { value: 'linux-arm64', label: 'Linux (ARM64)', family: 'unix' },
+  { value: 'macos-amd64', label: 'macOS (Intel)', family: 'unix' },
+  { value: 'macos-arm64', label: 'macOS (Apple Silicon)', family: 'unix' },
+  { value: 'windows-amd64', label: 'Windows (x86_64)', family: 'windows' },
 ];
 
 const DEFAULT_SERVER_TYPE: ServerType = 'linux-amd64';
-const UNIX_INSTALL_PATH = '/usr/local/bin/probara-agent';
-const WINDOWS_INSTALL_DIR = 'C:\\\\Program Files\\\\ProbaraAgent';
-const WINDOWS_INSTALL_PATH = `${WINDOWS_INSTALL_DIR}\\\\probara-agent.exe`;
 
 type ApiKeyOption = {
   id: string;
@@ -56,13 +56,13 @@ export default function AgentForm({
   onCancel,
   loading = false,
 }: AgentFormProps) {
-  const [alertPolicies, setAlertPolicies] = useState<AlertPolicy[]>([]);
   const [showInstallInstructions, setShowInstallInstructions] = useState(false);
   const [installCommand, setInstallCommand] = useState<AgentInstallCommand | null>(null);
   const [loadingInstallCmd, setLoadingInstallCmd] = useState(false);
   const [apiKey, setApiKeyState] = useState<string>('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [serverType, setServerType] = useState<ServerType>(DEFAULT_SERVER_TYPE);
+  const [allowRemoteDisable, setAllowRemoteDisable] = useState(false);
   const [apiKeyOptions, setApiKeyOptions] = useState<ApiKeyOption[]>([]);
   const [selectedApiKeyId, setSelectedApiKeyId] = useState<string>('');
   const [loadingApiKeys, setLoadingApiKeys] = useState(false);
@@ -71,35 +71,34 @@ export default function AgentForm({
   const isEditMode = Boolean(monitor);
   const initialAgentConfig =
     !isEditMode && initialData?.type === 'agent' ? (initialData.config as AgentMonitorConfig) : undefined;
+  const initialThresholds: MetricThresholdsConfig =
+    (monitor && monitor.type === 'agent'
+      ? (monitor.config as AgentMonitorConfig).metric_thresholds
+      : initialAgentConfig?.metric_thresholds) || {};
+  const thresholdToString = (v?: number) => (v != null && v > 0 ? String(v) : '');
 
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
     expected_interval_seconds: monitor && monitor.type === 'agent'
       ? (monitor.config as AgentMonitorConfig).expected_interval_seconds
       : initialAgentConfig?.expected_interval_seconds || 60,
-    alert_policy_ids:
-      monitor?.alert_policy_ids ||
-      (monitor?.alert_policy_id ? [monitor.alert_policy_id] : initialData?.alert_policy_ids || []),
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
+    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
+    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
+    cpu_threshold: thresholdToString(initialThresholds.cpu_percent),
+    memory_threshold: thresholdToString(initialThresholds.memory_percent),
+    disk_threshold: thresholdToString(initialThresholds.disk_percent),
+    swap_threshold: thresholdToString(initialThresholds.swap_percent),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    loadAlertPolicies();
     const key = getApiKey();
     if (key) setApiKeyState(key);
   }, []);
-
-  const loadAlertPolicies = async () => {
-    try {
-      const response = await getAlertPolicies({ page_size: 100 });
-      setAlertPolicies(response?.items || []);
-    } catch (error) {
-      console.error('Failed to load alert policies:', error);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,15 +108,40 @@ export default function AgentForm({
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (formData.expected_interval_seconds < 10) newErrors.expected_interval_seconds = 'Minimum 10 seconds';
 
+    // Parse threshold inputs: blank = no threshold, otherwise must be 1-100.
+    const parseThreshold = (raw: string, field: string): number | undefined => {
+      const trimmed = raw.trim();
+      if (trimmed === '') return undefined;
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0 || n > 100) {
+        newErrors[field] = 'Enter a percentage between 1 and 100';
+        return undefined;
+      }
+      return n;
+    };
+    const cpu = parseThreshold(formData.cpu_threshold, 'cpu_threshold');
+    const memory = parseThreshold(formData.memory_threshold, 'memory_threshold');
+    const disk = parseThreshold(formData.disk_threshold, 'disk_threshold');
+    const swap = parseThreshold(formData.swap_threshold, 'swap_threshold');
+
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
 
+    const thresholds: MetricThresholdsConfig = {};
+    if (cpu != null) thresholds.cpu_percent = cpu;
+    if (memory != null) thresholds.memory_percent = memory;
+    if (disk != null) thresholds.disk_percent = disk;
+    if (swap != null) thresholds.swap_percent = swap;
+
     const config: AgentMonitorConfig = {
       agent_id: isEditMode ? monitor?.agent_id || '' : '',
       expected_interval_seconds: formData.expected_interval_seconds,
     };
+    if (Object.keys(thresholds).length > 0) {
+      config.metric_thresholds = thresholds;
+    }
 
     const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
       name: formData.name.trim(),
@@ -128,7 +152,9 @@ export default function AgentForm({
       enabled: formData.enabled,
     };
 
-    requestData.alert_policy_ids = formData.alert_policy_ids;
+    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
+    requestData.notification_mode = formData.notification_mode;
+    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
@@ -259,7 +285,6 @@ export default function AgentForm({
     }
   };
 
-  // Installation instructions view
   if (isEditMode && monitor && showInstallInstructions) {
     if (!installCommand && !loadingInstallCmd) loadInstallCommand();
     if (!loadingApiKeys && !apiKeysLoaded) loadApiKeyOptions();
@@ -268,20 +293,38 @@ export default function AgentForm({
     const isWindows = selectedServer.family === 'windows';
     const activeApiKey = apiKeyOptions.find((option) => option.id === selectedApiKeyId)?.key || apiKey || '';
     const resolvedApiKey = activeApiKey || 'YOUR_API_KEY';
-    const binaryName = `probara-agent-${selectedServer.os}-${selectedServer.arch}${selectedServer.binaryExt}`;
-    const downloadUrl = installCommand ? `${installCommand.download_url}${binaryName}` : '';
+    const installQuery = allowRemoteDisable ? '?allow_remote_disable=true' : '';
     const installScriptUrl = installCommand
-      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.sh`
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.sh${installQuery}`
+      : '';
+    const windowsInstallScriptUrl = installCommand
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.ps1${installQuery}`
+      : '';
+    const uninstallScriptUrl = installCommand
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/uninstall/script.sh`
+      : '';
+    const windowsUninstallScriptUrl = installCommand
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/uninstall/script.ps1`
       : '';
     const linuxQuickInstallCommand = installCommand
-      ? `curl -sSL -H "Authorization: Bearer ${resolvedApiKey}" \
-  ${installScriptUrl} | bash`
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
+  "${installScriptUrl}" | sudo bash`
       : '';
     const linuxQuickInstallCopy = installCommand
-      ? `curl -sSL -H "Authorization: Bearer ${resolvedApiKey}" ${installScriptUrl} | bash`
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${installScriptUrl}" | sudo bash`
       : '';
     const windowsQuickInstallCommand = installCommand
-      ? `powershell -Command "$p='${WINDOWS_INSTALL_DIR}'; New-Item -ItemType Directory -Force -Path $p | Out-Null; $exe=Join-Path $p 'probara-agent.exe'; Invoke-WebRequest -Uri '${downloadUrl}' -OutFile $exe; Start-Process -FilePath $exe -ArgumentList '-backend-url','${installCommand.backend_url}','-agent-id','${installCommand.agent_id}','-api-key','${resolvedApiKey}','-interval','${installCommand.interval_seconds}'"`
+      ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Headers @{Authorization='Bearer ${resolvedApiKey}'} -Uri '${windowsInstallScriptUrl}').Content"`
+      : '';
+    const linuxQuickUninstallCommand = installCommand
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
+  "${uninstallScriptUrl}" | sudo bash`
+      : '';
+    const linuxQuickUninstallCopy = installCommand
+      ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" "${uninstallScriptUrl}" | sudo bash`
+      : '';
+    const windowsQuickUninstallCommand = installCommand
+      ? `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression (Invoke-WebRequest -UseBasicParsing -Headers @{Authorization='Bearer ${resolvedApiKey}'} -Uri '${windowsUninstallScriptUrl}').Content"`
       : '';
     const quickInstallCommand = installCommand
       ? (isWindows ? windowsQuickInstallCommand : linuxQuickInstallCommand)
@@ -289,49 +332,40 @@ export default function AgentForm({
     const quickInstallCopy = installCommand
       ? (isWindows ? windowsQuickInstallCommand : linuxQuickInstallCopy)
       : '';
-    const downloadCommand = installCommand
-      ? isWindows
-        ? `powershell -Command "New-Item -ItemType Directory -Force -Path '${WINDOWS_INSTALL_DIR}' | Out-Null; Invoke-WebRequest -Uri '${downloadUrl}' -OutFile '${WINDOWS_INSTALL_PATH}'"`
-        : `curl -sSL -o ${UNIX_INSTALL_PATH} \
-  ${downloadUrl}
-chmod +x ${UNIX_INSTALL_PATH}`
+    const quickUninstallCommand = installCommand
+      ? (isWindows ? windowsQuickUninstallCommand : linuxQuickUninstallCommand)
       : '';
-    const runCommand = installCommand
-      ? isWindows
-        ? `"${WINDOWS_INSTALL_PATH}" -backend-url ${installCommand.backend_url} -agent-id ${installCommand.agent_id} -api-key ${resolvedApiKey} -interval ${installCommand.interval_seconds}`
-        : `${UNIX_INSTALL_PATH} -backend-url ${installCommand.backend_url} -agent-id ${installCommand.agent_id} -api-key ${resolvedApiKey} -interval ${installCommand.interval_seconds}`
+    const quickUninstallCopy = installCommand
+      ? (isWindows ? windowsQuickUninstallCommand : linuxQuickUninstallCopy)
       : '';
 
     return (
       <div className="space-y-5">
-        <div className="rounded-xl border border-white/[0.06] bg-slate-800/30 p-5">
-          <h3 className="text-sm font-medium text-white mb-4">Agent Installation</h3>
-
+        <FormSection title="Agent installation">
           {loadingInstallCmd ? (
-            <div className="text-sm text-slate-500">Loading installation details...</div>
+            <div className="text-sm text-slate-500">Loading installation details…</div>
           ) : installCommand ? (
-            <div className="space-y-4">
-              {/* Credentials */}
+            <>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Agent ID</label>
+                <FormField label="Agent ID">
                   <div className="flex gap-2">
-                    <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-cyan-400 font-mono overflow-x-auto">
+                    <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
                       {installCommand.agent_id}
                     </code>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      type="button"
                       onClick={() => copyToClipboard(installCommand.agent_id, 'agent_id')}
-                      className="btn btn-xs btn-outline"
                     >
                       {copiedField === 'agent_id' ? 'Copied' : 'Copy'}
-                    </button>
+                    </Button>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">API Key</label>
+                </FormField>
+                <FormField label="API key">
                   <div className="space-y-2">
                     {loadingApiKeys ? (
-                      <p className="text-xs text-slate-500">Loading API keys...</p>
+                      <p className="text-xs text-slate-500">Loading API keys…</p>
                     ) : apiKeyOptions.length > 1 ? (
                       <select
                         value={selectedApiKeyId}
@@ -344,28 +378,28 @@ chmod +x ${UNIX_INSTALL_PATH}`
                       </select>
                     ) : null}
                     <div className="flex gap-2">
-                      <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-cyan-400 font-mono overflow-x-auto">
+                      <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
                         {activeApiKey || 'YOUR_API_KEY'}
                       </code>
-                      <button
-                        onClick={() => copyToClipboard(activeApiKey, 'api_key')}
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        type="button"
                         disabled={!activeApiKey}
-                        className="btn btn-xs btn-outline disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => copyToClipboard(activeApiKey, 'api_key')}
                       >
                         {copiedField === 'api_key' ? 'Copied' : 'Copy'}
-                      </button>
+                      </Button>
                     </div>
                     {apiKeyError && <p className="text-xs text-amber-300">{apiKeyError}</p>}
                     {!apiKeyError && apiKeyOptions.length === 0 && (
                       <p className="text-xs text-slate-500">No stored API keys. Create one in Settings to auto-fill.</p>
                     )}
                   </div>
-                </div>
+                </FormField>
               </div>
 
-              {/* Server Type */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Server Type</label>
+              <FormField label="Server type" description="Where the agent will run">
                 <select
                   value={serverType}
                   onChange={(e) => setServerType(e.target.value as ServerType)}
@@ -375,94 +409,78 @@ chmod +x ${UNIX_INSTALL_PATH}`
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
-                <p className="mt-1 text-xs text-slate-500">Choose the machine type where the agent will run.</p>
+              </FormField>
+
+              <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-white">Allow remote disable</p>
+                  <p className="text-xs text-slate-500">Let this agent remove its local service when the monitor is deleted</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAllowRemoteDisable((enabled) => !enabled)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${
+                    allowRemoteDisable ? 'bg-cyan-500' : 'bg-slate-700'
+                  }`}
+                  aria-pressed={allowRemoteDisable}
+                  aria-label="Toggle remote disable"
+                >
+                  <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                    allowRemoteDisable ? 'translate-x-4' : ''
+                  }`} />
+                </button>
               </div>
 
-              {/* Quick Install */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">
-                  {isWindows ? 'Quick Install (Windows)' : 'Quick Install (Linux/macOS)'}
-                </label>
+              <FormField label={isWindows ? 'Install service (Windows)' : 'Install service (Linux/macOS)'}>
                 <div className="flex gap-2">
-                  <pre className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
-{quickInstallCommand}
-                  </pre>
-                  <button
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickInstallCommand}</pre>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    className="self-start"
                     onClick={() => copyToClipboard(quickInstallCopy, 'install')}
-                    className="btn btn-xs btn-outline self-start"
                   >
                     {copiedField === 'install' ? 'Copied' : 'Copy'}
-                  </button>
+                  </Button>
                 </div>
-              </div>
+              </FormField>
 
-              {/* Download Binary */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Download Binary</label>
+              <FormField label={isWindows ? 'Uninstall service (Windows)' : 'Uninstall service (Linux/macOS)'}>
                 <div className="flex gap-2">
-                  <pre className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
-{downloadCommand}
-                  </pre>
-                  <button
-                    onClick={() => copyToClipboard(downloadCommand, 'download')}
-                    className="btn btn-xs btn-outline self-start"
+                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickUninstallCommand}</pre>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    className="self-start"
+                    onClick={() => copyToClipboard(quickUninstallCopy, 'uninstall')}
                   >
-                    {copiedField === 'download' ? 'Copied' : 'Copy'}
-                  </button>
+                    {copiedField === 'uninstall' ? 'Copied' : 'Copy'}
+                  </Button>
                 </div>
-              </div>
+              </FormField>
 
-              {/* Manual Run */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Run Agent</label>
-                <div className="flex gap-2">
-                  <code className="flex-1 rounded-lg border border-white/[0.08] bg-slate-900/50 px-3 py-2 text-xs text-slate-300 font-mono overflow-x-auto">
-                    {runCommand}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(runCommand, 'manual')}
-                    className="btn btn-xs btn-outline self-start"
-                  >
-                    {copiedField === 'manual' ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Info Box */}
               <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                <div className="flex items-start gap-3">
-                  <span className="text-emerald-400">OK</span>
-                  <div>
-                    <p className="text-xs font-medium text-white mb-1">Collected Metrics</p>
-                    <p className="text-xs text-slate-400">
-                      CPU, Memory, Disk, Network I/O, System Load, Process Count
-                    </p>
-                  </div>
-                </div>
+                <p className="text-xs font-medium text-white">Collected metrics</p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  CPU, memory, disk, network I/O, system load, process count
+                </p>
               </div>
-            </div>
+            </>
           ) : (
             <p className="text-sm text-rose-400">Failed to load installation details</p>
           )}
-        </div>
+        </FormSection>
 
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={() => setShowInstallInstructions(false)}
-            className="btn btn-secondary"
-          >
-            Back to Settings
-          </button>
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" type="button" onClick={() => setShowInstallInstructions(false)}>
+            Back to settings
+          </Button>
           {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="btn btn-primary"
-            >
+            <Button variant="accent" size="sm" type="button" onClick={onCancel}>
               Done
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -471,129 +489,135 @@ chmod +x ${UNIX_INSTALL_PATH}`
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Name */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Agent Name</label>
-        <input
-          type="text"
-          value={formData.name}
-          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          placeholder="Production Server"
-          className="input"
-        />
-        {errors.name && <p className="mt-1 text-xs text-rose-400">{errors.name}</p>}
-        <p className="mt-1 text-xs text-slate-500">Identifier for this monitored server</p>
-      </div>
-
-      {/* Reporting Interval */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Reporting Interval (seconds)</label>
-        <input
-          type="number"
-          value={formData.expected_interval_seconds}
-          onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
-          min={10}
-          step={10}
-          className="input"
-        />
-        {errors.expected_interval_seconds && <p className="mt-1 text-xs text-rose-400">{errors.expected_interval_seconds}</p>}
-        <p className="mt-1 text-xs text-slate-500">Agent marked stale if no report within 2x this interval</p>
-      </div>
-
-      {/* Alert Policies */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Alert Policies</label>
-        <div className="space-y-2">
-          {alertPolicies.length === 0 ? (
-            <div className="text-sm text-slate-500">No alert policies configured.</div>
-          ) : (
-            alertPolicies.map((policy) => {
-              const checked = formData.alert_policy_ids.includes(policy.id);
-              return (
-                <label key={policy.id} className="flex items-center gap-2 text-sm text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? [...formData.alert_policy_ids, policy.id]
-                        : formData.alert_policy_ids.filter((id) => id !== policy.id);
-                      setFormData({ ...formData, alert_policy_ids: next });
-                    }}
-                  />
-                  {policy.name}
-                </label>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Tags */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">Tags</label>
-        <input
-          type="text"
-          value={formData.tags}
-          onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-          placeholder="production, us-east-1 (comma-separated)"
-          className="input"
-        />
-      </div>
-
-      {/* Enabled Toggle */}
-      <div className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
-        <div>
-          <p className="text-sm font-medium text-white">Agent Enabled</p>
-          <p className="text-xs text-slate-500">Accept metrics from this agent</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-          className={`relative h-5 w-9 rounded-full transition-colors ${
-            formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-          }`}
+      <FormSection title="Agent">
+        <FormField
+          label="Agent name"
+          required
+          error={errors.name}
+          description="Identifier for this monitored server"
         >
-          <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            formData.enabled ? 'translate-x-4' : ''
-          }`} />
-        </button>
-      </div>
+          <input
+            type="text"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            placeholder="Production server"
+            className="input"
+          />
+        </FormField>
 
-      {/* Actions */}
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-white/[0.06]">
-        {onCancel && (
+        <FormField
+          label="Reporting interval (seconds)"
+          required
+          error={errors.expected_interval_seconds}
+          infoTip="Agent is marked stale if no report arrives within twice this interval."
+        >
+          <input
+            type="number"
+            value={formData.expected_interval_seconds}
+            onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
+            min={10}
+            step={10}
+            className="input"
+          />
+        </FormField>
+
+        <FormField label="Tags" description="Comma-separated, e.g. production, us-east-1">
+          <input
+            type="text"
+            value={formData.tags}
+            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+            placeholder="production, us-east-1"
+            className="input"
+          />
+        </FormField>
+      </FormSection>
+
+      <FormSection title="Alerting">
+        <AlertingSection
+          isGroup={false}
+          intervalSeconds={formData.expected_interval_seconds}
+          threshold={formData.consecutive_failures_threshold}
+          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          mode={formData.notification_mode}
+          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          customChannels={formData.notification_channels}
+          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+        />
+      </FormSection>
+
+      <FormSection title="Host metric thresholds">
+        <p className="text-xs text-slate-500">
+          Open an alert when a reported metric stays at or above the threshold. Leave blank to disable.
+          Evaluated independently of up/down status.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {([
+            { key: 'cpu_threshold', label: 'CPU usage (%)', placeholder: 'e.g. 90' },
+            { key: 'memory_threshold', label: 'Memory usage (%)', placeholder: 'e.g. 90' },
+            { key: 'disk_threshold', label: 'Disk usage (%)', placeholder: 'e.g. 85' },
+            { key: 'swap_threshold', label: 'Swap usage (%)', placeholder: 'e.g. 80' },
+          ] as const).map((field) => (
+            <FormField key={field.key} label={field.label} error={errors[field.key]}>
+              <input
+                type="number"
+                value={formData[field.key]}
+                onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
+                placeholder={field.placeholder}
+                min={1}
+                max={100}
+                step={1}
+                className="input"
+              />
+            </FormField>
+          ))}
+        </div>
+      </FormSection>
+
+      <FormSection title="Status">
+        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-white">Agent enabled</p>
+            <p className="text-xs text-slate-500">Accept metrics from this agent</p>
+          </div>
           <button
             type="button"
-            onClick={onCancel}
-            disabled={loading}
-            className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
+            }`}
+            aria-pressed={formData.enabled}
+            aria-label="Toggle agent enabled"
           >
-            Cancel
+            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+              formData.enabled ? 'translate-x-4' : ''
+            }`} />
           </button>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Agent Monitor'}
-        </button>
-      </div>
+        </div>
+      </FormSection>
 
-      {/* Installation Link for existing monitors */}
+      <FormActions
+        middle={`Expect an agent report every ${formData.expected_interval_seconds}s`}
+        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+        submit={{
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create agent monitor',
+          loading,
+          disabled: loading,
+          type: 'submit',
+        }}
+      />
+
       {isEditMode && monitor && (
-        <div className="pt-4 border-t border-white/[0.06]">
-          <button
+        <div className="border-t border-white/[0.06] pt-4">
+          <Button
+            variant="ghost"
+            size="sm"
             type="button"
+            icon={<Download strokeWidth={1.75} />}
+            className="w-full justify-center"
             onClick={() => setShowInstallInstructions(true)}
-            className="btn btn-secondary w-full"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            View Installation Instructions
-          </button>
+            View installation instructions
+          </Button>
         </div>
       )}
     </form>

@@ -169,9 +169,10 @@ func TestValidatorRegistry_Types(t *testing.T) {
 	registry := NewDefaultValidatorRegistry()
 	types := registry.Types()
 
-	// HTTP, Ping, DNS, GRPC, Group, Agent, Push, SIP, Synthetic API, Synthetic Browser = 10 types
-	if len(types) != 10 {
-		t.Errorf("Expected 10 types, got %d", len(types))
+	// HTTP, Ping, DNS, GRPC, Group, Agent, Push, SIP, Synthetic API, Synthetic Browser,
+	// Redis, Postgres, MongoDB, RabbitMQ, TCP, MySQL, WebSocket = 17 types
+	if len(types) != 17 {
+		t.Errorf("Expected 17 types, got %d", len(types))
 	}
 }
 

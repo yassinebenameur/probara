@@ -14,7 +14,10 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 func main() {
@@ -49,27 +52,43 @@ func main() {
 		}
 	}
 
-	// Initialize mailer (optional)
-	var mailer alerter.Mailer
+	// Wire SMTP backend into the email alert plugin.
 	if cfg.SMTPHost != "" && cfg.SMTPFrom != "" {
-		smtpMailer, err := alerter.NewSMTPMailer(cfg)
+		smtpMailer, err := email.NewSMTPMailer(email.SMTPParams{
+			Host:             cfg.SMTPHost,
+			Port:             cfg.SMTPPort,
+			Username:         cfg.SMTPUsername,
+			Password:         cfg.SMTPPassword,
+			From:             cfg.SMTPFrom,
+			UseTLS:           cfg.SMTPUseTLS,
+			DefaultRecipient: cfg.AlertEmailTo,
+		})
 		if err != nil {
 			log.WithError(err).Warn("Failed to configure SMTP mailer, email alerts will be skipped")
 		} else {
-			mailer = smtpMailer
+			email.SetMailer(smtpMailer)
 		}
+	} else {
+		log.Warn("SMTP not configured; email alert plugin will reject Send")
+	}
+
+	// Secrets encryption — required to dispatch encrypted channel configs.
+	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
+	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
+		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
+	} else if kerr != secrets.ErrKeyNotConfigured {
+		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
+	} else {
+		log.Warn("PROBARA_SECRETS_KEY not set; alerter will only handle plaintext channel configs")
 	}
 
 	// Create alerter
-	alert := alerter.NewAlerter(cfg, log, metricsRegistry, dbClient, natsClient, mailer)
+	alert := alerter.NewAlerter(cfg, log, metricsRegistry, dbClient, natsClient, secretsEncryptor)
 
 	// Start minimal HTTP server for health/metrics
 	go func() {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("OK"))
-		})
+		mux.HandleFunc("/healthz", healthzHandler(natsClient))
 		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -136,4 +155,20 @@ func main() {
 	}
 
 	log.Info("Alerter exited")
+}
+
+// healthzHandler reports the pod as dead once the NATS connection is
+// permanently closed, so Kubernetes restarts it instead of leaving a zombie
+// alerter. A nil client (NATS disabled) or a reconnecting connection is
+// healthy.
+func healthzHandler(natsClient *queue.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if natsClient != nil && natsClient.Closed() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("NATS connection permanently closed"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}
 }

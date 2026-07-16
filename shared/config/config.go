@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // BaseConfig contains common configuration for all services
@@ -22,43 +25,141 @@ type BaseConfig struct {
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
-	AlertStream           string
-	AlertSubject          string
-	AlertConsumerName     string
-	CheckJobSubject       string
+	AlertStream        string
+	AlertSubject       string
+	AlertConsumerName  string
+	CheckJobSubject    string
+	CheckJobStream     string
+	CheckResultSubject string
+	AIRCASubject       string
+	AIAnalysisEnabled  bool
+	// LLM_* env defaults — optional global fallback used when a tenant has no
+	// ai_settings row. Mirrors the worker's fields.
+	LLMProvider           string
+	LLMBaseURL            string
+	LLMAPIKey             string
+	LLMModel              string
+	LLMJSONMode           string
+	LLMMaxTokens          int
+	LLMTimeoutSeconds     int
 	AdminJWTSecret        string
 	AdminAccessTTLMinutes int
 	AdminRefreshTTLDays   int
 	AdminCookieSecure     bool
 	AdminBcryptCost       int
+	// AuditRetentionDays controls how long audit_log rows are kept.
+	// 0 disables pruning (keep forever). Audit retention is deliberately
+	// separate from tenants.data_retention_days: that governs monitoring
+	// telemetry, while audit data is compliance data with opposite pressure.
+	AuditRetentionDays int
+	// OIDC SSO (platform-level: one IdP per install). Read through this
+	// struct so a per-tenant DB-backed loader can be swapped in later.
+	OIDC                  OIDCConfig
 	SyntheticArtifactsDir string
+	// PublicBaseURL is the externally-reachable URL of this API (e.g.
+	// "https://probara.example.com"). When set, it is used as the BACKEND_URL
+	// baked into agent install scripts and push webhook URLs, bypassing
+	// Host-header inspection which is unreliable behind reverse proxies.
+	PublicBaseURL string
+	// PublicNATSURL is the NATS address reachable from remote networks (e.g.
+	// "nats://nats.example.com:4222"), baked into private-location worker
+	// deploy snippets. Empty renders a placeholder.
+	PublicNATSURL string
+	// NATSLocationAuthIssuerSeed enables the API-hosted NATS authorization
+	// callout used to issue per-location broker permissions.
+	NATSLocationAuthIssuerSeed string
+	// Mesh knobs mirrored from the scheduler (same env vars) so edge
+	// staleness and probe-now timeouts agree with the actual probe cadence.
+	MeshProbeIntervalSeconds int
+	MeshProbeTimeoutSeconds  int
 }
 
 // SchedulerConfig contains configuration for the scheduler service
 type SchedulerConfig struct {
 	BaseConfig
-	ScheduleIntervalSeconds       int
-	SchedulerBatchSize            int
-	CheckJobSubject               string
-	CheckJobStream                string
+	ScheduleIntervalSeconds int
+	SchedulerBatchSize      int
+	CheckJobSubject         string
+	CheckJobStream          string
+	// Results ingest: the scheduler hosts the consumer that persists check
+	// results published by workers over NATS (workers have no DB access).
+	CheckResultStream        string
+	CheckResultSubject       string
+	ResultIngestConsumerName string
+	ResultIngestConcurrency  int
+	ResultIngestEnabled      bool
+	// LegacyCheckConsumers are pre-locations filterless consumer names the
+	// scheduler deletes on startup: a work-queue stream can't host both a
+	// filterless consumer and the filtered per-location ones.
+	LegacyCheckConsumers          []string
 	RetentionCleanupEnabled       bool
 	RetentionCleanupHourUTC       int
 	RetentionCleanupBatchSize     int
 	RetentionCleanupMaxRowsPerRun int
+	// Monitor purge: removes child rows of soft-deleted monitors then the row itself.
+	MonitorPurgeEnabled         bool
+	MonitorPurgeIntervalSeconds int
+	MonitorPurgeBatchSize       int
+	MonitorPurgeMaxRowsPerRun   int
+	// Mesh: inter-location connectivity probing. Edges are derived from
+	// locations with a mesh_endpoint set; the threshold is platform-level for
+	// now because an edge has no monitor row to carry one.
+	MeshEnabled              bool
+	MeshProbeIntervalSeconds int
+	MeshProbeTimeoutSeconds  int
+	MeshFailureThreshold     int
+	MeshScheduleBatchSize    int
 }
 
 // WorkerConfig contains configuration for the worker service
 type WorkerConfig struct {
 	BaseConfig
-	WorkerConcurrency     int
-	NATSConsumerName      string
-	CheckJobStream        string
-	CheckJobSubject       string
+	WorkerConcurrency  int
+	NATSConsumerName   string
+	CheckJobStream     string
+	CheckJobSubject    string
+	CheckResultStream  string
+	CheckResultSubject string
+	// LocationID pins this worker to a private location: it consumes only
+	// that location's job subject and heartbeats its liveness. Empty = the
+	// default platform fleet.
+	LocationID            string
+	LocationCredential    string
 	MaxHTTPTimeoutSeconds int
 	MaxBodySizeBytes      int
 	HTTPBlockPrivateIPs   bool
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
+
+	// AI root cause analysis consumer + LLM provider settings. The consumer is
+	// enabled only when LLMBaseURL is set; otherwise the worker skips it and
+	// the feature degrades to "not configured".
+	AIRCAStream       string
+	AIRCASubject      string
+	AIRCAConsumerName string
+	LLMProvider       string
+	LLMBaseURL        string
+	LLMAPIKey         string
+	LLMModel          string
+	LLMJSONMode       string
+	LLMMaxTokens      int
+	LLMTimeoutSeconds int
+
+	// Notification dispatch consumer settings — only used when the alerter is
+	// publishing to the NOTIFICATIONS stream (ALERTER_ASYNC_DISPATCH=true).
+	NotificationsEnabled      bool
+	NotificationsStream       string
+	NotificationsSubjectGlob  string
+	NotificationsConsumerName string
+
+	// SMTP backend wired into the builtin email plugin (worker side, used by
+	// the notifications consumer). Mirrors AlerterConfig fields.
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPUseTLS   bool
 }
 
 // AlerterConfig contains configuration for the alerter service
@@ -70,6 +171,7 @@ type AlerterConfig struct {
 	AlertReminderIntervalSeconds int
 	AlertGroupWindowSeconds      int
 	AlertGroupMaxChildren        int
+	LatencyAnomalyEnabled        bool
 	SMTPHost                     string
 	SMTPPort                     int
 	SMTPUsername                 string
@@ -77,6 +179,14 @@ type AlerterConfig struct {
 	SMTPFrom                     string
 	SMTPUseTLS                   bool
 	AlertEmailTo                 string
+
+	// AsyncDispatch toggles publishing channel notifications to the NATS
+	// NOTIFICATIONS stream instead of dispatching synchronously inside the
+	// alerter loop. When true, the worker consumes "alerts.dispatch.*" and
+	// invokes the plugin Send path.
+	AsyncDispatch            bool
+	NotificationsStream      string
+	NotificationsSubjectGlob string
 }
 
 // StatusPageConfig contains configuration for the status page service
@@ -84,6 +194,10 @@ type StatusPageConfig struct {
 	BaseConfig
 	StatusPageBaseURL string
 	APIBaseURL        string
+	// HTTP server timeouts. These are a safety net only; the public status page
+	// is expected to render well within them. See LoadStatusPageConfig for defaults.
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
 // LoadBaseConfig loads base configuration from environment variables
@@ -174,6 +288,55 @@ func LoadAPIConfig() (*APIConfig, error) {
 	} else {
 		cfg.CheckJobSubject = checkJobSubject
 	}
+	cfg.CheckJobStream = envOrDefault("CHECK_JOB_STREAM", "CHECK_JOBS")
+	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+
+	// AI_RCA_SUBJECT — subject the API publishes AI root cause jobs to (the
+	// worker consumes them). Must match the worker's AI_RCA_SUBJECT.
+	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
+
+	cfg.MeshProbeIntervalSeconds = 30
+	if v := os.Getenv("MESH_PROBE_INTERVAL_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_INTERVAL_SECONDS: %q", v)
+		}
+		cfg.MeshProbeIntervalSeconds = n
+	}
+	cfg.MeshProbeTimeoutSeconds = 5
+	if v := os.Getenv("MESH_PROBE_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.MeshProbeTimeoutSeconds = n
+	}
+
+	// LLM_* env defaults — optional global fallback. When set, the API can build
+	// an analyzer/advisor and gate AI features even before a tenant configures
+	// its own ai_settings row.
+	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
+	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
+	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
+	cfg.LLMMaxTokens = 1024
+	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
+		}
+		cfg.LLMMaxTokens = n
+	}
+	cfg.LLMTimeoutSeconds = 60
+	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.LLMTimeoutSeconds = n
+	}
+	cfg.AIAnalysisEnabled = cfg.LLMBaseURL != ""
 
 	// ADMIN_JWT_SECRET
 	adminJWTSecret := os.Getenv("ADMIN_JWT_SECRET")
@@ -230,12 +393,115 @@ func LoadAPIConfig() (*APIConfig, error) {
 		cfg.AdminBcryptCost = cost
 	}
 
+	// AUDIT_RETENTION_DAYS (default 365; 0 = keep forever)
+	cfg.AuditRetentionDays = 365
+	if v := strings.TrimSpace(os.Getenv("AUDIT_RETENTION_DAYS")); v != "" {
+		days, err := strconv.Atoi(v)
+		if err != nil || days < 0 {
+			return nil, fmt.Errorf("invalid AUDIT_RETENTION_DAYS: %q", v)
+		}
+		cfg.AuditRetentionDays = days
+	}
+
 	// SYNTHETIC_BROWSER_ARTIFACTS_DIR
 	artifactsDir := strings.TrimSpace(os.Getenv("SYNTHETIC_BROWSER_ARTIFACTS_DIR"))
 	if artifactsDir == "" {
 		artifactsDir = filepath.Join(os.TempDir(), "probara", "synthetic-browser-artifacts")
 	}
 	cfg.SyntheticArtifactsDir = artifactsDir
+
+	// PUBLIC_BASE_URL: externally-reachable URL of the API, used for
+	// agent install scripts and push webhook URLs. Trailing slash is stripped.
+	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/")
+
+	// PUBLIC_NATS_URL: externally-reachable NATS address baked into
+	// private-location worker deploy snippets.
+	cfg.PublicNATSURL = strings.TrimSpace(os.Getenv("PUBLIC_NATS_URL"))
+	cfg.NATSLocationAuthIssuerSeed = strings.TrimSpace(os.Getenv("NATS_LOCATION_AUTH_ISSUER_SEED"))
+	if cfg.PublicNATSURL != "" && cfg.NATSLocationAuthIssuerSeed == "" {
+		return nil, fmt.Errorf("NATS_LOCATION_AUTH_ISSUER_SEED is required when PUBLIC_NATS_URL is set")
+	}
+	if cfg.NATSLocationAuthIssuerSeed != "" && strings.TrimSpace(os.Getenv("PROBARA_SECRETS_KEY")) == "" {
+		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
+	}
+
+	// OIDC_* — platform-level SSO configuration (needs PublicBaseURL for the
+	// default redirect URL, so it loads last).
+	oidcCfg, err := loadOIDCConfig(cfg.PublicBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.OIDC = *oidcCfg
+
+	return cfg, nil
+}
+
+// OIDCConfig is the platform-level OIDC SSO configuration.
+type OIDCConfig struct {
+	Enabled      bool
+	IssuerURL    string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	Scopes       []string
+	// ProviderLabel is shown on the login button ("Continue with <label>").
+	ProviderLabel string
+	// JITProvision creates users on first OIDC login when no matching
+	// account exists. Disable to require pre-created (invited) users.
+	JITProvision       bool
+	JITDefaultRole     string
+	JITDefaultTenantID string
+}
+
+func loadOIDCConfig(publicBaseURL string) (*OIDCConfig, error) {
+	cfg := &OIDCConfig{}
+
+	if v := strings.TrimSpace(os.Getenv("OIDC_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OIDC_ENABLED: %q", v)
+		}
+		cfg.Enabled = enabled
+	}
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+
+	cfg.IssuerURL = strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL"))
+	cfg.ClientID = strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID"))
+	cfg.ClientSecret = strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET"))
+	if cfg.IssuerURL == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
+		return nil, fmt.Errorf("OIDC_ISSUER_URL, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are required when OIDC_ENABLED=true")
+	}
+
+	cfg.RedirectURL = strings.TrimSpace(os.Getenv("OIDC_REDIRECT_URL"))
+	if cfg.RedirectURL == "" {
+		if publicBaseURL == "" {
+			return nil, fmt.Errorf("OIDC_REDIRECT_URL is required when PUBLIC_BASE_URL is not set")
+		}
+		cfg.RedirectURL = publicBaseURL + "/api/v1/auth/oidc/callback"
+	}
+
+	scopes := envOrDefault("OIDC_SCOPES", "openid profile email")
+	cfg.Scopes = strings.Fields(scopes)
+
+	cfg.ProviderLabel = envOrDefault("OIDC_PROVIDER_LABEL", "SSO")
+
+	cfg.JITProvision = true
+	if v := strings.TrimSpace(os.Getenv("OIDC_JIT_PROVISION")); v != "" {
+		jit, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OIDC_JIT_PROVISION: %q", v)
+		}
+		cfg.JITProvision = jit
+	}
+	cfg.JITDefaultRole = envOrDefault("OIDC_JIT_DEFAULT_ROLE", "viewer")
+	switch cfg.JITDefaultRole {
+	case "admin", "editor", "viewer":
+	default:
+		return nil, fmt.Errorf("invalid OIDC_JIT_DEFAULT_ROLE: %q", cfg.JITDefaultRole)
+	}
+	cfg.JITDefaultTenantID = envOrDefault("OIDC_JIT_DEFAULT_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 
 	return cfg, nil
 }
@@ -287,6 +553,37 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 		cfg.CheckJobStream = "CHECK_JOBS"
 	} else {
 		cfg.CheckJobStream = checkJobStream
+	}
+
+	// Results ingest — the scheduler-side consumer persisting worker results.
+	cfg.CheckResultStream = envOrDefault("CHECK_RESULT_STREAM", "CHECK_RESULTS")
+	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+	cfg.ResultIngestConsumerName = envOrDefault("RESULT_INGEST_CONSUMER_NAME", "result-ingest")
+	cfg.ResultIngestConcurrency = 10
+	if v := strings.TrimSpace(os.Getenv("RESULT_INGEST_CONCURRENCY")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid RESULT_INGEST_CONCURRENCY: %q", v)
+		}
+		cfg.ResultIngestConcurrency = n
+	}
+	cfg.ResultIngestEnabled = true
+	if v := strings.TrimSpace(os.Getenv("RESULT_INGEST_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RESULT_INGEST_ENABLED: %w", err)
+		}
+		cfg.ResultIngestEnabled = enabled
+	}
+
+	// CHECK_JOB_LEGACY_CONSUMERS — comma-separated filterless consumer names
+	// to delete on startup. Defaults cover the code default and the compose
+	// value used before per-location consumers existed.
+	legacyConsumers := envOrDefault("CHECK_JOB_LEGACY_CONSUMERS", "check-workers,worker")
+	for _, name := range strings.Split(legacyConsumers, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			cfg.LegacyCheckConsumers = append(cfg.LegacyCheckConsumers, name)
+		}
 	}
 
 	// RETENTION_CLEANUP_ENABLED
@@ -346,6 +643,87 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 		cfg.RetentionCleanupMaxRowsPerRun = maxRows
 	}
 
+	cfg.MonitorPurgeEnabled = true
+	if v := os.Getenv("MONITOR_PURGE_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_ENABLED: %w", err)
+		}
+		cfg.MonitorPurgeEnabled = enabled
+	}
+
+	cfg.MonitorPurgeIntervalSeconds = 30
+	if v := os.Getenv("MONITOR_PURGE_INTERVAL_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_INTERVAL_SECONDS: %q", v)
+		}
+		cfg.MonitorPurgeIntervalSeconds = n
+	}
+
+	cfg.MonitorPurgeBatchSize = 5000
+	if v := os.Getenv("MONITOR_PURGE_BATCH_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_BATCH_SIZE: %q", v)
+		}
+		cfg.MonitorPurgeBatchSize = n
+	}
+
+	cfg.MonitorPurgeMaxRowsPerRun = 200000
+	if v := os.Getenv("MONITOR_PURGE_MAX_ROWS_PER_RUN"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MONITOR_PURGE_MAX_ROWS_PER_RUN: %q", v)
+		}
+		cfg.MonitorPurgeMaxRowsPerRun = n
+	}
+
+	cfg.MeshEnabled = true
+	if v := strings.TrimSpace(os.Getenv("MESH_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MESH_ENABLED: %w", err)
+		}
+		cfg.MeshEnabled = enabled
+	}
+
+	cfg.MeshProbeIntervalSeconds = 30
+	if v := os.Getenv("MESH_PROBE_INTERVAL_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_INTERVAL_SECONDS: %q", v)
+		}
+		cfg.MeshProbeIntervalSeconds = n
+	}
+
+	cfg.MeshProbeTimeoutSeconds = 5
+	if v := os.Getenv("MESH_PROBE_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_PROBE_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.MeshProbeTimeoutSeconds = n
+	}
+
+	cfg.MeshFailureThreshold = 3
+	if v := os.Getenv("MESH_FAILURE_THRESHOLD"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_FAILURE_THRESHOLD: %q", v)
+		}
+		cfg.MeshFailureThreshold = n
+	}
+
+	cfg.MeshScheduleBatchSize = 500
+	if v := os.Getenv("MESH_SCHEDULE_BATCH_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid MESH_SCHEDULE_BATCH_SIZE: %q", v)
+		}
+		cfg.MeshScheduleBatchSize = n
+	}
+
 	return cfg, nil
 }
 
@@ -392,6 +770,27 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		cfg.CheckJobSubject = "check.jobs"
 	} else {
 		cfg.CheckJobSubject = checkJobSubject
+	}
+
+	// Results publishing — workers publish results here instead of writing
+	// Postgres, so remote location workers only need NATS reachability.
+	cfg.CheckResultStream = envOrDefault("CHECK_RESULT_STREAM", "CHECK_RESULTS")
+	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
+
+	// WORKER_LOCATION_ID — pins this worker to a private location (UUID from
+	// the Locations page). Empty = default platform fleet.
+	cfg.LocationID = strings.TrimSpace(os.Getenv("WORKER_LOCATION_ID"))
+	if cfg.LocationID != "" {
+		if _, err := uuid.Parse(cfg.LocationID); err != nil {
+			return nil, fmt.Errorf("invalid WORKER_LOCATION_ID: %q is not a UUID", cfg.LocationID)
+		}
+	}
+	cfg.LocationCredential = strings.TrimSpace(os.Getenv("LOCATION_CREDENTIAL"))
+	if cfg.LocationID != "" && cfg.LocationCredential == "" {
+		return nil, fmt.Errorf("LOCATION_CREDENTIAL is required when WORKER_LOCATION_ID is set")
+	}
+	if cfg.LocationID == "" && cfg.LocationCredential != "" {
+		return nil, fmt.Errorf("LOCATION_CREDENTIAL requires WORKER_LOCATION_ID")
 	}
 
 	// MAX_HTTP_TIMEOUT_SECONDS
@@ -454,7 +853,86 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	}
 	cfg.SyntheticArtifactsDir = artifactsDir
 
+	// NOTIFICATIONS_ENABLED — opt-in for the notifications consumer goroutine.
+	enabledStr := strings.TrimSpace(os.Getenv("NOTIFICATIONS_ENABLED"))
+	if enabledStr != "" {
+		enabled, err := strconv.ParseBool(enabledStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid NOTIFICATIONS_ENABLED: %w", err)
+		}
+		cfg.NotificationsEnabled = enabled
+	}
+
+	cfg.NotificationsStream = envOrDefault("NOTIFICATIONS_STREAM", "NOTIFICATIONS")
+	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
+	cfg.NotificationsConsumerName = envOrDefault("NOTIFICATIONS_CONSUMER_NAME", "notifications-worker")
+
+	// AI root cause analysis — provider-agnostic LLM, wired by env. The
+	// consumer self-disables when LLM_BASE_URL is unset.
+	cfg.AIRCAStream = envOrDefault("AI_RCA_STREAM", "AI_RCA")
+	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
+	cfg.AIRCAConsumerName = envOrDefault("AI_RCA_CONSUMER_NAME", "ai-rca-workers")
+	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
+	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
+	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
+	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
+	cfg.LLMMaxTokens = 1024
+	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
+		}
+		cfg.LLMMaxTokens = n
+	}
+	cfg.LLMTimeoutSeconds = 60
+	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
+		}
+		cfg.LLMTimeoutSeconds = n
+	}
+
+	// SMTP — only required when the email plugin is registered AND the
+	// notifications consumer is wired in. Otherwise these stay empty and the
+	// email plugin Send() returns an explicit error.
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+	smtpPortStr := os.Getenv("SMTP_PORT")
+	if smtpPortStr == "" {
+		cfg.SMTPPort = 587
+	} else {
+		port, err := strconv.Atoi(smtpPortStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SMTP_PORT: %w", err)
+		}
+		cfg.SMTPPort = port
+	}
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
+	cfg.SMTPFrom = os.Getenv("SMTP_FROM")
+	if cfg.SMTPFrom == "" {
+		cfg.SMTPFrom = cfg.SMTPUsername
+	}
+	useTLSStr := os.Getenv("SMTP_USE_TLS")
+	if useTLSStr == "" {
+		cfg.SMTPUseTLS = true
+	} else {
+		useTLS, err := strconv.ParseBool(useTLSStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SMTP_USE_TLS: %w", err)
+		}
+		cfg.SMTPUseTLS = useTLS
+	}
+
 	return cfg, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // LoadAlerterConfig loads alerter service configuration
@@ -492,6 +970,17 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 			return nil, fmt.Errorf("invalid ALERT_EVAL_INTERVAL_SECONDS: %w", err)
 		}
 		cfg.AlertEvalIntervalSeconds = val
+	}
+
+	// ALERTER_LATENCY_ANOMALY_ENABLED (default true): kill-switch for the
+	// latency anomaly detection step.
+	cfg.LatencyAnomalyEnabled = true
+	if v := os.Getenv("ALERTER_LATENCY_ANOMALY_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERTER_LATENCY_ANOMALY_ENABLED: %w", err)
+		}
+		cfg.LatencyAnomalyEnabled = enabled
 	}
 
 	// ALERT_REMINDER_INTERVAL_SECONDS
@@ -572,6 +1061,21 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 	// ALERT_EMAIL_TO
 	cfg.AlertEmailTo = os.Getenv("ALERT_EMAIL_TO")
 
+	// ALERTER_ASYNC_DISPATCH — when true, dispatchNotifications publishes to
+	// NATS rather than calling plugin.Send inline. Defaults to false so
+	// rollout is opt-in per environment.
+	asyncStr := strings.TrimSpace(os.Getenv("ALERTER_ASYNC_DISPATCH"))
+	if asyncStr != "" {
+		async, err := strconv.ParseBool(asyncStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALERTER_ASYNC_DISPATCH: %w", err)
+		}
+		cfg.AsyncDispatch = async
+	}
+
+	cfg.NotificationsStream = envOrDefault("NOTIFICATIONS_STREAM", "NOTIFICATIONS")
+	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
+
 	return cfg, nil
 }
 
@@ -590,5 +1094,24 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	// STATUS_PAGE_API_BASE_URL (optional; enables /_sp_api/* proxy for the in-page customizer)
 	cfg.APIBaseURL = os.Getenv("STATUS_PAGE_API_BASE_URL")
 
+	// HTTP server timeouts (seconds). Optional; defaults are generous so a large
+	// status page never trips the timeout while page generation itself is the real fix.
+	cfg.ReadTimeout = envDurationSeconds("STATUS_PAGE_READ_TIMEOUT_SECONDS", 15*time.Second)
+	cfg.WriteTimeout = envDurationSeconds("STATUS_PAGE_WRITE_TIMEOUT_SECONDS", 60*time.Second)
+
 	return cfg, nil
+}
+
+// envDurationSeconds reads an integer number of seconds from the environment,
+// falling back to def when unset or invalid.
+func envDurationSeconds(key string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return def
+	}
+	return time.Duration(seconds) * time.Second
 }

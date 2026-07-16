@@ -20,6 +20,80 @@ type StatusPageSettings struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      *string `json:"default_theme,omitempty"`
 	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
+	// Tenant-authored branding injected verbatim into the built-in template
+	// (custom CSS after the base styles, extra <head> markup, and markup
+	// before </body>). Lighter-weight customization than a full template.
+	CustomCSS        *string `json:"custom_css,omitempty"`
+	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
+	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
+}
+
+// StatusPageTemplateVersion summarizes one stored custom-template row.
+type StatusPageTemplateVersion struct {
+	Version     *int       `json:"version,omitempty"` // nil for drafts
+	Status      string     `json:"status"`            // draft | published | archived
+	SizeBytes   int        `json:"size_bytes"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	PublishedAt *time.Time `json:"published_at,omitempty"`
+}
+
+// StatusPageTemplateState is the full template-editing state for a page.
+type StatusPageTemplateState struct {
+	// HasCustom is true when a custom template is published (the public page
+	// is not rendering the built-in template).
+	HasCustom        bool                        `json:"has_custom"`
+	PublishedVersion *int                        `json:"published_version,omitempty"`
+	DraftSource      *string                     `json:"draft_source,omitempty"`
+	DraftUpdatedAt   *time.Time                  `json:"draft_updated_at,omitempty"`
+	Versions         []StatusPageTemplateVersion `json:"versions"`
+	// PreviewToken authorizes GET /public/status/{slug}/preview/draft when the
+	// deployment configures STATUS_PAGE_PREVIEW_SECRET; empty otherwise.
+	PreviewToken string `json:"preview_token,omitempty"`
+	MaxSizeBytes int    `json:"max_size_bytes"`
+}
+
+// SaveStatusPageTemplateDraftRequest carries a draft template source.
+type SaveStatusPageTemplateDraftRequest struct {
+	Source string `json:"source"`
+}
+
+// StatusPageLibraryTemplate is a named, tenant-scoped reusable template.
+// Library entries are source storage only: applying one to a page copies its
+// source into that page's draft.
+type StatusPageLibraryTemplate struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Description *string   `json:"description,omitempty"`
+	Source      string    `json:"source,omitempty"` // omitted in list responses
+	SizeBytes   int       `json:"size_bytes"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// CreateStatusPageLibraryTemplateRequest creates a library template.
+type CreateStatusPageLibraryTemplateRequest struct {
+	Name        string  `json:"name"`
+	Description *string `json:"description,omitempty"`
+	Source      string  `json:"source"`
+}
+
+// UpdateStatusPageLibraryTemplateRequest partially updates a library template.
+type UpdateStatusPageLibraryTemplateRequest struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Source      *string `json:"source,omitempty"`
+}
+
+// StatusPageLibraryTemplateListResponse lists a tenant's library templates.
+type StatusPageLibraryTemplateListResponse struct {
+	Items []StatusPageLibraryTemplate `json:"items"`
+	Total int                         `json:"total"`
+}
+
+// RevertStatusPageTemplateRequest republishes an archived template version.
+type RevertStatusPageTemplateRequest struct {
+	Version int `json:"version"`
 }
 
 type StatusPageSectionMonitor struct {

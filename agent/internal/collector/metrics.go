@@ -12,6 +12,7 @@ import (
 
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/load"
 	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/shirou/gopsutil/v3/net"
@@ -55,6 +56,12 @@ func (c *Collector) Collect(ctx context.Context) (*models.AgentMetrics, error) {
 		metrics.CPUPercent = cpuPercent
 	}
 
+	// Logical CPU core count
+	if cores, err := cpu.CountsWithContext(ctx, true); err == nil {
+		metrics.CPUCores = cores
+	}
+	// CPU core count is not critical, so we don't return error if it fails
+
 	// Memory metrics
 	memInfo, err := mem.VirtualMemoryWithContext(ctx)
 	if err != nil {
@@ -63,13 +70,33 @@ func (c *Collector) Collect(ctx context.Context) (*models.AgentMetrics, error) {
 	metrics.MemoryUsed = memInfo.Used
 	metrics.MemoryTotal = memInfo.Total
 
-	// Disk metrics
+	// Swap metrics
+	if swapInfo, err := mem.SwapMemoryWithContext(ctx); err == nil {
+		metrics.SwapUsed = swapInfo.Used
+		metrics.SwapTotal = swapInfo.Total
+	}
+	// Swap is not critical, so we don't return error if it fails
+
+	// Disk metrics for the configured path (kept for back-compat)
 	diskInfo, err := disk.UsageWithContext(ctx, c.diskPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get disk info: %w", err)
 	}
 	metrics.DiskUsed = diskInfo.Used
 	metrics.DiskTotal = diskInfo.Total
+
+	// Per-mount disk usage across all real filesystems
+	metrics.DiskMounts = c.collectDiskMounts(ctx)
+	// Per-mount disk usage is not critical, so we don't return error if it fails
+
+	// Cumulative disk I/O counters (summed across devices)
+	if ioCounters, err := disk.IOCountersWithContext(ctx); err == nil {
+		for _, io := range ioCounters {
+			metrics.DiskReadBytes += io.ReadBytes
+			metrics.DiskWriteBytes += io.WriteBytes
+		}
+	}
+	// Disk I/O is not critical, so we don't return error if it fails
 
 	// Network I/O
 	netIO, err := net.IOCountersWithContext(ctx, false)
@@ -96,7 +123,42 @@ func (c *Collector) Collect(ctx context.Context) (*models.AgentMetrics, error) {
 	}
 	// Process count is not critical, so we don't return error if it fails
 
+	// Host uptime
+	if uptime, err := host.UptimeWithContext(ctx); err == nil {
+		metrics.UptimeSeconds = uptime
+	}
+	// Uptime is not critical, so we don't return error if it fails
+
 	return metrics, nil
+}
+
+// collectDiskMounts returns per-mount usage for all real (non-pseudo) filesystems.
+// Mounts that fail to stat are skipped rather than aborting the report.
+func (c *Collector) collectDiskMounts(ctx context.Context) []models.DiskMount {
+	partitions, err := disk.PartitionsWithContext(ctx, false)
+	if err != nil {
+		return nil
+	}
+
+	mounts := make([]models.DiskMount, 0, len(partitions))
+	seen := make(map[string]struct{}, len(partitions))
+	for _, p := range partitions {
+		if _, ok := seen[p.Mountpoint]; ok {
+			continue
+		}
+		usage, err := disk.UsageWithContext(ctx, p.Mountpoint)
+		if err != nil || usage.Total == 0 {
+			continue
+		}
+		seen[p.Mountpoint] = struct{}{}
+		mounts = append(mounts, models.DiskMount{
+			Path:   p.Mountpoint,
+			Used:   usage.Used,
+			Total:  usage.Total,
+			Fstype: p.Fstype,
+		})
+	}
+	return mounts
 }
 
 func isNotImplementedError(err error) bool {

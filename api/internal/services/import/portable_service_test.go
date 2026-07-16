@@ -45,6 +45,10 @@ func (m *portableMonitorServiceMock) CreateMonitor(ctx context.Context, tenantID
 	return monitor, nil
 }
 
+func (m *portableMonitorServiceMock) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, monitorID *uuid.UUID, monitorType models.MonitorType, config json.RawMessage) (json.RawMessage, error) {
+	return config, nil
+}
+
 func (m *portableMonitorServiceMock) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID) (*models.Monitor, error) {
 	monitor, ok := m.getMonitors[monitorID]
 	if !ok {
@@ -87,8 +91,16 @@ func (m *portableMonitorServiceMock) DeleteMonitor(ctx context.Context, tenantID
 	return nil
 }
 
+func (m *portableMonitorServiceMock) BulkDeleteMonitors(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 func (m *portableMonitorServiceMock) DeleteMonitorHistory(ctx context.Context, tenantID, monitorID uuid.UUID) error {
 	return nil
+}
+
+func (m *portableMonitorServiceMock) BulkUpdateAlerting(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, threshold *int, mode *string, channels []models.MonitorChannelAssignment) (int, error) {
+	return len(monitorIDs), nil
 }
 
 func TestParseFile_PortableMonitorExport(t *testing.T) {
@@ -319,6 +331,61 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 
 	if err := sqlMock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestExecuteImport_SkipsAlreadyImportedMonitors(t *testing.T) {
+	tenantID := uuid.New()
+	existingAPIID := uuid.New()
+	monitorSvc := &portableMonitorServiceMock{
+		listMonitors: []models.Monitor{
+			{
+				ID:       existingAPIID,
+				TenantID: tenantID,
+				Name:     "API",
+				Type:     models.MonitorTypeHTTP,
+			},
+		},
+	}
+
+	svc := NewService(nil, monitorSvc)
+	result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
+		Rows: []models.ImportRow{
+			rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com/health", "method": "GET"}, nil, nil, 60, 30),
+			rowWithConfig(1, "Ping", "ping", map[string]interface{}{"host": "example.com"}, nil, nil, 60, 30),
+			rowWithConfig(2, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"API", "Ping"}, 60, 0),
+		},
+		Mapping: models.FieldMapping{
+			Name:            "name",
+			Type:            "type",
+			Config:          "config",
+			IntervalSeconds: "interval_seconds",
+			TimeoutSeconds:  "timeout_seconds",
+			Enabled:         "enabled",
+			GroupMembers:    "group_members",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteImport() error = %v", err)
+	}
+
+	if result.SuccessCount != 2 || result.SkippedCount != 1 || result.FailedCount != 0 {
+		t.Fatalf("unexpected import counts: %+v", result)
+	}
+	if result.Results[0].Status != "skipped" || !strings.Contains(result.Results[0].SkipReason, "already exists") {
+		t.Fatalf("unexpected duplicate result: %+v", result.Results[0])
+	}
+	if len(monitorSvc.createRequests) != 2 {
+		t.Fatalf("len(createRequests) = %d, want 2", len(monitorSvc.createRequests))
+	}
+
+	groupConfig := decodeConfig(t, monitorSvc.createRequests[1].Config)
+	memberIDs, ok := groupConfig["monitor_ids"].([]interface{})
+	if !ok || len(memberIDs) != 2 {
+		t.Fatalf("group monitor_ids = %#v, want two member IDs", groupConfig["monitor_ids"])
+	}
+	if memberIDs[0] != existingAPIID.String() {
+		t.Fatalf("first group member ID = %v, want existing API ID %s", memberIDs[0], existingAPIID)
 	}
 }
 

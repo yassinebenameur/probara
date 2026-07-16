@@ -33,6 +33,13 @@ func NewHandlers(service *tenants.Service, log *logger.Logger) *Handlers {
 
 // ListTenants handles GET /api/v1/tenants
 func (h *Handlers) ListTenants(w http.ResponseWriter, r *http.Request) {
+	// Tenant discovery is an admin-session concern; API keys are pinned to
+	// one tenant and never switch.
+	if _, err := middleware.GetAdminID(r.Context()); err != nil {
+		errors.WriteForbiddenError(w, "admin session required")
+		return
+	}
+
 	items, err := h.service.ListTenants(r.Context())
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to list tenants")
@@ -95,6 +102,13 @@ func (h *Handlers) UpdateTenantSettings(w http.ResponseWriter, r *http.Request) 
 
 	if req.DataRetentionDays != nil {
 		if err := validation.ValidateTenantDataRetentionDays(*req.DataRetentionDays); err != nil {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
+	}
+
+	if req.DashboardGroupTags != nil {
+		if err := validation.ValidateDashboardGroupTags(*req.DashboardGroupTags); err != nil {
 			errors.WriteValidationError(w, err.Error())
 			return
 		}

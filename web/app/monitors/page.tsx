@@ -1,10 +1,19 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, Layers } from 'lucide-react';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
+import FilterChip from '@/components/ui/FilterChip';
+import PageHeader from '@/components/ui/PageHeader';
+import SharedEmptyState from '@/components/ui/EmptyState';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/ToastProvider';
+import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
-  getMonitors,
   deleteMonitor,
   getMonitorResults,
   getGroupMembers,
@@ -14,8 +23,11 @@ import {
   getSyntheticBrowserScreenshotUrl,
   toggleMonitorEnabled,
   exportMonitors,
+  snoozeMonitor,
 } from '@/lib/api';
+import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 import { getApiKey } from '@/lib/auth';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import {
   calculateUptime,
   countOperationalResults,
@@ -92,29 +104,32 @@ function getTagColor(tag: string) {
   return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
 }
 
-// Tag pill component
-function TagPill({ tag, size = 'sm', onClick, selected = false }: { 
-  tag: string; 
-  size?: 'xs' | 'sm'; 
+// Tag pill — renders a colored Pill using the per-tag color palette. When onClick
+// is provided, the wrapping span becomes a focusable button with a selected ring.
+function TagPill({ tag, size = 'sm', onClick, selected = false }: {
+  tag: string;
+  size?: 'xs' | 'sm';
   onClick?: () => void;
   selected?: boolean;
 }) {
   const color = getTagColor(tag);
-  const sizeClasses = size === 'xs' 
-    ? 'text-[9px] px-1.5 py-0.5' 
-    : 'text-[10px] px-2 py-0.5';
-  
-  return (
-    <span
-      onClick={onClick}
-      className={`inline-flex items-center rounded-full border ${sizeClasses} font-medium transition-all ${
-        selected 
-          ? `${color.bg} ${color.text} ${color.border} ring-1 ring-offset-1 ring-offset-slate-900 ring-white/20` 
-          : `${color.bg} ${color.text} ${color.border}`
-      } ${onClick ? 'cursor-pointer hover:brightness-125' : ''}`}
-    >
+  const pill = (
+    <Pill tone="tag" size={size} color={color}>
       {tag}
-    </span>
+    </Pill>
+  );
+  if (!onClick) return pill;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={`inline-flex rounded-full transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 ${
+        selected ? 'ring-1 ring-offset-1 ring-offset-slate-900 ring-white/20' : 'hover:brightness-125'
+      }`}
+    >
+      {pill}
+    </button>
   );
 }
 
@@ -125,9 +140,36 @@ function StatusDot({ status }: { status: MonitorDisplayStatus }) {
     down: 'bg-rose-500',
     degraded: 'bg-amber-500',
     paused: 'bg-slate-500',
+    maintenance: 'bg-sky-500',
     unknown: 'bg-slate-500',
   };
   return <span className={`h-2 w-2 rounded-full ${colors[status]}`} />;
+}
+
+// Display names for monitor types. Types missing here (new features) still
+// render via the fallback — they show up in the filter automatically.
+const TYPE_LABELS: Record<string, { label: string; short: string }> = {
+  http: { label: 'HTTP', short: 'HTTP' },
+  ping: { label: 'Ping', short: 'PING' },
+  dns: { label: 'DNS', short: 'DNS' },
+  grpc: { label: 'gRPC', short: 'GRPC' },
+  tcp: { label: 'TCP', short: 'TCP' },
+  agent: { label: 'Agent', short: 'AGENT' },
+  group: { label: 'Group', short: 'GROUP' },
+  push: { label: 'Push', short: 'PUSH' },
+  sip: { label: 'SIP', short: 'SIP' },
+  synthetic_api: { label: 'Synthetic API', short: 'SYN API' },
+  synthetic_browser: { label: 'Synthetic Browser', short: 'SYN BROWSER' },
+  redis: { label: 'Redis', short: 'REDIS' },
+  postgres: { label: 'PostgreSQL', short: 'POSTGRES' },
+  mongodb: { label: 'MongoDB', short: 'MONGO' },
+  rabbitmq: { label: 'RabbitMQ', short: 'RABBITMQ' },
+  mysql: { label: 'MySQL', short: 'MYSQL' },
+  websocket: { label: 'WebSocket', short: 'WS' },
+};
+
+function monitorTypeLabel(type: string, variant: 'label' | 'short' = 'label') {
+  return TYPE_LABELS[type]?.[variant] ?? type.replace(/_/g, ' ');
 }
 
 // Type badge component
@@ -137,16 +179,23 @@ function TypeBadge({ type }: { type: string }) {
     ping: 'text-violet-400',
     dns: 'text-sky-400',
     grpc: 'text-teal-400',
+    tcp: 'text-lime-400',
     agent: 'text-amber-400',
     group: 'text-indigo-400',
     push: 'text-emerald-400',
     sip: 'text-orange-400',
     synthetic_api: 'text-fuchsia-400',
     synthetic_browser: 'text-pink-400',
+    redis: 'text-red-400',
+    postgres: 'text-blue-400',
+    mongodb: 'text-green-400',
+    rabbitmq: 'text-orange-300',
+    mysql: 'text-sky-300',
+    websocket: 'text-purple-400',
   };
   return (
     <span className={`text-[10px] font-medium uppercase ${colors[type] || 'text-slate-400'}`}>
-      {type}
+      {monitorTypeLabel(type, 'short')}
     </span>
   );
 }
@@ -264,94 +313,164 @@ function MonitorActionsMenu({
   onToggleEnabled,
   monitorId,
   onDelete,
+  onSnooze,
 }: {
   monitor: Monitor;
   onToggleEnabled: (monitor: Monitor) => void;
   monitorId: string;
   onDelete: () => void;
+  onSnooze: (monitor: Monitor, durationMinutes: number) => void;
 }) {
-  const closeMenu = (target: EventTarget | null) => {
-    if (!(target instanceof HTMLElement)) return;
-    const details = target.closest('details') as HTMLDetailsElement | null;
-    if (details) details.open = false;
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // The menu renders position:fixed so it can escape the group children's
+  // overflow-y-auto container; anchor it to the trigger on open.
+  const MENU_WIDTH = 144;
+  const MENU_HEIGHT = 196;
+
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const openUp = rect.bottom + 4 + MENU_HEIGHT > window.innerHeight;
+    setPos({
+      top: openUp ? rect.top - 4 - MENU_HEIGHT : rect.bottom + 4,
+      left: Math.max(8, rect.right - MENU_WIDTH),
+    });
+    setOpen(true);
   };
 
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [open]);
+
+  const itemClass =
+    'block w-full rounded px-2.5 py-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white';
+
   return (
-    <details className="relative" onClick={(e) => e.stopPropagation()}>
-      <summary
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggle}
         aria-label="Monitor actions"
-        className="list-none rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white cursor-pointer [&::-webkit-details-marker]:hidden"
+        aria-expanded={open}
+        className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white cursor-pointer"
       >
         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6h.01M12 12h.01M12 18h.01" />
         </svg>
-      </summary>
-      <div className="absolute right-0 z-30 mt-1 w-36 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-lg">
-        <Link
-          href={`/monitors/${monitorId}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-          }}
-          className="block rounded px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
+      </button>
+      {open && pos && (
+        <div
+          className="fixed z-50 w-36 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-lg backdrop-blur-sm"
+          style={{ top: pos.top, left: pos.left }}
+          onClick={(e) => e.stopPropagation()}
         >
-          Edit
-        </Link>
-        <Link
-          href={`/monitors/new?clone=${monitorId}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-          }}
-          className="block rounded px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
-        >
-          Clone
-        </Link>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-            onToggleEnabled(monitor);
-          }}
-          className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
-        >
-          {monitor.enabled ? 'Pause' : 'Start'}
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            closeMenu(e.currentTarget);
-            onDelete();
-          }}
-          className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-rose-300 transition-colors hover:bg-rose-500/10 hover:text-rose-200"
-        >
-          Delete
-        </button>
-      </div>
-    </details>
+          <Link
+            href={`/monitors/${monitorId}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+            className={itemClass}
+          >
+            Edit
+          </Link>
+          <Link
+            href={`/monitors/new?clone=${monitorId}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+            className={itemClass}
+          >
+            Clone
+          </Link>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onToggleEnabled(monitor);
+            }}
+            className={itemClass}
+          >
+            {monitor.enabled ? 'Pause' : 'Start'}
+          </button>
+          <div className="my-1 border-t border-white/[0.06] px-2.5 pt-1 text-[9px] uppercase tracking-wider text-slate-500">
+            Snooze alerts
+          </div>
+          <div className="flex gap-1 px-2.5 pb-1">
+            {[
+              { label: '1h', minutes: 60 },
+              { label: '4h', minutes: 240 },
+              { label: '24h', minutes: 1440 },
+            ].map(({ label, minutes }) => (
+              <button
+                key={label}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  onSnooze(monitor, minutes);
+                }}
+                className="flex-1 rounded border border-white/[0.08] px-1.5 py-1 text-[10px] text-slate-300 transition-colors hover:border-sky-500/40 hover:bg-sky-500/10 hover:text-sky-300"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onDelete();
+            }}
+            className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-rose-300 transition-colors hover:bg-rose-500/10 hover:text-rose-200"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
 // Compact monitor row component
-function MonitorRow({ 
-  monitor, 
-  results, 
-  isSelected, 
-  onClick, 
+function MonitorRow({
+  monitor,
+  results,
+  isSelected,
+  onClick,
   onDelete,
   onToggleEnabled,
+  onSnooze,
   isChecked,
   onToggleSelect,
   selectionMode,
   isChild = false,
-}: { 
+}: {
   monitor: Monitor;
   results: CheckResult[];
   isSelected: boolean;
   onClick: () => void;
   onDelete: () => void;
   onToggleEnabled: (monitor: Monitor) => void;
+  onSnooze: (monitor: Monitor, durationMinutes: number) => void;
   isChecked: boolean;
   onToggleSelect: () => void;
   selectionMode: boolean;
@@ -375,6 +494,10 @@ function MonitorRow({
         return `${cfg.host}:${port}`;
       }
     }
+    if (monitor.type === 'tcp' && monitor.config && 'host' in monitor.config) {
+      const cfg = monitor.config as { host?: string; port?: number };
+      if (cfg.host) return cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host;
+    }
     if (monitor.url) return monitor.url;
     if (monitor.config && 'host' in monitor.config) return monitor.config.host;
     return null;
@@ -389,7 +512,7 @@ function MonitorRow({
           : isChecked
           ? 'border-cyan-500/20 bg-cyan-500/5'
           : 'border-transparent hover:border-white/[0.06] hover:bg-slate-800/30'
-      } ${isChild ? 'ml-4 bg-slate-800/20 rounded-lg' : ''}`}
+      } ${isChild ? 'bg-slate-800/20' : ''}`}
     >
       <SelectCheckbox
         checked={isChecked}
@@ -403,8 +526,20 @@ function MonitorRow({
       {/* Name & Type */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-white truncate">{monitor.name}</span>
+          <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
           <TypeBadge type={monitor.type} />
+          {status === 'maintenance' && (
+            <span
+              className="rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-300"
+              title={
+                monitor.maintenance_until
+                  ? `Alerts suppressed until ${new Date(monitor.maintenance_until).toLocaleString()}`
+                  : 'Alerts suppressed during maintenance'
+              }
+            >
+              Maintenance
+            </span>
+          )}
           {/* Tags */}
           {monitor.tags && monitor.tags.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
@@ -449,11 +584,12 @@ function MonitorRow({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-1 opacity-100 transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
         <MonitorActionsMenu
           monitor={monitor}
           monitorId={monitor.id}
           onToggleEnabled={onToggleEnabled}
+          onSnooze={onSnooze}
           onDelete={onDelete}
         />
       </div>
@@ -472,6 +608,7 @@ function GroupCard({
   onClick,
   onDelete,
   onToggleEnabled,
+  onSnooze,
   isChecked,
   onToggleSelect,
   onToggleMonitorSelection,
@@ -481,6 +618,9 @@ function GroupCard({
   selectedMonitorId,
   selectedMonitorIds,
   visitedGroupIds = new Set<string>(),
+  autoExpand = false,
+  memberMatcher,
+  groupHasMatch,
 }: {
   monitor: Monitor;
   results: CheckResult[];
@@ -491,6 +631,7 @@ function GroupCard({
   onClick: () => void;
   onDelete: () => void;
   onToggleEnabled: (monitor: Monitor) => void;
+  onSnooze: (monitor: Monitor, durationMinutes: number) => void;
   isChecked: boolean;
   onToggleSelect: () => void;
   onToggleMonitorSelection: (id: string) => void;
@@ -500,8 +641,26 @@ function GroupCard({
   selectedMonitorId: string | null;
   selectedMonitorIds: Set<string>;
   visitedGroupIds?: Set<string>;
+  autoExpand?: boolean;
+  memberMatcher?: (monitor: Monitor) => boolean;
+  groupHasMatch?: (groupId: string) => boolean;
 }) {
   const [expanded, setExpanded] = useState(false); // Collapsed by default
+
+  // Expand automatically while a filter matches members inside this group,
+  // and collapse again when that filter is cleared (unless the user expanded it).
+  const wasAutoExpanded = useRef(false);
+  useEffect(() => {
+    if (autoExpand) {
+      setExpanded((prev) => {
+        if (!prev) wasAutoExpanded.current = true;
+        return true;
+      });
+    } else if (wasAutoExpanded.current) {
+      wasAutoExpanded.current = false;
+      setExpanded(false);
+    }
+  }, [autoExpand]);
   const status = getEffectiveMonitorStatus(monitor, results);
   const uptime = calculateUptime(results);
   const operationalCount = countOperationalResults(results);
@@ -514,6 +673,24 @@ function GroupCard({
     uptime: calculateUptime(memberResults[m.id] || [])
   }));
   const healthyCount = memberStats.filter(s => s.status === 'up').length;
+  const downCount = memberStats.filter(s => s.status === 'down' || s.status === 'degraded').length;
+  const healthTone = downCount > 0
+    ? 'text-rose-400'
+    : healthyCount === members.length && members.length > 0
+      ? 'text-emerald-400/90'
+      : 'text-slate-500';
+
+  // While filtering, only show the members that match (fall back to all if
+  // the group itself matched but none of its members did).
+  const matchingMembers = memberMatcher
+    ? members.filter(
+        (member) =>
+          memberMatcher(member) ||
+          (member.type === 'group' && groupHasMatch?.(member.id))
+      )
+    : members;
+  const visibleMembers = matchingMembers.length > 0 ? matchingMembers : members;
+  const hiddenMemberCount = members.length - visibleMembers.length;
 
   return (
     <div className={`rounded-xl border transition-all ${
@@ -553,7 +730,7 @@ function GroupCard({
         {/* Name */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-white">{monitor.name}</span>
+            <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
             <span className="text-[10px] font-medium uppercase text-indigo-400">GROUP</span>
             {/* Tags */}
             {monitor.tags && monitor.tags.length > 0 && (
@@ -568,27 +745,25 @@ function GroupCard({
             )}
           </div>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {healthyCount}/{members.length} healthy · {operationalCount > 0 ? `${uptime.toFixed(1)}%` : 'N/A'} uptime
+            <span className={healthTone}>{healthyCount}/{members.length} healthy</span>
+            {' · '}{operationalCount > 0 ? `${uptime.toFixed(1)}%` : 'N/A'} uptime
           </p>
         </div>
 
         {/* Member Status Dots */}
         <div className="hidden sm:flex items-center gap-1">
-          {members.slice(0, 8).map((m) => (
-            <div
-              key={m.id}
-              className={`h-2 w-2 rounded-full ${
-                getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'up'
-                  ? 'bg-emerald-500'
-                  : getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'paused'
-                    ? 'bg-slate-500'
-                    : getEffectiveMonitorStatus(m, memberResults[m.id] || []) === 'unknown'
-                    ? 'bg-slate-500'
-                    : 'bg-rose-500'
-              }`}
-              title={m.name}
-            />
-          ))}
+          {members.slice(0, 8).map((m) => {
+            const memberStatus = getEffectiveMonitorStatus(m, memberResults[m.id] || []);
+            const dotColor =
+              memberStatus === 'up'
+                ? 'bg-emerald-500'
+                : memberStatus === 'paused' || memberStatus === 'unknown'
+                  ? 'bg-slate-500'
+                  : memberStatus === 'maintenance'
+                    ? 'bg-sky-500'
+                    : 'bg-rose-500';
+            return <div key={m.id} className={`h-2 w-2 rounded-full ${dotColor}`} title={m.name} />;
+          })}
           {members.length > 8 && (
             <span className="text-[10px] text-slate-500">+{members.length - 8}</span>
           )}
@@ -598,25 +773,32 @@ function GroupCard({
         <StatusDot status={status} />
 
         {/* Actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 opacity-100 transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
           <MonitorActionsMenu
             monitor={monitor}
             monitorId={monitor.id}
             onToggleEnabled={onToggleEnabled}
+            onSnooze={onSnooze}
             onDelete={onDelete}
           />
         </div>
       </div>
 
       {/* Expanded Children */}
-      {expanded && members.length > 0 && (
-        <div className="border-t border-white/[0.04] px-3 py-3 space-y-2">
-          {members.map((member) => {
+      {expanded && visibleMembers.length > 0 && (
+        <div className="dashboard-scroll max-h-[60vh] overflow-y-auto overscroll-contain border-t border-white/[0.04] px-3 py-3">
+          {hiddenMemberCount > 0 && (
+            <p className="mb-2 ml-5 pl-2.5 text-[10px] text-slate-500">
+              Showing {visibleMembers.length} matching of {members.length} members
+            </p>
+          )}
+          <div className="ml-5 space-y-1.5 border-l border-white/[0.08] pl-2.5">
+          {visibleMembers.map((member) => {
             const memberKey = `${monitor.id}:${member.id}`;
             if (member.type === 'group') {
               const cycleDetected = nextVisitedGroupIDs.has(member.id);
               return (
-                <div key={memberKey} className="ml-4 space-y-1">
+                <div key={memberKey} className="space-y-1">
                   {cycleDetected ? (
                     <>
                       <MonitorRow
@@ -626,6 +808,7 @@ function GroupCard({
                         onClick={() => onSelectMonitor(member.id)}
                         onDelete={() => onDeleteMonitor(member.id)}
                         onToggleEnabled={onToggleEnabled}
+                        onSnooze={onSnooze}
                         isChecked={selectedMonitorIds.has(member.id)}
                         onToggleSelect={() => onToggleMonitorSelection(member.id)}
                         selectionMode={selectionMode}
@@ -646,6 +829,7 @@ function GroupCard({
                       onClick={() => onSelectMonitor(member.id)}
                       onDelete={() => onDeleteMonitor(member.id)}
                       onToggleEnabled={onToggleEnabled}
+                      onSnooze={onSnooze}
                       isChecked={selectedMonitorIds.has(member.id)}
                       onToggleSelect={() => onToggleMonitorSelection(member.id)}
                       onToggleMonitorSelection={onToggleMonitorSelection}
@@ -655,6 +839,9 @@ function GroupCard({
                       selectedMonitorId={selectedMonitorId}
                       selectedMonitorIds={selectedMonitorIds}
                       visitedGroupIds={nextVisitedGroupIDs}
+                      autoExpand={Boolean(memberMatcher) && groupHasMatch?.(member.id)}
+                      memberMatcher={memberMatcher}
+                      groupHasMatch={groupHasMatch}
                     />
                   )}
                 </div>
@@ -662,22 +849,23 @@ function GroupCard({
             }
 
             return (
-              <div key={memberKey} className="ml-4">
-                <MonitorRow
-                  monitor={member}
-                  results={memberResults[member.id] || []}
-                  isSelected={member.id === selectedMonitorId}
-                  onClick={() => onSelectMonitor(member.id)}
-                  onDelete={() => onDeleteMonitor(member.id)}
-                  onToggleEnabled={onToggleEnabled}
-                  isChecked={selectedMonitorIds.has(member.id)}
-                  onToggleSelect={() => onToggleMonitorSelection(member.id)}
-                  selectionMode={selectionMode}
-                  isChild
-                />
-              </div>
+              <MonitorRow
+                key={memberKey}
+                monitor={member}
+                results={memberResults[member.id] || []}
+                isSelected={member.id === selectedMonitorId}
+                onClick={() => onSelectMonitor(member.id)}
+                onDelete={() => onDeleteMonitor(member.id)}
+                onToggleEnabled={onToggleEnabled}
+                onSnooze={onSnooze}
+                isChecked={selectedMonitorIds.has(member.id)}
+                onToggleSelect={() => onToggleMonitorSelection(member.id)}
+                selectionMode={selectionMode}
+                isChild
+              />
             );
           })}
+          </div>
         </div>
       )}
     </div>
@@ -685,12 +873,18 @@ function GroupCard({
 }
 
 // Detail Panel Component
-function DetailPanel({ 
-  monitor, 
-  results 
-}: { 
+function DetailPanel({
+  monitor,
+  results,
+  members = [],
+  memberResults = {},
+  onSelectMember,
+}: {
   monitor: Monitor | null;
   results: CheckResult[];
+  members?: Monitor[];
+  memberResults?: Record<string, CheckResult[]>;
+  onSelectMember?: (id: string) => void;
 }) {
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
@@ -787,6 +981,15 @@ function DetailPanel({
   const latestResult = results[0];
   const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
 
+  const memberStatuses = monitor.type === 'group'
+    ? members.map((m) => getEffectiveMonitorStatus(m, memberResults[m.id] || []))
+    : [];
+  const memberUp = memberStatuses.filter((s) => s === 'up').length;
+  const memberDown = memberStatuses.filter((s) => s === 'down' || s === 'degraded').length;
+  const memberPaused = memberStatuses.filter((s) => s === 'paused').length;
+  const memberMaintenance = memberStatuses.filter((s) => s === 'maintenance').length;
+  const memberOther = memberStatuses.length - memberUp - memberDown - memberPaused - memberMaintenance;
+
   const getUrl = () => {
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
     if (monitor.config && 'base_url' in monitor.config) return monitor.config.base_url || null;
@@ -824,6 +1027,71 @@ function DetailPanel({
           <p className="text-[10px] text-slate-500">P95</p>
         </div>
       </div>
+
+      {/* Group Members */}
+      {monitor.type === 'group' && (
+        <div className="border-b border-white/[0.06] p-4">
+          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">
+            Members ({members.length})
+          </h4>
+          {members.length > 0 && (
+            <>
+              <div className="mb-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-800">
+                {memberUp > 0 && (
+                  <div className="bg-emerald-500" style={{ width: `${(memberUp / members.length) * 100}%` }} />
+                )}
+                {memberDown > 0 && (
+                  <div className="bg-rose-500" style={{ width: `${(memberDown / members.length) * 100}%` }} />
+                )}
+                {memberPaused > 0 && (
+                  <div className="bg-slate-500" style={{ width: `${(memberPaused / members.length) * 100}%` }} />
+                )}
+                {memberMaintenance > 0 && (
+                  <div className="bg-sky-500" style={{ width: `${(memberMaintenance / members.length) * 100}%` }} />
+                )}
+                {memberOther > 0 && (
+                  <div className="bg-slate-600" style={{ width: `${(memberOther / members.length) * 100}%` }} />
+                )}
+              </div>
+              <p className="mb-2 text-[10px] text-slate-500">
+                {[
+                  `${memberUp} up`,
+                  memberDown ? `${memberDown} down` : null,
+                  memberPaused ? `${memberPaused} paused` : null,
+                  memberMaintenance ? `${memberMaintenance} maintenance` : null,
+                  memberOther ? `${memberOther} unknown` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            </>
+          )}
+          {members.length > 0 ? (
+            <div className="dashboard-scroll max-h-56 space-y-0.5 overflow-y-auto overscroll-contain">
+              {members.map((member) => {
+                const memberStatus = getEffectiveMonitorStatus(member, memberResults[member.id] || []);
+                const memberOperational = countOperationalResults(memberResults[member.id] || []);
+                const memberUptime = calculateUptime(memberResults[member.id] || []);
+                return (
+                  <button
+                    key={member.id}
+                    onClick={() => onSelectMember?.(member.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/[0.04]"
+                  >
+                    <StatusDot status={memberStatus} />
+                    <span className="min-w-0 flex-1 truncate text-xs text-slate-300">{member.name}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {memberOperational > 0 ? `${memberUptime.toFixed(1)}%` : '—'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">No members yet</p>
+          )}
+        </div>
+      )}
 
       {/* Agent Metrics Section */}
       {monitor.type === 'agent' && agentMetrics && (
@@ -966,11 +1234,9 @@ function DetailPanel({
 
       {/* View Details */}
       <div className="p-3 border-t border-white/[0.06]">
-        <Link href={`/monitors/${monitor.id}`}>
-          <button className="w-full rounded-lg bg-cyan-500 py-2 text-xs font-medium text-white hover:bg-cyan-400 transition-colors">
-            View Details
-          </button>
-        </Link>
+        <Button variant="ghost" size="sm" className="w-full" asChild>
+          <Link href={`/monitors/${monitor.id}`}>View details</Link>
+        </Button>
       </div>
     </div>
   );
@@ -990,42 +1256,58 @@ function LoadingSkeleton() {
 // Empty state
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.1] py-12">
-      <svg className="h-10 w-10 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-      </svg>
-      <h3 className="mt-3 text-sm font-medium text-white">No monitors yet</h3>
-      <p className="mt-1 text-xs text-slate-500">Create your first monitor to start tracking</p>
-      <Link href="/monitors/new">
-        <button className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-400">
-          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Create Monitor
-        </button>
-      </Link>
-    </div>
+    <SharedEmptyState
+      icon={<Activity strokeWidth={1.5} />}
+      title="No monitors yet"
+      description="Create your first monitor to start tracking."
+      action={
+        <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+          <Link href="/monitors/new">Add monitor</Link>
+        </Button>
+      }
+    />
   );
 }
 
 export default function MonitorsPage() {
+  const { canWrite } = useCurrentUser();
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
+  const [showTypeFilter, setShowTypeFilter] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
   const [checkResultsMap, setCheckResultsMap] = useState<Record<string, CheckResult[]>>({});
   const [groupMembersMap, setGroupMembersMap] = useState<Record<string, Monitor[]>>({});
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { showToast } = useToast();
+  const [pendingDelete, setPendingDelete] = useState<Monitor | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMonitorIds, setSelectedMonitorIds] = useState<Set<string>>(new Set());
   const [groupNameInput, setGroupNameInput] = useState('');
   const [targetGroupId, setTargetGroupId] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [showBulkAlerting, setShowBulkAlerting] = useState(false);
+  const router = useRouter();
+
+  // Below lg the detail panel is not rendered, so selecting a row would do
+  // nothing visible — open the monitor's page instead.
+  const selectMonitor = (id: string) => {
+    if (selectionMode) {
+      setSelectedMonitorId(id);
+      return;
+    }
+    if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 1024px)').matches) {
+      router.push(`/monitors/${id}`);
+      return;
+    }
+    setSelectedMonitorId(id);
+  };
 
   useEffect(() => {
     loadMonitors();
@@ -1050,14 +1332,14 @@ export default function MonitorsPage() {
       // #region agent log
       const getMonitorsStart = Date.now();
       // #endregion
-      const response = await getMonitors({ page_size: 100 });
+      const monitorsList = await getAllMonitors();
       // #region agent log
       debugIngest({
         location: 'page.tsx:loadMonitors:getMonitors',
         message: 'getMonitors API call completed',
         data: {
           durationMs: Date.now() - getMonitorsStart,
-          monitorCount: response?.items?.length || 0,
+          monitorCount: monitorsList.length,
         },
         timestamp: Date.now(),
         sessionId: 'debug-session',
@@ -1065,7 +1347,6 @@ export default function MonitorsPage() {
         hypothesisId: 'A',
       });
       // #endregion
-      const monitorsList = response?.items || [];
       setMonitors(monitorsList);
 
       if (monitorsList.length > 0 && !selectedMonitorId) {
@@ -1120,7 +1401,7 @@ export default function MonitorsPage() {
                   apiCallCount++;
                   const membersStart = Date.now();
                   // #endregion
-                  const members = await getGroupMembers(monitor.id);
+                  const members = sortMonitorsByName(await getGroupMembers(monitor.id));
                   // #region agent log
                   debugIngest({
                     location: 'page.tsx:loadMonitors:getGroupMembers',
@@ -1198,26 +1479,36 @@ export default function MonitorsPage() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      setToast({ message: 'Monitor export downloaded', type: 'success' });
+      showToast('Monitor export downloaded', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to export monitors', type: 'error' });
+      showToast(err.message || 'Failed to export monitors', 'error');
     } finally {
       setExporting(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this monitor?')) return;
+  const requestDeleteById = (id: string) => {
+    const all = [...monitors, ...Object.values(groupMembersMap).flat()];
+    const target = all.find((m) => m.id === id);
+    if (target) setPendingDelete(target);
+  };
 
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+    const id = pendingDelete.id;
+    setDeleting(true);
     try {
       await deleteMonitor(id);
       setMonitors(monitors.filter((m) => m.id !== id));
       if (selectedMonitorId === id) {
         setSelectedMonitorId(monitors.find((m) => m.id !== id)?.id || null);
       }
-      setToast({ message: 'Monitor deleted', type: 'success' });
+      showToast('Monitor deleted', 'success');
+      setPendingDelete(null);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete', type: 'error' });
+      showToast(err.message || 'Failed to delete', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1232,12 +1523,27 @@ export default function MonitorsPage() {
         ] as const);
         return Object.fromEntries(nextEntries);
       });
-      setToast({
-        message: updated.enabled ? 'Monitor resumed' : 'Monitor paused',
-        type: 'success',
-      });
+      showToast(updated.enabled ? 'Monitor resumed' : 'Monitor paused', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to update monitor', type: 'error' });
+      showToast(err.message || 'Failed to update monitor', 'error');
+    }
+  };
+
+  const handleSnooze = async (monitor: Monitor, durationMinutes: number) => {
+    try {
+      const window = await snoozeMonitor(monitor.id, { duration_minutes: durationMinutes });
+      const updated: Monitor = { ...monitor, in_maintenance: true, maintenance_until: window.ends_at };
+      setMonitors((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setGroupMembersMap((prev) => {
+        const nextEntries = Object.entries(prev).map(([groupId, members]) => [
+          groupId,
+          members.map((member) => (member.id === updated.id ? updated : member)),
+        ] as const);
+        return Object.fromEntries(nextEntries);
+      });
+      showToast(`Alerts snoozed until ${new Date(window.ends_at).toLocaleTimeString()}`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to snooze monitor', 'error');
     }
   };
 
@@ -1271,6 +1577,28 @@ export default function MonitorsPage() {
     return Array.from(tagSet).sort();
   }, [monitors]);
 
+  // Types present in the workspace, with counts, most common first.
+  // Derived from data so new monitor types appear here with no UI changes.
+  const typeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    monitors.forEach((monitor) => {
+      counts.set(monitor.type, (counts.get(monitor.type) || 0) + 1);
+    });
+    return Array.from(counts.entries()).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+    );
+  }, [monitors]);
+
+  const toggleType = (type: string) => {
+    const newSelected = new Set(selectedTypes);
+    if (newSelected.has(type)) {
+      newSelected.delete(type);
+    } else {
+      newSelected.add(type);
+    }
+    setSelectedTypes(newSelected);
+  };
+
   // Toggle tag selection
   const toggleTag = (tag: string) => {
     const newSelected = new Set(selectedTags);
@@ -1296,22 +1624,44 @@ export default function MonitorsPage() {
     return memberIds;
   }, [groupMembersMap]);
 
-  // Filter monitors (exclude monitors that are members of a group - they only show under their group)
-  const filteredMonitors = monitors.filter((monitor) => {
-    // Don't show monitors that belong to a group as standalone items
-    if (groupMemberIds.has(monitor.id)) return false;
-    
+  const monitorMatchesFilters = (monitor: Monitor) => {
     const matchesSearch = monitor.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesType = typeFilter === 'all' || monitor.type === typeFilter;
+    const matchesType = selectedTypes.size === 0 || selectedTypes.has(monitor.type);
     const status = getEffectiveMonitorStatus(monitor, checkResultsMap[monitor.id] || []);
-    const matchesStatus = statusFilter === 'all' || 
+    const matchesStatus = statusFilter === 'all' ||
       (statusFilter === 'up' && status === 'up') ||
       (statusFilter === 'down' && (status === 'down' || status === 'degraded')) ||
-      (statusFilter === 'paused' && status === 'paused');
-    const matchesTags = selectedTags.size === 0 || 
-      (monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
+      (statusFilter === 'paused' && status === 'paused') ||
+      (statusFilter === 'maintenance' && status === 'maintenance');
+    const matchesTags = selectedTags.size === 0 ||
+      Boolean(monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
     return matchesSearch && matchesType && matchesStatus && matchesTags;
-  });
+  };
+
+  // A group also matches when any of its (nested) members match, so searching
+  // for a member surfaces the group it lives in.
+  const groupHasMatchingMember = (groupId: string, visited: Set<string> = new Set()): boolean => {
+    if (visited.has(groupId)) return false;
+    visited.add(groupId);
+    return (groupMembersMap[groupId] || []).some(
+      (member) =>
+        monitorMatchesFilters(member) ||
+        (member.type === 'group' && groupHasMatchingMember(member.id, visited))
+    );
+  };
+
+  const hasActiveFilters =
+    searchTerm.trim() !== '' || selectedTypes.size > 0 || statusFilter !== 'all' || selectedTags.size > 0;
+
+  // Filter monitors (exclude monitors that are members of a group - they only show under their group),
+  // then show groups ahead of ungrouped monitors.
+  const filteredMonitors = monitors
+    .filter((monitor) => {
+      if (groupMemberIds.has(monitor.id)) return false;
+      if (monitorMatchesFilters(monitor)) return true;
+      return monitor.type === 'group' && groupHasMatchingMember(monitor.id);
+    })
+    .sort((a, b) => Number(b.type === 'group') - Number(a.type === 'group'));
 
   const selectedMonitor = monitors.find((m) => m.id === selectedMonitorId) || null;
   const selectedMonitors = monitors.filter((m) => selectedMonitorIds.has(m.id));
@@ -1349,25 +1699,28 @@ export default function MonitorsPage() {
 
   const handleBulkDelete = async () => {
     if (selectedMonitors.length === 0) return;
-    if (!confirm(`Delete ${selectedMonitors.length} selected monitor(s)?`)) return;
+    setDeleting(true);
     try {
       await Promise.all(selectedMonitors.map((m) => deleteMonitor(m.id)));
       setMonitors(monitors.filter((m) => !selectedMonitorIds.has(m.id)));
       setSelectedMonitorIds(new Set());
-      setToast({ message: 'Selected monitors deleted', type: 'success' });
+      showToast('Selected monitors deleted', 'success');
+      setConfirmBulkDelete(false);
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to delete selected monitors', type: 'error' });
+      showToast(err.message || 'Failed to delete selected monitors', 'error');
+    } finally {
+      setDeleting(false);
     }
   };
 
   const handleCreateGroup = async () => {
     const trimmedName = groupNameInput.trim();
     if (!trimmedName) {
-      setToast({ message: 'Group name is required', type: 'error' });
+      showToast('Group name is required', 'error');
       return;
     }
     if (selectedMonitors.length < 1) {
-      setToast({ message: 'Select at least one item to create a group', type: 'error' });
+      showToast('Select at least one item to create a group', 'error');
       return;
     }
 
@@ -1383,19 +1736,19 @@ export default function MonitorsPage() {
       setGroupNameInput('');
       setSelectedMonitorIds(new Set());
       await loadMonitors();
-      setToast({ message: 'Group created', type: 'success' });
+      showToast('Group created', 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to create group', type: 'error' });
+      showToast(err.message || 'Failed to create group', 'error');
     }
   };
 
   const handleMoveToGroup = async () => {
     if (!targetGroupId) {
-      setToast({ message: 'Select a destination group first', type: 'error' });
+      showToast('Select a destination group first', 'error');
       return;
     }
     if (selectedMonitors.length === 0) {
-      setToast({ message: 'Select at least one monitor or group to move', type: 'error' });
+      showToast('Select at least one monitor or group to move', 'error');
       return;
     }
 
@@ -1404,7 +1757,7 @@ export default function MonitorsPage() {
       ? null
       : monitors.find((m) => m.id === targetGroupId && m.type === 'group');
     if (!isNoGroupDestination && !targetGroup) {
-      setToast({ message: 'Destination group not found', type: 'error' });
+      showToast('Destination group not found', 'error');
       return;
     }
 
@@ -1415,7 +1768,7 @@ export default function MonitorsPage() {
 
     if (!isNoGroupDestination) {
       if (selectedGroupIDs.includes(targetGroupId)) {
-        setToast({ message: 'Cannot move a group into itself', type: 'error' });
+        showToast('Cannot move a group into itself', 'error');
         return;
       }
 
@@ -1423,7 +1776,7 @@ export default function MonitorsPage() {
         groupContainsGroup(groupID, targetGroupId, groupMembersMap)
       );
       if (wouldCreateCycle) {
-        setToast({ message: 'Cannot move a group into one of its descendants', type: 'error' });
+        showToast('Cannot move a group into one of its descendants', 'error');
         return;
       }
     }
@@ -1443,7 +1796,7 @@ export default function MonitorsPage() {
     const hasRemovals = Object.keys(removalsByGroup).length > 0;
 
     if (isNoGroupDestination && !hasRemovals) {
-      setToast({ message: 'Selected items are not in any group', type: 'error' });
+      showToast('Selected items are not in any group', 'error');
       return;
     }
 
@@ -1455,7 +1808,7 @@ export default function MonitorsPage() {
       : selectedIds.filter((id) => !targetMemberIds.has(id));
 
     if (!isNoGroupDestination && !hasRemovals && idsToAdd.length === 0) {
-      setToast({ message: 'Selected items are already in the target group', type: 'error' });
+      showToast('Selected items are already in the target group', 'error');
       return;
     }
 
@@ -1474,14 +1827,11 @@ export default function MonitorsPage() {
 
       setSelectedMonitorIds(new Set());
       await loadMonitors();
-      setToast({
-        message: isNoGroupDestination
+      showToast(isNoGroupDestination
           ? `Removed ${selectedMonitors.length} item(s) from all groups`
-          : `Moved ${selectedMonitors.length} item(s) to ${targetGroup?.name}`,
-        type: 'success',
-      });
+          : `Moved ${selectedMonitors.length} item(s) to ${targetGroup?.name}`, 'success');
     } catch (err: any) {
-      setToast({ message: err.message || 'Failed to move monitors', type: 'error' });
+      showToast(err.message || 'Failed to move monitors', 'error');
     }
   };
 
@@ -1492,122 +1842,143 @@ export default function MonitorsPage() {
     return status === 'down' || status === 'degraded';
   }).length;
   const totalPaused = monitors.filter((m) => getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []) === 'paused').length;
+  const totalMaintenance = monitors.filter(
+    (m) => getEffectiveMonitorStatus(m, checkResultsMap[m.id] || []) === 'maintenance'
+  ).length;
 
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Monitors</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {monitors.length} monitors · {totalUp} up · {totalDown} down · {totalPaused} paused
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleExport}
-            disabled={exporting}
-            className="btn btn-secondary btn-sm disabled:opacity-60"
-          >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            {exporting ? 'Exporting...' : 'Export'}
-          </button>
-          <Link href="/monitors/import">
-            <button className="btn btn-secondary btn-sm">
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              Import
-            </button>
-          </Link>
-          <Link href="/monitors/new">
-            <button className="btn btn-primary btn-sm">
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              New Monitor
-            </button>
-          </Link>
-        </div>
-      </div>
+      <PageHeader
+        title="Monitors"
+        subtitle={`${monitors.length} monitors · ${totalUp} up · ${totalDown} down · ${totalPaused} paused${totalMaintenance ? ` · ${totalMaintenance} maintenance` : ''}`}
+        action={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Download strokeWidth={1.75} />}
+              onClick={handleExport}
+              disabled={exporting}
+              loading={exporting}
+            >
+              {exporting ? 'Exporting…' : 'Export'}
+            </Button>
+            {canWrite && (
+              <Button variant="ghost" size="sm" icon={<Upload strokeWidth={1.75} />} asChild>
+                <Link href="/monitors/import">Import</Link>
+              </Button>
+            )}
+            {canWrite && (
+              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+                <Link href="/monitors/new">Add monitor</Link>
+              </Button>
+            )}
+          </div>
+        }
+      />
 
       {/* Filters */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 max-w-xs">
-            <svg className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
             <input
               type="text"
-              placeholder="Search..."
+              placeholder="Search…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full rounded-lg border border-white/[0.06] bg-slate-900/50 py-1.5 pl-8 pr-3 text-xs text-white placeholder-slate-500 outline-none focus:border-cyan-500/50"
+              className="input input-sm pl-8"
             />
           </div>
 
-          <div className="flex items-center gap-0.5 rounded-lg border border-white/[0.06] bg-slate-900/50 p-0.5">
-            {['all', 'http', 'ping', 'dns', 'grpc', 'agent', 'group', 'push', 'sip', 'synthetic_api', 'synthetic_browser'].map((type) => (
-              <button
-                key={type}
-                onClick={() => setTypeFilter(type)}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                  typeFilter === type ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {type === 'all'
-                  ? 'All'
-                  : type === 'synthetic_api'
-                    ? 'SYN API'
-                    : type === 'synthetic_browser'
-                      ? 'SYN BROWSER'
-                      : type.toUpperCase()}
-              </button>
-            ))}
-          </div>
+          {/* Type Filter Toggle */}
+          <FilterChip
+            selected={selectedTypes.size > 0}
+            count={selectedTypes.size > 0 ? selectedTypes.size : undefined}
+            icon={<Layers strokeWidth={1.75} />}
+            onClick={() => setShowTypeFilter(!showTypeFilter)}
+            aria-expanded={showTypeFilter}
+          >
+            <span className="inline-flex items-center gap-1">
+              Type
+              <ChevronDown
+                className={`h-3 w-3 transition-transform ${showTypeFilter ? 'rotate-180' : ''}`}
+                strokeWidth={1.75}
+              />
+            </span>
+          </FilterChip>
 
-          <div className="flex items-center gap-0.5 rounded-lg border border-white/[0.06] bg-slate-900/50 p-0.5">
-            {['all', 'up', 'down', 'paused'].map((status) => (
-              <button
+          <div className="flex flex-wrap items-center gap-1.5">
+            {['all', 'up', 'down', 'paused', 'maintenance'].map((status) => (
+              <FilterChip
                 key={status}
+                selected={statusFilter === status}
                 onClick={() => setStatusFilter(status)}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                  statusFilter === status ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white'
-                }`}
               >
-                {status === 'all' ? 'All' : status === 'up' ? 'Up' : status === 'down' ? 'Down' : 'Paused'}
-              </button>
+                {status === 'all'
+                  ? 'All'
+                  : status === 'up'
+                  ? 'Up'
+                  : status === 'down'
+                  ? 'Down'
+                  : status === 'paused'
+                  ? 'Paused'
+                  : 'Maintenance'}
+              </FilterChip>
             ))}
           </div>
 
           {/* Tag Filter Toggle */}
           {allTags.length > 0 && (
-            <button
+            <FilterChip
+              selected={selectedTags.size > 0}
+              count={selectedTags.size > 0 ? selectedTags.size : undefined}
+              icon={<Tag strokeWidth={1.75} />}
               onClick={() => setShowTagFilter(!showTagFilter)}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-medium transition-all ${
-                selectedTags.size > 0 
-                  ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400' 
-                  : 'border-white/[0.06] bg-slate-900/50 text-slate-400 hover:text-white'
-              }`}
+              aria-expanded={showTagFilter}
             >
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-              </svg>
-              Tags
-              {selectedTags.size > 0 && (
-                <span className="rounded-full bg-cyan-500/20 px-1.5 py-0.5 text-[9px]">
-                  {selectedTags.size}
-                </span>
-              )}
-              <svg className={`h-3 w-3 transition-transform ${showTagFilter ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
+              <span className="inline-flex items-center gap-1">
+                Tags
+                <ChevronDown
+                  className={`h-3 w-3 transition-transform ${showTagFilter ? 'rotate-180' : ''}`}
+                  strokeWidth={1.75}
+                />
+              </span>
+            </FilterChip>
           )}
         </div>
+
+        {/* Type Filter Dropdown */}
+        {showTypeFilter && typeCounts.length > 0 && (
+          <div className="rounded-xl border border-white/[0.06] bg-slate-900/60 p-3 backdrop-blur-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                Filter by type
+              </span>
+              {selectedTypes.size > 0 && (
+                <button
+                  onClick={() => setSelectedTypes(new Set())}
+                  className="text-[10px] text-slate-400 hover:text-white transition-colors"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {typeCounts.map(([type, count]) => (
+                <FilterChip
+                  key={type}
+                  selected={selectedTypes.has(type)}
+                  count={count}
+                  onClick={() => toggleType(type)}
+                >
+                  {monitorTypeLabel(type)}
+                </FilterChip>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Tag Filter Dropdown */}
         {showTagFilter && allTags.length > 0 && (
@@ -1644,7 +2015,7 @@ export default function MonitorsPage() {
       {error && (
         <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2">
           <p className="text-xs text-rose-400">{error}</p>
-          <button onClick={loadMonitors} className="btn btn-danger btn-xs">Retry</button>
+          <Button variant="danger" size="xs" onClick={loadMonitors}>Retry</Button>
         </div>
       )}
 
@@ -1654,14 +2025,17 @@ export default function MonitorsPage() {
       ) : monitors.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
           {/* Monitor List */}
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             {/* Selection Mode Toggle & Actions Bar */}
             {filteredMonitors.length > 0 && (
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
                 {/* Selection mode toggle */}
-                <button
+                <Button
+                  variant={selectionMode ? 'accent' : 'ghost'}
+                  size="xs"
+                  icon={<CheckSquare strokeWidth={1.75} />}
                   onClick={() => {
                     if (selectionMode) {
                       clearSelection();
@@ -1669,37 +2043,23 @@ export default function MonitorsPage() {
                       setSelectionMode(true);
                     }
                   }}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-medium transition-all ${
-                    selectionMode
-                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400'
-                      : 'border-white/[0.06] bg-slate-900/50 text-slate-400 hover:text-white'
-                  }`}
                 >
-                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                  </svg>
                   {selectionMode ? 'Exit select' : 'Select'}
-                </button>
+                </Button>
 
                 {/* Selection actions - only show when in selection mode */}
                 {selectionMode && (
                   <>
                     <div className="h-4 w-px bg-white/[0.08]" />
-                    
-                    {/* Select all toggle */}
-                    <button
-                      onClick={toggleSelectAllFiltered}
-                      className="btn btn-outline btn-xs"
-                    >
+
+                    <Button variant="ghost" size="xs" onClick={toggleSelectAllFiltered}>
                       {allFilteredSelected ? 'Deselect all' : 'Select all'}
-                    </button>
+                    </Button>
 
                     {selectedMonitorIds.size > 0 && (
                       <>
-                        <span className="text-[10px] text-slate-500">
-                          {selectedMonitorIds.size} selected
-                        </span>
-                        
+                        <Pill tone="info" size="xs">{selectedMonitorIds.size} selected</Pill>
+
                         <div className="h-4 w-px bg-white/[0.08]" />
 
                         {/* Group creation */}
@@ -1709,28 +2069,25 @@ export default function MonitorsPage() {
                             placeholder="New group name..."
                             value={groupNameInput}
                             onChange={(e) => setGroupNameInput(e.target.value)}
-                            className="input input-xs h-6 w-32 text-[10px]"
+                            className="input input-xs h-7 w-32 text-[10px]"
                           />
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            icon={<FolderPlus strokeWidth={1.75} />}
                             onClick={handleCreateGroup}
                             disabled={!canCreateGroup}
-                            className={`btn btn-secondary btn-xs ${canCreateGroup ? '' : 'cursor-not-allowed opacity-60'}`}
                           >
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                            </svg>
                             Group
-                          </button>
+                          </Button>
                         </div>
-
-                        <div className="h-4 w-px bg-white/[0.08]" />
 
                         {/* Move to existing group */}
                         <div className="flex items-center gap-1.5">
                           <select
                             value={targetGroupId}
                             onChange={(e) => setTargetGroupId(e.target.value)}
-                            className="input input-xs h-6 w-36 text-[10px]"
+                            className="input input-xs h-7 w-36 text-[10px]"
                           >
                             <option value="">Move to group...</option>
                             <option value={NO_GROUP_VALUE}>No group</option>
@@ -1740,27 +2097,36 @@ export default function MonitorsPage() {
                               </option>
                             ))}
                           </select>
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            icon={<Move strokeWidth={1.75} />}
                             onClick={handleMoveToGroup}
                             disabled={!canMoveToGroup}
-                            className={`btn btn-secondary btn-xs ${canMoveToGroup ? '' : 'cursor-not-allowed opacity-60'}`}
                           >
                             Move
-                          </button>
+                          </Button>
                         </div>
 
                         <div className="h-4 w-px bg-white/[0.08]" />
 
-                        {/* Delete */}
-                        <button
-                          onClick={handleBulkDelete}
-                          className="btn btn-danger btn-xs"
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          icon={<Bell strokeWidth={1.75} />}
+                          onClick={() => setShowBulkAlerting(true)}
                         >
-                          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
+                          Edit alerting…
+                        </Button>
+
+                        <Button
+                          variant="danger"
+                          size="xs"
+                          icon={<Trash2 strokeWidth={1.75} />}
+                          onClick={() => setConfirmBulkDelete(true)}
+                        >
                           Delete
-                        </button>
+                        </Button>
                       </>
                     )}
                   </>
@@ -1786,14 +2152,18 @@ export default function MonitorsPage() {
                     isChecked={selectedMonitorIds.has(monitor.id)}
                     onToggleSelect={() => toggleMonitorSelection(monitor.id)}
                     onToggleMonitorSelection={toggleMonitorSelection}
-                    onDeleteMonitor={handleDelete}
+                    onDeleteMonitor={requestDeleteById}
                     onToggleEnabled={handleToggleEnabled}
+                    onSnooze={handleSnooze}
                     selectionMode={selectionMode}
                     onClick={() => setSelectedMonitorId(monitor.id)}
-                    onDelete={() => handleDelete(monitor.id)}
-                    onSelectMonitor={(id) => setSelectedMonitorId(id)}
+                    onDelete={() => requestDeleteById(monitor.id)}
+                    onSelectMonitor={selectMonitor}
                     selectedMonitorId={selectedMonitorId}
                     selectedMonitorIds={selectedMonitorIds}
+                    autoExpand={hasActiveFilters && groupHasMatchingMember(monitor.id)}
+                    memberMatcher={hasActiveFilters ? monitorMatchesFilters : undefined}
+                    groupHasMatch={(groupId) => groupHasMatchingMember(groupId)}
                   />
                 ) : (
                   <MonitorRow
@@ -1804,9 +2174,10 @@ export default function MonitorsPage() {
                     isChecked={selectedMonitorIds.has(monitor.id)}
                     onToggleSelect={() => toggleMonitorSelection(monitor.id)}
                     selectionMode={selectionMode}
-                    onClick={() => setSelectedMonitorId(monitor.id)}
-                    onDelete={() => handleDelete(monitor.id)}
+                    onClick={() => selectMonitor(monitor.id)}
+                    onDelete={() => requestDeleteById(monitor.id)}
                     onToggleEnabled={handleToggleEnabled}
+                    onSnooze={handleSnooze}
                   />
                 )
               ))
@@ -1815,27 +2186,56 @@ export default function MonitorsPage() {
 
           {/* Detail Panel */}
           <div className="hidden lg:block">
-            <div className="sticky top-6">
+            <div className="dashboard-scroll sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto overscroll-contain rounded-xl">
               <DetailPanel
                 monitor={selectedMonitor}
                 results={selectedMonitor ? checkResultsMap[selectedMonitor.id] || [] : []}
+                members={selectedMonitor ? groupMembersMap[selectedMonitor.id] || [] : []}
+                memberResults={checkResultsMap}
+                onSelectMember={setSelectedMonitorId}
               />
             </div>
           </div>
         </div>
       )}
 
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed bottom-4 right-4 rounded-lg px-3 py-2 shadow-lg text-xs ${
-          toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-        }`}>
-          <div className="flex items-center gap-2">
-            <span className="text-white">{toast.message}</span>
-            <button onClick={() => setToast(null)} className="text-white/80 hover:text-white">×</button>
-          </div>
-        </div>
+      {showBulkAlerting && (
+        <BulkAlertingModal
+          monitorIds={Array.from(selectedMonitorIds)}
+          onDone={() => {
+            setShowBulkAlerting(false);
+            setSelectedMonitorIds(new Set());
+            setSelectionMode(false);
+            showToast('Alerting settings updated', 'success');
+            loadMonitors();
+          }}
+          onCancel={() => setShowBulkAlerting(false)}
+        />
       )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={pendingDelete?.type === 'group' ? 'Delete group' : 'Delete monitor'}
+        description={
+          pendingDelete
+            ? `“${pendingDelete.name}” will be removed along with its check history. This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => !deleting && setPendingDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={`Delete ${selectedMonitors.length} selected monitor${selectedMonitors.length === 1 ? '' : 's'}`}
+        description="The selected monitors and their check history will be removed. This cannot be undone."
+        confirmLabel="Delete selected"
+        loading={deleting}
+        onConfirm={handleBulkDelete}
+        onCancel={() => !deleting && setConfirmBulkDelete(false)}
+      />
     </div>
   );
 }

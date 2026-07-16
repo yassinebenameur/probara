@@ -75,7 +75,10 @@ spec:
         - name: POSTGRES_URL
           value: {{ include "monitoring-platform.postgresUrl" . | quote }}
         - name: NATS_URL
-          value: {{ include "monitoring-platform.natsUrl" . | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_url
         - name: CHECK_JOB_STREAM
           value: "{{ .Values.scheduler.checkJobStream }}"
         - name: CHECK_JOB_SUBJECT

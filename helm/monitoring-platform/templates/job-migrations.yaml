@@ -7,7 +7,11 @@ metadata:
     {{- include "monitoring-platform.labels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
   annotations:
-    # Run migrations before other resources are created/updated
+    # Runs AFTER the release manifests are applied (post-install/post-upgrade),
+    # so new pods may briefly run against the old schema until this job
+    # finishes; application code must tolerate that window. We cannot use a
+    # pre-install hook: on first install the chart's own PostgreSQL would not
+    # exist yet for the migrations to run against.
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded

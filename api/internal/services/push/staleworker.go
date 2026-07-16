@@ -11,6 +11,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // StaleWorker monitors push monitors and marks them as down if stale
@@ -79,7 +80,7 @@ func (w *StaleWorker) checkStaleMonitors() {
 		            m.created_at
 		        ) as last_check
 		 FROM monitors m
-		 WHERE m.type = 'push' AND m.enabled = true`)
+		 WHERE m.type = 'push' AND m.enabled = true AND m.deleted_at IS NULL`)
 	if err != nil {
 		w.log.WithError(err).Error("failed to query push monitors")
 		return
@@ -138,25 +139,21 @@ func (w *StaleWorker) handleStaleMonitor(ctx context.Context, monitorID, tenantI
 		}
 	}
 
-	// Insert a failure check result
+	// Insert a failure check result and advance the monitor state machine so a
+	// silent push monitor actually transitions to down.
 	jobID := uuid.New()
 	errorMessage := "No push received within expected interval + grace period"
 
-	_, err := w.db.ExecContext(ctx,
-		`INSERT INTO check_results 
-		 (id, monitor_id, tenant_id, job_id, status, result_source, error_message, created_at, started_at, completed_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		uuid.New(),
-		monitorID,
-		tenantID,
-		jobID,
-		"failure",
-		string(sharedmodels.ResultSourceMonitor),
-		errorMessage,
-		now,
-		now,
-		now,
-	)
+	_, err := monitorstate.Record(ctx, w.db, monitorstate.Result{
+		MonitorID:    monitorID,
+		TenantID:     tenantID,
+		JobID:        jobID,
+		Status:       string(sharedmodels.ResultStatusFailure),
+		ResultSource: string(sharedmodels.ResultSourceMonitor),
+		ErrorMessage: &errorMessage,
+		StartedAt:    now,
+		CompletedAt:  now,
+	})
 	if err != nil {
 		w.log.WithError(err).WithFields(map[string]interface{}{
 			"monitor_id": monitorID,

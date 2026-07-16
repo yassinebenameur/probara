@@ -9,12 +9,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yassinebenameur/probara/scheduler/internal/ingest"
 	"github.com/yassinebenameur/probara/scheduler/internal/scheduler"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
+	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
 func main() {
@@ -48,6 +51,35 @@ func main() {
 
 	// Create scheduler
 	sched := scheduler.NewScheduler(cfg, log, metricsRegistry, dbClient, queueClient)
+	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
+	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
+		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
+	} else if kerr != secrets.ErrKeyNotConfigured {
+		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
+	}
+	sched.ConfigureEncryption(secretsEncryptor)
+
+	// Results ingest: persists check results workers publish over NATS and
+	// advances monitor state. Workers themselves have no Postgres access.
+	var ingestConsumer *ingest.Ingest
+	if cfg.ResultIngestEnabled {
+		statusPublisher, err := statusupdates.NewPublisher(cfg.NATSURL)
+		if err != nil {
+			log.WithError(err).Warn("Failed to initialize status update publisher; status pages won't live-update")
+			statusPublisher = nil
+		} else {
+			defer statusPublisher.Close()
+		}
+		ingestConsumer = ingest.New(cfg, log, metricsRegistry, dbClient, queueClient, statusPublisher)
+		ingestConsumer.ConfigureEncryption(secretsEncryptor)
+		go func() {
+			if err := ingestConsumer.Start(); err != nil {
+				log.WithError(err).Fatal("Results ingest failed")
+			}
+		}()
+	} else {
+		log.Warn("RESULT_INGEST_ENABLED=false; check results published by workers will not be persisted")
+	}
 
 	// Start minimal HTTP server for health/metrics
 	go func() {
@@ -108,6 +140,12 @@ func main() {
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	if ingestConsumer != nil {
+		if err := ingestConsumer.Shutdown(ctx); err != nil {
+			log.WithError(err).Error("Results ingest forced to shutdown")
+		}
+	}
 
 	if err := sched.Shutdown(ctx); err != nil {
 		log.WithError(err).Error("Scheduler forced to shutdown")

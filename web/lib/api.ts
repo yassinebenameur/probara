@@ -7,10 +7,6 @@ import type {
   MonitorListResponse,
   Alert,
   AlertListResponse,
-  AlertPolicy,
-  CreateAlertPolicyRequest,
-  UpdateAlertPolicyRequest,
-  AlertPolicyListResponse,
   AlertChannel,
   CreateAlertChannelRequest,
   UpdateAlertChannelRequest,
@@ -19,9 +15,20 @@ import type {
   CreateStatusPageRequest,
   UpdateStatusPageRequest,
   StatusPageListResponse,
+  StatusPageTemplateState,
+  StatusPageLibraryTemplate,
+  StatusPageLibraryTemplateListResponse,
   MonitorResultsResponse,
   MonitorAnalyticsResponse,
+  DependencyGraph,
+  DependencyMonitor,
+  DependencySuggestionResult,
   DashboardOverviewResponse,
+  DashboardSummaryResponse,
+  DashboardGroupSparklineResponse,
+  DashboardProblemMonitorsResponse,
+  DashboardRecentFailuresResponse,
+  DashboardRecentAlertsResponse,
   RunMonitorNowResponse,
   AddMonitorsToGroupRequest,
   RemoveMonitorsFromGroupRequest,
@@ -41,6 +48,39 @@ import type {
   ApiKey,
   ApiKeyListResponse,
   CreateApiKeyRequest,
+  AuthContext,
+  OidcStatus,
+  AuditListResponse,
+  IncidentListResponse,
+  AISettings,
+  AISettingsUpdate,
+  AITestRequest,
+  AITestResult,
+  IncidentAIAnalysis,
+  IncidentDetail,
+  CreateIncidentRequest,
+  UpdateIncidentRequest,
+  CreateIncidentTimelineEntryRequest,
+  PublishIncidentToStatusPageRequest,
+  IncidentState,
+  PluginManifest,
+  NotificationSettings,
+  NotificationMode,
+  ChannelAssignment,
+  MaintenanceWindow,
+  MaintenanceWindowListResponse,
+  MaintenanceWindowStatus,
+  CreateMaintenanceWindowRequest,
+  UpdateMaintenanceWindowRequest,
+  SnoozeMonitorRequest,
+  Location,
+  LocationListResponse,
+  CreateLocationRequest,
+  UpdateLocationRequest,
+  LocationDeployInfo,
+  MeshResponse,
+  MeshEdgeHistoryPoint,
+  MeshProbeResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -241,12 +281,42 @@ export async function getMonitor(id: string): Promise<Monitor> {
   return apiRequest<Monitor>('GET', `/v1/monitors/${id}`);
 }
 
-export async function runMonitorNow(id: string): Promise<RunMonitorNowResponse> {
-  return apiRequest<RunMonitorNowResponse>('POST', `/v1/monitors/${id}/run`);
+export async function runMonitorNow(
+  id: string,
+  opts?: { location_id?: string }
+): Promise<RunMonitorNowResponse> {
+  return apiRequest<RunMonitorNowResponse>(
+    'POST',
+    `/v1/monitors/${id}/run`,
+    opts?.location_id ? { location_id: opts.location_id } : undefined
+  );
 }
 
 export async function createMonitor(data: CreateMonitorRequest): Promise<Monitor> {
   return apiRequest<Monitor>('POST', '/v1/monitors', data);
+}
+
+export interface TestMonitorConfigRequest {
+  type: string;
+  config: unknown;
+  timeout_seconds?: number;
+  // Resolves write-only "***" secret placeholders against the stored monitor
+  // when testing an edit.
+  monitor_id?: string;
+  // Routes the ephemeral test to that private location's workers.
+  location_id?: string;
+}
+
+export interface TestMonitorConfigResponse {
+  status: 'success' | 'failure' | 'error';
+  latency_ms?: number;
+  error_message?: string;
+}
+
+// Runs one ephemeral check on a worker so a config can be validated before
+// saving. Nothing is persisted.
+export async function testMonitorConfig(data: TestMonitorConfigRequest): Promise<TestMonitorConfigResponse> {
+  return apiRequest<TestMonitorConfigResponse>('POST', '/v1/monitors/test', data);
 }
 
 export async function updateMonitor(
@@ -258,6 +328,164 @@ export async function updateMonitor(
 
 export async function deleteMonitor(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/monitors/${id}`);
+}
+
+// Maintenance window API functions
+export async function getMaintenanceWindows(params?: {
+  status?: MaintenanceWindowStatus;
+  monitor_id?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<MaintenanceWindowListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.status) queryParams.append('status', params.status);
+  if (params?.monitor_id) queryParams.append('monitor_id', params.monitor_id);
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/maintenance-windows${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<MaintenanceWindowListResponse>('GET', path);
+}
+
+export async function createMaintenanceWindow(
+  data: CreateMaintenanceWindowRequest
+): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('POST', '/v1/maintenance-windows', data);
+}
+
+export async function updateMaintenanceWindow(
+  id: string,
+  data: UpdateMaintenanceWindowRequest
+): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('PATCH', `/v1/maintenance-windows/${id}`, data);
+}
+
+export async function deleteMaintenanceWindow(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/maintenance-windows/${id}`);
+}
+
+// Creates a single-monitor maintenance window from now until the given time.
+export async function snoozeMonitor(
+  monitorId: string,
+  data: SnoozeMonitorRequest
+): Promise<MaintenanceWindow> {
+  return apiRequest<MaintenanceWindow>('POST', `/v1/monitors/${monitorId}/snooze`, data);
+}
+
+// Dependency API functions
+export async function getDependencyGraph(): Promise<DependencyGraph> {
+  return apiRequest<DependencyGraph>('GET', '/v1/monitors/dependency-graph');
+}
+
+export async function getMonitorDependencies(id: string): Promise<{ items: DependencyMonitor[] }> {
+  return apiRequest<{ items: DependencyMonitor[] }>('GET', `/v1/monitors/${id}/dependencies`);
+}
+
+export async function getMonitorDependents(id: string): Promise<{ items: DependencyMonitor[] }> {
+  return apiRequest<{ items: DependencyMonitor[] }>('GET', `/v1/monitors/${id}/dependents`);
+}
+
+export async function addMonitorDependency(id: string, dependsOnId: string): Promise<void> {
+  return apiRequest<void>('POST', `/v1/monitors/${id}/dependencies`, { depends_on_id: dependsOnId });
+}
+
+export async function suggestDependencies(): Promise<DependencySuggestionResult> {
+  return apiRequest<DependencySuggestionResult>('POST', '/v1/monitors/dependency-suggestions');
+}
+
+export async function removeMonitorDependency(id: string, dependsOnId: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/monitors/${id}/dependencies/${dependsOnId}`);
+}
+
+// Incident API functions
+export async function getIncidents(params?: {
+  page?: number;
+  page_size?: number;
+}): Promise<IncidentListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/incidents${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<IncidentListResponse>('GET', path);
+}
+
+export async function getIncident(id: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('GET', `/v1/incidents/${id}`);
+}
+
+export async function createIncident(data: CreateIncidentRequest): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', '/v1/incidents', data);
+}
+
+// requestIncidentAIAnalysis enqueues an AI root cause analysis and returns the
+// pending record. Throws on 503 when the LLM provider is not configured.
+export async function requestIncidentAIAnalysis(id: string): Promise<IncidentAIAnalysis> {
+  return apiRequest<IncidentAIAnalysis>('POST', `/v1/incidents/${id}/ai-analysis`);
+}
+
+// getIncidentAIAnalysis returns the latest analysis, or null when none exists.
+export async function getIncidentAIAnalysis(id: string): Promise<IncidentAIAnalysis | null> {
+  return apiRequest<IncidentAIAnalysis | null>('GET', `/v1/incidents/${id}/ai-analysis`);
+}
+
+// --- AI settings (per-tenant LLM config) ---
+
+export async function getAISettings(): Promise<AISettings> {
+  return apiRequest<AISettings>('GET', '/v1/ai-settings');
+}
+
+export async function updateAISettings(data: AISettingsUpdate): Promise<AISettings> {
+  return apiRequest<AISettings>('PUT', '/v1/ai-settings', data);
+}
+
+export async function testAISettings(data: AITestRequest): Promise<AITestResult> {
+  return apiRequest<AITestResult>('POST', '/v1/ai-settings/test', data);
+}
+
+export async function updateIncident(id: string, data: UpdateIncidentRequest): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('PATCH', `/v1/incidents/${id}`, data);
+}
+
+export async function transitionIncidentState(id: string, state: IncidentState): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/state`, { state });
+}
+
+export async function addIncidentTimelineEntry(
+  id: string,
+  data: CreateIncidentTimelineEntryRequest
+): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/timeline`, data);
+}
+
+export async function attachIncidentMonitor(id: string, monitorId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/monitors`, { monitor_id: monitorId });
+}
+
+export async function detachIncidentMonitor(id: string, monitorId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('DELETE', `/v1/incidents/${id}/monitors/${monitorId}`);
+}
+
+export async function attachIncidentAlert(id: string, alertId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('POST', `/v1/incidents/${id}/alerts`, { alert_id: alertId });
+}
+
+export async function detachIncidentAlert(id: string, alertId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('DELETE', `/v1/incidents/${id}/alerts/${alertId}`);
+}
+
+export async function publishIncidentToStatusPage(
+  id: string,
+  statusPageId: string,
+  data: PublishIncidentToStatusPageRequest
+): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('PUT', `/v1/incidents/${id}/status-pages/${statusPageId}`, data);
+}
+
+export async function unpublishIncidentFromStatusPage(id: string, statusPageId: string): Promise<IncidentDetail> {
+  return apiRequest<IncidentDetail>('DELETE', `/v1/incidents/${id}/status-pages/${statusPageId}`);
 }
 
 export async function deleteMonitorHistory(id: string): Promise<void> {
@@ -305,41 +533,6 @@ export async function resolveAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/resolve`);
 }
 
-// Alert Policy API functions
-export async function getAlertPolicies(params?: {
-  page?: number;
-  page_size?: number;
-}): Promise<AlertPolicyListResponse> {
-  const queryParams = new URLSearchParams();
-  if (params?.page) queryParams.append('page', String(params.page));
-  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
-
-  const queryString = queryParams.toString();
-  const path = `/v1/alert-policies${queryString ? `?${queryString}` : ''}`;
-  return apiRequest<AlertPolicyListResponse>('GET', path);
-}
-
-export async function getAlertPolicy(id: string): Promise<AlertPolicy> {
-  return apiRequest<AlertPolicy>('GET', `/v1/alert-policies/${id}`);
-}
-
-export async function createAlertPolicy(
-  data: CreateAlertPolicyRequest
-): Promise<AlertPolicy> {
-  return apiRequest<AlertPolicy>('POST', '/v1/alert-policies', data);
-}
-
-export async function updateAlertPolicy(
-  id: string,
-  data: UpdateAlertPolicyRequest
-): Promise<AlertPolicy> {
-  return apiRequest<AlertPolicy>('PATCH', `/v1/alert-policies/${id}`, data);
-}
-
-export async function deleteAlertPolicy(id: string): Promise<void> {
-  return apiRequest<void>('DELETE', `/v1/alert-policies/${id}`);
-}
-
 // Alert Channel API functions
 export async function getAlertChannels(params?: {
   page?: number;
@@ -377,6 +570,14 @@ export async function deleteAlertChannel(id: string): Promise<void> {
 
 export async function testAlertChannel(id: string): Promise<void> {
   return apiRequest<void>('POST', `/v1/alert-channels/${id}/test`);
+}
+
+export async function getAlertChannelPlugins(): Promise<PluginManifest[]> {
+  return apiRequest<PluginManifest[]>('GET', '/v1/alert-channel-plugins');
+}
+
+export async function getAlertChannelPlugin(type: string): Promise<PluginManifest> {
+  return apiRequest<PluginManifest>('GET', `/v1/alert-channel-plugins/${type}`);
 }
 
 // API Key functions
@@ -422,6 +623,11 @@ export async function getStatusPage(id: string): Promise<StatusPage> {
 }
 
 // Tenant API functions (admin only)
+export interface GetUsersParams {
+  page?: number;
+  page_size?: number;
+}
+
 export async function getTenants(): Promise<TenantListResponse> {
   return apiRequest<TenantListResponse>('GET', '/v1/tenants');
 }
@@ -437,10 +643,7 @@ export async function updateTenantSettings(
 }
 
 // Admin users API functions (admin only)
-export async function getUsers(params?: {
-  page?: number;
-  page_size?: number;
-}): Promise<AdminUserListResponse> {
+export async function getUsers(params?: GetUsersParams): Promise<AdminUserListResponse> {
   const queryParams = new URLSearchParams();
   if (params?.page) queryParams.append('page', String(params.page));
   if (params?.page_size) queryParams.append('page_size', String(params.page_size));
@@ -466,6 +669,49 @@ export async function deleteUser(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/users/${id}`);
 }
 
+// Auth context / SSO / audit log
+export async function getAuthContext(): Promise<AuthContext> {
+  return apiRequest<AuthContext>('GET', '/v1/auth-context');
+}
+
+// Unauthenticated: used by the login page before any session exists.
+export async function getOidcStatus(): Promise<OidcStatus> {
+  const response = await fetch(getApiUrl('/v1/auth/oidc/status'), { method: 'GET' });
+  if (!response.ok) {
+    return { enabled: false };
+  }
+  return (await response.json()) as OidcStatus;
+}
+
+export interface GetAuditLogParams {
+  action?: string;
+  outcome?: string;
+  actor_id?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export async function getAuditLog(params?: GetAuditLogParams): Promise<AuditListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.action) queryParams.append('action', params.action);
+  if (params?.outcome) queryParams.append('outcome', params.outcome);
+  if (params?.actor_id) queryParams.append('actor_id', params.actor_id);
+  if (params?.from) queryParams.append('from', params.from);
+  if (params?.to) queryParams.append('to', params.to);
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/audit-log${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<AuditListResponse>('GET', path);
+}
+
+export async function getAuditActions(): Promise<{ actions: string[] }> {
+  return apiRequest<{ actions: string[] }>('GET', '/v1/audit-log/actions');
+}
+
 export async function createStatusPage(
   data: CreateStatusPageRequest
 ): Promise<StatusPage> {
@@ -481,6 +727,110 @@ export async function updateStatusPage(
 
 export async function deleteStatusPage(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/status-pages/${id}`);
+}
+
+// Status page custom template API functions
+
+export async function getStatusPageTemplate(id: string): Promise<StatusPageTemplateState> {
+  return apiRequest<StatusPageTemplateState>('GET', `/v1/status-pages/${id}/template`);
+}
+
+export async function saveStatusPageTemplateDraft(
+  id: string,
+  source: string
+): Promise<StatusPageTemplateState> {
+  return apiRequest<StatusPageTemplateState>('PUT', `/v1/status-pages/${id}/template/draft`, {
+    source,
+  });
+}
+
+export async function discardStatusPageTemplateDraft(
+  id: string
+): Promise<StatusPageTemplateState> {
+  return apiRequest<StatusPageTemplateState>('DELETE', `/v1/status-pages/${id}/template/draft`);
+}
+
+export async function publishStatusPageTemplate(id: string): Promise<StatusPageTemplateState> {
+  return apiRequest<StatusPageTemplateState>('POST', `/v1/status-pages/${id}/template/publish`);
+}
+
+export async function revertStatusPageTemplate(
+  id: string,
+  version: number
+): Promise<StatusPageTemplateState> {
+  return apiRequest<StatusPageTemplateState>('POST', `/v1/status-pages/${id}/template/revert`, {
+    version,
+  });
+}
+
+export async function resetStatusPageTemplate(id: string): Promise<StatusPageTemplateState> {
+  return apiRequest<StatusPageTemplateState>('DELETE', `/v1/status-pages/${id}/template`);
+}
+
+// Plain-text downloads (the template sources are not JSON).
+async function apiRequestText(path: string): Promise<string> {
+  const apiKey = getApiKey();
+  const headers: HeadersInit = {};
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+  const tenantId = getSelectedTenantId();
+  if (tenantId) {
+    headers['X-Tenant-ID'] = tenantId;
+  }
+  const response = await fetch(getApiUrl(path), {
+    method: 'GET',
+    headers,
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  return response.text();
+}
+
+export async function getStatusPageDefaultTemplateSource(id: string): Promise<string> {
+  return apiRequestText(`/v1/status-pages/${id}/template/default`);
+}
+
+export async function getStatusPageTemplateVersionSource(
+  id: string,
+  version: number
+): Promise<string> {
+  return apiRequestText(`/v1/status-pages/${id}/template/versions/${version}/source`);
+}
+
+// Status page template library (tenant-level reusable templates)
+
+export async function listLibraryTemplates(): Promise<StatusPageLibraryTemplateListResponse> {
+  return apiRequest<StatusPageLibraryTemplateListResponse>('GET', '/v1/status-page-templates');
+}
+
+export async function getLibraryTemplate(id: string): Promise<StatusPageLibraryTemplate> {
+  return apiRequest<StatusPageLibraryTemplate>('GET', `/v1/status-page-templates/${id}`);
+}
+
+export async function createLibraryTemplate(data: {
+  name: string;
+  description?: string;
+  source: string;
+}): Promise<StatusPageLibraryTemplate> {
+  return apiRequest<StatusPageLibraryTemplate>('POST', '/v1/status-page-templates', data);
+}
+
+export async function updateLibraryTemplate(
+  id: string,
+  data: { name?: string; description?: string; source?: string }
+): Promise<StatusPageLibraryTemplate> {
+  return apiRequest<StatusPageLibraryTemplate>('PATCH', `/v1/status-page-templates/${id}`, data);
+}
+
+export async function deleteLibraryTemplate(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/status-page-templates/${id}`);
+}
+
+export async function getLibraryTemplateSource(id: string): Promise<string> {
+  return apiRequestText(`/v1/status-page-templates/${id}/source`);
 }
 
 // Monitor Results API functions
@@ -510,7 +860,7 @@ export async function getMonitorAnalytics(
 }
 
 export async function getDashboardOverview(params?: {
-  range?: '24h' | '7d' | '30d' | '90d' | '365d';
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   failures_limit?: number;
   alerts_limit?: number;
   tags?: string[];
@@ -524,6 +874,80 @@ export async function getDashboardOverview(params?: {
   const queryString = queryParams.toString();
   const path = `/v1/dashboard/overview${queryString ? `?${queryString}` : ''}`;
   return apiRequest<DashboardOverviewResponse>('GET', path);
+}
+
+export async function getDashboardSummary(params?: {
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
+  tags?: string[];
+}): Promise<DashboardSummaryResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/summary${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardSummaryResponse>('GET', path);
+}
+
+export async function getDashboardGroupSparkline(params: {
+  group: string | null;
+  range: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
+  tags?: string[];
+}): Promise<DashboardGroupSparklineResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.group) queryParams.append('group', params.group);
+  queryParams.append('range', params.range);
+  params.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  return apiRequest<DashboardGroupSparklineResponse>(
+    'GET',
+    `/v1/dashboard/group-sparkline?${queryParams.toString()}`
+  );
+}
+
+export async function getDashboardProblemMonitors(params?: {
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
+  limit?: number;
+  tags?: string[];
+}): Promise<DashboardProblemMonitorsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/problem-monitors${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardProblemMonitorsResponse>('GET', path);
+}
+
+export async function getDashboardRecentFailures(params?: {
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
+  limit?: number;
+  tags?: string[];
+}): Promise<DashboardRecentFailuresResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/recent-failures${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardRecentFailuresResponse>('GET', path);
+}
+
+export async function getDashboardRecentAlerts(params?: {
+  range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
+  limit?: number;
+  tags?: string[];
+}): Promise<DashboardRecentAlertsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  params?.tags?.forEach((tag) => queryParams.append('tag', tag));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/dashboard/recent-alerts${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<DashboardRecentAlertsResponse>('GET', path);
 }
 
 // Group API functions
@@ -560,6 +984,66 @@ export async function getAgentInstallCommand(
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${monitorId}/agent/install${queryString ? `?${queryString}` : ''}`;
   return apiRequest<AgentInstallCommand>('GET', path);
+}
+
+// Private location API functions
+export async function getLocations(params?: {
+  page?: number;
+  page_size?: number;
+}): Promise<LocationListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.page) queryParams.append('page', String(params.page));
+  if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+
+  const queryString = queryParams.toString();
+  const path = `/v1/locations${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<LocationListResponse>('GET', path);
+}
+
+export async function createLocation(data: CreateLocationRequest): Promise<Location> {
+  return apiRequest<Location>('POST', '/v1/locations', data);
+}
+
+export async function updateLocation(
+  id: string,
+  data: UpdateLocationRequest
+): Promise<Location> {
+  return apiRequest<Location>('PATCH', `/v1/locations/${id}`, data);
+}
+
+// Detaches the location from its monitors (their quorum is clamped server-side).
+export async function deleteLocation(id: string): Promise<{ monitors_detached: number }> {
+  return apiRequest<{ monitors_detached: number }>('DELETE', `/v1/locations/${id}`);
+}
+
+export async function getLocationDeployInfo(id: string): Promise<LocationDeployInfo> {
+  return apiRequest<LocationDeployInfo>('GET', `/v1/locations/${id}/deploy`);
+}
+
+// Inter-location connectivity mesh API functions
+
+export async function getMesh(): Promise<MeshResponse> {
+  return apiRequest<MeshResponse>('GET', '/v1/mesh');
+}
+
+export async function getMeshEdgeHistory(
+  sourceId: string,
+  targetId: string,
+  hours = 24
+): Promise<{ points: MeshEdgeHistoryPoint[] }> {
+  const params = new URLSearchParams({ source: sourceId, target: targetId, hours: String(hours) });
+  return apiRequest<{ points: MeshEdgeHistoryPoint[] }>('GET', `/v1/mesh/history?${params}`);
+}
+
+// Ephemeral probe of one directed edge via the source location's worker.
+export async function probeMeshEdge(
+  sourceId: string,
+  targetId: string
+): Promise<MeshProbeResponse> {
+  return apiRequest<MeshProbeResponse>('POST', '/v1/mesh/probe', {
+    source_location_id: sourceId,
+    target_location_id: targetId,
+  });
 }
 
 // Push API functions
@@ -653,6 +1137,27 @@ export async function previewImport(file: File): Promise<ImportPreviewResponse> 
 
 export async function executeImport(data: ImportExecuteRequest): Promise<ImportExecuteResponse> {
   return apiRequest<ImportExecuteResponse>('POST', '/v1/monitors/import', data);
+}
+
+// Notification Settings API functions
+export async function getNotificationSettings(): Promise<NotificationSettings> {
+  return apiRequest<NotificationSettings>('GET', '/v1/notification-settings');
+}
+
+export async function updateNotificationSettings(
+  data: Partial<NotificationSettings>
+): Promise<NotificationSettings> {
+  return apiRequest<NotificationSettings>('PUT', '/v1/notification-settings', data);
+}
+
+// Bulk Alerting API functions
+export async function bulkUpdateAlerting(data: {
+  monitor_ids: string[];
+  consecutive_failures_threshold?: number;
+  notification_mode?: NotificationMode;
+  notification_channels?: ChannelAssignment[];
+}): Promise<{ updated: number }> {
+  return apiRequest<{ updated: number }>('POST', '/v1/monitors/bulk/alerting', data);
 }
 
 export async function exportMonitors(): Promise<{ blob: Blob; filename: string }> {

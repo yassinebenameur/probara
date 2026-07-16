@@ -2,8 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { Bell, Network } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
+import Button from '@/components/ui/Button';
+import EmptyState from '@/components/ui/EmptyState';
 
 interface AlertTableProps {
   alerts: Alert[];
@@ -37,8 +41,19 @@ function getStatusBadgeClass(status: AlertStatus): string {
   }
 }
 
-function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleString();
+function hostMetricLabel(metric?: string): string {
+  switch (metric) {
+    case 'cpu':
+      return 'CPU';
+    case 'memory':
+      return 'memory';
+    case 'disk':
+      return 'disk';
+    case 'swap':
+      return 'swap';
+    default:
+      return 'host metric';
+  }
 }
 
 function formatDuration(startDate: string, endDate?: string): string {
@@ -89,15 +104,11 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
 
   if (alerts.length === 0) {
     return (
-      <div className="table-card">
-        <div className="py-12 text-center">
-          <div className="text-4xl mb-3">🔔</div>
-          <div className="text-lg font-medium mb-1">No alerts found</div>
-          <div className="text-sm text-slate-500">
-            Alerts will appear here when monitors fail and trigger alert policies.
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        icon={<Bell className="h-9 w-9" strokeWidth={1.5} />}
+        title="No alerts found"
+        description="Alerts will appear here when monitors fail and trigger alert policies."
+      />
     );
   }
 
@@ -142,28 +153,81 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                 </span>
               </td>
               <td>
-                <Link 
-                  href={`/monitors/${alert.monitor_id}`}
-                  className="font-medium text-white hover:text-cyan-400"
-                >
-                  {alert.monitor_name || alert.monitor_id}
-                </Link>
+                {alert.kind === 'mesh_edge' ? (
+                  <Link
+                    href="/mesh"
+                    className="inline-flex items-center gap-1.5 font-medium text-white hover:text-cyan-400"
+                    title="Inter-location mesh path down — view the connectivity matrix"
+                  >
+                    <Network className="h-3.5 w-3.5 text-slate-400" strokeWidth={1.75} />
+                    {alert.source_location_name || 'unknown'} → {alert.target_location_name || 'unknown'}
+                  </Link>
+                ) : (
+                  <Link
+                    href={`/monitors/${alert.monitor_id}`}
+                    className="font-medium text-white hover:text-cyan-400"
+                  >
+                    {alert.monitor_name || alert.monitor_id}
+                  </Link>
+                )}
+                {alert.kind === 'mesh_edge' && (
+                  <span
+                    className="ml-2 inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-300"
+                    title="Directed inter-location connectivity path"
+                  >
+                    mesh
+                  </span>
+                )}
+                {alert.kind === 'latency_anomaly' && (
+                  <span
+                    className="ml-2 inline-flex items-center rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-300"
+                    title="Latency degraded relative to baseline"
+                  >
+                    latency
+                  </span>
+                )}
+                {alert.kind === 'latency_anomaly' && alert.observed_latency_ms != null && alert.baseline_latency_ms != null && (
+                  <p className="mt-0.5 text-[10px] text-violet-300/80">
+                    {Math.round(alert.observed_latency_ms)} ms vs ~{Math.round(alert.baseline_latency_ms)} ms baseline
+                    {alert.anomaly_score != null && ` (${alert.anomaly_score.toFixed(1)}σ)`}
+                  </p>
+                )}
+                {alert.kind === 'host_metric' && (
+                  <span
+                    className="ml-2 inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300"
+                    title="Host metric breached its configured threshold"
+                  >
+                    {hostMetricLabel(alert.metric_name)}
+                  </span>
+                )}
+                {alert.kind === 'host_metric' && alert.metric_value != null && (
+                  <p className="mt-0.5 text-[10px] text-amber-300/80">
+                    {alert.metric_value.toFixed(1)}%
+                    {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}%)`}
+                  </p>
+                )}
                 {alert.last_error && (
                   <p className="mt-0.5 text-[10px] text-rose-400 truncate max-w-[200px]" title={alert.last_error}>
                     {alert.last_error}
                   </p>
                 )}
+                {alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id && (
+                  <Link
+                    href={`/monitors/${alert.root_cause_monitor_id}`}
+                    className="mt-1 inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400 hover:border-amber-500/40"
+                    title={`Likely caused by ${alert.root_cause_monitor_name}`}
+                  >
+                    likely caused by: {alert.root_cause_monitor_name}
+                  </Link>
+                )}
               </td>
               <td>
-                <Link 
-                  href={`/alert-policies/${alert.alert_policy_id}`}
-                  className="text-slate-400 hover:text-cyan-400"
-                >
+                <span className="text-slate-400">
                   {alert.policy_name || 'Unknown'}
-                </Link>
+                </span>
               </td>
               <td className="text-slate-400">
-                <div>{formatDate(alert.triggered_at)}</div>
+                <div>{formatDateTime(alert.triggered_at)}</div>
               </td>
               <td className="text-slate-400">
                 {formatDuration(alert.triggered_at, alert.resolved_at || undefined)}
@@ -176,26 +240,30 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td className="text-right">
                 <div className="flex items-center justify-end gap-1">
                   {alert.status === 'active' && (
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => handleAcknowledge(alert.id)}
                       disabled={processingId === alert.id}
-                      className="btn btn-warning btn-xs disabled:opacity-50"
+                      loading={processingId === alert.id}
                     >
-                      {processingId === alert.id ? '...' : 'Acknowledge'}
-                    </button>
+                      {processingId === alert.id ? '…' : 'Acknowledge'}
+                    </Button>
                   )}
                   {(alert.status === 'active' || alert.status === 'acknowledged') && (
-                    <button
+                    <Button
+                      variant="accent"
+                      size="xs"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}
-                      className="btn btn-success btn-xs disabled:opacity-50"
+                      loading={processingId === alert.id}
                     >
-                      {processingId === alert.id ? '...' : 'Resolve'}
-                    </button>
+                      {processingId === alert.id ? '…' : 'Resolve'}
+                    </Button>
                   )}
                   {alert.status === 'resolved' && (
                     <span className="text-[10px] text-slate-500">
-                      Resolved {alert.resolved_at ? formatDate(alert.resolved_at) : ''}
+                      Resolved {alert.resolved_at ? formatDateTime(alert.resolved_at) : ''}
                     </span>
                   )}
                 </div>

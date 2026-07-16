@@ -86,8 +86,10 @@ async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Respon
   };
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    init.body = req.body;
-    init.duplex = 'half';
+    const body = await req.arrayBuffer();
+    if (body.byteLength > 0) {
+      init.body = body;
+    }
   }
 
   try {

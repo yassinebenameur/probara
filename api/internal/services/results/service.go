@@ -247,19 +247,23 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 
 	if since != nil {
 		query = `
-			SELECT id, status, result_source, http_status, latency_ms, error_message, created_at, COALESCE(metrics_data::text, '')
-			FROM check_results
-			WHERE monitor_id = $1 AND tenant_id = $2 AND created_at >= $3
-			ORDER BY created_at DESC
+			SELECT cr.id, cr.status, cr.result_source, cr.http_status, cr.latency_ms, cr.error_message, cr.created_at, COALESCE(cr.metrics_data::text, ''),
+				cr.location_id, l.name
+			FROM check_results cr
+			LEFT JOIN locations l ON l.id = cr.location_id
+			WHERE cr.monitor_id = $1 AND cr.tenant_id = $2 AND cr.created_at >= $3
+			ORDER BY cr.created_at DESC
 			LIMIT $4
 		`
 		args = []interface{}{monitorID, tenantID, *since, limit}
 	} else {
 		query = `
-			SELECT id, status, result_source, http_status, latency_ms, error_message, created_at, COALESCE(metrics_data::text, '')
-			FROM check_results
-			WHERE monitor_id = $1 AND tenant_id = $2
-			ORDER BY created_at DESC
+			SELECT cr.id, cr.status, cr.result_source, cr.http_status, cr.latency_ms, cr.error_message, cr.created_at, COALESCE(cr.metrics_data::text, ''),
+				cr.location_id, l.name
+			FROM check_results cr
+			LEFT JOIN locations l ON l.id = cr.location_id
+			WHERE cr.monitor_id = $1 AND cr.tenant_id = $2
+			ORDER BY cr.created_at DESC
 			LIMIT $3
 		`
 		args = []interface{}{monitorID, tenantID, limit}
@@ -278,8 +282,10 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 		var latencyMS sql.NullInt64
 		var errorMessage sql.NullString
 		var metricsDataStr string
+		var locationName sql.NullString
 
-		err := rows.Scan(&result.ID, &result.Status, &result.ResultSource, &httpStatus, &latencyMS, &errorMessage, &result.CreatedAt, &metricsDataStr)
+		err := rows.Scan(&result.ID, &result.Status, &result.ResultSource, &httpStatus, &latencyMS, &errorMessage, &result.CreatedAt, &metricsDataStr,
+			&result.LocationID, &locationName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan check result: %w", err)
 		}
@@ -297,6 +303,9 @@ func (s *Service) getRegularResults(ctx context.Context, tenantID, monitorID uui
 		}
 		if metricsDataStr != "" {
 			result.MetricsData = json.RawMessage(metricsDataStr)
+		}
+		if locationName.Valid {
+			result.LocationName = &locationName.String
 		}
 
 		results = append(results, result)
@@ -319,7 +328,7 @@ func (s *Service) getMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, next_run_at, created_at, updated_at
 		FROM monitors
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
 
 	var monitor models.Monitor

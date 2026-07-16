@@ -23,16 +23,19 @@ type AlertEvent struct {
 
 // AlertDetails represents alert details from the event
 type AlertDetails struct {
-	ID            string     `json:"id"`
-	MonitorID     string     `json:"monitor_id"`
-	MonitorName   string     `json:"monitor_name"`
-	AlertPolicyID string     `json:"alert_policy_id"`
-	PolicyName    string     `json:"policy_name"`
-	Status        string     `json:"status"`
-	TriggeredAt   time.Time  `json:"triggered_at"`
-	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
-	FailureCount  int        `json:"failure_count"`
-	LastError     *string    `json:"last_error,omitempty"`
+	ID                   string     `json:"id"`
+	MonitorID            string     `json:"monitor_id"`
+	MonitorName          string     `json:"monitor_name"`
+	AlertPolicyID        string     `json:"alert_policy_id"`
+	PolicyName           string     `json:"policy_name"`
+	Status               string     `json:"status"`
+	TriggeredAt          time.Time  `json:"triggered_at"`
+	ResolvedAt           *time.Time `json:"resolved_at,omitempty"`
+	FailureCount         int        `json:"failure_count"`
+	LastError            *string    `json:"last_error,omitempty"`
+	RootCauseMonitorID   *string    `json:"root_cause_monitor_id,omitempty"`
+	RootCauseMonitorName *string    `json:"root_cause_monitor_name,omitempty"`
+	RootCauseDownSince   *time.Time `json:"root_cause_down_since,omitempty"`
 }
 
 // Subscriber listens for alert events from NATS and broadcasts to SSE clients
@@ -151,24 +154,47 @@ func (s *Subscriber) handleMessage(msg *queue.Message) error {
 func (s *Subscriber) convertToAlertWithDetails(event *AlertEvent) *models.AlertWithDetails {
 	alertID, _ := uuid.Parse(event.Alert.ID)
 	tenantID, _ := uuid.Parse(event.TenantID)
-	monitorID, _ := uuid.Parse(event.Alert.MonitorID)
-	policyID, _ := uuid.Parse(event.Alert.AlertPolicyID)
-
-	return &models.AlertWithDetails{
-		Alert: models.Alert{
-			ID:            alertID,
-			TenantID:      tenantID,
-			MonitorID:     monitorID,
-			AlertPolicyID: policyID,
-			Status:        models.AlertStatus(event.Alert.Status),
-			TriggeredAt:   event.Alert.TriggeredAt,
-			ResolvedAt:    event.Alert.ResolvedAt,
-			FailureCount:  event.Alert.FailureCount,
-			LastError:     event.Alert.LastError,
-			CreatedAt:     event.Alert.TriggeredAt,
-			UpdatedAt:     event.Timestamp,
-		},
-		MonitorName: event.Alert.MonitorName,
-		PolicyName:  event.Alert.PolicyName,
+	var monitorID *uuid.UUID
+	if parsed, err := uuid.Parse(event.Alert.MonitorID); err == nil && parsed != uuid.Nil {
+		monitorID = &parsed
 	}
+	var monitorName *string
+	if event.Alert.MonitorName != "" {
+		monitorName = &event.Alert.MonitorName
+	}
+
+	alert := &models.AlertWithDetails{
+		Alert: models.Alert{
+			ID:           alertID,
+			TenantID:     tenantID,
+			MonitorID:    monitorID,
+			Status:       models.AlertStatus(event.Alert.Status),
+			TriggeredAt:  event.Alert.TriggeredAt,
+			ResolvedAt:   event.Alert.ResolvedAt,
+			FailureCount: event.Alert.FailureCount,
+			LastError:    event.Alert.LastError,
+			CreatedAt:    event.Alert.TriggeredAt,
+			UpdatedAt:    event.Timestamp,
+		},
+		MonitorName: monitorName,
+	}
+
+	if event.Alert.RootCauseMonitorID != nil {
+		if rcID, err := uuid.Parse(*event.Alert.RootCauseMonitorID); err == nil {
+			alert.RootCauseMonitorID = &rcID
+		}
+	}
+	alert.RootCauseMonitorName = event.Alert.RootCauseMonitorName
+	alert.RootCauseDownSince = event.Alert.RootCauseDownSince
+
+	if event.Alert.AlertPolicyID != "" {
+		if policyID, err := uuid.Parse(event.Alert.AlertPolicyID); err == nil {
+			alert.AlertPolicyID = &policyID
+		}
+	}
+	if event.Alert.PolicyName != "" {
+		alert.PolicyName = &event.Alert.PolicyName
+	}
+
+	return alert
 }

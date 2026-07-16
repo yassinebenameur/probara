@@ -1,0 +1,102 @@
+{{- /*
+Per-location worker deployments for private locations whose workers run in the
+SAME cluster as the platform (e.g. one fleet per VPC reached over a service
+mesh). Locations outside the cluster deploy the worker themselves using the
+snippet from the Locations page. Location workers are NATS-only: no
+POSTGRES_URL — results travel back over NATS.
+*/}}
+{{- range .Values.worker.locations }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "monitoring-platform.fullname" $ }}-worker-{{ .name }}
+  labels:
+    {{- include "monitoring-platform.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker-location
+    probara.io/location: {{ .name | quote }}
+spec:
+  replicas: {{ .replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "monitoring-platform.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: worker-location
+      probara.io/location: {{ .name | quote }}
+  template:
+    metadata:
+      annotations:
+        {{- with $.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "monitoring-platform.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: worker-location
+        probara.io/location: {{ .name | quote }}
+    spec:
+      {{- if $.Values.serviceAccount.create }}
+      serviceAccountName: {{ include "monitoring-platform.serviceAccountName" $ }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: worker
+        image: "{{ $.Values.image.repository }}-worker:{{ $.Values.image.tag }}"
+        imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+        command: ["./worker"]
+        ports:
+        - name: metrics
+          containerPort: {{ $.Values.worker.metricsPort }}
+          protocol: TCP
+        - name: http
+          containerPort: {{ $.Values.worker.httpPort }}
+          protocol: TCP
+        env:
+        - name: SERVICE_NAME
+          value: "worker"
+        - name: HTTP_PORT
+          value: "{{ $.Values.worker.httpPort }}"
+        - name: METRICS_PORT
+          value: "{{ $.Values.worker.metricsPort }}"
+        - name: LOG_LEVEL
+          value: "{{ $.Values.worker.logLevel }}"
+        - name: NATS_URL
+          value: {{ required "each worker.locations entry needs its location-authenticated natsUrl" .natsUrl | quote }}
+        - name: CHECK_JOB_STREAM
+          value: "{{ $.Values.worker.checkJobStream }}"
+        - name: CHECK_JOB_SUBJECT
+          value: "{{ $.Values.worker.checkJobSubject }}"
+        - name: NATS_CONSUMER_NAME
+          # Scheduler pre-creates this fixed per-location durable so the
+          # restricted worker account never needs JetStream management rights.
+          value: "check-workers"
+        - name: WORKER_LOCATION_ID
+          value: {{ required "each worker.locations entry needs locationId (the location UUID)" .locationId | quote }}
+        - name: LOCATION_CREDENTIAL
+          value: {{ required "each worker.locations entry needs credential from the location deploy info" .credential | quote }}
+        - name: WORKER_CONCURRENCY
+          value: "{{ .concurrency | default $.Values.worker.concurrency }}"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: metrics
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml $.Values.worker.resources | nindent 10 }}
+        securityContext:
+          {{- toYaml $.Values.securityContext | nindent 10 }}
+      {{- with $.Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+{{- end }}

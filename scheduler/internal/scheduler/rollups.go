@@ -3,10 +3,15 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
@@ -117,44 +122,31 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 			break
 		}
 
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return totalProcessed, lastCursorUnix, fmt.Errorf("failed to begin rollup transaction: %w", err)
+		// Fast path: the whole batch in one transaction.
+		if err := s.applyRollupBatchTx(ctx, rows, state); err != nil {
+			if isTransientRollupError(err) {
+				// Transient infrastructure failure: abort the run; the cursor
+				// was not advanced and the next run retries from here.
+				return totalProcessed, lastCursorUnix, err
+			}
+			// Non-transient batch failure: likely a poisoned row. Replay the
+			// batch row-by-row so a single bad row cannot wedge the cursor.
+			s.logger.WithError(err).Warn("Rollup batch failed; replaying batch row-by-row")
+			applied, replayErr := s.replayRollupBatchRowByRow(ctx, rows, state)
+			totalProcessed += applied
+			if state.LastCreatedAt != nil {
+				lastCursorUnix = state.LastCreatedAt.UTC().Unix()
+			}
+			if replayErr != nil {
+				return totalProcessed, lastCursorUnix, replayErr
+			}
+		} else {
+			totalProcessed += len(rows)
 		}
-		committed := false
-		func() {
-			defer func() {
-				if !committed {
-					_ = tx.Rollback()
-				}
-			}()
-
-			for _, row := range rows {
-				if err = applyRollupRow(ctx, tx, row); err != nil {
-					return
-				}
-				lastCreatedAt := row.CreatedAt.UTC()
-				lastResultID := row.ID
-				state.LastCreatedAt = &lastCreatedAt
-				state.LastResultID = &lastResultID
-			}
-
-			if err = upsertRollupState(ctx, tx, state); err != nil {
-				return
-			}
-			if err = tx.Commit(); err != nil {
-				err = fmt.Errorf("failed to commit rollup transaction: %w", err)
-				return
-			}
-			committed = true
-		}()
-		if err != nil {
-			return totalProcessed, lastCursorUnix, err
-		}
-
-		totalProcessed += len(rows)
 		batches++
-		lastCursorUnix = rows[len(rows)-1].CreatedAt.UTC().Unix()
+		if state.LastCreatedAt != nil {
+			lastCursorUnix = state.LastCreatedAt.UTC().Unix()
+		}
 
 		now := time.Now()
 		if now.Sub(lastProgressLog) >= rollupProgressLogInterval {
@@ -189,6 +181,186 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 	}).Info("Rollup maintenance run completed")
 
 	return totalProcessed, lastCursorUnix, nil
+}
+
+// applyRollupBatchTx applies a whole batch of check results plus the cursor
+// advance in a single transaction. On success the caller's state is advanced
+// past the last row of the batch; on failure the transaction is rolled back
+// and the state is left untouched.
+func (s *Scheduler) applyRollupBatchTx(ctx context.Context, rows []rollupCheckResult, state *rollupState) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin rollup transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	pending := *state
+	for _, row := range rows {
+		if err := s.applyRow(ctx, tx, row); err != nil {
+			return err
+		}
+		advanceRollupCursor(&pending, row)
+	}
+	if err := upsertRollupState(ctx, tx, &pending); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit rollup transaction: %w", err)
+	}
+	committed = true
+	*state = pending
+	return nil
+}
+
+// replayRollupBatchRowByRow retries a failed batch one row per transaction.
+// A row that fails with a non-transient error is SKIPPED: it is logged at
+// ERROR level, counted in rollup_rows_skipped_total, and the cursor is
+// committed past it so the run keeps making progress (the raw check_results
+// row is untouched and remains recoverable later via backfill). A transient
+// failure aborts the run; the cursor has already been committed through the
+// last successfully processed row. Returns the number of rows applied
+// (skipped rows excluded).
+func (s *Scheduler) replayRollupBatchRowByRow(ctx context.Context, rows []rollupCheckResult, state *rollupState) (int, error) {
+	applied := 0
+	for _, row := range rows {
+		err := s.applyRollupRowTx(ctx, row, state)
+		if err == nil {
+			applied++
+			continue
+		}
+		if isTransientRollupError(err) {
+			return applied, fmt.Errorf("transient error during rollup row replay: %w", err)
+		}
+		s.logger.WithError(err).WithFields(logrus.Fields{
+			"check_result_id": row.ID,
+			"tenant_id":       row.TenantID,
+			"monitor_id":      row.MonitorID,
+			"created_at":      row.CreatedAt,
+		}).Error("Skipping poisoned rollup row")
+		s.rollupRowsSkipped.With(prometheus.Labels{}).Inc()
+		if err := s.commitRollupCursorPast(ctx, row, state); err != nil {
+			return applied, err
+		}
+	}
+	return applied, nil
+}
+
+// applyRollupRowTx applies a single check result and the matching cursor
+// advance in its own short transaction. The caller's state is advanced only
+// after a successful commit.
+func (s *Scheduler) applyRollupRowTx(ctx context.Context, row rollupCheckResult, state *rollupState) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin rollup row transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := s.applyRow(ctx, tx, row); err != nil {
+		return err
+	}
+	pending := *state
+	advanceRollupCursor(&pending, row)
+	if err := upsertRollupState(ctx, tx, &pending); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit rollup row transaction: %w", err)
+	}
+	committed = true
+	*state = pending
+	return nil
+}
+
+// commitRollupCursorPast persists a cursor advance past a skipped row in its
+// own transaction, without applying the row.
+func (s *Scheduler) commitRollupCursorPast(ctx context.Context, row rollupCheckResult, state *rollupState) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin rollup cursor transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	pending := *state
+	advanceRollupCursor(&pending, row)
+	if err := upsertRollupState(ctx, tx, &pending); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit rollup cursor transaction: %w", err)
+	}
+	committed = true
+	*state = pending
+	return nil
+}
+
+func advanceRollupCursor(state *rollupState, row rollupCheckResult) {
+	createdAt := row.CreatedAt.UTC()
+	id := row.ID
+	state.LastCreatedAt = &createdAt
+	state.LastResultID = &id
+}
+
+// isTransientRollupError reports whether err looks like a transient
+// infrastructure failure (worth aborting the run and retrying later) rather
+// than a data problem with a specific row. Classification is deliberately
+// conservative and simple: context cancellation/deadline, bad driver
+// connections, net errors, unexpected EOFs, and retryable Postgres SQLSTATE
+// classes are transient; ANYTHING else is treated as a row-level error and
+// makes the row eligible for skipping during replay.
+//
+// Transient errors abort the run and are retried next cycle, so erring on
+// the transient side is cheap. Misclassifying a retryable error as poison
+// would permanently skip a good row from the rollups (the raw check_results
+// row stays recoverable via backfill, but we'd rather not get there).
+func isTransientRollupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		return true
+	}
+	// lib/pq surfaces dropped connections as (unexpected) EOFs.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch pqErr.Code.Class() {
+		case "40", // transaction rollback (deadlock, serialization failure)
+			// 42: syntax error / undefined object (42703 undefined_column,
+			// 42P01 undefined_table, ...). The rollup SQL is constant, so a
+			// class-42 error can never be row-specific poison — it means the
+			// schema lags the code (e.g. the app rolled out before its
+			// migration, which the post-upgrade helm hook allows). Treating it
+			// as transient aborts the run so the job retries after the
+			// migration lands instead of skipping the whole backlog.
+			"42",
+			"53", // insufficient resources
+			"57", // operator intervention (query_canceled, shutdown)
+			"58": // system error
+			return true
+		}
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 func (s *Scheduler) loadRollupState(ctx context.Context) (*rollupState, error) {
@@ -274,6 +446,7 @@ func applyRollupRow(ctx context.Context, tx *sql.Tx, row rollupCheckResult) erro
 		return nil
 	}
 	day := time.Date(row.CreatedAt.Year(), row.CreatedAt.Month(), row.CreatedAt.Day(), 0, 0, 0, 0, time.UTC)
+	hour := row.CreatedAt.Truncate(time.Hour)
 	latencySum := 0.0
 	latencyCount := 0
 	if row.Status == string(sharedmodels.ResultStatusSuccess) && row.LatencyMS.Valid {
@@ -282,14 +455,15 @@ func applyRollupRow(ctx context.Context, tx *sql.Tx, row rollupCheckResult) erro
 	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO monitor_daily_rollups (
-			tenant_id, monitor_id, bucket_day, total_checks, success_checks,
+			tenant_id, monitor_id, bucket_day, total_checks, success_checks, error_checks,
 			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, NOW(), NOW())
+		) VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 		ON CONFLICT (monitor_id, bucket_day) DO UPDATE SET
 			tenant_id = EXCLUDED.tenant_id,
 			total_checks = monitor_daily_rollups.total_checks + 1,
 			success_checks = monitor_daily_rollups.success_checks + EXCLUDED.success_checks,
+			error_checks = monitor_daily_rollups.error_checks + EXCLUDED.error_checks,
 			latency_success_sum_ms = monitor_daily_rollups.latency_success_sum_ms + EXCLUDED.latency_success_sum_ms,
 			latency_success_count = monitor_daily_rollups.latency_success_count + EXCLUDED.latency_success_count,
 			latest_status = CASE
@@ -299,9 +473,34 @@ func applyRollupRow(ctx context.Context, tx *sql.Tx, row rollupCheckResult) erro
 			END,
 			latest_check_at = GREATEST(COALESCE(monitor_daily_rollups.latest_check_at, EXCLUDED.latest_check_at), EXCLUDED.latest_check_at),
 			updated_at = NOW()
-	`, row.TenantID, row.MonitorID, day, boolToInt(row.Status == string(sharedmodels.ResultStatusSuccess)), latencySum, latencyCount, row.Status, row.CreatedAt)
+	`, row.TenantID, row.MonitorID, day, boolToInt(row.Status == string(sharedmodels.ResultStatusSuccess)), boolToInt(row.Status == string(sharedmodels.ResultStatusError)), latencySum, latencyCount, row.Status, row.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to upsert daily rollup: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO monitor_hourly_rollups (
+			tenant_id, monitor_id, bucket_hour, total_checks, success_checks, error_checks,
+			latency_success_sum_ms, latency_success_count, latest_status, latest_check_at,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+		ON CONFLICT (monitor_id, bucket_hour) DO UPDATE SET
+			tenant_id = EXCLUDED.tenant_id,
+			total_checks = monitor_hourly_rollups.total_checks + 1,
+			success_checks = monitor_hourly_rollups.success_checks + EXCLUDED.success_checks,
+			error_checks = monitor_hourly_rollups.error_checks + EXCLUDED.error_checks,
+			latency_success_sum_ms = monitor_hourly_rollups.latency_success_sum_ms + EXCLUDED.latency_success_sum_ms,
+			latency_success_count = monitor_hourly_rollups.latency_success_count + EXCLUDED.latency_success_count,
+			latest_status = CASE
+				WHEN monitor_hourly_rollups.latest_check_at IS NULL OR EXCLUDED.latest_check_at >= monitor_hourly_rollups.latest_check_at
+				THEN EXCLUDED.latest_status
+				ELSE monitor_hourly_rollups.latest_status
+			END,
+			latest_check_at = GREATEST(COALESCE(monitor_hourly_rollups.latest_check_at, EXCLUDED.latest_check_at), EXCLUDED.latest_check_at),
+			updated_at = NOW()
+	`, row.TenantID, row.MonitorID, hour, boolToInt(row.Status == string(sharedmodels.ResultStatusSuccess)), boolToInt(row.Status == string(sharedmodels.ResultStatusError)), latencySum, latencyCount, row.Status, row.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to upsert hourly rollup: %w", err)
 	}
 
 	if row.Status == string(sharedmodels.ResultStatusSuccess) {
@@ -370,6 +569,9 @@ func pruneRollupTablesTx(ctx context.Context, tx *sql.Tx) error {
 	cutoff := time.Now().UTC().AddDate(0, 0, -rollupRetentionDays)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_daily_rollups WHERE bucket_day < $1::date`, cutoff); err != nil {
 		return fmt.Errorf("failed to prune daily rollups: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_hourly_rollups WHERE bucket_hour < $1`, cutoff); err != nil {
+		return fmt.Errorf("failed to prune hourly rollups: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM monitor_downtime_periods WHERE end_time < $1`, cutoff); err != nil {
 		return fmt.Errorf("failed to prune downtime periods: %w", err)

@@ -9,15 +9,18 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 const (
@@ -26,7 +29,24 @@ const (
 	retentionCleanupAdvisoryLock   = int64(901_337_401)
 	rollupMaintenanceTicker        = time.Minute
 	checkJobStreamMaxAge           = 24 * time.Hour
+	meshBatchTickerInterval        = 10 * time.Second
+
+	// suspectRecheckInterval is the fast cadence used while a monitor is in the
+	// suspect state, confirming or clearing a potential outage (spec §5).
+	suspectRecheckInterval = 20 * time.Second
 )
+
+// nextCheckDelay returns how long after now the monitor should run again.
+// Only 'suspect' (temporal, mid-confirmation) gets the fast recheck;
+// 'degraded' (spatial: some locations down, below quorum) can persist
+// indefinitely and runs at the normal interval.
+func nextCheckDelay(currentState string, intervalSeconds int) time.Duration {
+	interval := time.Duration(intervalSeconds) * time.Second
+	if currentState == "suspect" && suspectRecheckInterval < interval {
+		return suspectRecheckInterval
+	}
+	return interval
+}
 
 // Monitor represents a monitor for scheduling purposes
 type Monitor struct {
@@ -36,6 +56,12 @@ type Monitor struct {
 	Config          []byte
 	IntervalSeconds int
 	TimeoutSeconds  int
+	CurrentState    string
+	// LocationIDs the monitor fans out to; empty = default platform fleet.
+	LocationIDs []uuid.UUID
+	// LocationCredentials contains plaintext per-location credentials only for
+	// the lifetime of this scheduling batch.
+	LocationCredentials map[uuid.UUID]string
 }
 
 // Scheduler represents the scheduler service
@@ -45,6 +71,7 @@ type Scheduler struct {
 	metrics                 *metrics.Registry
 	db                      *db.Client
 	queue                   *queue.Client
+	secretsEncryptor        secrets.Encryptor
 	ctx                     context.Context
 	cancel                  context.CancelFunc
 	stop                    chan struct{}
@@ -67,8 +94,24 @@ type Scheduler struct {
 	rollupRuns        *prometheus.CounterVec
 	rollupRows        *prometheus.CounterVec
 	rollupErrors      *prometheus.CounterVec
+	rollupRowsSkipped *prometheus.CounterVec
 	rollupDuration    *prometheus.HistogramVec
 	rollupCursor      *prometheus.GaugeVec
+
+	meshEdgesScheduled *prometheus.CounterVec
+	meshPublishErrors  *prometheus.CounterVec
+
+	// applyRow applies one check result to the rollup tables inside the given
+	// transaction. It defaults to applyRollupRow and exists as a seam so tests
+	// can inject per-row failures.
+	applyRow func(ctx context.Context, tx *sql.Tx, row rollupCheckResult) error
+
+	// publish sends one job to the queue. It defaults to the NATS-backed
+	// implementation and exists as a seam (same pattern as applyRow) so tests
+	// can capture published jobs without a broker.
+	publish func(ctx context.Context, subject string, job *models.Job) error
+
+	purger *purger
 }
 
 // NewScheduler creates a new scheduler instance
@@ -76,14 +119,15 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Scheduler{
-		config:  cfg,
-		logger:  log,
-		metrics: metricsRegistry,
-		db:      dbClient,
-		queue:   queueClient,
-		ctx:     ctx,
-		cancel:  cancel,
-		stop:    make(chan struct{}),
+		config:           cfg,
+		logger:           log,
+		metrics:          metricsRegistry,
+		db:               dbClient,
+		queue:            queueClient,
+		ctx:              ctx,
+		cancel:           cancel,
+		stop:             make(chan struct{}),
+		secretsEncryptor: secrets.NoOpEncryptor{},
 	}
 
 	// Initialize metrics (using empty labels, so we'll use With(prometheus.Labels{}))
@@ -105,6 +149,16 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 	s.dbErrors = metricsRegistry.NewCounter(
 		"db_errors_total",
 		"Total number of database errors",
+		[]string{},
+	)
+	s.meshEdgesScheduled = metricsRegistry.NewCounter(
+		"mesh_edges_scheduled_total",
+		"Total number of mesh probe jobs published",
+		[]string{},
+	)
+	s.meshPublishErrors = metricsRegistry.NewCounter(
+		"mesh_publish_errors_total",
+		"Total number of mesh probe publish errors",
 		[]string{},
 	)
 	s.loopDuration = metricsRegistry.NewHistogram(
@@ -144,6 +198,11 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Total number of rollup maintenance failures",
 		[]string{},
 	)
+	s.rollupRowsSkipped = metricsRegistry.NewCounter(
+		"rollup_rows_skipped_total",
+		"Total number of poisoned check result rows skipped by rollup maintenance",
+		[]string{},
+	)
 	s.rollupDuration = metricsRegistry.NewHistogram(
 		"rollup_duration_seconds",
 		"Duration of rollup maintenance runs",
@@ -155,8 +214,37 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Unix timestamp of the latest processed check result cursor",
 		[]string{},
 	)
+	s.applyRow = applyRollupRow
+	s.publish = func(ctx context.Context, subject string, job *models.Job) error {
+		return s.queue.PublishJSON(ctx, subject, job, nil)
+	}
+
+	purgerMetrics := &purgerMetrics{
+		runs: metricsRegistry.NewCounter(
+			"monitor_purge_runs_total", "Total monitor purge runs", []string{}),
+		rows: metricsRegistry.NewCounter(
+			"monitor_purge_rows_total", "Total child rows deleted by purger", []string{}),
+		monitors: metricsRegistry.NewCounter(
+			"monitor_purge_monitors_total", "Total monitor rows fully purged", []string{}),
+		errors: metricsRegistry.NewCounter(
+			"monitor_purge_errors_total", "Total monitor purge errors", []string{}),
+		runDuration: metricsRegistry.NewHistogram(
+			"monitor_purge_run_duration_seconds", "Duration of monitor purge runs", []string{}, nil),
+	}
+	s.purger = newPurger(dbClient, log, purgerMetrics, purgerOptions{
+		BatchSize:     cfg.MonitorPurgeBatchSize,
+		MaxRowsPerRun: cfg.MonitorPurgeMaxRowsPerRun,
+	})
 
 	return s
+}
+
+// ConfigureEncryption wires the platform key used to decrypt monitor configs
+// and per-location credentials immediately before location-scoped publishing.
+func (s *Scheduler) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		s.secretsEncryptor = encryptor
+	}
 }
 
 // Start starts the scheduler loop
@@ -172,9 +260,22 @@ func (s *Scheduler) Start() error {
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
-	_, err := s.queue.EnsureWorkQueueStream(ctx, s.config.CheckJobStream, []string{s.config.CheckJobSubject}, checkJobStreamMaxAge)
+	// The stream carries the bare base subject (legacy, still valid for jobs
+	// in flight during rollout) plus the per-location hierarchy
+	// (<base>.default and <base>.loc.<id>).
+	subjects := []string{s.config.CheckJobSubject, s.config.CheckJobSubject + ".>"}
+	_, err := s.queue.EnsureWorkQueueStream(ctx, s.config.CheckJobStream, subjects, checkJobStreamMaxAge)
 	if err != nil {
 		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
+	}
+
+	// Work-queue streams forbid a filterless consumer coexisting with the
+	// filtered per-location consumers workers now create, so drop legacy
+	// filterless consumers (pre-locations worker fleets) if still present.
+	for _, name := range s.config.LegacyCheckConsumers {
+		if err := s.queue.DeleteConsumer(ctx, s.config.CheckJobStream, name); err == nil {
+			s.logger.WithField("consumer", name).Info("Deleted legacy filterless check-jobs consumer")
+		}
 	}
 
 	s.logger.WithField("stream", s.config.CheckJobStream).Info("JetStream stream ensured")
@@ -186,11 +287,20 @@ func (s *Scheduler) Start() error {
 	defer retentionTicker.Stop()
 	rollupTicker := time.NewTicker(rollupMaintenanceTicker)
 	defer rollupTicker.Stop()
+	purgeTicker := time.NewTicker(time.Duration(s.config.MonitorPurgeIntervalSeconds) * time.Second)
+	defer purgeTicker.Stop()
+	// The mesh tick just claims due edges; the per-edge cadence lives in
+	// location_mesh_state.next_run_at.
+	meshTicker := time.NewTicker(meshBatchTickerInterval)
+	defer meshTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
 	s.triggerRetentionCleanup()
 	s.triggerRollupMaintenance()
+	if s.config.MeshEnabled {
+		s.runMeshBatch(s.ctx)
+	}
 
 	for {
 		select {
@@ -206,6 +316,12 @@ func (s *Scheduler) Start() error {
 			s.triggerRetentionCleanup()
 		case <-rollupTicker.C:
 			s.triggerRollupMaintenance()
+		case <-purgeTicker.C:
+			s.triggerMonitorPurge()
+		case <-meshTicker.C:
+			if s.config.MeshEnabled {
+				s.runMeshBatch(s.ctx)
+			}
 		}
 	}
 }
@@ -305,6 +421,12 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, error) {
 		}
 		totalDeleted += deleted
 
+		meshDeleted, err := s.pruneTenantMeshResults(ctx, tenantID, retentionDays)
+		if err != nil {
+			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s mesh results: %w", tenantID, err)
+		}
+		totalDeleted += meshDeleted
+
 		if deleted > 0 {
 			s.logger.WithFields(logrus.Fields{
 				"tenant_id":        tenantID,
@@ -381,9 +503,10 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 // fetchDueMonitors fetches monitors that are due to run within a transaction
 func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize int) ([]Monitor, error) {
 	query := `
-		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds
+		SELECT id, tenant_id, type, config, interval_seconds, timeout_seconds, current_state
 		FROM monitors
 		WHERE enabled = true
+		  AND deleted_at IS NULL
 		  AND type != 'group'
 		  AND (next_run_at IS NULL OR next_run_at <= NOW())
 		ORDER BY next_run_at NULLS FIRST, id
@@ -403,7 +526,7 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 
 		err := rows.Scan(
 			&m.ID, &m.TenantID, &m.Type, &m.Config,
-			&m.IntervalSeconds, &m.TimeoutSeconds,
+			&m.IntervalSeconds, &m.TimeoutSeconds, &m.CurrentState,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)
@@ -416,18 +539,109 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 		return nil, fmt.Errorf("error iterating monitors: %w", err)
 	}
 
+	if err := s.attachMonitorLocations(ctx, tx, monitors); err != nil {
+		return nil, err
+	}
+
 	return monitors, nil
 }
 
-// createCheckJob creates a check job for a monitor
-func (s *Scheduler) createCheckJob(monitor Monitor) (*models.Job, error) {
+// attachMonitorLocations loads the selected locations for a batch of monitors
+// in one query (enabled, non-deleted locations only — a disabled location's
+// workers may be gone, so no jobs are addressed to it).
+func (s *Scheduler) attachMonitorLocations(ctx context.Context, tx *sql.Tx, monitors []Monitor) error {
+	if len(monitors) == 0 {
+		return nil
+	}
+
+	ids := make([]string, len(monitors))
+	index := make(map[uuid.UUID]int, len(monitors))
+	for i, m := range monitors {
+		ids[i] = m.ID.String()
+		index[m.ID] = i
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT ml.monitor_id, ml.location_id, l.worker_credential
+		FROM monitor_locations ml
+		JOIN locations l ON l.id = ml.location_id
+			AND l.deleted_at IS NULL
+			AND l.enabled = TRUE
+		WHERE ml.monitor_id = ANY($1::uuid[])
+	`, pq.Array(ids))
+	if err != nil {
+		return fmt.Errorf("failed to query monitor locations: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monitorID, locationID uuid.UUID
+		var encryptedCredential sql.NullString
+		if err := rows.Scan(&monitorID, &locationID, &encryptedCredential); err != nil {
+			return fmt.Errorf("failed to scan monitor location: %w", err)
+		}
+		i, ok := index[monitorID]
+		if !ok {
+			continue
+		}
+		monitors[i].LocationIDs = append(monitors[i].LocationIDs, locationID)
+		// Existing locations are issued credentials by their first deploy-info
+		// request. Until then, do not publish unauthenticated private jobs.
+		if !encryptedCredential.Valid || encryptedCredential.String == "" {
+			continue
+		}
+		credential, err := s.secretsEncryptor.Decrypt(encryptedCredential.String)
+		if err != nil {
+			return fmt.Errorf("decrypt worker credential for location %s: %w", locationID, err)
+		}
+		if monitors[i].LocationCredentials == nil {
+			monitors[i].LocationCredentials = make(map[uuid.UUID]string)
+		}
+		monitors[i].LocationCredentials[locationID] = credential
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating monitor locations: %w", err)
+	}
+	return nil
+}
+
+// createCheckJob creates a check job for a monitor. locationID is empty for
+// the default platform fleet.
+func (s *Scheduler) createCheckJob(monitor Monitor, locationID string) (*models.Job, error) {
 	jobID := uuid.New().String()
+
+	configJSON := json.RawMessage(monitor.Config)
+	if locationID != "" {
+		id, err := uuid.Parse(locationID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid location id: %w", err)
+		}
+		credential := monitor.LocationCredentials[id]
+		if credential == "" {
+			return nil, fmt.Errorf("missing worker credential for location %s", locationID)
+		}
+		if secrets.HasMonitorSecrets(monitor.Type) {
+			plaintext, err := secrets.DecryptMonitorConfig(s.secretsEncryptor, monitor.Type, configJSON)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt monitor config for location %s: %w", locationID, err)
+			}
+			locationEncryptor, err := locationauth.ConfigEncryptor(credential)
+			if err != nil {
+				return nil, fmt.Errorf("derive config key for location %s: %w", locationID, err)
+			}
+			configJSON, err = secrets.EncryptMonitorConfig(locationEncryptor, monitor.Type, plaintext)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt monitor config for location %s: %w", locationID, err)
+			}
+		}
+	}
 
 	payload := models.CheckJobPayload{
 		MonitorID:      monitor.ID.String(),
 		Type:           monitor.Type,
-		Config:         json.RawMessage(monitor.Config),
+		Config:         configJSON,
 		TimeoutSeconds: monitor.TimeoutSeconds,
+		LocationID:     locationID,
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -444,13 +658,78 @@ func (s *Scheduler) createCheckJob(monitor Monitor) (*models.Job, error) {
 	return job, nil
 }
 
-// publishJob publishes a job to NATS
-func (s *Scheduler) publishJob(ctx context.Context, job *models.Job) error {
-	err := s.queue.PublishJSON(ctx, s.config.CheckJobSubject, job, nil)
+// jobSubject returns the per-location subject a job is published to.
+func (s *Scheduler) jobSubject(locationID string) string {
+	if locationID == "" {
+		return models.CheckJobSubjectDefault(s.config.CheckJobSubject)
+	}
+	return models.CheckJobSubjectForLocation(s.config.CheckJobSubject, locationID)
+}
+
+func (s *Scheduler) ensureLocationConsumer(ctx context.Context, locationID string) error {
+	if locationID == "" || s.queue == nil {
+		return nil
+	}
+	_, err := s.queue.CreateConsumerWithOptions(ctx, s.config.CheckJobStream,
+		models.CheckJobConsumerForLocation(locationID),
+		queue.ConsumerOptions{FilterSubject: s.jobSubject(locationID)})
 	if err != nil {
+		return fmt.Errorf("ensure location consumer: %w", err)
+	}
+	return nil
+}
+
+// publishJob publishes a job to NATS (via the publish seam).
+func (s *Scheduler) publishJob(ctx context.Context, subject string, job *models.Job) error {
+	if err := s.publish(ctx, subject, job); err != nil {
 		return fmt.Errorf("failed to publish job: %w", err)
 	}
 	return nil
+}
+
+// publishMonitorJobs fans a due monitor out to its locations (or the default
+// fleet when none are selected). It returns how many jobs were published; the
+// caller reschedules the monitor iff at least one publish succeeded, so a
+// NATS blip retries next tick without skipping an interval.
+func (s *Scheduler) publishMonitorJobs(ctx context.Context, monitor Monitor) (published, failed int) {
+	locationIDs := []string{""}
+	if len(monitor.LocationIDs) > 0 {
+		locationIDs = locationIDs[:0]
+		for _, id := range monitor.LocationIDs {
+			locationIDs = append(locationIDs, id.String())
+		}
+	}
+
+	for _, locationID := range locationIDs {
+		if err := s.ensureLocationConsumer(ctx, locationID); err != nil {
+			s.logger.WithError(err).WithField("location_id", locationID).Error("Failed to ensure location consumer")
+			failed++
+			continue
+		}
+		job, err := s.createCheckJob(monitor, locationID)
+		if err != nil {
+			s.logger.WithError(err).
+				WithField("monitor_id", monitor.ID).
+				WithField("tenant_id", monitor.TenantID).
+				Error("Failed to create check job")
+			failed++
+			continue
+		}
+
+		if err := s.publishJob(ctx, s.jobSubject(locationID), job); err != nil {
+			s.jobsPublishErrors.With(prometheus.Labels{}).Inc()
+			s.logger.WithError(err).
+				WithField("monitor_id", monitor.ID).
+				WithField("tenant_id", monitor.TenantID).
+				WithField("location_id", locationID).
+				WithField("job_id", job.ID).
+				Error("Failed to publish job")
+			failed++
+			continue
+		}
+		published++
+	}
+	return published, failed
 }
 
 // updateMonitorNextRunAt updates the next_run_at for a monitor within a transaction
@@ -458,7 +737,7 @@ func (s *Scheduler) updateMonitorNextRunAt(ctx context.Context, tx *sql.Tx, moni
 	query := `
 		UPDATE monitors
 		SET next_run_at = $1, updated_at = NOW()
-		WHERE id = $2
+		WHERE id = $2 AND deleted_at IS NULL
 	`
 
 	_, err := tx.ExecContext(ctx, query, nextRunAt, monitorID)
@@ -512,32 +791,19 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 	publishErrors := 0
 
 	for _, monitor := range monitors {
-		// Create check job
-		job, err := s.createCheckJob(monitor)
-		if err != nil {
-			s.logger.WithError(err).
-				WithField("monitor_id", monitor.ID).
-				WithField("tenant_id", monitor.TenantID).
-				Error("Failed to create check job")
-			publishErrors++
-			continue
-		}
-
-		// Publish job to NATS (outside transaction, but we'll only update DB if publish succeeds)
-		if err := s.publishJob(ctx, job); err != nil {
-			s.jobsPublishErrors.With(prometheus.Labels{}).Inc()
-			s.logger.WithError(err).
-				WithField("monitor_id", monitor.ID).
-				WithField("tenant_id", monitor.TenantID).
-				WithField("job_id", job.ID).
-				Error("Failed to publish job")
-			publishErrors++
-			// Skip this monitor - don't update next_run_at if publish failed
+		// Fan out to the monitor's locations (or the default fleet) — jobs go
+		// to NATS outside the transaction; the DB reschedule below only
+		// happens when at least one job made it out.
+		published, failed := s.publishMonitorJobs(ctx, monitor)
+		publishErrors += failed
+		if published == 0 {
+			// Nothing published: leave next_run_at untouched so the monitor
+			// is retried on the next tick.
 			continue
 		}
 
 		// Calculate next run time
-		nextRunAt := time.Now().Add(time.Duration(monitor.IntervalSeconds) * time.Second)
+		nextRunAt := time.Now().Add(nextCheckDelay(monitor.CurrentState, monitor.IntervalSeconds))
 
 		// Update monitor's next_run_at within the transaction
 		if err := s.updateMonitorNextRunAt(ctx, tx, monitor.ID, nextRunAt); err != nil {
@@ -546,17 +812,17 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 				WithField("monitor_id", monitor.ID).
 				WithField("tenant_id", monitor.TenantID).
 				Error("Failed to update monitor next_run_at")
-			// If DB update fails, we've already published the job
-			// This is acceptable - the monitor will be scheduled again, but the job is already queued
+			// If DB update fails, we've already published the job(s)
+			// This is acceptable - the monitor will be scheduled again, but the jobs are already queued
 			// We continue to process other monitors
 			continue
 		}
 
 		scheduledCount++
 		s.logger.WithFields(logrus.Fields{
-			"monitor_id": monitor.ID,
-			"tenant_id":  monitor.TenantID,
-			"job_id":     job.ID,
+			"monitor_id":     monitor.ID,
+			"tenant_id":      monitor.TenantID,
+			"jobs_published": published,
 		}).Debug("Scheduled monitor check")
 	}
 
@@ -599,4 +865,30 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	// Start() will return when it sees the context is cancelled or stop channel is closed
 	// The timeout in the caller (main.go) will handle cases where Start() doesn't stop in time
 	return nil
+}
+
+func (s *Scheduler) triggerMonitorPurge() {
+	if !s.config.MonitorPurgeEnabled {
+		return
+	}
+	go func() {
+		start := time.Now()
+		purged, err := s.purger.runOnce(s.ctx)
+		duration := time.Since(start).Seconds()
+		s.purger.metrics.runs.With(prometheus.Labels{}).Inc()
+		s.purger.metrics.runDuration.With(prometheus.Labels{}).Observe(duration)
+		if err != nil {
+			s.logger.WithError(err).Warn("monitor purge run failed")
+			return
+		}
+		fields := logrus.Fields{
+			"monitors_purged":  purged,
+			"duration_seconds": duration,
+		}
+		if purged > 0 {
+			s.logger.WithFields(fields).Info("monitor purge run completed")
+		} else {
+			s.logger.WithFields(fields).Debug("monitor purge tick completed (no-op)")
+		}
+	}()
 }
