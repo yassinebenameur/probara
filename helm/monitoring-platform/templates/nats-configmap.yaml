@@ -1,0 +1,27 @@
+{{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitoring-platform.fullname" . }}-nats-config
+  labels:
+    {{- include "monitoring-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+data:
+  nats.conf: |
+    jetstream {
+      store_dir: /data
+    }
+    http_port: 8222
+    authorization {
+      users: [
+        {
+          user: {{ required "nats.auth.platformUser is required when nats.auth.enabled" .Values.nats.auth.platformUser | quote }}
+          password: {{ required "nats.auth.platformPassword is required when nats.auth.enabled" .Values.nats.auth.platformPassword | quote }}
+        }
+      ]
+      auth_callout {
+        issuer: {{ required "nats.auth.locationIssuerPublicKey is required when nats.auth.enabled" .Values.nats.auth.locationIssuerPublicKey | quote }}
+        auth_users: [{{ .Values.nats.auth.platformUser | quote }}]
+      }
+    }
+{{- end }}

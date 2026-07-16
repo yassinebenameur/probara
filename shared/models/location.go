@@ -13,4 +13,5 @@ type LocationHeartbeat struct {
 	Hostname   string    `json:"hostname,omitempty"`
 	Version    string    `json:"version,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
+	Signature  string    `json:"signature,omitempty"`
 }

@@ -161,6 +161,9 @@ func (s *Scheduler) fetchDueMeshEdges(ctx context.Context, tx *sql.Tx) ([]meshEd
 // its workers dial the target's echo endpoint directly, so latency measures
 // the real source→target network path.
 func (s *Scheduler) publishMeshJob(ctx context.Context, edge meshEdge) error {
+	if err := s.ensureLocationConsumer(ctx, edge.SourceID.String()); err != nil {
+		return err
+	}
 	configJSON, err := json.Marshal(models.MeshProbeConfig{
 		TargetLocationID: edge.TargetID.String(),
 		Endpoint:         edge.Endpoint,

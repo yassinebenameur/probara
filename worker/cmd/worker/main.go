@@ -13,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
@@ -86,10 +87,15 @@ func main() {
 		log.Warn("Notifications consumer enabled but SMTP not configured; email channels will fail")
 	}
 
-	// Secrets encryption — same provider the API uses so what API encrypted,
-	// the worker can decrypt.
+	// Private-location workers derive a location-only config key from their
+	// credential. Default-fleet workers use the platform at-rest key.
 	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
-	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
+	if cfg.LocationID != "" {
+		secretsEncryptor, err = locationauth.ConfigEncryptor(cfg.LocationCredential)
+		if err != nil {
+			log.WithError(err).Fatal("Invalid LOCATION_CREDENTIAL")
+		}
+	} else if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
 		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
 	} else if kerr != secrets.ErrKeyNotConfigured {
 		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")

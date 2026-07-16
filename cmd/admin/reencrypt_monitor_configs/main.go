@@ -61,8 +61,15 @@ func main() {
 		log.Fatalf("ping db: %v", err)
 	}
 
-	secretTypes := make([]string, 0, len(secrets.MonitorSecretFields))
+	secretTypeSet := make(map[string]struct{}, len(secrets.MonitorSecretFields)+len(secrets.MonitorSecretMapFields))
 	for t := range secrets.MonitorSecretFields {
+		secretTypeSet[t] = struct{}{}
+	}
+	for t := range secrets.MonitorSecretMapFields {
+		secretTypeSet[t] = struct{}{}
+	}
+	secretTypes := make([]string, 0, len(secretTypeSet))
+	for t := range secretTypeSet {
 		secretTypes = append(secretTypes, t)
 	}
 
@@ -160,6 +167,31 @@ func reencryptConfig(enc secrets.Encryptor, monitorType string, raw json.RawMess
 		}
 		cfg[field] = ct
 		changed = true
+	}
+	for _, field := range secrets.MonitorSecretMapFields[monitorType] {
+		values, ok := cfg[field].(map[string]any)
+		if !ok {
+			continue
+		}
+		for key, value := range values {
+			s, ok := value.(string)
+			if !ok || s == "" {
+				continue
+			}
+			if version, isEnvelope := secrets.EnvelopeVersion(s); isEnvelope && version == currentVersion {
+				continue
+			}
+			plain, err := enc.Decrypt(s)
+			if err != nil {
+				return nil, false, fmt.Errorf("decrypt field %q: %w", field+"."+key, err)
+			}
+			ct, err := enc.Encrypt(plain)
+			if err != nil {
+				return nil, false, fmt.Errorf("encrypt field %q: %w", field+"."+key, err)
+			}
+			values[key] = ct
+			changed = true
+		}
 	}
 
 	if !changed {

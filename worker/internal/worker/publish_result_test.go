@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/models"
 )
@@ -18,6 +20,34 @@ type spyResultPublisher struct {
 	subjects []string
 	headers  []map[string][]string
 	messages []models.CheckResultMessage
+}
+
+func TestPublishResultSignsPrivateLocationMessage(t *testing.T) {
+	credential := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	spy := &spyResultPublisher{}
+	w := newPublishTestWorker(spy)
+	w.config.LocationID = uuid.New().String()
+	w.config.LocationCredential = credential
+	msg := models.CheckResultMessage{
+		Version: "v1", JobID: uuid.New().String(), MonitorID: uuid.New().String(),
+		TenantID: uuid.New().String(), LocationID: w.config.LocationID,
+		Status: "success", ResultSource: "monitor", CompletedAt: time.Now().UTC(),
+	}
+	if err := w.publishResultMessage(context.Background(), msg); err != nil {
+		t.Fatal(err)
+	}
+	if want := models.CheckResultSubjectForLocation(models.CheckResultSubject, w.config.LocationID); spy.subjects[0] != want {
+		t.Fatalf("subject = %q, want %q", spy.subjects[0], want)
+	}
+	got := spy.messages[0]
+	if got.LocationSignature == "" {
+		t.Fatal("missing location signature")
+	}
+	sig := got.LocationSignature
+	got.LocationSignature = ""
+	if err := locationauth.VerifyJSON(credential, sig, got); err != nil {
+		t.Fatalf("verify signature: %v", err)
+	}
 }
 
 func (s *spyResultPublisher) PublishJSON(_ context.Context, subject string, v interface{}, headers map[string][]string) error {

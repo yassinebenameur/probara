@@ -73,9 +73,6 @@ services:
       ADMIN_REFRESH_TTL_DAYS: "30"
       ADMIN_COOKIE_SECURE: "false"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
-      # NATS address reachable from remote networks, baked into private-location
-      # worker deploy snippets (the host-exposed port in local dev).
-      PUBLIC_NATS_URL: "nats://localhost:4222"
       # Shared with the status-page service; see its definition below.
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
       # OIDC SSO (off by default; `docker compose --profile sso up` starts a

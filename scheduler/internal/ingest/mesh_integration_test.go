@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -9,11 +10,15 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
+
+var meshTestCredential = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 
 // newMeshTestIngest builds an Ingest with an explicit mesh failure threshold
 // (the knob under test), mirroring newTestIngest otherwise.
@@ -36,6 +41,13 @@ func insertMeshEdge(ctx context.Context, t testing.TB, dbClient *db.Client, tena
 		VALUES ($1, $2, $3)
 	`, tenantID, sourceID, targetID); err != nil {
 		t.Fatalf("insert mesh edge: %v", err)
+	}
+}
+
+func authorizeMeshSource(ctx context.Context, t testing.TB, dbClient *db.Client, sourceID uuid.UUID) {
+	t.Helper()
+	if _, err := dbClient.ExecContext(ctx, `UPDATE locations SET worker_credential = $1 WHERE id = $2`, meshTestCredential, sourceID); err != nil {
+		t.Fatalf("set mesh source credential: %v", err)
 	}
 }
 
@@ -67,9 +79,22 @@ func meshMessage(tenantID, sourceID, targetID uuid.UUID, status string) models.C
 // point the NATS consumer uses (exercising the Mesh != nil routing).
 func ingestMeshMessage(t *testing.T, i *Ingest, m models.CheckResultMessage) {
 	t.Helper()
-	if err := i.handleMessage(context.Background(), testMessage(mustMarshal(t, m))); err != nil {
+	if err := i.handleMessage(context.Background(), signedMeshQueueMessage(t, m)); err != nil {
 		t.Fatalf("handleMessage %s: %v", m.Status, err)
 	}
+}
+
+func signedMeshQueueMessage(t testing.TB, m models.CheckResultMessage) *queue.Message {
+	t.Helper()
+	m.LocationSignature = ""
+	signature, err := locationauth.SignJSON(meshTestCredential, m)
+	if err != nil {
+		t.Fatalf("sign mesh message: %v", err)
+	}
+	m.LocationSignature = signature
+	msg := testMessage(mustMarshal(t, m))
+	msg.Subject = models.CheckResultSubjectForLocation(models.CheckResultSubject, m.LocationID)
+	return msg
 }
 
 func meshEdgeState(ctx context.Context, t testing.TB, dbClient *db.Client, sourceID, targetID uuid.UUID) (string, int) {
@@ -105,6 +130,7 @@ func TestMeshIngestStateProgression(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mesh-ingest")
 	source := insertLocation(ctx, t, dbClient, tenantID, "mesh-src")
+	authorizeMeshSource(ctx, t, dbClient, source)
 	target := insertLocation(ctx, t, dbClient, tenantID, "mesh-tgt")
 	insertMeshEdge(ctx, t, dbClient, tenantID, source, target)
 
@@ -153,6 +179,7 @@ func TestMeshIngestRedeliveryIsNoOp(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mesh-dedupe")
 	source := insertLocation(ctx, t, dbClient, tenantID, "mesh-src")
+	authorizeMeshSource(ctx, t, dbClient, source)
 	target := insertLocation(ctx, t, dbClient, tenantID, "mesh-tgt")
 	insertMeshEdge(ctx, t, dbClient, tenantID, source, target)
 
@@ -161,9 +188,8 @@ func TestMeshIngestRedeliveryIsNoOp(t *testing.T) {
 	// The same message (same JobID) delivered twice: one sample row, one
 	// state-machine step.
 	m := meshMessage(tenantID, source, target, "failure")
-	data := mustMarshal(t, m)
 	for n := 0; n < 2; n++ {
-		if err := i.handleMessage(ctx, testMessage(data)); err != nil {
+		if err := i.handleMessage(ctx, signedMeshQueueMessage(t, m)); err != nil {
 			t.Fatalf("handleMessage delivery %d: %v", n+1, err)
 		}
 	}
@@ -184,6 +210,7 @@ func TestMeshIngestDropsResultForMissingEdge(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mesh-gone")
 	source := insertLocation(ctx, t, dbClient, tenantID, "mesh-src")
+	authorizeMeshSource(ctx, t, dbClient, source)
 	target := insertLocation(ctx, t, dbClient, tenantID, "mesh-tgt")
 	// No location_mesh_state row: the edge was removed while the probe was in
 	// flight. The result must be acked (nil) and insert nothing.
@@ -191,7 +218,7 @@ func TestMeshIngestDropsResultForMissingEdge(t *testing.T) {
 	i := newMeshTestIngest(t, dbClient)
 
 	m := meshMessage(tenantID, source, target, "failure")
-	if err := i.handleMessage(ctx, testMessage(mustMarshal(t, m))); err != nil {
+	if err := i.handleMessage(ctx, signedMeshQueueMessage(t, m)); err != nil {
 		t.Fatalf("handleMessage should drop results for missing edges, got: %v", err)
 	}
 
@@ -207,6 +234,7 @@ func TestMeshIngestPersistsSample(t *testing.T) {
 
 	tenantID := testutil.InsertTenant(ctx, t, dbClient, "mesh-sample")
 	source := insertLocation(ctx, t, dbClient, tenantID, "mesh-src")
+	authorizeMeshSource(ctx, t, dbClient, source)
 	target := insertLocation(ctx, t, dbClient, tenantID, "mesh-tgt")
 	insertMeshEdge(ctx, t, dbClient, tenantID, source, target)
 

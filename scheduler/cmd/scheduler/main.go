@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -50,6 +51,13 @@ func main() {
 
 	// Create scheduler
 	sched := scheduler.NewScheduler(cfg, log, metricsRegistry, dbClient, queueClient)
+	var secretsEncryptor secrets.Encryptor = secrets.NoOpEncryptor{}
+	if kp, kerr := secrets.NewEnvKeyProvider(); kerr == nil {
+		secretsEncryptor = secrets.NewAESGCMEncryptor(kp)
+	} else if kerr != secrets.ErrKeyNotConfigured {
+		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
+	}
+	sched.ConfigureEncryption(secretsEncryptor)
 
 	// Results ingest: persists check results workers publish over NATS and
 	// advances monitor state. Workers themselves have no Postgres access.
@@ -63,6 +71,7 @@ func main() {
 			defer statusPublisher.Close()
 		}
 		ingestConsumer = ingest.New(cfg, log, metricsRegistry, dbClient, queueClient, statusPublisher)
+		ingestConsumer.ConfigureEncryption(secretsEncryptor)
 		go func() {
 			if err := ingestConsumer.Start(); err != nil {
 				log.WithError(err).Fatal("Results ingest failed")

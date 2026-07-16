@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/queue"
 )
 
@@ -20,6 +21,7 @@ func mustMarshal(t testing.TB, v interface{}) []byte {
 func testMessage(data []byte) *queue.Message {
 	return &queue.Message{
 		Data:       data,
+		Subject:    models.CheckResultSubject,
 		Ack:        func() error { return nil },
 		Nak:        func() error { return nil },
 		InProgress: func() error { return nil },

@@ -24,11 +24,16 @@ spec:
           image: "{{ .Values.nats.image }}"
           imagePullPolicy: IfNotPresent
           args:
+            {{- if .Values.nats.auth.enabled }}
+            - "-c"
+            - "/etc/nats/nats.conf"
+            {{- else }}
             - "-js"
             - "-m"
             - "8222"
             - "-sd"
             - "/data"
+            {{- end }}
           ports:
             - name: client
               containerPort: 4222
@@ -60,6 +65,23 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.nats.auth.enabled }}
+            - name: config
+              mountPath: /etc/nats
+              readOnly: true
+            {{- end }}
+      {{- if or (not .Values.nats.persistence.enabled) .Values.nats.auth.enabled }}
+      volumes:
+        {{- if not .Values.nats.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.nats.auth.enabled }}
+        - name: config
+          configMap:
+            name: {{ include "monitoring-platform.fullname" . }}-nats-config
+        {{- end }}
+      {{- end }}
   {{- if .Values.nats.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -73,14 +95,8 @@ spec:
         resources:
           requests:
             storage: {{ .Values.nats.persistence.size }}
-  {{- else }}
-      volumes:
-        - name: data
-          emptyDir: {}
   {{- end }}
 {{- end }}
-
-
 
 
 

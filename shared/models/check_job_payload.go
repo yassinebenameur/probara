@@ -271,8 +271,11 @@ type MySQLMonitorConfig struct {
 // full ws:// or wss:// upgrade handshake, optionally followed by sending a
 // message and asserting on the first reply.
 type WebSocketMonitorConfig struct {
-	URL           string            `json:"url"`
-	Headers       map[string]string `json:"headers,omitempty"` // handshake request headers (e.g. Authorization)
+	URL string `json:"url"`
+	// Header values are encrypted at rest and write-only through the API (see
+	// shared/secrets.MonitorSecretMapFields). Header names remain visible so
+	// callers can preserve or replace individual values with "***".
+	Headers       map[string]string `json:"headers,omitempty"`
 	TLSSkipVerify *bool             `json:"tls_skip_verify,omitempty"`
 	// SendMessage is written as a text frame after the handshake. When
 	// ExpectedSubstring is set the checker waits (within the check timeout)
@@ -351,6 +354,13 @@ const TestCheckSubject = "checks.test"
 // served only by that location's workers.
 func TestCheckSubjectForLocation(locationID string) string {
 	return TestCheckSubject + ".loc." + locationID
+}
+
+// CheckJobConsumerForLocation is the broker-enforced durable name used by the
+// scheduler, private worker, and NATS authorization callout. It intentionally
+// does not inherit a worker fleet's configurable default consumer name.
+func CheckJobConsumerForLocation(locationID string) string {
+	return "check-workers-loc-" + locationID
 }
 
 // TestCheckResponse is the worker's reply to a test check request.

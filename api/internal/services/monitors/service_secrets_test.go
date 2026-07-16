@@ -171,3 +171,71 @@ func TestMonitorSecretLifecycle_NonSecretTypeUntouched(t *testing.T) {
 		t.Fatalf("http config modified in response: %s", created.Config)
 	}
 }
+
+func TestWebSocketHeaderSecretLifecycle(t *testing.T) {
+	enc := testEncryptor(t)
+	repo := &copyingRepo{MockRepository: NewMockRepository()}
+	svc := NewService(repo)
+	svc.ConfigureEncryption(enc)
+
+	tenantID := uuid.New()
+	created, err := svc.CreateMonitor(context.Background(), tenantID, &models.CreateMonitorRequest{
+		Name:            "authenticated socket",
+		Type:            models.MonitorTypeWebSocket,
+		Config:          json.RawMessage(`{"url":"wss://example.test/socket","headers":{"Authorization":"Bearer original","Origin":"https://app.test"}}`),
+		IntervalSeconds: 60,
+		TimeoutSeconds:  10,
+	})
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+
+	storedHeaders := decodeConfig(t, repo.createdConfig)["headers"].(map[string]any)
+	for name := range storedHeaders {
+		if value, _ := storedHeaders[name].(string); !secrets.LooksLikeEnvelope(value) {
+			t.Fatalf("stored header %q not encrypted: %v", name, storedHeaders[name])
+		}
+	}
+	responseHeaders := decodeConfig(t, created.Config)["headers"].(map[string]any)
+	for name := range responseHeaders {
+		if responseHeaders[name] != secrets.MaskedSecret {
+			t.Fatalf("response header %q = %v, want masked", name, responseHeaders[name])
+		}
+	}
+
+	// Edit-mode tests resolve a write-only placeholder to ciphertext; the
+	// worker's standard decrypt boundary then restores the handshake value.
+	resolved, err := svc.ResolveTestConfig(
+		context.Background(), tenantID, &created.ID, models.MonitorTypeWebSocket,
+		json.RawMessage(`{"url":"wss://example.test/socket","headers":{"Authorization":"***"}}`),
+	)
+	if err != nil {
+		t.Fatalf("ResolveTestConfig: %v", err)
+	}
+	decrypted, err := secrets.DecryptMonitorConfig(enc, "websocket", resolved)
+	if err != nil {
+		t.Fatalf("DecryptMonitorConfig: %v", err)
+	}
+	if got := decodeConfig(t, decrypted)["headers"].(map[string]any)["Authorization"]; got != "Bearer original" {
+		t.Fatalf("resolved Authorization = %v, want original value", got)
+	}
+
+	_, err = svc.UpdateMonitor(context.Background(), tenantID, created.ID, &models.UpdateMonitorRequest{
+		Config: json.RawMessage(`{"url":"wss://new.example.test/socket","headers":{"Authorization":"***","X-API-Key":"rotated"}}`),
+	})
+	if err != nil {
+		t.Fatalf("UpdateMonitor: %v", err)
+	}
+	updatedHeaders := decodeConfig(t, repo.lastUpdateConfig)["headers"].(map[string]any)
+	authPlain, err := enc.Decrypt(updatedHeaders["Authorization"].(string))
+	if err != nil || authPlain != "Bearer original" {
+		t.Fatalf("preserved Authorization = %q (err %v)", authPlain, err)
+	}
+	apiKeyPlain, err := enc.Decrypt(updatedHeaders["X-API-Key"].(string))
+	if err != nil || apiKeyPlain != "rotated" {
+		t.Fatalf("rotated X-API-Key = %q (err %v)", apiKeyPlain, err)
+	}
+	if _, ok := updatedHeaders["Origin"]; ok {
+		t.Fatal("omitted Origin header should be removed")
+	}
+}

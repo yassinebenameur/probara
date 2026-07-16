@@ -178,8 +178,8 @@ func (s *Service) CompleteFlow(ctx context.Context, code string, flow *FlowState
 
 // ResolveUser maps validated claims to an admin user:
 //  1. exact (issuer, subject) match → login;
-//  2. verified-email match on a local user without an external identity →
-//     link the identity to that account;
+//  2. verified-email match on a passwordless local user without an external
+//     identity → link the identity to that account;
 //  3. JIT provisioning (when enabled) — new member with the default
 //     membership, or superadmin when the install has no active admins
 //     (bootstrap parity so a fresh OIDC-only install is administrable);
@@ -248,7 +248,10 @@ func (s *Service) linkByEmail(ctx context.Context, issuer, subject, email string
 	row := s.db.QueryRowContext(ctx, `
 		UPDATE admin_users
 		SET external_issuer = $1, external_subject = $2, updated_at = NOW()
-		WHERE lower(email) = lower($3) AND external_subject IS NULL AND disabled_at IS NULL
+		WHERE lower(email) = lower($3)
+			AND password_hash IS NULL
+			AND external_subject IS NULL
+			AND disabled_at IS NULL
 		RETURNING `+oidcUserColumns+`
 	`, issuer, subject, email)
 	return scanUser(row)

@@ -15,10 +15,12 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 const (
@@ -57,6 +59,9 @@ type Monitor struct {
 	CurrentState    string
 	// LocationIDs the monitor fans out to; empty = default platform fleet.
 	LocationIDs []uuid.UUID
+	// LocationCredentials contains plaintext per-location credentials only for
+	// the lifetime of this scheduling batch.
+	LocationCredentials map[uuid.UUID]string
 }
 
 // Scheduler represents the scheduler service
@@ -66,6 +71,7 @@ type Scheduler struct {
 	metrics                 *metrics.Registry
 	db                      *db.Client
 	queue                   *queue.Client
+	secretsEncryptor        secrets.Encryptor
 	ctx                     context.Context
 	cancel                  context.CancelFunc
 	stop                    chan struct{}
@@ -113,14 +119,15 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Scheduler{
-		config:  cfg,
-		logger:  log,
-		metrics: metricsRegistry,
-		db:      dbClient,
-		queue:   queueClient,
-		ctx:     ctx,
-		cancel:  cancel,
-		stop:    make(chan struct{}),
+		config:           cfg,
+		logger:           log,
+		metrics:          metricsRegistry,
+		db:               dbClient,
+		queue:            queueClient,
+		ctx:              ctx,
+		cancel:           cancel,
+		stop:             make(chan struct{}),
+		secretsEncryptor: secrets.NoOpEncryptor{},
 	}
 
 	// Initialize metrics (using empty labels, so we'll use With(prometheus.Labels{}))
@@ -230,6 +237,14 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 	})
 
 	return s
+}
+
+// ConfigureEncryption wires the platform key used to decrypt monitor configs
+// and per-location credentials immediately before location-scoped publishing.
+func (s *Scheduler) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		s.secretsEncryptor = encryptor
+	}
 }
 
 // Start starts the scheduler loop
@@ -547,7 +562,7 @@ func (s *Scheduler) attachMonitorLocations(ctx context.Context, tx *sql.Tx, moni
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT ml.monitor_id, ml.location_id
+		SELECT ml.monitor_id, ml.location_id, l.worker_credential
 		FROM monitor_locations ml
 		JOIN locations l ON l.id = ml.location_id
 			AND l.deleted_at IS NULL
@@ -561,12 +576,28 @@ func (s *Scheduler) attachMonitorLocations(ctx context.Context, tx *sql.Tx, moni
 
 	for rows.Next() {
 		var monitorID, locationID uuid.UUID
-		if err := rows.Scan(&monitorID, &locationID); err != nil {
+		var encryptedCredential sql.NullString
+		if err := rows.Scan(&monitorID, &locationID, &encryptedCredential); err != nil {
 			return fmt.Errorf("failed to scan monitor location: %w", err)
 		}
-		if i, ok := index[monitorID]; ok {
-			monitors[i].LocationIDs = append(monitors[i].LocationIDs, locationID)
+		i, ok := index[monitorID]
+		if !ok {
+			continue
 		}
+		monitors[i].LocationIDs = append(monitors[i].LocationIDs, locationID)
+		// Existing locations are issued credentials by their first deploy-info
+		// request. Until then, do not publish unauthenticated private jobs.
+		if !encryptedCredential.Valid || encryptedCredential.String == "" {
+			continue
+		}
+		credential, err := s.secretsEncryptor.Decrypt(encryptedCredential.String)
+		if err != nil {
+			return fmt.Errorf("decrypt worker credential for location %s: %w", locationID, err)
+		}
+		if monitors[i].LocationCredentials == nil {
+			monitors[i].LocationCredentials = make(map[uuid.UUID]string)
+		}
+		monitors[i].LocationCredentials[locationID] = credential
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("error iterating monitor locations: %w", err)
@@ -579,10 +610,36 @@ func (s *Scheduler) attachMonitorLocations(ctx context.Context, tx *sql.Tx, moni
 func (s *Scheduler) createCheckJob(monitor Monitor, locationID string) (*models.Job, error) {
 	jobID := uuid.New().String()
 
+	configJSON := json.RawMessage(monitor.Config)
+	if locationID != "" {
+		id, err := uuid.Parse(locationID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid location id: %w", err)
+		}
+		credential := monitor.LocationCredentials[id]
+		if credential == "" {
+			return nil, fmt.Errorf("missing worker credential for location %s", locationID)
+		}
+		if secrets.HasMonitorSecrets(monitor.Type) {
+			plaintext, err := secrets.DecryptMonitorConfig(s.secretsEncryptor, monitor.Type, configJSON)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt monitor config for location %s: %w", locationID, err)
+			}
+			locationEncryptor, err := locationauth.ConfigEncryptor(credential)
+			if err != nil {
+				return nil, fmt.Errorf("derive config key for location %s: %w", locationID, err)
+			}
+			configJSON, err = secrets.EncryptMonitorConfig(locationEncryptor, monitor.Type, plaintext)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt monitor config for location %s: %w", locationID, err)
+			}
+		}
+	}
+
 	payload := models.CheckJobPayload{
 		MonitorID:      monitor.ID.String(),
 		Type:           monitor.Type,
-		Config:         json.RawMessage(monitor.Config),
+		Config:         configJSON,
 		TimeoutSeconds: monitor.TimeoutSeconds,
 		LocationID:     locationID,
 	}
@@ -609,6 +666,19 @@ func (s *Scheduler) jobSubject(locationID string) string {
 	return models.CheckJobSubjectForLocation(s.config.CheckJobSubject, locationID)
 }
 
+func (s *Scheduler) ensureLocationConsumer(ctx context.Context, locationID string) error {
+	if locationID == "" || s.queue == nil {
+		return nil
+	}
+	_, err := s.queue.CreateConsumerWithOptions(ctx, s.config.CheckJobStream,
+		models.CheckJobConsumerForLocation(locationID),
+		queue.ConsumerOptions{FilterSubject: s.jobSubject(locationID)})
+	if err != nil {
+		return fmt.Errorf("ensure location consumer: %w", err)
+	}
+	return nil
+}
+
 // publishJob publishes a job to NATS (via the publish seam).
 func (s *Scheduler) publishJob(ctx context.Context, subject string, job *models.Job) error {
 	if err := s.publish(ctx, subject, job); err != nil {
@@ -631,6 +701,11 @@ func (s *Scheduler) publishMonitorJobs(ctx context.Context, monitor Monitor) (pu
 	}
 
 	for _, locationID := range locationIDs {
+		if err := s.ensureLocationConsumer(ctx, locationID); err != nil {
+			s.logger.WithError(err).WithField("location_id", locationID).Error("Failed to ensure location consumer")
+			failed++
+			continue
+		}
 		job, err := s.createCheckJob(monitor, locationID)
 		if err != nil {
 			s.logger.WithError(err).

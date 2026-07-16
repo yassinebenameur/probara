@@ -25,12 +25,14 @@ type BaseConfig struct {
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
-	AlertStream       string
-	AlertSubject      string
-	AlertConsumerName string
-	CheckJobSubject   string
-	AIRCASubject      string
-	AIAnalysisEnabled bool
+	AlertStream        string
+	AlertSubject       string
+	AlertConsumerName  string
+	CheckJobSubject    string
+	CheckJobStream     string
+	CheckResultSubject string
+	AIRCASubject       string
+	AIAnalysisEnabled  bool
 	// LLM_* env defaults — optional global fallback used when a tenant has no
 	// ai_settings row. Mirrors the worker's fields.
 	LLMProvider           string
@@ -52,7 +54,7 @@ type APIConfig struct {
 	AuditRetentionDays int
 	// OIDC SSO (platform-level: one IdP per install). Read through this
 	// struct so a per-tenant DB-backed loader can be swapped in later.
-	OIDC OIDCConfig
+	OIDC                  OIDCConfig
 	SyntheticArtifactsDir string
 	// PublicBaseURL is the externally-reachable URL of this API (e.g.
 	// "https://probara.example.com"). When set, it is used as the BACKEND_URL
@@ -63,6 +65,9 @@ type APIConfig struct {
 	// "nats://nats.example.com:4222"), baked into private-location worker
 	// deploy snippets. Empty renders a placeholder.
 	PublicNATSURL string
+	// NATSLocationAuthIssuerSeed enables the API-hosted NATS authorization
+	// callout used to issue per-location broker permissions.
+	NATSLocationAuthIssuerSeed string
 	// Mesh knobs mirrored from the scheduler (same env vars) so edge
 	// staleness and probe-now timeouts agree with the actual probe cadence.
 	MeshProbeIntervalSeconds int
@@ -119,6 +124,7 @@ type WorkerConfig struct {
 	// that location's job subject and heartbeats its liveness. Empty = the
 	// default platform fleet.
 	LocationID            string
+	LocationCredential    string
 	MaxHTTPTimeoutSeconds int
 	MaxBodySizeBytes      int
 	HTTPBlockPrivateIPs   bool
@@ -282,6 +288,8 @@ func LoadAPIConfig() (*APIConfig, error) {
 	} else {
 		cfg.CheckJobSubject = checkJobSubject
 	}
+	cfg.CheckJobStream = envOrDefault("CHECK_JOB_STREAM", "CHECK_JOBS")
+	cfg.CheckResultSubject = envOrDefault("CHECK_RESULT_SUBJECT", "check.results")
 
 	// AI_RCA_SUBJECT — subject the API publishes AI root cause jobs to (the
 	// worker consumes them). Must match the worker's AI_RCA_SUBJECT.
@@ -395,7 +403,6 @@ func LoadAPIConfig() (*APIConfig, error) {
 		cfg.AuditRetentionDays = days
 	}
 
-
 	// SYNTHETIC_BROWSER_ARTIFACTS_DIR
 	artifactsDir := strings.TrimSpace(os.Getenv("SYNTHETIC_BROWSER_ARTIFACTS_DIR"))
 	if artifactsDir == "" {
@@ -410,6 +417,13 @@ func LoadAPIConfig() (*APIConfig, error) {
 	// PUBLIC_NATS_URL: externally-reachable NATS address baked into
 	// private-location worker deploy snippets.
 	cfg.PublicNATSURL = strings.TrimSpace(os.Getenv("PUBLIC_NATS_URL"))
+	cfg.NATSLocationAuthIssuerSeed = strings.TrimSpace(os.Getenv("NATS_LOCATION_AUTH_ISSUER_SEED"))
+	if cfg.PublicNATSURL != "" && cfg.NATSLocationAuthIssuerSeed == "" {
+		return nil, fmt.Errorf("NATS_LOCATION_AUTH_ISSUER_SEED is required when PUBLIC_NATS_URL is set")
+	}
+	if cfg.NATSLocationAuthIssuerSeed != "" && strings.TrimSpace(os.Getenv("PROBARA_SECRETS_KEY")) == "" {
+		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
+	}
 
 	// OIDC_* — platform-level SSO configuration (needs PublicBaseURL for the
 	// default redirect URL, so it loads last).
@@ -770,6 +784,13 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		if _, err := uuid.Parse(cfg.LocationID); err != nil {
 			return nil, fmt.Errorf("invalid WORKER_LOCATION_ID: %q is not a UUID", cfg.LocationID)
 		}
+	}
+	cfg.LocationCredential = strings.TrimSpace(os.Getenv("LOCATION_CREDENTIAL"))
+	if cfg.LocationID != "" && cfg.LocationCredential == "" {
+		return nil, fmt.Errorf("LOCATION_CREDENTIAL is required when WORKER_LOCATION_ID is set")
+	}
+	if cfg.LocationID == "" && cfg.LocationCredential != "" {
+		return nil, fmt.Errorf("LOCATION_CREDENTIAL requires WORKER_LOCATION_ID")
 	}
 
 	// MAX_HTTP_TIMEOUT_SECONDS

@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/yassinebenameur/probara/shared/config"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
@@ -161,7 +162,7 @@ func (w *Worker) consumerName() string {
 	if w.config.LocationID == "" {
 		return w.config.NATSConsumerName + "-default"
 	}
-	return w.config.NATSConsumerName + "-loc-" + w.config.LocationID
+	return models.CheckJobConsumerForLocation(w.config.LocationID)
 }
 
 // testCheckSubject returns the request-reply subject for ephemeral test
@@ -187,33 +188,28 @@ func (w *Worker) Start() error {
 		"registered_checkers": w.checkerRegistry.Types(),
 	}).Info("Starting worker service")
 
-	// Ensure JetStream stream exists. The subject set must match the
-	// scheduler's exactly (CreateOrUpdateStream applies whatever it is given):
-	// the bare base subject plus the per-location hierarchy.
 	ctx, cancel := context.WithTimeout(w.ctx, 10*time.Second)
 	defer cancel()
 
-	jobSubjects := []string{w.config.CheckJobSubject, w.config.CheckJobSubject + ".>"}
-	_, err := w.queue.EnsureWorkQueueStream(ctx, w.config.CheckJobStream, jobSubjects, checkJobStreamMaxAge)
-	if err != nil {
-		return fmt.Errorf("failed to ensure JetStream stream: %w", err)
+	var consumer jetstream.Consumer
+	var err error
+	if w.config.LocationID != "" {
+		// Scheduler owns stream/consumer lifecycle. Remote workers only look up
+		// their pre-created durable, keeping their broker permissions consume-only.
+		consumer, err = w.queue.LookupConsumer(ctx, w.config.CheckJobStream, consumerName)
+	} else {
+		jobSubjects := []string{w.config.CheckJobSubject, w.config.CheckJobSubject + ".>"}
+		_, err = w.queue.EnsureWorkQueueStream(ctx, w.config.CheckJobStream, jobSubjects, checkJobStreamMaxAge)
+		if err == nil {
+			_, err = w.queue.EnsureWorkQueueStream(ctx, w.config.CheckResultStream,
+				[]string{w.config.CheckResultSubject, w.config.CheckResultSubject + ".loc.>"}, checkJobStreamMaxAge)
+		}
+		if err == nil {
+			consumer, err = w.queue.CreateConsumerWithOptions(ctx, w.config.CheckJobStream, consumerName, queue.ConsumerOptions{FilterSubject: filterSubject})
+		}
 	}
-
-	// Results stream: the scheduler-side ingest consumer ensures it too, so
-	// ordering doesn't matter; ensuring here lets a worker start first.
-	_, err = w.queue.EnsureWorkQueueStream(ctx, w.config.CheckResultStream, []string{w.config.CheckResultSubject}, checkJobStreamMaxAge)
 	if err != nil {
-		return fmt.Errorf("failed to ensure results stream: %w", err)
-	}
-
-	w.logger.WithField("stream", w.config.CheckJobStream).Info("JetStream streams ensured")
-
-	// Create or get this fleet's durable consumer, filtered to its subject.
-	consumer, err := w.queue.CreateConsumerWithOptions(ctx, w.config.CheckJobStream, consumerName, queue.ConsumerOptions{
-		FilterSubject: filterSubject,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create consumer: %w", err)
+		return fmt.Errorf("failed to initialize consumer: %w", err)
 	}
 
 	w.logger.WithField("consumer", consumerName).Info("NATS consumer created")
@@ -521,10 +517,20 @@ func (w *Worker) publishExpiredJob(ctx context.Context, job *models.Job) error {
 }
 
 func (w *Worker) publishResultMessage(ctx context.Context, msg models.CheckResultMessage) error {
+	resultSubject := w.config.CheckResultSubject
+	if w.config.LocationID != "" {
+		msg.LocationSignature = ""
+		signature, err := locationauth.SignJSON(w.config.LocationCredential, msg)
+		if err != nil {
+			return fmt.Errorf("sign location result: %w", err)
+		}
+		msg.LocationSignature = signature
+		resultSubject = models.CheckResultSubjectForLocation(resultSubject, w.config.LocationID)
+	}
 	// Nats-Msg-Id enables JetStream's publish-side dedupe window; the durable
 	// dedupe is the unique index on check_results(job_id, result_source).
 	headers := map[string][]string{"Nats-Msg-Id": {msg.DedupeID()}}
-	if err := w.results.PublishJSON(ctx, w.config.CheckResultSubject, msg, headers); err != nil {
+	if err := w.results.PublishJSON(ctx, resultSubject, msg, headers); err != nil {
 		return fmt.Errorf("publish check result: %w", err)
 	}
 	return nil

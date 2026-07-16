@@ -78,7 +78,21 @@ spec:
         - name: POSTGRES_URL
           value: {{ include "monitoring-platform.postgresUrl" . | quote }}
         - name: NATS_URL
-          value: {{ include "monitoring-platform.natsUrl" . | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_url
+        - name: CHECK_JOB_STREAM
+          value: {{ .Values.scheduler.checkJobStream | quote }}
+        - name: CHECK_RESULT_SUBJECT
+          value: "check.results"
+        {{- if .Values.nats.auth.enabled }}
+        - name: NATS_LOCATION_AUTH_ISSUER_SEED
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_location_auth_issuer_seed
+        {{- end }}
         - name: ADMIN_JWT_SECRET
           valueFrom:
             secretKeyRef:

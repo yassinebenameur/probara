@@ -73,7 +73,11 @@ NATS connection URL
 */}}
 {{- define "monitoring-platform.natsUrl" -}}
 {{- if .Values.nats.enabled }}
+{{- if .Values.nats.auth.enabled }}
+{{- printf "nats://%s:%s@%s-nats:4222" (.Values.nats.auth.platformUser | urlquery) (.Values.nats.auth.platformPassword | urlquery) (include "monitoring-platform.fullname" .) }}
+{{- else }}
 {{- printf "nats://%s-nats:4222" (include "monitoring-platform.fullname" .) }}
+{{- end }}
 {{- else }}
 {{- .Values.nats.externalUrl }}
 {{- end }}

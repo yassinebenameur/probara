@@ -13,6 +13,12 @@ const (
 	CheckResultSubject = "check.results"
 )
 
+// CheckResultSubjectForLocation isolates private-worker publications at the
+// broker boundary. Only platform workers may publish the unsuffixed subject.
+func CheckResultSubjectForLocation(baseSubject, locationID string) string {
+	return baseSubject + ".loc." + locationID
+}
+
 // CheckResultMessage is the wire format for one executed (or expired) check.
 // Workers publish it instead of writing check_results directly, so remote
 // location workers only ever need NATS reachability — never Postgres.
@@ -35,6 +41,9 @@ type CheckResultMessage struct {
 	// source). Ingest routes it to location_mesh_state/mesh_probe_results
 	// instead of the monitor pipeline — MonitorID is empty for these.
 	Mesh *MeshResultInfo `json:"mesh,omitempty"`
+	// LocationSignature authenticates private-location results. Default-fleet
+	// results leave it empty.
+	LocationSignature string `json:"location_signature,omitempty"`
 }
 
 // MeshResultInfo carries the mesh-specific half of a probe result's edge key.

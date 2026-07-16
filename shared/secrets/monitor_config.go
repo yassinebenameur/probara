@@ -3,6 +3,7 @@ package secrets
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // MonitorSecretFields maps a monitor type to the top-level config keys that
@@ -20,9 +21,18 @@ var MonitorSecretFields = map[string][]string{
 	"mysql":    {"password", "connection_string", "tls_client_key_pem"},
 }
 
+// MonitorSecretMapFields maps monitor types to config objects whose values are
+// all secrets. WebSocket handshake headers are protected as a unit because
+// credentials are not limited to Authorization: Cookie and arbitrary custom
+// headers routinely carry bearer tokens too. Map keys remain visible so a
+// client can edit the write-only values individually.
+var MonitorSecretMapFields = map[string][]string{
+	"websocket": {"headers"},
+}
+
 // HasMonitorSecrets reports whether a monitor type carries secret config fields.
 func HasMonitorSecrets(monitorType string) bool {
-	return len(MonitorSecretFields[monitorType]) > 0
+	return len(MonitorSecretFields[monitorType]) > 0 || len(MonitorSecretMapFields[monitorType]) > 0
 }
 
 // EncryptMonitorConfig encrypts the secret fields of a monitor config. Values
@@ -78,7 +88,8 @@ func MaskMonitorConfig(monitorType string, raw json.RawMessage) (json.RawMessage
 // secret surviving the switch). Empty strings are dropped for cleanliness.
 func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMessage) (json.RawMessage, error) {
 	fields := MonitorSecretFields[monitorType]
-	if len(fields) == 0 || len(incoming) == 0 {
+	mapFields := MonitorSecretMapFields[monitorType]
+	if (len(fields) == 0 && len(mapFields) == 0) || len(incoming) == 0 {
 		return incoming, nil
 	}
 
@@ -114,6 +125,31 @@ func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMe
 		}
 	}
 
+	for _, field := range mapFields {
+		incomingValues, ok := stringMap(in[field])
+		if !ok {
+			continue
+		}
+		previousValues, _ := stringMap(prev[field])
+		for key, value := range incomingValues {
+			switch value {
+			case MaskedSecret:
+				if previous, found := lookupFold(previousValues, key); found {
+					incomingValues[key] = previous
+				} else {
+					delete(incomingValues, key)
+				}
+			case "":
+				delete(incomingValues, key)
+			}
+		}
+		if len(incomingValues) == 0 {
+			delete(in, field)
+		} else {
+			in[field] = incomingValues
+		}
+	}
+
 	return json.Marshal(in)
 }
 
@@ -121,7 +157,8 @@ func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMe
 // Non-string secret values are left untouched (validation rejects them upstream).
 func transformMonitorSecrets(monitorType string, raw json.RawMessage, fn func(field, value string) (string, error)) (json.RawMessage, error) {
 	fields := MonitorSecretFields[monitorType]
-	if len(fields) == 0 || len(raw) == 0 {
+	mapFields := MonitorSecretMapFields[monitorType]
+	if (len(fields) == 0 && len(mapFields) == 0) || len(raw) == 0 {
 		return raw, nil
 	}
 
@@ -149,11 +186,59 @@ func transformMonitorSecrets(monitorType string, raw json.RawMessage, fn func(fi
 			changed = true
 		}
 	}
+	for _, field := range mapFields {
+		values, ok := stringMap(cfg[field])
+		if !ok {
+			continue
+		}
+		for key, value := range values {
+			out, err := fn(field+"."+key, value)
+			if err != nil {
+				return nil, err
+			}
+			if out != value {
+				values[key] = out
+				changed = true
+			}
+		}
+		cfg[field] = values
+	}
 
 	if !changed {
 		return raw, nil
 	}
 	return json.Marshal(cfg)
+}
+
+func stringMap(value any) (map[string]string, bool) {
+	if value == nil {
+		return nil, false
+	}
+	switch values := value.(type) {
+	case map[string]string:
+		return values, true
+	case map[string]any:
+		out := make(map[string]string, len(values))
+		for key, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			out[key] = text
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func lookupFold(values map[string]string, key string) (string, bool) {
+	for candidate, value := range values {
+		if candidate == key || strings.EqualFold(candidate, key) {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func unmarshalConfigMap(raw json.RawMessage) (map[string]any, error) {

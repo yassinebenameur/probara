@@ -9,13 +9,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
+	callout "github.com/synadia-io/callout.go"
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
 	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
-	audithandlers "github.com/yassinebenameur/probara/api/internal/handlers/audit"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	apikeyhandlers "github.com/yassinebenameur/probara/api/internal/handlers/apikeys"
+	audithandlers "github.com/yassinebenameur/probara/api/internal/handlers/audit"
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
 	dashboardhandlers "github.com/yassinebenameur/probara/api/internal/handlers/dashboard"
 	depsuggesthandlers "github.com/yassinebenameur/probara/api/internal/handlers/depsuggest"
@@ -45,6 +47,7 @@ import (
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
+	locationnatsauthservice "github.com/yassinebenameur/probara/api/internal/services/locationnatsauth"
 	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	meshservice "github.com/yassinebenameur/probara/api/internal/services/mesh"
@@ -68,18 +71,22 @@ import (
 
 // Server represents the API HTTP server
 type Server struct {
-	config           *config.APIConfig
-	logger           *logger.Logger
-	metrics          *metrics.Registry
-	db               *db.Client
-	queue            *queue.Client
-	http             *http.Server
-	alertSubscriber  *alertservice.Subscriber
-	statusPublisher  *statusupdates.Publisher
-	pushStaleWorker  *pushservice.StaleWorker
-	agentStaleWorker *agentservice.StaleWorker
-	auditRecorder    *auditservice.Recorder
-	auditPruner      *auditservice.Pruner
+	config             *config.APIConfig
+	logger             *logger.Logger
+	metrics            *metrics.Registry
+	db                 *db.Client
+	queue              *queue.Client
+	http               *http.Server
+	alertSubscriber    *alertservice.Subscriber
+	statusPublisher    *statusupdates.Publisher
+	pushStaleWorker    *pushservice.StaleWorker
+	agentStaleWorker   *agentservice.StaleWorker
+	auditRecorder      *auditservice.Recorder
+	auditPruner        *auditservice.Pruner
+	locationAuthorizer *locationnatsauthservice.Service
+	locationAuth       *callout.AuthorizationService
+	locationAuthConn   *nats.Conn
+	locationAuthErr    error
 }
 
 type monitorStatusNotifier struct {
@@ -134,6 +141,21 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		log.WithError(kerr).Fatal("Invalid PROBARA_SECRETS_KEY")
 	} else {
 		log.Warn("PROBARA_SECRETS_KEY not set; alert channel secrets will be stored unencrypted")
+	}
+
+	locationSvc := locationservice.NewService(dbClient)
+	locationSvc.ConfigureEncryption(secretsEncryptor)
+	var locationAuthorizer *locationnatsauthservice.Service
+	var locationAuthErr error
+	if cfg.NATSLocationAuthIssuerSeed != "" {
+		locationAuthorizer, locationAuthErr = locationnatsauthservice.New(
+			cfg.NATSLocationAuthIssuerSeed,
+			locationSvc,
+			locationnatsauthservice.Options{
+				CheckJobStream: cfg.CheckJobStream,
+				ResultSubject:  cfg.CheckResultSubject,
+			},
+		)
 	}
 
 	// Status update publisher (optional)
@@ -260,6 +282,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			resultSvc := resultservice.NewService(dbClient, groupSvc, analyticsRepo)
 			monitorHandlers := monitorhandlers.NewHandlers(monitorService, groupSvc, resultSvc, log, cfg.SyntheticArtifactsDir)
 			monitorHandlers.ConfigureCheckJobs(checkJobQueue, cfg.CheckJobSubject)
+			monitorHandlers.ConfigureLocationSecurity(locationSvc)
 			monitorHandlers.ConfigureDependencies(depservice.NewService(dbClient))
 
 			// Import service and handlers
@@ -267,7 +290,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
 
 			// Private locations (remote worker deployments)
-			locationSvc := locationservice.NewService(dbClient)
 			locationHandlers := locationhandlers.NewHandlers(locationSvc, cfg.PublicNATSURL, log)
 			r.Route("/locations", func(r chi.Router) {
 				r.Post("/", locationHandlers.CreateLocation)
@@ -516,18 +538,20 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	}
 
 	return &Server{
-		config:           cfg,
-		logger:           log,
-		metrics:          metricsRegistry,
-		db:               dbClient,
-		queue:            checkJobQueue,
-		http:             httpServer,
-		alertSubscriber:  alertSubscriber,
-		statusPublisher:  statusPublisher,
-		pushStaleWorker:  pushStaleWorker,
-		agentStaleWorker: agentStaleWorker,
-		auditRecorder:    auditRecorder,
-		auditPruner:      auditPruner,
+		config:             cfg,
+		logger:             log,
+		metrics:            metricsRegistry,
+		db:                 dbClient,
+		queue:              checkJobQueue,
+		http:               httpServer,
+		alertSubscriber:    alertSubscriber,
+		statusPublisher:    statusPublisher,
+		pushStaleWorker:    pushStaleWorker,
+		agentStaleWorker:   agentStaleWorker,
+		auditRecorder:      auditRecorder,
+		auditPruner:        auditPruner,
+		locationAuthorizer: locationAuthorizer,
+		locationAuthErr:    locationAuthErr,
 	}
 }
 
@@ -536,6 +560,26 @@ func (s *Server) Start() error {
 	s.logger.WithFields(map[string]interface{}{
 		"port": s.config.HTTPPort,
 	}).Info("Starting HTTP server")
+	if s.locationAuthErr != nil {
+		return fmt.Errorf("configure NATS location authorization: %w", s.locationAuthErr)
+	}
+	if s.locationAuthorizer != nil {
+		nc, err := nats.Connect(s.config.NATSURL,
+			nats.RetryOnFailedConnect(true),
+			nats.MaxReconnects(-1),
+			nats.ReconnectWait(2*time.Second),
+		)
+		if err != nil {
+			return fmt.Errorf("connect NATS location authorization service: %w", err)
+		}
+		auth, err := s.locationAuthorizer.Start(nc)
+		if err != nil {
+			nc.Close()
+			return fmt.Errorf("start NATS location authorization service: %w", err)
+		}
+		s.locationAuthConn = nc
+		s.locationAuth = auth
+	}
 
 	if s.alertSubscriber != nil {
 		if err := s.alertSubscriber.Start(context.Background()); err != nil {
@@ -561,6 +605,14 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down HTTP server")
+	if s.locationAuth != nil {
+		if err := s.locationAuth.Stop(); err != nil {
+			s.logger.WithError(err).Warn("Failed to stop NATS location authorization service")
+		}
+	}
+	if s.locationAuthConn != nil {
+		s.locationAuthConn.Close()
+	}
 	if s.alertSubscriber != nil {
 		s.alertSubscriber.Stop()
 	}

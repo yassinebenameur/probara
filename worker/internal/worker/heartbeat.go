@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/models"
 )
 
@@ -26,6 +27,12 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 			Hostname:   hostname,
 			Timestamp:  time.Now().UTC(),
 		}
+		signature, err := locationauth.SignJSON(w.config.LocationCredential, hb)
+		if err != nil {
+			w.logger.WithError(err).Error("Failed to sign location heartbeat")
+			return
+		}
+		hb.Signature = signature
 		if err := w.queue.PublishCoreJSON(models.LocationHeartbeatSubject, hb); err != nil {
 			w.logger.WithError(err).Debug("Failed to publish location heartbeat")
 		}

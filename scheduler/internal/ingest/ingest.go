@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,10 +19,12 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/queue"
+	"github.com/yassinebenameur/probara/shared/secrets"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
 )
 
@@ -41,14 +44,15 @@ type statusPublisher interface {
 // one transaction (idempotent on job_id+result_source, so at-least-once
 // delivery can never double-apply).
 type Ingest struct {
-	config *config.SchedulerConfig
-	logger *logger.Logger
-	db     *db.Client
-	queue  *queue.Client
-	status statusPublisher
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	config           *config.SchedulerConfig
+	logger           *logger.Logger
+	db               *db.Client
+	queue            *queue.Client
+	status           statusPublisher
+	secretsEncryptor secrets.Encryptor
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
 
 	resultsIngested *prometheus.CounterVec
 	ingestErrors    *prometheus.CounterVec
@@ -62,12 +66,13 @@ func New(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegistry *metri
 	ctx, cancel := context.WithCancel(context.Background())
 
 	i := &Ingest{
-		config: cfg,
-		logger: log,
-		db:     dbClient,
-		queue:  queueClient,
-		ctx:    ctx,
-		cancel: cancel,
+		config:           cfg,
+		logger:           log,
+		db:               dbClient,
+		queue:            queueClient,
+		ctx:              ctx,
+		cancel:           cancel,
+		secretsEncryptor: secrets.NoOpEncryptor{},
 	}
 	if statusPub != nil {
 		i.status = statusPub
@@ -99,6 +104,89 @@ func New(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegistry *metri
 	return i
 }
 
+// ConfigureEncryption wires the platform at-rest key used to open private
+// location credentials before verifying worker signatures.
+func (i *Ingest) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		i.secretsEncryptor = encryptor
+	}
+}
+
+func (i *Ingest) locationCredential(ctx context.Context, locationID, tenantID, monitorID string) (string, error) {
+	locationUUID, err := uuid.Parse(locationID)
+	if err != nil {
+		return "", fmt.Errorf("invalid location_id: %w", err)
+	}
+	var stored string
+	query := `
+		SELECT l.worker_credential
+		FROM locations l
+		WHERE l.id = $1
+		  AND l.enabled = TRUE AND l.deleted_at IS NULL
+		  AND l.worker_credential IS NOT NULL`
+	args := []any{locationUUID}
+	if tenantID != "" {
+		tenantUUID, err := uuid.Parse(tenantID)
+		if err != nil {
+			return "", fmt.Errorf("invalid tenant_id: %w", err)
+		}
+		query += " AND l.tenant_id = $2"
+		args = append(args, tenantUUID)
+	}
+	if monitorID != "" {
+		monitorUUID, err := uuid.Parse(monitorID)
+		if err != nil {
+			return "", fmt.Errorf("invalid monitor_id: %w", err)
+		}
+		query += ` AND EXISTS (
+			SELECT 1 FROM monitor_locations ml
+			JOIN monitors m ON m.id = ml.monitor_id
+			WHERE ml.location_id = l.id AND ml.monitor_id = $3
+			  AND m.tenant_id = l.tenant_id AND m.deleted_at IS NULL
+		)`
+		args = append(args, monitorUUID)
+	}
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&stored); err != nil {
+		return "", fmt.Errorf("location credential lookup: %w", err)
+	}
+	credential, err := i.secretsEncryptor.Decrypt(stored)
+	if err != nil {
+		return "", fmt.Errorf("decrypt location credential: %w", err)
+	}
+	return credential, nil
+}
+
+func (i *Ingest) verifyLocationResult(ctx context.Context, subject string, m models.CheckResultMessage) error {
+	locationPrefix := i.config.CheckResultSubject + ".loc."
+	if subject == i.config.CheckResultSubject {
+		if m.LocationID != "" {
+			return fmt.Errorf("location result published on platform subject")
+		}
+		if m.LocationSignature != "" {
+			return fmt.Errorf("location signature without location_id")
+		}
+		return nil
+	}
+	if !strings.HasPrefix(subject, locationPrefix) {
+		return fmt.Errorf("unexpected result subject %q", subject)
+	}
+	subjectLocation := strings.TrimPrefix(subject, locationPrefix)
+	if subjectLocation == "" || strings.Contains(subjectLocation, ".") || m.LocationID != subjectLocation {
+		return fmt.Errorf("result subject location does not match payload")
+	}
+	monitorID := m.MonitorID
+	if m.Mesh != nil {
+		monitorID = ""
+	}
+	credential, err := i.locationCredential(ctx, m.LocationID, m.TenantID, monitorID)
+	if err != nil {
+		return err
+	}
+	signature := m.LocationSignature
+	m.LocationSignature = ""
+	return locationauth.VerifyJSON(credential, signature, m)
+}
+
 // Start ensures the results stream, creates the durable consumer and spawns
 // the ingest goroutines. It blocks until the context is cancelled.
 func (i *Ingest) Start() error {
@@ -112,7 +200,8 @@ func (i *Ingest) Start() error {
 	ctx, cancel := context.WithTimeout(i.ctx, 10*time.Second)
 	defer cancel()
 
-	_, err := i.queue.EnsureWorkQueueStream(ctx, i.config.CheckResultStream, []string{i.config.CheckResultSubject}, checkResultStreamMaxAge)
+	_, err := i.queue.EnsureWorkQueueStream(ctx, i.config.CheckResultStream,
+		[]string{i.config.CheckResultSubject, i.config.CheckResultSubject + ".loc.>"}, checkResultStreamMaxAge)
 	if err != nil {
 		return fmt.Errorf("failed to ensure results stream: %w", err)
 	}
@@ -184,6 +273,10 @@ func (i *Ingest) handleMessage(ctx context.Context, msg *queue.Message) error {
 
 	if m.Version != "v1" {
 		logEntry.WithField("version", m.Version).Error("Unsupported check result version")
+		return nil
+	}
+	if err := i.verifyLocationResult(ctx, msg.Subject, m); err != nil {
+		logEntry.WithError(err).Warn("Rejecting unauthenticated location result")
 		return nil
 	}
 

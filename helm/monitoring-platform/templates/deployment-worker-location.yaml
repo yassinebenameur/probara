@@ -59,24 +59,21 @@ spec:
         - name: LOG_LEVEL
           value: "{{ $.Values.worker.logLevel }}"
         - name: NATS_URL
-          value: {{ .natsUrl | default (include "monitoring-platform.natsUrl" $) | quote }}
+          value: {{ required "each worker.locations entry needs its location-authenticated natsUrl" .natsUrl | quote }}
         - name: CHECK_JOB_STREAM
           value: "{{ $.Values.worker.checkJobStream }}"
         - name: CHECK_JOB_SUBJECT
           value: "{{ $.Values.worker.checkJobSubject }}"
         - name: NATS_CONSUMER_NAME
-          value: "{{ $.Values.worker.consumerName }}"
+          # Scheduler pre-creates this fixed per-location durable so the
+          # restricted worker account never needs JetStream management rights.
+          value: "check-workers"
         - name: WORKER_LOCATION_ID
           value: {{ required "each worker.locations entry needs locationId (the location UUID)" .locationId | quote }}
+        - name: LOCATION_CREDENTIAL
+          value: {{ required "each worker.locations entry needs credential from the location deploy info" .credential | quote }}
         - name: WORKER_CONCURRENCY
           value: "{{ .concurrency | default $.Values.worker.concurrency }}"
-        {{- if $.Values.secrets.probaraSecretsKey }}
-        - name: PROBARA_SECRETS_KEY
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" $ }}-secret
-              key: probara_secrets_key
-        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

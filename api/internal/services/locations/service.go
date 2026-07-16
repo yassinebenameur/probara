@@ -4,7 +4,10 @@ package locations
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -18,10 +21,16 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/locationauth"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 // ErrNotFound is returned when a location does not exist for the tenant.
 var ErrNotFound = errors.New("location not found")
+
+// ErrInvalidWorkerCredential deliberately does not distinguish a missing,
+// disabled, deleted location from a wrong credential.
+var ErrInvalidWorkerCredential = errors.New("invalid location worker credential")
 
 // connectedWindow is how fresh last_seen_at must be for a location to count
 // as connected. Workers heartbeat every ~15s, so a minute tolerates a few
@@ -30,12 +39,22 @@ const connectedWindow = time.Minute
 
 // Service handles location business logic.
 type Service struct {
-	db *db.Client
+	db        *db.Client
+	encryptor secrets.Encryptor
 }
 
 // NewService creates a new locations service.
 func NewService(database *db.Client) *Service {
-	return &Service{db: database}
+	return &Service{db: database, encryptor: secrets.NoOpEncryptor{}}
+}
+
+// ConfigureEncryption wires the platform at-rest encryptor used to protect
+// location credentials in Postgres. Remote workers receive only their own
+// credential, never the platform master key.
+func (s *Service) ConfigureEncryption(encryptor secrets.Encryptor) {
+	if encryptor != nil {
+		s.encryptor = encryptor
+	}
 }
 
 const locationColumns = `
@@ -61,10 +80,18 @@ func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.Cr
 	}
 
 	id := uuid.New()
+	credential, err := newWorkerCredential()
+	if err != nil {
+		return nil, err
+	}
+	encryptedCredential, err := s.encryptor.Encrypt(credential)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt location worker credential: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO locations (id, tenant_id, name, slug, description, mesh_endpoint)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, id, tenantID, name, slugify(name), req.Description, meshEndpoint)
+		INSERT INTO locations (id, tenant_id, name, slug, description, mesh_endpoint, worker_credential)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, id, tenantID, name, slugify(name), req.Description, meshEndpoint, encryptedCredential)
 	if err != nil {
 		if strings.Contains(err.Error(), "idx_locations_tenant_name") {
 			return nil, fmt.Errorf("a location named %q already exists", name)
@@ -72,6 +99,112 @@ func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, req *models.Cr
 		return nil, fmt.Errorf("failed to create location: %w", err)
 	}
 	return s.Get(ctx, tenantID, id)
+}
+
+func newWorkerCredential() (string, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", fmt.Errorf("generate location worker credential: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(key), nil
+}
+
+// workerCredential returns the location's plaintext credential. Existing
+// locations created before migration 77 are issued one atomically on their
+// first deploy-info request.
+func (s *Service) workerCredential(ctx context.Context, tenantID, locationID uuid.UUID) (string, error) {
+	var stored sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT worker_credential
+		FROM locations
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+	`, locationID, tenantID).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("load location worker credential: %w", err)
+	}
+	if !stored.Valid || stored.String == "" {
+		credential, err := newWorkerCredential()
+		if err != nil {
+			return "", err
+		}
+		encrypted, err := s.encryptor.Encrypt(credential)
+		if err != nil {
+			return "", fmt.Errorf("encrypt location worker credential: %w", err)
+		}
+		if err := s.db.QueryRowContext(ctx, `
+			UPDATE locations
+			SET worker_credential = COALESCE(worker_credential, $1), updated_at = NOW()
+			WHERE id = $2 AND tenant_id = $3 AND deleted_at IS NULL
+			RETURNING worker_credential
+		`, encrypted, locationID, tenantID).Scan(&stored); err != nil {
+			return "", fmt.Errorf("issue location worker credential: %w", err)
+		}
+	}
+	credential, err := s.encryptor.Decrypt(stored.String)
+	if err != nil {
+		return "", fmt.Errorf("decrypt location worker credential: %w", err)
+	}
+	return credential, nil
+}
+
+// AuthenticateWorker validates broker auth-callout credentials for one
+// private location. locationID is the NATS username and credential the
+// password. Only active locations authenticate.
+func (s *Service) AuthenticateWorker(ctx context.Context, locationID, credential string) error {
+	id, err := uuid.Parse(locationID)
+	if err != nil || credential == "" {
+		return ErrInvalidWorkerCredential
+	}
+	var stored string
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT worker_credential
+		FROM locations
+		WHERE id = $1 AND enabled = TRUE AND deleted_at IS NULL
+		  AND worker_credential IS NOT NULL
+	`, id).Scan(&stored); err != nil {
+		return ErrInvalidWorkerCredential
+	}
+	expected, err := s.encryptor.Decrypt(stored)
+	if err != nil {
+		return fmt.Errorf("decrypt location worker credential: %w", err)
+	}
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(credential)) != 1 {
+		return ErrInvalidWorkerCredential
+	}
+	return nil
+}
+
+// ProtectMonitorConfigForWorker replaces platform-encrypted monitor secrets
+// with a location-only envelope before an on-demand or test job leaves the
+// trusted platform. The platform master key is never sent to remote workers.
+func (s *Service) ProtectMonitorConfigForWorker(ctx context.Context, tenantID, locationID uuid.UUID, monitorType string, config []byte) ([]byte, error) {
+	credential, err := s.workerCredential(ctx, tenantID, locationID)
+	if err != nil {
+		return nil, err
+	}
+	return s.protectMonitorConfigForCredential(credential, monitorType, config)
+}
+
+func (s *Service) protectMonitorConfigForCredential(credential, monitorType string, config []byte) ([]byte, error) {
+	if !secrets.HasMonitorSecrets(monitorType) {
+		return config, nil
+	}
+	plaintext, err := secrets.DecryptMonitorConfig(s.encryptor, monitorType, config)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt monitor config for private location: %w", err)
+	}
+	locationEncryptor, err := locationauth.ConfigEncryptor(credential)
+	if err != nil {
+		return nil, fmt.Errorf("derive private-location config key: %w", err)
+	}
+	protected, err := secrets.EncryptMonitorConfig(locationEncryptor, monitorType, plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt private-location monitor config: %w", err)
+	}
+	return protected, nil
 }
 
 // Get fetches a single location.

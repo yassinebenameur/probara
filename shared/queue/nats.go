@@ -170,6 +170,27 @@ func (c *Client) CreateConsumer(ctx context.Context, streamName string, consumer
 	return c.CreateConsumerWithOptions(ctx, streamName, consumerName, ConsumerOptions{})
 }
 
+// LookupConsumer loads an existing durable without attempting any stream or
+// consumer management operation. Remote private-location workers use this so
+// their broker account can have consume-only JetStream permissions.
+func (c *Client) LookupConsumer(ctx context.Context, streamName, consumerName string) (jetstream.Consumer, error) {
+	key := fmt.Sprintf("%s:%s", streamName, consumerName)
+	c.mu.Lock()
+	if consumer, exists := c.consumers[key]; exists {
+		c.mu.Unlock()
+		return consumer, nil
+	}
+	c.mu.Unlock()
+	consumer, err := c.js.Consumer(ctx, streamName, consumerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load consumer: %w", err)
+	}
+	c.mu.Lock()
+	c.consumers[key] = consumer
+	c.mu.Unlock()
+	return consumer, nil
+}
+
 // ConsumerOptions tunes a JetStream consumer. Zero values fall back to the
 // defaults previously hardcoded in CreateConsumer (AckWait=30s, MaxDeliver=3,
 // no BackOff array, no FilterSubject).

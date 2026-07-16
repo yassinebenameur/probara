@@ -24,10 +24,15 @@ interface WebsocketFormProps {
   loading?: boolean;
 }
 
-type HeaderRow = { key: string; value: string };
+type HeaderRow = { key: string; value: string; hasStoredValue?: boolean; originalKey?: string };
 
 function headersToRows(headers?: Record<string, string>): HeaderRow[] {
-  return Object.entries(headers || {}).map(([key, value]) => ({ key, value }));
+  return Object.entries(headers || {}).map(([key, value]) => ({
+    key,
+    value: value === '***' ? '' : value,
+    hasStoredValue: value === '***',
+    originalKey: value === '***' ? key : undefined,
+  }));
 }
 
 export default function WebsocketForm({
@@ -80,7 +85,7 @@ export default function WebsocketForm({
       newErrors.url = 'URL must start with ws:// or wss://';
     }
     for (const row of formData.headers) {
-      if ((row.key.trim() === '') !== (row.value.trim() === '')) {
+      if ((row.key.trim() === '') !== (row.value.trim() === '' && !row.hasStoredValue)) {
         newErrors.headers = 'Headers must have both a name and a value';
         break;
       }
@@ -108,7 +113,7 @@ export default function WebsocketForm({
     const config: WebSocketMonitorConfig = { url };
     const headers: Record<string, string> = {};
     for (const row of formData.headers) {
-      if (row.key.trim()) headers[row.key.trim()] = row.value;
+      if (row.key.trim()) headers[row.key.trim()] = row.value || (row.hasStoredValue ? '***' : '');
     }
     if (Object.keys(headers).length > 0) config.headers = headers;
     if (isSecure && formData.tls_skip_verify) config.tls_skip_verify = true;
@@ -177,7 +182,13 @@ export default function WebsocketForm({
                   value={row.key}
                   onChange={(e) => {
                     const headers = [...formData.headers];
-                    headers[i] = { ...headers[i], key: e.target.value };
+                    const current = headers[i];
+                    const keepsStoredValue = Boolean(
+                      current.hasStoredValue &&
+                      current.originalKey &&
+                      current.originalKey.toLowerCase() === e.target.value.trim().toLowerCase()
+                    );
+                    headers[i] = { ...current, key: e.target.value, hasStoredValue: keepsStoredValue };
                     setFormData({ ...formData, headers });
                   }}
                   placeholder="Authorization"
@@ -185,14 +196,14 @@ export default function WebsocketForm({
                   className="input flex-1"
                 />
                 <input
-                  type="text"
+                  type="password"
                   value={row.value}
                   onChange={(e) => {
                     const headers = [...formData.headers];
-                    headers[i] = { ...headers[i], value: e.target.value };
+                    headers[i] = { ...headers[i], value: e.target.value, hasStoredValue: false };
                     setFormData({ ...formData, headers });
                   }}
-                  placeholder="Bearer token"
+                  placeholder={row.hasStoredValue ? 'Stored value (leave blank to keep)' : 'Header value'}
                   aria-label={`Header ${i + 1} value`}
                   className="input flex-1"
                 />
@@ -208,7 +219,7 @@ export default function WebsocketForm({
             ))}
             <button
               type="button"
-              onClick={() => setFormData({ ...formData, headers: [...formData.headers, { key: '', value: '' }] })}
+              onClick={() => setFormData({ ...formData, headers: [...formData.headers, { key: '', value: '', hasStoredValue: false }] })}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-400 transition-colors hover:text-cyan-300"
             >
               <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />

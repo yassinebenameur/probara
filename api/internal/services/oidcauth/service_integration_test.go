@@ -40,6 +40,18 @@ func insertAdmin(ctx context.Context, t *testing.T, dbClient *db.Client, usernam
 	return id
 }
 
+func insertPasswordlessAdmin(ctx context.Context, t *testing.T, dbClient *db.Client, username string, email *string, platformRole string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO admin_users (id, username, email, password_hash, platform_role, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, $4, NOW(), NOW())
+	`, id, username, email, platformRole); err != nil {
+		t.Fatalf("insert passwordless admin: %v", err)
+	}
+	return id
+}
+
 func TestResolveUser(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test requires Docker")
@@ -57,7 +69,7 @@ func TestResolveUser(t *testing.T) {
 
 	t.Run("email link binds identity to pre-created user", func(t *testing.T) {
 		email := "invited@example.com"
-		userID := insertAdmin(ctx, t, dbClient, "invited", &email, auth.PlatformRoleMember)
+		userID := insertPasswordlessAdmin(ctx, t, dbClient, "invited", &email, auth.PlatformRoleMember)
 
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-invited", Email: email, EmailVerified: true}
 		user, jit, err := svc.ResolveUser(ctx, claims)
@@ -78,6 +90,37 @@ func TestResolveUser(t *testing.T) {
 		again, jit, err := svc.ResolveUser(ctx, claims)
 		if err != nil || jit || again.ID != userID {
 			t.Fatalf("repeat login: user=%v jit=%v err=%v", again, jit, err)
+		}
+	})
+
+	t.Run("verified email does not link password account or duplicate it", func(t *testing.T) {
+		email := "password@example.com"
+		userID := insertAdmin(ctx, t, dbClient, "password-user", &email, auth.PlatformRoleMember)
+
+		claims := &Claims{Issuer: testIssuer, Subject: "sub-password", Email: email, EmailVerified: true}
+		_, _, err := svc.ResolveUser(ctx, claims)
+		if !errors.Is(err, ErrNotProvisioned) {
+			t.Fatalf("expected ErrNotProvisioned, got %v", err)
+		}
+
+		var externalIssuer, externalSubject *string
+		if err := dbClient.QueryRowContext(ctx, `
+			SELECT external_issuer, external_subject FROM admin_users WHERE id = $1
+		`, userID).Scan(&externalIssuer, &externalSubject); err != nil {
+			t.Fatalf("lookup password user: %v", err)
+		}
+		if externalIssuer != nil || externalSubject != nil {
+			t.Fatalf("password account was linked: issuer=%v subject=%v", externalIssuer, externalSubject)
+		}
+
+		var count int
+		if err := dbClient.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM admin_users WHERE lower(email) = lower($1)
+		`, email).Scan(&count); err != nil {
+			t.Fatalf("count users by email: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("expected exactly one user for email, got %d", count)
 		}
 	})
 

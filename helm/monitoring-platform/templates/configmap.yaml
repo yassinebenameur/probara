@@ -8,8 +8,7 @@ data:
   # Logging configuration
   log_level: "{{ .Values.api.logLevel }}"
   
-  # Infrastructure URLs (non-sensitive)
-  nats_url: {{ include "monitoring-platform.natsUrl" . | quote }}
+  # Infrastructure endpoints
   postgresql_host: {{ include "monitoring-platform.postgresHost" . | quote }}
   postgresql_database: "{{ .Values.postgresql.auth.database }}"
   

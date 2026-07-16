@@ -205,3 +205,79 @@ func TestMergeMonitorConfigSecrets(t *testing.T) {
 		t.Fatal("placeholder with no stored secret should drop the field")
 	}
 }
+
+func TestWebSocketHeaderSecretLifecycle(t *testing.T) {
+	enc := monitorTestEncryptor(t)
+	raw := json.RawMessage(`{"url":"wss://example.test/socket","headers":{"Authorization":"Bearer top-secret","Cookie":"session=abc","Origin":"https://app.test"}}`)
+
+	if !HasMonitorSecrets("websocket") {
+		t.Fatal("websocket must be registered as carrying monitor secrets")
+	}
+
+	encrypted, err := EncryptMonitorConfig(enc, "websocket", raw)
+	if err != nil {
+		t.Fatalf("EncryptMonitorConfig: %v", err)
+	}
+	encryptedHeaders := configMap(t, encrypted)["headers"].(map[string]any)
+	for name, plaintext := range map[string]string{
+		"Authorization": "Bearer top-secret",
+		"Cookie":        "session=abc",
+		"Origin":        "https://app.test",
+	} {
+		ciphertext, ok := encryptedHeaders[name].(string)
+		if !ok || !LooksLikeEnvelope(ciphertext) {
+			t.Fatalf("header %q was not encrypted: %v", name, encryptedHeaders[name])
+		}
+		if ciphertext == plaintext {
+			t.Fatalf("header %q remained plaintext", name)
+		}
+	}
+
+	masked, err := MaskMonitorConfig("websocket", encrypted)
+	if err != nil {
+		t.Fatalf("MaskMonitorConfig: %v", err)
+	}
+	maskedHeaders := configMap(t, masked)["headers"].(map[string]any)
+	for name := range encryptedHeaders {
+		if maskedHeaders[name] != MaskedSecret {
+			t.Fatalf("header %q = %v, want masked", name, maskedHeaders[name])
+		}
+	}
+
+	// Per-key placeholders preserve existing ciphertext. Header matching is
+	// case-insensitive because HTTP header names are case-insensitive.
+	merged, err := MergeMonitorConfigSecrets(
+		"websocket",
+		json.RawMessage(`{"url":"wss://new.example.test/socket","headers":{"authorization":"***","Cookie":"rotated","X-Removed":"***"}}`),
+		encrypted,
+	)
+	if err != nil {
+		t.Fatalf("MergeMonitorConfigSecrets: %v", err)
+	}
+	mergedHeaders := configMap(t, merged)["headers"].(map[string]any)
+	if mergedHeaders["authorization"] != encryptedHeaders["Authorization"] {
+		t.Fatal("Authorization placeholder did not preserve stored ciphertext")
+	}
+	if mergedHeaders["Cookie"] != "rotated" {
+		t.Fatalf("replacement header = %v, want rotated", mergedHeaders["Cookie"])
+	}
+	if _, ok := mergedHeaders["Origin"]; ok {
+		t.Fatal("omitted header should be removed")
+	}
+	if _, ok := mergedHeaders["X-Removed"]; ok {
+		t.Fatal("orphaned placeholder should be removed")
+	}
+
+	reencrypted, err := EncryptMonitorConfig(enc, "websocket", merged)
+	if err != nil {
+		t.Fatalf("EncryptMonitorConfig after merge: %v", err)
+	}
+	decrypted, err := DecryptMonitorConfig(enc, "websocket", reencrypted)
+	if err != nil {
+		t.Fatalf("DecryptMonitorConfig: %v", err)
+	}
+	plainHeaders := configMap(t, decrypted)["headers"].(map[string]any)
+	if plainHeaders["authorization"] != "Bearer top-secret" || plainHeaders["Cookie"] != "rotated" {
+		t.Fatalf("decrypted headers = %v", plainHeaders)
+	}
+}

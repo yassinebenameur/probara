@@ -55,6 +55,17 @@ nats:
   externalUrl: ""
   # Embedded NATS configuration (used when enabled: true)
   image: nats:2.10-alpine
+  # Required before private-location workers can connect. The platform user is
+  # trusted for internal services; all other connections go through NATS auth
+  # callout and receive location-scoped subject permissions from the API.
+  auth:
+    enabled: false
+    platformUser: "probara-platform"
+    platformPassword: ""
+    # Generate an account seed/public key pair with nsc or nkeys. The seed is
+    # mounted only into the API; NATS receives only the public key.
+    locationIssuerPublicKey: ""
+    locationIssuerSeed: ""
   persistence:
     enabled: true
     size: 1Gi
@@ -137,9 +148,9 @@ api:
   # Example: "https://probara.example.com"
   publicBaseURL: ""
   # NATS address reachable from remote networks, baked into private-location
-  # worker deploy snippets. Expose NATS (LoadBalancer / TCP ingress) and enable
-  # NATS auth/TLS before pointing external locations at it.
-  # Example: "nats://nats.example.com:4222"
+  # worker deploy snippets. Requires nats.auth.enabled; expose NATS through TLS
+  # before pointing external locations at it.
+  # Example: "tls://nats.example.com:4222"
   publicNatsURL: ""
   resources:
     requests:
@@ -208,9 +219,10 @@ worker:
   # locations:
   #   - name: eu-west          # DNS-safe suffix for the Deployment name
   #     locationId: ""         # location UUID from the Locations page (required)
+  #     credential: ""         # LOCATION_CREDENTIAL from deploy info (required)
   #     replicas: 1
   #     concurrency: "10"      # optional, defaults to worker.concurrency
-  #     natsUrl: ""            # optional, defaults to the platform NATS URL
+  #     natsUrl: ""            # authenticated NATS URL from deploy info (required)
   #     # Optional Service exposing the mesh echo port so OTHER locations can
   #     # probe this one. Point the location's mesh_endpoint at its address
   #     # (e.g. an internal NLB reachable across your VPCs).

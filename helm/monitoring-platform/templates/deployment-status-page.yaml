@@ -64,7 +64,10 @@ spec:
         - name: POSTGRES_URL
           value: {{ include "monitoring-platform.postgresUrl" . | quote }}
         - name: NATS_URL
-          value: {{ include "monitoring-platform.natsUrl" . | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: nats_url
         {{- if .Values.statusPage.baseUrl }}
         - name: STATUS_PAGE_BASE_URL
           value: "{{ .Values.statusPage.baseUrl }}"

@@ -38,6 +38,10 @@ type checkRequester interface {
 	Request(ctx context.Context, subject string, data []byte) ([]byte, error)
 }
 
+type locationConfigProtector interface {
+	ProtectMonitorConfigForWorker(ctx context.Context, tenantID, locationID uuid.UUID, monitorType string, config []byte) ([]byte, error)
+}
+
 type groupMembershipService interface {
 	AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
 	RemoveMonitorsFromGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error
@@ -52,9 +56,16 @@ type Handlers struct {
 	resultService     resultservice.ResultsService
 	jobPublisher      checkJobPublisher
 	jobRequester      checkRequester
+	locationProtector locationConfigProtector
 	checkSubject      string
 	artifactsDir      string
 	logger            *logger.Logger
+}
+
+// ConfigureLocationSecurity wires per-location config envelope protection for
+// test and on-demand jobs sent to private workers.
+func (h *Handlers) ConfigureLocationSecurity(protector locationConfigProtector) {
+	h.locationProtector = protector
 }
 
 // ConfigureDependencies sets the service backing the monitor dependency
@@ -171,6 +182,26 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	testSubject := sharedmodels.TestCheckSubject
+	if req.LocationID != nil && *req.LocationID != "" {
+		locationID, err := uuid.Parse(*req.LocationID)
+		if err != nil {
+			errors.WriteValidationError(w, "invalid location_id")
+			return
+		}
+		if h.locationProtector == nil {
+			errors.WriteInternalError(w, "private location security is unavailable")
+			return
+		}
+		config, err = h.locationProtector.ProtectMonitorConfigForWorker(r.Context(), tenantUUID, locationID, string(req.Type), config)
+		if err != nil {
+			h.logger.WithError(err).Warn("Failed to protect private-location test config")
+			errors.WriteInternalError(w, "failed to protect test config")
+			return
+		}
+		testSubject = sharedmodels.TestCheckSubjectForLocation(locationID.String())
+	}
+
 	payload, err := json.Marshal(sharedmodels.CheckJobPayload{
 		Type:           string(req.Type),
 		Config:         config,
@@ -179,16 +210,6 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errors.WriteInternalError(w, "failed to encode test payload")
 		return
-	}
-
-	testSubject := sharedmodels.TestCheckSubject
-	if req.LocationID != nil && *req.LocationID != "" {
-		locationID, err := uuid.Parse(*req.LocationID)
-		if err != nil {
-			errors.WriteValidationError(w, "invalid location_id")
-			return
-		}
-		testSubject = sharedmodels.TestCheckSubjectForLocation(locationID.String())
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutSeconds+10)*time.Second)
@@ -918,10 +939,30 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 
 	var jobID string
 	for _, locationID := range locationIDs {
+		locationConfig := checkConfig
+		if locationID != "" {
+			if h.locationProtector == nil {
+				errors.WriteInternalError(w, "private location security is unavailable")
+				return
+			}
+			parsedLocationID, err := uuid.Parse(locationID)
+			if err != nil {
+				errors.WriteInternalError(w, "invalid stored location ID")
+				return
+			}
+			locationConfig, err = h.locationProtector.ProtectMonitorConfigForWorker(
+				r.Context(), tenantUUID, parsedLocationID, string(monitor.Type), checkConfig,
+			)
+			if err != nil {
+				h.logger.WithFields(map[string]interface{}{"error": err.Error(), "location_id": locationID}).Error("Failed to protect private-location monitor config")
+				errors.WriteInternalError(w, "failed to protect monitor config")
+				return
+			}
+		}
 		payload := sharedmodels.CheckJobPayload{
 			MonitorID:      monitor.ID.String(),
 			Type:           string(monitor.Type),
-			Config:         checkConfig,
+			Config:         locationConfig,
 			TimeoutSeconds: timeoutSeconds,
 			LocationID:     locationID,
 		}

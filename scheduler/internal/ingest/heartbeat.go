@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 
+	"github.com/yassinebenameur/probara/shared/locationauth"
 	"github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/queue"
 )
@@ -35,6 +36,23 @@ func (i *Ingest) startHeartbeatSubscriber() (*nats.Subscription, error) {
 			i.logger.WithField("location_id", hb.LocationID).Debug("Ignoring heartbeat with invalid location_id")
 			return
 		}
+		if hb.Timestamp.IsZero() || time.Since(hb.Timestamp) > 2*time.Minute || time.Until(hb.Timestamp) > 2*time.Minute {
+			i.logger.WithField("location_id", hb.LocationID).Debug("Ignoring stale location heartbeat")
+			return
+		}
+		ctx, cancel := context.WithTimeout(i.ctx, 5*time.Second)
+		defer cancel()
+		credential, err := i.locationCredential(ctx, hb.LocationID, "", "")
+		if err != nil {
+			i.logger.WithError(err).WithField("location_id", hb.LocationID).Debug("Ignoring unauthorized location heartbeat")
+			return
+		}
+		signature := hb.Signature
+		hb.Signature = ""
+		if err := locationauth.VerifyJSON(credential, signature, hb); err != nil {
+			i.logger.WithError(err).WithField("location_id", hb.LocationID).Debug("Ignoring unsigned location heartbeat")
+			return
+		}
 
 		mu.Lock()
 		if last, ok := lastWrite[hb.LocationID]; ok && time.Since(last) < heartbeatWriteThrottle {
@@ -44,8 +62,6 @@ func (i *Ingest) startHeartbeatSubscriber() (*nats.Subscription, error) {
 		lastWrite[hb.LocationID] = time.Now()
 		mu.Unlock()
 
-		ctx, cancel := context.WithTimeout(i.ctx, 5*time.Second)
-		defer cancel()
 		if _, err := i.db.ExecContext(ctx, `
 			UPDATE locations
 			SET last_seen_at = NOW(), updated_at = NOW()
