@@ -1,3 +1,20 @@
+# [1.0.0-alpha.57](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.56...v1.0.0-alpha.57) (2026-07-16)
+
+
+### Bug Fixes
+
+* **security:** P1 review fixes — location worker auth, NATS auth, secret hardening ([edcd44b](https://github.com/yassinebenameur/probara/commit/edcd44b245fb8c6b2d5c1fc9294189431f85b50e))
+
+
+### Features
+
+* **auth:** enterprise auth — RBAC, audit log, scoped API keys & OIDC SSO ([09f69f5](https://github.com/yassinebenameur/probara/commit/09f69f599e1530cef42baeedff8f4a20cffbbbf1))
+* **locations:** private locations & multi-location checks ([4d391b6](https://github.com/yassinebenameur/probara/commit/4d391b690c9b8bff79c0194ae2011553ba6dcc7c))
+* **mesh:** inter-location connectivity mesh — probes, edge state, alerts & UI ([c48af09](https://github.com/yassinebenameur/probara/commit/c48af0995b0e3eb97a8ba0a886e4bdae508b254d))
+* **monitors:** MySQL, WebSocket & DNS custom-resolver types — Tier 1 complete ([c68889c](https://github.com/yassinebenameur/probara/commit/c68889ce9c8d84c1dfc0f5d4f23f68249860f252))
+* status page custom templates + dependencies graph redesign ([702668c](https://github.com/yassinebenameur/probara/commit/702668c2938118647a0b84fa14eb8e919c52541c))
+* **status-page:** redesign editor — live preview, section-first layout, inline monitor picker ([21dcdc2](https://github.com/yassinebenameur/probara/commit/21dcdc20634112ae89c668e683ed3bfd4d04437f))
+
 # [1.0.0-alpha.56](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.55...v1.0.0-alpha.56) (2026-06-18)
 
 
