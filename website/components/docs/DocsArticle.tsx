@@ -5,7 +5,7 @@ import type { DocBlocks, DocPage } from '@/lib/docs/types';
 import { CodeBlock } from './CodeBlock';
 
 function InlineText({ text }: { text: string }) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^()\s]+\))/g);
   return (
     <>
       {parts.map((part, index) => {
@@ -14,6 +14,25 @@ function InlineText({ text }: { text: string }) {
         }
         if (part.startsWith('**') && part.endsWith('**')) {
           return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
+        }
+        const link = part.match(/^\[([^\]]+)\]\(([^()\s]+)\)$/);
+        if (link) {
+          const [, label, href] = link;
+          return href.startsWith('/') ? (
+            <Link key={`${part}-${index}`} className="doc-link" href={href}>
+              {label}
+            </Link>
+          ) : (
+            <a
+              key={`${part}-${index}`}
+              className="doc-link"
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {label}
+            </a>
+          );
         }
         return part;
       })}
@@ -123,7 +142,6 @@ export function DocsArticle({ page }: { page: DocPage }) {
           <p>{page.description}</p>
           <div className="docs-article__meta">
             <span>{page.readingTime}</span>
-            <span>Verified against the current dev state</span>
           </div>
         </header>
 

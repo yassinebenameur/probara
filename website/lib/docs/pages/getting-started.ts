@@ -83,7 +83,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Never commit `.env` or generated credentials. Set both `ADMIN_JWT_SECRET` (at least 32 characters) and `PUBLIC_BASE_URL` in `.env` before either startup workflow. The local script can generate a development-only JWT value later in its execution, but Docker Compose interpolation currently occurs first and can reject an unset value.",
+            "Never commit `.env` or generated credentials. Set both `ADMIN_JWT_SECRET` (a random value of 32 or more characters is recommended) and `PUBLIC_BASE_URL` in `.env` before either startup workflow. Docker Compose ships an insecure hardcoded default secret and the local script falls back to an insecure placeholder when the value is unset, so override it explicitly for anything beyond throwaway local development. The [configuration reference](/docs/configuration/#common-service-variables) documents every environment variable.",
         },
       ],
     },
@@ -98,7 +98,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
           tone: "warning",
           title: "Populate .env before the first start",
           text:
-            "Although the local script contains a development-secret generator and a localhost public-URL fallback, it invokes Docker Compose before reaching that logic. In the current development state, explicitly set `ADMIN_JWT_SECRET` and `PUBLIC_BASE_URL` in `.env` so Compose interpolation succeeds.",
+            "The local script falls back to an insecure hardcoded placeholder when `ADMIN_JWT_SECRET` is unset, and it never sets `PUBLIC_BASE_URL`. Explicitly set `ADMIN_JWT_SECRET` and `PUBLIC_BASE_URL` in `.env` so the stack does not run on placeholder or missing values.",
         },
         {
           type: "code",
@@ -120,7 +120,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "If execution reaches the local startup script with `ADMIN_JWT_SECRET` unset, the script can generate and persist a development-only value in `.dev-admin-jwt-secret`; it also has a `http://localhost:8080` public-URL fallback. These are implementation fallbacks, not a substitute for populating `.env` before the initial Compose call.",
+            "If the local startup script runs with `ADMIN_JWT_SECRET` unset, it falls back to a hardcoded development placeholder value. That fallback is an implementation convenience, not a substitute for populating `.env` with a real secret.",
         },
         {
           type: "code",
@@ -134,14 +134,14 @@ export const GETTING_STARTED_PAGE: DocPage = {
       id: "docker-workflow",
       title: "Start the Docker-backed workflow",
       intro:
-        "Use this workflow when you want the backend service images and Compose topology to match a packaged deployment more closely.",
+        "Use this workflow when you want the backend service images and Compose topology to match a [packaged deployment](/docs/deployment/#docker-compose) more closely.",
       blocks: [
         {
           type: "callout",
           tone: "warning",
           title: "Required configuration",
           text:
-            "Set `ADMIN_JWT_SECRET` to at least 32 characters and set `PUBLIC_BASE_URL` to the API origin that browsers, agents, remote workers, and generated links can actually reach.",
+            "Docker Compose ships an insecure hardcoded `ADMIN_JWT_SECRET` default that you should override for anything beyond local development. Set `ADMIN_JWT_SECRET` to a random value of 32 or more characters and set `PUBLIC_BASE_URL` to the API origin that browsers, agents, remote workers, and generated links can actually reach.",
         },
         {
           type: "code",
@@ -179,7 +179,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
               "Rendered public pages, data, and SSE",
             ],
             ["NATS monitoring", "`http://localhost:8222`", "Local broker diagnostics"],
-            ["API metrics", "`http://localhost:9090/metrics`", "Prometheus metrics"],
+            ["API metrics", "`http://localhost:8080/metrics`", "Prometheus metrics"],
             [
               "Scheduler metrics",
               "`http://localhost:9091/metrics`",
@@ -205,7 +205,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Backend services also expose `/healthz` and `/readyz`. A healthy process is not necessarily ready: readiness includes dependencies the service needs to perform work.",
+            "Backend services also expose `/healthz` and `/readyz`. A healthy process is not necessarily ready: [readiness](/docs/operations/#health-readiness) includes dependencies the service needs to perform work.",
         },
       ],
     },
@@ -236,7 +236,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An empty installation configured for OIDC can also bootstrap through the first successful just-in-time OIDC login. Subsequent user and tenant access is governed by platform roles and tenant memberships.",
+            "An empty installation configured for [OIDC](/docs/administration/#oidc) can also bootstrap through the first successful just-in-time OIDC login. Subsequent user and tenant access is governed by platform roles and tenant memberships.",
         },
       ],
     },
@@ -248,7 +248,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
           type: "list",
           ordered: true,
           items: [
-            "Open `Monitors` and choose a new HTTP monitor.",
+            "Open `Monitors` and choose a new [HTTP monitor](/docs/monitors/#http).",
             "Enter a public `http://` or `https://` URL, a check interval, and a timeout shorter than that interval.",
             "Use `Test` to perform a compute-only check before saving. A test result is returned immediately and is not added to monitor history.",
             "Save the monitor, then choose `Run now` to enqueue a real check. This result is persisted and participates in state and alert evaluation.",
@@ -258,9 +258,9 @@ export const GETTING_STARTED_PAGE: DocPage = {
         {
           type: "callout",
           tone: "info",
-          title: "Private destinations are blocked by default",
+          title: "Private destinations are not blocked by default",
           text:
-            "Workers reject loopback, private, link-local, and reserved destinations by default. For trusted internal monitoring, prefer a narrow `HTTP_ALLOWED_CIDRS` allowlist on a dedicated location instead of disabling `HTTP_BLOCK_PRIVATE_IPS` globally.",
+            "Workers only reject loopback, private, link-local, and reserved destinations when `HTTP_BLOCK_PRIVATE_IPS` is enabled; it defaults to `false`. Enable it on internet-facing workers, and for trusted internal monitoring prefer a narrow `HTTP_ALLOWED_CIDRS` allowlist on a [dedicated location](/docs/locations/).",
         },
         {
           type: "definitions",
@@ -300,7 +300,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
           items: [
             "If the UI loads but API calls fail, verify that `PUBLIC_BASE_URL` names the API origin, not the UI or status-page origin.",
             "If agents or remote workers cannot connect, confirm that the advertised URL is reachable from their network and that proxy/TLS settings preserve the intended scheme.",
-            "If an active check is rejected before connecting, review the destination-safety policy and location-specific CIDR allowlists.",
+            "If an active check is rejected before connecting, review the [destination-safety policy](/docs/security/#ssrf-network-policy) and location-specific CIDR allowlists.",
             "If PostgreSQL authentication fails after older local experiments, the repository-scoped Docker volume may contain incompatible credentials.",
           ],
         },

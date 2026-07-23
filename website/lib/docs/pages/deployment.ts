@@ -7,7 +7,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
   description:
     'Run Probara with local processes, Docker Compose, or Kubernetes and Helm, with explicit guidance for databases, NATS, ingress, private locations, migrations, scaling, and current packaging limitations.',
   eyebrow: 'Deployment guide',
-  readingTime: '22 min',
+  readingTime: '22 min read',
   keywords: [
     'deployment',
     'Docker Compose',
@@ -97,18 +97,18 @@ openssl rand -base64 32    # PROBARA_SECRETS_KEY`,
         {
           type: 'list',
           items: [
-            'Set `ADMIN_JWT_SECRET` to at least 32 characters. Shipped placeholder strings are rejected.',
-            'Set `PUBLIC_BASE_URL` to the externally reachable API origin. For local use, `http://localhost:8080` is appropriate.',
-            'Set `PROBARA_SECRETS_KEY` before storing monitor credentials, notification secrets, location credentials, or tenant AI keys.',
+            'Set `ADMIN_JWT_SECRET` to a random value of at least 32 characters. Validation only rejects an empty value, so shipped placeholder defaults must be replaced deliberately.',
+            'Set `PUBLIC_BASE_URL` to the [externally reachable API origin](/docs/configuration/#public-urls-and-private-location-auth). For local use, `http://localhost:8080` is appropriate.',
+            'Set `PROBARA_SECRETS_KEY` before storing monitor credentials, notification secrets, location credentials, or tenant AI keys; see [encryption keys](/docs/configuration/#encryption-keys) for format and rotation.',
             'Do not set `PUBLIC_NATS_URL` until NATS authentication and an externally reachable TLS/WSS endpoint are ready.',
           ],
         },
         {
           type: 'callout',
           tone: 'warning',
-          title: 'Compose interpolation happens before local secret generation',
+          title: 'Compose ships an insecure hardcoded secret',
           text:
-            'The Compose model requires `ADMIN_JWT_SECRET` and `PUBLIC_BASE_URL` while it is parsed. Populate `.env` before invoking Make, even though the local-process launcher can generate a development-only JWT later.',
+            'The Compose model hardcodes an insecure `ADMIN_JWT_SECRET` default and never references `PUBLIC_BASE_URL`; the only interpolated Compose variables (`STATUS_PAGE_PREVIEW_SECRET`, `OIDC_*`, `AUDIT_RETENTION_DAYS`) all carry `:-` defaults. Populate `.env` anyway so the platform runs on real values instead of placeholders.',
         },
       ],
     },
@@ -138,11 +138,6 @@ make stop-all-local`,
         {
           type: 'definitions',
           items: [
-            {
-              term: '`.dev-admin-jwt-secret`',
-              description:
-                'Gitignored, persistent development-only JWT secret created when no environment value exists.',
-            },
             {
               term: '`.dev-secrets.key`',
               description:
@@ -368,8 +363,8 @@ kubectl -n probara get jobs`,
             ],
             [
               '`secrets.adminJwtSecret`',
-              'Empty; required',
-              'At least 32 characters; placeholder values rejected by template validation.',
+              'Insecure placeholder default',
+              'Ships as `change-me-in-production-jwt-secret-minimum-32-chars`; no template validation rejects it, so replace it with at least 32 random characters.',
             ],
             [
               '`secrets.initialApiKey`',
@@ -430,11 +425,6 @@ kubectl -n probara get jobs`,
               '`worker.checkJobStream`, `.checkJobSubject`, `.consumerName`, `.concurrency`',
               '`check-jobs`, `check.job`, `worker`, `10`',
               'Queue contract and worker parallelism.',
-            ],
-            [
-              '`worker.httpBlockPrivateIPs`, `.httpAllowedCIDRs`',
-              '`true`, `[]`',
-              'Outbound SSRF policy and narrow trusted CIDR exceptions.',
             ],
             [
               '`worker.autoscaling.*`',
@@ -574,7 +564,7 @@ api:
         {
           type: 'paragraph',
           text:
-            'A private-location worker needs only an authenticated NATS endpoint, its location UUID, and its location credential. It must not receive direct PostgreSQL access. Generate deploy information in the Locations UI/API after NATS authorization is configured.',
+            'A private-location worker needs only an authenticated NATS endpoint, its location UUID, and its location credential. It must not receive direct PostgreSQL access. Generate deploy information in the [Locations UI/API](/docs/locations/#create-and-deploy) after NATS authorization is configured.',
         },
         {
           type: 'code',
@@ -588,8 +578,6 @@ api:
       natsUrl: "tls://location-id:credential@nats.example.com:4222"
       replicas: 1
       concurrency: "10"
-      httpAllowedCIDRs:
-        - "10.20.0.0/16"
       meshService:
         enabled: true
         type: LoadBalancer
@@ -600,7 +588,7 @@ api:
           type: 'list',
           items: [
             'Use a DNS-safe unique `name`; each entry creates a separate Deployment.',
-            'Keep `httpAllowedCIDRs` limited to networks that location is explicitly trusted to monitor.',
+            'The chart does not expose HTTP egress policy; provide `HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` through extra environment configuration, and keep any allowlist limited to networks that location is explicitly trusted to monitor.',
             'Expose the mesh echo endpoint only on private inter-location networks.',
             'For locations outside the Kubernetes cluster, use the generated container/deployment snippet rather than granting database access.',
             'The embedded NATS Service is ClusterIP-only; an external location needs a separate TLS/WSS exposure path.',
@@ -662,9 +650,9 @@ api:
           type: 'list',
           ordered: true,
           items: [
-            'Back up PostgreSQL and record the running application/chart/image versions.',
+            '[Back up PostgreSQL](/docs/operations/#backup-restore) and record the running application/chart/image versions.',
             'Render or lint the target chart with production values and inspect Secrets, Services, queue variables, and image tags.',
-            'Run the target migrations against a disposable copy or staging database.',
+            'Run the [target migrations](/docs/operations/#database-migrations) against a disposable copy or staging database.',
             'Deploy the migration-compatible application version. The chart migration Job is a post-install/post-upgrade hook; API startup also runs shared migrations.',
             'Verify `/readyz`, result ingestion, scheduled and on-demand checks, alert delivery, status invalidation, and private locations.',
             'Roll back application images only when the schema remains backward-compatible. Database migrations are not automatically reversed by `helm rollback`.',
@@ -750,12 +738,12 @@ api:
             'Configure HTTPS, `ADMIN_COOKIE_SECURE=true`, a correct `PUBLIC_BASE_URL`, and trusted reverse-proxy headers.',
             'Use stable random JWT, encryption, OIDC, preview, SMTP, webhook, database, and NATS secrets from a secret manager.',
             'Align every NATS stream, subject, consumer, and status-update subject across services.',
-            'Keep private-destination blocking enabled and allow only narrowly scoped CIDRs.',
+            'Keep [private-destination blocking](/docs/security/#ssrf-network-policy) enabled and allow only narrowly scoped CIDRs.',
             'Share or externalize synthetic-browser artifact storage.',
             'Provide secure TLS/WSS NATS exposure before enabling remote private locations.',
             'Correct ingress routing and verify browser client URLs in the built frontend image.',
             'Scrape the listeners that actually serve `/metrics`; alert on readiness failures, result-ingest errors, queue backlog, and migration failure.',
-            'Run the complete verification suite and a restore drill before launch.',
+            'Run the complete [verification suite](/docs/security/#security-verification) and a restore drill before launch.',
           ],
         },
       ],

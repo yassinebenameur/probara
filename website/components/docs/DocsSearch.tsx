@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Search, X } from 'lucide-react';
-import { FLAT_DOC_NAVIGATION } from '@/lib/docs/navigation';
+import { CornerDownRight, Search, X } from 'lucide-react';
+import type { DocSearchEntry } from '@/lib/docs/search';
 
-export function DocsSearch() {
+export function DocsSearch({ entries }: { entries: DocSearchEntry[] }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -13,10 +13,20 @@ export function DocsSearch() {
 
   const results = useMemo(() => {
     if (!normalized) return [];
-    return FLAT_DOC_NAVIGATION.filter((item) =>
-      `${item.title} ${item.description} ${item.group}`.toLowerCase().includes(normalized),
-    ).slice(0, 7);
-  }, [normalized]);
+    const tokens = normalized.split(/\s+/);
+    return entries
+      .filter((entry) => tokens.every((token) => entry.haystack.includes(token)))
+      .map((entry) => {
+        const title = (entry.section ?? entry.page).toLowerCase();
+        const score =
+          (title.startsWith(normalized) ? 0 : title.includes(normalized) ? 1 : 2) +
+          (entry.section ? 0.5 : 0);
+        return { entry, score };
+      })
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 8)
+      .map((ranked) => ranked.entry);
+  }, [entries, normalized]);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -59,19 +69,31 @@ export function DocsSearch() {
           {results.length > 0 ? (
             results.map((result) => (
               <Link
-                href={`/docs/${result.slug}/`}
-                key={result.slug}
+                href={result.href}
+                key={result.href}
                 onClick={() => {
                   setOpen(false);
                   setQuery('');
                 }}
               >
-                <strong>{result.title}</strong>
-                <span>{result.group}</span>
+                {result.section ? (
+                  <>
+                    <strong>
+                      <CornerDownRight size={11} aria-hidden="true" />
+                      {result.section}
+                    </strong>
+                    <span>{result.page}</span>
+                  </>
+                ) : (
+                  <>
+                    <strong>{result.page}</strong>
+                    <span>{result.group}</span>
+                  </>
+                )}
               </Link>
             ))
           ) : (
-            <p>No matching guide. Try a service or feature name.</p>
+            <p>No matches. Try a feature, variable, or service name.</p>
           )}
         </div>
       )}

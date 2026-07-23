@@ -23,7 +23,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The control-plane API is rooted at `{API_ORIGIN}/api/v1`. The API serves `/healthz`, `/readyz`, and `/metrics` on `HTTP_PORT` (8080 in the bundled deployments); its declared `METRICS_PORT` does not have a separate listener. Public rendered status pages are served by the separate status-page service.",
+            "The control-plane API is rooted at `{API_ORIGIN}/api/v1`. The API serves `/healthz`, `/readyz`, and `/metrics` on `HTTP_PORT` (8080 in the bundled deployments); its declared `METRICS_PORT` does not have a separate listener. Public rendered status pages are served by the separate [status-page service](/docs/status-pages/#public-routes).",
         },
         {
           type: "code",
@@ -86,7 +86,7 @@ export const API_PAGE: DocPage = {
             {
               term: "API key",
               description:
-                "Send `Authorization: Bearer pk_<secret>`. The key has read or write scope and is bound to its creation tenant.",
+                "Send `Authorization: Bearer pk_<secret>`. The key has [read or write scope](/docs/administration/#api-keys) and is bound to its creation tenant.",
             },
             {
               term: "Push token",
@@ -146,7 +146,7 @@ export const API_PAGE: DocPage = {
           columns: ["Principal", "Reads", "Mutations"],
           rows: [
             [
-              "Tenant viewer / read API key",
+              "[Tenant viewer](/docs/administration/#roles) / read API key",
               "Tenant data",
               "Only approved compute-only POST diagnostics",
             ],
@@ -259,7 +259,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/monitors/{id}/artifacts/screenshot?path=...`",
-              "Retrieve an authorized synthetic-browser screenshot path",
+              "Retrieve an authorized [synthetic-browser](/docs/monitors/#synthetic-browser) screenshot path",
             ],
             [
               "`POST /api/v1/monitors/{id}/snooze`",
@@ -371,7 +371,7 @@ export const API_PAGE: DocPage = {
             ["`DELETE /api/v1/locations/{id}`", "Delete and detach a location"],
             [
               "`GET /api/v1/locations/{id}/deploy`",
-              "Generate credential-scoped deployment information",
+              "Generate credential-scoped [deployment information](/docs/locations/#create-and-deploy)",
             ],
             ["`GET /api/v1/mesh`", "Read current directional mesh topology/state"],
             [
@@ -524,7 +524,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Alert policies are gone",
           text:
-            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints under `/alerts/counts/...` should not be used as a supported policy-management model.",
+            "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints under `/alerts/counts/...` should not be used as a supported policy-management model. See [retired alert policies](/docs/alerting/#retired-policies).",
         },
       ],
     },
@@ -658,7 +658,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, plus draft preview. Do not use those public routes to mutate configuration.",
+            "The separate status-page service exposes unauthenticated `GET /public/status/{slug}`, `/data`, and `/stream`, plus [draft preview](/docs/status-pages/#preview-security). Do not use those public routes to mutate configuration.",
         },
       ],
     },
@@ -713,7 +713,7 @@ export const API_PAGE: DocPage = {
           tone: "warning",
           title: "Capability URLs are credentials",
           text:
-            "Redact push tokens from logs and tracing. Agent installer responses can embed a tenant API key supplied for installation and must be handled as secret output.",
+            "Redact push tokens from logs and tracing. [Agent installer](/docs/agents/#install) responses can embed a tenant API key supplied for installation and must be handled as secret output.",
         },
       ],
     },
@@ -755,7 +755,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/audit-log`",
-              "Tenant admin; filtered audit records",
+              "Tenant admin; filtered [audit records](/docs/administration/#audit)",
             ],
             [
               "`GET /api/v1/audit-log/actions`",

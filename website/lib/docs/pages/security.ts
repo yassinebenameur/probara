@@ -7,7 +7,7 @@ export const SECURITY_PAGE: DocPage = {
   description:
     'Harden Probara authentication, tenant access, secrets, outbound monitoring, private locations, NATS, OIDC, notifications, status pages, audit evidence, and production infrastructure.',
   eyebrow: 'Security guide',
-  readingTime: '21 min',
+  readingTime: '21 min read',
   keywords: [
     'security',
     'SSRF',
@@ -108,7 +108,7 @@ export const SECURITY_PAGE: DocPage = {
             'Do not accept a tenant ID from a request without reconciling it to the authenticated identity and selected membership.',
             'API-key tenant identity is resolved from the stored key, not from a client-chosen tenant header.',
             'Review side-effecting “test,” “preview,” or “probe” endpoints carefully before adding them to the read-only POST allowlist.',
-            'Use separate API keys per integration, give them an expiry, select `read` unless mutation is necessary, and revoke them when ownership changes.',
+            'Use separate [API keys](/docs/administration/#api-keys) per integration, give them an expiry, select `read` unless mutation is necessary, and revoke them when ownership changes.',
           ],
         },
       ],
@@ -268,7 +268,7 @@ export const SECURITY_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'When a valid `PROBARA_SECRETS_KEY` keyring is configured, sensitive configuration is stored in self-describing AES-256-GCM JSON envelopes containing algorithm, key version, nonce, and ciphertext. The base key and every rotation key must decode from base64 to exactly 32 bytes.',
+            'When a valid `PROBARA_SECRETS_KEY` keyring is configured, sensitive configuration is stored in self-describing AES-256-GCM JSON envelopes containing algorithm, key version, nonce, and ciphertext. The base key and every [rotation key](/docs/configuration/#encryption-keys) must decode from base64 to exactly 32 bytes.',
         },
         {
           type: 'code',
@@ -358,7 +358,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           items: [
             'Hostname dials resolve candidate IPs and validate them before connecting.',
             'Browser validation rejects a hostname if any returned address is blocked, reducing mixed public/private DNS selection risk.',
-            'Use a dedicated location worker for internal monitoring and grant that location only the internal CIDRs it owns.',
+            'Use a [dedicated location worker](/docs/locations/#target-policy) for internal monitoring and grant that location only the internal CIDRs it owns.',
             'Do not globally disable blocking to monitor one private target.',
             'Treat `tls_skip_verify` and custom CA settings as scoped exceptions; prefer correct certificate chains and server names.',
             'Run workers without cloud instance metadata access and with a minimally privileged service account.',
@@ -380,7 +380,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'paragraph',
           text:
-            'Private locations authenticate to NATS with location UUID as username and a 32-byte random URL-safe credential as password. The API authorization callout validates only active, non-deleted locations and issues a one-hour NATS user claim scoped to that location.',
+            '[Private locations](/docs/locations/#credentials-and-secrets) authenticate to NATS with location UUID as username and a 32-byte random URL-safe credential as password. The API authorization callout validates only active, non-deleted locations and issues a one-hour NATS user claim scoped to that location.',
         },
         {
           type: 'list',
@@ -448,7 +448,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'list',
           items: [
-            'Published status pages are intentionally public. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure is intended.',
+            'Published [status pages](/docs/status-pages/#page-model) are intentionally public. Do not include private monitor URLs, internal hostnames, customer names, or operational notes unless disclosure is intended.',
             'Set one strong shared `STATUS_PAGE_PREVIEW_SECRET` on API and status service. Without it, preview-token enforcement is disabled.',
             'Preview tokens are HMAC-SHA256 values with a one-hour expiry. Treat preview URLs as temporary bearer links.',
             'The status service’s optional API proxy is intentionally restricted, but should still be exposed only through the expected status editing/preview flow.',
@@ -465,7 +465,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'paragraph',
           text:
-            'Audit records capture time, tenant, actor type/ID/label, action, resource, outcome, HTTP status, IP, user agent, and structured details. Writes are asynchronous in batches so audit storage does not block product requests.',
+            '[Audit records](/docs/administration/#audit) capture time, tenant, actor type/ID/label, action, resource, outcome, HTTP status, IP, user agent, and structured details. Writes are asynchronous in batches so audit storage does not block product requests.',
         },
         {
           type: 'list',

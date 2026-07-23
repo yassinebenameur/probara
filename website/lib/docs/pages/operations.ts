@@ -7,7 +7,7 @@ export const OPERATIONS_PAGE: DocPage = {
   description:
     'Operate Probara day to day: service lifecycle, health and readiness, Prometheus metrics, logs, migrations, retention, backup and restore, queue inspection, testing, and incident troubleshooting.',
   eyebrow: 'Operator handbook',
-  readingTime: '20 min',
+  readingTime: '20 min read',
   keywords: [
     'operations',
     'health',
@@ -305,7 +305,7 @@ go run ./cmd/migrate`,
         {
           type: 'paragraph',
           text:
-            'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set. The Helm migration Job is a post-install/post-upgrade hook.',
+            'The migration CLI requires `POSTGRES_URL`, defaults `MIGRATIONS_PATH` to `./migrations`, and retries the initial database connection up to 30 times at one-second intervals. API startup also runs the shared migration set. The [Helm migration Job](/docs/deployment/#migrations-upgrades) is a post-install/post-upgrade hook.',
         },
         {
           type: 'code',
@@ -348,7 +348,7 @@ make db-restore`,
           items: [
             'Quiesce writes or capture a database-consistent snapshot appropriate to your PostgreSQL topology.',
             'Back up PostgreSQL, including schema migration state, tenants, monitor configuration, alert state, users, API keys, audit data, and encrypted ciphertext.',
-            'Back up the complete encryption keyring separately. A database backup without the historical keys may be unrecoverable.',
+            'Back up the complete [encryption keyring](/docs/security/#encryption-at-rest) separately. A database backup without the historical keys may be unrecoverable.',
             'Protect JetStream state or accept that queued checks/results/notifications may be replayed or lost after recovery.',
             'Preserve browser artifacts separately if they are part of your incident evidence policy.',
             'Restore into an isolated environment, run readiness and data-integrity checks, then perform a documented cutover.',
@@ -378,7 +378,7 @@ make db-restore`,
             {
               term: 'Tenant telemetry retention',
               description:
-                'Each tenant’s `data_retention_days` controls raw check results and mesh results. A value of `0` preserves them; the public validator otherwise accepts 30–3650 days.',
+                'Each tenant’s `data_retention_days` controls raw check results and mesh results. A value of `0` preserves them; the public validator otherwise accepts 30–3650 days. It is configured in [tenant settings](/docs/administration/#tenant-settings).',
             },
             {
               term: 'Audit retention',
@@ -475,7 +475,7 @@ nats --server "$NATS_URL" consumer info CHECK_RESULTS result-ingest`,
             'Compose mounts a shared named volume into API and worker.',
             'Local-process services share the same host directory.',
             'The current Helm workloads do not mount shared artifact storage, so cross-pod and cross-node retrieval is unreliable.',
-            'Set retention and access controls appropriate for screenshots because they can capture page content, tokens, personal data, or internal application state.',
+            'Set retention and [access controls](/docs/security/#status-pages-artifacts) appropriate for screenshots because they can capture page content, tokens, personal data, or internal application state.',
           ],
         },
         {
@@ -540,7 +540,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Configuration exits immediately',
               'Missing ports/JWT, short or placeholder JWT, invalid bool/int/CIDR, incomplete OIDC, or location ID/credential mismatch',
-              'Read the first fatal line; compare the process environment with the configuration reference.',
+              'Read the first fatal line; compare the process environment with the [configuration reference](/docs/configuration/).',
             ],
             [
               'Compose command fails before containers start',
@@ -625,7 +625,7 @@ helm lint ./helm/monitoring-platform \\
             'Compare deployed queue variables and encryption-key versions across all replicas.',
             'Reduce blast radius with reversible actions: pause a broken monitor/policy, scale a healthy worker fleet, or disable optional async paths.',
             'Restore service, verify end-to-end from schedule through status/alert delivery, then reconcile delayed or duplicate jobs.',
-            'Record the operator action in incident notes and retain the audit/log/artifact evidence according to policy.',
+            'Record the operator action in [incident notes](/docs/alerting/#incidents) and retain the audit/log/artifact evidence according to policy.',
           ],
         },
       ],

@@ -76,7 +76,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When an availability alert opens or is reevaluated, Probara traverses upstream dependencies and selects the deepest currently down candidate. When candidates are at the same depth, the one that became down first wins.",
+            "When an [availability alert](/docs/alerting/#availability) opens or is reevaluated, Probara traverses upstream dependencies and selects the deepest currently down candidate. When candidates are at the same depth, the one that became down first wins.",
         },
         {
           type: "code",
@@ -95,7 +95,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
           tone: "warning",
           title: "Downstream alerts are not suppressed",
           text:
-            "Dependencies enrich each downstream availability alert with likely cause; they do not prevent that alert or its notifications. Use monitor-group alert rollup when the intended behavior is one alert for a member set.",
+            "Dependencies enrich each downstream availability alert with likely cause; they do not prevent that alert or its notifications. Use [monitor-group alert rollup](/docs/alerting/#group-rollup) when the intended behavior is one alert for a member set.",
         },
       ],
     },
@@ -106,7 +106,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "With an effective tenant AI configuration, the suggestion endpoint analyzes recent alert co-occurrence and asks the configured model for plausible upstream relationships. The current analysis window is 30 days, co-firing events are paired within 10 minutes, and a candidate pair needs at least two observations.",
+            "With an effective [tenant AI configuration](/docs/administration/#ai-settings), the suggestion endpoint analyzes recent alert co-occurrence and asks the configured model for plausible upstream relationships. The current analysis window is 30 days, co-firing events are paired within 10 minutes, and a candidate pair needs at least two observations.",
         },
         {
           type: "table",
@@ -263,7 +263,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Results marked with `result_source=platform` are excluded from standard monitor analytics. This prevents generated stale-agent/push state records from being counted as ordinary scheduled executions.",
+            "Results marked with `result_source=platform` are excluded from standard monitor analytics. This applies to expired-job results; generated [stale-agent/push state](/docs/agents/#freshness) records are written with `result_source=monitor` and are counted like ordinary results.",
         },
       ],
     },
@@ -274,7 +274,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Tenant telemetry retention is `0` for unlimited retention or a value from 30 through 3,650 days. Cleanup covers check results, mesh history, and rollup data according to the scheduler's retention tasks.",
+            "Tenant telemetry retention is `0` for unlimited retention or a value from 30 through 3,650 days. Cleanup covers check results, mesh history, and rollup data according to the scheduler's [retention tasks](/docs/operations/#retention).",
         },
         {
           type: "callout",
@@ -298,7 +298,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
             "Compare raw recent failures across locations; a degraded regional result can precede a quorum-confirmed outage.",
             "Inspect per-monitor latency, downtime periods, and coverage metadata.",
             "Check maintenance and deployment history before concluding that correlated alerts share a dependency.",
-            "Attach relevant alerts and monitors to an incident, preserving hypotheses as internal notes.",
+            "Attach relevant alerts and monitors to an [incident](/docs/alerting/#incidents), preserving hypotheses as internal notes.",
           ],
         },
       ],

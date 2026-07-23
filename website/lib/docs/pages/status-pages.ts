@@ -79,9 +79,9 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`show_monitor_url`",
               "Present in the settings schema; not currently wired into the built-in template",
             ],
-            ["`show_uptime`", "Controls per-monitor uptime in the built-in view"],
+            ["`show_monitor_uptime`", "Controls per-monitor uptime in the built-in view"],
             [
-              "`show_tls`",
+              "`show_monitor_tls`",
               "Present in the settings schema; not currently wired into the built-in template",
             ],
             [
@@ -189,7 +189,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           tone: "warning",
           title: "Platform-generated stale results are not uptime samples",
           text:
-            "Agent and push freshness failures can change current public state, but platform-source results are excluded from standard monitor analytics. Current status and historical uptime therefore answer related but not identical questions.",
+            "Agent and push [freshness failures](/docs/agents/#freshness) can change current public state, but platform-source results are excluded from standard [monitor analytics](/docs/monitors/#operations). Current status and historical uptime therefore answer related but not identical questions.",
         },
       ],
     },
@@ -201,7 +201,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
           type: "list",
           ordered: true,
           items: [
-            "Create or open an incident in the authenticated application.",
+            "Create or open an [incident](/docs/alerting/#incidents) in the authenticated application.",
             "Attach the affected monitors and relevant alerts.",
             "Add public timeline updates while keeping internal notes private.",
             "Publish the incident to one or more status pages.",
@@ -235,7 +235,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Maintenance changes alert behavior but does not stop checks. A page can continue showing observed state while also explaining the scheduled work, which helps visitors distinguish planned degradation from an unannounced incident.",
+            "Maintenance changes [alert behavior](/docs/alerting/#maintenance) but does not stop checks. A page can continue showing observed state while also explaining the scheduled work, which helps visitors distinguish planned degradation from an unannounced incident.",
         },
       ],
     },
@@ -326,14 +326,14 @@ export const STATUS_PAGES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `STATUS_PAGE_PREVIEW_SECRET` is configured, draft preview URLs require a signed preview token. Without that secret, the development preview path is open to anyone who can reach it.",
+            "When `STATUS_PAGE_PREVIEW_SECRET` is configured, draft preview URLs require a [signed preview token](/docs/security/#status-pages-artifacts). Without that secret, the development preview path is open to anyone who can reach it.",
         },
         {
           type: "callout",
           tone: "warning",
           title: "Configure preview signing outside local development",
           text:
-            "Drafts may contain unreleased incident messaging, brand changes, or diagnostic markup. Set a strong preview secret and restrict network exposure before using the preview route in a shared or production environment.",
+            "Drafts may contain unreleased incident messaging, brand changes, or diagnostic markup. Set a strong [preview secret](/docs/configuration/#status-page-service) and restrict network exposure before using the preview route in a shared or production environment.",
         },
       ],
     },

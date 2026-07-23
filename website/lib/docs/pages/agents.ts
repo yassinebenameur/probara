@@ -36,7 +36,7 @@ export const AGENTS_PAGE: DocPage = {
           tone: "info",
           title: "An agent is not a private worker",
           text:
-            "Install the host agent when you want telemetry about that host. Deploy a private location worker when you want Probara to execute active monitor checks from that network.",
+            "Install the host agent when you want telemetry about that host. Deploy a [private location worker](/docs/locations/) when you want Probara to execute active monitor checks from that network.",
         },
       ],
     },
@@ -57,19 +57,23 @@ export const AGENTS_PAGE: DocPage = {
               "Expected reporting interval, 10–86,400 seconds",
             ],
             [
-              "`cpu_threshold_percent`",
+              "`metric_thresholds`",
+              "Optional nested object of per-metric alert thresholds; omit a key to disable that metric's alert",
+            ],
+            [
+              "`metric_thresholds.cpu_percent`",
               "Optional positive percentage that opens a CPU host-metric alert",
             ],
             [
-              "`memory_threshold_percent`",
+              "`metric_thresholds.memory_percent`",
               "Optional positive percentage that opens a memory alert",
             ],
             [
-              "`disk_threshold_percent`",
+              "`metric_thresholds.disk_percent`",
               "Optional positive percentage evaluated for reported disk use",
             ],
             [
-              "`swap_threshold_percent`",
+              "`metric_thresholds.swap_percent`",
               "Optional positive percentage that opens a swap alert",
             ],
           ],
@@ -92,7 +96,7 @@ export const AGENTS_PAGE: DocPage = {
           ordered: true,
           items: [
             "Create an agent monitor and choose its expected interval and optional thresholds.",
-            "Create a tenant API key with `write` scope. Read scope cannot submit metrics.",
+            "Create a [tenant API key](/docs/administration/#api-keys) with `write` scope. Read scope cannot submit metrics.",
             "Open the monitor's agent install instructions and select the target platform.",
             "Run the generated script with the privileges required by that platform.",
             "Confirm the first report appears immediately, then verify periodic reports and current state.",
@@ -129,7 +133,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Generated URLs depend on `PUBLIC_BASE_URL`, which must be an absolute `http://` or `https://` origin without user information, query, or fragment. The corresponding platform binary must exist in the API static-agent directory.",
+            "Generated URLs depend on `PUBLIC_BASE_URL`, which must be an absolute `http://` or `https://` origin without user information, query, or fragment. The corresponding platform binary must exist in the API static-agent directory. See the [public URL configuration](/docs/configuration/#public-urls-and-private-location-auth) for how this value is wired.",
         },
       ],
     },
@@ -235,7 +239,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Stale transitions are platform-generated results. They affect current state and availability alerting but are excluded from standard scheduled-monitor uptime analytics.",
+            "Stale transitions are recorded with `result_source = monitor`, so they affect current state and availability alerting and are included in standard [uptime analytics](/docs/monitors/#operations). Only expired-job results use the `platform` source that analytics exclude.",
         },
       ],
     },
@@ -246,7 +250,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When a percentage threshold is present and the corresponding reported utilization exceeds it, Probara opens a separate host-metric alert. CPU, memory, disk, and swap alerts can be open independently.",
+            "When a percentage threshold is present and the corresponding reported utilization exceeds it, Probara opens a separate [host-metric alert](/docs/alerting/#host-and-mesh). CPU, memory, disk, and swap alerts can be open independently.",
         },
         {
           type: "list",
@@ -254,7 +258,7 @@ export const AGENTS_PAGE: DocPage = {
             "A resource breach does not mark agent availability down.",
             "A metric alert resolves when the utilization falls below the threshold.",
             "Removing a configured threshold resolves the corresponding condition.",
-            "Notification routing follows the monitor's default or custom channel assignments.",
+            "[Notification routing](/docs/alerting/#routing) follows the monitor's default or custom channel assignments.",
           ],
         },
       ],
@@ -299,7 +303,7 @@ export const AGENTS_PAGE: DocPage = {
               "Expected time between pushes, 10–86,400 seconds",
             ],
             [
-              "`grace_seconds`",
+              "`grace_period_seconds`",
               "Additional non-negative delay before the heartbeat is considered stale",
             ],
           ],
@@ -367,7 +371,7 @@ export const AGENTS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A push monitor becomes stale after `expected_interval_seconds + grace_seconds` without an accepted report. While it remains stale, the platform limits repeated generated failures to avoid unbounded duplicate history. A new accepted heartbeat restores up state.",
+            "A push monitor becomes stale after `expected_interval_seconds + grace_period_seconds` without an accepted report. While it remains stale, the platform limits repeated generated failures to avoid unbounded duplicate history. A new accepted heartbeat restores up state.",
         },
         {
           type: "callout",

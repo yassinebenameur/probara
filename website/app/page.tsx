@@ -5,7 +5,6 @@ import {
   Boxes,
   Braces,
   Cable,
-  Check,
   CircleDot,
   CloudCog,
   Database,
@@ -32,19 +31,17 @@ import {
   Workflow,
   Zap,
 } from 'lucide-react';
+import { FlightRecorder } from '@/components/FlightRecorder';
 import { SiteFooter } from '@/components/SiteFooter';
 import { SiteHeader } from '@/components/SiteHeader';
 
-const consoleMonitors = [
-  { name: 'Checkout API', type: 'HTTP', latency: '142 ms', status: 'Operational' },
-  { name: 'Production Postgres', type: 'PostgreSQL', latency: '18 ms', status: 'Operational' },
-  {
-    name: 'Login browser flow',
-    type: 'Synthetic Browser',
-    latency: '1.8 s',
-    status: 'Degraded',
-  },
-  { name: 'EU edge gateway', type: 'Ping', latency: '31 ms', status: 'Operational' },
+const dataPlate = [
+  ['Type', 'Self-hosted blackbox monitor'],
+  ['Protocols', '17 monitor types'],
+  ['Transport', 'NATS JetStream'],
+  ['State', 'PostgreSQL'],
+  ['Deploy', 'Docker Compose · Helm'],
+  ['License', 'GPL-3.0 open source'],
 ];
 
 const monitorGroups = [
@@ -110,141 +107,17 @@ const workflow = [
   },
 ];
 
-function ProductConsole() {
-  return (
-    <div className="hero-console-wrap" aria-label="Illustration of the Probara operations dashboard">
-      <div className="hero-console">
-        <div className="console-topbar">
-          <div className="console-dots" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-          <span className="console-title mono">Operations overview · production</span>
-          <span className="console-live">Live</span>
-        </div>
-        <div className="console-body">
-          <div className="console-main">
-            <div className="console-metrics">
-              <div className="console-metric">
-                <span className="console-metric__label">Fleet uptime</span>
-                <div className="console-metric__value">
-                  <strong>99.96%</strong>
-                  <small>30d</small>
-                </div>
-              </div>
-              <div className="console-metric">
-                <span className="console-metric__label">Median latency</span>
-                <div className="console-metric__value">
-                  <strong>128 ms</strong>
-                  <small>−11%</small>
-                </div>
-              </div>
-              <div className="console-metric">
-                <span className="console-metric__label">Checks</span>
-                <div className="console-metric__value">
-                  <strong>48</strong>
-                  <small>4 locations</small>
-                </div>
-              </div>
-            </div>
-            <div className="console-chart" aria-label="Uptime and latency trend illustration">
-              <svg viewBox="0 0 700 120" preserveAspectRatio="none" role="img">
-                <defs>
-                  <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#76f0bd" stopOpacity="0.22" />
-                    <stop offset="100%" stopColor="#76f0bd" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                <path
-                  d="M0,75 C50,69 72,56 116,61 C160,66 176,47 222,50 C265,53 294,35 338,42 C390,50 405,30 455,36 C510,44 540,20 584,28 C625,35 664,19 700,21 L700,120 L0,120 Z"
-                  fill="url(#chartFill)"
-                />
-                <path
-                  d="M0,75 C50,69 72,56 116,61 C160,66 176,47 222,50 C265,53 294,35 338,42 C390,50 405,30 455,36 C510,44 540,20 584,28 C625,35 664,19 700,21"
-                  fill="none"
-                  stroke="#76f0bd"
-                  strokeWidth="2"
-                  vectorEffect="non-scaling-stroke"
-                />
-                <path
-                  d="M0,91 C45,84 82,97 125,85 C174,72 206,88 252,78 C300,67 342,82 390,69 C440,56 475,72 526,62 C585,51 630,62 700,49"
-                  fill="none"
-                  stroke="#5ad9f8"
-                  strokeDasharray="5 5"
-                  strokeOpacity="0.65"
-                  strokeWidth="1.4"
-                  vectorEffect="non-scaling-stroke"
-                />
-              </svg>
-            </div>
-            <div className="console-monitor-list">
-              {consoleMonitors.map((monitor) => (
-                <div className="console-monitor" key={monitor.name}>
-                  <span className="console-monitor__name">
-                    <span className="console-monitor__icon">
-                      <Activity size={12} />
-                    </span>
-                    {monitor.name}
-                  </span>
-                  <span className="console-monitor__type">{monitor.type}</span>
-                  <span className="console-monitor__latency">{monitor.latency}</span>
-                  <span
-                    className={`console-status ${
-                      monitor.status === 'Degraded' ? 'console-status--warn' : ''
-                    }`}
-                  >
-                    {monitor.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <aside className="console-side">
-            <h3>Needs attention</h3>
-            <div className="console-incident">
-              <span className="console-incident__tag">
-                <Siren size={11} />
-                Investigating
-              </span>
-              <h4>Elevated login latency in EU</h4>
-              <p>2 of 4 locations affected. Dependency context points to the identity service.</p>
-            </div>
-            <div className="console-timeline">
-              <div>
-                <strong>Incident created</strong>
-                <span>Alert lifecycle · 2m ago</span>
-              </div>
-              <div>
-                <strong>Status page updated</strong>
-                <span>Public publication · 1m ago</span>
-              </div>
-              <div>
-                <strong>AI analysis ready</strong>
-                <span>3 likely causes · just now</span>
-              </div>
-            </div>
-          </aside>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function HomePage() {
   return (
     <>
       <SiteHeader />
       <main className="marketing-main">
         <section className="hero">
-          <div className="section-shell">
+          <div className="section-shell hero__grid">
             <div className="hero__content">
-              <span className="hero__eyebrow">
-                <span className="hero__eyebrow-dot" />
-                Self-hosted · Kubernetes-first · GPL-3.0
-              </span>
+              <p className="hero__eyebrow">Self-hosted / Kubernetes-first / GPL-3.0</p>
               <h1>
-                Monitoring without <span>blind spots.</span>
+                Monitoring without blind spots<span className="hero__dot">.</span>
               </h1>
               <p className="hero__lead">
                 Watch endpoints, protocols, databases, hosts, and scripted browser
@@ -260,20 +133,17 @@ export default function HomePage() {
                   Explore the docs
                 </Link>
               </div>
-              <div className="hero__note">
-                <span>
-                  <Check size={12} /> Docker Compose
-                </span>
-                <span>
-                  <Check size={12} /> Helm chart
-                </span>
-                <span>
-                  <Check size={12} /> External PostgreSQL &amp; NATS
-                </span>
-              </div>
             </div>
-            <ProductConsole />
+            <dl className="hero__plate" aria-label="Platform summary">
+              {dataPlate.map(([term, detail]) => (
+                <div key={term}>
+                  <dt>{term}</dt>
+                  <dd>{detail}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
+          <FlightRecorder />
         </section>
 
         <section className="signal-strip" aria-label="Platform highlights">
@@ -331,7 +201,12 @@ export default function HomePage() {
                     ['Singapore', 'Degraded'],
                     ['Private DC', 'Healthy'],
                   ].map(([place, status]) => (
-                    <div className="location-node" key={place}>
+                    <div
+                      className={`location-node${
+                        status === 'Degraded' ? ' location-node--warn' : ''
+                      }`}
+                      key={place}
+                    >
                       <span>
                         <strong>●</strong>
                         {place}
@@ -360,7 +235,7 @@ export default function HomePage() {
                     </span>
                     <small>Slack · Discord</small>
                   </div>
-                  <div className="alert-row">
+                  <div className="alert-row alert-row--warn">
                     <span>
                       <i /> Identity latency anomaly
                     </span>
@@ -415,10 +290,23 @@ export default function HomePage() {
                   co-firing signals, and ask the configured LLM for incident root causes.
                 </p>
                 <div className="feature-card__visual location-map" aria-hidden="true">
-                  {['Edge', 'API', 'Auth', 'DB'].map((node) => (
-                    <div className="location-node" key={node}>
-                      <strong>●</strong>
-                      {node}
+                  {[
+                    ['Edge', 'Impacted', 'warn'],
+                    ['API', 'Impacted', 'warn'],
+                    ['Auth', 'Healthy', 'up'],
+                    ['DB', 'Root cause', 'down'],
+                  ].map(([node, status, tone]) => (
+                    <div
+                      className={`location-node${
+                        tone === 'up' ? '' : ` location-node--${tone}`
+                      }`}
+                      key={node}
+                    >
+                      <span>
+                        <strong>●</strong>
+                        {node}
+                        <small>{status}</small>
+                      </span>
                     </div>
                   ))}
                 </div>

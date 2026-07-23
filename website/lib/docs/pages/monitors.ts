@@ -20,7 +20,7 @@ export const MONITORS_PAGE: DocPage = {
       id: "monitor-model",
       title: "Monitor model",
       intro:
-        "A monitor combines a type-specific check configuration with scheduling, state confirmation, notification routing, dependencies, and optional execution locations.",
+        "A monitor combines a type-specific check configuration with scheduling, state confirmation, [notification routing](/docs/alerting/#routing), dependencies, and optional [execution locations](/docs/locations/).",
       blocks: [
         {
           type: "table",
@@ -119,8 +119,8 @@ export const MONITORS_PAGE: DocPage = {
             ["`synthetic_api`", "A sequence of templated HTTP API steps", "Yes"],
             ["`synthetic_browser`", "A Chromium browser journey", "Yes"],
             ["`group`", "Derived state from member monitors", "No"],
-            ["`agent`", "Host telemetry and freshness reported by an installed agent", "No"],
-            ["`push`", "Token-based passive heartbeat freshness", "No"],
+            ["`agent`", "Host telemetry and freshness reported by an [installed agent](/docs/agents/#install)", "No"],
+            ["`push`", "Token-based [passive heartbeat](/docs/agents/#push-config) freshness", "No"],
           ],
         },
         {
@@ -139,7 +139,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An active monitor runs on its interval. Both `failure` and `error` outcomes count toward consecutive failure confirmation. Before the threshold it is `suspect`; at the threshold it becomes `down`. Any successful effective result resets the temporal counter and returns it to `up`.",
+            "An active monitor runs on its interval. Both `failure` and `error` outcomes count toward consecutive failure confirmation. Before the threshold it is `suspect`; at the threshold it becomes `down`. Any successful effective result resets the temporal counter and returns it to `up`. Confirmed transitions drive the [availability alert lifecycle](/docs/alerting/#availability).",
         },
         {
           type: "paragraph",
@@ -221,7 +221,7 @@ export const MONITORS_PAGE: DocPage = {
               "Skip server certificate verification for HTTPS; use only for controlled targets",
             ],
             [
-              "`tls_min_days_remaining`",
+              "`tls_min_days_valid`",
               "Fail when the leaf certificate has fewer remaining validity days",
             ],
             [
@@ -250,7 +250,7 @@ export const MONITORS_PAGE: DocPage = {
           language: "json",
           title: "HTTP monitor config",
           code:
-            '{\n  "url": "https://api.example.com/health",\n  "method": "GET",\n  "headers": {"Accept": "application/json"},\n  "expected_status_classes": ["2xx"],\n  "json_assertions": [\n    {"path": "status", "op": "equals", "value": "ok"},\n    {"path": "queue_depth", "op": "number_lt", "value": 100}\n  ],\n  "max_latency_ms": 1500,\n  "follow_redirects": true,\n  "max_redirects": 5,\n  "tls_min_days_remaining": 14,\n  "collect_timing": true\n}',
+            '{\n  "url": "https://api.example.com/health",\n  "method": "GET",\n  "headers": {"Accept": "application/json"},\n  "expected_status_classes": ["2xx"],\n  "json_assertions": [\n    {"path": "status", "op": "equals", "value": "ok"},\n    {"path": "queue_depth", "op": "number_lt", "value": 100}\n  ],\n  "max_latency_ms": 1500,\n  "follow_redirects": true,\n  "max_redirects": 5,\n  "tls_min_days_valid": 14,\n  "collect_timing": true\n}',
         },
       ],
     },
@@ -426,7 +426,7 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "Step",
-              "Unique `id`, optional `name`, `request`, `assertions`, and `extract` definitions",
+              "Unique `id`, optional `name`, `request`, `assert`, and `extract` definitions",
             ],
             [
               "Request",
@@ -453,7 +453,7 @@ export const MONITORS_PAGE: DocPage = {
           language: "json",
           title: "Two-step API journey",
           code:
-            '{\n  "base_url": "https://api.example.com",\n  "failure_mode": "fail_fast",\n  "variables": {"user": "monitor@example.com"},\n  "steps": [\n    {\n      "id": "login",\n      "request": {\n        "method": "POST",\n        "url": "/login",\n        "headers": {"Content-Type": "application/json"},\n        "body": "{\\"email\\":\\"{{user}}\\"}"\n      },\n      "assertions": [\n        {"target": "status", "op": "equals", "value": 200}\n      ],\n      "extract": [\n        {"name": "token", "from": "json", "path": "token", "sensitive": true}\n      ]\n    },\n    {\n      "id": "profile",\n      "request": {\n        "method": "GET",\n        "url": "/me",\n        "headers": {"Authorization": "Bearer {{token}}"}\n      },\n      "assertions": [\n        {"target": "json", "path": "email", "op": "equals", "value": "{{user}}"}\n      ]\n    }\n  ]\n}',
+            '{\n  "base_url": "https://api.example.com",\n  "failure_mode": "fail_fast",\n  "variables": {"user": "monitor@example.com"},\n  "steps": [\n    {\n      "id": "login",\n      "request": {\n        "method": "POST",\n        "url": "/login",\n        "headers": {"Content-Type": "application/json"},\n        "body": "{\\"email\\":\\"{{user}}\\"}"\n      },\n      "assert": [\n        {"target": "status", "op": "equals", "value": 200}\n      ],\n      "extract": [\n        {"name": "token", "from": "json", "path": "token", "sensitive": true}\n      ]\n    },\n    {\n      "id": "profile",\n      "request": {\n        "method": "GET",\n        "url": "/me",\n        "headers": {"Authorization": "Bearer {{token}}"}\n      },\n      "assert": [\n        {"target": "json", "path": "email", "op": "equals", "value": "{{user}}"}\n      ]\n    }\n  ]\n}',
         },
         {
           type: "paragraph",
@@ -493,7 +493,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Failure screenshots are exposed by the authenticated monitor artifact endpoint when the result contains a valid stored artifact path. Artifact availability depends on shared worker/API storage and retention. Do not build automation that expects trace or HAR files until worker support is implemented.",
+            "Failure screenshots are exposed by the authenticated [monitor artifact endpoint](/docs/api/#monitor-endpoints) when the result contains a valid stored artifact path. Artifact availability depends on shared worker/API storage and retention. Do not build automation that expects trace or HAR files until worker support is implemented.",
         },
         {
           type: "callout",
@@ -533,7 +533,7 @@ export const MONITORS_PAGE: DocPage = {
           tone: "info",
           title: "Groups are not locations or dependencies",
           text:
-            "A group presents and rolls up a set of peers. A location controls where a check runs. A dependency expresses an upstream causal relationship used for root-cause annotation.",
+            "A group presents and rolls up a set of peers. A location controls where a check runs. A dependency expresses an upstream causal relationship used for [root-cause annotation](/docs/dependencies/#root-cause).",
         },
       ],
     },

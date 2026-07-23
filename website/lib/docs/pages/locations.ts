@@ -67,7 +67,7 @@ export const LOCATIONS_PAGE: DocPage = {
           items: [
             "Create the location in the UI or location API.",
             "Open its deployment information. Creation generates a random location credential that is stored encrypted when platform secret encryption is enabled.",
-            "Copy the generated Docker or Kubernetes configuration into the target network.",
+            "Copy the generated [Docker or Kubernetes configuration](/docs/deployment/#private-location-workers) into the target network.",
             "Start the worker and wait for its heartbeat. The backend considers a location connected when its latest heartbeat is within roughly one minute.",
             "Assign the location to one or more active monitors and choose a failure quorum.",
           ],
@@ -84,7 +84,7 @@ export const LOCATIONS_PAGE: DocPage = {
           tone: "warning",
           title: "A public NATS URL is required",
           text:
-            "Generated deployment information requires `PUBLIC_NATS_URL` to use `tls://` or `wss://`, without embedded user information. It must be reachable from the location network and terminate with the NATS authentication callout enabled for location credentials.",
+            "Generated deployment information requires `PUBLIC_NATS_URL` to use `tls://` or `wss://`, without embedded user information. It must be reachable from the location network and terminate with the [NATS authentication callout](/docs/security/#private-locations-nats) enabled for location credentials.",
         },
         {
           type: "paragraph",
@@ -111,7 +111,7 @@ export const LOCATIONS_PAGE: DocPage = {
           type: "list",
           items: [
             "Store the location credential in a Kubernetes Secret or equivalent secret store, not in a committed values file.",
-            "Use TLS or WSS for the public NATS endpoint as required by deployment-info generation.",
+            "Use TLS or WSS for the [public NATS endpoint](/docs/configuration/#public-urls-and-private-location-auth) as required by deployment-info generation.",
             "Limit broker network exposure and use the generated credential only for its intended location.",
             "Replace a compromised location rather than treating the display slug as a rotatable secret.",
           ],
@@ -139,7 +139,7 @@ export const LOCATIONS_PAGE: DocPage = {
           tone: "warning",
           title: "Prefer narrow allowlists",
           text:
-            "Add only the CIDRs the worker is expected to monitor. Disabling private-IP blocking globally broadens the worker into an internal network request primitive and weakens SSRF containment.",
+            "Add only the CIDRs the worker is expected to monitor. Disabling private-IP blocking globally broadens the worker into an internal network request primitive and weakens [SSRF containment](/docs/security/#ssrf-network-policy).",
         },
       ],
     },
@@ -170,7 +170,7 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The stored quorum is constrained to at least one and at most the selected location count. A down aggregate opens normal availability alerts; degraded does not. Degraded state also does not use the suspect fast-recheck path.",
+            "The stored quorum is constrained to at least one and at most the selected location count. A down aggregate opens normal [availability alerts](/docs/alerting/#availability); degraded does not. Degraded state also does not use the suspect fast-recheck path.",
         },
         {
           type: "callout",
@@ -242,7 +242,7 @@ export const LOCATIONS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Mesh alerts are directional and use the tenant's default notification channels. They maintain their own lifecycle rather than changing an application monitor's state.",
+            "Mesh alerts are directional and use the tenant's [default notification channels](/docs/alerting/#routing). They maintain their own lifecycle rather than changing an application monitor's state.",
         },
         {
           type: "callout",

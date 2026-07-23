@@ -7,7 +7,7 @@ export const CONFIGURATION_PAGE: DocPage = {
   description:
     'A complete reference for Probara service, frontend, agent, maintenance, and deployment environment variables, including code defaults and the variables that Docker Compose and Helm actually wire.',
   eyebrow: 'Configuration reference',
-  readingTime: '24 min',
+  readingTime: '24 min read',
   keywords: [
     'environment variables',
     'configuration',
@@ -23,7 +23,7 @@ export const CONFIGURATION_PAGE: DocPage = {
       id: 'configuration-model',
       title: 'How configuration is resolved',
       intro:
-        'Each Go process reads environment variables directly. A code default only applies after the variable reaches the process; Docker Compose and the Helm chart expose smaller, different subsets of the complete runtime surface.',
+        'Each Go process reads environment variables directly. A code default only applies after the variable reaches the process; [Docker Compose](/docs/deployment/#docker-compose) and the [Helm chart](/docs/deployment/#helm-install) expose smaller, different subsets of the complete runtime surface.',
       blocks: [
         {
           type: 'definitions',
@@ -125,8 +125,8 @@ export const CONFIGURATION_PAGE: DocPage = {
           rows: [
             [
               '`ADMIN_JWT_SECRET`',
-              'Required; at least 32 characters; known shipped placeholders are rejected',
-              'Required by Compose interpolation and by the Helm Secret template.',
+              'Required; validation only rejects an empty value. Use at least 32 random characters.',
+              'Compose ships an insecure hardcoded default and the Helm values ship a placeholder default; override both for production.',
             ],
             [
               '`ADMIN_ACCESS_TTL_MINUTES`',
@@ -202,7 +202,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A public URL does not expose NATS for you',
           text:
-            'The embedded Helm NATS Service is ClusterIP-only, and local Compose NATS is unauthenticated plaintext. Production private locations need an independently exposed TLS/WSS broker path, authentication enabled, and the issuer/key configuration shared with the API.',
+            'The embedded Helm NATS Service is ClusterIP-only, and local Compose NATS is unauthenticated plaintext. Production private locations need an independently exposed [TLS/WSS broker path](/docs/security/#private-locations-nats), authentication enabled, and the issuer/key configuration shared with the API.',
         },
       ],
     },
@@ -261,7 +261,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'Compose includes development-oriented Dex defaults under its optional profile. Helm exposes the platform OIDC settings and stores the client secret separately. In production, register an exact HTTPS callback and choose the least-privileged JIT role.',
+            'Compose includes development-oriented Dex defaults under its optional profile. Helm exposes the platform OIDC settings and stores the client secret separately. In production, register an exact HTTPS callback and choose the [least-privileged JIT role](/docs/security/#oidc-security).',
         },
       ],
     },
@@ -290,7 +290,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'Every data-handling service needs the same keyring',
           text:
-            'API, scheduler, worker, and alerter can all read encrypted configuration. Missing keys may allow new plaintext operation in some direct runtimes, but they cannot decrypt existing ciphertext. The current Helm chart omits the key from the scheduler deployment.',
+            'API, scheduler, worker, and alerter can all read [encrypted configuration](/docs/security/#encryption-at-rest). Missing keys may allow new plaintext operation in some direct runtimes, but they cannot decrypt existing ciphertext. The current Helm chart omits the key from the scheduler deployment.',
         },
         {
           type: 'code',
@@ -529,8 +529,8 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             [
               '`HTTP_BLOCK_PRIVATE_IPS`',
-              '`true`; boolean',
-              'Blocks private, loopback, link-local, and reserved destinations across networked check types.',
+              '`false`; boolean',
+              'When enabled, blocks private, loopback, link-local, and reserved destinations across networked check types.',
             ],
             [
               '`HTTP_ALLOWED_CIDRS`',
@@ -554,7 +554,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'The HTTP prefix is historical',
           text:
-            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, browser, TCP, gRPC, database, broker, and other outbound dial paths. Disabling the policy grants broad internal-network reach to monitor configuration.',
+            '`HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` protect HTTP, browser, TCP, gRPC, database, broker, and other [outbound dial paths](/docs/security/#ssrf-network-policy). Disabling the policy grants broad internal-network reach to monitor configuration.',
         },
       ],
     },
@@ -708,7 +708,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_PREVIEW_SECRET`',
               'Empty',
-              'HMAC secret shared with API for one-hour preview tokens. With no secret, preview verification is not enforced.',
+              'HMAC secret shared with API for one-hour [preview tokens](/docs/status-pages/#preview-security). With no secret, preview verification is not enforced.',
             ],
             [
               '`STATUSPAGE_UPDATES_SUBJECT`',
@@ -894,7 +894,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'info',
           title: 'Document the effective profile, not only the loader',
           text:
-            'For reproducible installations, record the exact values that reach each service and keep API, scheduler, worker, alerter, and status contracts aligned. A valid variable name in this reference is not proof that the bundled deployment currently forwards it.',
+            'For reproducible installations, record the exact values that reach each service and keep API, scheduler, worker, alerter, and status contracts aligned. A valid variable name in this reference is not proof that the [bundled deployment](/docs/deployment/#known-chart-gaps) currently forwards it.',
         },
       ],
     },

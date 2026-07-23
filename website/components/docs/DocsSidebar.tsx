@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronDown } from 'lucide-react';
 import { DOC_NAVIGATION } from '@/lib/docs/navigation';
+import { buildSearchIndex } from '@/lib/docs/search';
 import { DocsSearch } from './DocsSearch';
 
 function NavigationLinks() {
@@ -26,7 +27,7 @@ function NavigationLinks() {
 export function DocsSidebar() {
   return (
     <aside className="docs-sidebar">
-      <DocsSearch />
+      <DocsSearch entries={buildSearchIndex()} />
       <nav aria-label="Documentation navigation">
         <NavigationLinks />
       </nav>

@@ -91,7 +91,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Viewer and read-key compute-only POST routes include monitor test, import preview, dependency suggestions, mesh probe, and AI connection test. Persisted operations such as `Run now`, channel test, acknowledgement, or configuration updates require write authorization.",
+            "Viewer and read-key compute-only POST routes include monitor test, import preview, dependency suggestions, mesh probe, and AI connection test. Persisted operations such as `Run now`, channel test, acknowledgement, or configuration updates require [write authorization](/docs/security/#roles-scopes-tenancy).",
         },
         {
           type: "callout",
@@ -190,7 +190,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
               "`key`",
               "Full secret returned only in the creation response",
             ],
-            ["`key_prefix`", "Non-secret prefix shown for identification"],
+            ["`key_prefix`", "Non-secret SHA-256-derived identifier returned in list responses to correlate keys; not a fragment of the secret"],
             ["`last_used_at`", "Usage timestamp, updated with write throttling"],
             ["`created_by` / `created_at`", "Creation audit metadata"],
             ["`revoked`", "Whether the key can no longer authenticate"],
@@ -207,9 +207,9 @@ export const ADMINISTRATION_PAGE: DocPage = {
           type: "list",
           ordered: true,
           items: [
-            "Create the key as a tenant administrator and choose the minimum scope.",
+            "Create the key as a tenant administrator and choose the [minimum scope](/docs/api/#authentication).",
             "Copy the full key from the one-time creation response into a secret manager.",
-            "Use `key_prefix` to identify it later; list responses do not reveal the full secret.",
+            "Use `key_prefix` to identify the key record later; it is a derived identifier, not a recognizable fragment of the secret, and list responses never reveal the full key.",
             "Set an expiration and rotate before it, rather than keeping indefinite integration credentials.",
             "Revoke the key when a client is retired or the secret may have leaked.",
           ],
@@ -228,7 +228,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Probara supports one platform identity provider using the authorization-code flow with PKCE. Signed state cookies and nonce validation protect the browser redirect. Provider discovery is loaded lazily as the login flow needs it.",
+            "Probara supports one [platform identity provider](/docs/configuration/#oidc) using the authorization-code flow with PKCE. Signed state cookies and nonce validation protect the browser redirect. Provider discovery is loaded lazily as the login flow needs it.",
         },
         {
           type: "list",
@@ -259,7 +259,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           columns: ["Setting", "Constraint and effect"],
           rows: [
             [
-              "`retention_days`",
+              "`data_retention_days`",
               "`0` keeps telemetry indefinitely; otherwise 30–3,650 days",
             ],
             [
@@ -271,7 +271,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Retention applies to monitoring telemetry such as check results, mesh history, and rollups. Audit retention is configured separately at platform level. Dashboard group tags change presentation only; they do not create monitor groups or notification rollup.",
+            "[Retention](/docs/operations/#retention) applies to monitoring telemetry such as check results, mesh history, and rollups. Audit retention is configured separately at platform level. Dashboard group tags change presentation only; they do not create monitor groups or notification rollup.",
         },
       ],
     },
@@ -309,7 +309,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Tenant settings override effective environment fallback configuration when present. The API key is encrypted at rest when the platform master encryption key is configured. The connection-test action is compute-only and can be run without saving a new monitor or incident.",
+            "Tenant settings override effective environment fallback configuration when present. The API key is encrypted at rest when the [platform master encryption key](/docs/security/#encryption-at-rest) is configured. The connection-test action is compute-only and can be run without saving a new monitor or incident.",
         },
         {
           type: "paragraph",
@@ -325,7 +325,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Tenant administrators and platform superadministrators can review audit events for mutations and important authentication/authorization paths. Records include actor type, identifier and label, action, resource, outcome, HTTP status, IP address, user agent, structured details, and timestamp.",
+            "Tenant administrators and platform superadministrators can review [audit events](/docs/security/#audit-proxy-trust) for mutations and important authentication/authorization paths. Records include actor type, identifier and label, action, resource, outcome, HTTP status, IP address, user agent, structured details, and timestamp.",
         },
         {
           type: "table",

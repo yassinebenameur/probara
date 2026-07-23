@@ -140,7 +140,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
             "For a monitor without selected locations, it publishes one job to the default fleet. With selected locations, it publishes one job per enabled location.",
             "A worker validates the target and configuration, performs the check within the monitor timeout, and publishes a result.",
             "The scheduler persists each result and updates per-location state.",
-            "For multi-location monitoring, it derives a monitor-level state using the configured failure quorum.",
+            "For multi-location monitoring, it derives a monitor-level state using the configured [failure quorum](/docs/locations/#assignment).",
             "The stored state is exposed to dashboards and status pages and evaluated by the alerter.",
           ],
         },
@@ -191,7 +191,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "For a single execution stream, `failure` and `error` outcomes increment the consecutive-failure counter. Before the configured threshold the monitor is `suspect`; at the threshold it is `down`. A successful result resets the counter and returns the state to `up`.",
+            "For a single execution stream, `failure` and `error` outcomes increment the [consecutive-failure counter](/docs/monitors/#scheduling-and-state). Before the configured threshold the monitor is `suspect`; at the threshold it is `down`. A successful result resets the counter and returns the state to `up`.",
         },
         {
           type: "paragraph",
@@ -234,7 +234,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Recent ranges can be calculated from raw results. Longer windows use hourly and daily rollups plus an unrolled raw tail. Analytics responses identify their source and coverage and can report partial coverage when retained data does not span the requested range.",
+            "Recent ranges can be calculated from raw results. Longer windows use [hourly and daily rollups](/docs/dependencies/#rollups) plus an unrolled raw tail. Analytics responses identify their source and coverage and can report partial coverage when retained data does not span the requested range.",
         },
       ],
     },
@@ -247,9 +247,9 @@ export const ARCHITECTURE_PAGE: DocPage = {
           ordered: true,
           items: [
             "The alerter evaluates stored monitor, location, host-agent, and mesh state.",
-            "It opens, acknowledges, reminds, and resolves alert records while deduplicating lifecycle notifications.",
+            "It opens, acknowledges, reminds, and resolves [alert records](/docs/alerting/#model) while deduplicating lifecycle notifications.",
             "Notification routing comes from tenant defaults or per-monitor custom channel assignments, including per-channel delay.",
-            "Selected alerts can be attached to incidents. Incidents can publish updates to selected status pages.",
+            "Selected alerts can be attached to incidents. Incidents can publish updates to selected [status pages](/docs/status-pages/#incidents).",
             "The status-page service loads durable page data from the API/database path and uses `statuspage.updates` to invalidate caches and push live SSE refreshes.",
           ],
         },
@@ -267,7 +267,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Application data is tenant-scoped throughout the model. Administrator sessions can select a tenant for which the user has membership; API keys are permanently pinned to the tenant that created them.",
+            "Application data is tenant-scoped throughout the model. Administrator sessions can select a tenant for which the user has membership; [API keys](/docs/api/#tenant-and-permissions) are permanently pinned to the tenant that created them.",
         },
         {
           type: "table",

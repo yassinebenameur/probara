@@ -20,7 +20,7 @@ export const ALERTING_PAGE: DocPage = {
       id: "model",
       title: "Alert model",
       intro:
-        "The alerter evaluates durable database state and creates one lifecycle record for each active condition. Alert policies are retired; routing now lives in tenant notification settings and each monitor.",
+        "The alerter evaluates durable database state and creates one lifecycle record for each active condition. Alert policies are retired; routing now lives in [tenant notification settings](/docs/administration/#tenant-settings) and each monitor.",
       blocks: [
         {
           type: "table",
@@ -77,7 +77,7 @@ export const ALERTING_PAGE: DocPage = {
           type: "list",
           ordered: true,
           items: [
-            "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its location failure quorum.",
+            "A check failure first passes through the monitor's consecutive-failure confirmation and, when locations are selected, its [location failure quorum](/docs/locations/#assignment).",
             "The alerter opens an availability alert only when effective state is `down`, the monitor is enabled, and maintenance/rollup rules do not mute it.",
             "The initial notification is sent through eligible routes after each route's configured delay.",
             "While the condition remains down, reminders are sent at the tenant reminder interval.",
@@ -145,10 +145,10 @@ export const ALERTING_PAGE: DocPage = {
               "`latency_anomaly_enabled`",
               "Defaults to false and also depends on the platform-level detector switch",
             ],
-            ["`latency_baseline_hours`", "Defaults to 168"],
-            ["`latency_sensitivity`", "Defaults to 3.5"],
-            ["`latency_min_breach_seconds`", "Defaults to 120"],
-            ["`latency_min_delta_ms`", "Defaults to 20"],
+            ["`latency_baseline_window_hours`", "Defaults to 168"],
+            ["`latency_anomaly_sensitivity`", "Defaults to 3.5"],
+            ["`latency_anomaly_min_breach_seconds`", "Defaults to 120"],
+            ["`latency_anomaly_min_delta_pct`", "Defaults to 20 (percent)"],
           ],
         },
       ],
@@ -164,7 +164,7 @@ export const ALERTING_PAGE: DocPage = {
             [
               "`email`",
               "`to` list and optional Go `text/template` subject/body",
-              "Uses the platform SMTP configuration",
+              "Uses the [platform SMTP configuration](/docs/configuration/#alerter-and-smtp)",
             ],
             [
               "`slack`",
@@ -236,7 +236,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The anomaly detector compares recent successful monitor-source latency with hourly successful-history baselines. It opens an alert only when latency exceeds the sensitivity threshold, minimum absolute delta, and minimum breach duration configured for the tenant.",
+            "The anomaly detector compares recent successful monitor-source latency with hourly successful-history baselines. It opens an alert only when latency exceeds the sensitivity threshold, minimum percent delta, and minimum breach duration configured for the tenant.",
         },
         {
           type: "list",
@@ -262,7 +262,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An agent monitor can define positive percentage thresholds for CPU, memory, disk, and swap. Each breached metric opens its own `host_metric` alert and resolves independently. Removing a threshold resolves an alert that no longer has a configured condition.",
+            "An [agent monitor](/docs/agents/#thresholds) can define positive percentage thresholds for CPU, memory, disk, and swap. Each breached metric opens its own `host_metric` alert and resolves independently. Removing a threshold resolves an alert that no longer has a configured condition.",
         },
         {
           type: "paragraph",
@@ -322,7 +322,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When a downstream availability alert opens, Probara inspects its dependency graph and annotates the alert with the deepest currently down upstream monitor. Ties prefer the upstream condition that became down earlier.",
+            "When a downstream availability alert opens, Probara inspects its [dependency graph](/docs/dependencies/#dependency-model) and annotates the alert with the deepest currently down upstream monitor. Ties prefer the upstream condition that became down earlier.",
         },
         {
           type: "paragraph",
@@ -366,7 +366,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Timeline entries can be system events, internal notes, or public updates. Publishing an incident to a status page exposes only the page-relevant subset: the incident and page must share selected linked monitors. Unpublishing removes it from that page without deleting the incident.",
+            "Timeline entries can be system events, internal notes, or public updates. Publishing an incident to a [status page](/docs/status-pages/#incidents) exposes only the page-relevant subset: the incident and page must share selected linked monitors. Unpublishing removes it from that page without deleting the incident.",
         },
         {
           type: "list",
@@ -388,7 +388,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When an effective tenant LLM configuration is enabled, an incident analysis request queues asynchronous work. Its result progresses through `pending`, `ready`, or `failed` and can include a summary, probable root cause, contributing factors, recommended actions, confidence, and evidence.",
+            "When an effective [tenant LLM configuration](/docs/administration/#ai-settings) is enabled, an incident analysis request queues asynchronous work. Its result progresses through `pending`, `ready`, or `failed` and can include a summary, probable root cause, contributing factors, recommended actions, confidence, and evidence.",
         },
         {
           type: "callout",
