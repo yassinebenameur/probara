@@ -20,7 +20,7 @@ const VARIANT: Record<ButtonVariant, string> = {
   ghost:
     'border border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08] hover:text-white',
   accent:
-    'bg-cyan-500 text-white hover:bg-cyan-400 shadow-[0_4px_20px_rgba(6,182,212,0.18)]',
+    'bg-cyan-500 text-white hover:bg-cyan-400 shadow-[0_4px_20px_rgba(255,90,36,0.18)]',
   danger:
     'border border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20 hover:text-rose-100',
   subtle:

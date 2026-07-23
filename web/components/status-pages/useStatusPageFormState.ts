@@ -28,7 +28,7 @@ export interface FormState {
   sections: EditableSection[];
 }
 
-export const DEFAULT_PRIMARY = '#22d3ee';
+export const DEFAULT_PRIMARY = '#ff8a5c';
 export const DEFAULT_SECONDARY = '#64748b';
 export const DEFAULT_SECTION_TITLE = 'Services';
 

@@ -389,7 +389,7 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
   const safeValue = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) ? value : '#000000';
   return (
     <FormField label={label}>
-      <div className="flex items-center gap-2 rounded-md border border-white/[0.06] bg-slate-900/60 p-1 pl-1.5 transition-colors focus-within:border-cyan-500/40 focus-within:shadow-[0_0_0_3px_rgba(6,182,212,0.12)]">
+      <div className="flex items-center gap-2 rounded-md border border-white/[0.06] bg-slate-900/60 p-1 pl-1.5 transition-colors focus-within:border-cyan-500/40 focus-within:shadow-[0_0_0_3px_rgba(255,90,36,0.12)]">
         <label
           className="relative h-7 w-7 flex-shrink-0 cursor-pointer overflow-hidden rounded border border-white/[0.06]"
           style={{ backgroundColor: safeValue }}
@@ -409,7 +409,7 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
           value={value}
           onChange={(event) => onChange(event.target.value)}
           className="w-full bg-transparent font-mono text-xs uppercase tracking-wider text-slate-200 placeholder:text-slate-600 focus:outline-none"
-          placeholder="#06b6d4"
+          placeholder="#ff5a24"
           spellCheck={false}
         />
       </div>

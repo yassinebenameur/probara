@@ -68,7 +68,7 @@ export default function AISuggestions({ onAccepted }: { onAccepted?: () => void 
     <Panel
       title="AI dependency suggestions"
       subtitle="Infer likely dependencies from co-firing alerts, names, tags, and groups"
-      dotColor="#06b6d4"
+      dotColor="#ff5a24"
       actions={(
         <Button variant="accent" size="xs" loading={loading} disabled={loading} onClick={run}>
           {ran ? 'Re-scan' : 'Suggest with AI'}

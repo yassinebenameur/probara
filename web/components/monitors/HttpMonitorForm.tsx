@@ -88,7 +88,7 @@ function MethodUrlRow({
   return (
     <div>
       <label className="block text-xs font-medium text-slate-400 mb-1.5">URL</label>
-      <div className={`flex rounded-xl border transition-all ${error ? 'border-rose-500/60' : 'border-white/[0.1] focus-within:border-cyan-500 focus-within:shadow-[0_0_0_3px_rgba(6,182,212,0.15)]'} bg-slate-900/80`}>
+      <div className={`flex rounded-xl border transition-all ${error ? 'border-rose-500/60' : 'border-white/[0.1] focus-within:border-cyan-500 focus-within:shadow-[0_0_0_3px_rgba(255,90,36,0.15)]'} bg-slate-900/80`}>
         <select
           value={method}
           onChange={(e) => onMethodChange(e.target.value)}

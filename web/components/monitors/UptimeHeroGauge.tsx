@@ -37,7 +37,7 @@ export function UptimeHeroGauge({ uptime, hasData, rangeLabel = '30 Day Window' 
   // SVG 0deg = 3-o'clock; gap centred at 6-o'clock → start at 140deg
   const rotationDeg = 90 + GAP_DEG / 2;
 
-  const accentColor = isCompliant ? '#06b6d4' : '#f43f5e';
+  const accentColor = isCompliant ? '#ff5a24' : '#f04a5a';
   const glowClass = isCompliant ? 'uptime-gauge-outer' : 'uptime-gauge-outer--breach';
 
   // Split uptime value into integer and decimal parts for differential sizing

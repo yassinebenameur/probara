@@ -24,31 +24,31 @@ const TONE: Record<Exclude<PillTone, 'tag'>, { bg: string; text: string; border:
     bg: 'bg-emerald-500/12',
     text: 'text-emerald-200',
     border: 'border-emerald-500/35',
-    dotGlow: 'shadow-[0_0_0_3px_rgba(16,185,129,0.18)]',
+    dotGlow: 'shadow-[0_0_0_3px_rgba(70,209,127,0.18)]',
   },
   danger: {
     bg: 'bg-rose-500/12',
     text: 'text-rose-200',
     border: 'border-rose-500/35',
-    dotGlow: 'shadow-[0_0_0_3px_rgba(244,63,94,0.18)]',
+    dotGlow: 'shadow-[0_0_0_3px_rgba(240,74,90,0.18)]',
   },
   warning: {
     bg: 'bg-amber-500/12',
     text: 'text-amber-200',
     border: 'border-amber-500/35',
-    dotGlow: 'shadow-[0_0_0_3px_rgba(245,158,11,0.18)]',
+    dotGlow: 'shadow-[0_0_0_3px_rgba(230,178,63,0.18)]',
   },
   info: {
     bg: 'bg-cyan-500/12',
     text: 'text-cyan-200',
     border: 'border-cyan-500/35',
-    dotGlow: 'shadow-[0_0_0_3px_rgba(6,182,212,0.18)]',
+    dotGlow: 'shadow-[0_0_0_3px_rgba(255,90,36,0.18)]',
   },
   neutral: {
     bg: 'bg-white/[0.04]',
     text: 'text-slate-300',
     border: 'border-white/10',
-    dotGlow: 'shadow-[0_0_0_3px_rgba(148,163,184,0.15)]',
+    dotGlow: 'shadow-[0_0_0_3px_rgba(174,182,194,0.15)]',
   },
 };
 

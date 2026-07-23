@@ -125,7 +125,7 @@ export default function AlertChannelsPage() {
                 </thead>
                 <tbody>
                   {channels.map((channel, idx) => (
-                    <tr key={channel.id} className={idx % 2 === 1 ? 'bg-[rgba(15,23,42,0.35)]' : ''}>
+                    <tr key={channel.id} className={idx % 2 === 1 ? 'bg-slate-900/[0.35]' : ''}>
                       <td>
                         <div className="font-medium text-sm">{channel.name}</div>
                       </td>

@@ -28,13 +28,13 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
       className={[
         'group relative w-[216px] rounded-xl border',
         'bg-gradient-to-br from-slate-900/95 to-slate-950/95',
-        'transition-all duration-200 hover:-translate-y-px hover:border-cyan-400/40 hover:shadow-[0_0_20px_-6px_rgba(34,211,238,0.4)]',
+        'transition-all duration-200 hover:-translate-y-px hover:border-cyan-400/40 hover:shadow-[0_0_20px_-6px_rgba(255,138,92,0.4)]',
         s.card,
         dimmed ? 'opacity-20' : 'opacity-100',
         highlighted || data.isFocus
-          ? 'border-cyan-400/70 shadow-[0_0_24px_-4px_rgba(34,211,238,0.55)]'
+          ? 'border-cyan-400/70 shadow-[0_0_24px_-4px_rgba(255,138,92,0.55)]'
           : '',
-        isDropTarget ? 'border-cyan-400/60 shadow-[0_0_20px_-4px_rgba(34,211,238,0.5)]' : '',
+        isDropTarget ? 'border-cyan-400/60 shadow-[0_0_20px_-4px_rgba(255,138,92,0.5)]' : '',
       ].join(' ')}
       style={{ transitionProperty: 'opacity, transform, border-color, box-shadow' }}
     >

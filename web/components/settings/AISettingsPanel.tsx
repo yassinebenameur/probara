@@ -120,7 +120,7 @@ export function AISettingsPanel() {
     <Panel
       title="AI root cause analysis"
       subtitle="Configure the LLM used to analyze incidents. Works with any OpenAI-compatible endpoint."
-      dotColor="#06b6d4"
+      dotColor="#ff5a24"
     >
       {loading ? (
         <div className="text-sm text-slate-500">Loading…</div>

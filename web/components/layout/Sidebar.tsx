@@ -162,7 +162,7 @@ export default function Sidebar() {
     <aside className="sticky top-0 hidden h-screen w-60 flex-col border-r border-white/[0.06] bg-slate-950/50 backdrop-blur-xl md:flex">
       {/* Logo */}
       <div className="flex h-14 items-center gap-3 border-b border-white/[0.06] px-4">
-        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-400 to-violet-500">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-400 to-cyan-600">
           <Zap className="h-4 w-4 text-white" strokeWidth={2.5} />
         </div>
         <div className="min-w-0">
@@ -172,7 +172,7 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-3">
+      <nav className="dashboard-scroll flex-1 overflow-y-auto py-3">
         {visibleGroups.map((group, groupIdx) => (
           <div key={group.label} className={groupIdx > 0 ? 'mt-1' : ''}>
             <p className="mb-1 px-4 pt-3 text-[0.65rem] font-semibold uppercase tracking-widest text-slate-600">

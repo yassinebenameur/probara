@@ -76,7 +76,7 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
     <Panel
       title="AI root cause analysis"
       subtitle="LLM diagnosis over the incident's probe evidence"
-      dotColor="#06b6d4"
+      dotColor="#ff5a24"
       actions={(
         <Button
           variant="accent"

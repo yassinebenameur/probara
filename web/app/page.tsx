@@ -354,7 +354,7 @@ function SectionCard({
   className?: string;
 }) {
   return (
-    <div className={`min-w-0 overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-[0_18px_45px_rgba(0,0,0,0.18)] ${className ?? ''}`}>
+    <div className={`min-w-0 overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-subtle ${className ?? ''}`}>
       <div className="flex min-h-14 min-w-0 flex-wrap items-center justify-between gap-2 border-b border-white/[0.05] bg-slate-950/20 px-5 py-3">
         <h3 className="min-w-0 text-sm font-semibold text-white">{title}</h3>
         {action && <div className="min-w-0 text-xs text-slate-500">{action}</div>}
@@ -371,35 +371,35 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
       icon: 'text-rose-300',
       text: 'text-rose-300',
       iconBg: 'bg-rose-500/10',
-      glow: 'rgba(244, 63, 94, 0.08)',
+      glow: 'rgba(240,74,90, 0.08)',
     },
     attention: {
       ring: 'border-amber-500/20',
       icon: 'text-amber-300',
       text: 'text-amber-300',
       iconBg: 'bg-amber-500/10',
-      glow: 'rgba(245, 158, 11, 0.07)',
+      glow: 'rgba(230,178,63, 0.07)',
     },
     stable: {
       ring: 'border-emerald-500/20',
       icon: 'text-emerald-300',
       text: 'text-emerald-300',
       iconBg: 'bg-emerald-500/10',
-      glow: 'rgba(16, 185, 129, 0.07)',
+      glow: 'rgba(70,209,127, 0.07)',
     },
     clean: {
       ring: 'border-emerald-500/20',
       icon: 'text-emerald-300',
       text: 'text-emerald-300',
       iconBg: 'bg-emerald-500/10',
-      glow: 'rgba(16, 185, 129, 0.07)',
+      glow: 'rgba(70,209,127, 0.07)',
     },
   };
   const tone = toneStyles[summary.tone];
 
   return (
     <section
-      className={`overflow-hidden rounded-xl border ${tone.ring} bg-slate-900/60 shadow-[0_18px_45px_rgba(0,0,0,0.2)]`}
+      className={`overflow-hidden rounded-xl border ${tone.ring} bg-slate-900/60 shadow-subtle`}
       style={{ backgroundImage: `radial-gradient(ellipse 60% 90% at 8% 0%, ${tone.glow}, transparent)` }}
     >
       <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
@@ -507,7 +507,7 @@ function UptimeResponseChart({
   }, [trendData]);
 
   return (
-    <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-[0_18px_45px_rgba(0,0,0,0.18)]">
+    <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-subtle">
       <div className="flex flex-col gap-3 border-b border-white/[0.05] bg-slate-950/20 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -536,8 +536,8 @@ function UptimeResponseChart({
               <ComposedChart data={trendData} margin={{ top: 10, right: 6, bottom: 0, left: 4 }}>
                 <defs>
                   <linearGradient id="combinedUptimeGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.22} />
-                    <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                    <stop offset="0%" stopColor="#46d17f" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="#46d17f" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
@@ -560,26 +560,26 @@ function UptimeResponseChart({
                   tick={{ fill: '#64748b', fontSize: 11 }}
                   tickFormatter={(v) => `${Math.round(Number(v))}ms`}
                 />
-                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(148,163,184,0.25)', strokeDasharray: '3 3' }} />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(174,182,194,0.25)', strokeDasharray: '3 3' }} />
                 <Area
                   yAxisId="uptime"
                   type="monotone"
                   dataKey="uptime"
-                  stroke="#34d399"
+                  stroke="#46d17f"
                   strokeWidth={2}
                   fill="url(#combinedUptimeGradient)"
                   name="uptime"
-                  activeDot={{ r: 3.5, fill: '#34d399', stroke: '#022c22', strokeWidth: 2 }}
+                  activeDot={{ r: 3.5, fill: '#46d17f', stroke: 'var(--bg-elevated)', strokeWidth: 2 }}
                 />
                 <Line
                   yAxisId="latency"
                   type="monotone"
                   dataKey="responseTime"
-                  stroke="#60a5fa"
+                  stroke="#6fb5dd"
                   strokeWidth={2}
                   dot={false}
                   name="responseTime"
-                  activeDot={{ r: 3.5, fill: '#60a5fa', stroke: '#0c1a3a', strokeWidth: 2 }}
+                  activeDot={{ r: 3.5, fill: '#6fb5dd', stroke: 'var(--bg-elevated)', strokeWidth: 2 }}
                 />
               </ComposedChart>
             </ResponsiveContainer>

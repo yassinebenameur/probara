@@ -144,7 +144,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
           {alerts.map((alert, idx) => (
             <tr 
               key={alert.id} 
-              className={`transition-colors hover:bg-slate-800/30 ${idx % 2 === 1 ? 'bg-[rgba(15,23,42,0.35)]' : ''}`}
+              className={`transition-colors hover:bg-slate-800/30 ${idx % 2 === 1 ? 'bg-slate-900/[0.35]' : ''}`}
             >
               <td>
                 <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium ${getStatusBadgeClass(alert.status)}`}>

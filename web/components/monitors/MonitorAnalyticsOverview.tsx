@@ -295,7 +295,7 @@ export default function MonitorAnalyticsOverview({
       </div>
 
       <div className="relative overflow-hidden rounded-2xl border border-white/[0.06] bg-slate-900/60 p-4 sm:p-5">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(6,182,212,0.08),transparent_42%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,90,36,0.08),transparent_42%)]" />
         <div className="relative grid gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] lg:items-center">
           <div className="flex justify-center lg:justify-start">
             <UptimeHeroGauge
@@ -368,8 +368,8 @@ export default function MonitorAnalyticsOverview({
                 <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="monitorUptimeGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.3} />
-                      <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                      <stop offset="0%" stopColor="#46d17f" stopOpacity={0.3} />
+                      <stop offset="100%" stopColor="#46d17f" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <XAxis
@@ -392,7 +392,7 @@ export default function MonitorAnalyticsOverview({
                   <Area
                     type="monotone"
                     dataKey="uptime"
-                    stroke="#10b981"
+                    stroke="#46d17f"
                     strokeWidth={2}
                     fill="url(#monitorUptimeGradient)"
                     connectNulls={false}
@@ -421,8 +421,8 @@ export default function MonitorAnalyticsOverview({
                 <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="monitorLatencyGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.3} />
-                      <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
+                      <stop offset="0%" stopColor="#ff5a24" stopOpacity={0.3} />
+                      <stop offset="100%" stopColor="#ff5a24" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <XAxis
@@ -442,12 +442,12 @@ export default function MonitorAnalyticsOverview({
                   />
                   <Tooltip content={<ChartTooltip kind="latency" range={timeRange} />} />
                   {downtimeAreas.map((area) => (
-                    <ReferenceArea key={area.id} x1={area.start} x2={area.end} fill="rgba(244,63,94,0.08)" strokeOpacity={0} />
+                    <ReferenceArea key={area.id} x1={area.start} x2={area.end} fill="rgba(240,74,90,0.08)" strokeOpacity={0} />
                   ))}
                   <Area
                     type="monotone"
                     dataKey="latency"
-                    stroke="#06b6d4"
+                    stroke="#ff5a24"
                     strokeWidth={2}
                     fill="url(#monitorLatencyGradient)"
                     connectNulls={false}

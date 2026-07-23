@@ -221,7 +221,7 @@ function LatencyTimeSeriesChart({
               <polyline
                 key={i}
                 fill="none"
-                stroke={seg.isSuccess ? '#22c55e' : '#ef4444'}
+                stroke={seg.isSuccess ? '#2fbd6a' : '#f04a5a'}
                 strokeWidth="2"
                 strokeOpacity="0.85"
                 points={seg.points.map((p) => `${p.x},${p.y}`).join(' ')}
@@ -246,7 +246,7 @@ function LatencyTimeSeriesChart({
                 cx={hoverSvgPoint.x}
                 cy={hoverSvgPoint.y}
                 r="3"
-                fill={hover!.point.status === 'success' ? '#22c55e' : '#ef4444'}
+                fill={hover!.point.status === 'success' ? '#2fbd6a' : '#f04a5a'}
                 vectorEffect="non-scaling-stroke"
               />
             )}
@@ -316,11 +316,11 @@ function computeTimingPhases(timing: HTTPTimingInfo): TimingPhase[] {
   const body = Math.max(0, total - dns - connect - tls - ttfb);
 
   return [
-    { label: 'DNS', color: '#a78bfa', ms: dns },
+    { label: 'DNS', color: '#6fb5dd', ms: dns },
     { label: 'TCP', color: '#38bdf8', ms: connect },
-    { label: 'TLS', color: '#fbbf24', ms: tls },
-    { label: 'TTFB', color: '#34d399', ms: ttfb },
-    { label: 'Body', color: '#60a5fa', ms: body },
+    { label: 'TLS', color: '#e6b23f', ms: tls },
+    { label: 'TTFB', color: '#46d17f', ms: ttfb },
+    { label: 'Body', color: '#7c9ef2', ms: body },
   ].filter((p) => p.ms > 0);
 }
 
@@ -842,8 +842,8 @@ export default function HttpMonitorOverview({
           className="pointer-events-none absolute inset-0 rounded-2xl"
           style={{
             background: uptime >= SLA_TARGET
-              ? 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(6,182,212,0.08), transparent)'
-              : 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(244,63,94,0.08), transparent)',
+              ? 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(255,90,36,0.08), transparent)'
+              : 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(240,74,90,0.08), transparent)',
           }}
         />
         <div className="relative">

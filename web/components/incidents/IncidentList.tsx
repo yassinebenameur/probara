@@ -55,7 +55,7 @@ export default function IncidentList({ incidents }: IncidentListProps) {
             </thead>
             <tbody>
               {incidents.map((incident, index) => (
-                <tr key={incident.id} className={index % 2 === 1 ? 'bg-[rgba(15,23,42,0.35)]' : ''}>
+                <tr key={incident.id} className={index % 2 === 1 ? 'bg-slate-900/[0.35]' : ''}>
                   <td>
                     <div className="text-sm font-medium text-white">{incident.title}</div>
                     <div className="mt-1 flex items-center gap-2 text-[0.7rem] text-slate-500">

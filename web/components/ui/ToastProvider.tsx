@@ -144,7 +144,7 @@ function ToastItem({ toast, onClose }: { toast: ToastMessage; onClose: () => voi
       iconColor: 'text-rose-300',
       bgColor: 'bg-rose-950/80',
       borderColor: 'border-rose-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(244,63,94,0.3)]',
+      glowColor: 'shadow-[0_0_30px_rgba(240,74,90,0.3)]',
     },
     success: {
       icon: <CheckIcon />,
@@ -152,7 +152,7 @@ function ToastItem({ toast, onClose }: { toast: ToastMessage; onClose: () => voi
       iconColor: 'text-emerald-300',
       bgColor: 'bg-emerald-950/80',
       borderColor: 'border-emerald-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(16,185,129,0.3)]',
+      glowColor: 'shadow-[0_0_30px_rgba(70,209,127,0.3)]',
     },
     warning: {
       icon: <WarningIcon />,
@@ -160,7 +160,7 @@ function ToastItem({ toast, onClose }: { toast: ToastMessage; onClose: () => voi
       iconColor: 'text-amber-300',
       bgColor: 'bg-amber-950/80',
       borderColor: 'border-amber-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(245,158,11,0.3)]',
+      glowColor: 'shadow-[0_0_30px_rgba(230,178,63,0.3)]',
     },
     info: {
       icon: <InfoIcon />,
@@ -168,7 +168,7 @@ function ToastItem({ toast, onClose }: { toast: ToastMessage; onClose: () => voi
       iconColor: 'text-cyan-300',
       bgColor: 'bg-cyan-950/80',
       borderColor: 'border-cyan-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(6,182,212,0.3)]',
+      glowColor: 'shadow-[0_0_30px_rgba(255,90,36,0.3)]',
     },
   };
 

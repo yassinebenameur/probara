@@ -131,11 +131,11 @@ export default function GroupedChecksView() {
             const operationalCount = countOperationalResults(results);
 
             return (
-              <div key={group.id} className="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.92)] overflow-hidden">
+              <div key={group.id} className="rounded-lg border border-white/[0.06] bg-slate-900/[0.92] overflow-hidden">
                 {/* Group Header */}
                 <div
                   onClick={() => toggleGroup(group.id)}
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-[rgba(15,23,42,0.95)]"
+                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-900/[0.95]"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-lg">{isExpanded ? '▼' : '▶'}</span>
@@ -158,7 +158,7 @@ export default function GroupedChecksView() {
 
                 {/* Group Members */}
                 {isExpanded && members.length > 0 && (
-                  <div className="border-t border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)]">
+                  <div className="border-t border-white/[0.06] bg-slate-900/[0.98]">
                     {members.map((member) => {
                       const memberResults = checkResults[member.id] || [];
                       const memberStatus = getEffectiveMonitorStatus(member, memberResults);
@@ -168,7 +168,7 @@ export default function GroupedChecksView() {
                       return (
                         <div
                           key={member.id}
-                          className="flex items-center justify-between p-3 pl-12 border-b border-[rgba(255,255,255,0.03)] last:border-b-0"
+                          className="flex items-center justify-between p-3 pl-12 border-b border-white/[0.03] last:border-b-0"
                         >
                           <div>
                             <div className="text-sm font-medium">{member.name}</div>
@@ -197,7 +197,7 @@ export default function GroupedChecksView() {
       {monitors.length > 0 && (
         <div className="space-y-2">
           <h3 className="text-sm font-medium text-muted">Individual Monitors</h3>
-          <div className="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.92)]">
+          <div className="rounded-lg border border-white/[0.06] bg-slate-900/[0.92]">
             {monitors.map((monitor, idx) => {
               const results = checkResults[monitor.id] || [];
               const status = getEffectiveMonitorStatus(monitor, results);
@@ -209,7 +209,7 @@ export default function GroupedChecksView() {
                   key={monitor.id}
                   className={`flex items-center justify-between p-3 ${
                     idx !== monitors.length - 1
-                      ? 'border-b border-[rgba(255,255,255,0.03)]'
+                      ? 'border-b border-white/[0.03]'
                       : ''
                   }`}
                 >

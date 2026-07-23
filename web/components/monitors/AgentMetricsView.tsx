@@ -80,7 +80,7 @@ const GAP_MAX_THRESHOLD_MS: Record<TimeRange, number> = {
   '7d': 12 * 60 * 60 * 1000,
 };
 
-const MOUNT_COLORS = ['#fbbf24', '#22d3ee', '#a78bfa', '#34d399', '#f472b6', '#fb923c'];
+const MOUNT_COLORS = ['#e6b23f', '#ff8a5c', '#6fb5dd', '#46d17f', '#f472b6', '#fb923c'];
 const MAX_MOUNTS = 6;
 const SYNC_ID = 'agent-metrics';
 
@@ -156,9 +156,9 @@ function formatUptime(seconds: number): string {
 }
 
 function getStatusColor(percent: number): string {
-  if (percent < 60) return '#22c55e';
-  if (percent < 80) return '#f59e0b';
-  return '#ef4444';
+  if (percent < 60) return '#2fbd6a';
+  if (percent < 80) return '#dc9e26';
+  return '#f04a5a';
 }
 
 function CircularProgress({
@@ -345,7 +345,7 @@ function MetricChart({
             <ReferenceLine
               key={`ref-${line.label}-${line.y}`}
               y={line.y}
-              stroke="#ef4444"
+              stroke="#f04a5a"
               strokeDasharray="4 4"
               strokeOpacity={0.7}
               ifOverflow="extendDomain"
@@ -371,8 +371,8 @@ function MetricChart({
               dataKey="ts"
               height={20}
               travellerWidth={8}
-              stroke="#334155"
-              fill="rgba(15,23,42,0.6)"
+              stroke="var(--border-default)"
+              fill="rgba(16,19,26,0.6)"
               tickFormatter={(value) => formatTimeLabel(value as number, range)}
             />
           )}
@@ -652,7 +652,7 @@ export default function AgentMetricsView({
             <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
               <MetricChart
                 data={chartData}
-                series={[{ key: 'cpu', name: 'CPU', color: '#22d3ee' }]}
+                series={[{ key: 'cpu', name: 'CPU', color: '#ff8a5c' }]}
                 range={timeRange}
                 yDomain={[0, 100]}
                 yTickFormatter={percentTick}
@@ -673,7 +673,7 @@ export default function AgentMetricsView({
               <MetricChart
                 data={chartData}
                 series={[
-                  { key: 'mem', name: 'Memory', color: '#a78bfa' },
+                  { key: 'mem', name: 'Memory', color: '#6fb5dd' },
                   { key: 'swap', name: 'Swap', color: '#f472b6' },
                 ]}
                 range={timeRange}
@@ -696,7 +696,7 @@ export default function AgentMetricsView({
                 series={
                   mountSeries.length > 0
                     ? mountSeries.map((mount) => ({ key: mount.key, name: mount.path, color: mount.color }))
-                    : [{ key: 'disk', name: 'Disk', color: '#fbbf24' }]
+                    : [{ key: 'disk', name: 'Disk', color: '#e6b23f' }]
                 }
                 range={timeRange}
                 yDomain={[0, 100]}
@@ -730,7 +730,7 @@ export default function AgentMetricsView({
               <MetricChart
                 data={chartData}
                 series={[
-                  { key: 'diskRead', name: 'Read', color: '#22c55e' },
+                  { key: 'diskRead', name: 'Read', color: '#2fbd6a' },
                   { key: 'diskWrite', name: 'Write', color: '#3b82f6' },
                 ]}
                 range={timeRange}
@@ -753,7 +753,7 @@ export default function AgentMetricsView({
               <MetricChart
                 data={chartData}
                 series={[
-                  { key: 'netIn', name: 'In', color: '#22c55e' },
+                  { key: 'netIn', name: 'In', color: '#2fbd6a' },
                   { key: 'netOut', name: 'Out', color: '#3b82f6' },
                 ]}
                 range={timeRange}

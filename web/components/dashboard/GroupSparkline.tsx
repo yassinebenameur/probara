@@ -22,7 +22,7 @@ export default function GroupSparkline({ buckets }: Props) {
     })
     .join(' ');
   const worst = Math.min(...buckets);
-  const stroke = worst >= 99 ? '#34d399' : worst >= 95 ? '#fbbf24' : '#f87171';
+  const stroke = worst >= 99 ? '#46d17f' : worst >= 95 ? '#e6b23f' : '#f87171';
 
   return (
     <svg width={width} height={height} aria-label="Uptime sparkline" role="img">

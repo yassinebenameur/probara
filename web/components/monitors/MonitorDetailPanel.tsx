@@ -267,7 +267,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
 
   if (!monitor) {
     return (
-      <div className="relative overflow-hidden rounded-[22px] border border-[rgba(255,255,255,0.14)] bg-[rgba(15,23,42,0.92)] p-3.5 shadow-subtle">
+      <div className="relative overflow-hidden rounded-[22px] border border-white/[0.14] bg-slate-900/[0.92] p-3.5 shadow-subtle">
         <div className="flex h-64 items-center justify-center text-sm text-muted">
           Select a monitor to view details
         </div>
@@ -276,13 +276,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
   }
 
   return (
-    <div className="relative overflow-hidden rounded-[22px] border border-[rgba(255,255,255,0.14)] bg-[rgba(15,23,42,0.92)] p-3.5 shadow-subtle">
+    <div className="relative overflow-hidden rounded-[22px] border border-white/[0.14] bg-slate-900/[0.92] p-3.5 shadow-subtle">
       {/* Header */}
       <div className="mb-2.5 flex flex-col gap-1">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-[0.9rem] font-medium">
             {monitor.name}
-            <span className="rounded-full border border-[rgba(148,163,184,0.6)] px-2 py-0.5 text-[0.72rem]">
+            <span className="rounded-full border border-slate-300/60 px-2 py-0.5 text-[0.72rem]">
               {monitor.type.toUpperCase()} · {monitor.enabled ? 'Active' : 'Disabled'}
             </span>
           </div>
@@ -304,26 +304,26 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
       ) : (
         <>
           {/* Snapshot Metrics */}
-          <div className="mt-2.5 border-t border-dashed border-[rgba(255,255,255,0.06)] pt-2">
+          <div className="mt-2.5 border-t border-dashed border-white/[0.06] pt-2">
             <div className="mb-1.5 text-[0.78rem] uppercase tracking-wide text-muted">
               Snapshot
             </div>
             <div className="flex flex-wrap gap-2 text-xs">
-              <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
+              <div className="min-w-[120px] flex-1 rounded-[14px] border border-white/[0.06] bg-slate-900/[0.96] p-2">
                 <div className="mb-0.5 text-[0.72rem] text-muted">Uptime 7 days</div>
                 <div className="text-[0.9rem] font-medium">{operationalCount > 0 ? `${uptime.toFixed(2)}%` : '—'}</div>
                 <div className="text-[0.72rem] text-muted">
                   {operationalCount > 0 ? `${operationalCount} checks` : 'No data'}
                 </div>
               </div>
-              <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
+              <div className="min-w-[120px] flex-1 rounded-[14px] border border-white/[0.06] bg-slate-900/[0.96] p-2">
                 <div className="mb-0.5 text-[0.72rem] text-muted">Latency</div>
                 <div className="text-[0.9rem] font-medium">P95: {latencyStats.p95} ms</div>
                 <div className="text-[0.72rem] text-muted">
                   Median: {latencyStats.median} ms
                 </div>
               </div>
-              <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
+              <div className="min-w-[120px] flex-1 rounded-[14px] border border-white/[0.06] bg-slate-900/[0.96] p-2">
                 <div className="mb-0.5 text-[0.72rem] text-muted">Last run</div>
                 <div className="text-[0.9rem] font-medium">
                   {latestOperationalResult
@@ -337,7 +337,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 </div>
               </div>
               {latestTLS && (
-                <div className="min-w-[120px] flex-1 rounded-[14px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.96)] p-2">
+                <div className="min-w-[120px] flex-1 rounded-[14px] border border-white/[0.06] bg-slate-900/[0.96] p-2">
                   <div className="mb-0.5 text-[0.72rem] text-muted">Certificate</div>
                   <div className="text-[0.9rem] font-medium">
                     {latestTLS.days_until_expiry !== undefined
@@ -355,7 +355,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
           </div>
 
           {/* Configuration */}
-          <div className="mt-2.5 border-t border-dashed border-[rgba(255,255,255,0.06)] pt-2">
+          <div className="mt-2.5 border-t border-dashed border-white/[0.06] pt-2">
             <div className="mb-1.5 text-[0.78rem] uppercase tracking-wide text-muted">
               Configuration
             </div>
@@ -365,13 +365,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 if (!httpConfig) return null;
                 return (
                   <>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">URL</span>
                       <span className="truncate text-right text-[#e5e7eb]">
                         {httpConfig.url}
                       </span>
                     </li>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Method</span>
                       <span className="text-[#e5e7eb]">
                         {httpConfig.method} · expect{' '}
@@ -382,7 +382,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                       (httpConfig.body_assertions && httpConfig.body_assertions.length > 0) ||
                       (httpConfig.response_header_assertions && httpConfig.response_header_assertions.length > 0) ||
                       (httpConfig.json_assertions && httpConfig.json_assertions.length > 0)) && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Checks</span>
                         <span className="text-[#e5e7eb]">
                           {httpConfig.max_latency_ms ? `latency \u2264 ${httpConfig.max_latency_ms}ms` : 'latency default'}
@@ -393,7 +393,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                       </li>
                     )}
                     {(httpConfig.follow_redirects !== undefined || httpConfig.max_redirects !== undefined) && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Redirects</span>
                         <span className="text-[#e5e7eb]">
                           {httpConfig.follow_redirects === false ? 'off' : `on Â· max ${httpConfig.max_redirects ?? 10}`}
@@ -403,7 +403,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                     {(httpConfig.tls_min_days_valid !== undefined ||
                       httpConfig.tls_skip_verify ||
                       (httpConfig.tls_server_name && httpConfig.tls_server_name.trim())) && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">TLS</span>
                         <span className="text-[#e5e7eb]">
                           {httpConfig.tls_skip_verify ? 'skip verify' : 'verify'}
@@ -419,7 +419,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 const pingConfig = getPingConfig(monitor);
                 if (!pingConfig) return null;
                 return (
-                  <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                  <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                     <span className="text-muted">Host</span>
                     <span className="truncate text-right text-[#e5e7eb]">
                       {pingConfig.host}
@@ -433,20 +433,20 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 const expected = dnsConfig.expected_answers || [];
                 return (
                   <>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Host</span>
                       <span className="truncate text-right text-[#e5e7eb]">
                         {dnsConfig.host}
                       </span>
                     </li>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Record</span>
                       <span className="text-[#e5e7eb]">
                         {(dnsConfig.record_type || 'A').toUpperCase()}
                       </span>
                     </li>
                     {expected.length > 0 && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Expected</span>
                         <span className="truncate text-right text-[#e5e7eb]">
                           {expected.join(', ')}
@@ -462,20 +462,20 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 const resolvedPort = grpcConfig.port || (grpcConfig.use_tls === false ? 80 : 443);
                 return (
                   <>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Target</span>
                       <span className="truncate text-right text-[#e5e7eb]">
                         {grpcConfig.host}:{resolvedPort}
                       </span>
                     </li>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">TLS</span>
                       <span className="text-[#e5e7eb]">
                         {grpcConfig.use_tls === false ? 'disabled' : 'enabled'}
                       </span>
                     </li>
                     {grpcConfig.service && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Service</span>
                         <span className="truncate text-right text-[#e5e7eb]">
                           {grpcConfig.service}
@@ -483,7 +483,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                       </li>
                     )}
                     {latestGRPCMetrics?.serving_status && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Last health</span>
                         <span className="text-[#e5e7eb]">
                           {latestGRPCMetrics.serving_status}
@@ -505,7 +505,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                     : 'disabled';
                 return (
                   <>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Target</span>
                       <span className="truncate text-right text-[#e5e7eb]">
                         {dbConfig.connection_string
@@ -514,13 +514,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                       </span>
                     </li>
                     {!dbConfig.connection_string && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">TLS</span>
                         <span className="text-[#e5e7eb]">{tls}</span>
                       </li>
                     )}
                     {dbConfig.username && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Auth</span>
                         <span className="truncate text-right text-[#e5e7eb]">
                           {dbConfig.username}
@@ -529,7 +529,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                       </li>
                     )}
                     {monitor.type === 'postgres' && (dbConfig.database || dbConfig.query) && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Check</span>
                         <span className="truncate text-right text-[#e5e7eb]">
                           {dbConfig.database || 'postgres'}
@@ -538,7 +538,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                       </li>
                     )}
                     {(dbConfig.max_latency_ms || dbConfig.warn_latency_ms) ? (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Latency</span>
                         <span className="text-[#e5e7eb]">
                           {dbConfig.warn_latency_ms ? `warn > ${dbConfig.warn_latency_ms}ms` : ''}
@@ -548,7 +548,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                       </li>
                     ) : null}
                     {latestDBMetrics && (latestDBMetrics.server_version || latestDBMetrics.role) && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Server</span>
                         <span className="truncate text-right text-[#e5e7eb]">
                           {[
@@ -578,14 +578,14 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 return (
                   <>
                     {synConfig.base_url && (
-                      <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                      <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Base URL</span>
                         <span className="truncate text-right text-[#e5e7eb]">
                           {synConfig.base_url}
                         </span>
                       </li>
                     )}
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Workflow</span>
                       <span className="text-[#e5e7eb]">
                         {(synConfig.steps || []).length} steps · mode {synConfig.failure_mode || 'fail_fast'}
@@ -599,13 +599,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 if (!synConfig) return null;
                 return (
                   <>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Start URL</span>
                       <span className="truncate text-right text-[#e5e7eb]">
                         {synConfig.start_url}
                       </span>
                     </li>
-                    <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                    <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Journey</span>
                       <span className="text-[#e5e7eb]">
                         {(synConfig.steps || []).length} steps · {synConfig.device || 'default device'}
@@ -614,7 +614,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   </>
                 );
               })()}
-              <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+              <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                 <span className="text-muted">Schedule</span>
                 <span className="text-[#e5e7eb]">
                   {formatInterval(monitor.interval_seconds)} · timeout{' '}
@@ -622,7 +622,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 </span>
               </li>
               {monitor.tags && monitor.tags.length > 0 && (
-                <li className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5">
+                <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                   <span className="text-muted">Tags</span>
                   <span className="flex flex-wrap gap-1">
                     {monitor.tags.map((tag) => (
@@ -635,22 +635,22 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
           </div>
 
           {monitor.type === 'synthetic_browser' && (
-            <div className="mt-2.5 border-t border-dashed border-[rgba(255,255,255,0.06)] pt-2">
+            <div className="mt-2.5 border-t border-dashed border-white/[0.06] pt-2">
               <div className="mb-1.5 text-[0.78rem] uppercase tracking-wide text-muted">
                 Latest failure screenshot
               </div>
               {screenshotLoading ? (
-                <div className="rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-3 text-xs text-muted">
+                <div className="rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-3 text-xs text-muted">
                   Loading screenshot...
                 </div>
               ) : screenshotBlobURL ? (
-                <div className="overflow-hidden rounded-[14px] border border-[rgba(255,255,255,0.08)] bg-[rgba(2,6,23,0.55)] p-2">
+                <div className="overflow-hidden rounded-[14px] border border-white/[0.08] bg-slate-950/[0.55] p-2">
                   <img
                     src={screenshotBlobURL}
                     alt="Latest synthetic browser screenshot"
                     loading="lazy"
                     decoding="async"
-                    className="h-auto max-h-[320px] w-full rounded-[10px] border border-[rgba(255,255,255,0.08)] object-contain"
+                    className="h-auto max-h-[320px] w-full rounded-[10px] border border-white/[0.08] object-contain"
                   />
                   <div className="mt-1.5 flex items-center justify-between text-[0.72rem] text-muted">
                     <span>{latestSyntheticBrowserResult ? formatTimeAgo(latestSyntheticBrowserResult.created_at) : 'Latest run'}</span>
@@ -659,13 +659,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                     </span>
                   </div>
                   {latestSyntheticBrowserResult?.error_message && (
-                    <div className="mt-1 rounded-[8px] border border-[rgba(244,63,94,0.25)] bg-[rgba(15,23,42,0.8)] px-2 py-1 text-[0.72rem] text-rose-200">
+                    <div className="mt-1 rounded-[8px] border border-[rgba(240,74,90,0.25)] bg-slate-900/80 px-2 py-1 text-[0.72rem] text-rose-200">
                       {latestSyntheticBrowserResult.error_message}
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-3 text-xs text-muted">
+                <div className="rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-3 text-xs text-muted">
                   No screenshot available yet. A screenshot is captured on failed runs when enabled.
                 </div>
               )}
@@ -673,7 +673,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
           )}
 
           {/* Recent Results */}
-          <div className="mt-2.5 border-t border-dashed border-[rgba(255,255,255,0.06)] pt-2">
+          <div className="mt-2.5 border-t border-dashed border-white/[0.06] pt-2">
             <div className="mb-1.5 text-[0.78rem] uppercase tracking-wide text-muted">
               Recent results
             </div>
@@ -682,7 +682,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 {recentResults.map((result, idx) => (
                   <li
                     key={result.id || idx}
-                    className="flex justify-between gap-2 rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-1.5"
+                    className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5"
                   >
                     <span className="text-muted">
                       {formatTimeAgo(result.created_at)}
@@ -708,7 +708,7 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                 ))}
               </ul>
             ) : (
-              <div className="rounded-[10px] border border-[rgba(255,255,255,0.06)] bg-[rgba(15,23,42,0.98)] px-2 py-3 text-center text-muted">
+              <div className="rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-3 text-center text-muted">
                 No check results yet
               </div>
             )}

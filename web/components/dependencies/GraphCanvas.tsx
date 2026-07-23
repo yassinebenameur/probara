@@ -28,6 +28,7 @@ import { GroupNode } from './GroupNode';
 import { DependencyEdge } from './DependencyEdge';
 import { AddMonitorPicker } from './AddMonitorPicker';
 import { setHover } from './hoverStore';
+import { useThemeName } from '@/components/ui/useThemeName';
 
 const nodeTypes = { monitor: MonitorNode, depGroup: GroupNode };
 const edgeTypes = { dependency: DependencyEdge };
@@ -68,6 +69,8 @@ export function GraphCanvas({
   const router = useRouter();
   const { fitView } = useReactFlow();
   const { showToast } = useToast();
+  const themeName = useThemeName();
+  const isLight = themeName === 'light';
   // Local copies so user drags layer on top of the computed layout; reseeded
   // whenever the structural state (focus/expand/graph) produces a new layout.
   const [rfNodes, setRfNodes] = useState<AppNode[]>(flowNodes);
@@ -263,7 +266,7 @@ export function GraphCanvas({
           className="pointer-events-none absolute inset-0 z-[1]"
           style={{
             background:
-              'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(8,145,178,0.07), transparent 70%)',
+              'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 70%)',
           }}
         />
         {rfNodes.length === 0 && (
@@ -303,28 +306,33 @@ export function GraphCanvas({
           edgesFocusable
           deleteKeyCode={['Delete', 'Backspace']}
           connectionRadius={36}
-          connectionLineStyle={{ stroke: '#22d3ee', strokeWidth: 2, strokeDasharray: '6 4' }}
-          colorMode="dark"
+          connectionLineStyle={{ stroke: '#ff8a5c', strokeWidth: 2, strokeDasharray: '6 4' }}
+          colorMode={themeName}
           onlyRenderVisibleElements
           className="!bg-transparent"
         >
-          <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#1e293b" />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={24}
+            size={1}
+            color={isLight ? '#d9dde3' : '#161b24'}
+          />
           <Controls showInteractive={false} position="bottom-left" />
           {!focusMonitor && rfNodes.length > 20 && (
             <MiniMap
               pannable
               zoomable
               position="bottom-right"
-              maskColor="rgba(2, 6, 23, 0.55)"
-              bgColor="rgba(15, 23, 42, 0.85)"
+              maskColor={isLight ? 'rgba(238,240,243, 0.6)' : 'rgba(11,13,17, 0.55)'}
+              bgColor={isLight ? 'rgba(255,255,255, 0.9)' : 'rgba(16,19,26, 0.85)'}
               nodeStrokeWidth={3}
               nodeColor={(node) => {
                 const data = node.data as MonitorNodeData | undefined;
                 const state = data?.monitor?.current_state;
-                if (state === 'down') return '#f43f5e';
-                if (state === 'suspect' || state === 'degraded') return '#fbbf24';
-                if (state === 'up') return '#10b981';
-                return '#475569';
+                if (state === 'down') return '#f04a5a';
+                if (state === 'suspect' || state === 'degraded') return '#e6b23f';
+                if (state === 'up') return '#46d17f';
+                return isLight ? '#a8b0ba' : '#475569';
               }}
               className="!rounded-lg !border !border-white/[0.08]"
             />

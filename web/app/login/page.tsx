@@ -218,12 +218,12 @@ function LoginPageInner() {
 
   return (
     <div className="flex min-h-screen items-center justify-center">
-      <div className="pointer-events-none fixed inset-0 bg-gradient-to-br from-emerald-500/5 via-transparent to-amber-500/5" />
+      <div className="pointer-events-none fixed inset-0 bg-gradient-to-br from-cyan-500/5 via-transparent to-sky-500/5" />
 
       <div className="relative w-full max-w-md p-8">
         <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-8 backdrop-blur-xl">
           <div className="mb-8 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-amber-500 shadow-lg shadow-emerald-500/20">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-cyan-600 shadow-lg shadow-cyan-500/20">
               <svg
                 className="h-8 w-8 text-white"
                 fill="none"

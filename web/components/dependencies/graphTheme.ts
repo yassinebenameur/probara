@@ -69,21 +69,21 @@ export const STATE_STYLES: Record<string, {
     iconTile: 'bg-amber-500/10 text-amber-400',
     dot: 'bg-amber-400',
     text: 'text-amber-400',
-    card: 'border-amber-500/40 shadow-[0_0_24px_-6px_rgba(251,191,36,0.35)]',
+    card: 'border-amber-500/40 shadow-[0_0_24px_-6px_rgba(230,178,63,0.35)]',
   },
   down: {
     accent: 'bg-rose-500',
     iconTile: 'bg-rose-500/10 text-rose-400',
     dot: 'bg-rose-500',
     text: 'text-rose-400',
-    card: 'border-rose-500/50 shadow-[0_0_28px_-4px_rgba(244,63,94,0.45)]',
+    card: 'border-rose-500/50 shadow-[0_0_28px_-4px_rgba(240,74,90,0.45)]',
   },
   degraded: {
     accent: 'bg-amber-400',
     iconTile: 'bg-amber-500/10 text-amber-400',
     dot: 'bg-amber-400',
     text: 'text-amber-400',
-    card: 'border-amber-500/40 shadow-[0_0_24px_-6px_rgba(251,191,36,0.35)]',
+    card: 'border-amber-500/40 shadow-[0_0_24px_-6px_rgba(230,178,63,0.35)]',
   },
   unknown: {
     accent: 'bg-slate-600',
@@ -99,10 +99,10 @@ export function stateStyle(state?: MonitorState) {
 }
 
 export const EDGE_COLORS: Record<string, string> = {
-  down: '#fb7185',
-  suspect: '#fbbf24',
-  degraded: '#fbbf24',
-  default: '#475569',
+  down: '#f4707d',
+  suspect: '#e6b23f',
+  degraded: '#e6b23f',
+  default: '#79828f',
 };
 
 export function styleEdge(from: string, to: string, upstreamState?: MonitorState): Edge {
@@ -123,7 +123,7 @@ export function styleEdge(from: string, to: string, upstreamState?: MonitorState
     style: {
       stroke: color,
       strokeWidth: tone === 'default' ? 1.5 : 2,
-      ...(tone === 'down' ? { filter: 'drop-shadow(0 0 4px rgba(251,113,133,0.55))' } : {}),
+      ...(tone === 'down' ? { filter: 'drop-shadow(0 0 4px rgba(244,112,125,0.55))' } : {}),
     },
     markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
   };
