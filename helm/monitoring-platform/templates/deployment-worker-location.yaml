@@ -74,6 +74,15 @@ spec:
           value: {{ required "each worker.locations entry needs credential from the location deploy info" .credential | quote }}
         - name: WORKER_CONCURRENCY
           value: "{{ .concurrency | default $.Values.worker.concurrency }}"
+        {{- with $.Values.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $.Values.worker.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

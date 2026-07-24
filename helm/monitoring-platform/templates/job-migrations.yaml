@@ -54,6 +54,12 @@ spec:
           env:
             - name: POSTGRES_URL
               value: {{ include "monitoring-platform.postgresUrl" . | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.migrations.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
       {{- with .Values.image.pullSecrets }}

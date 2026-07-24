@@ -56,6 +56,12 @@ spec:
           value: "{{ .Values.frontend.statusPageUrl | default .Values.statusPage.baseUrl }}"
         - name: API_PROXY_TARGET
           value: "{{ $apiProxyTarget }}"
+        {{- with .Values.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.frontend.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /

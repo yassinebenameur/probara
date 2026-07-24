@@ -71,6 +71,11 @@ export const CONFIGURATION_PAGE: DocPage = {
       title: 'Common service variables',
       blocks: [
         {
+          type: 'paragraph',
+          text:
+            'Where a table row below says a variable is “not exposed” by a deployment method, it means there is no dedicated Compose declaration or Helm value for it. In Helm, any such variable can still be injected without template changes via `extraEnv` (all workloads) or `<service>.extraEnv` — see [Helm values](/docs/deployment/#helm-values-auth-services). In Compose, add it to the service `environment` block explicitly.',
+        },
+        {
           type: 'table',
           columns: ['Variable', 'Code default / validation', 'Used by', 'Deployment notes'],
           rows: [

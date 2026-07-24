@@ -570,7 +570,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Encrypted monitor fails only in scheduler',
               'Scheduler lacks the current/historical encryption keyring',
-              'Provide the identical `PROBARA_SECRETS_KEY*` set to scheduler. The shipped Compose file and Helm chart wire the base key; rotation keys (`_V2`+) still need explicit wiring.',
+              'Provide the identical `PROBARA_SECRETS_KEY*` set to scheduler. The shipped Compose file and Helm chart wire the base key; add rotation keys (`_V2`+) through the chart\'s top-level `extraEnv` so every service receives the same keyring.',
             ],
             [
               'Browser screenshot is 404/missing',

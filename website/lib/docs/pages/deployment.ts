@@ -352,6 +352,11 @@ kubectl -n probara get jobs`,
           columns: ['Value family', 'Defaults', 'Meaning / caveat'],
           rows: [
             [
+              '`extraEnv`, `<service>.extraEnv`',
+              '`[]`',
+              'Standard EnvVar entries appended to workloads: top-level `extraEnv` reaches every workload (including the migrations job); per-service lists (`api`, `scheduler`, `worker`, `alerter`, `statusPage`, `frontend`, `migrations`) reach one. `worker.extraEnv` also applies to location workers, and each `worker.locations` entry may carry its own `extraEnv`. Use this for any supported runtime variable without a dedicated chart value (SMTP, LLM, rotation keys, SSRF policy).',
+            ],
+            [
               '`auth.auditRetentionDays`',
               '`365`',
               'Audit retention days; `0` preserves records indefinitely.',
@@ -678,10 +683,6 @@ api:
             [
               'No shared browser-artifact storage',
               'API replicas cannot reliably serve artifacts produced on worker filesystems.',
-            ],
-            [
-              'No `extraEnv`',
-              'Many supported runtime variables cannot be configured without changing templates.',
             ],
             [
               '`initialApiKey` is unused',

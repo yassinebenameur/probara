@@ -97,6 +97,12 @@ spec:
               name: {{ include "monitoring-platform.fullname" . }}-secret
               key: probara_secrets_key
         {{- end }}
+        {{- with .Values.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.worker.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

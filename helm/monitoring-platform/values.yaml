@@ -116,6 +116,22 @@ secrets:
   # OIDC client secret (required when auth.oidc.enabled)
   oidcClientSecret: ""
 
+# Extra environment variables appended to EVERY workload (api, scheduler,
+# worker, location workers, alerter, status page, frontend, migrations job).
+# Standard Kubernetes EnvVar entries — plain values or valueFrom secret/
+# configmap references. Use this for settings shared across services, e.g.
+# secrets-key rotation (PROBARA_SECRETS_KEY_V2) or SSRF policy overrides.
+# Per-service variables belong in <service>.extraEnv instead.
+# extraEnv:
+#   - name: HTTP_BLOCK_PRIVATE_IPS
+#     value: "true"
+#   - name: PROBARA_SECRETS_KEY_V2
+#     valueFrom:
+#       secretKeyRef:
+#         name: my-rotation-secret
+#         key: key_v2
+extraEnv: []
+
 # =============================================================================
 # MIGRATIONS JOB
 # =============================================================================
@@ -132,6 +148,8 @@ migrations:
     limits:
       cpu: "200m"
       memory: "256Mi"
+  # Extra env vars for the migrations job only (Kubernetes EnvVar entries).
+  extraEnv: []
 
 # =============================================================================
 # API SERVICE
@@ -159,6 +177,9 @@ api:
     limits:
       cpu: "500m"
       memory: "256Mi"
+  # Extra env vars for the API only (Kubernetes EnvVar entries), e.g. SMTP_*,
+  # LLM_*, OIDC tuning, NOTIFY_ASYNC_*.
+  extraEnv: []
 
 # =============================================================================
 # SCHEDULER SERVICE
@@ -183,6 +204,9 @@ scheduler:
     limits:
       cpu: "200m"
       memory: "128Mi"
+  # Extra env vars for the scheduler only (Kubernetes EnvVar entries), e.g.
+  # mesh scheduling, purge, or result-ingest tuning.
+  extraEnv: []
 
 # =============================================================================
 # WORKER SERVICE
@@ -231,6 +255,10 @@ worker:
   #       type: ClusterIP      # LoadBalancer for cross-VPC probing
   #       annotations: {}      # e.g. internal NLB annotations
   locations: []
+  # Extra env vars for the default worker fleet AND every location worker
+  # (Kubernetes EnvVar entries), e.g. HTTP_ALLOWED_CIDRS or check tuning.
+  # Individual locations entries may also carry their own extraEnv list.
+  extraEnv: []
 
 # =============================================================================
 # ALERTER SERVICE
@@ -247,6 +275,9 @@ alerter:
     limits:
       cpu: "200m"
       memory: "128Mi"
+  # Extra env vars for the alerter only (Kubernetes EnvVar entries), e.g.
+  # SMTP_* or notification worker tuning.
+  extraEnv: []
 
 # =============================================================================
 # STATUS PAGE SERVICE
@@ -273,6 +304,9 @@ statusPage:
     limits:
       cpu: "200m"
       memory: "128Mi"
+  # Extra env vars for the status-page service only (Kubernetes EnvVar
+  # entries), e.g. STATUS_PAGE_PREVIEW_SECRET.
+  extraEnv: []
 
 # =============================================================================
 # FRONTEND SERVICE
@@ -305,6 +339,8 @@ frontend:
     limits:
       cpu: "500m"
       memory: "256Mi"
+  # Extra env vars for the frontend only (Kubernetes EnvVar entries).
+  extraEnv: []
 
 # =============================================================================
 # INGRESS
