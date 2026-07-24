@@ -109,7 +109,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`dns`", "DNS resolution and optional expected answers", "Yes"],
             ["`grpc`", "Standard gRPC health service status", "Yes"],
             ["`tcp`", "TCP connection and optional TLS handshake", "Yes"],
-            ["`sip`", "SIP `OPTIONS` response", "Yes"],
+            ["`sip`", "SIP `OPTIONS` ping or `REGISTER` auth probe", "Yes"],
             ["`websocket`", "WebSocket upgrade and optional message exchange", "Yes"],
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
@@ -284,7 +284,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "SIP",
               description:
-                "Set `host`, optional `port`, `transport`, and `expected_status`. Probara sends SIP `OPTIONS`. Port defaults to 5060, transport to `udp`, and status to 200. Transport can be `udp` or `tcp`; accepted expected status values are 100–699.",
+                "Set `host`, optional `port`, `transport` (`udp`, `tcp`, or `tls`), `method`, and `expected_status`. `method: options` (default) sends a SIP `OPTIONS` availability ping; `method: register` sends a query-style `REGISTER` (no Contact header) that exercises the registrar and its digest authentication without creating, refreshing, or removing bindings. Configure `username`/`password` to answer digest challenges (MD5 and SHA-256, qop=auth) on either method, and `domain` to set the address-of-record for REGISTER. Port defaults to 5060 (5061 for TLS), status to 200; `tls_skip_verify` accepts lab certificates.",
             },
           ],
         },
@@ -293,7 +293,7 @@ export const MONITORS_PAGE: DocPage = {
           tone: "info",
           title: "Protocol health is deliberately narrow",
           text:
-            "A successful TCP connection does not prove an application protocol is healthy. A gRPC monitor requires the standard health service, and a SIP monitor checks an `OPTIONS` response rather than completing a call flow.",
+            "A successful TCP connection does not prove an application protocol is healthy. A gRPC monitor requires the standard health service, and a SIP monitor checks an `OPTIONS` or `REGISTER` response rather than completing a call flow with media.",
         },
       ],
     },
@@ -544,7 +544,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, plus every WebSocket header value. API reads replace protected values with `***`.",
+            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password`, plus every WebSocket header value. API reads replace protected values with `***`.",
         },
         {
           type: "list",

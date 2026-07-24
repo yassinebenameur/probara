@@ -232,7 +232,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   { type: 'dns', label: 'DNS', description: 'Resolve and verify records', icon: Search, category: 'Network', namePlaceholder: 'example.com DNS' },
   { type: 'grpc', label: 'gRPC', description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' },
   { type: 'tcp', label: 'TCP', description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' },
-  { type: 'sip', label: 'SIP', description: 'SIP OPTIONS availability', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' },
+  { type: 'sip', label: 'SIP', description: 'OPTIONS ping and REGISTER auth probes', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' },
   { type: 'postgres', label: 'PostgreSQL', description: 'Connect, auth, and query checks', icon: Database, category: 'Databases & Brokers', namePlaceholder: 'Postgres production' },
   { type: 'mysql', label: 'MySQL', description: 'Connect, auth, and query checks', icon: Cylinder, category: 'Databases & Brokers', namePlaceholder: 'MySQL production' },
   { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases & Brokers', namePlaceholder: 'Redis cache' },

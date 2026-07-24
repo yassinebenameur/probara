@@ -28,20 +28,21 @@ export default function SipForm({
   const initialSipConfig =
     !isEditMode && initialData?.type === 'sip' ? (initialData.config as SIPMonitorConfig) : undefined;
 
+  const editSipConfig =
+    monitor && monitor.type === 'sip' ? (monitor.config as SIPMonitorConfig) : undefined;
+
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
-    host: monitor && monitor.type === 'sip'
-      ? (monitor.config as SIPMonitorConfig)?.host || ''
-      : initialSipConfig?.host || '',
-    port: monitor && monitor.type === 'sip'
-      ? (monitor.config as SIPMonitorConfig)?.port || 5060
-      : initialSipConfig?.port || 5060,
-    transport: monitor && monitor.type === 'sip'
-      ? (monitor.config as SIPMonitorConfig)?.transport || 'udp'
-      : initialSipConfig?.transport || 'udp' as 'udp' | 'tcp',
-    expected_status: monitor && monitor.type === 'sip'
-      ? (monitor.config as SIPMonitorConfig)?.expected_status?.toString() || ''
-      : initialSipConfig?.expected_status?.toString() || '',
+    host: editSipConfig?.host || initialSipConfig?.host || '',
+    port: editSipConfig?.port || initialSipConfig?.port || 5060,
+    transport: (editSipConfig?.transport || initialSipConfig?.transport || 'udp') as 'udp' | 'tcp' | 'tls',
+    method: (editSipConfig?.method || initialSipConfig?.method || 'options') as 'options' | 'register',
+    username: editSipConfig?.username || initialSipConfig?.username || '',
+    password: editSipConfig?.password || initialSipConfig?.password || '',
+    domain: editSipConfig?.domain || initialSipConfig?.domain || '',
+    tls_skip_verify: editSipConfig?.tls_skip_verify ?? initialSipConfig?.tls_skip_verify ?? false,
+    expected_status: editSipConfig?.expected_status?.toString()
+      || initialSipConfig?.expected_status?.toString() || '',
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
     timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
@@ -66,6 +67,9 @@ export default function SipForm({
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
+    if ((formData.username.trim() === '') !== (formData.password === '')) {
+      newErrors.username = 'Username and password must be provided together';
+    }
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
@@ -77,6 +81,14 @@ export default function SipForm({
       port: formData.port,
       transport: formData.transport,
     };
+
+    if (formData.method !== 'options') config.method = formData.method;
+    if (formData.username.trim()) {
+      config.username = formData.username.trim();
+      config.password = formData.password;
+    }
+    if (formData.domain.trim()) config.domain = formData.domain.trim();
+    if (formData.transport === 'tls' && formData.tls_skip_verify) config.tls_skip_verify = true;
 
     if (formData.expected_status) {
       const status = parseInt(formData.expected_status);
@@ -144,14 +156,49 @@ export default function SipForm({
           <FormField label="Transport" description="SIP transport protocol">
             <select
               value={formData.transport}
-              onChange={(e) => setFormData({ ...formData, transport: e.target.value as 'udp' | 'tcp' })}
+              onChange={(e) => {
+                const transport = e.target.value as 'udp' | 'tcp' | 'tls';
+                setFormData({
+                  ...formData,
+                  transport,
+                  // Track the conventional default port unless the user set a custom one.
+                  port: transport === 'tls' && formData.port === 5060
+                    ? 5061
+                    : transport !== 'tls' && formData.port === 5061
+                    ? 5060
+                    : formData.port,
+                });
+              }}
               className="input"
             >
               <option value="udp">UDP</option>
               <option value="tcp">TCP</option>
+              <option value="tls">TLS</option>
             </select>
           </FormField>
         </div>
+
+        {formData.transport === 'tls' && (
+          <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium text-white">Skip certificate verification</p>
+              <p className="text-xs text-slate-500">For lab servers with self-signed certificates</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })}
+              className={`relative h-5 w-9 rounded-full transition-colors ${
+                formData.tls_skip_verify ? 'bg-cyan-500' : 'bg-slate-700'
+              }`}
+              aria-pressed={formData.tls_skip_verify}
+              aria-label="Toggle certificate verification skip"
+            >
+              <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+                formData.tls_skip_verify ? 'translate-x-4' : ''
+              }`} />
+            </button>
+          </div>
+        )}
 
         <FormField label="Expected status code" description="Default: 200 OK">
           <input
@@ -164,6 +211,63 @@ export default function SipForm({
             className="input"
           />
         </FormField>
+      </FormSection>
+
+      <FormSection title="Check">
+        <FormField label="Method" description="What the probe proves">
+          <select
+            value={formData.method}
+            onChange={(e) => setFormData({ ...formData, method: e.target.value as 'options' | 'register' })}
+            className="input"
+          >
+            <option value="options">OPTIONS — server availability ping</option>
+            <option value="register">REGISTER — registrar + authentication probe</option>
+          </select>
+        </FormField>
+
+        {formData.method === 'register' && (
+          <FormField
+            label="SIP domain"
+            description="Domain of the address-of-record. Defaults to the host."
+          >
+            <input
+              type="text"
+              value={formData.domain}
+              onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
+              placeholder="example.com"
+              className="input"
+            />
+          </FormField>
+        )}
+
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            label="Username"
+            error={errors.username}
+            description="Digest auth user (optional)"
+          >
+            <input
+              type="text"
+              value={formData.username}
+              onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+              placeholder="agent42"
+              autoComplete="off"
+              className="input"
+            />
+          </FormField>
+          <FormField
+            label="Password"
+            description={isEditMode ? 'Leave *** to keep the stored password' : 'Stored encrypted'}
+          >
+            <input
+              type="password"
+              value={formData.password}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              autoComplete="new-password"
+              className="input"
+            />
+          </FormField>
+        </div>
       </FormSection>
 
       <FormSection title="Schedule">
@@ -235,7 +339,9 @@ export default function SipForm({
         <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
           <div>
             <p className="text-sm font-medium text-white">Monitor enabled</p>
-            <p className="text-xs text-slate-500">Run SIP OPTIONS checks on schedule</p>
+            <p className="text-xs text-slate-500">
+              Run SIP {formData.method === 'register' ? 'REGISTER' : 'OPTIONS'} checks on schedule
+            </p>
           </div>
           <button
             type="button"
@@ -257,9 +363,13 @@ export default function SipForm({
         <div className="flex items-start gap-3">
           <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300" strokeWidth={1.75} />
           <div>
-            <p className="mb-1 text-xs font-medium text-white">SIP OPTIONS request</p>
+            <p className="mb-1 text-xs font-medium text-white">
+              {formData.method === 'register' ? 'SIP REGISTER probe' : 'SIP OPTIONS request'}
+            </p>
             <p className="text-xs text-slate-400">
-              Sends a SIP OPTIONS request to test server availability without initiating a call.
+              {formData.method === 'register'
+                ? 'Sends a query-style REGISTER (no Contact) that exercises the registrar and its digest authentication without creating or removing any bindings.'
+                : 'Sends a SIP OPTIONS request to test server availability without initiating a call. Answers digest challenges when credentials are configured.'}
             </p>
           </div>
         </div>
@@ -268,7 +378,7 @@ export default function SipForm({
       <FormActions
         middle={
           formData.host.trim()
-            ? `Every ${formData.interval_seconds}s · SIP OPTIONS ${formData.host.trim()}:${formData.port} (${formData.transport.toUpperCase()}) · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`
+            ? `Every ${formData.interval_seconds}s · SIP ${formData.method.toUpperCase()} ${formData.host.trim()}:${formData.port} (${formData.transport.toUpperCase()}) · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`
             : undefined
         }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}

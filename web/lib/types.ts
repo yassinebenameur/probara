@@ -311,8 +311,14 @@ export interface PushMonitorConfig {
 export interface SIPMonitorConfig {
   host: string;
   port: number;
-  transport: "udp" | "tcp";
+  transport: "udp" | "tcp" | "tls";
+  method?: "options" | "register";
+  username?: string;
+  password?: string; // write-only; API reads return the masked placeholder
+  domain?: string;
   expected_status?: number;
+  tls_skip_verify?: boolean;
+  tls_server_name?: string;
 }
 
 // Pasted TLS material shared by the database monitor types: CA PEM for

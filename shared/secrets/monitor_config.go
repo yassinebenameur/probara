@@ -19,6 +19,7 @@ var MonitorSecretFields = map[string][]string{
 	"mongodb":  {"password", "connection_string", "tls_client_key_pem"},
 	"rabbitmq": {"password", "connection_string", "tls_client_key_pem"},
 	"mysql":    {"password", "connection_string", "tls_client_key_pem"},
+	"sip":      {"password"},
 }
 
 // MonitorSecretMapFields maps monitor types to config objects whose values are

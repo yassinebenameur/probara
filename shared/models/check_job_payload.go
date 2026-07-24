@@ -94,9 +94,15 @@ type GroupMonitorConfig struct {
 // SIPMonitorConfig represents configuration for SIP monitors
 type SIPMonitorConfig struct {
 	Host           string `json:"host"`                      // SIP server hostname/IP
-	Port           int    `json:"port"`                      // Default 5060
-	Transport      string `json:"transport"`                 // "udp" or "tcp" (default: udp)
-	ExpectedStatus *int   `json:"expected_status,omitempty"` // Expected SIP response (default: 200)
+	Port           int    `json:"port"`                      // Default 5060 (5061 for TLS)
+	Transport      string `json:"transport"`                 // "udp", "tcp", or "tls" (default: udp)
+	Method         string `json:"method,omitempty"`          // "options" (default) or "register"
+	Username       string `json:"username,omitempty"`        // AOR user + digest auth username
+	Password       string `json:"password,omitempty"`        // Digest auth secret (encrypted at rest)
+	Domain         string `json:"domain,omitempty"`          // SIP domain for the AOR/request URI (default: host)
+	ExpectedStatus *int   `json:"expected_status,omitempty"` // Expected final SIP response (default: 200)
+	TLSSkipVerify  bool   `json:"tls_skip_verify,omitempty"` // Skip certificate verification (lab/self-signed)
+	TLSServerName  string `json:"tls_server_name,omitempty"` // SNI/verification name override
 }
 
 // SyntheticAPIMonitorConfig represents configuration for synthetic API workflow monitors

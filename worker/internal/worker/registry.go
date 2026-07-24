@@ -69,7 +69,7 @@ func NewDefaultRegistry(maxBodySizeBytes int, blockPrivateIPs bool, allowedCIDRs
 	registry.Register("ping", NewPingChecker())
 	registry.Register("dns", NewDNSChecker())
 	registry.Register("grpc", NewGRPCChecker(blockPrivateIPs, allowedCIDRs))
-	registry.Register("sip", NewSIPChecker())
+	registry.Register("sip", NewSIPChecker(blockPrivateIPs, allowedCIDRs))
 	registry.Register("synthetic_api", NewSyntheticAPIChecker())
 	registry.Register("synthetic_browser", NewSyntheticBrowserChecker(syntheticArtifactsDir))
 	registry.Register("redis", NewRedisChecker(blockPrivateIPs, allowedCIDRs))

@@ -552,9 +552,23 @@ func (v *SIPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	// Validate transport
 	if config.Transport != "" {
 		transport := strings.ToLower(config.Transport)
-		if transport != "udp" && transport != "tcp" {
-			return fmt.Errorf("transport must be 'udp' or 'tcp'")
+		if transport != "udp" && transport != "tcp" && transport != "tls" {
+			return fmt.Errorf("transport must be 'udp', 'tcp', or 'tls'")
 		}
+	}
+
+	// Validate method
+	if config.Method != "" {
+		method := strings.ToLower(config.Method)
+		if method != "options" && method != "register" {
+			return fmt.Errorf("method must be 'options' or 'register'")
+		}
+	}
+
+	// Digest credentials go together: a password without a username (or vice
+	// versa) is a config mistake, not a server-side condition.
+	if (strings.TrimSpace(config.Username) == "") != (config.Password == "") {
+		return fmt.Errorf("username and password must be provided together")
 	}
 
 	// Validate expected status (SIP response codes are 100-699)
