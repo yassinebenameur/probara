@@ -155,6 +155,13 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeWebSocket:        true,
 }
 
+// IsActiveCheckType reports whether the monitor type is actively scheduled by
+// the platform (as opposed to passive types like push/agent/group) and
+// therefore requires timeout validation.
+func IsActiveCheckType(monitorType models.MonitorType) bool {
+	return activeCheckTypes[monitorType]
+}
+
 // ValidateMonitor validates a CreateMonitorRequest
 func ValidateMonitor(req *models.CreateMonitorRequest) error {
 	return ValidateMonitorWithRegistry(req, DefaultRegistry)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
+	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -539,22 +540,11 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 	typeSet := make(map[string]bool)
 	suggestedMapping := make(map[string]string)
 
-	// Supported types
-	supportedTypes := map[string]bool{
-		"http":              true,
-		"ping":              true,
-		"dns":               true,
-		"grpc":              true,
-		"group":             true,
-		"agent":             true,
-		"push":              true,
-		"sip":               true,
-		"synthetic_api":     true,
-		"synthetic_browser": true,
-		"redis":             true,
-		"postgres":          true,
-		"mongodb":           true,
-		"rabbitmq":          true,
+	// Supported types come from the validator registry so preview suggestions
+	// stay in lockstep with what ExecuteImport actually accepts.
+	supportedTypes := make(map[string]bool)
+	for _, t := range validation.DefaultRegistry.Types() {
+		supportedTypes[string(t)] = true
 	}
 
 	// Common type aliases that map to supported types
@@ -592,6 +582,10 @@ func (s *Service) detectAndSuggestTypes(rows []models.ImportRow, mapping models.
 		"mongo":      "mongodb",
 		"amqp":       "rabbitmq",
 		"rabbit":     "rabbitmq",
+		"mariadb":    "mysql",
+		// WebSocket aliases
+		"ws":  "websocket",
+		"wss": "websocket",
 	}
 
 	for _, row := range rows {
@@ -1296,13 +1290,11 @@ func (s *Service) resolveMonitorType(row models.ImportRow, mapping models.FieldM
 	return "http"
 }
 
+// isSupportedMonitorType delegates to the validator registry so the import
+// path automatically accepts every monitor type the platform supports and
+// never drifts when new types are added.
 func isSupportedMonitorType(monitorType string) bool {
-	switch monitorType {
-	case "http", "ping", "dns", "grpc", "tcp", "group", "agent", "push", "sip", "synthetic_api", "synthetic_browser":
-		return true
-	default:
-		return false
-	}
+	return validation.DefaultRegistry.Has(models.MonitorType(monitorType))
 }
 
 func importDuplicateKey(name, monitorType string) string {
@@ -1315,13 +1307,7 @@ func importDuplicateKey(name, monitorType string) string {
 }
 
 func activeCheckType(monitorType models.MonitorType) bool {
-	switch monitorType {
-	case models.MonitorTypeHTTP, models.MonitorTypePing, models.MonitorTypeSIP, models.MonitorTypeDNS,
-		models.MonitorTypeGRPC, models.MonitorTypeTCP, models.MonitorTypeSyntheticAPI, models.MonitorTypeSyntheticBrowser:
-		return true
-	default:
-		return false
-	}
+	return validation.IsActiveCheckType(monitorType)
 }
 
 func (s *Service) extractRawConfig(fields map[string]interface{}, fieldName, monitorType string) (json.RawMessage, error) {

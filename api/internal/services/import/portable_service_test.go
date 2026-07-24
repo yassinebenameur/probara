@@ -14,6 +14,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
+	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -282,7 +283,14 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 			rowWithConfig(6, "Push", "push", map[string]interface{}{"push_token": "legacy-token", "expected_interval_seconds": 60, "grace_period_seconds": 5}, nil, nil, 60, 0),
 			rowWithConfig(7, "Synthetic API", "synthetic_api", map[string]interface{}{"steps": []interface{}{map[string]interface{}{"id": "health", "request": map[string]interface{}{"method": "GET", "url": "https://example.com/health"}}}}, nil, nil, 60, 30),
 			rowWithConfig(8, "Synthetic Browser", "synthetic_browser", map[string]interface{}{"start_url": "https://example.com", "steps": []interface{}{map[string]interface{}{"id": "open", "action": "goto", "url": "https://example.com"}}}, nil, nil, 60, 30),
-			rowWithConfig(9, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"API", "Push"}, 60, 0),
+			rowWithConfig(9, "TCP", "tcp", map[string]interface{}{"host": "tcp.example.com", "port": 9000}, nil, nil, 60, 30),
+			rowWithConfig(10, "Redis", "redis", map[string]interface{}{"host": "redis.example.com", "port": 6379}, nil, nil, 60, 30),
+			rowWithConfig(11, "Postgres", "postgres", map[string]interface{}{"host": "pg.example.com", "port": 5432, "username": "probe"}, nil, nil, 60, 30),
+			rowWithConfig(12, "MySQL", "mysql", map[string]interface{}{"host": "mysql.example.com", "port": 3306, "username": "probe"}, nil, nil, 60, 30),
+			rowWithConfig(13, "MongoDB", "mongodb", map[string]interface{}{"connection_string": "mongodb://mongo.example.com:27017"}, nil, nil, 60, 30),
+			rowWithConfig(14, "RabbitMQ", "rabbitmq", map[string]interface{}{"host": "mq.example.com", "port": 5672, "username": "guest"}, nil, nil, 60, 30),
+			rowWithConfig(15, "WebSocket", "websocket", map[string]interface{}{"url": "wss://ws.example.com/socket"}, nil, nil, 60, 30),
+			rowWithConfig(16, "Platform", "group", map[string]interface{}{"monitor_ids": []interface{}{"legacy-http"}}, nil, []string{"API", "Push"}, 60, 0),
 		},
 		Mapping: models.FieldMapping{
 			Name:             "name",
@@ -302,11 +310,20 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 		t.Fatalf("ExecuteImport() error = %v", err)
 	}
 
-	if result.SuccessCount != 10 || result.FailedCount != 0 || result.SkippedCount != 0 {
+	if result.SuccessCount != 17 || result.FailedCount != 0 || result.SkippedCount != 0 {
 		t.Fatalf("unexpected import counts: %+v", result)
 	}
-	if len(monitorSvc.createRequests) != 10 {
-		t.Fatalf("len(createRequests) = %d, want 10", len(monitorSvc.createRequests))
+	if len(monitorSvc.createRequests) != 17 {
+		t.Fatalf("len(createRequests) = %d, want 17", len(monitorSvc.createRequests))
+	}
+
+	// Every request the import path builds must pass the same validation the
+	// real monitor service applies — this catches type gates and timeout
+	// handling drifting from the validator registry.
+	for i, createReq := range monitorSvc.createRequests {
+		if err := validation.ValidateMonitor(createReq); err != nil {
+			t.Fatalf("createRequests[%d] (%s/%s) failed validation: %v", i, createReq.Type, createReq.Name, err)
+		}
 	}
 
 	pushConfig := decodeConfig(t, monitorSvc.createRequests[6].Config)
@@ -323,10 +340,16 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 		t.Fatalf("alert policy IDs = %+v, want [%s]", got, policyID)
 	}
 
-	groupConfig := decodeConfig(t, monitorSvc.createRequests[9].Config)
+	groupConfig := decodeConfig(t, monitorSvc.createRequests[16].Config)
 	memberIDs, ok := groupConfig["monitor_ids"].([]interface{})
 	if !ok || len(memberIDs) != 2 {
 		t.Fatalf("group monitor_ids = %#v, want two imported member IDs", groupConfig["monitor_ids"])
+	}
+
+	for _, idx := range []int{9, 10, 11, 12, 13, 14, 15} {
+		if monitorSvc.createRequests[idx].TimeoutSeconds <= 0 {
+			t.Fatalf("active check type %s lost its timeout on import: %+v", monitorSvc.createRequests[idx].Type, monitorSvc.createRequests[idx])
+		}
 	}
 
 	if err := sqlMock.ExpectationsWereMet(); err != nil {

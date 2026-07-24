@@ -50,8 +50,10 @@ const SUPPORTED_TYPES = [
   { value: 'synthetic_browser', label: 'Synthetic Browser', description: 'Browser workflow checks' },
   { value: 'redis', label: 'Redis', description: 'Redis connect + PING checks' },
   { value: 'postgres', label: 'PostgreSQL', description: 'PostgreSQL connect + query checks' },
+  { value: 'mysql', label: 'MySQL', description: 'MySQL connect + query checks' },
   { value: 'mongodb', label: 'MongoDB', description: 'MongoDB connect + ping checks' },
   { value: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect + auth checks' },
+  { value: 'websocket', label: 'WebSocket', description: 'WebSocket connect + message checks' },
 ];
 
 // Step indicator component

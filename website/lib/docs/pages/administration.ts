@@ -382,7 +382,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "warning",
           title: "Preview is mandatory operationally",
           text:
-            "The raw portable path currently accepts `http`, `ping`, `dns`, `grpc`, `tcp`, `group`, `agent`, `push`, `sip`, `synthetic_api`, and `synthetic_browser`; it rejects several newer database, broker, MySQL, and WebSocket types. Agent rows in the simple mapped path are skipped, and masked exported secrets do not reconstruct valid credentials.",
+            "The raw portable path accepts every monitor type in the live registry, including the database, broker, and WebSocket types. Agent rows in the simple mapped path are skipped, and masked exported secrets do not reconstruct valid credentials — re-enter them after import.",
         },
       ],
     },
@@ -400,7 +400,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           tone: "warning",
           title: "Export is not a secret backup or universal round trip",
           text:
-            "Protected values returned by the API are masked, and portable import supports fewer raw types than the live registry. Treat export as reviewed configuration material: store it securely, inspect import preview, and re-enter secrets through designated fields.",
+            "Protected values returned by the API are masked, so the bundle never contains usable credentials. Treat export as reviewed configuration material: store it securely, inspect import preview, and re-enter secrets through designated fields.",
         },
       ],
     },

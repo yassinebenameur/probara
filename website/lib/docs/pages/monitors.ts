@@ -126,9 +126,9 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "callout",
           tone: "info",
-          title: "Type availability and import support differ",
+          title: "Import accepts every type in this table",
           text:
-            "All types above can be created through the normal monitor API/UI. The portable import parser currently accepts a smaller type list; do not assume that exporting every current monitor type guarantees a one-step re-import.",
+            "All types above can be created through the normal monitor API/UI, and the raw portable import path accepts the same registry of types. Exported secrets are masked, so re-imported monitors that rely on credentials still need those values re-entered before their checks pass.",
         },
       ],
     },
@@ -635,9 +635,9 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "callout",
           tone: "warning",
-          title: "Portable import currently lags the full type registry",
+          title: "Secrets do not round-trip",
           text:
-            "Raw portable import currently accepts `http`, `ping`, `dns`, `grpc`, `tcp`, `group`, `agent`, `push`, `sip`, `synthetic_api`, and `synthetic_browser`. Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, and WebSocket definitions are not currently accepted by that raw path. Exported masked secrets are not usable credentials; verify every preview before execution.",
+            "Raw portable import accepts every monitor type in the live registry, including Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, and WebSocket. Exported masked secrets are not usable credentials, so re-enter passwords, connection strings, and client keys after import; verify every preview before execution.",
         },
       ],
     },
