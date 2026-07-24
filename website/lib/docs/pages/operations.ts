@@ -554,8 +554,8 @@ helm lint ./helm/monitoring-platform \\
             ],
             [
               'Scheduled checks work, Run now does not',
-              'API publishes `check.jobs` while deployed workers consume `check.job`',
-              'Align `CHECK_JOB_SUBJECT` and stream configuration on API, scheduler, and worker; inspect actual JetStream subjects.',
+              'API publishes on a different `CHECK_JOB_SUBJECT` than the workers consume (a custom override applied to only some services)',
+              'Align `CHECK_JOB_SUBJECT` and stream configuration on API, scheduler, and worker; the shipped Compose file and Helm chart set all three identically. Inspect actual JetStream subjects.',
             ],
             [
               'Checks execute but no history appears',
@@ -570,7 +570,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Encrypted monitor fails only in scheduler',
               'Scheduler lacks the current/historical encryption keyring',
-              'Provide the identical `PROBARA_SECRETS_KEY*` set to scheduler. Current Helm template needs a fix/downstream patch.',
+              'Provide the identical `PROBARA_SECRETS_KEY*` set to scheduler. The shipped Compose file and Helm chart wire the base key; rotation keys (`_V2`+) still need explicit wiring.',
             ],
             [
               'Browser screenshot is 404/missing',

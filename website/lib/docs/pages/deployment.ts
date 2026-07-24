@@ -229,9 +229,9 @@ docker compose down`,
         {
           type: 'list',
           items: [
-            'Scheduler and worker use stream `check-jobs` and subject `check.job`; API falls back to `CHECK_JOBS` and `check.jobs`. Scheduled jobs and on-demand jobs therefore do not share one subject contract.',
-            'The root `.env` file is not passed as a service `env_file`; only variables explicitly declared in Compose reach containers.',
-            'Encryption, AI, SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired.',
+            'API, scheduler, and worker all use stream `check-jobs` and subject `check.job`, so scheduled and on-demand jobs share one subject contract. If you change these values, change them on all three services together.',
+            'The root `.env` file is not passed as a service `env_file`; only variables explicitly declared in Compose reach containers. `PROBARA_SECRETS_KEY` is forwarded from the shell environment to the api, scheduler, worker, and alerter services.',
+            'AI, SMTP, asynchronous notifications, public NATS authorization, scheduler mesh/purge, and many result-ingest settings are not wired.',
             'The commented private-location worker example omits required `LOCATION_CREDENTIAL` and should not be enabled as written.',
             'The API and worker correctly share the `synthetic_artifacts` volume used for failure screenshots. Trace and HAR capture are configured by the schema but are not implemented by the current worker.',
           ],
@@ -241,7 +241,7 @@ docker compose down`,
           tone: 'warning',
           title: 'Do not hide these gaps with documentation-only values',
           text:
-            'Adding an entry to `.env` does not repair the Compose wiring. Until the Compose file is updated, customize the service environment explicitly and make the queue subjects identical before relying on on-demand checks.',
+            'Adding an entry to `.env` does not repair the Compose wiring for variables that are not forwarded. Customize the service environment explicitly for anything beyond the declared variables, and keep queue stream/subject values identical across the API, scheduler, and workers.',
         },
       ],
     },
@@ -374,7 +374,7 @@ kubectl -n probara get jobs`,
             [
               '`secrets.probaraSecretsKey`',
               'Empty',
-              'Base64 32-byte encryption key. Current chart omits it from scheduler.',
+              'Base64 32-byte encryption key. When set, the chart provides it to the API, scheduler, worker, and alerter.',
             ],
             [
               '`secrets.oidcClientSecret`',
@@ -675,14 +675,6 @@ api:
           type: 'table',
           columns: ['Gap', 'Operational impact'],
           rows: [
-            [
-              'Scheduler receives no encryption key',
-              'It cannot decrypt already encrypted monitor/location configuration.',
-            ],
-            [
-              'API subject differs from scheduler/worker',
-              'On-demand checks can publish to an unconsumed subject.',
-            ],
             [
               'No shared browser-artifact storage',
               'API replicas cannot reliably serve artifacts produced on worker filesystems.',

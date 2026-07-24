@@ -93,6 +93,16 @@ spec:
           value: "{{ .Values.scheduler.retentionCleanupBatchSize }}"
         - name: RETENTION_CLEANUP_MAX_ROWS_PER_RUN
           value: "{{ .Values.scheduler.retentionCleanupMaxRowsPerRun }}"
+        {{- if .Values.secrets.probaraSecretsKey }}
+        # The scheduler decrypts encrypted monitor configs at dispatch time and
+        # location credentials in results ingest; without the key those
+        # monitors silently fail to schedule.
+        - name: PROBARA_SECRETS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "monitoring-platform.fullname" . }}-secret
+              key: probara_secrets_key
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /healthz

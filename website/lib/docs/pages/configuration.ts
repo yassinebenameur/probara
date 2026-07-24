@@ -55,14 +55,14 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A populated .env file does not configure every Docker service',
           text:
-            'Compose has no `env_file` declaration. LLM, SMTP, encryption, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them.',
+            'Compose has no `env_file` declaration. LLM, SMTP, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services.',
         },
         {
           type: 'callout',
           tone: 'warning',
           title: 'Keep queue names identical across publishers and consumers',
           text:
-            'The code defaults are `CHECK_JOBS` and `check.jobs`, while the current Compose and Helm scheduler/worker values are `check-jobs` and `check.job`. The API is not given the matching subject, so on-demand “run now” jobs can be published where workers do not consume them. Treat stream and subject values as one cross-service contract.',
+            'The code defaults are `CHECK_JOBS` and `check.jobs`, while the shipped Compose and Helm values are `check-jobs` and `check.job` — set identically on the API, scheduler, and workers so on-demand “run now” jobs land where workers consume them. If you override either value, treat stream and subject as one cross-service contract and change them everywhere at once.',
         },
       ],
     },
@@ -326,12 +326,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`CHECK_JOB_STREAM`',
               '`CHECK_JOBS`',
-              'NATS authorization permissions and job topology. Helm passes the scheduler stream to API; Compose does not.',
+              'NATS authorization permissions and job topology. Compose and Helm pass the scheduler stream to API.',
             ],
             [
               '`CHECK_JOB_SUBJECT`',
               '`check.jobs`',
-              'On-demand check publication. Neither Compose nor Helm currently passes the scheduler/worker override to API.',
+              'On-demand check publication. Compose and Helm pass the scheduler/worker subject to API; keep all three aligned.',
             ],
             [
               '`CHECK_RESULT_SUBJECT`',

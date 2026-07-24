@@ -68,6 +68,13 @@ services:
       LOG_LEVEL: "info"
       POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
+      # Must match the scheduler/worker values below: "Run now" publishes
+      # check jobs from the API and silently breaks if these diverge.
+      CHECK_JOB_STREAM: "check-jobs"
+      CHECK_JOB_SUBJECT: "check.job"
+      # Optional monitor-config encryption key; set the same value on the
+      # api, scheduler, worker, and alerter services (unset = plaintext dev).
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:-}"
       ADMIN_JWT_SECRET: "your-secret-key-change-in-production"
       ADMIN_ACCESS_TTL_MINUTES: "15"
       ADMIN_REFRESH_TTL_DAYS: "30"
@@ -118,6 +125,7 @@ services:
       NATS_URL: "nats://nats:4222"
       CHECK_JOB_STREAM: "check-jobs"
       CHECK_JOB_SUBJECT: "check.job"
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:-}"
       SCHEDULE_INTERVAL_SECONDS: "5"
       RETENTION_CLEANUP_ENABLED: "true"
       RETENTION_CLEANUP_HOUR_UTC: "2"
@@ -156,6 +164,7 @@ services:
       NATS_URL: "nats://nats:4222"
       CHECK_JOB_STREAM: "check-jobs"
       CHECK_JOB_SUBJECT: "check.job"
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:-}"
       NATS_CONSUMER_NAME: "worker"
       WORKER_CONCURRENCY: "10"
       CHROME_BIN: "/usr/bin/chromium-browser"
@@ -261,6 +270,7 @@ services:
       LOG_LEVEL: "info"
       POSTGRES_URL: "postgres://probara:probara@postgres:5432/probara?sslmode=disable"
       NATS_URL: "nats://nats:4222"
+      PROBARA_SECRETS_KEY: "${PROBARA_SECRETS_KEY:-}"
       ALERT_STREAM: "ALERTS"
       ALERT_SUBJECT: "alerts"
       ALERT_EVAL_INTERVAL_SECONDS: "30"
