@@ -49,7 +49,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. Disabled users are checked against database state on authenticated requests.",
+            "Administrator access tokens default to a short lifetime (15 minutes in the standard configuration), while refresh tokens default to 30 days and rotate on use. A rotated refresh token stays valid for a 60-second reuse window so concurrent refreshes from parallel requests or multiple tabs do not end the session. Disabled users are checked against database state on authenticated requests.",
         },
       ],
     },

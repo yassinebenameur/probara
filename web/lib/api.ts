@@ -232,7 +232,7 @@ async function apiRequest<T>(
     const response = await fetch(getApiUrl(path), options);
     if (response.status === 401 && !apiKey) {
       tenantSelectionValidated = false;
-      const refreshed = await tryRefresh();
+      const refreshed = await refreshSession();
       if (refreshed) {
         const retryResponse = await fetch(getApiUrl(path), options);
         return handleResponse<T>(retryResponse, Boolean(apiKey));
@@ -247,7 +247,21 @@ async function apiRequest<T>(
   }
 }
 
-async function tryRefresh(): Promise<boolean> {
+// Refresh rotates the token server-side, so concurrent calls would race and
+// all but one lose. Single-flight: every 401 handler (including the SSE
+// stream) awaits the same in-flight request.
+let refreshInFlight: Promise<boolean> | null = null;
+
+export function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function doRefresh(): Promise<boolean> {
   try {
     const response = await fetch(getApiUrl('/v1/auth/refresh'), {
       method: 'POST',
@@ -1093,7 +1107,7 @@ export async function previewImport(file: File): Promise<ImportPreviewResponse> 
 
   let response = await makeRequest();
   if (response.status === 401 && !apiKey) {
-    const refreshed = await tryRefresh();
+    const refreshed = await refreshSession();
     if (refreshed) {
       response = await makeRequest();
     }
@@ -1187,7 +1201,7 @@ export async function exportMonitors(): Promise<{ blob: Blob; filename: string }
 
   let response = await makeRequest();
   if (response.status === 401 && !apiKey) {
-    const refreshed = await tryRefresh();
+    const refreshed = await refreshSession();
     if (refreshed) {
       response = await makeRequest();
     }

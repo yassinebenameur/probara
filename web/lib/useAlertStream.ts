@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
+import { refreshSession } from './api';
 import { getApiKey } from './auth';
 import { clearSelectedTenantId, getSelectedTenantId, setSelectedTenantId } from './tenant';
 import type { Alert } from './types';
 
 const SSE_API_BASE_URL = '/api';
 const TENANTS_PATH = '/api/v1/tenants';
-const REFRESH_PATH = '/api/v1/auth/refresh';
 
 interface StreamRequestConfig {
   apiKeyMode: boolean;
@@ -23,18 +23,6 @@ function buildStreamUrl(baseUrl: string, tenantId?: string | null): string {
     url.searchParams.set('tenant_id', tenantId);
   }
   return url.toString();
-}
-
-async function refreshAdminSession(): Promise<boolean> {
-  try {
-    const response = await fetch(REFRESH_PATH, {
-      method: 'POST',
-      credentials: 'include',
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
 
 async function ensureTenantSelected(): Promise<string | null> {
@@ -204,7 +192,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
       });
 
       if (response.status === 401 && !requestConfig.apiKeyMode) {
-        const refreshed = await refreshAdminSession();
+        const refreshed = await refreshSession();
         if (refreshed) {
           requestConfig = await buildStreamRequestConfig();
           console.log('SSE: Reconnecting after refresh to', requestConfig.url);

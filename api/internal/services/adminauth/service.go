@@ -189,17 +189,30 @@ func (s *Service) CreateSession(ctx context.Context, adminID uuid.UUID, refreshT
 	return nil
 }
 
+// refreshReuseGrace is how long a rotated (revoked) refresh token is still
+// accepted after rotation. Concurrent refreshes race: when the access token
+// expires, parallel 401 retries and other browser tabs all POST /refresh with
+// the same cookie, only one rotation can win, and without a reuse interval
+// the losers would be treated as invalid and bounce the user to the login
+// page. The trade-off is that a stolen refresh token can also be replayed
+// within this window before reuse is rejected.
+const refreshReuseGrace = 60 * time.Second
+
 // GetSessionByTokenHash returns the admin ID for a valid refresh token hash.
+// Tokens rotated less than refreshReuseGrace ago are still accepted so that
+// concurrent refreshes from the same browser don't invalidate the session.
 func (s *Service) GetSessionByTokenHash(ctx context.Context, refreshTokenHash string) (uuid.UUID, error) {
 	query := `
 		SELECT admin_user_id
 		FROM admin_sessions
-		WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()
+		WHERE refresh_token_hash = $1
+		  AND expires_at > NOW()
+		  AND (revoked_at IS NULL OR revoked_at > NOW() - make_interval(secs => $2))
 		LIMIT 1
 	`
 
 	var adminID uuid.UUID
-	if err := s.db.QueryRowContext(ctx, query, refreshTokenHash).Scan(&adminID); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, refreshTokenHash, refreshReuseGrace.Seconds()).Scan(&adminID); err != nil {
 		if err == sql.ErrNoRows {
 			return uuid.UUID{}, fmt.Errorf("invalid refresh token")
 		}

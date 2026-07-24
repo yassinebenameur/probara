@@ -138,8 +138,8 @@ export const SECURITY_PAGE: DocPage = {
             ],
             [
               'Refresh token',
-              'SHA-256 hash stored in `admin_sessions`; rotated and revocable',
-              'Default lifetime is 30 days. Protect database backups because they contain session metadata and hashes.',
+              'SHA-256 hash stored in `admin_sessions`; rotated on use, with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
+              'Default lifetime is 30 days. The reuse window also means a stolen refresh token can be replayed for up to 60 seconds after rotation. Protect database backups because they contain session metadata and hashes.',
             ],
           ],
         },
