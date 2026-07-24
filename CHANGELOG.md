@@ -1,3 +1,20 @@
+# [1.0.0-alpha.58](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.57...v1.0.0-alpha.58) (2026-07-24)
+
+
+### Bug Fixes
+
+* **deploy:** align run-now check-job subject and wire scheduler secrets key ([faf844a](https://github.com/yassinebenameur/probara/commit/faf844aa96ace47bbe1e5316ea660b0006ed4867))
+* **import:** accept all registered monitor types in portable import ([d5db8f8](https://github.com/yassinebenameur/probara/commit/d5db8f83aef46b8db76d7276f46ba72839f552e4))
+
+
+### Features
+
+* **helm:** extraEnv on every workload ([5dac1fc](https://github.com/yassinebenameur/probara/commit/5dac1fc8bf0c1746871c49baee985205774aaf5b))
+* **sip:** REGISTER auth probes, digest authentication, TLS transport ([b83c57a](https://github.com/yassinebenameur/probara/commit/b83c57aff21612d76c5748226cf0a6b64cf4ac88))
+* **web:** flight-recorder redesign with light/dark theming ([8956847](https://github.com/yassinebenameur/probara/commit/8956847122f26587fe67f4131919f060df24b3bc))
+* **website:** add landing page and documentation ([b8c6146](https://github.com/yassinebenameur/probara/commit/b8c6146d23001e645aeebfec509a851748f824e9))
+* **website:** docs cross-links, inline link rendering & landing polish ([85da8ff](https://github.com/yassinebenameur/probara/commit/85da8ffd60762b44f71b70ab7d12d067a74c94f0))
+
 # [1.0.0-alpha.57](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.56...v1.0.0-alpha.57) (2026-07-16)
 
 
