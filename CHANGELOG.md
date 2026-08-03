@@ -1,3 +1,10 @@
+# [1.0.0-alpha.60](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.59...v1.0.0-alpha.60) (2026-08-03)
+
+
+### Bug Fixes
+
+* **alerter:** tls_expiry cert query timed out and blocked all alert dispatch ([ff8098d](https://github.com/yassinebenameur/probara/commit/ff8098d6e85a72c0eca234b9098be3d36a9e3b84))
+
 # [1.0.0-alpha.59](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.58...v1.0.0-alpha.59) (2026-08-03)
 
 
