@@ -663,6 +663,23 @@
       background: var(--blue);
       box-shadow: 0 0 8px var(--blue-glow);
     }
+    .cert-warning {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font: .58rem var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--yellow);
+      border: 1px solid var(--yellow-glow);
+      border-radius: 999px;
+      padding: 1px 7px;
+      white-space: nowrap;
+    }
+    .cert-warning .status-dot {
+      background: var(--yellow);
+      box-shadow: 0 0 8px var(--yellow-glow);
+    }
     .chevron {
       color: var(--text-dim);
       transition: transform .35s var(--ease);
@@ -1492,6 +1509,12 @@
                         <span data-monitor-uptime-label>{{.SummaryCaption}}</span>
                         <span>{{.MonitorDetailLine}}</span>
                         <span>{{.LastCheckAgo}}</span>
+                        {{if .CertExpiresSoon}}
+                          <span class="cert-warning" title="The TLS certificate for this component expires soon. The service itself is operational.">
+                            <span class="status-dot"></span>
+                            Certificate expires soon
+                          </span>
+                        {{end}}
                       </div>
                     </div>
                   </div>

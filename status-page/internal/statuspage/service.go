@@ -108,6 +108,10 @@ type MonitorStatus struct {
 	LastLatency        *int                 `json:"last_latency_ms,omitempty"`
 	TLSDaysUntilExpiry *int                 `json:"tls_days_until_expiry,omitempty"`
 	TLSNotAfter        string               `json:"tls_not_after,omitempty"`
+	// CertExpiresSoon is set when the monitor has an open tls_expiry alert:
+	// the certificate is inside its configured warning window while the
+	// endpoint itself is still up.
+	CertExpiresSoon bool `json:"cert_expires_soon,omitempty"`
 	Uptime24h          *float64             `json:"uptime_24h,omitempty"`
 	Uptime24hFormatted string               `json:"-"` // For template use only
 	Uptime1h           *float64             `json:"uptime_1h,omitempty"`

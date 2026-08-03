@@ -23,12 +23,13 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		ShowMonitorUptime: true,
 		Monitors: []MonitorStatus{
 			{
-				ID:          "monitor-1",
-				Name:        "API",
-				MonitorType: "http",
-				Status:      "up",
-				URL:         "https://example.com/health",
-				Tags:        []string{"core"},
+				ID:              "monitor-1",
+				Name:            "API",
+				MonitorType:     "http",
+				Status:          "up",
+				URL:             "https://example.com/health",
+				Tags:            []string{"core"},
+				CertExpiresSoon: true,
 				UptimeHistory24h: []HourlyUptime{
 					{Hour: "2026-03-01T00:00", Uptime: 100},
 					{Hour: "2026-03-01T01:00", Uptime: 99},
@@ -94,6 +95,7 @@ func TestRenderPublicStatusPage_UsesSharedRangeControlForSingleMonitorAndDarkThe
 		`No active incidents.`,
 		`class="group-cards"`,
 		`<div class="footer-inner">`,
+		`Certificate expires soon`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("expected rendered HTML to contain %q", want)

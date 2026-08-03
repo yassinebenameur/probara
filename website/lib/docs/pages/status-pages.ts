@@ -117,6 +117,11 @@ export const STATUS_PAGES_PAGE: DocPage = {
             "Settings are part of the page definition and can be supplied at creation or update. Several visibility fields are reserved in the schema but are not yet consumed by the active built-in renderer; storing them does not make those panels appear. Custom template authors must verify which data is present in the current template context.",
         },
         {
+          type: "paragraph",
+          text:
+            "Separately from these settings, the built-in template automatically shows a small \"Certificate expires soon\" note on a component whose monitor has an open [`tls_expiry` alert](/docs/alerting/#host-and-mesh) — the certificate is inside its `tls_min_days_valid` window while the component itself remains operational, so the note never changes the component's status. Custom templates receive this as the boolean `CertExpiresSoon` field on each monitor entry.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Custom HTML is trusted author content",

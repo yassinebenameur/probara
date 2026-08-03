@@ -135,6 +135,7 @@ type statusPageMonitorView struct {
 	Tags                   []string
 	MonitorDetailLine      string
 	TLSDetail              string
+	CertExpiresSoon        bool
 	History1hJSON          string
 	History24hJSON         string
 	History7dJSON          string
@@ -594,6 +595,7 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		Tags:                   monitor.Tags,
 		MonitorDetailLine:      detailLine,
 		TLSDetail:              tlsDetail,
+		CertExpiresSoon:        monitor.CertExpiresSoon,
 		History1hJSON:          mustJSON(sliceToBarPoints(monitor.UptimeHistory1h)),
 		History24hJSON:         mustJSON(history24),
 		History7dJSON:          mustJSON(history7),

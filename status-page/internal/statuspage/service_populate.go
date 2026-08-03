@@ -93,6 +93,20 @@ func (s *Service) populatePageMonitors(ctx context.Context, tenantID uuid.UUID, 
 		assignRegularShortRange(m.ptr, m.id, statusByID, summaryByID, hourlyByID, historyByID)
 	}
 
+	// Flag components whose certificate is inside its expiry warning window
+	// (open tls_expiry alert) — shown as a small note, not a status change.
+	if len(regularIDs) > 0 {
+		expiring, err := s.batchOpenTLSExpiryAlerts(ctx, regularIDs, tenantID)
+		if err != nil {
+			return err
+		}
+		for _, m := range mons {
+			if !m.isGroup && expiring[m.id] {
+				m.ptr.CertExpiresSoon = true
+			}
+		}
+	}
+
 	// Build long-range scopes (one per distinct monitor on the page) and apply in a batch.
 	scopes := make([]sharedanalytics.ScopeAnalyticsBatchRequest, 0, len(mons))
 	scopeMonitors := make(map[uuid.UUID][]*MonitorStatus)
@@ -261,6 +275,31 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 		return nil, fmt.Errorf("error iterating batch current status: %w", err)
 	}
 	return result, nil
+}
+
+// batchOpenTLSExpiryAlerts returns the set of monitors with an open tls_expiry
+// alert, i.e. whose certificate has fewer remaining validity days than the
+// monitor's tls_min_days_valid threshold.
+func (s *Service) batchOpenTLSExpiryAlerts(ctx context.Context, monitorIDs []uuid.UUID, tenantID uuid.UUID) (map[uuid.UUID]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT monitor_id FROM alerts
+		WHERE tenant_id = $2 AND monitor_id = ANY($1)
+		  AND kind = 'tls_expiry' AND status IN ('active', 'acknowledged')
+	`, pq.Array(monitorIDs), tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("batch open tls expiry alerts: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID]bool)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan tls expiry alert monitor: %w", err)
+		}
+		result[id] = true
+	}
+	return result, rows.Err()
 }
 
 // mapMonitorState maps the persisted state-machine value to the public status-page vocabulary.
