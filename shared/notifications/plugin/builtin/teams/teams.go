@@ -140,6 +140,8 @@ func buildMessageCard(req plugin.DispatchRequest) messageCard {
 		prefix = latencyTitlePrefix(eventTypeOf(req))
 	} else if event.Alert.IsHostMetric() {
 		prefix = event.Alert.HostMetricLabel(eventTypeOf(req))
+	} else if event.Alert.IsTLSExpiry() {
+		prefix = event.Alert.TLSExpiryLabel(eventTypeOf(req))
 	}
 	title := fmt.Sprintf("%s: %s", prefix, event.Alert.MonitorName)
 	timestamp := event.Timestamp

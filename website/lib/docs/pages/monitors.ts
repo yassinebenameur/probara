@@ -222,7 +222,7 @@ export const MONITORS_PAGE: DocPage = {
             ],
             [
               "`tls_min_days_valid`",
-              "Fail when the leaf certificate has fewer remaining validity days",
+              "Open a [`tls_expiry` alert](/docs/alerting/#host-and-mesh) when the leaf certificate has fewer remaining validity days; the check itself still passes",
             ],
             [
               "`tls_server_name`",
@@ -238,7 +238,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When no status expectation is supplied, the accepted default is the `2xx` class. When multiple status criteria are supplied, satisfying any accepted code, range, or class is sufficient. Body, header, JSON, TLS, and latency assertions are then evaluated in addition to status.",
+            "When no status expectation is supplied, the accepted default is the `2xx` class. When multiple status criteria are supplied, satisfying any accepted code, range, or class is sufficient. Body, header, JSON, and latency assertions are then evaluated in addition to status. The `tls_min_days_valid` window is the exception: it never fails the check and instead raises a dedicated `tls_expiry` alert (the check still fails if the certificate cannot be inspected at all, e.g. a non-HTTPS URL with the field set).",
         },
         {
           type: "paragraph",

@@ -179,6 +179,9 @@ func DefaultSubject(event notifications.AlertEvent) string {
 	if event.Alert.IsHostMetric() {
 		return fmt.Sprintf("[%s] %s", event.Alert.HostMetricLabel(event.Type), event.Alert.MonitorName)
 	}
+	if event.Alert.IsTLSExpiry() {
+		return fmt.Sprintf("[%s] %s", event.Alert.TLSExpiryLabel(event.Type), event.Alert.MonitorName)
+	}
 	if event.Type == "resolved" {
 		return fmt.Sprintf("[Alert Resolved] %s", event.Alert.MonitorName)
 	}

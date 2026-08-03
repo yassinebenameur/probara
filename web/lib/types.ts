@@ -555,7 +555,7 @@ export interface NotificationSettings {
   latency_anomaly_min_delta_pct: number;
 }
 
-export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge';
+export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry';
 
 export type MonitorState = 'unknown' | 'up' | 'suspect' | 'down' | 'degraded';
 

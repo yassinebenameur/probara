@@ -206,6 +206,20 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                     {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}%)`}
                   </p>
                 )}
+                {alert.kind === 'tls_expiry' && (
+                  <span
+                    className="ml-2 inline-flex items-center rounded-full border border-orange-500/20 bg-orange-500/10 px-2 py-0.5 text-[10px] font-medium text-orange-300"
+                    title="TLS certificate is inside its expiry warning window — the endpoint itself is still up"
+                  >
+                    certificate
+                  </span>
+                )}
+                {alert.kind === 'tls_expiry' && alert.metric_value != null && (
+                  <p className="mt-0.5 text-[10px] text-orange-300/80">
+                    expires in {Math.round(alert.metric_value)}d
+                    {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}d)`}
+                  </p>
+                )}
                 {alert.last_error && (
                   <p className="mt-0.5 text-[10px] text-rose-400 truncate max-w-[200px]" title={alert.last_error}>
                     {alert.last_error}

@@ -140,6 +140,8 @@ func buildBlockKit(req plugin.DispatchRequest) slackPayload {
 		label = latencyLabel(eventType)
 	} else if event.Alert.IsHostMetric() {
 		label = event.Alert.HostMetricLabel(eventType)
+	} else if event.Alert.IsTLSExpiry() {
+		label = event.Alert.TLSExpiryLabel(eventType)
 	}
 	header := fmt.Sprintf("%s %s: %s", emoji, label, event.Alert.MonitorName)
 

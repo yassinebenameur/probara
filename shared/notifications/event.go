@@ -76,13 +76,14 @@ type FailingLocation struct {
 	DownSince *time.Time `json:"down_since,omitempty"`
 }
 
-// KindAvailability, KindLatencyAnomaly, KindHostMetric and KindMeshEdge are
-// the alert kinds.
+// KindAvailability, KindLatencyAnomaly, KindHostMetric, KindMeshEdge and
+// KindTLSExpiry are the alert kinds.
 const (
 	KindAvailability   = "availability"
 	KindLatencyAnomaly = "latency_anomaly"
 	KindHostMetric     = "host_metric"
 	KindMeshEdge       = "mesh_edge"
+	KindTLSExpiry      = "tls_expiry"
 )
 
 // IsLatencyAnomaly reports whether this alert is a latency degradation alert.
@@ -98,6 +99,37 @@ func (d AlertDetails) IsHostMetric() bool {
 // IsMeshEdge reports whether this alert is an inter-location mesh edge outage.
 func (d AlertDetails) IsMeshEdge() bool {
 	return d.Kind == KindMeshEdge
+}
+
+// IsTLSExpiry reports whether this alert is a TLS-certificate-expiry warning.
+func (d AlertDetails) IsTLSExpiry() bool {
+	return d.Kind == KindTLSExpiry
+}
+
+// TLSExpiryLabel returns a header label for a tls_expiry alert, for use in
+// notification titles and headers.
+func (d AlertDetails) TLSExpiryLabel(eventType string) string {
+	switch eventType {
+	case "resolved":
+		return "TLS Certificate Renewed"
+	case "reminder":
+		return "TLS Certificate Still Expiring"
+	default:
+		return "TLS Certificate Expiring"
+	}
+}
+
+// TLSExpirySummary renders the remaining certificate lifetime for a
+// tls_expiry alert, e.g. "expires in 11d (threshold 14d)". Empty when this is
+// not a tls_expiry alert or no value is available.
+func (d AlertDetails) TLSExpirySummary() string {
+	if !d.IsTLSExpiry() || d.MetricValue == nil {
+		return ""
+	}
+	if d.ThresholdValue != nil {
+		return fmt.Sprintf("expires in %dd (threshold %dd)", int(*d.MetricValue), int(*d.ThresholdValue))
+	}
+	return fmt.Sprintf("expires in %dd", int(*d.MetricValue))
 }
 
 // MetricLabel returns a human-readable name for the breaching host metric,
@@ -195,6 +227,12 @@ func (d AlertDetails) Headline() string {
 			return label + " back to normal"
 		}
 		return label + " usage high"
+	}
+	if d.IsTLSExpiry() {
+		if d.Status == "resolved" {
+			return "certificate renewed"
+		}
+		return "certificate expiring"
 	}
 	if d.Status == "resolved" {
 		return "recovered"

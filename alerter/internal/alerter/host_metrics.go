@@ -317,6 +317,11 @@ func (a *Alerter) resolveClearedHostMetricAlerts(ctx context.Context, c hostMetr
 // is no longer in the evaluated set (thresholds removed, monitor
 // deleted/disabled). keep is the set of monitor IDs evaluated this tick.
 func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid.UUID) error {
+	if keep == nil {
+		// A nil slice encodes as SQL NULL and `= ANY(NULL)` filters every row
+		// out; an empty array keeps the "resolve everything" semantics.
+		keep = []uuid.UUID{}
+	}
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.metric_name, al.triggered_at
 		FROM alerts al

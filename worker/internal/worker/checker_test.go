@@ -639,19 +639,22 @@ func TestHTTPChecker_TLSInfoAndExpiryCheck(t *testing.T) {
 		t.Fatalf("Expected TLS info with days_until_expiry, got %#v", env)
 	}
 
-	expiryFailConfig := map[string]interface{}{
+	// A cert inside the tls_min_days_valid window does NOT fail the check —
+	// the alerter reads the recorded expiry and opens a tls_expiry alert
+	// instead, so the monitor stays 'up'.
+	nearExpiryConfig := map[string]interface{}{
 		"url":                server.URL,
 		"method":             "GET",
 		"tls_skip_verify":    true,
 		"tls_min_days_valid": *env.HTTP.TLS.DaysUntilExpiry + 1,
 	}
-	expiryFailJSON, _ := json.Marshal(expiryFailConfig)
-	expiryFailResult := checker.Check(context.Background(), expiryFailJSON, 10)
-	if expiryFailResult.Status != "failure" {
-		t.Errorf("Check() status = %v, want failure", expiryFailResult.Status)
+	nearExpiryJSON, _ := json.Marshal(nearExpiryConfig)
+	nearExpiryResult := checker.Check(context.Background(), nearExpiryJSON, 10)
+	if nearExpiryResult.Status != "success" {
+		t.Errorf("Check() status = %v, want success (near-expiry cert must not fail the check), error=%v", nearExpiryResult.Status, nearExpiryResult.ErrorMessage)
 	}
-	if expiryFailResult.ErrorMessage == nil || !strings.Contains(*expiryFailResult.ErrorMessage, "tls") {
-		t.Errorf("Expected failure error message to mention tls, got %v", expiryFailResult.ErrorMessage)
+	if len(nearExpiryResult.MetricsData) == 0 {
+		t.Fatalf("Expected MetricsData with TLS info on near-expiry result")
 	}
 }
 

@@ -177,6 +177,9 @@ func buildEmbed(req plugin.DispatchRequest) discordPayload {
 	if event.Alert.IsHostMetric() {
 		title = fmt.Sprintf("%s: %s", event.Alert.HostMetricLabel(eventType), event.Alert.MonitorName)
 	}
+	if event.Alert.IsTLSExpiry() {
+		title = fmt.Sprintf("%s: %s", event.Alert.TLSExpiryLabel(eventType), event.Alert.MonitorName)
+	}
 
 	return discordPayload{
 		Embeds: []discordEmbed{{

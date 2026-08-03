@@ -46,6 +46,11 @@ export const ALERTING_PAGE: DocPage = {
               "A directional location-mesh edge reaches down",
               "That direction recovers",
             ],
+            [
+              "`tls_expiry`",
+              "An HTTP monitor's certificate has fewer remaining validity days than `tls_min_days_valid`",
+              "A renewed certificate is observed, or the threshold is removed",
+            ],
           ],
         },
         {
@@ -257,7 +262,7 @@ export const ALERTING_PAGE: DocPage = {
     },
     {
       id: "host-and-mesh",
-      title: "Host metric and mesh alerts",
+      title: "Host metric, mesh, and TLS expiry alerts",
       blocks: [
         {
           type: "paragraph",
@@ -270,11 +275,16 @@ export const ALERTING_PAGE: DocPage = {
             "A location mesh edge opens a `mesh_edge` alert after its directional failure threshold. The reverse direction is a different condition. Mesh alerts use tenant default channels.",
         },
         {
+          type: "paragraph",
+          text:
+            "An HTTP monitor with `tls_min_days_valid` opens a `tls_expiry` alert when its most recently observed certificate has fewer remaining validity days than the threshold. The certificate window does not fail the check: the endpoint stays `up` and the warning is a distinct alert kind, so an aging certificate is distinguishable from an outage. The alert resolves when a renewed certificate is observed or the threshold is removed. A fully expired certificate fails the TLS handshake itself and therefore surfaces as a regular availability alert.",
+        },
+        {
           type: "callout",
           tone: "info",
           title: "Automatic incident coverage is specific",
           text:
-            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric or mesh-edge alert.",
+            "The verified automatic-incident paths cover availability and latency anomaly alerts. Do not assume the tenant switch automatically creates incidents for every host-metric, mesh-edge, or TLS-expiry alert.",
         },
       ],
     },

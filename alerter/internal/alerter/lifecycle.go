@@ -32,6 +32,9 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateHostMetricThresholds(ctx); err != nil {
 		return err
 	}
+	if err := a.evaluateTLSExpiry(ctx); err != nil {
+		return err
+	}
 	if err := a.evaluateMeshEdges(ctx); err != nil {
 		return err
 	}
@@ -460,6 +463,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			(al.kind = 'availability' AND m.current_state IN ('down', 'degraded'))
 			OR al.kind = 'latency_anomaly'
 			OR al.kind = 'host_metric'
+			OR al.kind = 'tls_expiry'
 		  )
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  -- A 'per_monitor' group does not dispatch its own alert (if one is still

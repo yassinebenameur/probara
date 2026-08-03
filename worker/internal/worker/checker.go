@@ -423,14 +423,16 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		assertionsFailed = append(assertionsFailed, fmt.Sprintf("latency: %dms > %dms", latencyMs, *config.MaxLatencyMs))
 	}
 
-	// TLS certificate expiry check (https only)
+	// TLS misconfiguration check (https only). A certificate inside the
+	// tls_min_days_valid window does NOT fail the check: the alerter compares
+	// the recorded cert expiry against the threshold and opens a dedicated
+	// tls_expiry alert, so a healthy endpoint with an aging cert stays 'up'.
+	// Only configs where the cert cannot be inspected at all keep failing.
 	if config.TLSMinDaysValid != nil {
 		if parsedURL.Scheme != "https" {
 			assertionsFailed = append(assertionsFailed, "tls: tls_min_days_valid requires https")
 		} else if metrics.TLS == nil || metrics.TLS.DaysUntilExpiry == nil {
 			assertionsFailed = append(assertionsFailed, "tls: missing certificate info")
-		} else if *metrics.TLS.DaysUntilExpiry < *config.TLSMinDaysValid {
-			assertionsFailed = append(assertionsFailed, fmt.Sprintf("tls: expires in %dd (< %dd)", *metrics.TLS.DaysUntilExpiry, *config.TLSMinDaysValid))
 		}
 	}
 
