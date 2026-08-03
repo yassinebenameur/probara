@@ -1,3 +1,17 @@
+# [1.0.0-alpha.59](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.58...v1.0.0-alpha.59) (2026-08-03)
+
+
+### Bug Fixes
+
+* **auth:** stop concurrent refreshes from killing the session ([2590f58](https://github.com/yassinebenameur/probara/commit/2590f58a61cf6b432563c1c260f6cab147a39871))
+* **web:** reload page data when the tenant switcher changes tenant ([d4ff745](https://github.com/yassinebenameur/probara/commit/d4ff7459d065c237c81108680d0253966c1d49c4))
+
+
+### Features
+
+* **alerting:** dedicated tls_expiry alert kind for certificate expiry ([b93e148](https://github.com/yassinebenameur/probara/commit/b93e148f16023b1d4a88e5b01e8e1e0f1c4934a1))
+* **status-page:** certificate-expires-soon note on public components ([219e070](https://github.com/yassinebenameur/probara/commit/219e0704dc3754fb3110cbc474032526f98c2fb6))
+
 # [1.0.0-alpha.58](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.57...v1.0.0-alpha.58) (2026-07-24)
 
 
