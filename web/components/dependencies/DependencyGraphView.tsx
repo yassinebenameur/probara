@@ -48,24 +48,11 @@ export default function DependencyGraphView({ refreshToken = 0 }: { refreshToken
     }
   }, []);
 
-  // Initial load, reload on accepted AI suggestions, full reset on tenant switch.
+  // Initial load and reload on accepted AI suggestions. A tenant switch needs no
+  // handling here: TenantScope remounts the page, resetting graph and view state.
   useEffect(() => {
     loadGraph();
   }, [loadGraph, refreshToken]);
-
-  useEffect(() => {
-    const onTenantChange = () => {
-      setFocusId(null);
-      setShowAll(false);
-      setExpandedFrom(new Set());
-      setExpandedCounts({});
-      setExtraNodes([]);
-      setQuery('');
-      loadGraph();
-    };
-    window.addEventListener('tenant-changed', onTenantChange);
-    return () => window.removeEventListener('tenant-changed', onTenantChange);
-  }, [loadGraph]);
 
   const adjacency = useMemo(() => (graph ? buildAdjacency(graph) : null), [graph]);
   const railEntries = useMemo(() => (adjacency ? sortForRail(adjacency) : []), [adjacency]);

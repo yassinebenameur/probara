@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { getAuthContext } from '@/lib/api';
 import { hasApiKey } from '@/lib/auth';
+import { TENANT_CHANGED_EVENT } from '@/lib/tenant';
 import type { AdminUser, AuthContext, TenantRole } from '@/lib/types';
 
 interface CurrentUserValue {
@@ -97,8 +98,8 @@ export function CurrentUserProvider({ children }: { children: React.ReactNode })
   // Role can differ per tenant: refetch when the tenant switcher fires.
   useEffect(() => {
     const onTenantChanged = () => refresh();
-    window.addEventListener('tenant-changed', onTenantChanged);
-    return () => window.removeEventListener('tenant-changed', onTenantChanged);
+    window.addEventListener(TENANT_CHANGED_EVENT, onTenantChanged);
+    return () => window.removeEventListener(TENANT_CHANGED_EVENT, onTenantChanged);
   }, [refresh]);
 
   return <CurrentUserContext.Provider value={value}>{children}</CurrentUserContext.Provider>;

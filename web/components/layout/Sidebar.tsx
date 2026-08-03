@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { getMonitors, getAlertChannels, getStatusPages, getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
-import { clearSelectedTenantId } from '@/lib/tenant';
+import { TENANT_CHANGED_EVENT, clearSelectedTenantId } from '@/lib/tenant';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import Pill from '@/components/ui/Pill';
 import Button from '@/components/ui/Button';
@@ -131,8 +131,8 @@ export default function Sidebar() {
 
   useEffect(() => {
     const handler = () => loadCounts();
-    window.addEventListener('tenant-changed', handler);
-    return () => window.removeEventListener('tenant-changed', handler);
+    window.addEventListener(TENANT_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(TENANT_CHANGED_EVENT, handler);
   }, [loadCounts]);
 
   const getCount = (countKey?: NavItem['countKey']): number | null => {

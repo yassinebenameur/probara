@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation';
 import { AlertStreamProvider } from '@/components/alerts/AlertStreamProvider';
 import { CurrentUserProvider } from '@/components/providers/CurrentUserProvider';
+import { TenantProvider, TenantScope } from '@/components/providers/TenantProvider';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import AuthGuard from './AuthGuard';
@@ -17,6 +18,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthGuard>
+      <TenantProvider>
       <CurrentUserProvider>
       <AlertStreamProvider>
         <div className="flex min-h-screen">
@@ -26,12 +28,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <main className="min-w-0 flex-1 overflow-x-clip">
             <TopBar />
             <div className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
-              {children}
+              <TenantScope>{children}</TenantScope>
             </div>
           </main>
         </div>
       </AlertStreamProvider>
       </CurrentUserProvider>
+      </TenantProvider>
     </AuthGuard>
   );
 }

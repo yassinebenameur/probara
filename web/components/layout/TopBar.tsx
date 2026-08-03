@@ -2,9 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { hasApiKey } from '@/lib/auth';
-import { clearSelectedTenantId, getSelectedTenantId, setSelectedTenantId } from '@/lib/tenant';
+import {
+  clearSelectedTenantId,
+  emitTenantChange,
+  getSelectedTenantId,
+  setSelectedTenantId,
+} from '@/lib/tenant';
 import { getTenants } from '@/lib/api';
 import type { Tenant } from '@/lib/types';
+import { useSelectedTenantId } from '@/components/providers/TenantProvider';
 import ThemeToggle from '@/components/ui/ThemeToggle';
 
 /**
@@ -14,8 +20,10 @@ import ThemeToggle from '@/components/ui/ThemeToggle';
 export default function TopBar() {
   const [mounted, setMounted] = useState(false);
   const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [selectedTenantId, setSelectedTenantIdState] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // The provider is the single source of truth for the selection; this bar only
+  // writes to it, so no local copy can drift out of sync.
+  const selectedTenantId = useSelectedTenantId();
 
   useEffect(() => {
     setMounted(true);
@@ -42,12 +50,10 @@ export default function TopBar() {
 
         if (nextTenantId) {
           setSelectedTenantId(nextTenantId);
-          setSelectedTenantIdState(nextTenantId);
-          notifyTenantChange();
         } else {
           clearSelectedTenantId();
-          setSelectedTenantIdState(null);
         }
+        emitTenantChange();
       })
       .catch(() => {
         if (isActive) {
@@ -60,16 +66,9 @@ export default function TopBar() {
     };
   }, [mounted]);
 
-  const notifyTenantChange = () => {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('tenant-changed'));
-    }
-  };
-
   const handleTenantChange = (value: string) => {
     setSelectedTenantId(value);
-    setSelectedTenantIdState(value);
-    notifyTenantChange();
+    emitTenantChange();
   };
 
   return (

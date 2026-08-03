@@ -65,6 +65,15 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job) and
   `<service>.extraEnv`; `worker.extraEnv` also reaches location workers, and
   `worker.locations[]` entries can carry their own.
+- **Selected tenant (web)**: `lib/tenant.ts` owns storage +
+  `TENANT_CHANGED_EVENT`; `components/providers/TenantProvider.tsx` is the
+  React-side source of truth (`useSelectedTenantId`) and its `TenantScope`
+  keys the page subtree on the tenant, so every page's mount-time fetch
+  re-runs on a switch. Pages must not add their own `tenant-changed`
+  listeners — only components *outside* that subtree (Sidebar,
+  CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
+  redirect to their list page on a switch (`/users/[id]` excepted: users are
+  platform-scoped).
 
 ## Build, test, verify
 

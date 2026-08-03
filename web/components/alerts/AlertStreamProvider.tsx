@@ -12,6 +12,7 @@ import {
 } from 'react';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useAlertStream } from '@/lib/useAlertStream';
+import { TENANT_CHANGED_EVENT } from '@/lib/tenant';
 import type { Alert, AlertStreamEvent, AlertStreamEventType } from '@/lib/types';
 
 type AlertStreamListener = (event: AlertStreamEvent) => void;
@@ -66,9 +67,9 @@ export function AlertStreamProvider({ children }: { children: ReactNode }) {
       void reconnect();
     };
 
-    window.addEventListener('tenant-changed', handleTenantChange);
+    window.addEventListener(TENANT_CHANGED_EVENT, handleTenantChange);
     return () => {
-      window.removeEventListener('tenant-changed', handleTenantChange);
+      window.removeEventListener(TENANT_CHANGED_EVENT, handleTenantChange);
     };
   }, [reconnect]);
 

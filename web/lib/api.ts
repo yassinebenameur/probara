@@ -1,5 +1,10 @@
 import { getApiKey, clearApiKey } from './auth';
-import { clearSelectedTenantId, getSelectedTenantId, setSelectedTenantId } from './tenant';
+import {
+  clearSelectedTenantId,
+  emitTenantChange,
+  getSelectedTenantId,
+  setSelectedTenantId,
+} from './tenant';
 import type {
   Monitor,
   CreateMonitorRequest,
@@ -166,9 +171,7 @@ async function ensureTenantSelected(): Promise<void> {
     const firstTenantId = data.items?.[0]?.id;
     if (firstTenantId) {
       setSelectedTenantId(firstTenantId);
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('tenant-changed'));
-      }
+      emitTenantChange();
     } else if (storedTenantId) {
       // Stored tenant became invalid (or tenants are empty): avoid sending stale X-Tenant-ID.
       clearSelectedTenantId();
