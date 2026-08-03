@@ -130,20 +130,34 @@ func (a *Alerter) loadTLSExpiryConfigs(ctx context.Context) ([]tlsExpiryConfig, 
 // evaluation time from the not_after recorded on the monitor's most recent
 // check result that carries certificate info. Falls back to the worker's
 // days_until_expiry snapshot when not_after is unparseable.
+//
+// The per-monitor LATERAL walks idx_check_results_monitor_id_created_at
+// backwards and stops at the first row with certificate info; the 24h bound
+// caps the walk for monitors whose recent results never carry TLS metrics
+// (a DISTINCT ON over `monitor_id = ANY(...)` planned a sort over every
+// historical row and timed out on large check_results tables). Monitors
+// with no certificate observed in the window are skipped this tick, which
+// leaves any open alert untouched — same as "no data yet".
 func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]int, error) {
 	result := make(map[uuid.UUID]int)
 	if len(monitorIDs) == 0 {
 		return result, nil
 	}
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT DISTINCT ON (monitor_id) monitor_id,
-			metrics_data #>> '{http,tls,not_after}',
-			metrics_data #>> '{http,tls,days_until_expiry}'
-		FROM check_results
-		WHERE monitor_id = ANY($1)
-		  AND result_source = 'monitor'
-		  AND metrics_data #> '{http,tls}' IS NOT NULL
-		ORDER BY monitor_id, created_at DESC
+		SELECT m.id,
+			cr.metrics_data #>> '{http,tls,not_after}',
+			cr.metrics_data #>> '{http,tls,days_until_expiry}'
+		FROM unnest($1::uuid[]) AS m(id)
+		JOIN LATERAL (
+			SELECT metrics_data
+			FROM check_results
+			WHERE monitor_id = m.id
+			  AND result_source = 'monitor'
+			  AND created_at > NOW() - INTERVAL '24 hours'
+			  AND metrics_data #> '{http,tls}' IS NOT NULL
+			ORDER BY created_at DESC
+			LIMIT 1
+		) cr ON TRUE
 	`, pq.Array(monitorIDs))
 	if err != nil {
 		return nil, err

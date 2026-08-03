@@ -32,8 +32,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.evaluateHostMetricThresholds(ctx); err != nil {
 		return err
 	}
+	// TLS expiry is advisory — a failure here must never block availability
+	// alerting or notification dispatch further down the lifecycle.
 	if err := a.evaluateTLSExpiry(ctx); err != nil {
-		return err
+		a.logger.WithError(err).Error("TLS expiry evaluation failed")
 	}
 	if err := a.evaluateMeshEdges(ctx); err != nil {
 		return err
