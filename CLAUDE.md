@@ -114,5 +114,10 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   loopback targets to `host.docker.internal` (compose worker only).
 - `alert_policies` are retired (API returns 410); workspace alert config
   lives on tenants via `/notification-settings`.
+- **Web overlays must portal**: pages wrap content in `space-y-*`, which puts a
+  `margin-top` on a `fixed inset-0` sibling, so the backdrop stops covering the
+  viewport (and `main`'s `overflow-x-clip` can clip it). Wrap modal roots in
+  `components/ui/ModalPortal.tsx`. Modals still rendered inline elsewhere carry
+  this bug.
 - Commit style: conventional commits (`fix(scope):`, `feat(scope):`) with a
   body explaining root cause and verification.

@@ -182,7 +182,9 @@ export default function MaintenancePage() {
                       {' · '}
                       {window.monitors
                         .slice(0, 3)
-                        .map((m) => m.name)
+                        // A group target mutes its members too — say so instead of
+                        // reading like a single monitor.
+                        .map((m) => (m.type === 'group' ? `${m.name} (group)` : m.name))
                         .join(', ')}
                       {window.monitors.length > 3 && ` +${window.monitors.length - 3} more`}
                     </>
