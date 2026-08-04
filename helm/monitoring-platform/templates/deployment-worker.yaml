@@ -97,6 +97,9 @@ spec:
               name: {{ include "monitoring-platform.fullname" . }}-secret
               key: probara_secrets_key
         {{- end }}
+        {{- with (include "monitoring-platform.smtpEnv" .) }}
+        {{- . | nindent 8 }}
+        {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

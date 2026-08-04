@@ -62,6 +62,14 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   worker, alerter. Compose passes it through from the shell env to all four;
   Helm wires it via guarded `secretKeyRef` blocks. Rotation keys (`_V2`+) go
   through the chart's top-level `extraEnv`.
+- **`SMTP_*`**: needed by alerter (alert delivery), worker (async dispatch),
+  and **api** — `POST /alert-channels/{id}/test` runs the email plugin in the
+  API process, so alerter-only SMTP yields channels that deliver alerts but
+  fail every test with `mailer not configured`. Parsed once in
+  `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
+  top-level `smtp:` block renders the env into all three workloads. Compose
+  wires none of it. `SMTP_USE_TLS=true` is implicit TLS (port 465), never
+  STARTTLS.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job) and
   `<service>.extraEnv`; `worker.extraEnv` also reaches location workers, and
   `worker.locations[]` entries can carry their own.

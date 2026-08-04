@@ -93,6 +93,45 @@ func TestLoadAlerterConfig_Defaults(t *testing.T) {
 	}
 }
 
+// The API needs the same SMTP transport as the alerter: POST
+// /alert-channels/{id}/test runs the email plugin's Send path in-process, so a
+// missing mailer there fails every email channel test even when delivery works.
+func TestLoadAPIConfig_SMTP(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SMTP_HOST", "smtp.example.com")
+	t.Setenv("SMTP_PORT", "465")
+	t.Setenv("SMTP_USE_TLS", "true")
+	t.Setenv("SMTP_USERNAME", "user@example.com")
+	t.Setenv("SMTP_FROM", "")
+
+	cfg, err := LoadAPIConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.SMTPHost != "smtp.example.com" {
+		t.Fatalf("expected SMTPHost smtp.example.com, got %s", cfg.SMTPHost)
+	}
+	if cfg.SMTPPort != 465 {
+		t.Fatalf("expected SMTPPort 465, got %d", cfg.SMTPPort)
+	}
+	if !cfg.SMTPUseTLS {
+		t.Fatalf("expected SMTPUseTLS true")
+	}
+	if cfg.SMTPFrom != "user@example.com" {
+		t.Fatalf("expected SMTPFrom to default to SMTP_USERNAME, got %s", cfg.SMTPFrom)
+	}
+}
+
+func TestLoadAPIConfig_SMTPInvalidPort(t *testing.T) {
+	setRequiredAPIEnv(t)
+	t.Setenv("SMTP_PORT", "not-a-port")
+
+	if _, err := LoadAPIConfig(); err == nil {
+		t.Fatalf("expected error for invalid SMTP_PORT")
+	}
+}
+
 func TestLoadSchedulerConfig_RetentionDefaults(t *testing.T) {
 	t.Setenv("HTTP_PORT", "8080")
 	t.Setenv("METRICS_PORT", "9090")

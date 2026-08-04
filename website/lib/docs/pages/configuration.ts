@@ -595,7 +595,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The worker uses the same `LLM_*` and `SMTP_*` variables documented on this page. Compose and Helm do not currently wire AI, notification, or SMTP variables into the worker.',
+            'The worker uses the same `LLM_*` and `SMTP_*` variables documented on this page. Compose wires neither AI, notification, nor SMTP variables into the worker. Helm wires `SMTP_*` through its `smtp` values block; AI and notification-mode variables still require `extraEnv`.',
         },
       ],
     },
@@ -651,6 +651,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Must match worker.',
             ],
           ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The `SMTP_*` variables are read identically by three services, and each one needs them for a different reason: the **alerter** delivers alert email from its evaluation loop, the **worker** delivers it when asynchronous dispatch is enabled, and the **API** serves `POST /api/v1/alert-channels/{id}/test`, which runs the same email plugin in-process. An install that sets SMTP only on the alerter delivers alerts correctly but fails every email channel test with `mailer not configured`. The Helm `smtp` values block renders the variables into all three at once; set it there rather than in a single service\'s `extraEnv`.',
         },
         {
           type: 'table',
@@ -885,7 +890,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
             ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
             ['AI fallback', 'Not wired', 'Not wired'],
-            ['SMTP and notification mode', 'Not wired', 'Not wired'],
+            [
+              'SMTP',
+              'Not wired',
+              '`smtp` values block wired to API, worker, and alerter',
+            ],
+            ['Notification dispatch mode', 'Not wired', 'Not wired'],
             ['Scheduler result ingest', 'Code defaults only', 'Code defaults only'],
             ['Scheduler purge and mesh', 'Code defaults only', 'Code defaults only'],
             ['Worker result stream and AI/notification queues', 'Code defaults only', 'Code defaults only'],

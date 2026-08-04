@@ -91,4 +91,40 @@ NATS host
 */}}
 {{- define "monitoring-platform.natsHost" -}}
 {{- printf "%s-nats" (include "monitoring-platform.fullname" .) }}
+{{- end }}{{/*
+SMTP env block for the builtin email notification plugin. Rendered into every
+workload that can invoke email Send: alerter (alert delivery), worker
+(async notifications consumer), and api (alert-channel test endpoint). Wiring
+only some of them produces channels that deliver but cannot be tested, or the
+reverse. Emits nothing when smtp.host is unset.
+*/}}
+{{- define "monitoring-platform.smtpEnv" -}}
+{{- with .Values.smtp }}
+{{- if .host }}
+- name: SMTP_HOST
+  value: {{ .host | quote }}
+- name: SMTP_PORT
+  value: {{ .port | quote }}
+- name: SMTP_USE_TLS
+  value: {{ .useTLS | quote }}
+{{- with .from }}
+- name: SMTP_FROM
+  value: {{ . | quote }}
+{{- end }}
+{{- with .username }}
+- name: SMTP_USERNAME
+  value: {{ . | quote }}
+{{- end }}
+{{- if .existingSecret }}
+- name: SMTP_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .existingSecret | quote }}
+      key: {{ .existingSecretKey | default "password" | quote }}
+{{- else if .password }}
+- name: SMTP_PASSWORD
+  value: {{ .password | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

@@ -16,6 +16,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 )
 
 func main() {
@@ -47,6 +48,29 @@ func main() {
 		log.WithError(err).Fatal("Failed to run migrations")
 	}
 	log.Info("Database migrations completed")
+
+	// Wire the SMTP backend into the email plugin. The API never dispatches
+	// real alerts — that is the alerter's job — but POST
+	// /alert-channels/{id}/test invokes the same plugin Send path, so without a
+	// mailer here every email channel test fails with "mailer not configured"
+	// even when delivery works end to end.
+	if cfg.SMTPHost != "" && cfg.SMTPFrom != "" {
+		smtpMailer, err := email.NewSMTPMailer(email.SMTPParams{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+			UseTLS:   cfg.SMTPUseTLS,
+		})
+		if err != nil {
+			log.WithError(err).Warn("Failed to configure SMTP mailer; email channel tests will fail")
+		} else {
+			email.SetMailer(smtpMailer)
+		}
+	} else {
+		log.Warn("SMTP not configured; email channel tests will report mailer not configured")
+	}
 
 	// Initialize metrics
 	metricsRegistry := metrics.NewRegistry(cfg.ServiceName)

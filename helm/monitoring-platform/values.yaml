@@ -133,6 +133,34 @@ secrets:
 extraEnv: []
 
 # =============================================================================
+# SMTP (builtin email notification channels)
+# =============================================================================
+# Process-level mail transport for email alert channels. Rendered into the
+# alerter (alert delivery), the worker (async notification dispatch), and the
+# api (the "Test channel" button hits POST /alert-channels/{id}/test, which
+# runs the same plugin Send path in-process). Set it here rather than in a
+# single service's extraEnv — wiring only the alerter gives channels that
+# deliver alerts but fail every test.
+#
+# Leave host empty to disable: email channels then report "mailer not
+# configured" instead of sending.
+#
+# useTLS=true means implicit TLS on connect (SMTPS), NOT STARTTLS — pair it
+# with port 465. Providers advertising 587 expect STARTTLS and will not work.
+smtp:
+  host: ""
+  port: 465
+  useTLS: true
+  # Sender address. Falls back to username when empty.
+  from: ""
+  username: ""
+  # Prefer existingSecret over an inline password. existingSecret must live in
+  # the release namespace; existingSecretKey defaults to "password".
+  password: ""
+  existingSecret: ""
+  existingSecretKey: "password"
+
+# =============================================================================
 # MIGRATIONS JOB
 # =============================================================================
 migrations:

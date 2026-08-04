@@ -354,7 +354,12 @@ kubectl -n probara get jobs`,
             [
               '`extraEnv`, `<service>.extraEnv`',
               '`[]`',
-              'Standard EnvVar entries appended to workloads: top-level `extraEnv` reaches every workload (including the migrations job); per-service lists (`api`, `scheduler`, `worker`, `alerter`, `statusPage`, `frontend`, `migrations`) reach one. `worker.extraEnv` also applies to location workers, and each `worker.locations` entry may carry its own `extraEnv`. Use this for any supported runtime variable without a dedicated chart value (SMTP, LLM, rotation keys, SSRF policy).',
+              'Standard EnvVar entries appended to workloads: top-level `extraEnv` reaches every workload (including the migrations job); per-service lists (`api`, `scheduler`, `worker`, `alerter`, `statusPage`, `frontend`, `migrations`) reach one. `worker.extraEnv` also applies to location workers, and each `worker.locations` entry may carry its own `extraEnv`. Use this for any supported runtime variable without a dedicated chart value (LLM, rotation keys, SSRF policy).',
+            ],
+            [
+              '`smtp.host`, `.port`, `.useTLS`, `.from`, `.username`, `.password`, `.existingSecret`, `.existingSecretKey`',
+              '`""`, `465`, `true`, `""`, `""`, `""`, `""`, `password`',
+              'Mail transport for email alert channels, rendered into the API, worker, and alerter together — the API needs it for the channel test endpoint, not only the alerter. Empty `host` disables email delivery. `useTLS` selects implicit TLS (pair with port 465), not STARTTLS. Prefer `existingSecret` over an inline `password`.',
             ],
             [
               '`auth.auditRetentionDays`',
@@ -439,7 +444,7 @@ kubectl -n probara get jobs`,
             [
               '`alerter.enabled`, `.replicas`, `.metricsPort`, `.logLevel`',
               '`true`, `2`, `9090`, `info`',
-              'Alert evaluation workload; advanced alert/SMTP settings are not chart values.',
+              'Alert evaluation workload. SMTP comes from the top-level `smtp` block; other advanced alert settings are not chart values.',
             ],
           ],
         },

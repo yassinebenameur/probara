@@ -22,9 +22,62 @@ type BaseConfig struct {
 	NATSURL     string
 }
 
+// SMTPConfig is the process-level SMTP transport for the builtin email
+// notification plugin. Every service that can invoke email Send needs it: the
+// alerter (evaluation loop), the worker (async notifications consumer), and the
+// API (the alert-channel test endpoint). Embedded rather than nested so
+// existing cfg.SMTPHost-style reads keep working.
+type SMTPConfig struct {
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPUseTLS   bool
+}
+
+// loadSMTPConfig reads the SMTP_* variables. Sole parser for these — services
+// must not re-read the env, so defaults and validation stay identical across
+// api, worker, and alerter. All fields are optional: when SMTP_HOST is empty no
+// mailer is installed and the email plugin's Send returns an explicit error.
+func loadSMTPConfig() (SMTPConfig, error) {
+	var cfg SMTPConfig
+
+	cfg.SMTPHost = os.Getenv("SMTP_HOST")
+
+	cfg.SMTPPort = 587
+	if v := os.Getenv("SMTP_PORT"); v != "" {
+		port, err := strconv.Atoi(v)
+		if err != nil {
+			return SMTPConfig{}, fmt.Errorf("invalid SMTP_PORT: %w", err)
+		}
+		cfg.SMTPPort = port
+	}
+
+	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
+
+	cfg.SMTPFrom = os.Getenv("SMTP_FROM")
+	if cfg.SMTPFrom == "" {
+		cfg.SMTPFrom = cfg.SMTPUsername
+	}
+
+	cfg.SMTPUseTLS = true
+	if v := os.Getenv("SMTP_USE_TLS"); v != "" {
+		useTLS, err := strconv.ParseBool(v)
+		if err != nil {
+			return SMTPConfig{}, fmt.Errorf("invalid SMTP_USE_TLS: %w", err)
+		}
+		cfg.SMTPUseTLS = useTLS
+	}
+
+	return cfg, nil
+}
+
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
+	SMTPConfig
 	AlertStream        string
 	AlertSubject       string
 	AlertConsumerName  string
@@ -114,6 +167,9 @@ type SchedulerConfig struct {
 // WorkerConfig contains configuration for the worker service
 type WorkerConfig struct {
 	BaseConfig
+	// SMTP backend wired into the builtin email plugin (worker side, used by
+	// the notifications consumer).
+	SMTPConfig
 	WorkerConcurrency  int
 	NATSConsumerName   string
 	CheckJobStream     string
@@ -151,20 +207,12 @@ type WorkerConfig struct {
 	NotificationsStream       string
 	NotificationsSubjectGlob  string
 	NotificationsConsumerName string
-
-	// SMTP backend wired into the builtin email plugin (worker side, used by
-	// the notifications consumer). Mirrors AlerterConfig fields.
-	SMTPHost     string
-	SMTPPort     int
-	SMTPUsername string
-	SMTPPassword string
-	SMTPFrom     string
-	SMTPUseTLS   bool
 }
 
 // AlerterConfig contains configuration for the alerter service
 type AlerterConfig struct {
 	BaseConfig
+	SMTPConfig
 	AlertStream                  string
 	AlertSubject                 string
 	AlertEvalIntervalSeconds     int
@@ -172,12 +220,6 @@ type AlerterConfig struct {
 	AlertGroupWindowSeconds      int
 	AlertGroupMaxChildren        int
 	LatencyAnomalyEnabled        bool
-	SMTPHost                     string
-	SMTPPort                     int
-	SMTPUsername                 string
-	SMTPPassword                 string
-	SMTPFrom                     string
-	SMTPUseTLS                   bool
 	AlertEmailTo                 string
 
 	// AsyncDispatch toggles publishing channel notifications to the NATS
@@ -432,6 +474,16 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	cfg.OIDC = *oidcCfg
+
+	// SMTP_* — the API needs the transport for POST
+	// /alert-channels/{id}/test on email channels. Unset means the test
+	// endpoint reports email as not configured; alert delivery itself is
+	// unaffected (that runs in the alerter).
+	smtpCfg, err := loadSMTPConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.SMTPConfig = smtpCfg
 
 	return cfg, nil
 }
@@ -897,33 +949,11 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	// SMTP — only required when the email plugin is registered AND the
 	// notifications consumer is wired in. Otherwise these stay empty and the
 	// email plugin Send() returns an explicit error.
-	cfg.SMTPHost = os.Getenv("SMTP_HOST")
-	smtpPortStr := os.Getenv("SMTP_PORT")
-	if smtpPortStr == "" {
-		cfg.SMTPPort = 587
-	} else {
-		port, err := strconv.Atoi(smtpPortStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid SMTP_PORT: %w", err)
-		}
-		cfg.SMTPPort = port
+	smtpCfg, err := loadSMTPConfig()
+	if err != nil {
+		return nil, err
 	}
-	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
-	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
-	cfg.SMTPFrom = os.Getenv("SMTP_FROM")
-	if cfg.SMTPFrom == "" {
-		cfg.SMTPFrom = cfg.SMTPUsername
-	}
-	useTLSStr := os.Getenv("SMTP_USE_TLS")
-	if useTLSStr == "" {
-		cfg.SMTPUseTLS = true
-	} else {
-		useTLS, err := strconv.ParseBool(useTLSStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid SMTP_USE_TLS: %w", err)
-		}
-		cfg.SMTPUseTLS = useTLS
-	}
+	cfg.SMTPConfig = smtpCfg
 
 	return cfg, nil
 }
@@ -1019,44 +1049,12 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 		cfg.AlertGroupMaxChildren = val
 	}
 
-	// SMTP_HOST
-	cfg.SMTPHost = os.Getenv("SMTP_HOST")
-
-	// SMTP_PORT
-	smtpPortStr := os.Getenv("SMTP_PORT")
-	if smtpPortStr == "" {
-		cfg.SMTPPort = 587
-	} else {
-		smtpPort, err := strconv.Atoi(smtpPortStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid SMTP_PORT: %w", err)
-		}
-		cfg.SMTPPort = smtpPort
+	// SMTP_* transport
+	smtpCfg, err := loadSMTPConfig()
+	if err != nil {
+		return nil, err
 	}
-
-	// SMTP_USERNAME
-	cfg.SMTPUsername = os.Getenv("SMTP_USERNAME")
-
-	// SMTP_PASSWORD
-	cfg.SMTPPassword = os.Getenv("SMTP_PASSWORD")
-
-	// SMTP_FROM
-	cfg.SMTPFrom = os.Getenv("SMTP_FROM")
-	if cfg.SMTPFrom == "" {
-		cfg.SMTPFrom = cfg.SMTPUsername
-	}
-
-	// SMTP_USE_TLS
-	smtpUseTLSStr := os.Getenv("SMTP_USE_TLS")
-	if smtpUseTLSStr == "" {
-		cfg.SMTPUseTLS = true
-	} else {
-		useTLS, err := strconv.ParseBool(smtpUseTLSStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid SMTP_USE_TLS: %w", err)
-		}
-		cfg.SMTPUseTLS = useTLS
-	}
+	cfg.SMTPConfig = smtpCfg
 
 	// ALERT_EMAIL_TO
 	cfg.AlertEmailTo = os.Getenv("ALERT_EMAIL_TO")

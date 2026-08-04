@@ -202,7 +202,7 @@ export const ALERTING_PAGE: DocPage = {
           type: "list",
           items: [
             "Create a channel from a registered plugin and save its plugin-specific configuration.",
-            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission.",
+            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission. Email tests are served by the API process, so they need the same [platform SMTP configuration](/docs/configuration/#alerter-and-smtp) as the alerter; without it the test reports `mailer not configured` even when alert email is being delivered.",
             "Activate or deactivate the channel. Inactive channels remain configured but are skipped for delivery.",
             "Assign it in tenant defaults or in a monitor's custom routing.",
           ],
