@@ -1,3 +1,11 @@
+# [1.0.0-alpha.61](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.60...v1.0.0-alpha.61) (2026-08-04)
+
+
+### Bug Fixes
+
+* **api:** wire SMTP mailer so email channel tests stop failing ([9616380](https://github.com/yassinebenameur/probara/commit/96163802297fa3a91490ac9548a7205419420728))
+* **web:** email recipient field ate the separator, blocking a second address ([d5f5b5f](https://github.com/yassinebenameur/probara/commit/d5f5b5f10ef58ba930b0ec4a55c477348f8309f5))
+
 # [1.0.0-alpha.60](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.59...v1.0.0-alpha.60) (2026-08-03)
 
 
