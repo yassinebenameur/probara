@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Button from '@/components/ui/Button';
 import FormField from '@/components/ui/FormField';
 import type { PluginField, PluginManifest } from '@/lib/types';
@@ -76,20 +76,7 @@ function FieldRenderer({ field, value, error, isEdit, onChange }: FieldRendererP
       );
     case 'email_list':
       return (
-        <FormField
-          label={field.label}
-          required={field.required}
-          description={field.help ?? 'Separate emails with commas, semicolons, or new lines.'}
-          error={error}
-        >
-          <input
-            type="text"
-            className="input"
-            placeholder={field.placeholder ?? 'oncall@example.com, team@example.com'}
-            value={emailListToString(value)}
-            onChange={(e) => onChange(splitEmails(e.target.value))}
-          />
-        </FormField>
+        <EmailListField field={field} value={value} error={error} onChange={onChange} />
       );
     case 'secret':
       return (
@@ -121,6 +108,60 @@ function FieldRenderer({ field, value, error, isEdit, onChange }: FieldRendererP
         </FormField>
       );
   }
+}
+
+/**
+ * Comma/semicolon/newline separated address input over a string[] value.
+ *
+ * The separator has to survive keystrokes: parsing on every change and echoing
+ * the parsed array back drops the separator the user just typed (splitEmails
+ * discards the empty trailing segment), which makes a second address
+ * impossible to enter. So the raw text is local state while the field is being
+ * edited and only the parsed array travels to the parent.
+ */
+function EmailListField({
+  field,
+  value,
+  error,
+  onChange,
+}: {
+  field: PluginField;
+  value: unknown;
+  error?: string;
+  onChange: (v: unknown) => void;
+}) {
+  const incoming = emailListToString(value);
+  const [text, setText] = useState(incoming);
+
+  // Adopt values arriving from outside (edit form hydrating, plugin switch,
+  // reset) without clobbering in-progress typing: skip when the local text
+  // already parses to the same addresses.
+  useEffect(() => {
+    setText((current) =>
+      splitEmails(current).join(', ') === splitEmails(incoming).join(', ') ? current : incoming
+    );
+  }, [incoming]);
+
+  return (
+    <FormField
+      label={field.label}
+      required={field.required}
+      description={field.help ?? 'Separate emails with commas, semicolons, or new lines.'}
+      error={error}
+    >
+      <input
+        type="text"
+        className="input"
+        placeholder={field.placeholder ?? 'oncall@example.com, team@example.com'}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange(splitEmails(e.target.value));
+        }}
+        onBlur={() => setText(splitEmails(text).join(', '))}
+      />
+    </FormField>
+  );
 }
 
 function BoolField({
