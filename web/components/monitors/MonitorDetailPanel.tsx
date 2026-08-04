@@ -31,6 +31,7 @@ import {
   getOperationalResults,
 } from '@/lib/monitor-utils';
 import Pill from '@/components/ui/Pill';
+import CopyableTarget from '@/components/ui/CopyableTarget';
 
 interface MonitorDetailPanelProps {
   monitor: Monitor | null;
@@ -367,9 +368,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   <>
                     <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">URL</span>
-                      <span className="truncate text-right text-[#e5e7eb]">
-                        {httpConfig.url}
-                      </span>
+                      <CopyableTarget
+                        value={httpConfig.url}
+                        label="URL"
+                        size="xs"
+                        className="min-w-0 justify-end"
+                        textClassName="text-[#e5e7eb]"
+                      />
                     </li>
                     <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Method</span>
@@ -580,9 +585,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                     {synConfig.base_url && (
                       <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                         <span className="text-muted">Base URL</span>
-                        <span className="truncate text-right text-[#e5e7eb]">
-                          {synConfig.base_url}
-                        </span>
+                        <CopyableTarget
+                          value={synConfig.base_url}
+                          label="base URL"
+                          size="xs"
+                          className="min-w-0 justify-end"
+                          textClassName="text-[#e5e7eb]"
+                        />
                       </li>
                     )}
                     <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
@@ -601,9 +610,13 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                   <>
                     <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Start URL</span>
-                      <span className="truncate text-right text-[#e5e7eb]">
-                        {synConfig.start_url}
-                      </span>
+                      <CopyableTarget
+                        value={synConfig.start_url}
+                        label="start URL"
+                        size="xs"
+                        className="min-w-0 justify-end"
+                        textClassName="text-[#e5e7eb]"
+                      />
                     </li>
                     <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
                       <span className="text-muted">Journey</span>

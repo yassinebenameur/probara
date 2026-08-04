@@ -10,6 +10,7 @@ import FilterChip from '@/components/ui/FilterChip';
 import PageHeader from '@/components/ui/PageHeader';
 import SharedEmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
@@ -35,6 +36,7 @@ import {
   formatTimeAgo,
   getEffectiveMonitorStatus,
   isPlatformResult,
+  monitorTargetLabel,
   MonitorDisplayStatus,
   calculateLatencyStats,
 } from '@/lib/monitor-utils';
@@ -553,7 +555,15 @@ function MonitorRow({
           )}
         </div>
         {getUrl() && (
-          <p className="text-[10px] text-slate-500 truncate mt-0.5">{getUrl()}</p>
+          <div className="mt-0.5">
+            <CopyableTarget
+              value={getUrl() as string}
+              label={monitorTargetLabel(monitor.type)}
+              size="xs"
+              revealOnHover
+              textClassName="text-slate-500"
+            />
+          </div>
         )}
         {/* Agent Metrics */}
         {monitor.type === 'agent' && agentMetrics && (
@@ -1006,7 +1016,18 @@ function DetailPanel({
         <div className="flex items-start justify-between">
           <div>
             <h3 className="font-medium text-white">{monitor.name}</h3>
-            <p className="text-xs text-slate-500 mt-0.5">{getUrl() || monitor.type}</p>
+            {getUrl() ? (
+              <div className="mt-0.5 max-w-full">
+                <CopyableTarget
+                  value={getUrl() as string}
+                  label={monitorTargetLabel(monitor.type)}
+                  size="sm"
+                  textClassName="text-slate-500"
+                />
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 mt-0.5">{monitor.type}</p>
+            )}
           </div>
           <StatusDot status={status} />
         </div>

@@ -1,4 +1,4 @@
-import { CheckResult, Monitor, MonitorState } from './types';
+import { CheckResult, Monitor, MonitorState, MonitorType } from './types';
 
 export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
 export type MonitorDisplayStatus = MonitorHealthStatus | 'paused' | 'maintenance';
@@ -131,6 +131,28 @@ export function monitorStateColors(state?: MonitorState): { dot: string; text: s
       return { dot: 'bg-rose-500', text: 'text-rose-400', border: 'border-rose-500/40' };
     default:
       return { dot: 'bg-slate-500', text: 'text-slate-400', border: 'border-slate-500/40' };
+  }
+}
+
+/**
+ * Human name for a monitor's target, used in copy/open affordances so the
+ * tooltip reads "Copy URL" for HTTP but "Copy host" for ping and friends.
+ */
+export function monitorTargetLabel(type?: MonitorType | string): string {
+  switch (type) {
+    case 'http':
+    case 'synthetic_api':
+    case 'synthetic_browser':
+    case 'websocket':
+      return 'URL';
+    case 'ping':
+    case 'dns':
+    case 'agent':
+      return 'host';
+    case 'sip':
+      return 'SIP target';
+    default:
+      return 'endpoint';
   }
 }
 

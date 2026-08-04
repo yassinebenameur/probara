@@ -17,8 +17,9 @@ import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
 import Button from '@/components/ui/Button';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
-import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
+import { getEffectiveMonitorStatus, monitorTargetLabel, MonitorDisplayStatus } from '@/lib/monitor-utils';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
 
@@ -493,15 +494,25 @@ export default function EditMonitorPage() {
     }
   };
 
-  // Get URL from monitor config
+  // Get URL from monitor config — mirrors the monitor list so synthetic and
+  // gRPC monitors expose the same copyable target on both screens.
   const getUrl = () => {
     if (!monitor) return null;
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
-    if (monitor.url) return monitor.url;
-    if ((monitor.type === 'tcp' || monitor.type === 'grpc') && monitor.config && 'host' in monitor.config) {
+    if (monitor.config && 'base_url' in monitor.config) return monitor.config.base_url || null;
+    if (monitor.config && 'start_url' in monitor.config) return monitor.config.start_url;
+    if (monitor.type === 'grpc' && monitor.config && 'host' in monitor.config) {
+      const cfg = monitor.config as { host?: string; port?: number; use_tls?: boolean };
+      if (cfg.host) {
+        const port = cfg.port || (cfg.use_tls === false ? 80 : 443);
+        return `${cfg.host}:${port}`;
+      }
+    }
+    if (monitor.type === 'tcp' && monitor.config && 'host' in monitor.config) {
       const cfg = monitor.config as { host?: string; port?: number };
       if (cfg.host) return cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host;
     }
+    if (monitor.url) return monitor.url;
     if (monitor.config && 'host' in monitor.config) return monitor.config.host;
     return null;
   };
@@ -637,9 +648,19 @@ export default function EditMonitorPage() {
           </span>
         }
         subtitle={
-          <span>
+          <span className="inline-flex max-w-full flex-wrap items-center gap-x-2">
             <span className="uppercase">{monitor.type}</span>
-            {getUrl() && <span> · {getUrl()}</span>}
+            {getUrl() && (
+              <>
+                <span aria-hidden="true">·</span>
+                <CopyableTarget
+                  value={getUrl() as string}
+                  label={monitorTargetLabel(monitor.type)}
+                  size="sm"
+                  textClassName="text-slate-400"
+                />
+              </>
+            )}
           </span>
         }
         action={
