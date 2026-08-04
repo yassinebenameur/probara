@@ -1,3 +1,13 @@
+# [1.0.0-alpha.62](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.61...v1.0.0-alpha.62) (2026-08-04)
+
+
+### Features
+
+* **maintenance:** select targets by group or tag, and select all at once ([800c685](https://github.com/yassinebenameur/probara/commit/800c685c29405c808b6422b8d3b8b24bda69e92f))
+* **web,status-page:** unify the platform logo on the trace mark ([38187ff](https://github.com/yassinebenameur/probara/commit/38187ff0d7a4255aed0c8e7e521a4ab40a9dd037))
+* **web:** add operator UI favicon ([15c529c](https://github.com/yassinebenameur/probara/commit/15c529cc77787a3bd97af0448da7cfb108b08fa2)), closes [#ff5a24](https://github.com/yassinebenameur/probara/issues/ff5a24) [#140a05](https://github.com/yassinebenameur/probara/issues/140a05)
+* **web:** make monitor targets copyable from the list and detail views ([d54b667](https://github.com/yassinebenameur/probara/commit/d54b66704b35313a473402ea3e1832b7666d537a))
+
 # [1.0.0-alpha.61](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.60...v1.0.0-alpha.61) (2026-08-04)
 
 
