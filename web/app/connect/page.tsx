@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/Button';
+import BrandMark from '@/components/ui/BrandMark';
 import { setApiKey } from '@/lib/auth';
 
 export default function ConnectPage() {
@@ -61,11 +62,7 @@ export default function ConnectPage() {
         <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-8 backdrop-blur-xl">
           {/* Logo */}
           <div className="mb-8 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-violet-500 shadow-lg shadow-cyan-500/20">
-              <svg className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </div>
+            <BrandMark size={56} className="drop-shadow-[0_8px_16px_rgba(255,90,36,0.25)]" />
           </div>
 
           {/* Header */}

@@ -105,6 +105,15 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 
 ## Gotchas
 
+- **Brand mark lives in four runtimes** and they must change together:
+  `web/components/ui/BrandMark.tsx` (operator UI logo — sidebar, login,
+  connect), `web/app/icon.svg` (dashboard favicon), `website/app/icon.svg`
+  (landing/docs favicon), and an inline data-URI `<link rel="icon">` in
+  `shared/statustemplate/default.gohtml` (status pages, monochrome variant
+  that inverts with browser chrome). Same trace geometry, four copies —
+  status pages get a data URI because the service has no static-asset route
+  and pages render under arbitrary domains and path prefixes.
+
 - **rtk output filter** (user-global CLAUDE.md tool) truncates long command
   output in pipes — `helm template`, large `curl` responses. Use
   `rtk proxy <cmd>` for raw output or write to a file and read that.

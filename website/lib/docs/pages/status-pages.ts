@@ -103,7 +103,7 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ["`custom_css`", "Page-scoped custom stylesheet, up to 128 KiB"],
             [
               "`custom_head_html`",
-              "Trusted custom head markup, up to 64 KiB",
+              "Trusted custom head markup, up to 64 KiB. Injected after the built-in head, so a `<link rel=\"icon\">` here replaces the default monochrome favicon",
             ],
             [
               "`custom_footer_html`",

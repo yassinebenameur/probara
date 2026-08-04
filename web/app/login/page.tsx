@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/ui/Button";
+import BrandMark from "@/components/ui/BrandMark";
 import { clearApiKey } from "@/lib/auth";
 import { getOidcStatus } from "@/lib/api";
 import type { OidcStatus } from "@/lib/types";
@@ -223,21 +224,10 @@ function LoginPageInner() {
       <div className="relative w-full max-w-md p-8">
         <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-8 backdrop-blur-xl">
           <div className="mb-8 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-cyan-600 shadow-lg shadow-cyan-500/20">
-              <svg
-                className="h-8 w-8 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 11c1.657 0 3-1.343 3-3S13.657 5 12 5 9 6.343 9 8s1.343 3 3 3zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
-                />
-              </svg>
-            </div>
+            <BrandMark
+              size={56}
+              className="drop-shadow-[0_8px_16px_rgba(255,90,36,0.25)]"
+            />
           </div>
 
           <div className="mb-8 text-center">

@@ -12,7 +12,6 @@ import {
   Users,
   Settings,
   LogOut,
-  Zap,
   Siren,
   Workflow,
   Wrench,
@@ -26,6 +25,7 @@ import { TENANT_CHANGED_EVENT, clearSelectedTenantId } from '@/lib/tenant';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import Pill from '@/components/ui/Pill';
 import Button from '@/components/ui/Button';
+import BrandMark from '@/components/ui/BrandMark';
 
 type NavItem = {
   name: string;
@@ -162,9 +162,7 @@ export default function Sidebar() {
     <aside className="sticky top-0 hidden h-screen w-60 flex-col border-r border-white/[0.06] bg-slate-950/50 backdrop-blur-xl md:flex">
       {/* Logo */}
       <div className="flex h-14 items-center gap-3 border-b border-white/[0.06] px-4">
-        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-400 to-cyan-600">
-          <Zap className="h-4 w-4 text-white" strokeWidth={2.5} />
-        </div>
+        <BrandMark size={32} className="flex-shrink-0" />
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold text-white">Probara</h1>
           <p className="truncate text-[0.7rem] text-slate-500">Monitoring Platform</p>
