@@ -1,3 +1,10 @@
+# [1.0.0-alpha.63](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.62...v1.0.0-alpha.63) (2026-08-05)
+
+
+### Features
+
+* **email:** render alert email as branded HTML with a readable body ([3446c5c](https://github.com/yassinebenameur/probara/commit/3446c5ca02fb345cd6dd9f6863ffbae3600e00d0))
+
 # [1.0.0-alpha.62](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.61...v1.0.0-alpha.62) (2026-08-04)
 
 
