@@ -60,8 +60,10 @@ func main() {
 			Username:         cfg.SMTPUsername,
 			Password:         cfg.SMTPPassword,
 			From:             cfg.SMTPFrom,
+			FromName:         cfg.SMTPFromName,
 			UseTLS:           cfg.SMTPUseTLS,
 			DefaultRecipient: cfg.AlertEmailTo,
+			AppBaseURL:       cfg.AppBaseURL,
 		})
 		if err != nil {
 			log.WithError(err).Warn("Failed to configure SMTP mailer, email alerts will be skipped")

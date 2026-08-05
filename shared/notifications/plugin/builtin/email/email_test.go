@@ -34,8 +34,8 @@ func TestPlugin_Manifest(t *testing.T) {
 	if !m.HasCapability(plugin.CapabilityRenderedAlert) {
 		t.Error("expected CapabilityRenderedAlert")
 	}
-	if len(m.Fields) != 3 {
-		t.Errorf("expected 3 fields, got %d", len(m.Fields))
+	if len(m.Fields) != 4 {
+		t.Errorf("expected 4 fields, got %d", len(m.Fields))
 	}
 }
 
@@ -119,7 +119,7 @@ func TestPlugin_Send_PropagatesMailerError(t *testing.T) {
 
 func TestRenderSubject_DefaultsAndOverride(t *testing.T) {
 	event := sampleEvent()
-	subj, err := RenderSubject(event, Templates{})
+	subj, err := RenderSubject(event, Templates{}, "")
 	if err != nil {
 		t.Fatalf("default subject: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestRenderSubject_DefaultsAndOverride(t *testing.T) {
 		t.Errorf("default subject missing monitor name: %q", subj)
 	}
 
-	subj, err = RenderSubject(event, Templates{Subject: "X-{{.status}}"})
+	subj, err = RenderSubject(event, Templates{Subject: "X-{{.status}}"}, "")
 	if err != nil {
 		t.Fatalf("override: %v", err)
 	}
@@ -137,11 +137,11 @@ func TestRenderSubject_DefaultsAndOverride(t *testing.T) {
 }
 
 func TestRenderBody_DefaultIncludesKeyFields(t *testing.T) {
-	body, err := RenderBody(sampleEvent(), Templates{})
+	body, err := RenderBody(sampleEvent(), Templates{}, "")
 	if err != nil {
 		t.Fatalf("default body: %v", err)
 	}
-	for _, want := range []string{"API health", "Critical", "active", "tenant-1"} {
+	for _, want := range []string{"API health", "Critical", "DOWN", "tenant-1", "timeout"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q\nfull body:\n%s", want, body)
 		}
@@ -177,7 +177,7 @@ func sampleEvent() notifications.AlertEvent {
 
 func TestDefaultBody_RootCauseAnnotation(t *testing.T) {
 	event := sampleEvent()
-	if strings.Contains(DefaultBody(event), "Likely Caused By") {
+	if strings.Contains(DefaultBody(event), "Likely root cause") {
 		t.Fatal("root-cause line rendered without a root cause set")
 	}
 
@@ -187,11 +187,11 @@ func TestDefaultBody_RootCauseAnnotation(t *testing.T) {
 	event.Alert.RootCauseDownSince = &downSince
 
 	body := DefaultBody(event)
-	if !strings.Contains(body, "Likely Caused By: Postgres prod") {
+	if !strings.Contains(body, "Postgres prod") || !strings.Contains(body, "Likely root cause") {
 		t.Fatalf("root-cause line missing from body:\n%s", body)
 	}
 
-	data := templateData(event)
+	data := templateData(event, "")
 	if data["root_cause_monitor_name"] != "Postgres prod" {
 		t.Fatalf("template variable root_cause_monitor_name = %v", data["root_cause_monitor_name"])
 	}

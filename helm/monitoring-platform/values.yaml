@@ -133,6 +133,15 @@ secrets:
 extraEnv: []
 
 # =============================================================================
+# PUBLIC APP URL (notification deep links)
+# =============================================================================
+# Public origin of the operator UI, e.g. "https://probara.example.com". Alert
+# emails render an "open the monitor" button pointing at it. Left empty the
+# button is omitted — a notification linking to a guessed host is worse than one
+# with no link. Rendered into api, alerter and worker alongside the SMTP block.
+appBaseURL: ""
+
+# =============================================================================
 # SMTP (builtin email notification channels)
 # =============================================================================
 # Process-level mail transport for email alert channels. Rendered into the
@@ -153,6 +162,8 @@ smtp:
   useTLS: true
   # Sender address. Falls back to username when empty.
   from: ""
+  # Display name on the From header. Code defaults to "Probara Alerts".
+  fromName: ""
   username: ""
   # Prefer existingSecret over an inline password. existingSecret must live in
   # the release namespace; existingSecretKey defaults to "password".

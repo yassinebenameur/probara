@@ -667,9 +667,19 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`SMTP_PASSWORD`', 'Empty', 'SMTP authentication secret.'],
             ['`SMTP_FROM`', '`SMTP_USERNAME` when empty', 'Required effective sender address.'],
             [
+              '`SMTP_FROM_NAME`',
+              '`Probara Alerts`',
+              'Display name on the From header. The envelope sender stays `SMTP_FROM`.',
+            ],
+            [
               '`SMTP_USE_TLS`',
               '`true`; boolean',
               '`true` selects direct implicit TLS, not STARTTLS. Verify the provider and port pairing.',
+            ],
+            [
+              '`APP_BASE_URL`',
+              'Empty',
+              'Public origin of the operator UI. Adds an "open the monitor" button to alert email; omitted when unset. Read by the same three services.',
             ],
           ],
         },

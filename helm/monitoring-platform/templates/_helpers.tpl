@@ -96,9 +96,16 @@ SMTP env block for the builtin email notification plugin. Rendered into every
 workload that can invoke email Send: alerter (alert delivery), worker
 (async notifications consumer), and api (alert-channel test endpoint). Wiring
 only some of them produces channels that deliver but cannot be tested, or the
-reverse. Emits nothing when smtp.host is unset.
+reverse. APP_BASE_URL rides along because the same three workloads render the
+alert email and its "open the monitor" link; it is emitted independently of
+smtp.host so it survives an SMTP-less install. Emits nothing when neither
+smtp.host nor appBaseURL is set.
 */}}
 {{- define "monitoring-platform.smtpEnv" -}}
+{{- with .Values.appBaseURL }}
+- name: APP_BASE_URL
+  value: {{ . | quote }}
+{{- end }}
 {{- with .Values.smtp }}
 {{- if .host }}
 - name: SMTP_HOST
@@ -109,6 +116,10 @@ reverse. Emits nothing when smtp.host is unset.
   value: {{ .useTLS | quote }}
 {{- with .from }}
 - name: SMTP_FROM
+  value: {{ . | quote }}
+{{- end }}
+{{- with .fromName }}
+- name: SMTP_FROM_NAME
   value: {{ . | quote }}
 {{- end }}
 {{- with .username }}

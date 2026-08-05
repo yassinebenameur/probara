@@ -33,7 +33,14 @@ type SMTPConfig struct {
 	SMTPUsername string
 	SMTPPassword string
 	SMTPFrom     string
+	SMTPFromName string
 	SMTPUseTLS   bool
+	// AppBaseURL is the public origin of the operator UI, e.g.
+	// "https://probara.example.com". Alert emails link to the affected monitor
+	// when it is set and omit the button when it is not — a guessed host in a
+	// notification is worse than no link. It lives with the SMTP block because
+	// the same three workloads need it, for the same reason.
+	AppBaseURL string
 }
 
 // loadSMTPConfig reads the SMTP_* variables. Sole parser for these — services
@@ -61,6 +68,16 @@ func loadSMTPConfig() (SMTPConfig, error) {
 	if cfg.SMTPFrom == "" {
 		cfg.SMTPFrom = cfg.SMTPUsername
 	}
+
+	// Display name on the From header. Defaults to a product name so alerts do
+	// not arrive as a bare address; set SMTP_FROM_NAME="" is not distinguishable
+	// from unset, so an operator who wants a bare address sets it to a space.
+	cfg.SMTPFromName = os.Getenv("SMTP_FROM_NAME")
+	if cfg.SMTPFromName == "" {
+		cfg.SMTPFromName = "Probara Alerts"
+	}
+
+	cfg.AppBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/")
 
 	cfg.SMTPUseTLS = true
 	if v := os.Getenv("SMTP_USE_TLS"); v != "" {

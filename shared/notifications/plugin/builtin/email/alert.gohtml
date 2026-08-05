@@ -1,0 +1,202 @@
+{{- /*
+Probara alert email. Table-based, inline-styled, 600px — the shape every mail
+client (including the Word rendering engine in Outlook desktop) renders
+predictably. Colour classes exist only so the prefers-color-scheme block below
+can override them; clients that ignore <style> still get the inline light
+values. Rendered by RenderHTML in render.go from the alertView model, so this
+markup and the plain-text part always describe the same alert.
+*/ -}}
+<!DOCTYPE html>
+<html lang="en" style="margin:0;padding:0;">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>{{.Label}} · {{.MonitorName}}</title>
+<style>
+  a { text-decoration: none; }
+  .pb-body { background: #f4f4f5; }
+  .pb-card { background: #ffffff; border-color: #e4e4e7; }
+  .pb-title { color: #18181b; }
+  .pb-text { color: #3f3f46; }
+  .pb-muted { color: #71717a; }
+  .pb-dim { color: #a1a1aa; }
+  .pb-rule { border-color: #ededf0; }
+  .pb-panel { background: #fafafa; border-color: #ededf0; }
+  @media (prefers-color-scheme: dark) {
+    .pb-body { background: #09090b !important; }
+    .pb-card { background: #131316 !important; border-color: #2a2a30 !important; }
+    .pb-title { color: #fafafa !important; }
+    .pb-text { color: #d4d4d8 !important; }
+    .pb-muted { color: #a1a1aa !important; }
+    .pb-dim { color: #7c7c85 !important; }
+    .pb-rule { border-color: #26262b !important; }
+    .pb-panel { background: #1a1a1e !important; border-color: #2a2a30 !important; }
+    /* The status pill and the root-cause callout deliberately keep their light
+       tints on a dark card. The pill's tint IS the severity signal, and a
+       media query cannot re-derive a legible dark equivalent per tone —
+       the tone colours arrive as inline values. */
+  }
+  @media only screen and (max-width: 620px) {
+    .pb-pad { padding-left: 24px !important; padding-right: 24px !important; }
+    .pb-h1 { font-size: 22px !important; }
+    .pb-metric { font-size: 32px !important; }
+    /* The masthead timestamp collides with the wordmark on a phone; the same
+       instant is spelled out in the Triggered row below. */
+    .pb-sm-hide { display: none !important; }
+  }
+</style>
+</head>
+<body class="pb-body" style="margin:0;padding:0;width:100%;background:#f4f4f5;-webkit-font-smoothing:antialiased;">
+
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">{{.Preheader}}&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="pb-body" style="background:#f4f4f5;">
+<tr><td align="center" style="padding:32px 12px;">
+
+  {{/* Outlook's Word engine ignores max-width, so it gets a fixed 600px wrapper
+       through a conditional comment. The comment is injected as pre-escaped
+       HTML because html/template elides comments from its output. */}}
+  {{.MSOWrapOpen}}
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="pb-card" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #e4e4e7;border-radius:16px;overflow:hidden;font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+
+    <!-- Masthead on instrument-panel ink. The mark is a bar trace drawn with
+         table cells rather than an <img>: Gmail drops data: URIs and every
+         client can block remote images, and a masthead that silently vanishes
+         is worse than one built from cells that always paint. -->
+    <tr><td style="background:{{.BrandInk}};padding:18px 32px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td align="left" valign="bottom" style="width:34px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="height:22px;"><tr>
+              <td valign="bottom" style="height:22px;"><div style="width:3px;height:9px;background:{{.BrandOrange}};border-radius:1px;font-size:0;line-height:0;">&nbsp;</div></td>
+              <td valign="bottom" style="height:22px;padding-left:3px;"><div style="width:3px;height:17px;background:{{.BrandOrange}};border-radius:1px;font-size:0;line-height:0;">&nbsp;</div></td>
+              <td valign="bottom" style="height:22px;padding-left:3px;"><div style="width:3px;height:6px;background:{{.BrandOrange}};border-radius:1px;font-size:0;line-height:0;">&nbsp;</div></td>
+              <td valign="bottom" style="height:22px;padding-left:3px;"><div style="width:3px;height:22px;background:{{.BrandOrange}};border-radius:1px;font-size:0;line-height:0;">&nbsp;</div></td>
+              <td valign="bottom" style="height:22px;padding-left:3px;"><div style="width:3px;height:12px;background:{{.BrandOrange}};border-radius:1px;font-size:0;line-height:0;">&nbsp;</div></td>
+            </tr></table>
+          </td>
+          <td align="left" valign="middle" style="padding-left:14px;font-family:'Archivo',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:#fdfcfb;">Probara</td>
+          <td class="pb-sm-hide" align="right" valign="middle" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#a89c94;">{{.SentAt}}</td>
+        </tr>
+      </table>
+    </td></tr>
+
+    <!-- Status rail: the alert's severity, readable before a single word is. -->
+    <tr><td style="height:4px;line-height:4px;font-size:0;background:{{.Tone.Accent}};">&nbsp;</td></tr>
+
+    <tr><td class="pb-pad" style="padding:32px 40px 8px 40px;">
+      <!-- Status pill -->
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="background:{{.Tone.Tint}};border-radius:999px;padding:6px 14px;">
+          <span style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:11px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:{{.Tone.OnTint}};">{{.Tone.Label}} &nbsp;·&nbsp; {{.Label}}</span>
+        </td>
+      </tr></table>
+
+      <h1 class="pb-title pb-h1" style="margin:18px 0 0 0;font-family:'Archivo',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:26px;line-height:1.25;font-weight:700;letter-spacing:-0.4px;color:#18181b;mso-line-height-rule:exactly;">{{.MonitorName}}</h1>
+
+      <p class="pb-text" style="margin:12px 0 0 0;font-size:15px;line-height:1.6;color:#3f3f46;mso-line-height-rule:exactly;">{{.Summary}}</p>
+    </td></tr>
+
+    {{if .Metric}}
+    <!-- Measurement readout: the number that caused the alert, unmissable. -->
+    <tr><td class="pb-pad" style="padding:24px 40px 0 40px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="pb-panel" style="background:#fafafa;border:1px solid #ededf0;border-radius:10px;">
+        <!-- The accent stripe lives on the inner cell: the dark-mode .pb-panel
+             rule rewrites the table's border-color wholesale and would repaint
+             a border-left set on the table itself. -->
+        <tr><td style="padding:18px 20px;border-left:3px solid {{.Tone.Accent}};">
+          <div class="pb-muted" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:10px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#71717a;">{{.Metric.Label}}</div>
+          <div class="pb-metric" style="margin-top:6px;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:36px;line-height:1.1;font-weight:600;letter-spacing:-1px;color:{{.Tone.Accent}};mso-line-height-rule:exactly;">{{.Metric.Value}}</div>
+          {{if .Metric.Note}}<div class="pb-dim" style="margin-top:6px;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:12px;color:#a1a1aa;">{{.Metric.Note}}</div>{{end}}
+        </td></tr>
+      </table>
+    </td></tr>
+    {{end}}
+
+    {{if .LastError}}
+    <!-- Verbatim probe output, monospaced and wrapped so long errors do not
+         blow the 600px column open. -->
+    <tr><td class="pb-pad" style="padding:24px 40px 0 40px;">
+      <div class="pb-muted" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:10px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#71717a;padding-bottom:8px;">Last error</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="pb-panel" style="background:#fafafa;border:1px solid #ededf0;border-radius:10px;">
+        <tr><td class="pb-text" style="padding:14px 16px;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:13px;line-height:1.55;color:#3f3f46;word-break:break-word;">{{.LastError}}</td></tr>
+      </table>
+    </td></tr>
+    {{end}}
+
+    {{if .RootCause}}
+    <!-- Dependency-graph annotation: usually the only line that matters at 3am. -->
+    <tr><td class="pb-pad" style="padding:24px 40px 0 40px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fdf6e8;border:1px solid #f3e4c3;border-radius:10px;">
+        <tr><td style="padding:14px 16px;">
+          <div style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:10px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#946200;">Likely root cause</div>
+          <div style="margin-top:6px;font-size:14px;line-height:1.5;color:#7a5200;">{{.RootCause}}</div>
+        </td></tr>
+      </table>
+    </td></tr>
+    {{end}}
+
+    {{if .Locations}}
+    <tr><td class="pb-pad" style="padding:24px 40px 0 40px;">
+      <div class="pb-muted" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:10px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#71717a;padding-bottom:10px;">Failing locations</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        {{range .Locations}}
+        <tr>
+          <td valign="top" style="width:6px;padding:8px 0 0 0;font-size:0;line-height:0;"><div style="width:6px;height:6px;border-radius:3px;background:{{$.Tone.Accent}};font-size:0;line-height:0;">&nbsp;</div></td>
+          <td class="pb-text" style="padding:0 0 8px 12px;font-size:14px;line-height:1.5;color:#3f3f46;">{{.Name}}{{if .DownSince}} <span class="pb-dim" style="color:#a1a1aa;">— {{.DownSince}}</span>{{end}}</td>
+        </tr>
+        {{end}}
+      </table>
+    </td></tr>
+    {{end}}
+
+    {{if .Rows}}
+    <tr><td class="pb-pad" style="padding:28px 40px 0 40px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        {{range $i, $row := .Rows}}
+        <tr>
+          <td class="pb-muted pb-rule" style="padding:11px 12px 11px 0;{{if $i}}border-top:1px solid #ededf0;{{end}}font-size:13px;line-height:1.4;color:#71717a;white-space:nowrap;vertical-align:top;">{{$row.Label}}</td>
+          <td class="pb-text pb-rule" align="right" style="padding:11px 0;{{if $i}}border-top:1px solid #ededf0;{{end}}font-size:13px;line-height:1.4;font-weight:600;color:#3f3f46;vertical-align:top;">{{$row.Value}}</td>
+        </tr>
+        {{end}}
+      </table>
+    </td></tr>
+    {{end}}
+
+    {{if .ActionURL}}
+    <tr><td class="pb-pad" style="padding:28px 40px 0 40px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td align="center" style="background:{{.BrandOrange}};border-radius:8px;">
+          <a href="{{.ActionURL}}" style="display:inline-block;padding:13px 24px;font-family:'Archivo',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:0.2px;color:{{.BrandInk}};">{{.ActionLabel}} &nbsp;&rarr;</a>
+        </td>
+      </tr></table>
+    </td></tr>
+    {{end}}
+
+    <tr><td class="pb-pad" style="padding:32px 40px 0 40px;"><div class="pb-rule" style="height:1px;line-height:1px;font-size:0;border-top:1px solid #ededf0;">&nbsp;</div></td></tr>
+
+    <tr><td class="pb-pad" style="padding:16px 40px 32px 40px;">
+      <p class="pb-dim" style="margin:0;font-size:12px;line-height:1.6;color:#a1a1aa;">
+        You are receiving this because your address is on an email alert channel for this workspace.
+      </p>
+      <p class="pb-dim" style="margin:10px 0 0 0;font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:11px;line-height:1.7;color:#a1a1aa;">
+        alert {{.AlertID}}{{if .TenantID}}<br>workspace {{.TenantID}}{{end}}
+      </p>
+    </td></tr>
+
+  </table>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
+    <tr><td align="center" style="padding:16px 12px 0 12px;">
+      <span class="pb-dim" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#a1a1aa;">Probara &nbsp;·&nbsp; uptime &amp; voice observability</span>
+    </td></tr>
+  </table>
+  {{.MSOWrapClose}}
+
+</td></tr>
+</table>
+</body>
+</html>

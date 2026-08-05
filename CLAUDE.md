@@ -62,14 +62,17 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   worker, alerter. Compose passes it through from the shell env to all four;
   Helm wires it via guarded `secretKeyRef` blocks. Rotation keys (`_V2`+) go
   through the chart's top-level `extraEnv`.
-- **`SMTP_*`**: needed by alerter (alert delivery), worker (async dispatch),
-  and **api** — `POST /alert-channels/{id}/test` runs the email plugin in the
-  API process, so alerter-only SMTP yields channels that deliver alerts but
-  fail every test with `mailer not configured`. Parsed once in
-  `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
-  top-level `smtp:` block renders the env into all three workloads. Compose
-  wires none of it. `SMTP_USE_TLS=true` is implicit TLS (port 465), never
-  STARTTLS.
+- **`SMTP_*` / `APP_BASE_URL`**: needed by alerter (alert delivery), worker
+  (async dispatch), and **api** — `POST /alert-channels/{id}/test` runs the
+  email plugin in the API process, so alerter-only SMTP yields channels that
+  deliver alerts but fail every test with `mailer not configured`. Parsed once
+  in `shared/config` (`loadSMTPConfig`, embedded `SMTPConfig`); the chart's
+  top-level `smtp:` and `appBaseURL:` values render the env into all three
+  workloads via the `smtpEnv` helper. Compose wires none of it.
+  `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
+  `APP_BASE_URL` is the operator-UI origin and only adds the "open the
+  monitor" button to alert email — unset omits the button, never a guessed
+  host.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job) and
   `<service>.extraEnv`; `worker.extraEnv` also reaches location workers, and
   `worker.locations[]` entries can carry their own.
@@ -112,7 +115,21 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   `shared/statustemplate/default.gohtml` (status pages, monochrome variant
   that inverts with browser chrome). Same trace geometry, four copies —
   status pages get a data URI because the service has no static-asset route
-  and pages render under arbitrary domains and path prefixes.
+  and pages render under arbitrary domains and path prefixes. Alert email is
+  the deliberate exception: `shared/notifications/plugin/builtin/email/alert.gohtml`
+  draws a bar trace out of table cells because Gmail drops `data:` image URIs
+  and every client can block remote ones — a masthead that vanishes is worse
+  than an approximation. Recolour it with the other four; do not give it an
+  `<img>`.
+
+- **Alert email rendering** lives entirely in
+  `shared/notifications/plugin/builtin/email`: `view.go` builds one
+  presentation model (`alertView`) that both `alert.gohtml` (HTML part) and
+  `renderAlertText` (plain-text part) consume, so the two MIME parts of a
+  message cannot describe different alerts. Add a new alert kind's wording in
+  `summaryFor`/`toneFor`/`metricFor`, never in the template. `smtp.go`
+  assembles `multipart/alternative` with base64 parts (long styled lines
+  otherwise trip the SMTP 998-octet limit) and RFC 2047 headers.
 
 - **rtk output filter** (user-global CLAUDE.md tool) truncates long command
   output in pipes — `helm template`, large `curl` responses. Use

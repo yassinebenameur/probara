@@ -168,8 +168,8 @@ export const ALERTING_PAGE: DocPage = {
           rows: [
             [
               "`email`",
-              "`to` list and optional Go `text/template` subject/body",
-              "Uses the [platform SMTP configuration](/docs/configuration/#alerter-and-smtp)",
+              "`to` list and optional subject / plain-text / HTML body templates",
+              "Branded HTML plus plain-text email over the [platform SMTP configuration](/docs/configuration/#alerter-and-smtp)",
             ],
             [
               "`slack`",
@@ -213,6 +213,45 @@ export const ALERTING_PAGE: DocPage = {
           title: "Webhook hosts are validated",
           text:
             "Built-in chat plugins accept only their approved HTTPS webhook hosts, and generic webhooks require HTTPS. Redirects and DNS/network policy are still security-sensitive; keep egress narrowly controlled.",
+        },
+      ],
+    },
+    {
+      id: "email-rendering",
+      title: "Email rendering and templates",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "With no template overrides, an email channel sends a `multipart/alternative` message: a branded HTML part and a plain-text part rendered from the same data, so text-only clients and mail archives never see markup. The HTML part is self-contained — inline styles, no remote images, no `data:` URIs — and adapts to the reader's light or dark theme. Both parts lead with a one-sentence summary of what happened, then the measurement that tripped the alert (observed vs. baseline latency, metric vs. threshold, certificate days remaining), the verbatim probe error, the likely root cause when the dependency graph identifies one, the failing locations of a multi-location monitor, and a metadata block with the trigger time, elapsed duration, and failed-check count.",
+        },
+        {
+          type: "paragraph",
+          text:
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+        },
+        {
+          type: "table",
+          columns: ["Channel field", "Effect"],
+          rows: [
+            [
+              "`subject_template`",
+              "Go `text/template` replacing the default `[Alert Triggered] <monitor>` subject.",
+            ],
+            [
+              "`body_template`",
+              "Go `text/template` replacing the plain-text body. Set on its own it sends a text-only message: an operator who wrote a specific text alert should not also receive unrelated generated markup alongside it.",
+            ],
+            [
+              "`body_html_template`",
+              "Go `html/template` replacing the built-in HTML design. Alert values are HTML-escaped; your markup is not. Combine it with `body_template` to control both parts.",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Templates receive the raw alert fields (`monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out and the error is logged.",
         },
       ],
     },
