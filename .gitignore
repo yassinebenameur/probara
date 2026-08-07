@@ -54,6 +54,11 @@ status-page/main
 postgres_data/
 nats_data/
 
+# Database dumps (`make db-backup` writes backup.sql to the repo root)
+backup.sql
+*.dump
+*.sql.gz
+
 # Kubernetes secrets
 *.secret.yaml
 secrets/

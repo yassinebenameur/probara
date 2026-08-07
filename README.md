@@ -280,6 +280,16 @@ make migrate
 make test
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, the build and test
+commands per module, and the commit conventions.
+
+Found a security issue? Please report it privately — see
+[SECURITY.md](SECURITY.md). Do not open a public issue.
+
+Licensed under AGPL-3.0; see [LICENSE](LICENSE).
+
 ## Notes
 
 - `README.md` reflects the current repo state: backend services run via `docker-compose.yml`; UI runs from `web/`.
