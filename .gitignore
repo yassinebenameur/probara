@@ -37,6 +37,13 @@ build/
 coverage
 coverage.html
 
+# Next.js build output (and the .next.old.<ts> backups `next build` leaves behind —
+# these embed app source in webpack caches and must never be committed)
+.next/
+**/.next/
+.next.old.*
+**/.next.old.*
+
 # Compiled agent binaries
 static/agent/
 agent/uptime-agent
@@ -69,6 +76,14 @@ temp/
 # Test/report artifacts
 web/playwright-report/
 web/test-results/
+.playwright-mcp/
+# Ad-hoc screenshots and Playwright a11y-snapshot dumps land at the repo root
+/*.png
+/asr-detail.yml
+
+# Agent/tooling scratch
+.claire/
+.mcp.json
 
 # Visual brainstorming sessions
 .superpowers/
