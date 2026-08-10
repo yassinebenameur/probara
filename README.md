@@ -1,90 +1,119 @@
 # Probara Monitoring Platform
 
-Kubernetes-first uptime monitoring for APIs, services, and endpoints.
+Self-hosted blackbox monitoring platform: Go microservices connected by NATS
+JetStream and PostgreSQL, a Next.js operator UI, and a public status page
+service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
 
-## What This Project Is
+![Monitors list showing http, dns, tcp, postgres, and group monitors with uptime bars](docs/screenshots/monitors.png)
 
-Probara is a blackbox monitoring platform designed to run as distributed microservices on Kubernetes:
+## What it brings to the table
 
-- API service for monitor, alert policy, status page, tenant, and auth workflows
-- Scheduler that continuously enqueues check jobs
-- Worker pool that executes checks in parallel
-- Alerter that evaluates failures and dispatches notifications
-- Status page service for public uptime pages
-- Web UI (Next.js) for operations
+- **17 monitor types, checked at the real protocol layer** — HTTP (status,
+  body, JSON, and TLS-expiry assertions), ICMP ping, DNS records, TCP, gRPC
+  health, WebSocket, SIP (OPTIONS and digest-auth REGISTER over udp/tcp/tls),
+  Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, multi-step API sequences with
+  variable extraction, scripted browser journeys (headless Chromium via
+  chromedp), push heartbeats, a host agent for CPU/memory/disk telemetry, and
+  monitor groups.
+- **Multi-location checks** — remote workers connect outbound to NATS only,
+  never to Postgres, so a private location needs one egress rule. Results are
+  tracked per location with a configurable failure quorum; fewer failing
+  locations than quorum yields a distinct `degraded` state instead of a false
+  `down`. An N×N inter-location mesh probes worker-to-worker paths and alerts
+  on broken edges.
+- **Small footprint** — every service is a static, CGO-free Go binary. At
+  default Helm resource requests, a complete HA install (two replicas of each
+  service plus bundled Postgres and NATS) requests about 1 CPU and 1.4 Gi of
+  memory; one replica of each app service requests 450m / 576Mi. The host
+  agent is a single ~8 MB static binary. The worker image is the one heavy
+  image — it bundles Chromium for browser checks.
+- **Alerting with context** — consecutive-failure thresholds and latency
+  anomaly detection, alert grouping, reminders, and maintenance windows.
+  Delivery over email, Slack, Discord, Teams, and webhooks. Incidents, a
+  service dependency graph, and optional LLM root-cause analysis through any
+  OpenAI-compatible endpoint (configuration only — no hardcoded vendor; local
+  vLLM/Ollama work).
+- **Access control** — multi-tenancy, OIDC SSO with group-to-role mapping,
+  admin/editor/viewer roles, an audit log, read/write-scoped API keys, monitor
+  and channel secrets encrypted at rest, and an SSRF guard applied to every
+  checker that dials out.
+- **Status pages** — theme the built-in page, or replace the entire Go
+  template with draft preview and versioned publish/revert. Pages update live
+  over NATS and server-sent events.
 
-Supported monitor types in the codebase:
+| Inter-location mesh | Per-location monitor detail |
+| --- | --- |
+| ![Mesh connectivity matrix with per-edge latencies between three locations](docs/screenshots/mesh.png) | ![Monitor detail with per-location status chips and the failure quorum rule](docs/screenshots/monitor-detail.png) |
+| **Public status page** | **Operations dashboard** |
+| ![Public status page with 24-hour uptime bars and per-service health](docs/screenshots/status-page.png) | ![Dashboard with uptime and response-time trend and recent changes feed](docs/screenshots/dashboard.png) |
 
-- `http`
-- `ping`
-- `dns`
-- `grpc`
-- `sip`
-- `synthetic_api`
-- `synthetic_browser`
-- `push`
-- `agent`
-- `group`
+## Architecture
 
-`grpc` monitors call `grpc.health.v1.Health/Check` and mark success only when status is `SERVING`.
-
-## Why This Is Kubernetes-Focused And Built For Scale
-
-- Microservice split by responsibility (API, scheduler, workers, alerter, status page, frontend)
-- Stateless application services; state is externalized to PostgreSQL + NATS JetStream
-- Queue-based fan-out (`scheduler -> NATS -> workers`) for high-throughput check execution
-- Horizontal scaling by replicas (especially workers)
-- Built-in worker autoscaling support in Helm (`HorizontalPodAutoscaler`)
-- Health/readiness/metrics endpoints on each service for Kubernetes probes and observability
-
-High-level flow:
+- **API** (chi) — monitors, alert channels, notification settings, incidents,
+  status pages, tenants, users, auth (sessions, OIDC, API keys), audit log
+- **Scheduler** — enqueues check jobs on NATS JetStream and ingests results:
+  per-location state, quorum aggregation, and the monitor state machine
+- **Workers** — execute all check types; the default fleet plus optional
+  per-location fleets consuming only their location's subject
+- **Alerter** — alert lifecycle, latency anomaly detection, grouping,
+  mesh-edge alerts, and notification delivery
+- **Status page** — public uptime pages with live updates
+- **Web** — Next.js operator UI
 
 ```
-clients -> API -> PostgreSQL
-               -> NATS JetStream <- Scheduler
-                                  <- Workers (N replicas)
-workers -> check results -> PostgreSQL -> Alerter + Status Page
+clients ──> API ──> PostgreSQL
+              └──> NATS JetStream <── Scheduler (dispatch)
+                        │
+                        ▼
+        Workers (default fleet + per-location fleets)
+                        │  results via NATS
+                        ▼
+        Scheduler ingest ──> PostgreSQL (per-location state + quorum)
+                                  │
+                 Alerter (lifecycle, anomaly, grouping) ──> channels
+                 Status pages (live via NATS + SSE)
+
+host agents / push checks ──> API
+workers ◀──▶ workers (mesh echo probes between locations)
 ```
 
-## Quick Start (Local Docker)
+Details: [`docs/architecture.md`](docs/architecture.md).
 
-Prerequisites:
+## Monitor types
 
-- Docker + Docker Compose v2
-- Go 1.23+ (for local commands like admin bootstrap)
-- Node.js LTS via `nvm` (for UI)
-- Make
+Web & API: `http`, `synthetic_api`, `synthetic_browser`, `websocket`, `grpc`
+Network: `ping`, `dns`, `tcp`, `sip`
+Databases & brokers: `redis`, `postgres`, `mysql`, `mongodb`, `rabbitmq`
+Infrastructure: `agent`, `push`, `group`
 
-Use nvm LTS before running UI commands:
+`grpc` monitors call `grpc.health.v1.Health/Check` and mark success only when
+status is `SERVING`.
+
+## Quick Start (Local)
+
+Prerequisites: Docker + Docker Compose v2, Go 1.23+, Node.js LTS via `nvm`,
+Make.
+
+One command — infra in Docker, app services in containers, UI via nvm:
 
 ```bash
-nvm install --lts
-nvm use --lts
+make start-all
 ```
 
-Start backend services:
+Or run the Go services as local processes (Docker only for Postgres/NATS):
 
 ```bash
-make up
+make start-all-local
 ```
 
-This starts: `postgres`, `nats`, `migrations`, `api`, `scheduler`, `worker`, `alerter`, `status-page`.
-
-Create/update an admin user (one-time):
+Both bootstrap the database, run migrations, and start the UI. Create or
+update an admin user (one-time):
 
 ```bash
 POSTGRES_URL='postgres://probara:probara@localhost:5432/probara?sslmode=disable' \
 ADMIN_USERNAME='admin' \
 ADMIN_PASSWORD='change-me' \
 go run ./cmd/admin
-```
-
-Run the UI:
-
-```bash
-cd web
-npm install
-npm run dev
 ```
 
 Useful local URLs:
@@ -95,19 +124,23 @@ Useful local URLs:
 - NATS monitor: `http://localhost:8222`
 - Metrics: `:9090` (api), `:9091` (scheduler), `:9092` (worker), `:9093` (status-page), `:9094` (alerter)
 
+To try OIDC SSO locally, Compose ships a Dex identity provider behind a
+profile: `docker compose --profile sso up -d dex`.
+
+Manual, step-by-step alternative:
+
+```bash
+make up            # postgres, nats, migrations, api, scheduler, worker, alerter, status-page
+cd web
+npm install
+npm run dev
+```
+
 ## Kubernetes Deployment (Helm)
 
-Helm chart path:
-
-- `helm/monitoring-platform`
-
-Prerequisites:
-
-- Kubernetes cluster
-- `kubectl`
-- `helm`
-
-Install or upgrade:
+Chart: `helm/monitoring-platform` (bundled PostgreSQL and NATS, optional
+external ones, worker HPA, per-location worker fleets, migrations run as a
+`post-install`/`post-upgrade` hook job).
 
 ```bash
 helm upgrade --install probara ./helm/monitoring-platform \
@@ -127,6 +160,12 @@ secrets:
   adminJwtSecret: "replace-with-32-plus-char-secret"
   initialApiKey: "replace-with-secure-initial-key"
 
+api:
+  # Public URLs used in agent install scripts, push webhook URLs, and
+  # private-location deploy snippets. Set both when exposing Probara.
+  publicBaseURL: "https://probara.example.com"
+  publicNatsURL: "nats://nats.example.com:4222"
+
 ingress:
   enabled: true
   className: nginx
@@ -143,27 +182,45 @@ ingress:
 
 statusPage:
   baseUrl: "https://status.example.com"
-  service:
-    type: NodePort
 
 frontend:
   apiUrl: "/api"
   # Optional override. Defaults to in-cluster API service:
-  # http://<release>-probara-api:8080 (or <release>-api if nameOverride/fullnameOverride changes naming)
-  apiProxyTarget: ""
+  # http://<release>-probara-api:8080
 
 worker:
   replicas: 2
   checkJobStream: "check-jobs"
   checkJobSubject: "check.job"
+  # Off by default (chart defaults: min 2, max 10, 80% CPU). Example override:
   autoscaling:
     enabled: true
     minReplicas: 2
-    maxReplicas: 20
-    targetCPUUtilizationPercentage: 70
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
 ```
 
-### Using External PostgreSQL/NATS
+### Per-location worker fleets
+
+Each `worker.locations[]` entry becomes its own Deployment consuming only that
+location's job subject. Locations outside the cluster use the deploy snippet
+from the Locations page instead — only NATS must be reachable from there,
+never Postgres.
+
+```yaml
+worker:
+  locations:
+    - name: eu-west            # DNS-safe suffix for the Deployment name
+      locationId: "<uuid>"     # from the Locations page
+      credential: "<secret>"   # LOCATION_CREDENTIAL from deploy info
+      natsUrl: "nats://..."    # authenticated NATS URL from deploy info
+      replicas: 1
+      meshService:             # optional: expose the mesh echo port so
+        enabled: true          # other locations can probe this one
+        type: ClusterIP        # LoadBalancer for cross-VPC probing
+```
+
+### Using external PostgreSQL/NATS
 
 ```yaml
 postgresql:
@@ -175,9 +232,10 @@ nats:
   externalUrl: "nats://nats.example:4222"
 ```
 
-Set scheduler and worker job stream/subject to the same values. If you use API "run now" checks, keep `CHECK_JOB_SUBJECT` aligned there as well.
+Set scheduler and worker job stream/subject to the same values. If you use API
+"run now" checks, keep `CHECK_JOB_SUBJECT` aligned there as well.
 
-### Access Without Ingress
+### Access without ingress
 
 ```bash
 kubectl port-forward -n monitoring svc/probara-frontend 3000:3000
@@ -185,12 +243,19 @@ kubectl port-forward -n monitoring svc/probara-api 8080:8080
 kubectl port-forward -n monitoring svc/probara-status-page 8082:8080
 ```
 
-`/api/*` requests go through the frontend server and are proxied to `API_PROXY_TARGET`
-(set automatically by the chart to the API service in-cluster).
+`/api/*` requests go through the frontend server and are proxied to
+`API_PROXY_TARGET` (set automatically by the chart to the API service
+in-cluster).
 
 ## Environment Variables
 
-When running services directly (outside Helm), these are the main environment variables.
+When running services directly (outside Helm), these are the main environment
+variables.
+
+> Note: the code defaults for the check-job queue are `CHECK_JOBS` /
+> `check.jobs`, while Compose and the Helm chart configure `check-jobs` /
+> `check.job` on all services. Either pair works — but API, scheduler, and
+> workers must all use the same values, or "run now" silently breaks.
 
 ### Core (all services)
 
@@ -289,10 +354,3 @@ Found a security issue? Please report it privately — see
 [SECURITY.md](SECURITY.md). Do not open a public issue.
 
 Licensed under AGPL-3.0; see [LICENSE](LICENSE).
-
-## Notes
-
-- `README.md` reflects the current repo state: backend services run via `docker-compose.yml`; UI runs from `web/`.
-- Helm chart includes embedded PostgreSQL and NATS, optional external dependencies, and worker HPA support.
-- Helm chart runs DB migrations as a `post-install` / `post-upgrade` hook job.
-- Architecture details: `docs/architecture.md`.
