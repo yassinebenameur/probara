@@ -1,3 +1,10 @@
+# [1.0.0-alpha.64](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.63...v1.0.0-alpha.64) (2026-08-10)
+
+
+### Features
+
+* **auth:** map OIDC groups to roles with login-time sync and settings editor ([79281a0](https://github.com/yassinebenameur/probara/commit/79281a0cc80ed2b06c3560d4dea2d036ffd6d617))
+
 # [1.0.0-alpha.63](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.62...v1.0.0-alpha.63) (2026-08-05)
 
 
