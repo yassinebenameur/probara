@@ -230,11 +230,11 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 				// so runOnce defers the rest to the next tick — this is NOT
 				// an error.
 				p.logger.WithFields(logrus.Fields{
-					"monitor_id":         monitorID,
-					"table":              d.name,
-					"rows_in_table":      tableSpent,
-					"rows_in_run":        spent,
-					"rows_budget_left":   rowsBudget,
+					"monitor_id":       monitorID,
+					"table":            d.name,
+					"rows_in_table":    tableSpent,
+					"rows_in_run":      spent,
+					"rows_budget_left": rowsBudget,
 				}).Debug("monitor purge: row budget exhausted at batch boundary; resuming next tick")
 				return spent, false, nil
 			}

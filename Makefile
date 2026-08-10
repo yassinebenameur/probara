@@ -260,7 +260,7 @@ lint: fmt vet
 
 fmt:
 	@echo "Checking code formatting..."
-	@gofmt_output=$$(gofmt -l .); \
+	@gofmt_output=$$(git ls-files -z -- '*.go' | xargs -0 gofmt -l); \
 	if [ -n "$$gofmt_output" ]; then \
 		echo "The following files need formatting:"; \
 		echo "$$gofmt_output"; \
@@ -270,5 +270,6 @@ fmt:
 
 vet:
 	@echo "Running go vet..."
-	go vet $$(go list ./... | grep -v /scripts)
+	go vet ./...
+	cd agent && go vet ./...
 	@echo "✅ go vet passed"

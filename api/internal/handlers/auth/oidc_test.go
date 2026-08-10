@@ -76,14 +76,14 @@ func TestFlowCookieTamperRejected(t *testing.T) {
 
 func TestSanitizeNextPath(t *testing.T) {
 	cases := map[string]string{
-		"/monitors":               "/monitors",
-		"/monitors?page=2":        "/monitors?page=2",
-		"":                        "",
-		"https://evil.example":    "",
-		"//evil.example":          "",
-		"monitors":                "",
-		"/ok\r\nSet-Cookie: x=1":  "",
-		"\\evil":                  "",
+		"/monitors":              "/monitors",
+		"/monitors?page=2":       "/monitors?page=2",
+		"":                       "",
+		"https://evil.example":   "",
+		"//evil.example":         "",
+		"monitors":               "",
+		"/ok\r\nSet-Cookie: x=1": "",
+		"\\evil":                 "",
 	}
 	for input, want := range cases {
 		if got := sanitizeNextPath(input); got != want {

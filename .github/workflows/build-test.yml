@@ -2,46 +2,123 @@ name: Build and Test
 
 on:
   push:
-    branches: [ dev, staging, main ]
+    branches: [dev, staging, main]
   pull_request:
-    branches: [ dev, staging, main ]
+    branches: [dev, staging, main]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  go-format:
+    name: Go formatting
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.23'
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
 
-    - name: Cache Go modules
-      uses: actions/cache@v5
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Check formatting
+        run: make fmt
 
-    - name: Download dependencies
-      run: go mod download
+  go-test:
+    name: Go test (${{ matrix.name }})
+    runs-on: ubuntu-latest
 
-    - name: Run go fmt
-      run: go fmt ./...
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: main module
+            directory: .
+            go-version-file: go.mod
+            dependency-path: go.sum
+            coverage-file: coverage-main.out
+            coverage-flag: main
+          - name: agent module
+            directory: agent
+            go-version-file: agent/go.mod
+            dependency-path: agent/go.sum
+            coverage-file: coverage-agent.out
+            coverage-flag: agent
 
-    - name: Run go vet
-      run: go vet ./...
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-    - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out ./...
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.go-version-file }}
+          cache-dependency-path: ${{ matrix.dependency-path }}
 
-    - name: Upload coverage
-      uses: codecov/codecov-action@v7
-      if: always()
-      with:
-        files: ./coverage.out
-        fail_ci_if_error: false
+      - name: Download dependencies
+        working-directory: ${{ matrix.directory }}
+        run: go mod download
+
+      - name: Run go vet
+        working-directory: ${{ matrix.directory }}
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: ${{ matrix.directory }}
+        run: go test -v -race -coverprofile="${{ github.workspace }}/${{ matrix.coverage-file }}" ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v7
+        if: always()
+        with:
+          files: ./${{ matrix.coverage-file }}
+          flags: ${{ matrix.coverage-flag }}
+          fail_ci_if_error: false
+
+  frontend:
+    name: Frontend (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: operator UI
+            directory: web
+            lockfile: web/package-lock.json
+          - name: website
+            directory: website
+            lockfile: website/package-lock.json
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: ${{ matrix.lockfile }}
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.directory }}
+        run: npm ci
+
+      - name: Run lint
+        working-directory: ${{ matrix.directory }}
+        run: npm run lint
+
+      - name: Run typecheck
+        working-directory: ${{ matrix.directory }}
+        run: npm exec -- tsc --noEmit
+
+      - name: Run production build
+        working-directory: ${{ matrix.directory }}
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: npm run build

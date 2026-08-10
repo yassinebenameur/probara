@@ -20,7 +20,6 @@ Infrastructure (Postgres, NATS, and an optional dex IdP for OIDC) runs in
 Compose; the application services run as local processes:
 
 ```sh
-make up              # start infra
 make start-all-local # run api, scheduler, worker, and the web UI locally
 ```
 
@@ -49,20 +48,26 @@ affected process, or verify through tests.
 
 ## Building and testing
 
-Go modules are independent — run these from each module directory you changed
-(`api/`, `worker/`, `scheduler/`, `shared/`, `alerter/`):
+Most Go services share the root module. The downloadable agent under `agent/`
+is a separate nested module, so verify both when a change crosses that boundary:
 
 ```sh
-go build ./...
+make lint
 go test ./...
+(cd agent && go test ./...)
 ```
 
 The full `api/` suite takes over two minutes.
 
-Frontend, from `web/` or `website/`:
+Use the repository's Node.js LTS selection and the committed lockfiles for both
+frontends. From `web/`, then `website/`, run:
 
 ```sh
-npx tsc --noEmit
+nvm use --lts
+npm ci
+npm run lint
+npm exec -- tsc --noEmit
+npm run build
 ```
 
 Chart changes:

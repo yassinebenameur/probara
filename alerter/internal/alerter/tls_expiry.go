@@ -186,7 +186,7 @@ func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.
 }
 
 // openTLSExpiryAlert opens a tls_expiry alert if one is not already open.
-// Idempotent via the (monitor_id, kind, COALESCE(metric_name, '')) partial
+// Idempotent via the (monitor_id, kind, COALESCE(metric_name, ”)) partial
 // unique index, so it is safe across alerter replicas.
 func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, days int) error {
 	value := float64(days)

@@ -17,6 +17,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -262,7 +263,7 @@ func TestSIPChecker_RegisterDigestMD5(t *testing.T) {
 		password = "s3cret"
 	)
 
-	var sawCSeq2 bool
+	var sawCSeq2 atomic.Bool
 	host, port := startFakeUDPSIPServer(t, func(request string) []string {
 		if !strings.HasPrefix(request, "REGISTER sip:probara.test SIP/2.0") {
 			t.Errorf("unexpected request line: %s", strings.SplitN(request, "\r\n", 2)[0])
@@ -276,7 +277,7 @@ func TestSIPChecker_RegisterDigestMD5(t *testing.T) {
 				authLine = strings.TrimSpace(line[len("authorization:"):])
 			}
 			if strings.HasPrefix(line, "CSeq: 2 REGISTER") {
-				sawCSeq2 = true
+				sawCSeq2.Store(true)
 			}
 		}
 		if authLine == "" {
@@ -307,7 +308,7 @@ func TestSIPChecker_RegisterDigestMD5(t *testing.T) {
 	if result.Status != "success" {
 		t.Fatalf("Status = %q (%v), want success", result.Status, result.ErrorMessage)
 	}
-	if !sawCSeq2 {
+	if !sawCSeq2.Load() {
 		t.Fatal("authenticated retry must increment CSeq to 2")
 	}
 }

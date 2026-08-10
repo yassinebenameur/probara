@@ -129,8 +129,8 @@ func TestGetRecentAlerts_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect + `
-		WHERE a.tenant_id = $1 AND ` + alertVisibleClause + `
+	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect+`
+		WHERE a.tenant_id = $1 AND `+alertVisibleClause+`
 		ORDER BY a.triggered_at DESC
 		LIMIT $2
 	`)).
@@ -168,7 +168,7 @@ func TestGetRecentAlertsForTags_ReturnsEmptySliceWhenNoRows(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect + `
+	mock.ExpectQuery(regexp.QuoteMeta(alertDetailSelect+`
 		WHERE a.tenant_id = $1
 		  AND m.tenant_id = $1
 		  AND m.tags @> $2::text[]

@@ -97,21 +97,21 @@ type StatusPageMaintenanceWindow struct {
 
 // MonitorStatus represents a monitor's status on a status page
 type MonitorStatus struct {
-	ID                 string               `json:"id"`
-	Name               string               `json:"name"`
-	URL                string               `json:"url"`
-	MonitorType        string               `json:"monitor_type"` // "http", "ping", "dns", "agent", "group", "push", "sip"
-	Status             string               `json:"status"`       // "up", "down", "error", "unknown"
-	Tags               []string             `json:"tags,omitempty"`
-	LastCheckTime      *time.Time           `json:"last_check_time,omitempty"`
-	LastHTTPStatus     *int                 `json:"last_http_status,omitempty"`
-	LastLatency        *int                 `json:"last_latency_ms,omitempty"`
-	TLSDaysUntilExpiry *int                 `json:"tls_days_until_expiry,omitempty"`
-	TLSNotAfter        string               `json:"tls_not_after,omitempty"`
+	ID                 string     `json:"id"`
+	Name               string     `json:"name"`
+	URL                string     `json:"url"`
+	MonitorType        string     `json:"monitor_type"` // "http", "ping", "dns", "agent", "group", "push", "sip"
+	Status             string     `json:"status"`       // "up", "down", "error", "unknown"
+	Tags               []string   `json:"tags,omitempty"`
+	LastCheckTime      *time.Time `json:"last_check_time,omitempty"`
+	LastHTTPStatus     *int       `json:"last_http_status,omitempty"`
+	LastLatency        *int       `json:"last_latency_ms,omitempty"`
+	TLSDaysUntilExpiry *int       `json:"tls_days_until_expiry,omitempty"`
+	TLSNotAfter        string     `json:"tls_not_after,omitempty"`
 	// CertExpiresSoon is set when the monitor has an open tls_expiry alert:
 	// the certificate is inside its configured warning window while the
 	// endpoint itself is still up.
-	CertExpiresSoon bool `json:"cert_expires_soon,omitempty"`
+	CertExpiresSoon    bool                 `json:"cert_expires_soon,omitempty"`
 	Uptime24h          *float64             `json:"uptime_24h,omitempty"`
 	Uptime24hFormatted string               `json:"-"` // For template use only
 	Uptime1h           *float64             `json:"uptime_1h,omitempty"`
