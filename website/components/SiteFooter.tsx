@@ -25,7 +25,7 @@ const footerGroups = [
     title: 'Project',
     links: [
       { label: 'GitHub', href: 'https://github.com/yassinebenameur/probara' },
-      { label: 'GPL-3.0 license', href: 'https://github.com/yassinebenameur/probara/blob/dev/LICENSE' },
+      { label: 'AGPL-3.0 license', href: 'https://github.com/yassinebenameur/probara/blob/dev/LICENSE' },
       { label: 'Issues', href: 'https://github.com/yassinebenameur/probara/issues' },
       { label: 'Releases', href: 'https://github.com/yassinebenameur/probara/releases' },
     ],
@@ -43,7 +43,7 @@ export function SiteFooter() {
           <p>
             Self-hosted monitoring for the systems your users and operators depend on.
           </p>
-          <span className="site-footer__license">Open source · GPL-3.0</span>
+          <span className="site-footer__license">Open source · AGPL-3.0</span>
         </div>
         {footerGroups.map((group) => (
           <div key={group.title} className="site-footer__group">

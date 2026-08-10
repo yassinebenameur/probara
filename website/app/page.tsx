@@ -41,7 +41,7 @@ const dataPlate = [
   ['Transport', 'NATS JetStream'],
   ['State', 'PostgreSQL'],
   ['Deploy', 'Docker Compose · Helm'],
-  ['License', 'GPL-3.0 open source'],
+  ['License', 'AGPL-3.0 open source'],
 ];
 
 const monitorGroups = [
@@ -115,7 +115,7 @@ export default function HomePage() {
         <section className="hero">
           <div className="section-shell hero__grid">
             <div className="hero__content">
-              <p className="hero__eyebrow">Self-hosted / Kubernetes-first / GPL-3.0</p>
+              <p className="hero__eyebrow">Self-hosted / Kubernetes-first / AGPL-3.0</p>
               <h1>
                 Monitoring without blind spots<span className="hero__dot">.</span>
               </h1>
