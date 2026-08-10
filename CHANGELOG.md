@@ -1,3 +1,10 @@
+# [1.0.0-alpha.65](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.64...v1.0.0-alpha.65) (2026-08-10)
+
+
+### Bug Fixes
+
+* **deps:** remediate runtime vulnerabilities ([e1b4ef0](https://github.com/yassinebenameur/probara/commit/e1b4ef03ea2cd3c1a5807a582856d083c07eb806))
+
 # [1.0.0-alpha.64](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.63...v1.0.0-alpha.64) (2026-08-10)
 
 
