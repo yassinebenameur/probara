@@ -13,6 +13,7 @@ import { ApiKey, ApiKeyScope } from '@/lib/types';
 import Select from '@/components/ui/Select';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { SSOPanel } from '@/components/settings/SSOPanel';
+import { OidcGroupMappingsPanel } from '@/components/settings/OidcGroupMappingsPanel';
 import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
@@ -215,6 +216,8 @@ export default function SettingsPage() {
       <AISettingsPanel />
 
       {isSuperadmin && <SSOPanel />}
+
+      {isSuperadmin && <OidcGroupMappingsPanel />}
 
       <Panel
         title="Data retention"

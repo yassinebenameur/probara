@@ -72,24 +72,24 @@ func TestResolveUser(t *testing.T) {
 		userID := insertPasswordlessAdmin(ctx, t, dbClient, "invited", &email, auth.PlatformRoleMember)
 
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-invited", Email: email, EmailVerified: true}
-		user, jit, err := svc.ResolveUser(ctx, claims)
+		resolved, err := svc.ResolveUser(ctx, claims)
 		if err != nil {
 			t.Fatalf("ResolveUser: %v", err)
 		}
-		if jit {
+		if resolved.JITCreated {
 			t.Fatal("expected email link, not JIT")
 		}
-		if user.ID != userID {
-			t.Fatalf("linked wrong user: %s != %s", user.ID, userID)
+		if resolved.User.ID != userID {
+			t.Fatalf("linked wrong user: %s != %s", resolved.User.ID, userID)
 		}
-		if user.AuthMethod != "oidc" {
-			t.Fatalf("expected auth method oidc after link, got %q", user.AuthMethod)
+		if resolved.User.AuthMethod != "oidc" {
+			t.Fatalf("expected auth method oidc after link, got %q", resolved.User.AuthMethod)
 		}
 
 		// Second login matches by (issuer, subject).
-		again, jit, err := svc.ResolveUser(ctx, claims)
-		if err != nil || jit || again.ID != userID {
-			t.Fatalf("repeat login: user=%v jit=%v err=%v", again, jit, err)
+		again, err := svc.ResolveUser(ctx, claims)
+		if err != nil || again.JITCreated || again.User.ID != userID {
+			t.Fatalf("repeat login: resolved=%v err=%v", again, err)
 		}
 	})
 
@@ -98,7 +98,7 @@ func TestResolveUser(t *testing.T) {
 		userID := insertAdmin(ctx, t, dbClient, "password-user", &email, auth.PlatformRoleMember)
 
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-password", Email: email, EmailVerified: true}
-		_, _, err := svc.ResolveUser(ctx, claims)
+		_, err := svc.ResolveUser(ctx, claims)
 		if !errors.Is(err, ErrNotProvisioned) {
 			t.Fatalf("expected ErrNotProvisioned, got %v", err)
 		}
@@ -132,7 +132,7 @@ func TestResolveUser(t *testing.T) {
 		// existing account, and the email unique index blocks a JIT
 		// doppelgänger — the only safe outcome is refusing the login.
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-unverified", Email: email, EmailVerified: false}
-		_, _, err := svc.ResolveUser(ctx, claims)
+		_, err := svc.ResolveUser(ctx, claims)
 		if !errors.Is(err, ErrNotProvisioned) {
 			t.Fatalf("expected ErrNotProvisioned, got %v", err)
 		}
@@ -140,21 +140,21 @@ func TestResolveUser(t *testing.T) {
 
 	t.Run("JIT provisions viewer with default membership", func(t *testing.T) {
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-new", Email: "new@example.com", EmailVerified: true}
-		user, jit, err := svc.ResolveUser(ctx, claims)
+		resolved, err := svc.ResolveUser(ctx, claims)
 		if err != nil {
 			t.Fatalf("ResolveUser: %v", err)
 		}
-		if !jit {
+		if !resolved.JITCreated {
 			t.Fatal("expected JIT provisioning")
 		}
-		if user.PlatformRole != auth.PlatformRoleMember {
-			t.Fatalf("expected member, got %q", user.PlatformRole)
+		if resolved.User.PlatformRole != auth.PlatformRoleMember {
+			t.Fatalf("expected member, got %q", resolved.User.PlatformRole)
 		}
 
 		var role string
 		if err := dbClient.QueryRowContext(ctx, `
 			SELECT role FROM tenant_memberships WHERE admin_user_id = $1 AND tenant_id = $2
-		`, user.ID, tenantID).Scan(&role); err != nil {
+		`, resolved.User.ID, tenantID).Scan(&role); err != nil {
 			t.Fatalf("membership lookup: %v", err)
 		}
 		if role != auth.RoleViewer {
@@ -167,14 +167,14 @@ func TestResolveUser(t *testing.T) {
 		insertAdmin(ctx, t, dbClient, email, nil, auth.PlatformRoleMember) // username == the email JIT will derive
 
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-collision", Email: email, EmailVerified: false}
-		user, jit, err := svc.ResolveUser(ctx, claims)
+		resolved, err := svc.ResolveUser(ctx, claims)
 		if err != nil {
 			t.Fatalf("ResolveUser: %v", err)
 		}
-		if !jit {
+		if !resolved.JITCreated {
 			t.Fatal("expected JIT provisioning")
 		}
-		if user.Username == email {
+		if resolved.User.Username == email {
 			t.Fatal("expected suffixed username on collision")
 		}
 	})
@@ -182,7 +182,7 @@ func TestResolveUser(t *testing.T) {
 	t.Run("JIT disabled yields ErrNotProvisioned", func(t *testing.T) {
 		strictSvc := newTestService(dbClient, tenantID, false)
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-stranger", Email: "stranger@example.com", EmailVerified: true}
-		_, _, err := strictSvc.ResolveUser(ctx, claims)
+		_, err := strictSvc.ResolveUser(ctx, claims)
 		if !errors.Is(err, ErrNotProvisioned) {
 			t.Fatalf("expected ErrNotProvisioned, got %v", err)
 		}
@@ -190,15 +190,15 @@ func TestResolveUser(t *testing.T) {
 
 	t.Run("disabled account cannot log back in", func(t *testing.T) {
 		claims := &Claims{Issuer: testIssuer, Subject: "sub-disabled", Email: "disabled@example.com", EmailVerified: true}
-		user, _, err := svc.ResolveUser(ctx, claims)
+		resolved, err := svc.ResolveUser(ctx, claims)
 		if err != nil {
 			t.Fatalf("initial provisioning: %v", err)
 		}
-		if _, err := dbClient.ExecContext(ctx, `UPDATE admin_users SET disabled_at = NOW() WHERE id = $1`, user.ID); err != nil {
+		if _, err := dbClient.ExecContext(ctx, `UPDATE admin_users SET disabled_at = NOW() WHERE id = $1`, resolved.User.ID); err != nil {
 			t.Fatalf("disable user: %v", err)
 		}
 
-		_, _, err = svc.ResolveUser(ctx, claims)
+		_, err = svc.ResolveUser(ctx, claims)
 		if !errors.Is(err, ErrNotProvisioned) {
 			t.Fatalf("expected ErrNotProvisioned for disabled account, got %v", err)
 		}
@@ -218,14 +218,14 @@ func TestResolveUserZeroAdminsBecomesSuperadmin(t *testing.T) {
 	svc := newTestService(dbClient, tenantID, true)
 
 	claims := &Claims{Issuer: testIssuer, Subject: "sub-first", Email: "first@example.com", EmailVerified: true}
-	user, jit, err := svc.ResolveUser(ctx, claims)
+	resolved, err := svc.ResolveUser(ctx, claims)
 	if err != nil {
 		t.Fatalf("ResolveUser: %v", err)
 	}
-	if !jit {
+	if !resolved.JITCreated {
 		t.Fatal("expected JIT provisioning")
 	}
-	if user.PlatformRole != auth.PlatformRoleSuperadmin {
-		t.Fatalf("first user on a fresh install must be superadmin, got %q", user.PlatformRole)
+	if resolved.User.PlatformRole != auth.PlatformRoleSuperadmin {
+		t.Fatalf("first user on a fresh install must be superadmin, got %q", resolved.User.PlatformRole)
 	}
 }

@@ -793,6 +793,22 @@ export const API_PAGE: DocPage = {
               "`DELETE /api/v1/users/{id}`",
               "Superadmin; delete subject to last-admin/self safeguards",
             ],
+            [
+              "`GET /api/v1/oidc-group-mappings`",
+              "Superadmin; list OIDC group→role mappings, groups seen at past SSO logins, and groups-claim config facts",
+            ],
+            [
+              "`POST /api/v1/oidc-group-mappings`",
+              "Superadmin; map an IdP group to a tenant role or platform superadmin",
+            ],
+            [
+              "`PATCH /api/v1/oidc-group-mappings/{id}`",
+              "Superadmin; change a mapping's role and/or display label",
+            ],
+            [
+              "`DELETE /api/v1/oidc-group-mappings/{id}`",
+              "Superadmin; remove a mapping",
+            ],
           ],
         },
       ],

@@ -124,6 +124,10 @@ spec:
             secretKeyRef:
               name: {{ include "monitoring-platform.fullname" . }}-secret
               key: oidc_client_secret
+        - name: OIDC_SCOPES
+          value: {{ .Values.auth.oidc.scopes | quote }}
+        - name: OIDC_GROUPS_CLAIM
+          value: {{ .Values.auth.oidc.groupsClaim | quote }}
         - name: OIDC_PROVIDER_LABEL
           value: {{ .Values.auth.oidc.providerLabel | quote }}
         - name: OIDC_JIT_PROVISION

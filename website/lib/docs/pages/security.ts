@@ -175,6 +175,8 @@ export const SECURITY_PAGE: DocPage = {
             'Register only the needed scopes: default `openid profile email`.',
             'Store `OIDC_CLIENT_SECRET` outside source control and rotate it using the IdP’s overlapping-secret procedure when possible.',
             'Use JIT role `viewer` unless a stronger business requirement exists. Validate `OIDC_JIT_DEFAULT_TENANT_ID` because the loader does not validate UUID syntax.',
+            'Prefer [OIDC group mappings](/docs/administration/#oidc-group-mappings) over broad JIT defaults when the IdP manages access: roles are re-derived from IdP groups on every login, so removing a user from a group revokes their access at their next sign-in (active sessions are re-checked per request, so demotions bite immediately after the sync).',
+            'Group-mapping misconfiguration cannot fully lock you out: the sync never demotes the last active superadmin, local password login is unaffected, and deleting all mapping rows instantly restores manual role management.',
             'Disable JIT provisioning when accounts must be approved in advance; pre-created users are matched using verified identity information.',
             'Keep `PUBLIC_BASE_URL` stable and canonical to avoid callback confusion behind proxies.',
             'Review IdP claim and email-verification behavior during every provider change.',

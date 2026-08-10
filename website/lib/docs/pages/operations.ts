@@ -588,6 +588,11 @@ helm lint ./helm/monitoring-platform \\
               'Compare the exact HTTPS callback with the IdP registration and inspect OIDC discovery.',
             ],
             [
+              'SSO user loses roles (or gains none) after login',
+              'OIDC group mappings exist but the ID token carries no groups claim — `groups` scope not requested, wrong `OIDC_GROUPS_CLAIM`, or the IdP does not embed groups in the ID token',
+              'Check API logs for the missing-groups warning, add `groups` to `OIDC_SCOPES`, and verify the [group-mapping requirements](/docs/administration/#oidc-group-mappings). Deleting all mappings restores manual role management.',
+            ],
+            [
               'Status page updates slowly',
               'NATS status subscriber disconnected or update subject differs',
               'Check `sse_subscriber_connected`, subscriber logs, shared subject, and cache TTL.',

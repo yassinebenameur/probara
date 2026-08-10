@@ -10,7 +10,7 @@ import FormActions from '@/components/ui/FormActions';
 import Select from '@/components/ui/Select';
 import Pill from '@/components/ui/Pill';
 import MembershipsEditor from '@/components/users/MembershipsEditor';
-import { getTenants, getUser, updateUser } from '@/lib/api';
+import { getTenants, getUser, listOidcGroupMappings, updateUser } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import type { AdminUser, MembershipInput, PlatformRole, Tenant } from '@/lib/types';
 
@@ -26,6 +26,9 @@ export default function EditUserPage() {
   const [platformRole, setPlatformRole] = useState<PlatformRole>('member');
   const [memberships, setMemberships] = useState<MembershipInput[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  // True when OIDC group→role mappings exist: SSO users' roles are then
+  // re-derived from IdP groups on every login, overwriting edits made here.
+  const [groupMappingsActive, setGroupMappingsActive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -36,11 +39,13 @@ export default function EditUserPage() {
       try {
         setLoading(true);
         setError('');
-        const [data, tenantsResponse] = await Promise.all([
+        const [data, tenantsResponse, mappingsResponse] = await Promise.all([
           getUser(id),
           getTenants().catch(() => ({ items: [] as Tenant[] })),
+          listOidcGroupMappings().catch(() => null),
         ]);
         setUser(data);
+        setGroupMappingsActive((mappingsResponse?.mappings?.length ?? 0) > 0);
         setUsername(data.username);
         setEmail(data.email || '');
         setPlatformRole(data.platform_role || 'member');
@@ -150,6 +155,13 @@ export default function EditUserPage() {
                 onChange={(event) => setPassword(event.target.value)}
               />
             </FormField>
+            {isOidcUser && groupMappingsActive && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+                This user signs in via SSO and OIDC group mappings are active: the platform
+                role and tenant memberships below are re-derived from their IdP groups on
+                every login. Edits here last only until their next sign-in.
+              </div>
+            )}
             <FormField label="Platform role">
               <Select
                 value={platformRole}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,6 +39,9 @@ type Claims struct {
 	EmailVerified     bool   `json:"email_verified"`
 	PreferredUsername string `json:"preferred_username"`
 	Name              string `json:"name"`
+	// Groups comes from the claim named by OIDC_GROUPS_CLAIM, so it cannot
+	// carry a static json tag; CompleteFlow fills it from the raw claim set.
+	Groups []string
 }
 
 // FlowState is the per-login-attempt state carried in the signed flow cookie.
@@ -173,6 +177,12 @@ func (s *Service) CompleteFlow(ctx context.Context, code string, flow *FlowState
 		return nil, fmt.Errorf("id_token missing subject")
 	}
 
+	var raw map[string]json.RawMessage
+	if err := idToken.Claims(&raw); err != nil {
+		return nil, fmt.Errorf("failed to parse raw claims: %w", err)
+	}
+	claims.Groups = parseGroupsClaim(raw[s.cfg.GroupsClaim])
+
 	return claims, nil
 }
 
@@ -185,36 +195,56 @@ func (s *Service) CompleteFlow(ctx context.Context, code string, flow *FlowState
 //     (bootstrap parity so a fresh OIDC-only install is administrable);
 //  4. otherwise ErrNotProvisioned.
 //
-// Returns the user and whether it was JIT-created.
-func (s *Service) ResolveUser(ctx context.Context, claims *Claims) (*models.AdminUser, bool, error) {
+// When group→role mappings exist (any oidc_group_mappings rows), the IdP is
+// the source of truth: existing users are re-synced on every login and a
+// sync failure aborts the login rather than admitting stale roles.
+func (s *Service) ResolveUser(ctx context.Context, claims *Claims) (*ResolveResult, error) {
+	result, err := s.resolveUser(ctx, claims)
+	if err == nil {
+		// The token behind these groups is verified and the login succeeded —
+		// catalog them so the mapping editor can suggest real group names.
+		s.recordSeenGroups(ctx, claims.Groups)
+	}
+	return result, err
+}
+
+func (s *Service) resolveUser(ctx context.Context, claims *Claims) (*ResolveResult, error) {
 	user, err := s.findByExternalIdentity(ctx, claims.Issuer, claims.Subject)
 	if err == nil {
-		return user, false, nil
+		sync, syncErr := s.syncMappedRoles(ctx, user, claims.Groups)
+		if syncErr != nil {
+			return nil, syncErr
+		}
+		return &ResolveResult{User: user, Sync: sync}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, false, err
+		return nil, err
 	}
 
 	if claims.Email != "" && claims.EmailVerified {
 		user, err = s.linkByEmail(ctx, claims.Issuer, claims.Subject, claims.Email)
 		if err == nil {
 			s.log.WithFields(map[string]interface{}{"email": claims.Email}).Info("Linked OIDC identity to existing user by email")
-			return user, false, nil
+			sync, syncErr := s.syncMappedRoles(ctx, user, claims.Groups)
+			if syncErr != nil {
+				return nil, syncErr
+			}
+			return &ResolveResult{User: user, Sync: sync}, nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, false, err
+			return nil, err
 		}
 	}
 
 	if !s.cfg.JITProvision {
-		return nil, false, ErrNotProvisioned
+		return nil, ErrNotProvisioned
 	}
 
 	user, err = s.provisionUser(ctx, claims)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return user, true, nil
+	return &ResolveResult{User: user, JITCreated: true}, nil
 }
 
 const oidcUserColumns = `
@@ -277,6 +307,11 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 		return nil, fmt.Errorf("invalid OIDC_JIT_DEFAULT_TENANT_ID: %w", err)
 	}
 
+	mappings, err := s.loadGroupMappings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -289,7 +324,14 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_users WHERE disabled_at IS NULL`).Scan(&activeAdmins); err != nil {
 		return nil, fmt.Errorf("failed to count active admins: %w", err)
 	}
+	// Mapped roles replace the JIT defaults whenever any mapping rows exist
+	// (a new user and an existing user in the same groups must end up
+	// identical). Bootstrap parity still takes precedence.
+	mappedPlatform, mappedMemberships := resolveMappedRoles(claims.Groups, mappings)
 	platformRole := auth.PlatformRoleMember
+	if len(mappings) > 0 {
+		platformRole = mappedPlatform
+	}
 	if activeAdmins == 0 {
 		platformRole = auth.PlatformRoleSuperadmin
 	}
@@ -334,7 +376,20 @@ func (s *Service) provisionUser(ctx context.Context, claims *Claims) (*models.Ad
 		return nil, fmt.Errorf("failed to provision OIDC user: %w", err)
 	}
 
-	if platformRole == auth.PlatformRoleMember {
+	if len(mappings) > 0 {
+		// Mapped memberships — possibly none, which deliberately provisions a
+		// role-less user rather than falling back to the JIT default (that
+		// fallback would silently re-grant access on group removal).
+		for _, mappedTenantID := range sortedTenantIDs(mappedMemberships) {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
+				SELECT $1, $2, $3, $4, $5, $5
+				WHERE EXISTS (SELECT 1 FROM tenants WHERE id = $3)
+			`, uuid.New(), user.ID, mappedTenantID, mappedMemberships[mappedTenantID], now); err != nil {
+				return nil, fmt.Errorf("failed to create mapped membership: %w", err)
+			}
+		}
+	} else if platformRole == auth.PlatformRoleMember {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tenant_memberships (id, admin_user_id, tenant_id, role, created_at, updated_at)
 			SELECT $1, $2, $3, $4, $5, $5

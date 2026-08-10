@@ -63,6 +63,43 @@ export interface OidcStatus {
   label?: string;
 }
 
+// OIDC group→role mapping. No tenant_id = platform mapping (superadmin).
+// Any existing mappings make the IdP the source of truth: SSO users' roles
+// are re-derived from their groups on every login.
+export interface OidcGroupMapping {
+  id: string;
+  group_name: string;
+  // Operator-facing display name; matching always uses group_name.
+  label?: string;
+  tenant_id?: string;
+  tenant_name?: string;
+  role: PlatformRole | TenantRole;
+  created_at: string;
+  updated_at: string;
+}
+
+// IdP group observed in a verified ID token at a past SSO login — the
+// mapping editor's suggestion source (OIDC has no group-enumeration API).
+export interface OidcSeenGroup {
+  group_name: string;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface OidcGroupMappingListResponse {
+  mappings: OidcGroupMapping[];
+  seen_groups: OidcSeenGroup[];
+  groups_claim: string;
+  groups_scope_requested: boolean;
+}
+
+export interface CreateOidcGroupMappingRequest {
+  group_name: string;
+  label?: string;
+  tenant_id?: string;
+  role: string;
+}
+
 // Admin user types
 export interface AdminUser {
   id: string;

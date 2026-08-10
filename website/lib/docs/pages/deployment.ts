@@ -368,8 +368,8 @@ kubectl -n probara get jobs`,
             ],
             [
               '`auth.oidc.*`',
-              'Disabled; blank issuer/client; label `SSO`; JIT viewer/default tenant',
-              'Platform OIDC settings. Secret is `secrets.oidcClientSecret`.',
+              'Disabled; blank issuer/client; scopes `openid profile email`; groups claim `groups`; label `SSO`; JIT viewer/default tenant',
+              'Platform OIDC settings. Secret is `secrets.oidcClientSecret`. Add `groups` to `auth.oidc.scopes` when using OIDC group mappings.',
             ],
             [
               '`secrets.adminJwtSecret`',

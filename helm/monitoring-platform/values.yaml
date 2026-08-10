@@ -92,6 +92,12 @@ auth:
     enabled: false
     issuerUrl: ""
     clientId: ""
+    # Scopes requested from the IdP. Add "groups" when using the in-app OIDC
+    # group→role mappings (Settings → OIDC group mappings) — many IdPs only
+    # emit the groups claim when the scope is requested.
+    scopes: "openid profile email"
+    # ID-token claim holding the user's groups (for group→role mappings).
+    groupsClaim: "groups"
     # Shown on the login button: "Continue with <providerLabel>"
     providerLabel: "SSO"
     # Create accounts on first SSO login (viewer in the default tenant).

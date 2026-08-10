@@ -80,7 +80,8 @@ OIDC_CLIENT_ID=…
 OIDC_CLIENT_SECRET=…
 # optional:
 OIDC_REDIRECT_URL=…        # default PUBLIC_BASE_URL + /api/v1/auth/oidc/callback
-OIDC_SCOPES="openid profile email"
+OIDC_SCOPES="openid profile email"   # add "groups" for group→role mappings
+OIDC_GROUPS_CLAIM=groups   # ID-token claim read by group→role mappings
 OIDC_PROVIDER_LABEL="Okta" # login button text
 OIDC_JIT_PROVISION=true
 OIDC_JIT_DEFAULT_ROLE=viewer
@@ -108,8 +109,52 @@ Identity mapping on callback:
 OIDC login JIT-provisions a *superadmin* (mirroring the password
 bootstrap guard). Whichever path runs first claims superadmin.
 
+### Group→role mappings
+
+Superadmins map IdP groups to roles in `oidc_group_mappings` (Settings →
+OIDC group mappings, or `/api/v1/oidc-group-mappings`). A row targets a
+tenant with a tenant role, or the platform (`tenant_id NULL`, role
+`superadmin`). Groups come from the ID-token claim named by
+`OIDC_GROUPS_CLAIM` (no userinfo fallback — the IdP must embed the claim,
+which usually means requesting the `groups` scope via `OIDC_SCOPES`).
+
+Semantics (`api/internal/services/oidcauth/groupsync.go`):
+
+- **Zero rows = feature off** — JIT defaults apply, roles stay manual.
+  Deleting all rows is the runtime kill switch.
+- Any rows → the IdP is the source of truth for SSO users: platform role
+  and the *full* membership set are re-derived on **every login**
+  (manual edits to SSO users last until their next sign-in). Password
+  accounts are never touched.
+- Highest role wins per tenant (`admin > editor > viewer`); group names
+  match case-sensitively on the **raw claim value** (Azure AD sends group
+  object IDs there, not names). Mappings carry an optional cosmetic
+  `label` so GUID rows stay readable in the settings table.
+- No matched groups → member with zero memberships (deliberately no
+  JIT-default fallback — that would re-grant revoked access).
+- The sync never demotes the **last active superadmin** (skipped +
+  flagged `skipped_last_superadmin_demotion` in the audit event); local
+  password login is unaffected, so mapping misconfig can't hard-lock the
+  install.
+- Sync runs in one transaction (user row locked `FOR UPDATE`); a sync
+  failure aborts the login (`sso_error=internal`) rather than admitting
+  stale roles. Applied changes emit an `auth.oidc_role_sync` audit event
+  with the membership diff, `matched_groups`, and `received_groups`
+  (everything the token presented — check here on name mismatches).
+- Every successful SSO login upserts the token's groups into
+  `oidc_seen_groups` (best-effort, never blocks login, works with zero
+  mappings). The mapping editor uses it for autocomplete and
+  click-to-prefill chips of unmapped groups — OIDC has no
+  group-enumeration API, so this is the discovery mechanism.
+- JIT provisioning with mappings present uses the mapped roles instead
+  of `OIDC_JIT_DEFAULT_ROLE`/`_TENANT_ID` (bootstrap parity still wins).
+
 Local dev IdP: `docker compose --profile sso up dex`
 (`admin@example.com` / `password`; config in `infra/dex/config.yaml`).
+staticPasswords users carry no groups — use the "Mock (groups test)"
+connector on dex's login screen (fixed identity with groups
+`["authors"]`) and `OIDC_SCOPES="openid profile email groups"` to
+exercise mappings.
 
 ## Deploy ordering
 

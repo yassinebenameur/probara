@@ -27,6 +27,16 @@ oauth2:
 
 enablePasswordDB: true
 
+# staticPasswords users carry NO groups — to exercise group→role mappings
+# pick "Mock (groups test)" on dex's login screen: the mockCallback connector
+# returns a fixed identity (Kilgore Trout) with groups ["authors"]. Map the
+# "authors" group in Settings → OIDC group mappings and set
+# OIDC_SCOPES="openid profile email groups" in .env.
+connectors:
+  - type: mockCallback
+    id: mock
+    name: Mock (groups test)
+
 staticPasswords:
   # password is "password" (bcrypt)
   - email: admin@example.com

@@ -243,7 +243,12 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`OIDC_SCOPES`',
               '`openid profile email`',
-              'Whitespace-separated scopes.',
+              'Whitespace-separated scopes. Add `groups` when using OIDC group mappings — many IdPs (Okta among them) only emit the groups claim when the scope is requested.',
+            ],
+            [
+              '`OIDC_GROUPS_CLAIM`',
+              '`groups`',
+              'ID-token claim read for group→role mappings. The mapping rules themselves live in the database (Settings → OIDC group mappings), not in environment variables.',
             ],
             ['`OIDC_PROVIDER_LABEL`', '`SSO`', 'Human-readable login-provider label.'],
             [
@@ -254,7 +259,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`OIDC_JIT_DEFAULT_ROLE`',
               '`viewer`; one of `admin`, `editor`, `viewer`',
-              'Default tenant role for JIT users.',
+              'Default tenant role for JIT users. Ignored whenever any OIDC group mappings exist — mapped roles replace the JIT defaults entirely.',
             ],
             [
               '`OIDC_JIT_DEFAULT_TENANT_ID`',

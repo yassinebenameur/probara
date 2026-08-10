@@ -513,6 +513,9 @@ type OIDCConfig struct {
 	ClientSecret string
 	RedirectURL  string
 	Scopes       []string
+	// GroupsClaim is the ID-token claim read for group→role mappings. The
+	// scope that makes the IdP emit it stays operator-managed via OIDC_SCOPES.
+	GroupsClaim string
 	// ProviderLabel is shown on the login button ("Continue with <label>").
 	ProviderLabel string
 	// JITProvision creates users on first OIDC login when no matching
@@ -553,6 +556,8 @@ func loadOIDCConfig(publicBaseURL string) (*OIDCConfig, error) {
 
 	scopes := envOrDefault("OIDC_SCOPES", "openid profile email")
 	cfg.Scopes = strings.Fields(scopes)
+
+	cfg.GroupsClaim = envOrDefault("OIDC_GROUPS_CLAIM", "groups")
 
 	cfg.ProviderLabel = envOrDefault("OIDC_PROVIDER_LABEL", "SSO")
 

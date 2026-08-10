@@ -237,7 +237,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "A verified email can link to an explicitly SSO-only account.",
             "An unverified email is not trusted for account linking.",
             "A subject already bound to another account is refused.",
-            "When just-in-time provisioning is enabled, new users receive the configured default platform/tenant membership rather than arbitrary claims-based privilege.",
+            "When just-in-time provisioning is enabled, new users receive the configured default platform/tenant membership rather than arbitrary claims-based privilege — unless OIDC group mappings exist, in which case mapped roles replace the JIT defaults.",
             "On an empty installation, the first successful JIT login becomes the initial superadministrator.",
           ],
         },
@@ -247,6 +247,38 @@ export const ADMINISTRATION_PAGE: DocPage = {
           title: "Verify redirect and public origins",
           text:
             "The provider callback must match the externally reachable API origin and proxy scheme. Misconfigured `PUBLIC_BASE_URL` or forwarded headers can break stateful login even when local login works.",
+        },
+      ],
+    },
+    {
+      id: "oidc-group-mappings",
+      title: "OIDC group mappings",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Superadmins can map identity-provider groups to roles under Settings → OIDC group mappings (or via `/api/v1/oidc-group-mappings`). A mapping targets either one tenant with a role (`admin`, `editor`, `viewer`) or the platform (grants `superadmin`). Groups are read from the ID-token claim named by [`OIDC_GROUPS_CLAIM`](/docs/configuration/#oidc); request the `groups` scope via `OIDC_SCOPES` so the provider sends it.",
+        },
+        {
+          type: "list",
+          items: [
+            "Zero mappings means the feature is off: JIT defaults apply and roles stay manually managed. Deleting all mappings restores that behavior immediately.",
+            "With any mappings present, the identity provider is the source of truth for SSO users: platform role and tenant memberships are re-derived from the user's groups on every login, overwriting manual edits.",
+            "A user in several groups mapping to the same tenant gets the highest role (`admin` > `editor` > `viewer`). Group names match case-sensitively.",
+            "A user in no mapped groups syncs to a member with no tenant memberships — deliberately no fallback to the JIT default, which would silently re-grant revoked access.",
+            "The sync never demotes the last active superadmin; the demotion is skipped and flagged in the audit log (`skipped_last_superadmin_demotion`).",
+            "Password-based accounts are never touched by group sync.",
+            "Applied changes are recorded as `auth.oidc_role_sync` audit events with the full membership diff, the matched groups, and every group the token presented (`received_groups`) — the place to look when a name doesn't match.",
+            "Groups presented in verified ID tokens at successful logins are catalogued and offered as suggestions in the mapping editor (with click-to-prefill chips for groups that have no mapping yet). OIDC has no API to enumerate an IdP's groups, so the catalog only knows groups someone has already logged in with.",
+            "Mappings accept an optional display label (click a row's group cell to edit). Matching always uses the raw claim value — essential with Azure AD, whose groups claim carries object IDs (GUIDs), not names: label the GUID rows so the table stays readable.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Groups must arrive in the ID token",
+          text:
+            "Probara reads groups from the ID token only — there is no userinfo-endpoint fallback yet. Configure the provider to embed the claim (Okta: a Groups claim filter on the authorization server; Azure AD: group claims in token configuration, noting that past ~200 groups Azure sends a reference instead of values). If mappings exist but the token carries no groups claim, users sync to no mapped roles and the API logs a warning.",
         },
       ],
     },

@@ -28,6 +28,7 @@ import (
 	meshhandlers "github.com/yassinebenameur/probara/api/internal/handlers/mesh"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
+	oidcmappinghandlers "github.com/yassinebenameur/probara/api/internal/handlers/oidcmappings"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
@@ -54,6 +55,7 @@ import (
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	oidcauthservice "github.com/yassinebenameur/probara/api/internal/services/oidcauth"
+	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
@@ -525,6 +527,16 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", adminUsersHandlers.GetUser)
 				r.Patch("/{id}", adminUsersHandlers.UpdateUser)
 				r.Delete("/{id}", adminUsersHandlers.DeleteUser)
+			})
+
+			// OIDC group→role mappings (superadmin only)
+			oidcMappingHandlers := oidcmappinghandlers.NewHandlers(oidcmappingsservice.NewService(dbClient), cfg.OIDC, log)
+			r.Route("/oidc-group-mappings", func(r chi.Router) {
+				r.Use(apimiddleware.RequireSuperadmin)
+				r.Get("/", oidcMappingHandlers.List)
+				r.Post("/", oidcMappingHandlers.Create)
+				r.Patch("/{id}", oidcMappingHandlers.Update)
+				r.Delete("/{id}", oidcMappingHandlers.Delete)
 			})
 		})
 	})

@@ -126,7 +126,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, jitProvisioned, err := h.oidc.ResolveUser(r.Context(), claims)
+	resolved, err := h.oidc.ResolveUser(r.Context(), claims)
 	if err != nil {
 		clearFlow()
 		if errors.Is(err, oidcauth.ErrNotProvisioned) {
@@ -138,6 +138,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		h.redirectLoginError(w, r, "internal")
 		return
 	}
+	user := resolved.User
 
 	if err := h.service.UpdateLastLogin(r.Context(), user.ID); err != nil {
 		h.logger.WithError(err).Warn("Failed to update last login")
@@ -157,8 +158,32 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		event.ActorType = audit.ActorAdminUser
 		event.ActorID = &user.ID
 		event.ActorLabel = user.Username
-		event.Details = map[string]any{"jit_provisioned": jitProvisioned}
+		details := map[string]any{"jit_provisioned": resolved.JITCreated}
+		if sync := resolved.Sync; sync != nil {
+			details["role_sync_applied"] = sync.Applied
+			details["skipped_last_superadmin_demotion"] = sync.SkippedDemotion
+		}
+		event.Details = details
 		h.audit.Record(event)
+
+		if sync := resolved.Sync; sync != nil && sync.Applied {
+			syncEvent := audit.FromRequest(r)
+			syncEvent.Action = "auth.oidc_role_sync"
+			syncEvent.Outcome = audit.OutcomeSuccess
+			syncEvent.ActorType = audit.ActorAdminUser
+			syncEvent.ActorID = &user.ID
+			syncEvent.ActorLabel = user.Username
+			syncEvent.Details = map[string]any{
+				"old_platform_role":   sync.OldPlatformRole,
+				"new_platform_role":   sync.NewPlatformRole,
+				"memberships_added":   sync.AddedMemberships,
+				"memberships_removed": sync.RemovedMemberships,
+				"memberships_changed": sync.ChangedMemberships,
+				"matched_groups":      sync.MatchedGroups,
+				"received_groups":     sync.ReceivedGroups,
+			}
+			h.audit.Record(syncEvent)
+		}
 	}
 
 	target := flow.Next

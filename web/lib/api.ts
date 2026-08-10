@@ -55,6 +55,9 @@ import type {
   CreateApiKeyRequest,
   AuthContext,
   OidcStatus,
+  OidcGroupMapping,
+  OidcGroupMappingListResponse,
+  CreateOidcGroupMappingRequest,
   AuditListResponse,
   IncidentListResponse,
   AISettings,
@@ -698,6 +701,28 @@ export async function getOidcStatus(): Promise<OidcStatus> {
     return { enabled: false };
   }
   return (await response.json()) as OidcStatus;
+}
+
+// OIDC group→role mappings (superadmin only)
+export async function listOidcGroupMappings(): Promise<OidcGroupMappingListResponse> {
+  return apiRequest<OidcGroupMappingListResponse>('GET', '/v1/oidc-group-mappings');
+}
+
+export async function createOidcGroupMapping(
+  data: CreateOidcGroupMappingRequest
+): Promise<OidcGroupMapping> {
+  return apiRequest<OidcGroupMapping>('POST', '/v1/oidc-group-mappings', data);
+}
+
+export async function updateOidcGroupMapping(
+  id: string,
+  data: { role?: string; label?: string }
+): Promise<OidcGroupMapping> {
+  return apiRequest<OidcGroupMapping>('PATCH', `/v1/oidc-group-mappings/${id}`, data);
+}
+
+export async function deleteOidcGroupMapping(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oidc-group-mappings/${id}`);
 }
 
 export interface GetAuditLogParams {
