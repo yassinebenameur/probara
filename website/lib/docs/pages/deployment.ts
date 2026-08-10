@@ -67,7 +67,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
           items: [
             'Docker with Compose v2 for PostgreSQL, NATS, migrations, and container workflows.',
             'GNU Make and a Bash-compatible environment for repository scripts. On Windows, use WSL or another environment that can execute the Makefile’s Bash commands.',
-            'Go 1.23 for the main monorepo. The local launcher compares the installed major/minor version with the root `go.mod` toolchain.',
+            'Go 1.26.5 for the main monorepo. The local launcher compares the installed major/minor version with the root `go.mod` directive.',
             'Node.js LTS and npm for the frontend. `scripts/start-ui.sh` can use nvm when it is available.',
             'Helm 3 and `kubectl` for Kubernetes deployment.',
             'A PostgreSQL 16-compatible database and NATS 2.10 with JetStream for production when not using embedded chart dependencies.',
@@ -76,7 +76,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The standalone agent is a separate Go module that currently declares Go 1.21. Root `make test` does not cover it.',
+            'The standalone agent is a separate Go module that declares the same Go 1.26.5 toolchain. Root `make test` does not cover it.',
         },
       ],
     },

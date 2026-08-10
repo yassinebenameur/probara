@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 WORKDIR /build
 
@@ -38,4 +38,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:9090/healthz || exit 1
 
 CMD ["./alerter"]
-

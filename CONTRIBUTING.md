@@ -9,7 +9,7 @@ project's [LICENSE](LICENSE) (AGPL-3.0).
 
 ## Prerequisites
 
-- **Go 1.23+** — CI builds against 1.23
+- **Go 1.26.5** — use the toolchain declared by both Go modules
 - **Node.js LTS** — see `.nvmrc`
 - **Docker + Docker Compose** — provides Postgres and NATS for local dev
 - **Helm 3** — only if you touch `helm/monitoring-platform/`

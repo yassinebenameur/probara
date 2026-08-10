@@ -91,7 +91,7 @@ status is `SERVING`.
 
 ## Quick Start (Local)
 
-Prerequisites: Docker + Docker Compose v2, Go 1.23+, Node.js LTS via `nvm`,
+Prerequisites: Docker + Docker Compose v2, Go 1.26.5, Node.js LTS via `nvm`,
 Make.
 
 One command — infra in Docker, app services in containers, UI via nvm:
@@ -132,7 +132,7 @@ Manual, step-by-step alternative:
 ```bash
 make up            # postgres, nats, migrations, api, scheduler, worker, alerter, status-page
 cd web
-npm install
+npm ci
 npm run dev
 ```
 

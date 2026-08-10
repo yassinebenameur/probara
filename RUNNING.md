@@ -12,7 +12,7 @@ This single command will:
 - Start all backend services (API, Scheduler, Worker, Status Page, PostgreSQL, NATS)
 - Run database migrations automatically
 - Wait for services to be healthy
-- Start the Next.js UI using nvm LTS (Node v24.11.1)
+- Start the Next.js UI using the current nvm LTS release
 - Show all service URLs
 
 **UI logs** are saved to `/tmp/probara-ui.log`. View them with:
@@ -34,7 +34,7 @@ This command:
 
 Local service logs are saved under `/tmp/probara-*.log`, and startup validation logs are written to `/tmp/probara-local-start.log`.
 
-If Go is missing or the installed version does not match the repo requirement from [`go.mod`](/mnt/c/Users/eVoo/WebstormProjects/probara/go.mod), startup fails immediately and logs the reason.
+If Go is missing or the installed version does not match the repository requirement in [`go.mod`](go.mod), startup fails immediately and logs the reason.
 
 ### Stop Everything
 
@@ -125,8 +125,8 @@ fewer failing locations show as **Degraded** (amber, no alert).
 ## Requirements
 
 - Docker & Docker Compose v2
-- Go `1.23.x`
-- Node.js (via nvm) - LTS version (v24.11.1 recommended)
+- Go `1.26.5`
+- Node.js via nvm — use the current LTS release selected by `.nvmrc`
 - Make
 - Bash
 

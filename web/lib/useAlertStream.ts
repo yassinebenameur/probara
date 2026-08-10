@@ -122,7 +122,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
   const isConnectedRef = useRef(false);
   const maxReconnectAttempts = 10;
   const baseReconnectDelay = 1000;
-  const connectRef = useRef<() => Promise<void>>();
+  const connectRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
   const scheduleReconnect = useCallback(() => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {

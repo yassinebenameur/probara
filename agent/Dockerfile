@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 WORKDIR /app
 
@@ -36,4 +36,3 @@ ENV DISK_PATH="/"
 # Run the agent
 ENTRYPOINT ["./agent"]
 CMD ["-backend-url", "${BACKEND_URL}", "-agent-id", "${AGENT_ID}", "-api-key", "${API_KEY}", "-interval", "${INTERVAL}", "-disk-path", "${DISK_PATH}"]
-
