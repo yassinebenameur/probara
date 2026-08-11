@@ -33,6 +33,7 @@ jobs:
           cache-dependency-path: website/package-lock.json
 
       - name: Configure GitHub Pages
+        id: pages
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
@@ -50,7 +51,8 @@ jobs:
       - name: Build static website
         working-directory: website
         env:
-          NEXT_PUBLIC_SITE_URL: https://probara-uptime.com
+          NEXT_PUBLIC_SITE_URL: ${{ steps.pages.outputs.base_url }}
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
           NEXT_TELEMETRY_DISABLED: 1
         run: npm run build
 

@@ -66,7 +66,9 @@ for unknown paths.
 The repository workflow `.github/workflows/deploy-website.yml` verifies, builds,
 and deploys the site whenever `website/` changes on `dev`. It also supports a
 manual run from the Actions tab. The production build sets
-`NEXT_PUBLIC_SITE_URL=https://probara-uptime.com` and publishes `website/out`.
+`NEXT_PUBLIC_SITE_URL` and `NEXT_PUBLIC_BASE_PATH` from the active GitHub Pages
+configuration, then publishes `website/out`. This keeps asset and navigation
+paths correct both at the repository URL and after a custom domain is enabled.
 
 One-time repository and DNS setup is still required:
 
