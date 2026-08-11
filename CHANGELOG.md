@@ -1,3 +1,10 @@
+# [1.0.0-alpha.67](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.66...v1.0.0-alpha.67) (2026-08-11)
+
+
+### Bug Fixes
+
+* **website:** respect GitHub Pages base path ([d187cef](https://github.com/yassinebenameur/probara/commit/d187cef5eb436f7917fb5c80b154403c73331382))
+
 # [1.0.0-alpha.66](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.65...v1.0.0-alpha.66) (2026-08-11)
 
 
