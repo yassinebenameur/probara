@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`probara` is a Go monorepo with service packages at the repo root: `api/`, `scheduler/`, `worker/`, `alerter/`, `status-page/`, and `agent/`. Shared code lives in `shared/` and common entrypoints live under service-specific `cmd/` folders plus top-level utilities in `cmd/`. The web frontend is in `web/` (`app/`, `components/`, `lib/`). Deployment assets live in `helm/` and `infra/`; architecture notes are in `docs/architecture.md`; helper scripts are in `scripts/`.
+`probara` is a Go monorepo with service packages at the repo root: `api/`, `scheduler/`, `worker/`, `alerter/`, `status-page/`, and `agent/`. Shared code lives in `shared/` and common entrypoints live under service-specific `cmd/` folders plus top-level utilities in `cmd/`. The authenticated web frontend is in `web/` (`app/`, `components/`, `lib/`); the statically exported public website and product documentation are in `website/`. Deployment assets live in `helm/` and `infra/`; architecture notes are in `docs/architecture.md`; helper scripts are in `scripts/`.
 
 ## Build, Test, and Development Commands
 Use the `Makefile` for normal development workflows:
@@ -19,7 +19,7 @@ Verification commands:
 
 - `make test` runs `go test -v -race -coverprofile=coverage.out` across the module.
 - `make lint` checks formatting and `go vet`; `make fmt` and `make vet` run them separately.
-- For frontend-only changes, run relevant commands from `web/`, usually `npm run lint` and `npm run build`.
+- For frontend-only changes, run relevant commands in the touched project (`web/` or `website/`), usually `npm run lint`, `npm run typecheck`, and `npm run build`.
 
 ## Coding Style & Naming Conventions
 Format Go code with `gofmt`; do not hand-align or mix spacing styles. Keep packages lowercase, exported identifiers in `CamelCase`, and filenames descriptive (`service.go`, `handlers.go`, `registry_test.go`). Follow existing service boundaries: reusable logic belongs in `shared/`, not copied between services. In `web/`, use TypeScript, PascalCase component filenames, and keep route files under `app/**/page.tsx`.

@@ -61,6 +61,26 @@ The included Nginx configuration serves prerendered route directories, applies
 long-lived caching only to fingerprinted Next.js assets, and returns a real 404
 for unknown paths.
 
+## GitHub Pages deployment
+
+The repository workflow `.github/workflows/deploy-website.yml` verifies, builds,
+and deploys the site whenever `website/` changes on `dev`. It also supports a
+manual run from the Actions tab. The production build sets
+`NEXT_PUBLIC_SITE_URL=https://probara-uptime.com` and publishes `website/out`.
+
+One-time repository and DNS setup is still required:
+
+1. In the repository's **Settings > Pages**, select **GitHub Actions** as the
+   publishing source and set the custom domain to `probara-uptime.com`.
+2. Point the apex domain to GitHub Pages' four IPv4 addresses and point `www` to
+   `yassinebenameur.github.io`. Remove any conflicting parking records first.
+3. After GitHub's DNS check succeeds, enable **Enforce HTTPS**.
+
+The domain currently uses Namecheap Web Hosting DNS, so manage those records in
+the hosting account's cPanel Zone Editor. If the nameservers are later changed
+to Namecheap BasicDNS, manage them from Namecheap's Advanced DNS page instead.
+Preserve mail and domain-verification records when changing the website records.
+
 ## Content model
 
 Documentation navigation lives in `lib/docs/navigation.ts`. Each article exports
