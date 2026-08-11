@@ -1,3 +1,10 @@
+# [1.0.0-alpha.66](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.65...v1.0.0-alpha.66) (2026-08-11)
+
+
+### Features
+
+* **helm:** source every secret from existing or external secrets ([87215dc](https://github.com/yassinebenameur/probara/commit/87215dca63d2ac331f011bc60ac69760b5a99ded))
+
 # [1.0.0-alpha.65](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.64...v1.0.0-alpha.65) (2026-08-10)
 
 
