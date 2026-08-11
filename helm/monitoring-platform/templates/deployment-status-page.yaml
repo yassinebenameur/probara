@@ -61,13 +61,8 @@ spec:
           value: "{{ .Values.statusPage.metricsPort }}"
         - name: LOG_LEVEL
           value: "{{ .Values.statusPage.logLevel }}"
-        - name: POSTGRES_URL
-          value: {{ include "monitoring-platform.postgresUrl" . | quote }}
-        - name: NATS_URL
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: nats_url
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_URL" "key" "nats_url" "secret" .Values.nats.existingSecret "secretKey" .Values.nats.existingSecretKey) | nindent 8 }}
         {{- if .Values.statusPage.baseUrl }}
         - name: STATUS_PAGE_BASE_URL
           value: "{{ .Values.statusPage.baseUrl }}"

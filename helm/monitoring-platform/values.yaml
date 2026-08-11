@@ -26,12 +26,23 @@ postgresql:
   # External PostgreSQL URL (used when enabled: false)
   # Example: "postgres://user:password@external-postgres:5432/probara?sslmode=disable"
   externalUrl: ""
+  # Read the full DSN from an existing Secret instead of externalUrl or the
+  # embedded credentials below. Takes precedence over both. Every workload
+  # reads POSTGRES_URL from it, so the DSN never appears in a PodSpec.
+  existingSecret: ""
+  existingSecretKey: postgres_url
   # Embedded PostgreSQL configuration (used when enabled: true)
   image: postgres:16-alpine
   auth:
     username: probara
     password: probara-secret
     database: probara
+    # Embedded-PostgreSQL server credentials from an existing Secret. Requires
+    # postgresql.existingSecret as well: Helm cannot compose a DSN out of
+    # values it is not allowed to read.
+    existingSecret: ""
+    existingSecretUserKey: postgresql_username
+    existingSecretPasswordKey: postgresql_password
   persistence:
     enabled: true
     size: 10Gi
@@ -53,6 +64,12 @@ nats:
   # External NATS URL (used when enabled: false)
   # Example: "nats://external-nats:4222"
   externalUrl: ""
+  # Read the full NATS URL — credentials included — from an existing Secret
+  # instead of externalUrl or the composed embedded URL. Required when
+  # auth.platformPasswordExistingSecret is set with the embedded broker, since
+  # Helm cannot compose a URL around a password it cannot read.
+  existingSecret: ""
+  existingSecretKey: nats_url
   # Embedded NATS configuration (used when enabled: true)
   image: nats:2.10-alpine
   # Required before private-location workers can connect. The platform user is
@@ -61,11 +78,17 @@ nats:
   auth:
     enabled: false
     platformUser: "probara-platform"
+    # Passed to the broker as --user/--pass, substituted by Kubernetes from a
+    # Secret-backed env var, so it never lands in the ConfigMap.
     platformPassword: ""
+    platformPasswordExistingSecret: ""
+    platformPasswordExistingSecretKey: nats_platform_password
     # Generate an account seed/public key pair with nsc or nkeys. The seed is
     # mounted only into the API; NATS receives only the public key.
     locationIssuerPublicKey: ""
     locationIssuerSeed: ""
+    locationIssuerSeedExistingSecret: ""
+    locationIssuerSeedExistingSecretKey: nats_location_auth_issuer_seed
   persistence:
     enabled: true
     size: 1Gi
@@ -110,8 +133,27 @@ auth:
 # SECRETS
 # =============================================================================
 secrets:
+  # Chart-wide fallback: one Secret you supply (hand-written, or produced by
+  # External Secrets Operator / Vault / sealed-secrets / SOPS) that backs every
+  # credential without a per-field reference below. When set, the chart renders
+  # no Secret of its own and expects these keys:
+  #   always            postgres_url, nats_url, admin_jwt_secret,
+  #                     probara_secrets_key
+  #   postgresql.enabled  postgresql_username, postgresql_password
+  #   nats.auth.enabled   nats_platform_password (embedded broker only),
+  #                     nats_location_auth_issuer_seed
+  #   oidc enabled      oidc_client_secret
+  # A key the chart asks for but the Secret does not carry keeps the pod in
+  # CreateContainerConfigError — deliberate: silently starting without, say,
+  # probara_secrets_key would store monitor credentials in plaintext.
+  # Per-field <field>ExistingSecret values win over this one and may point at
+  # different Secrets, so chart-managed, chart-wide and per-field sources can be
+  # mixed field by field.
+  existingSecret: ""
   # Admin JWT secret - CHANGE IN PRODUCTION
   adminJwtSecret: "change-me-in-production-jwt-secret-minimum-32-chars"
+  adminJwtSecretExistingSecret: ""
+  adminJwtSecretExistingSecretKey: admin_jwt_secret
   # Initial API key for first login - CHANGE IN PRODUCTION
   initialApiKey: "probara-initial-api-key-change-me"
   # At-rest encryption key for monitor/channel config secrets (DB passwords,
@@ -119,8 +161,12 @@ secrets:
   #   openssl rand -base64 32
   # Empty = encryption disabled; secrets are stored in plaintext. SET IN PRODUCTION.
   probaraSecretsKey: ""
+  probaraSecretsKeyExistingSecret: ""
+  probaraSecretsKeyExistingSecretKey: probara_secrets_key
   # OIDC client secret (required when auth.oidc.enabled)
   oidcClientSecret: ""
+  oidcClientSecretExistingSecret: ""
+  oidcClientSecretExistingSecretKey: oidc_client_secret
 
 # Extra environment variables appended to EVERY workload (api, scheduler,
 # worker, location workers, alerter, status page, frontend, migrations job).
@@ -292,6 +338,12 @@ worker:
   #     replicas: 1
   #     concurrency: "10"      # optional, defaults to worker.concurrency
   #     natsUrl: ""            # authenticated NATS URL from deploy info (required)
+  #     # Or take both from a Secret in the release namespace instead, so no
+  #     # location credential lands in the PodSpec. Set it and natsUrl/
+  #     # credential are no longer required.
+  #     existingSecret: ""
+  #     natsUrlKey: nats_url
+  #     credentialKey: credential
   #     # Optional Service exposing the mesh echo port so OTHER locations can
   #     # probe this one. Point the location's mesh_endpoint at its address
   #     # (e.g. an internal NLB reachable across your VPCs).

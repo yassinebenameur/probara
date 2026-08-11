@@ -256,7 +256,7 @@ export const SECURITY_PAGE: DocPage = {
           items: [
             'Never commit `.env`, Helm production values, generated location snippets, backup files, or decrypted configuration.',
             'Kubernetes Secrets are base64 transport objects, not encrypted storage by themselves. Enable etcd encryption and use workload identity/external secret management where available.',
-            'Helm stores release values in-cluster; avoid putting secrets into command history and protect the namespace/release metadata.',
+            'Helm stores release values in-cluster; avoid putting secrets into command history and protect the namespace/release metadata. Every chart credential can instead be [read from a Secret you supply](/docs/deployment/#external-secrets), which keeps it out of the release values entirely.',
             'The local launcher chmods the development JWT file to 0600, but the development encryption-key file relies on the current umask. Verify and restrict its permissions.',
             'Use separate secrets for preview signing, JWT signing, encryption, webhooks, NATS issuer, and location credentials; do not reuse one master string.',
           ],

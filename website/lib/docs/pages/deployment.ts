@@ -323,17 +323,42 @@ kubectl -n probara get jobs`,
             ['`image.tag`', '`latest`', 'Backend image tag. Pin for production.'],
             ['`image.pullSecrets`', '`[]`', 'Backend registry pull secrets.'],
             ['`postgresql.enabled`', '`true`', 'Deploy embedded PostgreSQL StatefulSet.'],
-            ['`postgresql.externalUrl`', 'Empty', 'Used when embedded PostgreSQL is disabled.'],
+            ['`postgresql.externalUrl`', 'Empty', 'Used when embedded PostgreSQL is disabled. Required in that mode unless an existing Secret supplies the DSN — an empty external URL now fails the render instead of starting pods with a blank DSN.'],
+            [
+              '`postgresql.existingSecret`, `.existingSecretKey`',
+              'Empty, `postgres_url`',
+              'Read the full DSN from a Secret you supply instead of `externalUrl` or the embedded credentials. Works in either mode and takes precedence over both.',
+            ],
             ['`postgresql.image`', '`postgres:16-alpine`', 'Embedded database image.'],
             ['`postgresql.auth.username`', '`probara`', 'Embedded database user.'],
             ['`postgresql.auth.password`', '`probara-secret`', 'Embedded password; replace it.'],
             ['`postgresql.auth.database`', '`probara`', 'Embedded database name.'],
+            [
+              '`postgresql.auth.existingSecret`, `.existingSecretUserKey`, `.existingSecretPasswordKey`',
+              'Empty, `postgresql_username`, `postgresql_password`',
+              'Embedded-server credentials from a Secret you supply. Requires the DSN to be externalized too — via `postgresql.existingSecret` or the chart-wide `secrets.existingSecret` — because Helm cannot compose a DSN out of values it is not allowed to read. The render fails if neither is set.',
+            ],
             ['`postgresql.persistence.enabled`', '`true`', 'Use a PVC for database data.'],
             ['`postgresql.persistence.size`', '`10Gi`', 'Database PVC request.'],
             ['`postgresql.persistence.storageClass`', 'Empty', 'Cluster default storage class.'],
             ['`postgresql.resources`', '100m/256Mi request; 500m/512Mi limit', 'Embedded database resources.'],
             ['`nats.enabled`', '`true`', 'Deploy embedded NATS StatefulSet.'],
             ['`nats.externalUrl`', 'Empty', 'Used when embedded NATS is disabled.'],
+            [
+              '`nats.existingSecret`, `.existingSecretKey`',
+              'Empty, `nats_url`',
+              'Read the full broker URL — credentials included — from a Secret you supply. Required alongside `nats.auth.platformPasswordExistingSecret` on the embedded broker (or covered by the chart-wide `secrets.existingSecret`), since the chart otherwise has to compose the URL around a password it cannot read.',
+            ],
+            [
+              '`nats.auth.platformPasswordExistingSecret`, `.platformPasswordExistingSecretKey`',
+              'Empty, `nats_platform_password`',
+              'Platform-user password for the embedded broker. It reaches nats-server as a `--pass` argument, substituted by Kubernetes from a Secret-backed environment variable, so no password is written into the ConfigMap in either mode. It deliberately does not travel through `nats.conf` — nats-server re-parses an expanded `$VAR` as configuration, which breaks purely numeric or space-bearing passwords.',
+            ],
+            [
+              '`nats.auth.locationIssuerSeedExistingSecret`, `.locationIssuerSeedExistingSecretKey`',
+              'Empty, `nats_location_auth_issuer_seed`',
+              'Auth-callout account seed for the API. The matching public key stays a plain ConfigMap value.',
+            ],
             ['`nats.image`', '`nats:2.10-alpine`', 'Embedded broker image.'],
             ['`nats.persistence.enabled`', '`true`', 'Persist JetStream state.'],
             ['`nats.persistence.size`', '`1Gi`', 'NATS PVC request.'],
@@ -372,9 +397,14 @@ kubectl -n probara get jobs`,
               'Platform OIDC settings. Secret is `secrets.oidcClientSecret`. Add `groups` to `auth.oidc.scopes` when using OIDC group mappings.',
             ],
             [
+              '`secrets.existingSecret`',
+              'Empty',
+              'Chart-wide fallback Secret backing every credential without a per-field reference. When set the chart renders no Secret of its own. See “Secrets from an external secret manager” below for the key names.',
+            ],
+            [
               '`secrets.adminJwtSecret`',
               'Insecure placeholder default',
-              'Ships as `change-me-in-production-jwt-secret-minimum-32-chars`; no template validation rejects it, so replace it with at least 32 random characters.',
+              'Ships as `change-me-in-production-jwt-secret-minimum-32-chars`; no template validation rejects it, so replace it with at least 32 random characters, or point `secrets.adminJwtSecretExistingSecret` at a Secret.',
             ],
             [
               '`secrets.initialApiKey`',
@@ -384,12 +414,17 @@ kubectl -n probara get jobs`,
             [
               '`secrets.probaraSecretsKey`',
               'Empty',
-              'Base64 32-byte encryption key. When set, the chart provides it to the API, scheduler, worker, and alerter.',
+              'Base64 32-byte encryption key, provided to the API, scheduler, worker, and alerter. Supplied by either the literal or an existing Secret; with neither, the key is absent and at-rest encryption stays off.',
             ],
             [
               '`secrets.oidcClientSecret`',
               'Empty',
-              'Required when OIDC is enabled.',
+              'Required when OIDC is enabled — the render now fails if neither it nor `secrets.oidcClientSecretExistingSecret` is set, instead of leaving the API pod unable to start on a missing Secret key.',
+            ],
+            [
+              '`secrets.<field>ExistingSecret`, `.<field>ExistingSecretKey`',
+              'Empty; canonical key name',
+              'Per-field overrides for `adminJwtSecret`, `probaraSecretsKey`, and `oidcClientSecret`. They win over `secrets.existingSecret` and may point at different Secrets, so chart-managed, chart-wide, and per-field sources mix field by field.',
             ],
             [
               '`migrations.enabled`',
@@ -535,6 +570,82 @@ kubectl -n probara get jobs`,
       ],
     },
     {
+      id: 'external-secrets',
+      title: 'Secrets from an external secret manager',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'Every credential the chart consumes can come from a Secret you supply instead of a literal in your values file. The chart takes no dependency on any particular tool: External Secrets Operator, the Vault agent injector, sealed-secrets, SOPS, and a hand-written `kubectl create secret` all end at the same place — a Secret in the release namespace — and the chart only ever names it.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Each field resolves its source in a fixed order: its own `<field>ExistingSecret`, then the chart-wide `secrets.existingSecret`, then the Secret the chart renders from your literal values. Sources mix field by field, so an install can keep the JWT chart-managed while the encryption key comes from Vault and the database DSN from a cloud secret store.',
+        },
+        {
+          type: 'code',
+          language: 'yaml',
+          title: 'Chart-wide: one Secret behind everything',
+          code: `secrets:
+  # The chart then renders no Secret of its own.
+  existingSecret: probara-platform-secrets`,
+        },
+        {
+          type: 'code',
+          language: 'yaml',
+          title: 'Per field: different stores for different credentials',
+          code: `postgresql:
+  enabled: false
+  existingSecret: rds-probara       # key: postgres_url (override with existingSecretKey)
+
+nats:
+  existingSecret: nats-platform     # key: nats_url
+
+secrets:
+  adminJwtSecret: "kept-in-the-values-file-for-this-install"
+  probaraSecretsKeyExistingSecret: vault-probara
+  probaraSecretsKeyExistingSecretKey: encryption_key
+  oidcClientSecretExistingSecret: vault-probara
+
+worker:
+  locations:
+    - name: eu-west
+      locationId: "location-uuid-from-probara"
+      existingSecret: probara-location-eu-west`,
+        },
+        {
+          type: 'table',
+          columns: ['Key', 'Needed when', 'Read by'],
+          rows: [
+            ['`postgres_url`', 'Always', 'API, scheduler, worker, alerter, status page, migrations job'],
+            ['`nats_url`', 'Always', 'API, scheduler, worker, alerter, status page'],
+            ['`admin_jwt_secret`', 'Always', 'API'],
+            [
+              '`probara_secrets_key`',
+              'Always in chart-wide mode',
+              'API, scheduler, worker, alerter. In chart-wide mode the chart assumes the Secret carries it rather than silently running with at-rest encryption off.',
+            ],
+            ['`postgresql_username`, `postgresql_password`', '`postgresql.enabled`', 'Embedded PostgreSQL StatefulSet'],
+            ['`nats_platform_password`', '`nats.auth.enabled` on the embedded broker', 'Embedded NATS server, as a `--pass` argument substituted by Kubernetes'],
+            ['`nats_location_auth_issuer_seed`', '`nats.auth.enabled`', 'API'],
+            ['`oidc_client_secret`', '`auth.oidc.enabled`', 'API'],
+          ],
+        },
+        {
+          type: 'list',
+          items: [
+            'Per-field `<field>ExistingSecretKey` values default to the canonical key names above, so a Secret laid out with those names needs no key overrides.',
+            'A key the chart asks for but the Secret does not carry leaves the pod in `CreateContainerConfigError`. That is deliberate: a missing encryption key should stop a rollout, not quietly disable encryption.',
+            'Helm cannot read Secrets, so it cannot assemble a URL around a value it does not have: `postgresql.auth.existingSecret` needs the DSN externalized too, and `nats.auth.platformPasswordExistingSecret` needs the broker URL externalized. Either the matching per-field reference or the chart-wide `secrets.existingSecret` satisfies that; setting neither fails the render with that explanation.',
+            'The Secret must exist before the pods start. With External Secrets Operator, that means the ExternalSecret must have synced — the migrations Job runs as a `post-install`/`post-upgrade` hook and needs `postgres_url` at that moment.',
+            'Rotating a value in the Secret does not restart the workloads; the chart sets no checksum annotation. Restart the affected Deployments yourself after a rotation.',
+            'Rotation keys (`PROBARA_SECRETS_KEY_V2` and higher) have no dedicated value and go through the top-level `extraEnv`, which accepts a `valueFrom.secretKeyRef` entry like any Kubernetes EnvVar.',
+          ],
+        },
+      ],
+    },
+    {
       id: 'external-database-nats',
       title: 'External PostgreSQL and NATS',
       blocks: [
@@ -561,7 +672,7 @@ api:
             'Use TLS certificate verification for both PostgreSQL and NATS. Do not copy the example with `sslmode=disable` into production.',
             'Provision JetStream storage for `CHECK_JOBS`, `CHECK_RESULTS`, alert, notification, and AI workloads.',
             'Keep the platform NATS credential separate from per-location credentials and restrict broker/network access.',
-            'Protect values files and rendered manifests because external URLs may contain credentials. The chart does not accept an existing Secret reference for these URLs.',
+            'External URLs written as literals live in your values file. Point `postgresql.existingSecret` and `nats.existingSecret` at Secrets instead to keep them out of it — either way the chart reads both URLs from a Secret at runtime, never from a PodSpec.',
             'Test migrations against a backup before changing application versions.',
           ],
         },
@@ -586,6 +697,10 @@ api:
       locationId: "location-uuid-from-probara"
       credential: "generated-location-credential"
       natsUrl: "tls://location-id:credential@nats.example.com:4222"
+      # Or replace both with a Secret in the release namespace:
+      #   existingSecret: probara-location-eu-west
+      #   natsUrlKey: nats_url          # default
+      #   credentialKey: credential     # default
       replicas: 1
       concurrency: "10"
       meshService:
@@ -598,6 +713,7 @@ api:
           type: 'list',
           items: [
             'Use a DNS-safe unique `name`; each entry creates a separate Deployment.',
+            'Set `existingSecret` on an entry to take `natsUrl` and `credential` from a Secret instead of the values file; the literals are then no longer required and no location credential appears in the PodSpec.',
             'The chart does not expose HTTP egress policy; provide `HTTP_BLOCK_PRIVATE_IPS` and `HTTP_ALLOWED_CIDRS` through extra environment configuration, and keep any allowlist limited to networks that location is explicitly trusted to monitor.',
             'Expose the mesh echo endpoint only on private inter-location networks.',
             'For locations outside the Kubernetes cluster, use the generated container/deployment snippet rather than granting database access.',
@@ -734,7 +850,7 @@ api:
             'Pin immutable backend, frontend, agent, migration, PostgreSQL, and NATS versions.',
             'Use managed/HA PostgreSQL and NATS or define tested backup and restore objectives for embedded state.',
             'Configure HTTPS, `ADMIN_COOKIE_SECURE=true`, a correct `PUBLIC_BASE_URL`, and trusted reverse-proxy headers.',
-            'Use stable random JWT, encryption, OIDC, preview, SMTP, webhook, database, and NATS secrets from a secret manager.',
+            'Use stable random JWT, encryption, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',
             'Align every NATS stream, subject, consumer, and status-update subject across services.',
             'Keep [private-destination blocking](/docs/security/#ssrf-network-policy) enabled and allow only narrowly scoped CIDRs.',
             'Share or externalize synthetic-browser artifact storage.',

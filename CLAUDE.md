@@ -60,8 +60,11 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   all three. Changing one service alone silently breaks run-now.
 - **`PROBARA_SECRETS_KEY`**: needed by api, scheduler (dispatch decrypt),
   worker, alerter. Compose passes it through from the shell env to all four;
-  Helm wires it via guarded `secretKeyRef` blocks. Rotation keys (`_V2`+) go
-  through the chart's top-level `extraEnv`.
+  Helm renders it through `monitoring-platform.secretEnv`, guarded by
+  `monitoring-platform.hasSecret` — the guard tests "literal **or** any
+  existing-Secret ref", never the literal alone, or an external-secret install
+  silently runs with encryption off. Rotation keys (`_V2`+) go through the
+  chart's top-level `extraEnv`.
 - **`SMTP_*` / `APP_BASE_URL`**: needed by alerter (alert delivery), worker
   (async dispatch), and **api** — `POST /alert-channels/{id}/test` runs the
   email plugin in the API process, so alerter-only SMTP yields channels that
@@ -76,6 +79,23 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job) and
   `<service>.extraEnv`; `worker.extraEnv` also reaches location workers, and
   `worker.locations[]` entries can carry their own.
+- **Helm secret sources**: every credential resolves per-field
+  `<field>ExistingSecret` → chart-wide `secrets.existingSecret` → the
+  chart-managed `<fullname>-secret`, all through
+  `monitoring-platform.secretEnv` in `_helpers.tpl`. Never render a credential
+  as a literal `value:` in a PodSpec and never hardcode the Secret name — the
+  canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
+  `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
+  `oidc_client_secret`) are the contract external secret managers fill.
+  The NATS platform password reaches the embedded broker as a `--pass` arg
+  substituted by Kubernetes (`$(NATS_PLATFORM_PASSWORD)`), keeping the
+  ConfigMap secret-free; never move it into `nats.conf` via nats-server's own
+  `$VAR` expansion, which re-parses the value as config (numeric, boolean-ish,
+  or space/comma/brace passwords abort startup) and silently ignores the
+  expansion if you quote the reference. Helm cannot read Secrets,
+  so anything the chart *composes* from a credential (the Postgres DSN, the
+  embedded NATS URL) needs the composed value externalized too — hence the
+  paired `fail`s in `secret.yaml`.
 - **Selected tenant (web)**: `lib/tenant.ts` owns storage +
   `TENANT_CHANGED_EVENT`; `components/providers/TenantProvider.tsx` is the
   React-side source of truth (`useSelectedTenantId`) and its `TenantScope`

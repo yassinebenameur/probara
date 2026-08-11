@@ -52,8 +52,7 @@ spec:
           {{- end }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
-            - name: POSTGRES_URL
-              value: {{ include "monitoring-platform.postgresUrl" . | quote }}
+            {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 12 }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
