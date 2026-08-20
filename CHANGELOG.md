@@ -1,3 +1,21 @@
+# [1.0.0-alpha.68](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.67...v1.0.0-alpha.68) (2026-08-20)
+
+
+### Bug Fixes
+
+* **api:** stop rejecting agent monitor edits on timeout validation ([d6d663a](https://github.com/yassinebenameur/probara/commit/d6d663aa1500f6da98ceb2f0e4fcbf49103ddf91))
+* **scheduler:** replace the rollup cursor with a dirty-bucket ledger ([1dbc041](https://github.com/yassinebenameur/probara/commit/1dbc0413509384d5ee6752b8e9c6cd666b3d9628)), closes [hi#water](https://github.com/hi/issues/water)
+* **scheduler:** retry result ingest indefinitely instead of dropping ([c15711e](https://github.com/yassinebenameur/probara/commit/c15711eb6e685c496e48b5a9568c295bed03553b))
+
+
+### Features
+
+* **agent:** move host monitoring to OpenTelemetry and a generic metric store ([79dc315](https://github.com/yassinebenameur/probara/commit/79dc315d18de80cef44aa44ac79dd03e2b359d81))
+* **monitors:** add clusterMonitor-backed cluster checks to the MongoDB monitor ([3c6b3c2](https://github.com/yassinebenameur/probara/commit/3c6b3c2c4b53e5eb00603fe3747663dc178b1cd9))
+* **monitors:** add mongod process-CPU cluster check ([69dc29a](https://github.com/yassinebenameur/probara/commit/69dc29ae4d368a00ed631c70e03fb98a08a8b1be))
+* **monitors:** record a state timeline and stop inventing uptime ([d7b9cf1](https://github.com/yassinebenameur/probara/commit/d7b9cf18a50f831b66da6836cd9e32cc534b7e84))
+* **web:** chart MongoDB cluster metrics on the monitor detail page ([6ce5bd8](https://github.com/yassinebenameur/probara/commit/6ce5bd8d84a1676ed3eb82d6c0f0f471fcf4551b))
+
 # [1.0.0-alpha.67](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.66...v1.0.0-alpha.67) (2026-08-11)
 
 
