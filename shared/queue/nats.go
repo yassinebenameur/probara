@@ -222,9 +222,14 @@ func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, cons
 	if ackWait <= 0 {
 		ackWait = 30 * time.Second
 	}
+	// 0 = default (3 attempts); negative = unlimited redelivery (JetStream
+	// MaxDeliver -1) for consumers where dropping a message is worse than
+	// retrying it forever (e.g. results ingest during a schema-lag window).
 	maxDeliver := opts.MaxDeliver
-	if maxDeliver <= 0 {
+	if maxDeliver == 0 {
 		maxDeliver = 3
+	} else if maxDeliver < 0 {
+		maxDeliver = -1
 	}
 
 	cfg := jetstream.ConsumerConfig{
@@ -237,7 +242,10 @@ func (c *Client) CreateConsumerWithOptions(ctx context.Context, streamName, cons
 		FilterSubject: opts.FilterSubject,
 	}
 
-	consumer, err := stream.CreateConsumer(ctx, cfg)
+	// CreateOrUpdate: a durable that already exists with an older retry
+	// policy (e.g. the results-ingest consumer before it became unlimited)
+	// must pick up the new config on deploy instead of failing to start.
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, cfg)
 	if err != nil {
 		// Consumer might already exist, try to get it
 		consumer, err = stream.Consumer(ctx, consumerName)
