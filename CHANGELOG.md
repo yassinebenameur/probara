@@ -1,3 +1,10 @@
+# [1.0.0-alpha.69](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.68...v1.0.0-alpha.69) (2026-08-20)
+
+
+### Bug Fixes
+
+* **api:** ship collector binaries in the api image and unbreak CI ([e71c473](https://github.com/yassinebenameur/probara/commit/e71c473c89bd85ec02c3614fc87d331a55747267))
+
 # [1.0.0-alpha.68](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.67...v1.0.0-alpha.68) (2026-08-20)
 
 
