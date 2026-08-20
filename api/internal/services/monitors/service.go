@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -381,11 +382,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	effectiveType := existing.Type
+	if req.Type != nil {
+		effectiveType = *req.Type
+	}
+
 	if len(req.Config) > 0 {
-		effectiveType := existing.Type
-		if req.Type != nil {
-			effectiveType = *req.Type
-		}
 		config, err := s.prepareConfigForWrite(effectiveType, req.Config, existing.Config)
 		if err != nil {
 			return nil, err
@@ -411,8 +413,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
-	// Validate timeout < interval
-	if timeoutSeconds >= intervalSeconds {
+	// Validate timeout < interval — active check types only. Passive types
+	// (agent/push/group) never execute a check, so timeout is meaningless for
+	// them; the DB constraint exempts them likewise (migration 000012), and
+	// the agent form has always written timeout == interval, which made every
+	// UI edit of an agent monitor fail here.
+	if validation.IsActiveCheckType(effectiveType) && timeoutSeconds >= intervalSeconds {
 		return nil, fmt.Errorf("timeout_seconds must be less than interval_seconds")
 	}
 
