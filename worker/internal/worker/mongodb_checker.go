@@ -144,7 +144,7 @@ func (c *MongoDBChecker) Check(ctx context.Context, configRaw json.RawMessage, t
 	// Optional cluster checks (clusterMonitor role). A failed command becomes
 	// an `unavailable` annotation, never a DOWN — unless a configured hard
 	// assertion depends on it (mongoFinishResult fails closed then).
-	if config.CollectConnections || config.CollectCache || config.CollectMemory || config.CollectNetwork {
+	if config.CollectConnections || config.CollectCache || config.CollectMemory || config.CollectNetwork || config.CollectCPU {
 		var status mongoServerStatusDoc
 		if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Decode(&status); err != nil {
 			metrics.Unavailable = append(metrics.Unavailable, mongoCmdUnavailable("server_status", err))

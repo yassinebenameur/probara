@@ -46,6 +46,7 @@ const countValue = (v: number) => `${Math.round(v).toLocaleString()}`;
 const bytesTick = (v: number) => formatBytes(v);
 const rateValue = (v: number) => `${formatBytes(v)}/s`;
 const opsValue = (v: number) => `${v >= 10 ? Math.round(v) : v.toFixed(1)}/s`;
+const cpuValue = (v: number) => `${v >= 100 ? Math.round(v) : v.toFixed(1)}%`;
 
 // Per-second rate between consecutive snapshots of a cumulative counter.
 // Negative deltas mean the server restarted — that interval is skipped.
@@ -217,6 +218,32 @@ export default function MongoClusterPanels({ monitor, results }: { monitor: Moni
         ],
         yTickFormatter: opsValue,
         valueFormatter: opsValue,
+        yDomain: [0, 'auto'],
+      });
+    }
+
+    // Process CPU: cumulative µs of CPU time → % of one core (can exceed
+    // 100% on a multi-threaded mongod, like top).
+    const toCorePercent = (points: Point[]): Point[] => points.map(([ts, v]) => [ts, (v / 1_000_000) * 100]);
+    const cpuUser = toCorePercent(ratePoints(snapshots, (m) => m.cpu_user_us));
+    if (cpuUser.length > 0) {
+      const cpuSystem = toCorePercent(ratePoints(snapshots, (m) => m.cpu_system_us));
+      specs.push({
+        title: 'Process CPU',
+        headline: `${cpuValue((last(cpuUser) ?? 0) + (last(cpuSystem) ?? 0))} of one core`,
+        rows: buildChartRows(
+          [
+            { key: 'user', points: cpuUser },
+            { key: 'system', points: cpuSystem },
+          ],
+          stepMs
+        ),
+        series: [
+          { key: 'user', name: 'User', color: SERIES_COLORS[1] },
+          { key: 'system', name: 'System', color: SERIES_COLORS[2] },
+        ],
+        yTickFormatter: cpuValue,
+        valueFormatter: cpuValue,
         yDomain: [0, 'auto'],
       });
     }

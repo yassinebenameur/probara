@@ -256,6 +256,7 @@ type MongoDBMonitorConfig struct {
 	CollectCache       bool `json:"collect_cache,omitempty"`       // serverStatus.wiredTiger.cache
 	CollectMemory      bool `json:"collect_memory,omitempty"`      // serverStatus.mem
 	CollectNetwork     bool `json:"collect_network,omitempty"`     // serverStatus.network + opcounters
+	CollectCPU         bool `json:"collect_cpu,omitempty"`         // serverStatus.extra_info process CPU time (Linux)
 	// Replication-lag thresholds (seconds), mirroring max/warn latency
 	// semantics: max fails the check (and fails CLOSED when lag cannot be
 	// evaluated — unauthorized, standalone, no primary), warn only annotates.

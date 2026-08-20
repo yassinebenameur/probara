@@ -429,6 +429,7 @@ export interface MongoDBMonitorConfig extends DBTLSMaterial {
   collect_cache?: boolean; // serverStatus.wiredTiger.cache
   collect_memory?: boolean; // serverStatus.mem
   collect_network?: boolean; // serverStatus.network + opcounters
+  collect_cpu?: boolean; // serverStatus.extra_info process CPU time (Linux)
   // Max fails the check (and fails closed when lag can't be evaluated);
   // warn only annotates. Both require collect_replication.
   max_replication_lag_seconds?: number;
@@ -521,6 +522,8 @@ export interface MongoDBMetrics extends DBMetrics {
   network_bytes_out?: number; // cumulative since restart
   network_requests?: number;
   opcounters?: Record<string, number>;
+  cpu_user_us?: number; // mongod process CPU time, cumulative µs (Linux)
+  cpu_system_us?: number;
   replication?: MongoDBReplicationMetrics;
   replication_lag_warn_seconds?: number;
   unavailable?: MongoDBUnavailableCheck[];

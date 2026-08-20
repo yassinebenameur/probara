@@ -315,6 +315,7 @@ export default function DatabaseForm({
     collect_cache: existingConfig.collect_cache ?? false,
     collect_memory: existingConfig.collect_memory ?? false,
     collect_network: existingConfig.collect_network ?? false,
+    collect_cpu: existingConfig.collect_cpu ?? false,
     max_replication_lag_seconds: existingConfig.max_replication_lag_seconds
       ? String(existingConfig.max_replication_lag_seconds)
       : '',
@@ -349,6 +350,7 @@ export default function DatabaseForm({
     formData.collect_cache,
     formData.collect_memory,
     formData.collect_network,
+    formData.collect_cpu,
   ].filter(Boolean).length;
   const [clusterChecksOpen, setClusterChecksOpen] = useState(clusterChecksEnabled > 0);
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
@@ -498,6 +500,7 @@ export default function DatabaseForm({
       if (formData.collect_cache) config.collect_cache = true;
       if (formData.collect_memory) config.collect_memory = true;
       if (formData.collect_network) config.collect_network = true;
+      if (formData.collect_cpu) config.collect_cpu = true;
       if (formData.collect_replication) {
         const maxLag = formData.max_replication_lag_seconds.trim()
           ? parseInt(formData.max_replication_lag_seconds, 10)
@@ -1107,6 +1110,12 @@ export default function DatabaseForm({
                   description="Network I/O and operation counters"
                   checked={formData.collect_network}
                   onChange={(v) => setFormData({ ...formData, collect_network: v })}
+                />
+                <ToggleRow
+                  title="Process CPU"
+                  description="CPU time consumed by mongod (Linux servers)"
+                  checked={formData.collect_cpu}
+                  onChange={(v) => setFormData({ ...formData, collect_cpu: v })}
                 />
                 {formData.collect_replication && (
                   <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">

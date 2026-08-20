@@ -30,6 +30,10 @@ type mongoMetrics struct {
 	NetworkBytesOut      *int64           `json:"network_bytes_out,omitempty"` // cumulative since restart
 	NetworkRequests      *int64           `json:"network_requests,omitempty"`
 	Opcounters           map[string]int64 `json:"opcounters,omitempty"`
+	// Process CPU time consumed by mongod (getrusage, Linux; cumulative µs).
+	// Host CPU is not observable through clusterMonitor — that's agent territory.
+	CPUUserMicros   *int64 `json:"cpu_user_us,omitempty"`
+	CPUSystemMicros *int64 `json:"cpu_system_us,omitempty"`
 
 	// replSetGetStatus-backed group (clusterMonitor role).
 	Replication *mongoReplicationMetrics `json:"replication,omitempty"`
@@ -101,6 +105,10 @@ type mongoServerStatusDoc struct {
 		Getmore int64 `bson:"getmore"`
 		Command int64 `bson:"command"`
 	} `bson:"opcounters"`
+	ExtraInfo *struct {
+		UserTimeUs   int64 `bson:"user_time_us"`   // "fields vary by platform" —
+		SystemTimeUs int64 `bson:"system_time_us"` // zero when the host OS omits them
+	} `bson:"extra_info"`
 }
 
 type mongoReplSetStatusDoc struct {
@@ -147,6 +155,11 @@ func applyMongoServerStatus(m *mongoMetrics, doc mongoServerStatusDoc, config mo
 		m.CacheUsedBytes = &used
 		m.CacheMaxBytes = &max
 		m.CacheDirtyBytes = &dirty
+	}
+	if config.CollectCPU && doc.ExtraInfo != nil && (doc.ExtraInfo.UserTimeUs > 0 || doc.ExtraInfo.SystemTimeUs > 0) {
+		user, system := doc.ExtraInfo.UserTimeUs, doc.ExtraInfo.SystemTimeUs
+		m.CPUUserMicros = &user
+		m.CPUSystemMicros = &system
 	}
 	if config.CollectNetwork {
 		if doc.Network != nil {

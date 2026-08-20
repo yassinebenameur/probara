@@ -60,6 +60,11 @@ func fullServerStatusFixture() bson.M {
 			"getmore": int64(5),
 			"command": int64(6),
 		},
+		"extra_info": bson.M{
+			"note":           "fields vary by platform",
+			"user_time_us":   int64(16_000_000),
+			"system_time_us": int64(4_000_000),
+		},
 	}
 }
 
@@ -69,7 +74,7 @@ func TestApplyMongoServerStatusGroups(t *testing.T) {
 	t.Run("all groups", func(t *testing.T) {
 		m := &mongoMetrics{}
 		applyMongoServerStatus(m, doc, models.MongoDBMonitorConfig{
-			CollectConnections: true, CollectCache: true, CollectMemory: true, CollectNetwork: true,
+			CollectConnections: true, CollectCache: true, CollectMemory: true, CollectNetwork: true, CollectCPU: true,
 		})
 		if m.UptimeSeconds == nil || *m.UptimeSeconds != 12345 {
 			t.Fatalf("uptime = %v, want 12345", m.UptimeSeconds)
@@ -101,6 +106,9 @@ func TestApplyMongoServerStatusGroups(t *testing.T) {
 		if len(m.Opcounters) != 6 || m.Opcounters["command"] != 6 {
 			t.Fatalf("opcounters = %v", m.Opcounters)
 		}
+		if m.CPUUserMicros == nil || *m.CPUUserMicros != 16_000_000 || m.CPUSystemMicros == nil || *m.CPUSystemMicros != 4_000_000 {
+			t.Fatalf("cpu = %v/%v", m.CPUUserMicros, m.CPUSystemMicros)
+		}
 	})
 
 	t.Run("only enabled groups populate", func(t *testing.T) {
@@ -109,7 +117,7 @@ func TestApplyMongoServerStatusGroups(t *testing.T) {
 		if m.CacheUsedBytes == nil {
 			t.Fatal("cache group enabled but not populated")
 		}
-		if m.ConnectedClients != nil || m.UsedMemoryBytes != nil || m.NetworkBytesIn != nil || m.Opcounters != nil {
+		if m.ConnectedClients != nil || m.UsedMemoryBytes != nil || m.NetworkBytesIn != nil || m.Opcounters != nil || m.CPUUserMicros != nil {
 			t.Fatal("disabled groups must stay empty")
 		}
 		if m.UptimeSeconds == nil {
@@ -121,10 +129,20 @@ func TestApplyMongoServerStatusGroups(t *testing.T) {
 		bare := decodeServerStatus(t, bson.M{"uptime": 7.0})
 		m := &mongoMetrics{}
 		applyMongoServerStatus(m, bare, models.MongoDBMonitorConfig{
-			CollectConnections: true, CollectCache: true, CollectMemory: true, CollectNetwork: true,
+			CollectConnections: true, CollectCache: true, CollectMemory: true, CollectNetwork: true, CollectCPU: true,
 		})
-		if m.ConnectedClients != nil || m.CacheUsedBytes != nil || m.UsedMemoryBytes != nil || m.NetworkBytesIn != nil {
+		if m.ConnectedClients != nil || m.CacheUsedBytes != nil || m.UsedMemoryBytes != nil || m.NetworkBytesIn != nil || m.CPUUserMicros != nil {
 			t.Fatal("nil sections must not populate fields")
+		}
+	})
+
+	t.Run("platform without cpu times emits nothing", func(t *testing.T) {
+		fixture := fullServerStatusFixture()
+		fixture["extra_info"] = bson.M{"note": "fields vary by platform", "page_faults": int64(12)}
+		m := &mongoMetrics{}
+		applyMongoServerStatus(m, decodeServerStatus(t, fixture), models.MongoDBMonitorConfig{CollectCPU: true})
+		if m.CPUUserMicros != nil || m.CPUSystemMicros != nil {
+			t.Fatal("zero cpu times mean the platform omits them; must stay nil")
 		}
 	})
 
