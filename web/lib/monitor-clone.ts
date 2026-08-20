@@ -79,10 +79,14 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
       };
     }
     case 'agent': {
+      // agent_id is cleared: the clone gets its own identity on create.
       const cfg = monitor.config as AgentMonitorConfig | undefined;
       return {
         agent_id: '',
         expected_interval_seconds: cfg?.expected_interval_seconds || monitor.interval_seconds || 60,
+        ...(cfg?.metric_rules && cfg.metric_rules.length > 0
+          ? { metric_rules: cloneObject(cfg.metric_rules) }
+          : {}),
       };
     }
     case 'push': {

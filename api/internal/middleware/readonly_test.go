@@ -118,7 +118,7 @@ func TestPostReadAllowlistDrift(t *testing.T) {
 		"/api/v1/alert-channels/{id}/test": {}, // sends a real notification
 	}
 
-	readVerbs := map[string]struct{}{"test": {}, "preview": {}, "probe": {}, "suggestions": {}, "dependency-suggestions": {}}
+	readVerbs := map[string]struct{}{"test": {}, "preview": {}, "probe": {}, "suggestions": {}, "dependency-suggestions": {}, "query": {}}
 
 	// Mirror of the mutation routes in server.go that end in a read-ish verb.
 	// Walking the real router would need the full Server dependency graph;
@@ -130,11 +130,12 @@ func TestPostReadAllowlistDrift(t *testing.T) {
 		"/api/v1/monitors/import/preview",
 		"/api/v1/monitors/dependency-suggestions",
 		"/api/v1/alert-channels/{id}/test",
+		"/api/v1/monitors/{id}/metrics/query",
 	}
 
 	for _, route := range postRoutes {
 		if _, excluded := writeGatedExceptions[route]; excluded {
-			if _, inAllowlist := postReadPaths[route]; inAllowlist {
+			if isPostReadPath(route) {
 				t.Errorf("route %s is both write-gated exception and allowlisted", route)
 			}
 			continue
@@ -147,7 +148,9 @@ func TestPostReadAllowlistDrift(t *testing.T) {
 		if _, ok := readVerbs[last]; !ok {
 			continue
 		}
-		if _, ok := postReadPaths[route]; !ok {
+		// isPostReadPath covers both the exact allowlist and the
+		// parameterized patterns ({id} matches the [^/]+ segment).
+		if !isPostReadPath(route) {
 			t.Errorf("POST route %s looks compute-only but is missing from postReadPaths (or add it to writeGatedExceptions)", route)
 		}
 	}

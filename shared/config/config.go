@@ -142,6 +142,12 @@ type APIConfig struct {
 	// staleness and probe-now timeouts agree with the actual probe cadence.
 	MeshProbeIntervalSeconds int
 	MeshProbeTimeoutSeconds  int
+	// OTLP ingest guardrails for agent monitors pushing OpenTelemetry
+	// metrics: max distinct series per monitor (overflow points are rejected
+	// via OTLP partial_success) and max export requests per monitor per
+	// minute (excess gets 429 + Retry-After, which the collector retries).
+	OTLPMaxSeriesPerMonitor int
+	OTLPMonitorRatePerMin   int
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -179,6 +185,11 @@ type SchedulerConfig struct {
 	MeshProbeTimeoutSeconds  int
 	MeshFailureThreshold     int
 	MeshScheduleBatchSize    int
+	// MetricRawRetentionDays is how long raw metric_samples partitions are
+	// kept before the partition-maintenance pass drops them (hourly metric
+	// rollups survive independently). Per-tenant data_retention_days can only
+	// tighten this, never extend it.
+	MetricRawRetentionDays int
 }
 
 // WorkerConfig contains configuration for the worker service
@@ -482,6 +493,24 @@ func LoadAPIConfig() (*APIConfig, error) {
 	}
 	if cfg.NATSLocationAuthIssuerSeed != "" && strings.TrimSpace(os.Getenv("PROBARA_SECRETS_KEY")) == "" {
 		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
+	}
+
+	// OTLP_* — ingest guardrails for the OTel metrics endpoint.
+	cfg.OTLPMaxSeriesPerMonitor = 2000
+	if v := strings.TrimSpace(os.Getenv("OTLP_MAX_SERIES_PER_MONITOR")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid OTLP_MAX_SERIES_PER_MONITOR: %q", v)
+		}
+		cfg.OTLPMaxSeriesPerMonitor = n
+	}
+	cfg.OTLPMonitorRatePerMin = 60
+	if v := strings.TrimSpace(os.Getenv("OTLP_MONITOR_RATE_PER_MIN")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid OTLP_MONITOR_RATE_PER_MIN: %q", v)
+		}
+		cfg.OTLPMonitorRatePerMin = n
 	}
 
 	// OIDC_* — platform-level SSO configuration (needs PublicBaseURL for the
@@ -796,6 +825,15 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 			return nil, fmt.Errorf("invalid MESH_SCHEDULE_BATCH_SIZE: %q", v)
 		}
 		cfg.MeshScheduleBatchSize = n
+	}
+
+	cfg.MetricRawRetentionDays = 30
+	if v := strings.TrimSpace(os.Getenv("METRIC_RAW_RETENTION_DAYS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid METRIC_RAW_RETENTION_DAYS: %q", v)
+		}
+		cfg.MetricRawRetentionDays = n
 	}
 
 	return cfg, nil

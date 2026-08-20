@@ -113,7 +113,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
             "Starts PostgreSQL and NATS with Docker Compose.",
             "Bootstraps local database access and validates the Go toolchain.",
             "Runs the database migrations with `go run ./cmd/migrate`.",
-            "Builds the installable host-agent artifacts and starts the Go services as local processes.",
+            "Builds the installable collector artifacts and starts the Go services as local processes.",
             "Launches the Next.js web application.",
           ],
         },

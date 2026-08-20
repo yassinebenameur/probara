@@ -797,35 +797,27 @@ export const CONFIGURATION_PAGE: DocPage = {
     },
     {
       id: 'agent',
-      title: 'Standalone host agent settings',
+      title: 'Collector agent settings',
       blocks: [
         {
+          type: 'paragraph',
+          text:
+            'The host agent is `probara-collector`, an OpenTelemetry Collector distribution started as `probara-collector --config <path>`. Its generated configuration contains no secrets; credentials are supplied through the environment (systemd `EnvironmentFile`, launchd runner script, or the Windows service registry `Environment` value).',
+        },
+        {
           type: 'table',
-          columns: ['CLI flag', 'Default', 'Description'],
+          columns: ['Environment variable', 'Default', 'Description'],
           rows: [
-            ['`-backend-url`', 'None; required', 'Externally reachable API base URL.'],
-            ['`-agent-id`', 'None; required', 'Agent monitor identifier.'],
-            ['`-api-key`', 'None; required', 'Bearer API key used for reporting.'],
-            ['`-interval`', '`60`', 'Reporting interval in seconds.'],
-            ['`-disk-path`', '`/`', 'Filesystem path used for disk telemetry.'],
-            [
-              '`-allow-remote-disable`',
-              '`false`',
-              'Allows a server HTTP 410 response to initiate local disable/uninstall.',
-            ],
-            [
-              '`-remote-disable-command`',
-              'Empty',
-              'Script/command used only when remote disable is explicitly allowed.',
-            ],
+            ['`PROBARA_API_KEY`', 'None; required', 'Tenant write-scope API key sent as the `Authorization: Bearer` header.'],
+            ['`PROBARA_AGENT_ID`', 'None; required', 'Agent monitor identifier sent as the `X-Probara-Agent-Id` header.'],
           ],
         },
         {
           type: 'callout',
-          tone: 'warning',
-          title: 'CLI flags are authoritative',
+          tone: 'info',
+          title: 'Everything else lives in the collector config',
           text:
-            'The current agent executable does not read `BACKEND_URL`, `AGENT_ID`, `API_KEY`, `INTERVAL`, or `DISK_PATH` from the environment, despite older README and Dockerfile claims. The JSON-form container command also does not shell-expand `${…}` placeholders. Supply the CLI flags explicitly.',
+            'API origin, export interval, scrapers, and processors are all part of the generated collector YAML (`GET /api/v1/monitors/{id}/agent/config.yaml`), which references credentials only via `${env:…}` expansion. The legacy `probara-agent` CLI flags — including `-allow-remote-disable` — are retired with that binary; see the [migration guide](/docs/agents/#migrating-legacy).',
         },
       ],
     },
@@ -841,8 +833,8 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`ADMIN_USERNAME`', 'Required', '`go run ./cmd/admin` administrator upsert.'],
             ['`ADMIN_PASSWORD`', 'Required', '`go run ./cmd/admin`; do not expose in shell history in production.'],
             ['`BOOTSTRAP_DB_USER`', '`probara`', '`scripts/bootstrap-local-db.sh`.'],
-            ['`VERSION`', '`1.0.0`', '`scripts/build-agent.sh`.'],
-            ['`BUILD_DIR`', '`./static/agent`', 'Output directory for downloadable agent binaries.'],
+            ['`OCB_VERSION`', '`v0.159.0`', '`scripts/build-collector.sh`; pinned OpenTelemetry Collector Builder version, must match `collector/manifest.yaml`.'],
+            ['`BUILD_DIR`', '`./static/collector`', 'Output directory for downloadable collector binaries and `checksums.txt`.'],
             [
               '`GHCR_OWNER`',
               'Falls back to `GITHUB_REPOSITORY_OWNER`; then required',

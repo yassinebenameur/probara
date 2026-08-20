@@ -218,21 +218,29 @@ type GroupConfig struct {
 	MonitorIDs []string `json:"monitor_ids"`
 }
 
-// AgentConfig represents the configuration for an agent monitor
+// AgentConfig represents the configuration for an agent monitor. Agents are
+// OpenTelemetry collectors pushing OTLP metrics; ExpectedIntervalSeconds is
+// both the collector's collection_interval and the freshness basis.
 type AgentConfig struct {
-	AgentID                 string                  `json:"agent_id"`
-	ExpectedIntervalSeconds int                     `json:"expected_interval_seconds"`
-	MetricThresholds        *MetricThresholdsConfig `json:"metric_thresholds,omitempty"`
+	AgentID                 string       `json:"agent_id"`
+	ExpectedIntervalSeconds int          `json:"expected_interval_seconds"`
+	MetricRules             []MetricRule `json:"metric_rules,omitempty"`
 }
 
-// MetricThresholdsConfig holds the per-monitor host-metric alert thresholds
-// (percent, 0-100) evaluated by the alerter. A nil or non-positive value means
-// the metric has no threshold and is not alerted on.
-type MetricThresholdsConfig struct {
-	CPUPercent    *float64 `json:"cpu_percent,omitempty"`
-	MemoryPercent *float64 `json:"memory_percent,omitempty"`
-	DiskPercent   *float64 `json:"disk_percent,omitempty"`
-	SwapPercent   *float64 `json:"swap_percent,omitempty"`
+// MetricRule is one host_metric alert rule over the monitor's metric store
+// series (replacing the fixed cpu/memory/disk/swap metric_thresholds;
+// migration 000085 rewrites old configs). Thresholds are in the metric's
+// NATIVE unit — a ratio 0-1 for *.utilization metrics, bytes for *.usage —
+// with percent↔ratio conversion owned by the UI. A rule without attribute
+// filters fans out to every matching series (e.g. one filesystem rule alerts
+// per mountpoint), each breaching series opening its own alert keyed by its
+// canonical series key (shared/metricstore.SeriesKeyString).
+type MetricRule struct {
+	MetricName         string            `json:"metric_name"`
+	AttributeFilters   map[string]string `json:"attribute_filters,omitempty"`
+	Operator           string            `json:"operator"` // ">=" (default) or "<="
+	Threshold          float64           `json:"threshold"`
+	ForDurationSeconds int               `json:"for_duration_seconds,omitempty"`
 }
 
 // PushConfig represents the configuration for a push monitor

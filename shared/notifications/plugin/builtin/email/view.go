@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
@@ -236,17 +237,21 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 		if metric == "" {
 			metric = "a host metric"
 		}
+		// Values render in the metric's display unit (percent for
+		// utilization ratios and legacy kinds, bytes for usage, raw
+		// otherwise); wording stays direction-neutral because a rule may be
+		// a <= threshold.
 		if resolved {
 			if alert.ThresholdValue != nil {
-				return fmt.Sprintf("%s usage is back below the %s threshold.", capitalize(metric), pctValue(*alert.ThresholdValue))
+				return fmt.Sprintf("%s is back within the %s threshold.", capitalize(metric), hostMetricValue(alert, *alert.ThresholdValue))
 			}
-			return fmt.Sprintf("%s usage is back within its configured threshold.", capitalize(metric))
+			return fmt.Sprintf("%s is back within its configured threshold.", capitalize(metric))
 		}
 		if alert.MetricValue != nil && alert.ThresholdValue != nil {
-			return fmt.Sprintf("%s usage reached %s, above the %s threshold.",
-				capitalize(metric), pctValue(*alert.MetricValue), pctValue(*alert.ThresholdValue))
+			return fmt.Sprintf("%s reached %s, breaching the %s threshold.",
+				capitalize(metric), hostMetricValue(alert, *alert.MetricValue), hostMetricValue(alert, *alert.ThresholdValue))
 		}
-		return fmt.Sprintf("%s usage breached its configured threshold.", capitalize(metric))
+		return fmt.Sprintf("%s breached its configured threshold.", capitalize(metric))
 
 	case alert.IsTLSExpiry():
 		if resolved {
@@ -317,11 +322,11 @@ func metricFor(alert notifications.AlertDetails, resolved bool) *metricPanel {
 		if label == "" {
 			label = "Host metric"
 		}
-		p := &metricPanel{Label: capitalize(label) + " usage", Value: pctValue(*alert.MetricValue)}
+		p := &metricPanel{Label: capitalize(label), Value: hostMetricValue(alert, *alert.MetricValue)}
 		if alert.ThresholdValue != nil {
-			p.Note = "threshold " + pctValue(*alert.ThresholdValue)
+			p.Note = "threshold " + hostMetricValue(alert, *alert.ThresholdValue)
 			if resolved {
-				p.Note = "back below " + pctValue(*alert.ThresholdValue)
+				p.Note = "back within " + hostMetricValue(alert, *alert.ThresholdValue)
 			}
 		}
 		return p
@@ -468,6 +473,16 @@ func pctValue(v float64) string {
 		return fmt.Sprintf("%d%%", int64(v))
 	}
 	return fmt.Sprintf("%.1f%%", v)
+}
+
+// hostMetricValue renders a host-metric value/threshold in the metric's
+// display unit, keyed by the alert's metric name (canonical series key or
+// legacy percent kind). Falls back to percent when the name is missing.
+func hostMetricValue(alert notifications.AlertDetails, v float64) string {
+	if alert.MetricName != nil {
+		return metricstore.FormatAlertValue(*alert.MetricName, v)
+	}
+	return pctValue(v)
 }
 
 // dayAdjective renders a day count for attributive use, e.g. "14-day window".

@@ -93,6 +93,20 @@ func (s *Service) populatePageMonitors(ctx context.Context, tenantID uuid.UUID, 
 		assignRegularShortRange(m.ptr, m.id, statusByID, summaryByID, hourlyByID, historyByID)
 	}
 
+	// Agent monitors: latest host metrics from the metric store for the
+	// show_agent_metrics cards (best-effort; a silent agent renders no cards
+	// — GetLatestAgentMetrics is freshness-bounded). The template gates on
+	// the page's ShowAgentMetrics, so unconditional population here is cheap
+	// and keeps page settings out of this layer.
+	for _, m := range mons {
+		if m.isGroup || m.ptr.MonitorType != "agent" {
+			continue
+		}
+		if am, err := s.GetLatestAgentMetrics(ctx, m.id, tenantID); err == nil {
+			m.ptr.AgentMetrics = am
+		}
+	}
+
 	// Flag components whose certificate is inside its expiry warning window
 	// (open tls_expiry alert) — shown as a small note, not a status change.
 	if len(regularIDs) > 0 {

@@ -214,6 +214,27 @@ func (p *purger) purgeMonitor(ctx context.Context, conn *sql.Conn, monitorID uui
 		{"check_results", `DELETE FROM check_results
 			WHERE id IN (SELECT id FROM check_results
 			             WHERE monitor_id = ANY($1) LIMIT $2)`},
+		// Metric store: samples first (no FK — a cascade across the
+		// partitioned table would be unbounded work), then rollups, ledger,
+		// and the series registry. Batched via PKs, not ctid: ctid is not
+		// unique across the samples table's partitions.
+		{"metric_samples", `DELETE FROM metric_samples
+			WHERE (series_id, ts) IN (
+				SELECT ms.series_id, ms.ts FROM metric_samples ms
+				JOIN metric_series s ON s.id = ms.series_id
+				WHERE s.monitor_id = ANY($1) LIMIT $2)`},
+		{"metric_rollups_hourly", `DELETE FROM metric_rollups_hourly
+			WHERE (series_id, bucket) IN (
+				SELECT r.series_id, r.bucket FROM metric_rollups_hourly r
+				JOIN metric_series s ON s.id = r.series_id
+				WHERE s.monitor_id = ANY($1) LIMIT $2)`},
+		{"metric_rollup_dirty", `DELETE FROM metric_rollup_dirty
+			WHERE (monitor_id, bucket_hour) IN (
+				SELECT monitor_id, bucket_hour FROM metric_rollup_dirty
+				WHERE monitor_id = ANY($1) LIMIT $2)`},
+		{"metric_series", `DELETE FROM metric_series
+			WHERE id IN (SELECT id FROM metric_series
+			             WHERE monitor_id = ANY($1) LIMIT $2)`},
 	}
 
 	for _, d := range deletes {

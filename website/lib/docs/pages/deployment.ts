@@ -76,7 +76,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The standalone agent is a separate Go module that declares the same Go 1.26.5 toolchain. Root `make test` does not cover it.',
+            'The host agent (`probara-collector`) is not a separate Go module: `scripts/build-collector.sh` generates and cross-compiles a minimal OpenTelemetry Collector distribution from `collector/manifest.yaml` with a pinned builder version. Root `make test` covers the whole repository.',
         },
       ],
     },
@@ -133,7 +133,7 @@ make stop-all-local`,
         {
           type: 'paragraph',
           text:
-            'The target starts PostgreSQL and NATS, bootstraps local database access, validates Go, runs migrations, builds downloadable agent binaries, builds and launches each Go service, and starts Next.js on `0.0.0.0:3000`.',
+            'The target starts PostgreSQL and NATS, bootstraps local database access, validates Go, runs migrations, builds downloadable collector binaries, builds and launches each Go service, and starts Next.js on `0.0.0.0:3000`.',
         },
         {
           type: 'definitions',
@@ -847,7 +847,7 @@ api:
         {
           type: 'list',
           items: [
-            'Pin immutable backend, frontend, agent, migration, PostgreSQL, and NATS versions.',
+            'Pin immutable backend, frontend, collector, migration, PostgreSQL, and NATS versions.',
             'Use managed/HA PostgreSQL and NATS or define tested backup and restore objectives for embedded state.',
             'Configure HTTPS, `ADMIN_COOKIE_SECURE=true`, a correct `PUBLIC_BASE_URL`, and trusted reverse-proxy headers.',
             'Use stable random JWT, encryption, OIDC, preview, SMTP, webhook, database, and NATS secrets, sourced [from your secret manager](#external-secrets) rather than written into the values file.',

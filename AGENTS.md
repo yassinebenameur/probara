@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`probara` is a Go monorepo with service packages at the repo root: `api/`, `scheduler/`, `worker/`, `alerter/`, `status-page/`, and `agent/`. Shared code lives in `shared/` and common entrypoints live under service-specific `cmd/` folders plus top-level utilities in `cmd/`. The authenticated web frontend is in `web/` (`app/`, `components/`, `lib/`); the statically exported public website and product documentation are in `website/`. Deployment assets live in `helm/` and `infra/`; architecture notes are in `docs/architecture.md`; helper scripts are in `scripts/`.
+`probara` is a Go monorepo with service packages at the repo root: `api/`, `scheduler/`, `worker/`, `alerter/`, and `status-page/`. Shared code lives in `shared/` and common entrypoints live under service-specific `cmd/` folders plus top-level utilities in `cmd/`. Host monitoring ships as `probara-collector`, a minimal OpenTelemetry Collector distribution built from the OCB manifest in `collector/` (no in-repo agent code). The authenticated web frontend is in `web/` (`app/`, `components/`, `lib/`); the statically exported public website and product documentation are in `website/`. Deployment assets live in `helm/` and `infra/`; architecture notes are in `docs/architecture.md`; helper scripts are in `scripts/`.
 
 ## Build, Test, and Development Commands
 Use the `Makefile` for normal development workflows:
@@ -29,10 +29,10 @@ Keep changes aligned with the current service boundaries:
 
 - `api/` owns CRUD, dashboard/admin flows, auth, imports, push handling, and writes the shared application data model.
 - `scheduler/` is responsible for scheduling monitor execution and retention cleanup; do not move check execution or alert evaluation logic into it.
-- `worker/` consumes check jobs, runs monitor checks (`http`, `ping`, `dns`, `grpc`, `sip`, `agent`, `synthetic_api`, `synthetic_browser`), writes results, and publishes live status updates.
+- `worker/` consumes check jobs, runs monitor checks (`http`, `ping`, `dns`, `grpc`, `sip`, `synthetic_api`, `synthetic_browser`), writes results, and publishes live status updates (`agent`/`push`/`group` are passive types the worker never executes).
 - `alerter/` evaluates alert policies from database state, manages alert lifecycle/notification deduplication, and publishes alert events.
 - `status-page/` is the public-facing Go service for rendered status pages and live updates; `web/` is the separate React/Next.js application for the main product UI.
-- `agent/` is a separate nested Go module that reports agent-side metrics back to the backend; account for that when running Go commands.
+- Agent monitors are passive: hosts run `probara-collector` (an OTel Collector) pushing OTLP metrics to the API's `/api/v1/otlp/v1/metrics`; the `collector/` directory holds only the OCB build manifest.
 
 Shared integration contracts matter more than internal implementation details:
 
@@ -43,7 +43,7 @@ Shared integration contracts matter more than internal implementation details:
 - Operational endpoints `/healthz`, `/readyz`, and `/metrics` are part of the standard service shape; keep them intact when touching service startup/server wiring.
 
 ## Testing Guidelines
-Place Go tests next to the code they cover using `*_test.go`. Use `*_integration_test.go` for database or queue-backed tests and keep unit tests fast by default. Add coverage for each touched package, especially validators, services, and handlers. The top-level `make test` covers the main Go module; when touching the nested `agent/` module, run its tests from `agent/` as well. For frontend changes, run relevant checks from `web/` and note manual verification steps when no automated UI test exists.
+Place Go tests next to the code they cover using `*_test.go`. Use `*_integration_test.go` for database or queue-backed tests and keep unit tests fast by default. Add coverage for each touched package, especially validators, services, and handlers. The top-level `make test` covers the whole Go module. For frontend changes, run relevant checks from `web/` and note manual verification steps when no automated UI test exists.
 
 ## Agent Instructions Maintenance
 After completing a feature or bug fix, consider whether `AGENTS.md` should be updated. Only add or change guidance when the work introduces durable repo knowledge that future agents or contributors need, such as new commands, service boundaries, architecture contracts, testing expectations, required workflows, or non-obvious operational constraints. Do not add one-off implementation notes, temporary workarounds, obvious code details, or anything already documented clearly elsewhere unless linking or summarizing it here would prevent repeated mistakes. Keep updates concise, general, and aligned with best practices.

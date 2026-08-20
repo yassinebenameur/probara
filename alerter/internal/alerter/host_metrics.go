@@ -11,45 +11,64 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/maintenance"
-	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/metricstore"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
 
-// hostMetricKinds is the canonical, ordered set of metrics a threshold can
-// target. Order keeps alert creation deterministic when several breach at once.
-var hostMetricKinds = []string{"cpu", "memory", "disk", "swap"}
+// Host-metric alerting over the generic metric store: each agent monitor's
+// config carries metric_rules ([{metric_name, attribute_filters, operator,
+// threshold, for_duration_seconds}], native units — ratio 0-1 for
+// *.utilization). A rule fans out to every matching series; each breaching
+// series opens its own host_metric alert keyed by its CANONICAL SERIES KEY
+// (metricstore.SeriesKeyString) in alerts.metric_name — per-mountpoint disk
+// alerts coexist under the (monitor_id, kind, metric_name) unique index
+// unchanged since migration 000059.
+//
+// Evaluation is freshness-bounded (monitorstate.FreshnessHorizonSeconds): a
+// silent agent's last readings stop being evaluated and their alerts resolve
+// — the availability watchdog owns paging for the outage itself. This
+// replaces the pre-OTel evaluator whose unbounded DISTINCT ON kept a dead
+// host's last breach alerting forever.
 
-// hostMetricConfig is the effective host-metric threshold config for one agent
-// monitor, parsed from its monitors.config JSON.
+// hostMetricConfig is one agent monitor's effective rule set.
 type hostMetricConfig struct {
-	monitorID   uuid.UUID
-	tenantID    uuid.UUID
-	monitorName string
-	// thresholds maps a metric name ("cpu", "memory", ...) to its percent
-	// threshold (0-100). Only metrics with a positive threshold are present.
-	thresholds map[string]float64
+	monitorID       uuid.UUID
+	tenantID        uuid.UUID
+	monitorName     string
+	intervalSeconds int
+	rules           []metricRule
 }
 
-// metricThresholdConfig mirrors the metric_thresholds block stored in
-// monitors.config for agent monitors. All fields are optional; a nil or
-// non-positive value means "no threshold for this metric".
-type metricThresholdConfig struct {
-	CPUPercent    *float64 `json:"cpu_percent"`
-	MemoryPercent *float64 `json:"memory_percent"`
-	DiskPercent   *float64 `json:"disk_percent"`
-	SwapPercent   *float64 `json:"swap_percent"`
+// metricRule mirrors the metric_rules entries in monitors.config (the API's
+// models.MetricRule; the alerter keeps its own decode struct like every
+// other config slice it reads).
+type metricRule struct {
+	MetricName         string            `json:"metric_name"`
+	AttributeFilters   map[string]string `json:"attribute_filters"`
+	Operator           string            `json:"operator"`
+	Threshold          float64           `json:"threshold"`
+	ForDurationSeconds int               `json:"for_duration_seconds"`
 }
 
-// agentThresholdConfig is the slice of monitors.config the alerter cares about.
-type agentThresholdConfig struct {
-	MetricThresholds *metricThresholdConfig `json:"metric_thresholds"`
+func (r metricRule) breaches(value float64) bool {
+	if r.Operator == "<=" {
+		return value <= r.Threshold
+	}
+	return value >= r.Threshold
 }
 
-// evaluateHostMetricThresholds compares each agent monitor's latest reported
-// host metrics against its configured thresholds and opens or resolves a
-// host_metric alert per breaching metric. Like latency anomalies, this is
-// orthogonal to the availability state machine: an 'up' host can still be
-// flagged for high CPU/memory/disk/swap.
+// breachingSeries is one series currently in breach of a rule.
+type breachingSeries struct {
+	seriesKey string
+	value     float64
+	threshold float64
+}
+
+// evaluateHostMetricThresholds compares each agent monitor's fresh series
+// against its metric rules and opens or resolves host_metric alerts. Like
+// latency anomalies, this is orthogonal to availability: an 'up' host can
+// still be flagged for a breaching metric.
 func (a *Alerter) evaluateHostMetricThresholds(ctx context.Context) error {
 	configs, err := a.loadHostMetricConfigs(ctx)
 	if err != nil {
@@ -65,63 +84,135 @@ func (a *Alerter) evaluateHostMetricThresholds(ctx context.Context) error {
 		monitorIDs = append(monitorIDs, c.monitorID)
 	}
 
-	latest, err := a.loadLatestAgentMetrics(ctx, monitorIDs)
-	if err != nil {
-		return fmt.Errorf("load latest agent metrics: %w", err)
-	}
-
 	now := time.Now()
 	for _, c := range configs {
-		m, ok := latest[c.monitorID]
-		if !ok {
-			// No metrics reported yet; leave any open alerts untouched.
+		breaching, err := a.evaluateMonitorRules(ctx, c)
+		if err != nil {
+			a.logger.WithError(err).WithFields(map[string]interface{}{
+				"monitor_id": c.monitorID,
+			}).Error("Failed to evaluate host metric rules")
 			continue
 		}
 
-		breaching := make(map[string]bool, len(c.thresholds))
-		for _, metric := range hostMetricKinds {
-			threshold, configured := c.thresholds[metric]
-			if !configured {
-				continue
-			}
-			value, available := metricUsage(m, metric)
-			if !available {
-				continue
-			}
-			if value >= threshold {
-				breaching[metric] = true
-				if err := a.openHostMetricAlert(ctx, c, metric, value, threshold); err != nil {
-					a.logger.WithError(err).WithFields(map[string]interface{}{
-						"monitor_id": c.monitorID, "metric": metric,
-					}).Error("Failed to open host metric alert")
-				}
+		open := make(map[string]bool, len(breaching))
+		for _, b := range breaching {
+			open[b.seriesKey] = true
+			if err := a.openHostMetricAlert(ctx, c, b); err != nil {
+				a.logger.WithError(err).WithFields(map[string]interface{}{
+					"monitor_id": c.monitorID, "series": b.seriesKey,
+				}).Error("Failed to open host metric alert")
 			}
 		}
 
-		// Resolve open host_metric alerts whose metric is no longer breaching
-		// (recovered, or threshold removed from config).
-		if err := a.resolveClearedHostMetricAlerts(ctx, c, breaching, now); err != nil {
+		// Resolve open alerts whose series is no longer breaching —
+		// recovered, rule removed, or series gone stale (freshness bound).
+		if err := a.resolveClearedHostMetricAlerts(ctx, c, open, now); err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{
 				"monitor_id": c.monitorID,
 			}).Error("Failed to resolve cleared host metric alerts")
 		}
 	}
 
-	// Resolve host_metric alerts for monitors that dropped out of the evaluated
-	// set entirely (thresholds removed, monitor deleted/disabled).
+	// Resolve host_metric alerts for monitors that dropped out of the
+	// evaluated set entirely (rules removed, monitor deleted/disabled).
 	return a.resolveOrphanHostMetricAlerts(ctx, monitorIDs)
 }
 
+// evaluateMonitorRules returns the monitor's currently breaching series.
+// Only series seen within the freshness horizon participate; a stale or
+// absent series contributes nothing (its alert then resolves).
+func (a *Alerter) evaluateMonitorRules(ctx context.Context, c hostMetricConfig) ([]breachingSeries, error) {
+	names := make([]string, 0, len(c.rules))
+	seen := map[string]bool{}
+	for _, r := range c.rules {
+		if !seen[r.MetricName] {
+			seen[r.MetricName] = true
+			names = append(names, r.MetricName)
+		}
+	}
+	freshness := time.Duration(monitorstate.FreshnessHorizonSeconds(c.intervalSeconds)) * time.Second
+	latest, err := metricstore.LatestSamples(ctx, a.db, c.tenantID, c.monitorID, names, freshness)
+	if err != nil {
+		return nil, fmt.Errorf("load latest samples: %w", err)
+	}
+
+	var out []breachingSeries
+	for _, rule := range c.rules {
+		for _, ls := range latest {
+			if ls.MetricName != rule.MetricName || !attrsMatch(rule.AttributeFilters, ls.Attributes) {
+				continue
+			}
+			if !rule.breaches(ls.Value) {
+				continue
+			}
+			if rule.ForDurationSeconds > 0 {
+				sustained, err := a.sustainedBreach(ctx, rule, ls.SeriesID, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				if !sustained {
+					continue
+				}
+			}
+			out = append(out, breachingSeries{
+				seriesKey: metricstore.SeriesKeyString(ls.MetricName, ls.Attributes),
+				value:     ls.Value,
+				threshold: rule.Threshold,
+			})
+		}
+	}
+	return out, nil
+}
+
+// sustainedBreach implements for_duration with Prometheus `for` semantics,
+// statelessly (correct across alerter replicas and restarts): every sample
+// inside [now-for_duration, now] breaches AND a breaching anchor sample
+// exists at or before the window start — a breach younger than the window,
+// or any in-window recovery, does not open.
+func (a *Alerter) sustainedBreach(ctx context.Context, rule metricRule, seriesID int64, now time.Time) (bool, error) {
+	window := time.Duration(rule.ForDurationSeconds) * time.Second
+	// Lookback beyond the window so the anchor sample is in range.
+	from := now.Add(-window - 2*window - time.Minute)
+	samples, err := metricstore.RangeSamples(ctx, a.db, seriesID, from, now)
+	if err != nil {
+		return false, fmt.Errorf("load range samples: %w", err)
+	}
+	windowStart := now.Add(-window)
+	anchored := false
+	for _, s := range samples {
+		if !s.TS.After(windowStart) {
+			// The newest sample at or before the window start is the anchor.
+			anchored = rule.breaches(s.Value)
+			continue
+		}
+		if !rule.breaches(s.Value) {
+			return false, nil
+		}
+	}
+	return anchored, nil
+}
+
+// attrsMatch reports whether every filter entry is present in the series
+// attributes (subset match; nil filters match everything).
+func attrsMatch(filters, attrs map[string]string) bool {
+	for k, v := range filters {
+		if attrs[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 // loadHostMetricConfigs returns one config per enabled agent monitor whose
-// monitors.config carries a metric_thresholds block. Monitors in an active
-// maintenance window are excluded so planned work stays quiet.
+// monitors.config carries metric_rules. Monitors in an active maintenance
+// window are excluded so planned work stays quiet.
 func (a *Alerter) loadHostMetricConfigs(ctx context.Context) ([]hostMetricConfig, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT m.id, m.tenant_id, m.name, m.config
+		SELECT m.id, m.tenant_id, m.name, m.interval_seconds, m.config->'metric_rules'
 		FROM monitors m
 		WHERE m.type = 'agent'
 		  AND m.enabled = TRUE AND m.deleted_at IS NULL
-		  AND m.config ? 'metric_thresholds'
+		  AND m.config ? 'metric_rules'
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 	`)
 	if err != nil {
@@ -132,120 +223,37 @@ func (a *Alerter) loadHostMetricConfigs(ctx context.Context) ([]hostMetricConfig
 	var out []hostMetricConfig
 	for rows.Next() {
 		var (
-			id, tenantID uuid.UUID
-			name         string
-			configBytes  []byte
+			id, tenantID    uuid.UUID
+			name            string
+			intervalSeconds int
+			rulesBytes      []byte
 		)
-		if err := rows.Scan(&id, &tenantID, &name, &configBytes); err != nil {
+		if err := rows.Scan(&id, &tenantID, &name, &intervalSeconds, &rulesBytes); err != nil {
 			return nil, err
 		}
-
-		var cfg agentThresholdConfig
-		if err := json.Unmarshal(configBytes, &cfg); err != nil {
-			a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": id}).Warn("Skipping monitor with unparseable config")
+		var rules []metricRule
+		if err := json.Unmarshal(rulesBytes, &rules); err != nil {
+			a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": id}).Warn("Skipping monitor with unparseable metric_rules")
 			continue
 		}
-		thresholds := normalizeThresholds(cfg.MetricThresholds)
-		if len(thresholds) == 0 {
+		if len(rules) == 0 {
 			continue
 		}
 		out = append(out, hostMetricConfig{
-			monitorID:   id,
-			tenantID:    tenantID,
-			monitorName: name,
-			thresholds:  thresholds,
+			monitorID:       id,
+			tenantID:        tenantID,
+			monitorName:     name,
+			intervalSeconds: intervalSeconds,
+			rules:           rules,
 		})
 	}
 	return out, rows.Err()
 }
 
-// normalizeThresholds turns the optional config block into a metric→threshold
-// map, keeping only positive values (a 0 or negative threshold is "disabled").
-func normalizeThresholds(c *metricThresholdConfig) map[string]float64 {
-	if c == nil {
-		return nil
-	}
-	out := make(map[string]float64, 4)
-	add := func(metric string, v *float64) {
-		if v != nil && *v > 0 {
-			out[metric] = *v
-		}
-	}
-	add("cpu", c.CPUPercent)
-	add("memory", c.MemoryPercent)
-	add("disk", c.DiskPercent)
-	add("swap", c.SwapPercent)
-	return out
-}
-
-// loadLatestAgentMetrics returns the most recent reported metrics per monitor.
-func (a *Alerter) loadLatestAgentMetrics(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]*models.AgentMetrics, error) {
-	result := make(map[uuid.UUID]*models.AgentMetrics)
-	if len(monitorIDs) == 0 {
-		return result, nil
-	}
-	rows, err := a.db.QueryContext(ctx, `
-		SELECT DISTINCT ON (monitor_id) monitor_id, metrics_data
-		FROM check_results
-		WHERE monitor_id = ANY($1)
-		  AND result_source = 'monitor'
-		  AND status = 'success'
-		  AND metrics_data IS NOT NULL
-		ORDER BY monitor_id, created_at DESC
-	`, pq.Array(monitorIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var mid uuid.UUID
-		var data []byte
-		if err := rows.Scan(&mid, &data); err != nil {
-			return nil, err
-		}
-		var metrics models.AgentMetrics
-		if err := json.Unmarshal(data, &metrics); err != nil {
-			a.logger.WithError(err).WithFields(map[string]interface{}{"monitor_id": mid}).Warn("Skipping monitor with unparseable metrics_data")
-			continue
-		}
-		result[mid] = &metrics
-	}
-	return result, rows.Err()
-}
-
-// metricUsage returns the current percent value (0-100) for a metric and
-// whether it is available on this report. Metrics with no denominator (e.g. a
-// host without swap) or an unavailable CPU sample return available=false.
-func metricUsage(m *models.AgentMetrics, metric string) (float64, bool) {
-	switch metric {
-	case "cpu":
-		if m.CPUPercent < 0 {
-			return 0, false
-		}
-		return m.CPUPercent, true
-	case "memory":
-		if m.MemoryTotal == 0 {
-			return 0, false
-		}
-		return float64(m.MemoryUsed) / float64(m.MemoryTotal) * 100, true
-	case "disk":
-		if m.DiskTotal == 0 {
-			return 0, false
-		}
-		return float64(m.DiskUsed) / float64(m.DiskTotal) * 100, true
-	case "swap":
-		if m.SwapTotal == 0 {
-			return 0, false
-		}
-		return float64(m.SwapUsed) / float64(m.SwapTotal) * 100, true
-	}
-	return 0, false
-}
-
-// openHostMetricAlert opens a host_metric alert for one breaching metric if one
-// is not already open. Idempotent via the (monitor_id, kind, metric_name)
-// partial unique index, so it is safe across alerter replicas.
-func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, metric string, value, threshold float64) error {
+// openHostMetricAlert opens a host_metric alert for one breaching series if
+// one is not already open. Idempotent via the (monitor_id, kind,
+// metric_name) partial unique index, so it is safe across alerter replicas.
+func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, b breachingSeries) error {
 	var alertID uuid.UUID
 	err := a.db.QueryRowContext(ctx, `
 		INSERT INTO alerts (id, tenant_id, monitor_id, alert_policy_id, kind, status,
@@ -254,7 +262,7 @@ func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, m
 		VALUES ($1, $2, $3, NULL, 'host_metric', 'active', NOW(), 0, $4, $5, $6, NOW(), NOW())
 		ON CONFLICT (monitor_id, kind, (COALESCE(metric_name, ''))) WHERE status IN ('active', 'acknowledged') DO NOTHING
 		RETURNING id
-	`, uuid.New(), c.tenantID, c.monitorID, metric, value, threshold).Scan(&alertID)
+	`, uuid.New(), c.tenantID, c.monitorID, b.seriesKey, b.value, b.threshold).Scan(&alertID)
 	if err == sql.ErrNoRows {
 		return nil // already open
 	}
@@ -262,23 +270,25 @@ func (a *Alerter) openHostMetricAlert(ctx context.Context, c hostMetricConfig, m
 		return fmt.Errorf("insert host metric alert: %w", err)
 	}
 
-	metricName := metric
+	seriesKey := b.seriesKey
+	value := b.value
+	threshold := b.threshold
 	record := alertRecord{
 		ID: alertID, TenantID: c.tenantID, MonitorID: c.monitorID,
 		Kind: notifications.KindHostMetric, TriggeredAt: time.Now(),
-		MetricName: &metricName, MetricValue: &value, ThresholdValue: &threshold,
+		MetricName: &seriesKey, MetricValue: &value, ThresholdValue: &threshold,
 	}
 	binding := policyBinding{MonitorID: c.monitorID, TenantID: c.tenantID, MonitorName: c.monitorName}
 	a.publishAlertEvent(ctx, "created", binding, &record, nil)
 	return nil
 }
 
-// resolveClearedHostMetricAlerts resolves open host_metric alerts for a monitor
-// whose metric is no longer in the breaching set (recovered, or threshold
-// removed), notifying channels that fired.
+// resolveClearedHostMetricAlerts resolves open host_metric alerts for a
+// monitor whose series key is no longer in the breaching set (recovered,
+// rule removed, or series stale/absent), notifying channels that fired.
 func (a *Alerter) resolveClearedHostMetricAlerts(ctx context.Context, c hostMetricConfig, breaching map[string]bool, now time.Time) error {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT id, metric_name, triggered_at FROM alerts
+		SELECT id, metric_name, threshold_value, triggered_at FROM alerts
 		WHERE monitor_id = $1 AND kind = 'host_metric' AND status IN ('active', 'acknowledged')
 	`, c.monitorID)
 	if err != nil {
@@ -289,12 +299,13 @@ func (a *Alerter) resolveClearedHostMetricAlerts(ctx context.Context, c hostMetr
 	type openAlert struct {
 		id          uuid.UUID
 		metricName  sql.NullString
+		threshold   sql.NullFloat64
 		triggeredAt time.Time
 	}
 	var open []openAlert
 	for rows.Next() {
 		var oa openAlert
-		if err := rows.Scan(&oa.id, &oa.metricName, &oa.triggeredAt); err != nil {
+		if err := rows.Scan(&oa.id, &oa.metricName, &oa.threshold, &oa.triggeredAt); err != nil {
 			return fmt.Errorf("scan open host metric alert: %w", err)
 		}
 		open = append(open, oa)
@@ -304,17 +315,16 @@ func (a *Alerter) resolveClearedHostMetricAlerts(ctx context.Context, c hostMetr
 	}
 
 	for _, oa := range open {
-		metric := oa.metricName.String
-		if breaching[metric] {
+		if breaching[oa.metricName.String] {
 			continue // still breaching; keep open
 		}
-		a.resolveHostMetricAlert(ctx, oa.id, c.tenantID, c.monitorID, c.monitorName, metric, oa.triggeredAt, now)
+		a.resolveHostMetricAlert(ctx, oa.id, c.tenantID, c.monitorID, c.monitorName, oa.metricName.String, oa.threshold, oa.triggeredAt, now)
 	}
 	return nil
 }
 
-// resolveOrphanHostMetricAlerts resolves open host_metric alerts whose monitor
-// is no longer in the evaluated set (thresholds removed, monitor
+// resolveOrphanHostMetricAlerts resolves open host_metric alerts whose
+// monitor is no longer in the evaluated set (rules removed, monitor
 // deleted/disabled). keep is the set of monitor IDs evaluated this tick.
 func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid.UUID) error {
 	if keep == nil {
@@ -323,7 +333,7 @@ func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid
 		keep = []uuid.UUID{}
 	}
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.metric_name, al.triggered_at
+		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.metric_name, al.threshold_value, al.triggered_at
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		WHERE al.kind = 'host_metric'
@@ -342,12 +352,13 @@ func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid
 		monitorID   uuid.UUID
 		monitorName string
 		metricName  sql.NullString
+		threshold   sql.NullFloat64
 		triggeredAt time.Time
 	}
 	var orphans []orphan
 	for rows.Next() {
 		var o orphan
-		if err := rows.Scan(&o.id, &o.tenantID, &o.monitorID, &o.monitorName, &o.metricName, &o.triggeredAt); err != nil {
+		if err := rows.Scan(&o.id, &o.tenantID, &o.monitorID, &o.monitorName, &o.metricName, &o.threshold, &o.triggeredAt); err != nil {
 			return fmt.Errorf("scan orphan host metric alert: %w", err)
 		}
 		orphans = append(orphans, o)
@@ -358,23 +369,28 @@ func (a *Alerter) resolveOrphanHostMetricAlerts(ctx context.Context, keep []uuid
 
 	now := time.Now()
 	for _, o := range orphans {
-		a.resolveHostMetricAlert(ctx, o.id, o.tenantID, o.monitorID, o.monitorName, o.metricName.String, o.triggeredAt, now)
+		a.resolveHostMetricAlert(ctx, o.id, o.tenantID, o.monitorID, o.monitorName, o.metricName.String, o.threshold, o.triggeredAt, now)
 	}
 	return nil
 }
 
-// resolveHostMetricAlert resolves a single host_metric alert and notifies any
-// channels that already fired for it.
-func (a *Alerter) resolveHostMetricAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName, metric string, triggeredAt, now time.Time) {
+// resolveHostMetricAlert resolves a single host_metric alert and notifies
+// any channels that already fired for it. The threshold rides the resolve
+// event so wording can say what range the metric returned to.
+func (a *Alerter) resolveHostMetricAlert(ctx context.Context, alertID, tenantID, monitorID uuid.UUID, monitorName, seriesKey string, threshold sql.NullFloat64, triggeredAt, now time.Time) {
 	resolvedAt, err := a.resolveAlert(ctx, alertID, now)
 	if err != nil {
 		a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": alertID}).Error("Failed to resolve host metric alert")
 		return
 	}
-	metricName := metric
+	metricName := seriesKey
 	record := alertRecord{
 		ID: alertID, TenantID: tenantID, MonitorID: monitorID,
 		Kind: notifications.KindHostMetric, TriggeredAt: triggeredAt, MetricName: &metricName,
+	}
+	if threshold.Valid {
+		t := threshold.Float64
+		record.ThresholdValue = &t
 	}
 	binding := policyBinding{MonitorID: monitorID, TenantID: tenantID, MonitorName: monitorName}
 	a.publishAlertEvent(ctx, "resolved", binding, &record, &resolvedAt)

@@ -326,17 +326,21 @@ export interface GroupMonitorConfig {
   monitor_ids: string[];
 }
 
-export interface MetricThresholdsConfig {
-  cpu_percent?: number;
-  memory_percent?: number;
-  disk_percent?: number;
-  swap_percent?: number;
+// Generic metric alert rule evaluated by the alerter against the metric
+// store. Thresholds are in the metric's NATIVE unit: *.utilization metrics
+// are ratios 0-1 (the UI shows percent and converts on submit/display).
+export interface MetricRule {
+  metric_name: string;
+  attribute_filters?: Record<string, string>;
+  operator: '>=' | '<=';
+  threshold: number;
+  for_duration_seconds?: number; // 0/absent = instant
 }
 
 export interface AgentMonitorConfig {
   agent_id: string;
   expected_interval_seconds: number;
-  metric_thresholds?: MetricThresholdsConfig;
+  metric_rules?: MetricRule[];
 }
 
 export interface PushMonitorConfig {
@@ -1442,7 +1446,9 @@ export interface CheckResult {
   created_at: string;
 }
 
-// Agent Metrics types
+// Legacy agent metrics blob (pre-OTel host agent). New agent monitors emit
+// heartbeat check results without metrics_data; historical results may still
+// carry this shape, so the list-page mini view keeps rendering it.
 export interface AgentDiskMount {
   path: string;
   used: number;
@@ -1472,7 +1478,7 @@ export interface AgentMetrics {
   timestamp: string;
 }
 
-// Agent Install Command types
+// Agent Install Command types (OpenTelemetry Collector distribution)
 export interface AgentInstallCommand {
   agent_id: string;
   backend_url: string;
@@ -1480,9 +1486,70 @@ export interface AgentInstallCommand {
   windows_install_script: string;
   uninstall_script: string;
   windows_uninstall_script: string;
-  config_template: string;
+  // Generated collector YAML (linux variant); per-platform variants come from
+  // GET /v1/monitors/{id}/agent/config.yaml?platform=linux|darwin|windows.
+  collector_config: string;
+  collector_version: string;
   download_url: string;
   interval_seconds: number;
+}
+
+// Generic metric store types (agent monitors push OTLP metrics)
+
+export type MetricType = 'gauge' | 'counter';
+
+export interface MetricSeriesInfo {
+  series_key: string;
+  metric_name: string;
+  attributes: Record<string, string>;
+  unit: string;
+  metric_type: MetricType;
+  last_seen_at: string;
+}
+
+export interface MetricSeriesListResponse {
+  items: MetricSeriesInfo[];
+}
+
+export type MetricAgg = 'avg' | 'min' | 'max' | 'sum' | 'last';
+
+export interface MetricQuerySpec {
+  ref: string;
+  metric_name: string;
+  // Subset match; omitted = fan-out to every matching series.
+  attribute_filters?: Record<string, string>;
+  agg: MetricAgg;
+  // Per-second rate; only valid for counter series (server 422s otherwise).
+  rate?: boolean;
+}
+
+export interface MetricQueryRequest {
+  start: string;
+  end: string;
+  step_seconds: number; // 10..86400
+  queries: MetricQuerySpec[]; // max 12
+}
+
+export interface MetricSeriesData {
+  series_key: string;
+  metric_name: string;
+  attributes: Record<string, string>;
+  unit: string;
+  metric_type: MetricType;
+  // [epoch_ms, value]; buckets with no samples are omitted.
+  points: [number, number][];
+}
+
+export interface MetricQueryRefResult {
+  ref: string;
+  step_seconds: number;
+  source: 'raw' | 'rollup';
+  truncated: boolean;
+  series: MetricSeriesData[];
+}
+
+export interface MetricQueryResponse {
+  results: MetricQueryRefResult[];
 }
 
 // Push Info types

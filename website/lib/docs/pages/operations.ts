@@ -58,9 +58,9 @@ export const OPERATIONS_PAGE: DocPage = {
               'Static shell may load, but authenticated product workflows fail when API is unreachable.',
             ],
             [
-              'Host agent',
+              'Collector agent (`probara-collector`)',
               'Reachable HTTPS API and valid API key',
-              'Collects locally but cannot report while disconnected; remote disable is explicit opt-in.',
+              'Scrapes host metrics locally but cannot export while disconnected; there is no remote disable — uninstall is operator-run.',
             ],
           ],
         },
@@ -378,7 +378,7 @@ make db-restore`,
             {
               term: 'Tenant telemetry retention',
               description:
-                'Each tenant’s `data_retention_days` controls raw check results and mesh results. A value of `0` preserves them; the public validator otherwise accepts 30–3650 days. It is configured in [tenant settings](/docs/administration/#tenant-settings).',
+                'Each tenant’s `data_retention_days` controls raw check results and mesh results, and can tighten (never extend) raw agent metric-sample retention below `METRIC_RAW_RETENTION_DAYS`. A value of `0` preserves check/mesh results; the public validator otherwise accepts 30–3650 days. It is configured in [tenant settings](/docs/administration/#tenant-settings).',
             },
             {
               term: 'Audit retention',
@@ -411,6 +411,9 @@ make db-restore`,
             ['`RETENTION_CLEANUP_BATCH_SIZE`', '`5000`', 'Delete batch size.'],
             ['`RETENTION_CLEANUP_MAX_ROWS_PER_RUN`', '`200000`', 'Per-run cap; backlog can require multiple days/runs.'],
             ['`AUDIT_RETENTION_DAYS`', '`365`', 'Separate hourly API audit pruner; `0` disables pruning.'],
+            ['`METRIC_RAW_RETENTION_DAYS`', '`30`', 'Raw OTLP metric samples (daily partitions); a tenant\'s `data_retention_days` can tighten it. Hourly metric rollups are kept 400 days.'],
+            ['`OTLP_MAX_SERIES_PER_MONITOR`', '`2000`', 'Metric-series cardinality cap per agent monitor; overflow points are rejected via OTLP `partial_success`.'],
+            ['`OTLP_MONITOR_RATE_PER_MIN`', '`60`', 'OTLP ingest requests per minute per monitor; excess returns `429` with `Retry-After`.'],
             ['`MONITOR_PURGE_INTERVAL_SECONDS`', '`30`', 'Soft-delete purge cadence.'],
             ['`MONITOR_PURGE_BATCH_SIZE`', '`5000`', 'Child-row purge batch size.'],
             ['`MONITOR_PURGE_MAX_ROWS_PER_RUN`', '`200000`', 'Purge safety cap.'],
@@ -506,10 +509,8 @@ make vet`,
         {
           type: 'code',
           language: 'bash',
-          title: 'Nested agent, frontend, and chart',
-          code: `(cd agent && go test ./...)
-
-(cd web && npm run lint && npm run build)
+          title: 'Frontend and chart',
+          code: `(cd web && npm run lint && npm run build)
 (cd website && npm run typecheck && npm run build)
 
 helm lint ./helm/monitoring-platform \\
@@ -519,7 +520,7 @@ helm lint ./helm/monitoring-platform \\
         {
           type: 'list',
           items: [
-            '`make test` runs the main module with race detection and writes `coverage.out`; it excludes script packages and the nested agent module.',
+            '`make test` runs the Go module with race detection and writes `coverage.out`; it excludes script packages. There is no separate agent module or test suite — the collector is a prebuilt OpenTelemetry distribution (`make build-collector-static`).',
             'Database integration tests use Testcontainers and require a working Docker daemon capable of starting PostgreSQL 16.',
             'Run `make test-cover` to open the HTML coverage report.',
             'Frontend changes require both lint and a production build; documentation site changes should at least run `npm run typecheck` and `npm run build` from `website/`.',
@@ -601,11 +602,6 @@ helm lint ./helm/monitoring-platform \\
               'Frontend links point to old origin',
               '`NEXT_PUBLIC_*` changed only at runtime',
               'Rebuild the frontend client bundle with the desired public values or use stable relative routing.',
-            ],
-            [
-              'Agent container reports literal placeholders',
-              'JSON-form CMD does not expand environment variables',
-              'Pass `-backend-url`, `-agent-id`, and `-api-key` CLI flags explicitly.',
             ],
             [
               'Prometheus cannot scrape API on 9090',

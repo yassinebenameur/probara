@@ -22,7 +22,7 @@ type RouteContext = {
 function buildTargetUrl(requestUrl: string, path: string[]): string {
   const incoming = new URL(requestUrl);
   const targetPath = path.join('/');
-  return `${API_PROXY_TARGET}/static/agent/${targetPath}${incoming.search || ''}`;
+  return `${API_PROXY_TARGET}/static/collector/${targetPath}${incoming.search || ''}`;
 }
 
 function copyHeaders(requestHeaders: Headers): Headers {
@@ -45,7 +45,7 @@ function copyResponseHeaders(upstream: Response): Headers {
   return headers;
 }
 
-async function proxyAgentStatic(req: Request, ctx: RouteContext): Promise<Response> {
+async function proxyCollectorStatic(req: Request, ctx: RouteContext): Promise<Response> {
   const { path } = await ctx.params;
   const targetUrl = buildTargetUrl(req.url, path);
 
@@ -71,9 +71,9 @@ async function proxyAgentStatic(req: Request, ctx: RouteContext): Promise<Respon
 }
 
 export function GET(req: Request, ctx: RouteContext): Promise<Response> {
-  return proxyAgentStatic(req, ctx);
+  return proxyCollectorStatic(req, ctx);
 }
 
 export function HEAD(req: Request, ctx: RouteContext): Promise<Response> {
-  return proxyAgentStatic(req, ctx);
+  return proxyCollectorStatic(req, ctx);
 }

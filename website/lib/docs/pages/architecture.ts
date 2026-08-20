@@ -75,8 +75,8 @@ export const ARCHITECTURE_PAGE: DocPage = {
               "Public Go-rendered status pages",
             ],
             [
-              "`agent/`",
-              "A separately versioned host telemetry binary",
+              "`collector/`",
+              "OpenTelemetry Collector Builder manifest for the `probara-collector` host-metrics distribution",
               "Remote active checks or private-location worker behavior",
             ],
           ],
@@ -84,9 +84,9 @@ export const ARCHITECTURE_PAGE: DocPage = {
         {
           type: "callout",
           tone: "info",
-          title: "The host agent is a nested Go module",
+          title: "The host agent is a built OpenTelemetry distribution",
           text:
-            "The top-level Go test command does not implicitly cover every nested-agent change. Run the agent module's tests from `agent/` when modifying it.",
+            "There is no custom agent codebase or nested Go module: `scripts/build-collector.sh` generates and cross-compiles the collector from `collector/manifest.yaml` with a pinned OpenTelemetry Collector Builder version, and the API serves the binaries plus `checksums.txt` from `/static/collector/`.",
         },
       ],
     },

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/metricstore"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 )
 
@@ -476,6 +477,16 @@ func (v *GroupConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 // AgentConfigValidator validates agent monitor configuration
 type AgentConfigValidator struct{}
 
+const (
+	maxMetricRules           = 50
+	maxMetricAttributeFilter = 8
+	maxMetricRuleForDuration = 86400
+)
+
+// metricNamePattern matches OTel metric names (semconv dots, plus the
+// underscore/slash/dash forms custom receivers produce).
+var metricNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_./-]*$`)
+
 // ValidateConfig validates agent monitor config
 func (v *AgentConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	var config models.AgentConfig
@@ -492,6 +503,71 @@ func (v *AgentConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		return fmt.Errorf("expected_interval_seconds must be at most %d", maxIntervalSeconds)
 	}
 
+	if len(config.MetricRules) > maxMetricRules {
+		return fmt.Errorf("metric_rules cannot contain more than %d rules", maxMetricRules)
+	}
+	seen := make(map[string]bool, len(config.MetricRules))
+	for i, rule := range config.MetricRules {
+		if err := validateMetricRule(rule); err != nil {
+			return fmt.Errorf("metric_rules[%d]: %w", i, err)
+		}
+		// One rule per target series set keeps alert identity unambiguous
+		// (alerts key on the breaching series' canonical key).
+		key := metricstore.SeriesKeyString(rule.MetricName, rule.AttributeFilters)
+		if seen[key] {
+			return fmt.Errorf("metric_rules[%d]: duplicate rule for %s", i, key)
+		}
+		seen[key] = true
+	}
+
+	return nil
+}
+
+func validateMetricRule(rule models.MetricRule) error {
+	if rule.MetricName == "" {
+		return fmt.Errorf("metric_name is required")
+	}
+	if len(rule.MetricName) > 255 || !metricNamePattern.MatchString(rule.MetricName) {
+		return fmt.Errorf("metric_name %q is not a valid metric name", rule.MetricName)
+	}
+	switch rule.Operator {
+	case "", ">=", "<=":
+	default:
+		return fmt.Errorf("operator must be \">=\" or \"<=\"")
+	}
+	if math.IsNaN(rule.Threshold) || math.IsInf(rule.Threshold, 0) {
+		return fmt.Errorf("threshold must be a finite number")
+	}
+	if rule.Operator != "<=" && rule.Threshold <= 0 {
+		return fmt.Errorf("threshold must be greater than 0 for >= rules")
+	}
+	if rule.Operator == "<=" && rule.Threshold < 0 {
+		return fmt.Errorf("threshold cannot be negative")
+	}
+	// Utilization metrics are ratios: catching a percent-vs-ratio slip here
+	// beats a rule that can never fire (or always fires).
+	if strings.HasSuffix(rule.MetricName, ".utilization") && rule.Threshold > 1 {
+		return fmt.Errorf("utilization thresholds are ratios (0-1); 90%% is 0.9")
+	}
+	if len(rule.AttributeFilters) > maxMetricAttributeFilter {
+		return fmt.Errorf("attribute_filters cannot contain more than %d entries", maxMetricAttributeFilter)
+	}
+	for k, v := range rule.AttributeFilters {
+		if k == "" || v == "" {
+			return fmt.Errorf("attribute filter keys and values cannot be empty")
+		}
+		if len(k) > 128 || len(v) > 128 {
+			return fmt.Errorf("attribute filter keys and values cannot exceed 128 characters")
+		}
+		// ',' and '}' would make the canonical series key (alert identity)
+		// ambiguous; '=' likewise.
+		if strings.ContainsAny(k, ",}=") || strings.ContainsAny(v, ",}=") {
+			return fmt.Errorf("attribute filter %q=%q contains a reserved character (, } =)", k, v)
+		}
+	}
+	if rule.ForDurationSeconds < 0 || rule.ForDurationSeconds > maxMetricRuleForDuration {
+		return fmt.Errorf("for_duration_seconds must be between 0 and %d", maxMetricRuleForDuration)
+	}
 	return nil
 }
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Download } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, MetricThresholdsConfig, AgentInstallCommand, ApiKey, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, AgentInstallCommand, ApiKey, NotificationMode, ChannelAssignment } from '@/lib/types';
 import { getAgentInstallCommand, getApiKeys } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
@@ -11,6 +11,11 @@ import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import { AlertingSection } from './AlertingSection';
+import MetricRuleBuilder, {
+  MetricRuleDraft,
+  draftsFromRules,
+  rulesFromDrafts,
+} from './MetricRuleBuilder';
 
 type ServerType =
   | 'linux-amd64'
@@ -23,14 +28,15 @@ type ServerTypeOption = {
   value: ServerType;
   label: string;
   family: 'unix' | 'windows';
+  platform: 'linux' | 'darwin' | 'windows';
 };
 
 const SERVER_TYPE_OPTIONS: ServerTypeOption[] = [
-  { value: 'linux-amd64', label: 'Linux (x86_64)', family: 'unix' },
-  { value: 'linux-arm64', label: 'Linux (ARM64)', family: 'unix' },
-  { value: 'macos-amd64', label: 'macOS (Intel)', family: 'unix' },
-  { value: 'macos-arm64', label: 'macOS (Apple Silicon)', family: 'unix' },
-  { value: 'windows-amd64', label: 'Windows (x86_64)', family: 'windows' },
+  { value: 'linux-amd64', label: 'Linux (x86_64)', family: 'unix', platform: 'linux' },
+  { value: 'linux-arm64', label: 'Linux (ARM64)', family: 'unix', platform: 'linux' },
+  { value: 'macos-amd64', label: 'macOS (Intel)', family: 'unix', platform: 'darwin' },
+  { value: 'macos-arm64', label: 'macOS (Apple Silicon)', family: 'unix', platform: 'darwin' },
+  { value: 'windows-amd64', label: 'Windows (x86_64)', family: 'windows', platform: 'windows' },
 ];
 
 const DEFAULT_SERVER_TYPE: ServerType = 'linux-amd64';
@@ -62,7 +68,6 @@ export default function AgentForm({
   const [apiKey, setApiKeyState] = useState<string>('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [serverType, setServerType] = useState<ServerType>(DEFAULT_SERVER_TYPE);
-  const [allowRemoteDisable, setAllowRemoteDisable] = useState(false);
   const [apiKeyOptions, setApiKeyOptions] = useState<ApiKeyOption[]>([]);
   const [selectedApiKeyId, setSelectedApiKeyId] = useState<string>('');
   const [loadingApiKeys, setLoadingApiKeys] = useState(false);
@@ -71,11 +76,10 @@ export default function AgentForm({
   const isEditMode = Boolean(monitor);
   const initialAgentConfig =
     !isEditMode && initialData?.type === 'agent' ? (initialData.config as AgentMonitorConfig) : undefined;
-  const initialThresholds: MetricThresholdsConfig =
+  const initialRules =
     (monitor && monitor.type === 'agent'
-      ? (monitor.config as AgentMonitorConfig).metric_thresholds
-      : initialAgentConfig?.metric_thresholds) || {};
-  const thresholdToString = (v?: number) => (v != null && v > 0 ? String(v) : '');
+      ? (monitor.config as AgentMonitorConfig).metric_rules
+      : initialAgentConfig?.metric_rules) || [];
 
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
@@ -87,13 +91,11 @@ export default function AgentForm({
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-    cpu_threshold: thresholdToString(initialThresholds.cpu_percent),
-    memory_threshold: thresholdToString(initialThresholds.memory_percent),
-    disk_threshold: thresholdToString(initialThresholds.disk_percent),
-    swap_threshold: thresholdToString(initialThresholds.swap_percent),
   });
+  const [ruleDrafts, setRuleDrafts] = useState<MetricRuleDraft[]>(() => draftsFromRules(initialRules));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [ruleErrors, setRuleErrors] = useState<Record<number, string>>({});
 
   useEffect(() => {
     const key = getApiKey();
@@ -103,44 +105,26 @@ export default function AgentForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
+    setRuleErrors({});
 
     const newErrors: Record<string, string> = {};
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (formData.expected_interval_seconds < 10) newErrors.expected_interval_seconds = 'Minimum 10 seconds';
 
-    // Parse threshold inputs: blank = no threshold, otherwise must be 1-100.
-    const parseThreshold = (raw: string, field: string): number | undefined => {
-      const trimmed = raw.trim();
-      if (trimmed === '') return undefined;
-      const n = Number(trimmed);
-      if (!Number.isFinite(n) || n <= 0 || n > 100) {
-        newErrors[field] = 'Enter a percentage between 1 and 100';
-        return undefined;
-      }
-      return n;
-    };
-    const cpu = parseThreshold(formData.cpu_threshold, 'cpu_threshold');
-    const memory = parseThreshold(formData.memory_threshold, 'memory_threshold');
-    const disk = parseThreshold(formData.disk_threshold, 'disk_threshold');
-    const swap = parseThreshold(formData.swap_threshold, 'swap_threshold');
+    const { rules, errors: newRuleErrors } = rulesFromDrafts(ruleDrafts);
 
-    if (Object.keys(newErrors).length > 0) {
+    if (Object.keys(newErrors).length > 0 || Object.keys(newRuleErrors).length > 0) {
       setErrors(newErrors);
+      setRuleErrors(newRuleErrors);
       return;
     }
-
-    const thresholds: MetricThresholdsConfig = {};
-    if (cpu != null) thresholds.cpu_percent = cpu;
-    if (memory != null) thresholds.memory_percent = memory;
-    if (disk != null) thresholds.disk_percent = disk;
-    if (swap != null) thresholds.swap_percent = swap;
 
     const config: AgentMonitorConfig = {
       agent_id: isEditMode ? monitor?.agent_id || '' : '',
       expected_interval_seconds: formData.expected_interval_seconds,
     };
-    if (Object.keys(thresholds).length > 0) {
-      config.metric_thresholds = thresholds;
+    if (rules.length > 0) {
+      config.metric_rules = rules;
     }
 
     const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
@@ -293,18 +277,20 @@ export default function AgentForm({
     const isWindows = selectedServer.family === 'windows';
     const activeApiKey = apiKeyOptions.find((option) => option.id === selectedApiKeyId)?.key || apiKey || '';
     const resolvedApiKey = activeApiKey || 'YOUR_API_KEY';
-    const installQuery = allowRemoteDisable ? '?allow_remote_disable=true' : '';
     const installScriptUrl = installCommand
-      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.sh${installQuery}`
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.sh`
       : '';
     const windowsInstallScriptUrl = installCommand
-      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.ps1${installQuery}`
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/install/script.ps1`
       : '';
     const uninstallScriptUrl = installCommand
       ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/uninstall/script.sh`
       : '';
     const windowsUninstallScriptUrl = installCommand
       ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/uninstall/script.ps1`
+      : '';
+    const collectorConfigUrl = installCommand
+      ? `${installCommand.backend_url}/api/v1/monitors/${monitor.id}/agent/config.yaml?platform=${selectedServer.platform}`
       : '';
     const linuxQuickInstallCommand = installCommand
       ? `curl -fsSL -H "Authorization: Bearer ${resolvedApiKey}" \
@@ -341,11 +327,18 @@ export default function AgentForm({
 
     return (
       <div className="space-y-5">
-        <FormSection title="Agent installation">
+        <FormSection title="Collector installation">
           {loadingInstallCmd ? (
             <div className="text-sm text-slate-500">Loading installation details…</div>
           ) : installCommand ? (
             <>
+              <p className="text-xs text-slate-500">
+                The install script sets up <span className="font-mono text-slate-400">probara-collector</span>
+                {' '}(an OpenTelemetry Collector distribution
+                {installCommand.collector_version ? `, v${installCommand.collector_version}` : ''})
+                as a system service that pushes OTLP host metrics to this monitor.
+              </p>
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField label="Agent ID">
                   <div className="flex gap-2">
@@ -399,7 +392,7 @@ export default function AgentForm({
                 </FormField>
               </div>
 
-              <FormField label="Server type" description="Where the agent will run">
+              <FormField label="Server type" description="Where the collector will run">
                 <select
                   value={serverType}
                   onChange={(e) => setServerType(e.target.value as ServerType)}
@@ -410,26 +403,6 @@ export default function AgentForm({
                   ))}
                 </select>
               </FormField>
-
-              <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium text-white">Allow remote disable</p>
-                  <p className="text-xs text-slate-500">Let this agent remove its local service when the monitor is deleted</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setAllowRemoteDisable((enabled) => !enabled)}
-                  className={`relative h-5 w-9 rounded-full transition-colors ${
-                    allowRemoteDisable ? 'bg-cyan-500' : 'bg-slate-700'
-                  }`}
-                  aria-pressed={allowRemoteDisable}
-                  aria-label="Toggle remote disable"
-                >
-                  <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                    allowRemoteDisable ? 'translate-x-4' : ''
-                  }`} />
-                </button>
-              </div>
 
               <FormField label={isWindows ? 'Install service (Windows)' : 'Install service (Linux/macOS)'}>
                 <div className="flex gap-2">
@@ -461,10 +434,43 @@ export default function AgentForm({
                 </div>
               </FormField>
 
+              <FormField
+                label="Collector config"
+                description="Generated OpenTelemetry Collector configuration (Linux variant) — the install script writes it for you"
+              >
+                <div className="flex gap-2">
+                  <pre className="max-h-64 flex-1 overflow-auto whitespace-pre rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{installCommand.collector_config}</pre>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    type="button"
+                    className="self-start"
+                    onClick={() => copyToClipboard(installCommand.collector_config, 'collector_config')}
+                  >
+                    {copiedField === 'collector_config' ? 'Copied' : 'Copy'}
+                  </Button>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  Managing hosts with Ansible/Chef/Puppet? Fetch the raw per-platform YAML from{' '}
+                  <button
+                    type="button"
+                    className="font-mono text-cyan-300 hover:text-cyan-200"
+                    onClick={() => copyToClipboard(collectorConfigUrl, 'config_url')}
+                    title="Copy URL"
+                  >
+                    {copiedField === 'config_url' ? 'Copied' : `…/agent/config.yaml?platform=${selectedServer.platform}`}
+                  </button>{' '}
+                  and ship the <span className="font-mono">probara-collector</span> binary from{' '}
+                  <span className="font-mono break-all">{installCommand.download_url}</span>.
+                </p>
+              </FormField>
+
               <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
                 <p className="text-xs font-medium text-white">Collected metrics</p>
                 <p className="mt-0.5 text-xs text-slate-400">
-                  CPU, memory, disk, network I/O, system load, process count
+                  OpenTelemetry hostmetrics: CPU and memory utilization, swap, per-mount filesystem
+                  usage, disk and network I/O, load averages, process count, and uptime — stored as
+                  queryable metric series.
                 </p>
               </div>
             </>
@@ -545,32 +551,18 @@ export default function AgentForm({
         />
       </FormSection>
 
-      <FormSection title="Host metric thresholds">
+      <FormSection title="Metric alert rules">
         <p className="text-xs text-slate-500">
-          Open an alert when a reported metric stays at or above the threshold. Leave blank to disable.
-          Evaluated independently of up/down status.
+          Open an alert when a reported metric breaches its threshold, optionally only after it is
+          sustained for a duration. Utilization thresholds are entered as percentages. Evaluated
+          independently of up/down status.
         </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {([
-            { key: 'cpu_threshold', label: 'CPU usage (%)', placeholder: 'e.g. 90' },
-            { key: 'memory_threshold', label: 'Memory usage (%)', placeholder: 'e.g. 90' },
-            { key: 'disk_threshold', label: 'Disk usage (%)', placeholder: 'e.g. 85' },
-            { key: 'swap_threshold', label: 'Swap usage (%)', placeholder: 'e.g. 80' },
-          ] as const).map((field) => (
-            <FormField key={field.key} label={field.label} error={errors[field.key]}>
-              <input
-                type="number"
-                value={formData[field.key]}
-                onChange={(e) => setFormData({ ...formData, [field.key]: e.target.value })}
-                placeholder={field.placeholder}
-                min={1}
-                max={100}
-                step={1}
-                className="input"
-              />
-            </FormField>
-          ))}
-        </div>
+        <MetricRuleBuilder
+          drafts={ruleDrafts}
+          onChange={setRuleDrafts}
+          errors={ruleErrors}
+          monitorId={isEditMode ? monitor?.id : undefined}
+        />
       </FormSection>
 
       <FormSection title="Status">

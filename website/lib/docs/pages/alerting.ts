@@ -38,8 +38,8 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`host_metric`",
-              "Agent CPU, memory, disk, or swap exceeds its configured threshold",
-              "The metric returns below threshold or its threshold is removed",
+              "A metric series reported by an agent's collector breaches a configured metric rule",
+              "The series returns within the rule, the rule is removed, or the readings go stale",
             ],
             [
               "`mesh_edge`",
@@ -306,7 +306,12 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An [agent monitor](/docs/agents/#thresholds) can define positive percentage thresholds for CPU, memory, disk, and swap. Each breached metric opens its own `host_metric` alert and resolves independently. Removing a threshold resolves an alert that no longer has a configured condition.",
+            "An [agent monitor](/docs/agents/#thresholds) defines `metric_rules`: up to 50 threshold rules over any metric its collector reports, compared in the metric's native unit (`*.utilization` metrics are ratios, so 90% is `0.9`), with optional attribute filters and an optional sustained-for duration that must hold for the whole window before the alert opens. A rule without filters fans out per matching series — one filesystem rule opens one `host_metric` alert per breaching mountpoint.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Each alert is keyed by its canonical series key (for example `system.filesystem.utilization{device=/dev/sda1,mode=rw,mountpoint=/data,type=ext4}`) and resolves independently when the series returns within the rule or the rule is removed. Evaluation is freshness-bounded to three monitor intervals (90-second floor), so a dead collector's last stale readings cannot keep metric alerts open — the availability alert covers that outage. Alerts migrated from the retired `metric_thresholds` fields keep working; their legacy names still render on existing alert records.",
         },
         {
           type: "paragraph",

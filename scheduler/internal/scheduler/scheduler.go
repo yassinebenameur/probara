@@ -423,6 +423,12 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, error) {
 		}
 		totalDeleted += meshDeleted
 
+		metricDeleted, err := s.pruneTenantMetricSamples(ctx, tenantID, retentionDays)
+		if err != nil {
+			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s metric samples: %w", tenantID, err)
+		}
+		totalDeleted += metricDeleted
+
 		if deleted > 0 {
 			s.logger.WithFields(logrus.Fields{
 				"tenant_id":        tenantID,

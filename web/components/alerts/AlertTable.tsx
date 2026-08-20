@@ -6,6 +6,7 @@ import { Bell, Network } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
+import { formatAlertValue, formatSeriesLabel } from '@/lib/metrics';
 import Button from '@/components/ui/Button';
 import EmptyState from '@/components/ui/EmptyState';
 
@@ -38,21 +39,6 @@ function getStatusBadgeClass(status: AlertStatus): string {
       return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
     default:
       return 'bg-slate-500/10 text-slate-400 border border-slate-500/20';
-  }
-}
-
-function hostMetricLabel(metric?: string): string {
-  switch (metric) {
-    case 'cpu':
-      return 'CPU';
-    case 'memory':
-      return 'memory';
-    case 'disk':
-      return 'disk';
-    case 'swap':
-      return 'swap';
-    default:
-      return 'host metric';
   }
 }
 
@@ -197,13 +183,14 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                     className="ml-2 inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300"
                     title="Host metric breached its configured threshold"
                   >
-                    {hostMetricLabel(alert.metric_name)}
+                    {formatSeriesLabel(alert.metric_name)}
                   </span>
                 )}
                 {alert.kind === 'host_metric' && alert.metric_value != null && (
                   <p className="mt-0.5 text-[10px] text-amber-300/80">
-                    {alert.metric_value.toFixed(1)}%
-                    {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}%)`}
+                    {formatAlertValue(alert.metric_name, alert.metric_value)}
+                    {alert.threshold_value != null &&
+                      ` (threshold ${formatAlertValue(alert.metric_name, alert.threshold_value)})`}
                   </p>
                 )}
                 {alert.kind === 'tls_expiry' && (

@@ -41,12 +41,6 @@ jobs:
             dependency-path: go.sum
             coverage-file: coverage-main.out
             coverage-flag: main
-          - name: agent module
-            directory: agent
-            go-version-file: agent/go.mod
-            dependency-path: agent/go.sum
-            coverage-file: coverage-agent.out
-            coverage-flag: agent
 
     steps:
       - name: Checkout code

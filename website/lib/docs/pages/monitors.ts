@@ -119,7 +119,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`synthetic_api`", "A sequence of templated HTTP API steps", "Yes"],
             ["`synthetic_browser`", "A Chromium browser journey", "Yes"],
             ["`group`", "Derived state from member monitors", "No"],
-            ["`agent`", "Host telemetry and freshness reported by an [installed agent](/docs/agents/#install)", "No"],
+            ["`agent`", "Host metrics and freshness pushed by an [installed OpenTelemetry collector](/docs/agents/#install)", "No"],
             ["`push`", "Token-based [passive heartbeat](/docs/agents/#push-config) freshness", "No"],
           ],
         },

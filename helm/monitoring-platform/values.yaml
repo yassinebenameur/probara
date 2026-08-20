@@ -251,10 +251,10 @@ api:
   httpPort: 8080
   metricsPort: 9090
   logLevel: "info"
-  # Externally-reachable URL of the API. Baked into agent install scripts and
-  # push webhook URLs in place of the request Host header (which is unreliable
-  # when the API sits behind the Next.js frontend proxy or other reverse proxies).
-  # Example: "https://probara.example.com"
+  # Externally-reachable URL of the API. Baked into collector install scripts
+  # and push webhook URLs in place of the request Host header (which is
+  # unreliable when the API sits behind the Next.js frontend proxy or other
+  # reverse proxies). Example: "https://probara.example.com"
   publicBaseURL: ""
   # NATS address reachable from remote networks, baked into private-location
   # worker deploy snippets. Requires nats.auth.enabled; expose NATS through TLS

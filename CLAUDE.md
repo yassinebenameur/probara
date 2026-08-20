@@ -23,6 +23,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `alerter/` — alert evaluation and notification delivery
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, AI provider
+- `collector/` — OCB manifest for `probara-collector`, the minimal OTel
+  Collector distribution that agent monitors install on hosts (built by
+  `scripts/build-collector.sh` into `static/collector/`; no in-repo agent code)
 - `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack
@@ -37,6 +40,12 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   (`MonitorSecretFields` / `MonitorSecretMapFields`). One entry gives
   encryption at rest, `***` masking on reads, write-only merge on updates,
   and correct scheduler/worker/location handling — no per-type code.
+- **Metric identity and display**: `shared/metricstore` owns canonical series
+  keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
+  label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
+  identity (`alerts.metric_name`), notification wording, and status pages all
+  go through it; `web/lib/metrics.ts` is its TS twin. Never invent a parallel
+  series encoding.
 - **Monitor state semantics**: `docs/state-semantics.md` (rules `S-*`).
   Changes to state transitions, quorum aggregation, freshness/absence,
   pause/maintenance handling, or uptime accounting must update the rule
@@ -59,6 +68,20 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
    secrets coverage) — import/export support is automatic via the registry
 
 ## Cross-service contracts
+
+- **Agent monitors are OTLP push**: hosts run `probara-collector` (or stock
+  otelcol-contrib) exporting to `POST /api/v1/otlp/v1/metrics` with
+  `Authorization: Bearer <tenant API key>` + `X-Probara-Agent-Id` (fallback:
+  `probara.agent.id` resource attribute). Samples land in the metric store
+  (`metric_series`/`metric_samples`, daily partitions, hourly rollups via the
+  `metric_rollup_dirty` ledger); each accepted export records ONE success
+  heartbeat via `monitorstate.Record` with **server-clock** `StartedAt`
+  (S-O3). The legacy `POST /api/v1/agent/metrics` stays accepting (with
+  Deprecation/Sunset headers) until the sunset date in
+  `api/internal/handlers/agent/handler.go`, then becomes a 410 tombstone.
+  Host alerting is `metric_rules` on the agent config (native units — ratio
+  0-1 for `*.utilization`; validated in `AgentConfigValidator`), evaluated by
+  the alerter against the store with a freshness bound.
 
 - **Check-job queue**: `CHECK_JOB_STREAM`/`CHECK_JOB_SUBJECT` must be identical
   on API (run-now publisher), scheduler, and workers. Code defaults
@@ -133,6 +156,15 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   api behavior through unit tests or restart the processes.
 
 ## Gotchas
+
+- **Collector version pinning**: the OCB/component version is pinned in BOTH
+  `collector/manifest.yaml` and `scripts/build-collector.sh` (`OCB_VERSION`),
+  and surfaced as `CollectorVersion` in
+  `api/internal/services/agent/collector_install.go` — bump all three
+  together, and re-run
+  `go test ./api/internal/services/agent/ -run TestGeneratedConfigValidates`
+  after `make build-collector-static` (it runs the real binary's `validate`
+  against the generated config).
 
 - **Brand mark lives in four runtimes** and they must change together:
   `web/components/ui/BrandMark.tsx` (operator UI logo — sidebar, login,

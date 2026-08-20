@@ -102,6 +102,18 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 		return totalProcessed, 0, err
 	}
 
+	// Metric store maintenance (same lock/cadence): partition upkeep, then
+	// the metric dirty-ledger consumer. Failures leave marks in place — next
+	// run retries, nothing is skipped.
+	if err := s.maintainMetricPartitions(ctx); err != nil {
+		return totalProcessed, 0, err
+	}
+	metricProcessed, _, err := s.consumeMetricDirtyBuckets(ctx)
+	if err != nil {
+		return totalProcessed + metricProcessed, 0, err
+	}
+	totalProcessed += metricProcessed
+
 	var lastCursorUnix int64
 	var lastCreatedAt sql.NullTime
 	if err := s.db.QueryRowContext(ctx, `
@@ -147,6 +159,9 @@ func pruneRollupTablesTx(ctx context.Context, tx *sql.Tx) error {
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE monitor_downtime_open SET started_at = $1, updated_at = NOW() WHERE started_at < $1`, cutoff); err != nil {
 		return fmt.Errorf("failed to clamp open downtime periods: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM metric_rollups_hourly WHERE bucket < $1`, cutoff); err != nil {
+		return fmt.Errorf("failed to prune metric rollups: %w", err)
 	}
 	return nil
 }

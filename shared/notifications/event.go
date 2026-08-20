@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/metricstore"
 )
 
 // AlertEvent is the canonical alert event published by the alerter to NATS and
@@ -132,29 +134,34 @@ func (d AlertDetails) TLSExpirySummary() string {
 	return fmt.Sprintf("expires in %dd", int(*d.MetricValue))
 }
 
-// MetricLabel returns a human-readable name for the breaching host metric,
-// e.g. "CPU" or "memory". Empty when this is not a host-metric alert.
+// MetricLabel returns a human-readable name for the breaching metric, e.g.
+// "CPU" or "Filesystem (/data)". MetricName is a canonical series key
+// (metric_rules era) or a legacy fixed kind (cpu|memory|disk|swap) on
+// historical alerts; both render. Empty when this is not a host-metric alert.
 func (d AlertDetails) MetricLabel() string {
 	if d.MetricName == nil {
 		return ""
 	}
-	switch *d.MetricName {
-	case "cpu":
-		return "CPU"
-	case "memory":
-		return "memory"
-	case "disk":
-		return "disk"
-	case "swap":
-		return "swap"
-	default:
-		return *d.MetricName
+	return metricstore.AlertLabel(*d.MetricName)
+}
+
+// hostMetricUsageStyle reports whether the metric reads naturally as a
+// "usage high / back to normal" phrase (the curated usage/utilization
+// metrics and the legacy kinds). Uncurated or non-usage metrics get
+// direction-neutral wording — the rule may be a <= threshold.
+func (d AlertDetails) hostMetricUsageStyle() bool {
+	if d.MetricName == nil {
+		return false
 	}
+	name, _ := metricstore.ParseSeriesKeyString(*d.MetricName)
+	m, ok := metricstore.Lookup(name)
+	return ok && strings.HasSuffix(strings.ToLower(m.Label), "usage")
 }
 
 // HostMetricLabel returns a title-cased header label for a host_metric alert,
-// e.g. "CPU Usage High" / "Memory Back to Normal", for use in notification
-// titles and headers.
+// e.g. "CPU Usage High" / "Memory Back to Normal" for usage-style metrics,
+// or "Load 5m Threshold Breached" for everything else, for use in
+// notification titles and headers.
 func (d AlertDetails) HostMetricLabel(eventType string) string {
 	label := d.MetricLabel()
 	if label == "" {
@@ -162,27 +169,39 @@ func (d AlertDetails) HostMetricLabel(eventType string) string {
 	} else {
 		label = strings.ToUpper(label[:1]) + label[1:]
 	}
+	if d.hostMetricUsageStyle() {
+		switch eventType {
+		case "resolved":
+			return label + " Back to Normal"
+		case "reminder":
+			return label + " Still High"
+		default:
+			return label + " Usage High"
+		}
+	}
 	switch eventType {
 	case "resolved":
-		return label + " Back to Normal"
+		return label + " Back in Range"
 	case "reminder":
-		return label + " Still High"
+		return label + " Still Breaching"
 	default:
-		return label + " Usage High"
+		return label + " Threshold Breached"
 	}
 }
 
-// MetricSummary renders the breach magnitude for a host_metric alert, e.g.
-// "94.2% (threshold 90%)". Empty when this is not a host-metric alert or no
-// value is available.
+// MetricSummary renders the breach magnitude for a host_metric alert in the
+// metric's display unit, e.g. "94.2% (threshold 90%)" or "1.2 GB (threshold
+// 1.0 GB)". Empty when this is not a host-metric alert or no value is
+// available.
 func (d AlertDetails) MetricSummary() string {
-	if !d.IsHostMetric() || d.MetricValue == nil {
+	if !d.IsHostMetric() || d.MetricValue == nil || d.MetricName == nil {
 		return ""
 	}
+	value := metricstore.FormatAlertValue(*d.MetricName, *d.MetricValue)
 	if d.ThresholdValue != nil {
-		return fmt.Sprintf("%.1f%% (threshold %.0f%%)", *d.MetricValue, *d.ThresholdValue)
+		return fmt.Sprintf("%s (threshold %s)", value, metricstore.FormatAlertValue(*d.MetricName, *d.ThresholdValue))
 	}
-	return fmt.Sprintf("%.1f%%", *d.MetricValue)
+	return value
 }
 
 // FailingLocationNames renders the failing locations as a comma-separated
@@ -223,10 +242,16 @@ func (d AlertDetails) Headline() string {
 		if label == "" {
 			label = "host metric"
 		}
-		if d.Status == "resolved" {
-			return label + " back to normal"
+		if d.hostMetricUsageStyle() {
+			if d.Status == "resolved" {
+				return label + " back to normal"
+			}
+			return label + " usage high"
 		}
-		return label + " usage high"
+		if d.Status == "resolved" {
+			return label + " back in range"
+		}
+		return label + " threshold breached"
 	}
 	if d.IsTLSExpiry() {
 		if d.Status == "resolved" {

@@ -20,20 +20,13 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { getEffectiveMonitorStatus, monitorTargetLabel, MonitorDisplayStatus } from '@/lib/monitor-utils';
+import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
 
 const isDatabaseMonitorType = (t: string): boolean =>
   t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq' || t === 'mysql';
-type AgentTimeRange = '1h' | '6h' | '24h' | '7d';
 type OverviewTimeRange = MonitorAnalyticsRange;
-
-const AGENT_RANGE_MS: Record<AgentTimeRange, number> = {
-  '1h': 60 * 60 * 1000,
-  '6h': 6 * 60 * 60 * 1000,
-  '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-};
 
 const OVERVIEW_RANGE_MS: Record<OverviewTimeRange, number> = {
   '1h': 60 * 60 * 1000,
@@ -45,28 +38,8 @@ const OVERVIEW_RANGE_MS: Record<OverviewTimeRange, number> = {
   '365d': 365 * 24 * 60 * 60 * 1000,
 };
 
-const NON_AGENT_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const NON_AGENT_OVERVIEW_RESULTS_LIMIT = 50;
-const MIN_CLIENT_RESULTS = 500;
-const MAX_CLIENT_RESULTS = 100000;
-const LIMIT_PADDING = 120;
-const LIMIT_HEADROOM_NUM = 115;
-const LIMIT_HEADROOM_DEN = 100;
-
-function estimateResultsLimit(
-  windowMs: number,
-  intervalSeconds?: number,
-  fallbackIntervalSeconds = 60
-): number {
-  const safeIntervalSeconds = intervalSeconds && intervalSeconds > 0
-    ? intervalSeconds
-    : fallbackIntervalSeconds;
-
-  const expectedPoints = Math.ceil(windowMs / (safeIntervalSeconds * 1000));
-  const buffered = Math.ceil((expectedPoints * LIMIT_HEADROOM_NUM) / LIMIT_HEADROOM_DEN) + LIMIT_PADDING;
-
-  return Math.max(MIN_CLIENT_RESULTS, Math.min(MAX_CLIENT_RESULTS, buffered));
-}
+const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const OVERVIEW_RESULTS_LIMIT = 50;
 
 function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckResult[]): CheckResult[] {
   const byID = new Map<string, CheckResult>();
@@ -245,52 +218,27 @@ export default function EditMonitorPage() {
     }
   }, [id]);
 
-  const loadResults = useCallback(async (opts?: { silent?: boolean; range?: AgentTimeRange }) => {
+  // Recent results power the status badge and the History tab. Agent monitor
+  // results are heartbeats now — metrics render from the metric store query
+  // API (fetched inside AgentMetricsView), never from these results.
+  const loadResults = useCallback(async (opts?: { silent?: boolean }) => {
     try {
       if (!opts?.silent) {
         setResultsLoading(true);
       }
 
-      const isAgentMonitor = monitor?.type === 'agent';
-      const range = opts?.range ?? agentTimeRange;
-      const nowMs = Date.now();
       const currentResults = resultsRef.current;
       const latestKnownCreatedAt = currentResults?.results?.[0]?.created_at;
-      let maxResults = NON_AGENT_OVERVIEW_RESULTS_LIMIT;
-      let cutoffMs: number | null = null;
-      let requestParams: { limit?: number; since?: string };
-
-      if (isAgentMonitor) {
-        const selectedWindowMs = AGENT_RANGE_MS[range];
-        cutoffMs = nowMs - selectedWindowMs;
-        const cutoffISO = new Date(cutoffMs).toISOString();
-        maxResults = estimateResultsLimit(
-          selectedWindowMs,
-          monitor?.interval_seconds,
-          30
-        );
-        requestParams =
-          opts?.silent && latestKnownCreatedAt
-            ? { since: latestKnownCreatedAt }
-            : { since: cutoffISO };
-      } else {
-        requestParams =
-          opts?.silent && latestKnownCreatedAt
-            ? { since: latestKnownCreatedAt }
-            : { limit: NON_AGENT_OVERVIEW_RESULTS_LIMIT };
-      }
+      const requestParams: { limit?: number; since?: string } =
+        opts?.silent && latestKnownCreatedAt
+          ? { since: latestKnownCreatedAt }
+          : { limit: OVERVIEW_RESULTS_LIMIT };
 
       const data = await getMonitorResults(id, requestParams);
 
       if (opts?.silent && currentResults?.results?.length) {
-        let mergedResults = mergeAndSortResults(data.results, currentResults.results);
-        if (cutoffMs !== null) {
-          mergedResults = mergedResults.filter((result) => {
-            const ts = Date.parse(result.created_at);
-            return Number.isFinite(ts) && ts >= cutoffMs;
-          });
-        }
-        mergedResults = mergedResults.slice(0, maxResults);
+        const mergedResults = mergeAndSortResults(data.results, currentResults.results)
+          .slice(0, OVERVIEW_RESULTS_LIMIT);
 
         const mergedPayload: MonitorResultsResponse = {
           monitor_id: currentResults.monitor_id || data.monitor_id,
@@ -301,7 +249,7 @@ export default function EditMonitorPage() {
       } else {
         const nextPayload: MonitorResultsResponse = {
           monitor_id: data.monitor_id,
-          results: isAgentMonitor ? data.results : data.results.slice(0, NON_AGENT_OVERVIEW_RESULTS_LIMIT),
+          results: data.results.slice(0, OVERVIEW_RESULTS_LIMIT),
         };
         resultsRef.current = nextPayload;
         setResults(nextPayload);
@@ -313,17 +261,12 @@ export default function EditMonitorPage() {
         setResultsLoading(false);
       }
     }
-  }, [id, monitor?.type, monitor?.interval_seconds, agentTimeRange]);
+  }, [id]);
 
   const loadHistoryResults = useCallback(async () => {
-    if (monitor?.type === 'agent') {
-      await loadResults();
-      return;
-    }
-
     try {
       setResultsLoading(true);
-      const cutoffISO = new Date(Date.now() - NON_AGENT_HISTORY_WINDOW_MS).toISOString();
+      const cutoffISO = new Date(Date.now() - HISTORY_WINDOW_MS).toISOString();
       const data = await getMonitorResults(id, { since: cutoffISO });
       setHistoryResults(data);
     } catch (err: any) {
@@ -332,7 +275,7 @@ export default function EditMonitorPage() {
     } finally {
       setResultsLoading(false);
     }
-  }, [id, loadResults, monitor?.type]);
+  }, [id]);
 
   const loadAnalytics = useCallback(async (range?: OverviewTimeRange) => {
     if (monitor?.type === 'agent') {
@@ -388,7 +331,9 @@ export default function EditMonitorPage() {
       return;
     }
 
-    const intervalMs = monitor?.type === 'agent' ? 10000 : 15000;
+    // Agent metric charts poll themselves inside AgentMetricsView; this only
+    // keeps the status badge and recent results fresh.
+    const intervalMs = 15000;
 
     const poll = async () => {
       if (document.visibilityState !== 'visible') {
@@ -621,10 +566,10 @@ export default function EditMonitorPage() {
     { id: 'json', label: 'JSON' },
   ] as const;
   const selectedWindowMs =
-    monitor.type === 'agent'
-      ? AGENT_RANGE_MS[agentTimeRange]
-      : activeTab === 'history'
-        ? NON_AGENT_HISTORY_WINDOW_MS
+    activeTab === 'history'
+      ? HISTORY_WINDOW_MS
+      : monitor.type === 'agent'
+        ? AGENT_RANGE_MS[agentTimeRange]
         : OVERVIEW_RANGE_MS[overviewRange];
   const boundedRetentionDays =
     tenantRetentionDays && tenantRetentionDays > 0 ? tenantRetentionDays : null;
@@ -731,10 +676,7 @@ export default function EditMonitorPage() {
                 analytics={analytics}
                 loading={resultsLoading || analyticsLoading}
               agentTimeRange={agentTimeRange}
-              onAgentTimeRangeChange={(range) => {
-                setAgentTimeRange(range);
-                void loadResults({ range });
-              }}
+              onAgentTimeRangeChange={setAgentTimeRange}
               timeRange={overviewRange}
               onTimeRangeChange={(range) => {
                 setOverviewRange(range);
@@ -744,7 +686,7 @@ export default function EditMonitorPage() {
           )}
           {activeTab === 'history' && (
             <MonitorDetailHistory
-              results={monitor.type === 'agent' ? (results?.results || []) : (historyResults?.results || [])}
+              results={historyResults?.results || []}
               loading={resultsLoading}
             />
           )}

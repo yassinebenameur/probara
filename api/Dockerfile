@@ -13,14 +13,11 @@ COPY . .
 # Build the API application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/api ./api/cmd/api
 
-# Build agent binaries for distribution (agent has its own go.mod)
-RUN mkdir -p /app/static/agent && \
-    cd agent && go mod download && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /app/static/agent/probara-agent-linux-amd64 ./cmd/agent && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /app/static/agent/probara-agent-linux-arm64 ./cmd/agent && \
-    CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o /app/static/agent/probara-agent-darwin-amd64 ./cmd/agent && \
-    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o /app/static/agent/probara-agent-darwin-arm64 ./cmd/agent && \
-    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /app/static/agent/probara-agent-windows-amd64.exe ./cmd/agent
+# Build probara-collector binaries for distribution (minimal OTel Collector,
+# OCB manifest in collector/manifest.yaml; scripts/build-collector.sh is the
+# same pipeline for local dev). The pinned builder version must match the
+# manifest's component versions — bump together.
+RUN BUILD_DIR=/app/static/collector sh scripts/build-collector.sh
 
 # Runtime stage
 FROM alpine:latest
@@ -39,7 +36,7 @@ COPY --from=builder /app/api .
 # Copy migrations
 COPY --from=builder /build/shared/db/migrations ./shared/db/migrations
 
-# Copy agent binaries for download
+# Copy collector binaries for download
 COPY --from=builder /app/static ./static
 
 # Change ownership
