@@ -142,6 +142,7 @@ export function MetricChart({
   showBrush = false,
   referenceLines,
   syncId = METRIC_SYNC_ID,
+  yAxisWidth = 56,
 }: {
   data: ChartRow[];
   series: ChartSeries[];
@@ -152,7 +153,10 @@ export function MetricChart({
   height?: number;
   showBrush?: boolean;
   referenceLines?: ReferenceThreshold[];
+  // Pass '' to opt out of cross-chart hover sync (each chart tooltips alone).
   syncId?: string;
+  // Widen for long tick labels (byte values) so they don't wrap.
+  yAxisWidth?: number;
 }) {
   const hasData = data.some((row) => series.some((s) => row[s.key] !== null && row[s.key] !== undefined));
   if (!hasData) {
@@ -166,7 +170,7 @@ export function MetricChart({
   return (
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} syncId={syncId} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+        <AreaChart data={data} syncId={syncId || undefined} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
           <defs>
             {series.map((s) => (
               <linearGradient key={s.key} id={`agentGradient-${s.key}`} x1="0" y1="0" x2="0" y2="1">
@@ -189,7 +193,7 @@ export function MetricChart({
             domain={yDomain ?? ['auto', 'auto']}
             axisLine={false}
             tickLine={false}
-            width={56}
+            width={yAxisWidth}
             tick={{ fill: '#64748b', fontSize: 11 }}
             tickFormatter={(value) => yTickFormatter(value)}
           />

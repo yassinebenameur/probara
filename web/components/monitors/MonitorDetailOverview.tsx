@@ -5,6 +5,7 @@ import AgentMetricsView from './AgentMetricsView';
 import MetricExplorer from './MetricExplorer';
 import type { TimeRange as AgentTimeRange } from './metric-chart';
 import MonitorAnalyticsOverview from './MonitorAnalyticsOverview';
+import MongoClusterPanels from './MongoClusterPanels';
 
 interface MonitorDetailOverviewProps {
   monitor: Monitor;
@@ -54,13 +55,16 @@ export default function MonitorDetailOverview({
   }
 
   return (
-    <MonitorAnalyticsOverview
-      monitor={monitor}
-      analytics={analytics}
-      results={results}
-      loading={loading}
-      timeRange={timeRange}
-      onTimeRangeChange={onTimeRangeChange || (() => undefined)}
-    />
+    <div className="space-y-6">
+      <MonitorAnalyticsOverview
+        monitor={monitor}
+        analytics={analytics}
+        results={results}
+        loading={loading}
+        timeRange={timeRange}
+        onTimeRangeChange={onTimeRangeChange || (() => undefined)}
+      />
+      {monitor.type === 'mongodb' && <MongoClusterPanels monitor={monitor} results={results} />}
+    </div>
   );
 }

@@ -390,6 +390,11 @@ export const MONITORS_PAGE: DocPage = {
             "MongoDB monitors can additionally enable per-feature cluster checks, each an individually toggleable read-only admin command: `collect_replication` runs `replSetGetStatus` (member states, health, and replication lag), while `collect_connections`, `collect_cache`, `collect_memory`, and `collect_network` read their sections from a single `serverStatus` call (connections, WiredTiger cache, resident/virtual memory, network I/O and opcounters). Both commands are covered by MongoDB's built-in `clusterMonitor` role — no `clusterAdmin`, `root`, or write privileges. When the monitoring user lacks the role, the affected data is skipped and flagged in the check's metrics (`unavailable`) without failing the check; on a standalone server the replication check reports \"not a replica set\". Replication lag supports the same warn/max split as latency: `warn_replication_lag_seconds` annotates, `max_replication_lag_seconds` fails the check and flows through normal availability alerting — and it fails closed, so if replication status becomes unreadable (role revoked, command timeout, standalone target, no primary) the check fails rather than silently passing.",
         },
         {
+          type: "paragraph",
+          text:
+            "The monitor detail page charts the collected cluster metrics over recent checks — replication lag (with the warn/max thresholds drawn as reference lines), connections, WiredTiger cache, memory, and, for the cumulative operation and network counters, per-second rates derived between consecutive checks.",
+        },
+        {
           type: "callout",
           tone: "info",
           title: "Granting clusterMonitor",

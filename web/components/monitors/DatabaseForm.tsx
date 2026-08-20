@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
+import InfoTip from '@/components/ui/InfoTip';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
@@ -1060,15 +1061,18 @@ export default function DatabaseForm({
             </button>
             {clusterChecksOpen && (
               <div className="space-y-2 border-t border-white/[0.06] px-4 py-4">
-                <p className="text-xs text-slate-500">
-                  These read-only admin commands need MongoDB&apos;s built-in <code className="text-slate-400">clusterMonitor</code> role
-                  — no write or admin privileges. If the monitoring user lacks it, the data is skipped and flagged on the
-                  monitor; the check never fails because of missing permissions (only a max-lag threshold below turns
-                  missing data into a failure).
-                </p>
+                <div className="flex items-center gap-1.5 pb-1 text-xs text-slate-500">
+                  Read-only admin commands — skipped and flagged when the role is missing, never failing the check.
+                  <InfoTip inLabel ariaLabel="About cluster checks and permissions">
+                    Both commands are covered by MongoDB&apos;s built-in <code>clusterMonitor</code> role — no write or
+                    admin privileges: <code>db.grantRolesToUser(&quot;&lt;user&gt;&quot;, [&#123;role: &quot;clusterMonitor&quot;,
+                    db: &quot;admin&quot;&#125;])</code>. Without it the data is skipped and flagged on the monitor; only a
+                    configured max-lag threshold turns missing replication data into a failure.
+                  </InfoTip>
+                </div>
                 <ToggleRow
                   title="Replication status"
-                  description="Member health, states, and replication lag via replSetGetStatus (replica sets only)"
+                  description="Member health and replication lag (replica sets only)"
                   checked={formData.collect_replication}
                   onChange={(v) =>
                     setFormData({
@@ -1082,34 +1086,34 @@ export default function DatabaseForm({
                 />
                 <ToggleRow
                   title="Connections"
-                  description="Current and available connections via serverStatus"
+                  description="Current and available connections"
                   checked={formData.collect_connections}
                   onChange={(v) => setFormData({ ...formData, collect_connections: v })}
                 />
                 <ToggleRow
                   title="WiredTiger cache"
-                  description="Cache used, configured max, and dirty bytes via serverStatus"
+                  description="Cache used, configured max, and dirty bytes"
                   checked={formData.collect_cache}
                   onChange={(v) => setFormData({ ...formData, collect_cache: v })}
                 />
                 <ToggleRow
                   title="Memory"
-                  description="Resident and virtual memory via serverStatus"
+                  description="Resident and virtual memory"
                   checked={formData.collect_memory}
                   onChange={(v) => setFormData({ ...formData, collect_memory: v })}
                 />
                 <ToggleRow
                   title="Network & operations"
-                  description="Network I/O and operation counters via serverStatus"
+                  description="Network I/O and operation counters"
                   checked={formData.collect_network}
                   onChange={(v) => setFormData({ ...formData, collect_network: v })}
                 />
                 {formData.collect_replication && (
                   <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
                     <FormField
-                      label="Warn replication lag (s, optional)"
+                      label="Warn replication lag (s)"
                       error={errors.warn_replication_lag_seconds}
-                      description="Flag the check with a warning above this — without failing it"
+                      infoTip="Optional. Flags the check with a warning above this lag — without failing it."
                     >
                       <input
                         type="number"
@@ -1121,9 +1125,9 @@ export default function DatabaseForm({
                       />
                     </FormField>
                     <FormField
-                      label="Max replication lag (s, optional)"
+                      label="Max replication lag (s)"
                       error={errors.max_replication_lag_seconds}
-                      description="Fails the check when lag exceeds this — or when replication status can't be read (missing role, standalone, no primary) — and triggers availability alerts"
+                      infoTip="Optional. Fails the check when lag exceeds this — or when replication status can't be read at all (missing role, standalone, no primary) — and triggers availability alerts."
                     >
                       <input
                         type="number"
@@ -1142,9 +1146,9 @@ export default function DatabaseForm({
         )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField
-            label="Warn latency (ms, optional)"
+            label="Warn latency (ms)"
             error={errors.warn_latency_ms}
-            description="Flag the check with a warning above this — without failing it"
+            infoTip="Optional. Flags the check with a warning above this round-trip time — without failing it."
           >
             <input
               type="number"
@@ -1156,9 +1160,9 @@ export default function DatabaseForm({
             />
           </FormField>
           <FormField
-            label="Max latency (ms, optional)"
+            label="Max latency (ms)"
             error={errors.max_latency_ms}
-            description="Fail the check if the round trip takes longer than this"
+            infoTip="Optional. Fails the check if the round trip takes longer than this — triggers availability alerts."
           >
             <input
               type="number"
