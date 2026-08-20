@@ -37,7 +37,8 @@ type OperationalSummaryInput = {
   opsSummary?: DashboardOpsSummary | null;
   problemMonitorsCount: number;
   recentFailuresCount: number;
-  overallUptime: number;
+  /** null = no checks in the window; the tile renders "—", never "0.00%". */
+  overallUptime: number | null;
   avgResponseMs: number;
   rangeLabel?: string;
 };
@@ -94,9 +95,16 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
     metrics: [
       {
         label: 'Uptime',
-        value: formatPercent(input.overallUptime),
-        detail: input.rangeLabel ?? 'Selected range',
-        tone: input.overallUptime >= 99 ? 'clean' : input.overallUptime >= 95 ? 'attention' : 'critical',
+        value: input.overallUptime == null ? '—' : formatPercent(input.overallUptime),
+        detail: input.overallUptime == null ? 'No checks in range' : input.rangeLabel ?? 'Selected range',
+        tone:
+          input.overallUptime == null
+            ? undefined
+            : input.overallUptime >= 99
+              ? 'clean'
+              : input.overallUptime >= 95
+                ? 'attention'
+                : 'critical',
       },
       {
         label: 'Avg response',

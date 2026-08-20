@@ -464,11 +464,9 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		}
 	}
 
-	if req.Enabled != nil {
-		setParts = append(setParts, fmt.Sprintf("enabled = $%d", argIndex))
-		args = append(args, *req.Enabled)
-		argIndex++
-	}
+	// Enabled is handled by repo.SetEnabled below, not the dynamic UPDATE: a
+	// real toggle must reset state and record a pause/resume interval in one
+	// locked transaction (S-P2, docs/state-semantics.md).
 
 	if req.Tags != nil {
 		setParts = append(setParts, fmt.Sprintf("tags = $%d", argIndex))
@@ -529,7 +527,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
-	if len(setParts) == 0 && req.NotificationChannels == nil {
+	if len(setParts) == 0 && req.NotificationChannels == nil && req.Enabled == nil && req.LocationIDs == nil {
 		// No fields to update, return existing
 		return existing, nil
 	}
@@ -552,6 +550,16 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 			return nil, err
 		}
 		*monitor = *loaded
+	}
+
+	if req.Enabled != nil {
+		if err := s.repo.SetEnabled(ctx, tenantID, monitorID, *req.Enabled); err != nil {
+			return nil, err
+		}
+		monitor.Enabled = *req.Enabled
+		if existing.Enabled != *req.Enabled {
+			monitor.CurrentState = "unknown"
+		}
 	}
 
 	if updatePolicies {

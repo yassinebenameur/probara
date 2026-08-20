@@ -37,6 +37,12 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   (`MonitorSecretFields` / `MonitorSecretMapFields`). One entry gives
   encryption at rest, `***` masking on reads, write-only merge on updates,
   and correct scheduler/worker/location handling — no per-type code.
+- **Monitor state semantics**: `docs/state-semantics.md` (rules `S-*`).
+  Changes to state transitions, quorum aggregation, freshness/absence,
+  pause/maintenance handling, or uptime accounting must update the rule
+  table in the same commit; tests cite rule IDs
+  (`shared/monitorstate/spec_test.go`). New aggregation surfaces delegate to
+  `shared/monitorstate`, never invent parallel state rules.
 
 ## Adding a monitor type (checklist)
 

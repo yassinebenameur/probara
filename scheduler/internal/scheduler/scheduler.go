@@ -81,6 +81,9 @@ type Scheduler struct {
 	lastRetentionRunUTCDate string
 	rollupMu                sync.Mutex
 	rollupRunning           bool
+	watchdogMu              sync.Mutex
+	watchdogRunning         bool
+	status                  statusPublisher
 
 	// Metrics
 	loopsTotal        *prometheus.CounterVec
@@ -293,11 +296,14 @@ func (s *Scheduler) Start() error {
 	// location_mesh_state.next_run_at.
 	meshTicker := time.NewTicker(meshBatchTickerInterval)
 	defer meshTicker.Stop()
+	watchdogTicker := time.NewTicker(watchdogTickerInterval)
+	defer watchdogTicker.Stop()
 
 	// Initial run
 	s.scheduleBatch(s.ctx)
 	s.triggerRetentionCleanup()
 	s.triggerRollupMaintenance()
+	s.triggerWatchdog()
 	if s.config.MeshEnabled {
 		s.runMeshBatch(s.ctx)
 	}
@@ -322,6 +328,8 @@ func (s *Scheduler) Start() error {
 			if s.config.MeshEnabled {
 				s.runMeshBatch(s.ctx)
 			}
+		case <-watchdogTicker.C:
+			s.triggerWatchdog()
 		}
 	}
 }

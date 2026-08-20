@@ -606,7 +606,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Analytics report uptime, SLA/availability summary fields, downtime duration, average/median/p95/latest latency, series data, downtime periods, source, coverage start, and whether the requested window is partially covered. Long ranges combine rollups with the current raw tail.",
+            "Analytics report uptime, SLA/availability summary fields, downtime duration, average/median/p95/latest latency, series data, downtime periods, source, coverage start, and whether the requested window is partially covered. Long ranges combine rollups with the current raw tail. The summary carries `has_data`: when no checks ran in the window the percentage fields are meaningless zeros and clients must render a no-data state, never 0% or 100%. It also carries `method`: `interval` means `availability_pct` is a time integration over the monitor's state timeline — unknown and paused time leave the denominator and surface as `coverage_pct`, and downtime inside maintenance windows counts as planned rather than unavailability; `sampled` means the window predates the timeline and the legacy success/total rate stands in.",
         },
         {
           type: "callout",

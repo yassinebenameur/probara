@@ -854,7 +854,7 @@ export default function DashboardPage() {
       opsSummary,
       problemMonitorsCount: problemMonitors.length,
       recentFailuresCount: recentFailures.length,
-      overallUptime: stats?.overall_uptime || 0,
+      overallUptime: stats?.overall_uptime ?? null,
       avgResponseMs: stats?.avg_response_ms || 0,
       rangeLabel: DASHBOARD_RANGE_LABELS[timeRange],
     }),

@@ -81,8 +81,6 @@ type Server struct {
 	http               *http.Server
 	alertSubscriber    *alertservice.Subscriber
 	statusPublisher    *statusupdates.Publisher
-	pushStaleWorker    *pushservice.StaleWorker
-	agentStaleWorker   *agentservice.StaleWorker
 	auditRecorder      *auditservice.Recorder
 	auditPruner        *auditservice.Pruner
 	locationAuthorizer *locationnatsauthservice.Service
@@ -177,8 +175,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Push service and handlers (created here to use in both public and authenticated routes)
 	pushSvc := pushservice.NewService(dbClient.DB, statusPublisher)
 	pushHandlers := pushhandlers.NewHandler(pushSvc, log, cfg.PublicBaseURL)
-	pushStaleWorker := pushservice.NewStaleWorker(dbClient.DB, log)
-	agentStaleWorker := agentservice.NewStaleWorker(dbClient.DB, log, statusPublisher)
+	// Push/agent staleness detection moved to the scheduler's absence
+	// watchdog (S-F4, docs/state-semantics.md) — one advisory-locked detector
+	// fleet-wide instead of one per API replica.
 	alertHub := alertservice.NewHub()
 	alertSubscriber := alertservice.NewSubscriber(checkJobQueue, alertHub, cfg, log)
 
@@ -558,8 +557,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		http:               httpServer,
 		alertSubscriber:    alertSubscriber,
 		statusPublisher:    statusPublisher,
-		pushStaleWorker:    pushStaleWorker,
-		agentStaleWorker:   agentStaleWorker,
 		auditRecorder:      auditRecorder,
 		auditPruner:        auditPruner,
 		locationAuthorizer: locationAuthorizer,
@@ -598,12 +595,6 @@ func (s *Server) Start() error {
 			return fmt.Errorf("start alert subscriber: %w", err)
 		}
 	}
-	if s.pushStaleWorker != nil {
-		s.pushStaleWorker.Start()
-	}
-	if s.agentStaleWorker != nil {
-		s.agentStaleWorker.Start()
-	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Start()
 	}
@@ -627,12 +618,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.alertSubscriber != nil {
 		s.alertSubscriber.Stop()
-	}
-	if s.pushStaleWorker != nil {
-		s.pushStaleWorker.Stop()
-	}
-	if s.agentStaleWorker != nil {
-		s.agentStaleWorker.Stop()
 	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Stop()

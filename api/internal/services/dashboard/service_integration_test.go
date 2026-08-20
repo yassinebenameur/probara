@@ -80,7 +80,7 @@ func TestService_GetOverview_LongRangeParityMatchesMonitorAnalytics(t *testing.T
 			}
 
 			expectedSLA := (monitorAAnalytics.Summary.SLAPct + monitorBAnalytics.Summary.SLAPct) / 2
-			assertDashboardClose(t, overview.Stats.OverallUptime, expectedSLA)
+			assertDashboardClose(t, derefUptime(t, overview.Stats.OverallUptime), expectedSLA)
 
 			pointDay1 := findTrendPoint(t, overview.Trend, day1)
 			expectedDay1Uptime := averageMonitorSeriesAt(day1, monitorAAnalytics.UptimeSeries, monitorBAnalytics.UptimeSeries)
@@ -389,7 +389,7 @@ func TestService_LoadGroups_24hHourlyRollupIncludesRawLagTail(t *testing.T) {
 	}
 	// Rollup: 23 total, 23 success. Raw lag-tail: 1 failure.
 	// Total = 24, success = 23 → 23/24 ≈ 95.83%.
-	assertDashboardClose(t, groups[0].Uptime, 95.8333333333)
+	assertDashboardClose(t, derefUptime(t, groups[0].Uptime), 95.8333333333)
 	if groups[0].AttentionCount != 1 {
 		t.Fatalf("AttentionCount = %d, want 1", groups[0].AttentionCount)
 	}
@@ -466,7 +466,7 @@ func TestService_GetOverview_TagFilteredScopeAndZeroMatch(t *testing.T) {
 	if overview.Stats.TotalMonitors != 1 || overview.Stats.ActiveMonitors != 1 || overview.Stats.HTTPMonitors != 1 {
 		t.Fatalf("Stats = %+v, want one matching monitor", overview.Stats)
 	}
-	assertDashboardClose(t, overview.Stats.OverallUptime, 70.0)
+	assertDashboardClose(t, derefUptime(t, overview.Stats.OverallUptime), 70.0)
 	if overview.OpsSummary.UpMonitors != 0 || overview.OpsSummary.DownMonitors != 1 || overview.OpsSummary.ActiveAlerts != 1 || overview.OpsSummary.AcknowledgedAlerts != 0 {
 		t.Fatalf("OpsSummary = %+v, want one down monitor and one active alert", overview.OpsSummary)
 	}
@@ -549,6 +549,14 @@ func assertDashboardClose(t *testing.T, got, want float64) {
 	}
 }
 
+func derefUptime(t *testing.T, p *float64) float64 {
+	t.Helper()
+	if p == nil {
+		t.Fatal("uptime is nil, want a value")
+	}
+	return *p
+}
+
 func TestService_GetSummary_24hStatsExactRollingFromHourlyRollup(t *testing.T) {
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -576,8 +584,8 @@ func TestService_GetSummary_24hStatsExactRollingFromHourlyRollup(t *testing.T) {
 		t.Fatalf("GetSummary() error = %v", err)
 	}
 	// 20 buckets * (9 success / 10 total) = 90% uptime; latency 100ms/check.
-	if math.Abs(resp.Stats.OverallUptime-90) > 0.01 {
-		t.Fatalf("OverallUptime = %f, want 90", resp.Stats.OverallUptime)
+	if u := derefUptime(t, resp.Stats.OverallUptime); math.Abs(u-90) > 0.01 {
+		t.Fatalf("OverallUptime = %f, want 90", u)
 	}
 	if math.Abs(resp.Stats.AvgResponseMS-100) > 0.01 {
 		t.Fatalf("AvgResponseMS = %f, want 100", resp.Stats.AvgResponseMS)
@@ -704,8 +712,8 @@ func TestService_LoadGroups_24hUsesExactRollingSummary(t *testing.T) {
 	if g.AttentionCount != 1 {
 		t.Fatalf("team-a AttentionCount = %d, want 1", g.AttentionCount)
 	}
-	if math.Abs(g.Uptime-50) > 0.01 {
-		t.Fatalf("team-a Uptime = %f, want 50", g.Uptime)
+	if u := derefUptime(t, g.Uptime); math.Abs(u-50) > 0.01 {
+		t.Fatalf("team-a Uptime = %f, want 50", u)
 	}
 }
 
@@ -742,7 +750,7 @@ func TestService_GetGroupSparkline_24hHourAligned(t *testing.T) {
 	}
 	found50 := false
 	for _, v := range resp.Buckets {
-		if math.Abs(v-50) < 0.01 {
+		if v != nil && math.Abs(*v-50) < 0.01 {
 			found50 = true
 			break
 		}
@@ -813,8 +821,8 @@ func TestService_GetOverview_24hHourlyRollupSmoke(t *testing.T) {
 		t.Fatalf("GetOverview() error = %v", err)
 	}
 	// Per-monitor uptime = 25/50 = 50% (single monitor).
-	if math.Abs(resp.Stats.OverallUptime-50) > 0.01 {
-		t.Fatalf("OverallUptime = %f, want 50", resp.Stats.OverallUptime)
+	if u := derefUptime(t, resp.Stats.OverallUptime); math.Abs(u-50) > 0.01 {
+		t.Fatalf("OverallUptime = %f, want 50", u)
 	}
 	// Activity sums: 5 buckets * 10 checks = 50 checks; 5 * 5 failures = 25 failures.
 	totalChecks := 0

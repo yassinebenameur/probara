@@ -903,7 +903,8 @@ export interface DashboardStats {
   active_monitors: number;
   http_monitors: number;
   agent_monitors: number;
-  overall_uptime: number;
+  /** null = no checks in the window; render as no-data, never 0% (S-D1). */
+  overall_uptime: number | null;
   avg_response_ms: number;
 }
 
@@ -993,14 +994,16 @@ export interface DashboardSummaryResponse {
 export interface DashboardGroupMember {
   monitor_id: string;
   monitor_name: string;
-  uptime: number;
+  /** null = no checks in the window (paused, new); render "—", never 100%. */
+  uptime: number | null;
   current_status: string | null;
 }
 
 export interface DashboardGroup {
   tag: string | null;
   monitor_count: number;
-  uptime: number;
+  /** Mean over members with data; null when no member has any. */
+  uptime: number | null;
   attention_count: number;
   worst_member: DashboardGroupMember | null;
   members: DashboardGroupMember[];
@@ -1009,7 +1012,8 @@ export interface DashboardGroup {
 export interface DashboardGroupSparklineResponse {
   tag: string | null;
   range: DashboardRange;
-  buckets: number[];
+  /** null buckets = no checks landed in them; render gaps. */
+  buckets: (number | null)[];
 }
 
 export interface DashboardProblemMonitorsResponse {
@@ -1606,6 +1610,13 @@ export type MonitorAnalyticsRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' |
 export type AnalyticsSource = 'raw' | 'rollup';
 
 export interface MonitorAnalyticsSummary {
+  /** false = no checks in the window; the percentages are meaningless zeros. */
+  has_data: boolean;
+  /** "interval" = time-based availability from the state timeline; "sampled" = legacy count-based. */
+  method: 'interval' | 'sampled';
+  availability_pct: number;
+  /** Observed share of the window; only present for method "interval". */
+  coverage_pct?: number;
   uptime_pct: number;
   sla_pct: number;
   downtime_pct: number;

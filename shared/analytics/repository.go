@@ -77,14 +77,48 @@ func (r *Repository) GetScopeAnalytics(ctx context.Context, tenantID uuid.UUID, 
 			GeneratedAt: now.UTC(),
 			Source:      sourceForRange(rangeValue),
 			IsPartial:   true,
+			Summary:     Summary{Method: "sampled"},
 			Series:      emptySeries(window),
 		}, nil
 	}
 
+	var res *Result
 	if window.UseRollup {
-		return r.getRollupAnalytics(ctx, tenantID, monitorIDs, window, now.UTC())
+		res, err = r.getRollupAnalytics(ctx, tenantID, monitorIDs, window, now.UTC())
+	} else {
+		res, err = r.getRawAnalytics(ctx, tenantID, monitorIDs, window, now.UTC())
 	}
-	return r.getRawAnalytics(ctx, tenantID, monitorIDs, window, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	if err := r.applyIntervalAvailability(ctx, tenantID, monitorIDs, window.Start, now.UTC(), res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// applyIntervalAvailability fills the time-based headline (S-U1). When the
+// timeline does not cover the window, the sampled rate stands in, labeled
+// method="sampled" (S-U5).
+func (r *Repository) applyIntervalAvailability(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, start, end time.Time, res *Result) error {
+	res.Summary.Method = "sampled"
+	res.Summary.AvailabilityPct = res.Summary.SLAPct
+	ia, covered, err := r.computeIntervalAvailability(ctx, tenantID, monitorIDs, start, end)
+	if err != nil {
+		return err
+	}
+	if !covered {
+		return nil
+	}
+	res.Summary.Method = "interval"
+	res.Summary.AvailabilityPct = ia.AvailabilityPct
+	coverage := ia.CoveragePct
+	res.Summary.CoveragePct = &coverage
+	// The timeline is authoritative once it covers the window: an entirely
+	// unknown window renders as no-data even when history-only sample rows
+	// exist (S-D1).
+	res.Summary.HasData = ia.HasData
+	return nil
 }
 
 // ScopeAnalyticsBatchRequest identifies one analytics scope to compute within a batch.
@@ -444,6 +478,7 @@ func buildRawResult(window Window, generatedAt time.Time, rows []rawRow) *Result
 	}
 
 	uptime := average(perMonitorUptimes)
+	res.Summary.HasData = len(perMonitorUptimes) > 0
 	res.Summary.UptimePct = uptime
 	res.Summary.SLAPct = uptime
 	res.Summary.DowntimePct = maxFloat(0, 100-uptime)
@@ -667,7 +702,6 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 			series = append(series, point)
 			continue
 		}
-		point.HasData = true
 		uptimes := make([]float64, 0, len(monitorStats))
 		latencies := make([]float64, 0, len(monitorStats))
 		for _, stat := range monitorStats {
@@ -679,6 +713,10 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 				latencies = append(latencies, *avg)
 			}
 		}
+		// A rollup row can exist with zero checks; a bucket only has data if
+		// something was actually checked, else it must render as no-data,
+		// not as a 0% day (S-D1).
+		point.HasData = point.TotalChecks > 0
 		point.UptimePct = average(uptimes)
 		if len(latencies) > 0 {
 			point.AvgLatencyMS = PtrFloat64(average(latencies))
@@ -714,6 +752,7 @@ func buildRollupResult(window Window, generatedAt time.Time, rows []rollupRow) *
 		}
 	}
 	sla := average(perMonitorSLA)
+	res.Summary.HasData = len(perMonitorSLA) > 0
 	res.Summary.UptimePct = sla
 	res.Summary.SLAPct = sla
 	res.Summary.DowntimePct = maxFloat(0, 100-sla)

@@ -38,8 +38,11 @@ func (f *fakeAnalyticsReader) GetScopeAnalytics(ctx context.Context, tenantID uu
 		GeneratedAt: now,
 		Source:      sharedanalytics.SourceRollup,
 		Summary: sharedanalytics.Summary{
-			SLAPct:       98.5,
-			AvgLatencyMS: &avgLatency,
+			HasData:         true,
+			Method:          "sampled",
+			AvailabilityPct: 98.5,
+			SLAPct:          98.5,
+			AvgLatencyMS:    &avgLatency,
 		},
 	}, nil
 }
@@ -92,8 +95,8 @@ func TestService_GetStats_LongRangeUsesInjectedAnalyticsReader(t *testing.T) {
 	if analytics.calls != 1 {
 		t.Fatalf("analytics calls = %d, want 1", analytics.calls)
 	}
-	if stats.OverallUptime != 98.5 {
-		t.Fatalf("OverallUptime = %.1f, want 98.5", stats.OverallUptime)
+	if stats.OverallUptime == nil || *stats.OverallUptime != 98.5 {
+		t.Fatalf("OverallUptime = %v, want 98.5", stats.OverallUptime)
 	}
 	if stats.AvgResponseMS != 245 {
 		t.Fatalf("AvgResponseMS = %.1f, want 245", stats.AvgResponseMS)

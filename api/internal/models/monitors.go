@@ -159,6 +159,15 @@ const (
 )
 
 type MonitorAnalyticsSummary struct {
+	// HasData false means no checks ran in the window: the percentage
+	// fields are meaningless zeros and the UI must render no-data (S-D1).
+	HasData bool `json:"has_data"`
+	// Method: "interval" = availability integrated over the state timeline;
+	// "sampled" = legacy success/total counting (window predates the
+	// timeline). coverage_pct is only present for "interval".
+	Method          string     `json:"method"`
+	AvailabilityPct float64    `json:"availability_pct"`
+	CoveragePct     *float64   `json:"coverage_pct,omitempty"`
 	UptimePct       float64    `json:"uptime_pct"`
 	SLAPct          float64    `json:"sla_pct"`
 	DowntimePct     float64    `json:"downtime_pct"`

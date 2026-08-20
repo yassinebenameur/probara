@@ -16,10 +16,12 @@ import (
 const membersPreviewLimit = 10
 
 // groupAggregationRow is one monitor's pre-aggregated stats joined with its tag set.
+// Uptime is nil when the monitor had no checks in the range (paused, new): no
+// data is not 100% (S-D1, docs/state-semantics.md).
 type groupAggregationRow struct {
 	MonitorID      uuid.UUID
 	Name           string
-	Uptime         float64
+	Uptime         *float64
 	Tags           []string
 	CurrentStatus  *string
 	AttentionCount int // 1 if monitor needs attention (failure/error in range OR current_status in {failure,error}), else 0
@@ -51,7 +53,9 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 
 	var ungrouped *models.DashboardGroup
 	sums := make(map[string]float64, len(groupTags))
+	counts := make(map[string]int, len(groupTags))
 	var ungroupedSum float64
+	var ungroupedCount int
 
 	for _, row := range rows {
 		matched := false
@@ -59,7 +63,10 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 			if g, ok := buckets[tag]; ok {
 				matched = true
 				g.MonitorCount++
-				sums[tag] += row.Uptime
+				if row.Uptime != nil {
+					sums[tag] += *row.Uptime
+					counts[tag]++
+				}
 				g.AttentionCount += row.AttentionCount
 				g.Members = appendGroupMember(g.Members, row)
 			}
@@ -69,18 +76,33 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 				ungrouped = &models.DashboardGroup{Tag: nil}
 			}
 			ungrouped.MonitorCount++
-			ungroupedSum += row.Uptime
+			if row.Uptime != nil {
+				ungroupedSum += *row.Uptime
+				ungroupedCount++
+			}
 			ungrouped.AttentionCount += row.AttentionCount
 			ungrouped.Members = appendGroupMember(ungrouped.Members, row)
 		}
 	}
 
-	finalize := func(g *models.DashboardGroup, totalUptime float64) {
-		if g.MonitorCount > 0 {
-			g.Uptime = totalUptime / float64(g.MonitorCount)
+	// Group uptime is the mean over members WITH data; members with no checks
+	// no longer count as 100% and a group with no data at all reads null.
+	finalize := func(g *models.DashboardGroup, totalUptime float64, dataCount int) {
+		if dataCount > 0 {
+			u := totalUptime / float64(dataCount)
+			g.Uptime = &u
 		}
+		// Worst-first among members with data; no-data members sort last —
+		// missing checks must not rank a member as the worst performer.
 		sort.SliceStable(g.Members, func(i, j int) bool {
-			return g.Members[i].Uptime < g.Members[j].Uptime
+			ui, uj := g.Members[i].Uptime, g.Members[j].Uptime
+			if ui == nil {
+				return false
+			}
+			if uj == nil {
+				return true
+			}
+			return *ui < *uj
 		})
 		if len(g.Members) > membersPreviewLimit {
 			g.Members = g.Members[:membersPreviewLimit]
@@ -97,11 +119,11 @@ func aggregateGroups(rows []groupAggregationRow, groupTags []string) []models.Da
 	out := make([]models.DashboardGroup, 0, len(order)+1)
 	for _, tag := range order {
 		g := buckets[tag]
-		finalize(g, sums[tag])
+		finalize(g, sums[tag], counts[tag])
 		out = append(out, *g)
 	}
 	if ungrouped != nil {
-		finalize(ungrouped, ungroupedSum)
+		finalize(ungrouped, ungroupedSum, ungroupedCount)
 		out = append(out, *ungrouped)
 	}
 	return out
@@ -175,13 +197,9 @@ func (s *Service) queryMonitorsForGroupsRaw(
 			m.name,
 			COALESCE(m.tags, '{}'::text[]) AS tags,
 			cs.current_status,
-			COALESCE(
-				CASE WHEN pm.total_checks > 0
-					THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
-					ELSE 100.0
-				END,
-				100.0
-			) AS uptime,
+			CASE WHEN pm.total_checks > 0
+				THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
+			END AS uptime,
 			COALESCE(pm.bad_checks, 0) > 0 OR COALESCE(cs.current_status IN ('failure','error'), FALSE) AS needs_attention
 		FROM monitors m
 		LEFT JOIN per_monitor pm ON pm.monitor_id = m.id
@@ -270,9 +288,10 @@ func (s *Service) queryMonitorsForGroups24hHourlyRollup(
 	out := make([]groupAggregationRow, 0, len(monitorRows))
 	for _, m := range monitorRows {
 		t := totals[m.id]
-		uptime := 100.0
+		var uptime *float64
 		if t.TotalChecks > 0 {
-			uptime = (float64(t.SuccessChecks) / float64(t.TotalChecks)) * 100.0
+			u := (float64(t.SuccessChecks) / float64(t.TotalChecks)) * 100.0
+			uptime = &u
 		}
 		bad := t.TotalChecks - t.SuccessChecks
 		needsAttention := bad > 0 || (t.LatestStatus != nil && (*t.LatestStatus == "failure" || *t.LatestStatus == "error"))
@@ -364,13 +383,9 @@ func (s *Service) queryMonitorsForGroupsRollup(
 			m.name,
 			COALESCE(m.tags, '{}'::text[]) AS tags,
 			latest.current_status,
-			COALESCE(
-				CASE WHEN pm.total_checks > 0
-					THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
-					ELSE 100.0
-				END,
-				100.0
-			) AS uptime,
+			CASE WHEN pm.total_checks > 0
+				THEN (pm.success_checks::float / pm.total_checks::float) * 100.0
+			END AS uptime,
 			COALESCE(pm.bad_checks, 0) > 0 OR COALESCE(latest.current_status IN ('failure','error'), FALSE) AS needs_attention
 		FROM monitors m
 		LEFT JOIN per_monitor pm ON pm.monitor_id = m.id
@@ -472,7 +487,7 @@ func (s *Service) GetGroupSparkline(
 		return nil, err
 	}
 
-	buckets := make([]float64, 0, sparklineBucketCount)
+	buckets := make([]*float64, 0, sparklineBucketCount)
 	if len(monitorIDs) == 0 {
 		return &models.DashboardGroupSparklineResponse{
 			Tag:     params.Tag,
@@ -571,13 +586,15 @@ func (s *Service) monitorIDsForGroup(
 
 // groupUptimeSeries returns a per-bucket uptime % series for the given monitor set,
 // using the analytics rollup for long ranges and live SQL for short ranges.
+// A nil bucket means no checks landed in it — rendered as a gap, never as a
+// synthetic value (S-D1).
 func (s *Service) groupUptimeSeries(
 	ctx context.Context,
 	tenantID uuid.UUID,
 	monitorIDs []uuid.UUID,
 	rng models.DashboardRange,
 	rangeStart, rangeEnd, rangeEndExclusive time.Time,
-) ([]float64, error) {
+) ([]*float64, error) {
 	if isDashboardRollupRange(rng) {
 		analyticsResult, err := s.analytics.GetScopeAnalytics(
 			ctx,
@@ -589,9 +606,14 @@ func (s *Service) groupUptimeSeries(
 		if err != nil {
 			return nil, fmt.Errorf("failed to query rollup-backed sparkline: %w", err)
 		}
-		out := make([]float64, 0, len(analyticsResult.Series))
+		out := make([]*float64, 0, len(analyticsResult.Series))
 		for _, p := range analyticsResult.Series {
-			out = append(out, p.UptimePct)
+			if !p.HasData {
+				out = append(out, nil)
+				continue
+			}
+			v := p.UptimePct
+			out = append(out, &v)
 		}
 		return out, nil
 	}
@@ -613,13 +635,14 @@ func (s *Service) groupUptimeSeries(
 			return nil, err
 		}
 		series := data.hourlySeries
-		out := make([]float64, 0, len(series))
+		out := make([]*float64, 0, len(series))
 		for _, p := range series {
 			if p.TotalChecks == 0 {
-				out = append(out, 100.0)
+				out = append(out, nil)
 				continue
 			}
-			out = append(out, (float64(p.SuccessChecks)/float64(p.TotalChecks))*100.0)
+			v := (float64(p.SuccessChecks) / float64(p.TotalChecks)) * 100.0
+			out = append(out, &v)
 		}
 		return out, nil
 	}
@@ -643,13 +666,9 @@ func (s *Service) groupUptimeSeries(
             GROUP BY 1
         )
         SELECT
-            COALESCE(
-                CASE WHEN pb.total_checks > 0
-                    THEN (pb.success_checks::float / pb.total_checks::float) * 100.0
-                    ELSE 100.0
-                END,
-                100.0
-            ) AS uptime
+            CASE WHEN pb.total_checks > 0
+                THEN (pb.success_checks::float / pb.total_checks::float) * 100.0
+            END AS uptime
         FROM buckets b
         LEFT JOIN per_bucket pb ON pb.bucket_start = b.bucket_start
         ORDER BY b.bucket_start
@@ -659,9 +678,9 @@ func (s *Service) groupUptimeSeries(
 		return nil, fmt.Errorf("failed to query 1h sparkline: %w", err)
 	}
 	defer rows.Close()
-	out := []float64{}
+	out := []*float64{}
 	for rows.Next() {
-		var v float64
+		var v *float64
 		if err := rows.Scan(&v); err != nil {
 			return nil, fmt.Errorf("failed to scan bucket: %w", err)
 		}
@@ -675,16 +694,16 @@ func (s *Service) groupUptimeSeries(
 
 // resampleTo down-/up-samples a series to exactly n buckets by linear index mapping.
 // For empty input, returns an empty slice.
-func resampleTo(in []float64, n int) []float64 {
+func resampleTo(in []*float64, n int) []*float64 {
 	if len(in) == 0 || n <= 0 {
-		return []float64{}
+		return []*float64{}
 	}
 	if len(in) == n {
-		out := make([]float64, n)
+		out := make([]*float64, n)
 		copy(out, in)
 		return out
 	}
-	out := make([]float64, n)
+	out := make([]*float64, n)
 	for i := 0; i < n; i++ {
 		// Take the bucket at the proportional position in the source.
 		srcIdx := i * len(in) / n

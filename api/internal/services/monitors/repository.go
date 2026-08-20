@@ -3,6 +3,7 @@ package monitors
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // Repository defines the interface for monitor data access
@@ -37,6 +39,8 @@ type Repository interface {
 	GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error)
 	// monitor_locations management
 	SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error
+	// SetEnabled toggles pause/resume with the S-P2 state reset.
+	SetEnabled(ctx context.Context, tenantID, monitorID uuid.UUID, enabled bool) error
 	GetLocationIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 	GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error)
 }
@@ -53,6 +57,12 @@ func NewPostgresRepository(database db.DB) *PostgresRepository {
 
 // Create inserts a new monitor into the database
 func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin create transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	query := `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config,
@@ -68,7 +78,7 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 
 	var tags []string
 
-	err := r.db.QueryRowContext(ctx, query,
+	err = tx.QueryRowContext(ctx, query,
 		monitor.ID, monitor.TenantID, monitor.Name, monitor.Type, monitor.Config,
 		monitor.IntervalSeconds, monitor.TimeoutSeconds, monitor.AlertPolicyID,
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
@@ -84,6 +94,20 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 
 	if err != nil {
 		return fmt.Errorf("failed to create monitor: %w", err)
+	}
+
+	// The timeline starts at creation: every non-group monitor always has
+	// exactly one open state interval (S-U4, docs/state-semantics.md). Group
+	// state is derived by the alerter's SQL roll-up and has no timeline yet.
+	if monitor.Type != models.MonitorTypeGroup {
+		if err := monitorstate.RecordIntervalTx(ctx, tx, monitor.TenantID, monitor.ID,
+			monitorstate.State(monitor.CurrentState), monitorstate.IntervalReasonCreated); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit create transaction: %w", err)
 	}
 
 	monitor.Tags = tags
@@ -334,6 +358,9 @@ func (r *PostgresRepository) DeleteHistory(ctx context.Context, tenantID uuid.UU
 		`DELETE FROM monitor_hourly_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_daily_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM check_results WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		// Closed intervals are history; the open one stays — a live monitor
+		// always keeps exactly one open interval (S-U4).
+		`DELETE FROM monitor_state_intervals WHERE tenant_id = $1 AND monitor_id = ANY($2) AND ended_at IS NOT NULL`,
 	}
 
 	for _, stmt := range deleteStatements {
@@ -631,12 +658,35 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 // removed locations are deleted so they can never resurface in the quorum
 // aggregate; when the set becomes empty, the monitor returns to the default
 // fleet and restarts the legacy state machine from 'unknown'.
+//
+// Lock ordering (S-O1, docs/state-semantics.md): the monitor row is locked
+// first, matching result ingest — which holds the same lock while touching
+// monitor_location_state — so the child-row deletes below can neither
+// deadlock against an in-flight result nor lose to one that re-upserts a
+// removed location's state row after its membership check.
 func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error {
+	// A nil slice must behave like an empty one: pq.Array(nil) encodes SQL
+	// NULL and `!= ALL(NULL)` matches nothing, silently keeping every
+	// membership and state row while the monitor still resets to 'unknown'.
+	if locationIDs == nil {
+		locationIDs = []uuid.UUID{}
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	var prevState string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT current_state FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
+	`, monitorID, tenantID).Scan(&prevState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("monitor not found")
+		}
+		return fmt.Errorf("failed to lock monitor: %w", err)
+	}
 
 	if len(locationIDs) > 0 {
 		var count int
@@ -679,10 +729,75 @@ func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitor
 		`, monitorID, tenantID); err != nil {
 			return fmt.Errorf("failed to reset monitor state: %w", err)
 		}
+		if prevState != string(monitorstate.StateUnknown) {
+			if err := monitorstate.RecordIntervalTx(ctx, tx, tenantID, monitorID,
+				monitorstate.StateUnknown, monitorstate.IntervalReasonLocationChange); err != nil {
+				return err
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit monitor locations: %w", err)
+	}
+	return nil
+}
+
+// SetEnabled toggles a monitor's enabled flag. A real toggle resets observed
+// state to 'unknown' with the per-location machinery cleared (S-P2,
+// docs/state-semantics.md): the pre-pause state must not survive into resume
+// — a monitor paused while down would otherwise re-open an availability
+// alert on unpause before any fresh check runs. Lock order per S-O1.
+func (r *PostgresRepository) SetEnabled(ctx context.Context, tenantID, monitorID uuid.UUID, enabled bool) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var current bool
+	var monitorType string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT enabled, type FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
+	`, monitorID, tenantID).Scan(&current, &monitorType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("monitor not found")
+		}
+		return fmt.Errorf("failed to lock monitor: %w", err)
+	}
+	if current == enabled {
+		return tx.Commit()
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE monitors
+		SET enabled = $2,
+			current_state = 'unknown',
+			consecutive_failures = 0,
+			last_state_change_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1
+	`, monitorID, enabled); err != nil {
+		return fmt.Errorf("failed to toggle monitor: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM monitor_location_state WHERE monitor_id = $1
+	`, monitorID); err != nil {
+		return fmt.Errorf("failed to clear location state: %w", err)
+	}
+	if monitorType != string(models.MonitorTypeGroup) {
+		reason := monitorstate.IntervalReasonPause
+		if enabled {
+			reason = monitorstate.IntervalReasonResume
+		}
+		if err := monitorstate.RecordIntervalTx(ctx, tx, tenantID, monitorID,
+			monitorstate.StateUnknown, reason); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit enabled toggle: %w", err)
 	}
 	return nil
 }

@@ -51,6 +51,29 @@ test('buildOperationalSummary avoids contradictory operational copy when only re
   assert.match(summary.description, /resolved/i);
 });
 
+test('buildOperationalSummary renders no-data uptime as a dash, never 0.00% (S-D1)', () => {
+  const summary = buildOperationalSummary({
+    opsSummary: {
+      up_monitors: 0,
+      down_monitors: 0,
+      paused_monitors: 2,
+      maintenance_monitors: 0,
+      active_alerts: 0,
+      acknowledged_alerts: 0,
+    },
+    problemMonitorsCount: 0,
+    recentFailuresCount: 0,
+    overallUptime: null,
+    avgResponseMs: 0,
+  });
+
+  const uptimeTile = summary.metrics.find((metric) => metric.label === 'Uptime');
+  assert.ok(uptimeTile);
+  assert.equal(uptimeTile.value, '—');
+  assert.equal(uptimeTile.tone, undefined);
+  assert.match(uptimeTile.detail ?? '', /no checks/i);
+});
+
 test('sortNeedsAttention puts active and lower uptime monitors first', () => {
   const monitors = [
     {

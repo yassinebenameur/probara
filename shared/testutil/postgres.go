@@ -102,6 +102,30 @@ func InsertGroupMonitor(ctx context.Context, t testing.TB, dbClient *shareddb.Cl
 	return id
 }
 
+// InsertAgentMonitor inserts an agent monitor with the given agent_id (the
+// OTLP/legacy push identity) and reporting interval.
+func InsertAgentMonitor(ctx context.Context, t testing.TB, dbClient *shareddb.Client, tenantID uuid.UUID, name, agentID string, intervalSeconds int) uuid.UUID {
+	t.Helper()
+
+	id := uuid.New()
+	if name == "" {
+		name = fmt.Sprintf("agent-%s", id.String())
+	}
+	if _, err := dbClient.ExecContext(ctx, `
+		INSERT INTO monitors (
+			id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
+			alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, 'agent',
+			jsonb_build_object('agent_id', $4::text, 'expected_interval_seconds', $5::int),
+			$5, $5, NULL, TRUE, ARRAY[]::text[], $4, NULL, NULL, NOW(), NOW()
+		)
+	`, id, tenantID, name, agentID, intervalSeconds); err != nil {
+		t.Fatalf("insert agent monitor: %v", err)
+	}
+	return id
+}
+
 func AddMonitorToGroup(ctx context.Context, t testing.TB, dbClient *shareddb.Client, monitorID, groupID uuid.UUID) {
 	t.Helper()
 

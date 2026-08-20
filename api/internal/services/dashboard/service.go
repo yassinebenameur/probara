@@ -381,7 +381,12 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		if err != nil {
 			return stats, fmt.Errorf("failed to query rollup-backed dashboard stats: %w", err)
 		}
-		stats.OverallUptime = analyticsResult.Summary.SLAPct
+		if analyticsResult.Summary.HasData {
+			// Interval-based availability when the timeline covers the
+			// window (S-U1); the sampled rate otherwise (S-U5).
+			sla := analyticsResult.Summary.AvailabilityPct
+			stats.OverallUptime = &sla
+		}
 		if analyticsResult.Summary.AvgLatencyMS != nil {
 			stats.AvgResponseMS = *analyticsResult.Summary.AvgLatencyMS
 		}
@@ -406,7 +411,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			  %s
 			GROUP BY cr.monitor_id
 		)
-		SELECT COALESCE(AVG((success_checks::float / NULLIF(total_checks, 0)) * 100.0), 0)
+		SELECT AVG((success_checks::float / NULLIF(total_checks, 0)) * 100.0)
 		FROM per_monitor
 		WHERE total_checks > 0
 	`
@@ -1665,11 +1670,9 @@ func formatTrendLabel(bucketStart time.Time, rangeValue models.DashboardRange) s
 
 // computeMonitorWeightedUptime returns the monitor-weighted mean uptime % over the
 // given totals: each monitor contributes one data point (its per-monitor success
-// rate); monitors with no data are skipped. Returns 0 on empty input.
-func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) float64 {
-	if len(totals) == 0 {
-		return 0
-	}
+// rate); monitors with no data are skipped. Returns nil when nothing was
+// checked — no data must not read as 0% (S-D1, docs/state-semantics.md).
+func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) *float64 {
 	sum := 0.0
 	n := 0
 	for _, t := range totals {
@@ -1680,9 +1683,10 @@ func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) 
 		n++
 	}
 	if n == 0 {
-		return 0
+		return nil
 	}
-	return sum / float64(n)
+	u := sum / float64(n)
+	return &u
 }
 
 // computeMonitorWeightedLatency returns the monitor-weighted mean success-latency

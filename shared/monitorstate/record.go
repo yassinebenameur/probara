@@ -29,6 +29,12 @@ type Result struct {
 	MetricsData          json.RawMessage
 	StartedAt            time.Time
 	CompletedAt          time.Time
+	// SyntheticAbsence marks watchdog-generated failure evidence for silent
+	// push/agent monitors. Its StartedAt is the SERVER clock, while real
+	// evidence for those types carries the reporter's clock — so it must
+	// neither advance the S-O2 evidence watermark nor be rejected by it
+	// (a lagging agent clock would otherwise be locked out after recovery).
+	SyntheticAbsence bool
 }
 
 // Record inserts a check result and advances the monitor's state machine in a
@@ -40,6 +46,14 @@ type Result struct {
 // The insert is idempotent on (job_id, result_source): a redelivered result
 // inserts nothing and returns a no-op transition with Duplicate=true, so
 // at-least-once NATS delivery can never double-advance the state machine.
+//
+// Two results are recorded as history without running the machine
+// (HistoryOnly=true):
+//   - a location-less result for a monitor that has selected locations — the
+//     quorum aggregate owns its state and a stale default-fleet job must not
+//     clobber it (S-E5, docs/state-semantics.md);
+//   - evidence older than the newest already applied on this stream — late
+//     redeliveries must never move state backwards (S-O2).
 func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -49,14 +63,40 @@ func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 
 	var snap Snapshot
 	var threshold int
+	var lastStarted sql.NullTime
 	err = tx.QueryRowContext(ctx, `
-		SELECT current_state, consecutive_failures, consecutive_failures_threshold
+		SELECT current_state, consecutive_failures, consecutive_failures_threshold, last_result_started_at
 		FROM monitors
 		WHERE id = $1
 		FOR UPDATE
-	`, r.MonitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &threshold)
+	`, r.MonitorID).Scan(&snap.State, &snap.ConsecutiveFailures, &threshold, &lastStarted)
 	if err != nil {
 		return Transition{}, fmt.Errorf("lock monitor state: %w", err)
+	}
+
+	historyOnly := Transition{
+		From:                snap.State,
+		To:                  snap.State,
+		ConsecutiveFailures: snap.ConsecutiveFailures,
+		HistoryOnly:         true,
+	}
+
+	// S-E5: the monitor lock serializes this check against SetLocations, so
+	// the answer cannot change under us.
+	var locationBound bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM monitor_locations WHERE monitor_id = $1)
+	`, r.MonitorID).Scan(&locationBound); err != nil {
+		return Transition{}, fmt.Errorf("check location binding: %w", err)
+	}
+	if locationBound {
+		if _, err := insertResult(ctx, tx, r); err != nil {
+			return Transition{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return Transition{}, fmt.Errorf("commit result transaction: %w", err)
+		}
+		return historyOnly, nil
 	}
 
 	inserted, err := insertResult(ctx, tx, r)
@@ -75,16 +115,32 @@ func Record(ctx context.Context, db *sql.DB, r Result) (Transition, error) {
 		}, nil
 	}
 
+	// S-O2 late-result guard (synthetic absence bypasses it: server clock,
+	// not comparable with the reporter's evidence clock).
+	if !r.SyntheticAbsence && lastStarted.Valid && r.StartedAt.Before(lastStarted.Time) {
+		if err := tx.Commit(); err != nil {
+			return Transition{}, fmt.Errorf("commit result transaction: %w", err)
+		}
+		return historyOnly, nil
+	}
+
 	transition := Apply(snap, IsFailureStatus(r.Status), threshold)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE monitors
 		SET current_state = $1,
 			consecutive_failures = $2,
 			last_state_change_at = CASE WHEN $3 THEN NOW() ELSE last_state_change_at END,
+			last_result_at = NOW(),
+			last_result_started_at = CASE WHEN $6 THEN last_result_started_at ELSE $5::timestamptz END,
 			updated_at = NOW()
 		WHERE id = $4
-	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, r.MonitorID); err != nil {
+	`, string(transition.To), transition.ConsecutiveFailures, transition.Changed, r.MonitorID, r.StartedAt, r.SyntheticAbsence); err != nil {
 		return Transition{}, fmt.Errorf("update monitor state: %w", err)
+	}
+	if transition.Changed {
+		if err := RecordIntervalTx(ctx, tx, r.TenantID, r.MonitorID, transition.To, IntervalReasonResult); err != nil {
+			return Transition{}, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

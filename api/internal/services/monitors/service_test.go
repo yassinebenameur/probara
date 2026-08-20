@@ -149,6 +149,10 @@ func (m *MockRepository) SetLocations(ctx context.Context, tenantID, monitorID u
 	return nil
 }
 
+func (m *MockRepository) SetEnabled(ctx context.Context, tenantID, monitorID uuid.UUID, enabled bool) error {
+	return nil
+}
+
 func (m *MockRepository) GetLocationIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
 	return make(map[uuid.UUID][]uuid.UUID), nil
 }
