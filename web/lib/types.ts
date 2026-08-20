@@ -421,6 +421,18 @@ export interface MongoDBMonitorConfig extends DBTLSMaterial {
   replica_set?: string;
   max_latency_ms?: number;
   warn_latency_ms?: number;
+  // Cluster checks (read-only admin commands; need MongoDB's built-in
+  // clusterMonitor role). Missing privileges never fail the check unless a
+  // hard threshold below depends on the data.
+  collect_replication?: boolean; // replSetGetStatus
+  collect_connections?: boolean; // serverStatus.connections
+  collect_cache?: boolean; // serverStatus.wiredTiger.cache
+  collect_memory?: boolean; // serverStatus.mem
+  collect_network?: boolean; // serverStatus.network + opcounters
+  // Max fails the check (and fails closed when lag can't be evaluated);
+  // warn only annotates. Both require collect_replication.
+  max_replication_lag_seconds?: number;
+  warn_replication_lag_seconds?: number;
 }
 
 export interface RabbitMQMonitorConfig extends DBTLSMaterial {
@@ -474,7 +486,49 @@ export interface DBMetrics {
   latency_warn_ms?: number;
 }
 
-export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "mongodb" | "rabbitmq" | "mysql", DBMetrics>>;
+export interface MongoDBReplicationMember {
+  name: string;
+  state: string; // PRIMARY/SECONDARY/ARBITER/...
+  health: boolean;
+  lag_seconds?: number;
+}
+
+export interface MongoDBReplicationMetrics {
+  set?: string;
+  primary?: string; // "" / absent = the set has no primary
+  members_total: number;
+  members_healthy: number;
+  max_lag_seconds?: number; // absent = no primary or no secondaries
+  members?: MongoDBReplicationMember[];
+}
+
+export interface MongoDBUnavailableCheck {
+  check: "server_status" | "repl_set_status";
+  reason: "unauthorized" | "not_replica_set" | "error";
+  message?: string;
+}
+
+// MongoDB cluster-check extras (clusterMonitor role), flat siblings of the
+// shared DBMetrics fields under metrics_data.mongodb.
+export interface MongoDBMetrics extends DBMetrics {
+  uptime_seconds?: number;
+  connections_available?: number;
+  mem_virtual_bytes?: number;
+  cache_used_bytes?: number;
+  cache_max_bytes?: number;
+  cache_dirty_bytes?: number;
+  network_bytes_in?: number; // cumulative since restart
+  network_bytes_out?: number; // cumulative since restart
+  network_requests?: number;
+  opcounters?: Record<string, number>;
+  replication?: MongoDBReplicationMetrics;
+  replication_lag_warn_seconds?: number;
+  unavailable?: MongoDBUnavailableCheck[];
+}
+
+export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "rabbitmq" | "mysql", DBMetrics>> & {
+  mongodb?: MongoDBMetrics;
+};
 
 export type SyntheticFailureMode = "fail_fast" | "continue";
 

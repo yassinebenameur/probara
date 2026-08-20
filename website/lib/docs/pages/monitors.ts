@@ -114,7 +114,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
             ["`mysql`", "MySQL connect and optional query assertion", "Yes"],
-            ["`mongodb`", "MongoDB connectivity and optional topology constraint", "Yes"],
+            ["`mongodb`", "MongoDB connectivity, optional topology constraint, and optional clusterMonitor cluster checks", "Yes"],
             ["`rabbitmq`", "AMQP handshake, authentication, and virtual-host access", "Yes"],
             ["`synthetic_api`", "A sequence of templated HTTP API steps", "Yes"],
             ["`synthetic_browser`", "A Chromium browser journey", "Yes"],
@@ -365,7 +365,7 @@ export const MONITORS_PAGE: DocPage = {
             [
               "`mongodb`",
               "`mongodb://` / `mongodb+srv://` URI or `host`, `port` (27017), paired username/password, `auth_source`, TLS",
-              "Optional `replica_set` topology and reachable-primary requirement",
+              "Optional `replica_set` topology and reachable-primary requirement; optional cluster checks via `collect_replication`, `collect_connections`, `collect_cache`, `collect_memory`, `collect_network`",
             ],
             [
               "`rabbitmq`",
@@ -383,6 +383,18 @@ export const MONITORS_PAGE: DocPage = {
           type: "paragraph",
           text:
             "These monitors share optional `max_latency_ms` and `warn_latency_ms`. The maximum is a hard failure; the warning threshold annotates metrics without changing a successful check to failure.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "MongoDB monitors can additionally enable per-feature cluster checks, each an individually toggleable read-only admin command: `collect_replication` runs `replSetGetStatus` (member states, health, and replication lag), while `collect_connections`, `collect_cache`, `collect_memory`, and `collect_network` read their sections from a single `serverStatus` call (connections, WiredTiger cache, resident/virtual memory, network I/O and opcounters). Both commands are covered by MongoDB's built-in `clusterMonitor` role — no `clusterAdmin`, `root`, or write privileges. When the monitoring user lacks the role, the affected data is skipped and flagged in the check's metrics (`unavailable`) without failing the check; on a standalone server the replication check reports \"not a replica set\". Replication lag supports the same warn/max split as latency: `warn_replication_lag_seconds` annotates, `max_replication_lag_seconds` fails the check and flows through normal availability alerting — and it fails closed, so if replication status becomes unreadable (role revoked, command timeout, standalone target, no primary) the check fails rather than silently passing.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Granting clusterMonitor",
+          text:
+            "`db.grantRolesToUser(\"monitoring\", [{ role: \"clusterMonitor\", db: \"admin\" }])` is the only grant the cluster checks need. Without it the basic connect/ping/latency monitoring keeps working unchanged.",
         },
         {
           type: "table",

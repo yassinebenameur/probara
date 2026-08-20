@@ -116,7 +116,7 @@ func (c *MongoDBChecker) Check(ctx context.Context, configRaw json.RawMessage, t
 	// Best-effort enrichment for the detail panel: hello (role, set name) and
 	// buildInfo (version) are cheap and need no special privileges; users
 	// restricted from them still get a working ping monitor.
-	metrics := &dbMetrics{}
+	metrics := &mongoMetrics{}
 	var hello struct {
 		IsWritablePrimary bool   `bson:"isWritablePrimary"`
 		SetName           string `bson:"setName"`
@@ -137,7 +137,29 @@ func (c *MongoDBChecker) Check(ctx context.Context, configRaw json.RawMessage, t
 	if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Decode(&buildInfo); err == nil {
 		metrics.ServerVersion = buildInfo.Version
 	}
+	// Latency is the connect+ping round trip, captured before any cluster
+	// command runs — enabling cluster checks must not trip latency thresholds.
 	latencyMs := time.Since(startTime).Milliseconds()
 
-	return dbLatencyResult("mongodb", latencyMs, config.MaxLatencyMs, config.WarnLatencyMs, metrics)
+	// Optional cluster checks (clusterMonitor role). A failed command becomes
+	// an `unavailable` annotation, never a DOWN — unless a configured hard
+	// assertion depends on it (mongoFinishResult fails closed then).
+	if config.CollectConnections || config.CollectCache || config.CollectMemory || config.CollectNetwork {
+		var status mongoServerStatusDoc
+		if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Decode(&status); err != nil {
+			metrics.Unavailable = append(metrics.Unavailable, mongoCmdUnavailable("server_status", err))
+		} else {
+			applyMongoServerStatus(metrics, status, config)
+		}
+	}
+	if config.CollectReplication {
+		var replStatus mongoReplSetStatusDoc
+		if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "replSetGetStatus", Value: 1}}).Decode(&replStatus); err != nil {
+			metrics.Unavailable = append(metrics.Unavailable, mongoCmdUnavailable("repl_set_status", err))
+		} else {
+			metrics.Replication = buildMongoReplicationMetrics(replStatus)
+		}
+	}
+
+	return mongoFinishResult(config, metrics, latencyMs)
 }

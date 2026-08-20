@@ -18,6 +18,7 @@ import {
   MongoDBMonitorConfig,
   RabbitMQMonitorConfig,
   DBMetrics,
+  MongoDBMetrics,
   DBMetricsEnvelope,
 } from '@/lib/types';
 import { getMonitorResults, getSyntheticBrowserScreenshotUrl } from '@/lib/api';
@@ -574,6 +575,40 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
                         </span>
                       </li>
                     ) : null}
+                    {monitor.type === 'mongodb' && (() => {
+                      const mongo = latestDBMetrics as MongoDBMetrics | null;
+                      if (!mongo) return null;
+                      const repl = mongo.replication;
+                      return (
+                        <>
+                          {repl && (
+                            <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
+                              <span className="text-muted">Replication</span>
+                              <span className="truncate text-right text-[#e5e7eb]">
+                                {repl.members_healthy}/{repl.members_total} healthy
+                                {repl.max_lag_seconds != null ? ` · lag ${repl.max_lag_seconds}s` : ''}
+                              </span>
+                            </li>
+                          )}
+                          {mongo.replication_lag_warn_seconds != null && (
+                            <li className="flex justify-between gap-2 rounded-[10px] border border-amber-500/30 bg-amber-500/[0.07] px-2 py-1.5">
+                              <span className="text-amber-400">Warning</span>
+                              <span className="text-amber-300">
+                                replication lag over {mongo.replication_lag_warn_seconds}s warn threshold
+                              </span>
+                            </li>
+                          )}
+                          {mongo.unavailable?.some((u) => u.reason === 'unauthorized') && (
+                            <li className="flex justify-between gap-2 rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
+                              <span className="text-muted">Note</span>
+                              <span className="truncate text-right text-slate-400">
+                                Cluster checks skipped — grant clusterMonitor
+                              </span>
+                            </li>
+                          )}
+                        </>
+                      );
+                    })()}
                   </>
                 );
               })()}

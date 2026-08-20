@@ -247,6 +247,21 @@ type MongoDBMonitorConfig struct {
 	ReplicaSet    string `json:"replica_set,omitempty"`
 	MaxLatencyMs  *int64 `json:"max_latency_ms,omitempty"`
 	WarnLatencyMs *int64 `json:"warn_latency_ms,omitempty"`
+	// Cluster checks: each optional group runs a read-only admin command
+	// that MongoDB's built-in clusterMonitor role can execute (serverStatus /
+	// replSetGetStatus). Missing privileges never fail the check — the group
+	// is skipped and flagged in metrics_data instead. All default off.
+	CollectReplication bool `json:"collect_replication,omitempty"` // replSetGetStatus
+	CollectConnections bool `json:"collect_connections,omitempty"` // serverStatus.connections
+	CollectCache       bool `json:"collect_cache,omitempty"`       // serverStatus.wiredTiger.cache
+	CollectMemory      bool `json:"collect_memory,omitempty"`      // serverStatus.mem
+	CollectNetwork     bool `json:"collect_network,omitempty"`     // serverStatus.network + opcounters
+	// Replication-lag thresholds (seconds), mirroring max/warn latency
+	// semantics: max fails the check (and fails CLOSED when lag cannot be
+	// evaluated — unauthorized, standalone, no primary), warn only annotates.
+	// Both require collect_replication.
+	MaxReplicationLagSeconds  *int64 `json:"max_replication_lag_seconds,omitempty"`
+	WarnReplicationLagSeconds *int64 `json:"warn_replication_lag_seconds,omitempty"`
 }
 
 // MySQLMonitorConfig represents configuration for MySQL/MariaDB monitors.

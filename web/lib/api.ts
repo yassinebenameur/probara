@@ -10,6 +10,7 @@ import type {
   CreateMonitorRequest,
   UpdateMonitorRequest,
   MonitorListResponse,
+  DBMetricsEnvelope,
   Alert,
   AlertListResponse,
   AlertChannel,
@@ -334,6 +335,9 @@ export interface TestMonitorConfigResponse {
   status: 'success' | 'failure' | 'error';
   latency_ms?: number;
   error_message?: string;
+  // Structured extras from the checker, same envelope as check results
+  // (e.g. metrics_data.mongodb.unavailable for skipped cluster checks).
+  metrics_data?: DBMetricsEnvelope;
 }
 
 // Runs one ephemeral check on a worker so a config can be validated before

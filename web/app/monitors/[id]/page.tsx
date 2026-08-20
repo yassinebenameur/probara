@@ -4,7 +4,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { Clock, Settings as SettingsIcon, Trash2 } from 'lucide-react';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
@@ -21,6 +21,7 @@ import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { getEffectiveMonitorStatus, monitorTargetLabel, MonitorDisplayStatus } from '@/lib/monitor-utils';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
+import { formatBytes } from '@/lib/metrics';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
 
@@ -781,6 +782,59 @@ export default function EditMonitorPage() {
                   ]
                     .filter(Boolean)
                     .join(' · ');
+                  const mongo = monitor.type === 'mongodb' ? (dbMetrics as MongoDBMetrics) : null;
+                  const repl = mongo?.replication;
+                  const mongoRows = mongo
+                    ? [
+                        mongo.connected_clients != null && mongo.connections_available != null
+                          ? { label: 'Connections', value: `${mongo.connected_clients} current · ${mongo.connections_available} available` }
+                          : null,
+                        mongo.used_memory_bytes != null || mongo.mem_virtual_bytes != null
+                          ? {
+                              label: 'Memory',
+                              value: [
+                                mongo.used_memory_bytes != null ? `${formatBytes(mongo.used_memory_bytes)} resident` : '',
+                                mongo.mem_virtual_bytes != null ? `${formatBytes(mongo.mem_virtual_bytes)} virtual` : '',
+                              ].filter(Boolean).join(' · '),
+                            }
+                          : null,
+                        mongo.cache_used_bytes != null && mongo.cache_max_bytes != null
+                          ? {
+                              label: 'Cache',
+                              value: `${formatBytes(mongo.cache_used_bytes)} / ${formatBytes(mongo.cache_max_bytes)}${
+                                mongo.cache_dirty_bytes != null ? ` · ${formatBytes(mongo.cache_dirty_bytes)} dirty` : ''
+                              }`,
+                            }
+                          : null,
+                        mongo.network_bytes_in != null && mongo.network_bytes_out != null
+                          ? { label: 'Network', value: `${formatBytes(mongo.network_bytes_in)} in · ${formatBytes(mongo.network_bytes_out)} out` }
+                          : null,
+                        repl
+                          ? {
+                              label: 'Replication',
+                              value: `${repl.members_healthy}/${repl.members_total} healthy${
+                                repl.max_lag_seconds != null ? ` · lag ${repl.max_lag_seconds}s` : ''
+                              }${repl.primary ? ` · primary ${repl.primary}` : ''}`,
+                            }
+                          : null,
+                      ].filter((row): row is { label: string; value: string } => row !== null)
+                    : [];
+                  const mongoWarnings = mongo
+                    ? [
+                        mongo.replication_lag_warn_seconds != null
+                          ? `replication lag over ${mongo.replication_lag_warn_seconds}s threshold`
+                          : null,
+                        repl && !repl.primary ? 'replica set has no primary' : null,
+                        repl && repl.members_healthy < repl.members_total ? 'unhealthy replica set member(s)' : null,
+                      ].filter((w): w is string => w !== null)
+                    : [];
+                  const mongoHints = (mongo?.unavailable ?? []).map((u) =>
+                    u.reason === 'unauthorized'
+                      ? 'Cluster checks skipped — grant clusterMonitor'
+                      : u.reason === 'not_replica_set'
+                        ? 'Replication: not a replica set'
+                        : 'Cluster checks temporarily unavailable'
+                  );
                   return (
                     <>
                       {server && (
@@ -789,6 +843,12 @@ export default function EditMonitorPage() {
                           <span className="truncate text-right text-slate-300">{server}</span>
                         </div>
                       )}
+                      {mongoRows.map((row) => (
+                        <div key={row.label} className="flex justify-between">
+                          <span className="text-slate-500">{row.label}</span>
+                          <span className="truncate text-right text-slate-300">{row.value}</span>
+                        </div>
+                      ))}
                       {dbMetrics.latency_warn_ms ? (
                         <div className="flex justify-between">
                           <span className="text-amber-400">Warning</span>
@@ -797,6 +857,18 @@ export default function EditMonitorPage() {
                           </span>
                         </div>
                       ) : null}
+                      {mongoWarnings.map((warning) => (
+                        <div key={warning} className="flex justify-between">
+                          <span className="text-amber-400">Warning</span>
+                          <span className="text-right text-amber-300">{warning}</span>
+                        </div>
+                      ))}
+                      {mongoHints.map((hint) => (
+                        <div key={hint} className="flex justify-between gap-2">
+                          <span className="shrink-0 text-slate-500">Note</span>
+                          <span className="text-right text-slate-400">{hint}</span>
+                        </div>
+                      ))}
                     </>
                   );
                 })()}

@@ -19,6 +19,7 @@ import {
 } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
 import {
+  Activity,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -308,6 +309,17 @@ export default function DatabaseForm({
     expected_role: existingConfig.expected_role || ('' as '' | 'master' | 'replica'),
     max_latency_ms: existingConfig.max_latency_ms ? String(existingConfig.max_latency_ms) : '',
     warn_latency_ms: existingConfig.warn_latency_ms ? String(existingConfig.warn_latency_ms) : '',
+    collect_replication: existingConfig.collect_replication ?? false,
+    collect_connections: existingConfig.collect_connections ?? false,
+    collect_cache: existingConfig.collect_cache ?? false,
+    collect_memory: existingConfig.collect_memory ?? false,
+    collect_network: existingConfig.collect_network ?? false,
+    max_replication_lag_seconds: existingConfig.max_replication_lag_seconds
+      ? String(existingConfig.max_replication_lag_seconds)
+      : '',
+    warn_replication_lag_seconds: existingConfig.warn_replication_lag_seconds
+      ? String(existingConfig.warn_replication_lag_seconds)
+      : '',
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
     timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
@@ -330,6 +342,14 @@ export default function DatabaseForm({
   const [certsOpen, setCertsOpen] = useState(
     Boolean(formData.tls_ca_pem || formData.tls_client_cert_pem || storedClientKey)
   );
+  const clusterChecksEnabled = [
+    formData.collect_replication,
+    formData.collect_connections,
+    formData.collect_cache,
+    formData.collect_memory,
+    formData.collect_network,
+  ].filter(Boolean).length;
+  const [clusterChecksOpen, setClusterChecksOpen] = useState(clusterChecksEnabled > 0);
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
   // List shared by the Locations section (via onLocationsLoaded) so the
   // test-from picker can resolve location names.
@@ -404,6 +424,23 @@ export default function DatabaseForm({
     if (maxLatency && warnLatency && warnLatency >= maxLatency) {
       newErrors.warn_latency_ms = 'Must be lower than max latency';
     }
+    if (type === 'mongodb' && formData.collect_replication) {
+      const maxLag = formData.max_replication_lag_seconds.trim()
+        ? parseInt(formData.max_replication_lag_seconds, 10)
+        : undefined;
+      const warnLag = formData.warn_replication_lag_seconds.trim()
+        ? parseInt(formData.warn_replication_lag_seconds, 10)
+        : undefined;
+      if (formData.max_replication_lag_seconds.trim() && (!Number.isFinite(maxLag) || (maxLag as number) <= 0)) {
+        newErrors.max_replication_lag_seconds = 'Must be a positive number of seconds';
+      }
+      if (formData.warn_replication_lag_seconds.trim() && (!Number.isFinite(warnLag) || (warnLag as number) <= 0)) {
+        newErrors.warn_replication_lag_seconds = 'Must be a positive number of seconds';
+      }
+      if (maxLag && warnLag && warnLag >= maxLag) {
+        newErrors.warn_replication_lag_seconds = 'Must be lower than max replication lag';
+      }
+    }
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
@@ -453,6 +490,24 @@ export default function DatabaseForm({
     }
 
     if (type === 'redis' && formData.expected_role) config.expected_role = formData.expected_role;
+    if (type === 'mongodb') {
+      // Cluster checks apply in both connection modes — post-connect commands.
+      if (formData.collect_replication) config.collect_replication = true;
+      if (formData.collect_connections) config.collect_connections = true;
+      if (formData.collect_cache) config.collect_cache = true;
+      if (formData.collect_memory) config.collect_memory = true;
+      if (formData.collect_network) config.collect_network = true;
+      if (formData.collect_replication) {
+        const maxLag = formData.max_replication_lag_seconds.trim()
+          ? parseInt(formData.max_replication_lag_seconds, 10)
+          : undefined;
+        const warnLag = formData.warn_replication_lag_seconds.trim()
+          ? parseInt(formData.warn_replication_lag_seconds, 10)
+          : undefined;
+        if (maxLag) config.max_replication_lag_seconds = maxLag;
+        if (warnLag) config.warn_replication_lag_seconds = warnLag;
+      }
+    }
     if (QUERY_CAPABLE_TYPES.includes(type) && formData.query.trim()) {
       config.query = formData.query.trim();
       if (formData.query_value_op) {
@@ -892,6 +947,13 @@ export default function DatabaseForm({
               Connected{typeof test.result.latency_ms === 'number' ? ` in ${test.result.latency_ms}ms` : ''}
             </p>
           )}
+          {test.phase === 'done' &&
+            test.result.status === 'success' &&
+            test.result.metrics_data?.mongodb?.unavailable?.some((u) => u.reason === 'unauthorized') && (
+              <p className="text-xs text-amber-400">
+                Cluster checks skipped — grant the monitoring user the clusterMonitor role
+              </p>
+            )}
           {test.phase === 'done' && test.result.status !== 'success' && (
             <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-400">
               <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
@@ -968,6 +1030,115 @@ export default function DatabaseForm({
               <option value="replica">Replica</option>
             </select>
           </FormField>
+        )}
+        {type === 'mongodb' && (
+          <div className="rounded-lg border border-white/[0.06] bg-slate-900/40">
+            <button
+              type="button"
+              onClick={() => setClusterChecksOpen(!clusterChecksOpen)}
+              className="flex w-full items-center justify-between px-4 py-3 text-left"
+              aria-expanded={clusterChecksOpen}
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-white">
+                <Activity className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
+                Cluster checks
+                <span className="text-xs font-normal text-slate-500">serverStatus / replSetGetStatus</span>
+                <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+                  requires clusterMonitor
+                </span>
+                {clusterChecksEnabled > 0 && (
+                  <span className="rounded-md bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-400">
+                    {clusterChecksEnabled} enabled
+                  </span>
+                )}
+              </span>
+              {clusterChecksOpen ? (
+                <ChevronDown className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+              )}
+            </button>
+            {clusterChecksOpen && (
+              <div className="space-y-2 border-t border-white/[0.06] px-4 py-4">
+                <p className="text-xs text-slate-500">
+                  These read-only admin commands need MongoDB&apos;s built-in <code className="text-slate-400">clusterMonitor</code> role
+                  — no write or admin privileges. If the monitoring user lacks it, the data is skipped and flagged on the
+                  monitor; the check never fails because of missing permissions (only a max-lag threshold below turns
+                  missing data into a failure).
+                </p>
+                <ToggleRow
+                  title="Replication status"
+                  description="Member health, states, and replication lag via replSetGetStatus (replica sets only)"
+                  checked={formData.collect_replication}
+                  onChange={(v) =>
+                    setFormData({
+                      ...formData,
+                      collect_replication: v,
+                      // Lag thresholds are meaningless without the check.
+                      max_replication_lag_seconds: v ? formData.max_replication_lag_seconds : '',
+                      warn_replication_lag_seconds: v ? formData.warn_replication_lag_seconds : '',
+                    })
+                  }
+                />
+                <ToggleRow
+                  title="Connections"
+                  description="Current and available connections via serverStatus"
+                  checked={formData.collect_connections}
+                  onChange={(v) => setFormData({ ...formData, collect_connections: v })}
+                />
+                <ToggleRow
+                  title="WiredTiger cache"
+                  description="Cache used, configured max, and dirty bytes via serverStatus"
+                  checked={formData.collect_cache}
+                  onChange={(v) => setFormData({ ...formData, collect_cache: v })}
+                />
+                <ToggleRow
+                  title="Memory"
+                  description="Resident and virtual memory via serverStatus"
+                  checked={formData.collect_memory}
+                  onChange={(v) => setFormData({ ...formData, collect_memory: v })}
+                />
+                <ToggleRow
+                  title="Network & operations"
+                  description="Network I/O and operation counters via serverStatus"
+                  checked={formData.collect_network}
+                  onChange={(v) => setFormData({ ...formData, collect_network: v })}
+                />
+                {formData.collect_replication && (
+                  <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
+                    <FormField
+                      label="Warn replication lag (s, optional)"
+                      error={errors.warn_replication_lag_seconds}
+                      description="Flag the check with a warning above this — without failing it"
+                    >
+                      <input
+                        type="number"
+                        value={formData.warn_replication_lag_seconds}
+                        onChange={(e) => setFormData({ ...formData, warn_replication_lag_seconds: e.target.value })}
+                        min={1}
+                        placeholder="e.g. 10"
+                        className="input"
+                      />
+                    </FormField>
+                    <FormField
+                      label="Max replication lag (s, optional)"
+                      error={errors.max_replication_lag_seconds}
+                      description="Fails the check when lag exceeds this — or when replication status can't be read (missing role, standalone, no primary) — and triggers availability alerts"
+                    >
+                      <input
+                        type="number"
+                        value={formData.max_replication_lag_seconds}
+                        onChange={(e) => setFormData({ ...formData, max_replication_lag_seconds: e.target.value })}
+                        min={1}
+                        placeholder="e.g. 30"
+                        className="input"
+                      />
+                    </FormField>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField
