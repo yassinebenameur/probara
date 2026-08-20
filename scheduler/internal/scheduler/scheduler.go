@@ -94,11 +94,11 @@ type Scheduler struct {
 	monitorsInBatch   *prometheus.HistogramVec
 	retentionRuns     *prometheus.CounterVec
 	retentionRows     *prometheus.CounterVec
-	rollupRuns     *prometheus.CounterVec
-	rollupRows     *prometheus.CounterVec
-	rollupErrors   *prometheus.CounterVec
-	rollupDuration *prometheus.HistogramVec
-	rollupCursor   *prometheus.GaugeVec
+	rollupRuns        *prometheus.CounterVec
+	rollupRows        *prometheus.CounterVec
+	rollupErrors      *prometheus.CounterVec
+	rollupDuration    *prometheus.HistogramVec
+	rollupCursor      *prometheus.GaugeVec
 
 	meshEdgesScheduled *prometheus.CounterVec
 	meshPublishErrors  *prometheus.CounterVec

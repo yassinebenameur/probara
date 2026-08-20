@@ -16,8 +16,8 @@ import (
 	"github.com/yassinebenameur/probara/shared/config"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
-	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 

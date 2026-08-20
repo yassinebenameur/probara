@@ -1991,11 +1991,11 @@ func (s *Service) GetLatestAgentMetrics(ctx context.Context, monitorID, tenantID
 
 	metrics := &AgentMetricsData{}
 	var (
-		memUsed, memTotal  float64 // bytes, from system.memory.usage per state
-		memUtil            float64 // ratio 0-1, from system.memory.utilization{state=used}
-		memUtilSeen        bool
+		memUsed, memTotal   float64 // bytes, from system.memory.usage per state
+		memUtil             float64 // ratio 0-1, from system.memory.utilization{state=used}
+		memUtilSeen         bool
 		diskUsed, diskTotal float64 // bytes, system.filesystem.usage summed across mountpoints
-		netIn, netOut      float64 // cumulative counter bytes summed across devices
+		netIn, netOut       float64 // cumulative counter bytes summed across devices
 	)
 
 	for _, smp := range samples {

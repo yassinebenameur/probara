@@ -13,17 +13,24 @@ OCB_VERSION=${OCB_VERSION:-"v0.159.0"}
 BUILD_DIR=${BUILD_DIR:-"./static/collector"}
 DIST_DIR="collector/dist"
 
+# Resolve BUILD_DIR to an absolute path: the go builds below run from inside
+# DIST_DIR, and a relative-vs-absolute BUILD_DIR must not change where the
+# binaries land (the api Dockerfile passes /app/static/collector; prefixing
+# that with ../../ silently wrote into /build/app/... and shipped an empty
+# static/ directory).
+mkdir -p "${BUILD_DIR}"
+BUILD_DIR="$(cd "${BUILD_DIR}" && pwd)"
+
 echo "Generating probara-collector sources (OCB ${OCB_VERSION})..."
 (cd collector && go run go.opentelemetry.io/collector/cmd/builder@${OCB_VERSION} --config manifest.yaml --skip-compilation)
 
-mkdir -p "${BUILD_DIR}"
 rm -f "${BUILD_DIR}"/probara-collector-* "${BUILD_DIR}/checksums.txt"
 
 build() {
   local goos=$1 goarch=$2 suffix=$3
   echo "Building for ${goos} ${goarch}..."
   (cd "${DIST_DIR}" && CGO_ENABLED=0 GOOS=${goos} GOARCH=${goarch} \
-    go build -ldflags="-s -w" -o "../../${BUILD_DIR}/probara-collector-${goos}-${goarch}${suffix}" .)
+    go build -ldflags="-s -w" -o "${BUILD_DIR}/probara-collector-${goos}-${goarch}${suffix}" .)
 }
 
 build linux amd64 ""

@@ -54,10 +54,10 @@ type mongoUnavailableCheck struct {
 }
 
 type mongoReplicationMetrics struct {
-	Set            string                   `json:"set,omitempty"`
-	Primary        string                   `json:"primary,omitempty"` // host:port; "" when the set has no primary
-	MembersTotal   int                      `json:"members_total"`
-	MembersHealthy int                      `json:"members_healthy"`
+	Set            string `json:"set,omitempty"`
+	Primary        string `json:"primary,omitempty"` // host:port; "" when the set has no primary
+	MembersTotal   int    `json:"members_total"`
+	MembersHealthy int    `json:"members_healthy"`
 	// MaxLagSeconds is nil when lag is undefined: no primary, or no
 	// secondaries to lag behind it.
 	MaxLagSeconds *int64                   `json:"max_lag_seconds,omitempty"`
