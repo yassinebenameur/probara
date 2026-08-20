@@ -97,6 +97,29 @@ its uptime computed over only the checked half. Consequences:
   zero checks, and empty analytics summaries reading 0% (a red "SLA Breach")
   — is retired. Group uptime is now the mean over members *with* data.
 
+## Rollup dirty-bucket ledger
+
+Every monitor-source `check_results` insert marks its `(monitor_id,
+bucket_hour)` in `rollup_dirty` **in the same transaction**
+(`shared/monitorstate/record.go`, migration 000083), and rollup maintenance
+(`scheduler/internal/scheduler/rollups_dirty.go`) consumes the ledger by
+rebuilding each marked hourly bucket **wholesale** from raw rows (REPLACE
+semantics, the same math as `scripts/backfill_hourly_rollups.sql`), then
+re-deriving the affected daily buckets from the hourly table. Whenever a row
+commits — late, redelivered, behind any clock — its bucket is marked, which
+is exact by construction: the retired incremental cursor scanned worker-clock
+`created_at` and permanently skipped late-visible rows (the ~0.1–0.6%
+undercount), and its poison-skip replay path could drop rows outright. A
+failed batch now simply leaves its marks for the next run. `rollup_job_state`
+survives as a **completeness watermark** for the 24h stitchers: it advances
+to the newest monitor-source row only after a run that drains the ledger (see
+the updated contract in `shared/analytics/rollup_cursor.go`). Downtime tables
+are now a projection of `monitor_state_intervals` (closed `down` intervals →
+periods, open `down` interval → `monitor_downtime_open`); pre-timeline
+downtime rows are preserved, and group monitors (no timeline yet) keep their
+frozen rows until their state derivation is unified. The backfill script
+remains the repair tool for pre-ledger history.
+
 ## Rollup-era failure vs error split
 
 `error_checks` columns were added to both rollup tables in migration

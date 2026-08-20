@@ -191,5 +191,28 @@ func insertResult(ctx context.Context, db execer, r Result) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("insert check result rows affected: %w", err)
 	}
-	return rows > 0, nil
+	inserted := rows > 0
+
+	// Mark the row's rollup bucket dirty in the same transaction: whenever
+	// this insert commits — late, redelivered, behind any clock — its bucket
+	// is marked, so rollup maintenance can never permanently skip it (the
+	// retired-cursor bug). Buckets key on created_at (= StartedAt above), the
+	// same clock the rollup tables aggregate by. Platform rows are excluded
+	// from rollups and are not marked.
+	// DO UPDATE (not DO NOTHING): re-marking refreshes marked_at with the
+	// wall clock, so a consumer that read the mark before this insert
+	// committed sees a newer timestamp and leaves the mark in place — the
+	// bucket is rebuilt again next run with this row included. Without the
+	// refresh, the consumer's conditional delete would consume the mark
+	// while its rebuild snapshot predates this row, losing it permanently.
+	if inserted && r.ResultSource == "monitor" {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO rollup_dirty (monitor_id, bucket_hour)
+			VALUES ($1, date_trunc('hour', $2::timestamptz))
+			ON CONFLICT (monitor_id, bucket_hour) DO UPDATE SET marked_at = clock_timestamp()
+		`, r.MonitorID, r.StartedAt); err != nil {
+			return false, fmt.Errorf("mark rollup bucket dirty: %w", err)
+		}
+	}
+	return inserted, nil
 }

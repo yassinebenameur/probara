@@ -220,8 +220,8 @@ make healthcheck`,
             ],
             [
               'Retention and rollups',
-              '`retention_cleanup_runs_total`, `retention_cleanup_rows_total`, `rollup_runs_total`, `rollup_rows_total`, `rollup_errors_total`, `rollup_rows_skipped_total`, `rollup_duration_seconds`, `rollup_cursor_unix`',
-              'Stale cursor, error growth, poison-row skips, or runs exceeding the maintenance window.',
+              '`retention_cleanup_runs_total`, `retention_cleanup_rows_total`, `rollup_runs_total`, `rollup_rows_total`, `rollup_errors_total`, `rollup_duration_seconds`, `rollup_cursor_unix`',
+              'Stale completeness watermark, error growth, or runs exceeding the maintenance window.',
             ],
             [
               'Monitor purge',
@@ -393,7 +393,7 @@ make db-restore`,
             {
               term: 'Rollups',
               description:
-                'Scheduler maintenance processes result history into aggregate data and tracks a cursor; poisoned rows may be skipped and counted.',
+                'Result ingestion marks each affected hour in a dirty-bucket ledger within the same transaction, and scheduler maintenance rebuilds marked buckets wholesale from raw results — late or redelivered rows can never be permanently skipped. A failed batch leaves its marks for the next run.',
             },
           ],
         },

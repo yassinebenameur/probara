@@ -94,24 +94,18 @@ type Scheduler struct {
 	monitorsInBatch   *prometheus.HistogramVec
 	retentionRuns     *prometheus.CounterVec
 	retentionRows     *prometheus.CounterVec
-	rollupRuns        *prometheus.CounterVec
-	rollupRows        *prometheus.CounterVec
-	rollupErrors      *prometheus.CounterVec
-	rollupRowsSkipped *prometheus.CounterVec
-	rollupDuration    *prometheus.HistogramVec
-	rollupCursor      *prometheus.GaugeVec
+	rollupRuns     *prometheus.CounterVec
+	rollupRows     *prometheus.CounterVec
+	rollupErrors   *prometheus.CounterVec
+	rollupDuration *prometheus.HistogramVec
+	rollupCursor   *prometheus.GaugeVec
 
 	meshEdgesScheduled *prometheus.CounterVec
 	meshPublishErrors  *prometheus.CounterVec
 
-	// applyRow applies one check result to the rollup tables inside the given
-	// transaction. It defaults to applyRollupRow and exists as a seam so tests
-	// can inject per-row failures.
-	applyRow func(ctx context.Context, tx *sql.Tx, row rollupCheckResult) error
-
 	// publish sends one job to the queue. It defaults to the NATS-backed
-	// implementation and exists as a seam (same pattern as applyRow) so tests
-	// can capture published jobs without a broker.
+	// implementation and exists as a seam so tests can capture published jobs
+	// without a broker.
 	publish func(ctx context.Context, subject string, job *models.Job) error
 
 	purger *purger
@@ -201,11 +195,6 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Total number of rollup maintenance failures",
 		[]string{},
 	)
-	s.rollupRowsSkipped = metricsRegistry.NewCounter(
-		"rollup_rows_skipped_total",
-		"Total number of poisoned check result rows skipped by rollup maintenance",
-		[]string{},
-	)
 	s.rollupDuration = metricsRegistry.NewHistogram(
 		"rollup_duration_seconds",
 		"Duration of rollup maintenance runs",
@@ -217,7 +206,6 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 		"Unix timestamp of the latest processed check result cursor",
 		[]string{},
 	)
-	s.applyRow = applyRollupRow
 	s.publish = func(ctx context.Context, subject string, job *models.Job) error {
 		return s.queue.PublishJSON(ctx, subject, job, nil)
 	}

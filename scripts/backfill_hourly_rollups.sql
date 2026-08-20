@@ -7,9 +7,10 @@
 --   1. Repair gaps left by the original 48h-only hourly backfill shipped in
 --      migration 000041_create_monitor_hourly_rollups (hours older than 48h at
 --      migration time were never aggregated into monitor_hourly_rollups).
---   2. Recover check_results rows skipped by the rollup job's poisoned-row
---      handling (scheduler logs "Skipping poisoned rollup row" and increments
---      rollup_rows_skipped_total; the raw row stays in check_results).
+--   2. Repair history from before the dirty-bucket ledger (migration 000083):
+--      the retired incremental cursor could permanently skip late-visible
+--      rows and its poisoned-row handling could drop rows outright. Buckets
+--      written since the ledger landed are exact and need no repair.
 --
 -- USAGE
 --   psql "$DATABASE_URL" \
