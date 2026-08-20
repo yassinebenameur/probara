@@ -897,13 +897,77 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 		limit = problemMonitorLimit
 	}
 
-	if isDashboardRollupRange(dashboardRange) {
-		return s.getProblemMonitorsLongRange(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	var monitors []models.DashboardProblemMonitor
+	var err error
+	switch {
+	case isDashboardRollupRange(dashboardRange):
+		monitors, err = s.getProblemMonitorsLongRange(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	case dashboardRange == models.DashboardRange24h:
+		monitors, err = s.getProblemMonitors24h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	default:
+		monitors, err = s.getProblemMonitors1h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
 	}
-	if dashboardRange == models.DashboardRange24h {
-		return s.getProblemMonitors24h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	if err != nil {
+		return nil, err
 	}
-	return s.getProblemMonitors1h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+
+	// Rollups carry no error messages, so the latest failure reason is fetched
+	// from raw check_results in one batched probe over the <= limit winners,
+	// keeping the three range variants untouched.
+	if err := s.attachLatestProblemErrors(ctx, tenantID, rangeStart, rangeEndExclusive, monitors); err != nil {
+		return nil, err
+	}
+	return monitors, nil
+}
+
+// attachLatestProblemErrors populates LatestErrorMessage on each problem
+// monitor from its most recent failing check inside the range. Monitors whose
+// failures only exist in rollups (raw rows already purged) keep a nil message.
+func (s *Service) attachLatestProblemErrors(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, monitors []models.DashboardProblemMonitor) error {
+	if len(monitors) == 0 {
+		return nil
+	}
+	monitorIDs := make([]uuid.UUID, 0, len(monitors))
+	for _, m := range monitors {
+		monitorIDs = append(monitorIDs, m.MonitorID)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (cr.monitor_id) cr.monitor_id, cr.error_message
+		FROM check_results cr
+		WHERE cr.tenant_id = $1
+		  AND cr.monitor_id = ANY($2)
+		  AND cr.status IN ('failure', 'error')
+		  AND cr.result_source <> 'platform'
+		  AND cr.created_at >= $3
+		  AND cr.created_at < $4
+		ORDER BY cr.monitor_id, cr.created_at DESC
+	`, tenantID, pq.Array(monitorIDs), rangeStart, rangeEndExclusive)
+	if err != nil {
+		return fmt.Errorf("failed to query latest problem errors: %w", err)
+	}
+	defer rows.Close()
+
+	latest := make(map[uuid.UUID]*string, len(monitors))
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var message sql.NullString
+		if err := rows.Scan(&monitorID, &message); err != nil {
+			return fmt.Errorf("failed to scan latest problem error: %w", err)
+		}
+		if message.Valid && message.String != "" {
+			v := message.String
+			latest[monitorID] = &v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating latest problem errors: %w", err)
+	}
+
+	for i := range monitors {
+		monitors[i].LatestErrorMessage = latest[monitors[i].MonitorID]
+	}
+	return nil
 }
 
 func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {

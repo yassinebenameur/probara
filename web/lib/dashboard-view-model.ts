@@ -28,10 +28,42 @@ export type ActivityTimelineItem = {
   label: string;
   title: string;
   detail: string;
+  /** Full check error_message for failure items; undefined for alert items. */
+  reason?: string;
   occurredAt: string;
   relativeTime: string;
   tone: 'success' | 'warning' | 'danger' | 'info';
 };
+
+// ─── Failure reason parsing ─────────────────────────────────────────────────
+// Workers prefix HTTP error messages with a category (timeout:/dns:/connect:,
+// worker/internal/worker/checker.go) and assertion failures with the assertion
+// name (status_code:/latency:/tls:). Unrecognized prefixes get no category —
+// the raw message is still displayed, just without a pill.
+
+export type FailureReasonCategory = 'timeout' | 'dns' | 'connect' | 'status' | 'latency' | 'tls';
+
+const REASON_PREFIX_CATEGORIES: Record<string, FailureReasonCategory> = {
+  timeout: 'timeout',
+  dns: 'dns',
+  connect: 'connect',
+  status_code: 'status',
+  latency: 'latency',
+  tls: 'tls',
+};
+
+export type FailureReason = {
+  category: FailureReasonCategory | null;
+  text: string;
+};
+
+export function parseFailureReason(message: string | null | undefined): FailureReason | null {
+  const text = message?.trim();
+  if (!text) return null;
+  const colon = text.indexOf(':');
+  const prefix = colon > 0 ? text.slice(0, colon).trim().toLowerCase() : '';
+  return { category: REASON_PREFIX_CATEGORIES[prefix] ?? null, text };
+}
 
 type OperationalSummaryInput = {
   opsSummary?: DashboardOpsSummary | null;
@@ -194,6 +226,7 @@ export function buildActivityTimeline(input: BuildActivityTimelineInput): Activi
       failure.result_source === 'platform' ? 'Platform event' : failure.status,
       typeof failure.latency_ms === 'number' ? `${failure.latency_ms}ms` : undefined,
     ].filter(Boolean).join(' · '),
+    reason: failure.error_message || undefined,
     occurredAt: failure.occurred_at,
     relativeTime: formatRelativeTimeFrom(failure.occurred_at, now),
     tone: failureTone(failure),

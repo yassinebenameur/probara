@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildActivityTimeline,
   buildOperationalSummary,
+  parseFailureReason,
   sortNeedsAttention,
 } from './dashboard-view-model';
 
@@ -146,4 +147,50 @@ test('buildActivityTimeline merges failures and alerts chronologically with clea
     items.map((item) => item.label),
     ['Alert triggered', 'Failure resolved'],
   );
+});
+
+test('buildActivityTimeline carries the failure error message as reason', () => {
+  const items = buildActivityTimeline({
+    failures: [
+      {
+        check_result_id: 'r1',
+        monitor_id: 'm1',
+        monitor_name: 'API',
+        status: 'error',
+        result_source: 'monitor',
+        error_message: 'dns: lookup api.example.com: no such host',
+        latency_ms: 12,
+        occurred_at: '2026-04-24T10:00:00.000Z',
+        state: 'firing',
+      },
+    ],
+    alerts: [],
+    now,
+  });
+
+  assert.equal(items[0].reason, 'dns: lookup api.example.com: no such host');
+  assert.equal(items[0].detail, 'error · 12ms');
+});
+
+test('parseFailureReason categorizes known worker prefixes and passes through the rest', () => {
+  assert.deepEqual(parseFailureReason('timeout: context deadline exceeded'), {
+    category: 'timeout',
+    text: 'timeout: context deadline exceeded',
+  });
+  assert.equal(parseFailureReason('dns: no such host')?.category, 'dns');
+  assert.equal(parseFailureReason('connect: connection refused')?.category, 'connect');
+  assert.equal(parseFailureReason('status_code: got 404')?.category, 'status');
+  assert.equal(parseFailureReason('latency: 3200ms > 1000ms')?.category, 'latency');
+  assert.equal(parseFailureReason('tls: missing certificate info')?.category, 'tls');
+
+  // Unknown prefixes keep the raw text but get no pill category.
+  assert.deepEqual(parseFailureReason('redis: NOAUTH Authentication required'), {
+    category: null,
+    text: 'redis: NOAUTH Authentication required',
+  });
+  assert.equal(parseFailureReason('no colon here')?.category, null);
+  assert.equal(parseFailureReason(''), null);
+  assert.equal(parseFailureReason('   '), null);
+  assert.equal(parseFailureReason(null), null);
+  assert.equal(parseFailureReason(undefined), null);
 });

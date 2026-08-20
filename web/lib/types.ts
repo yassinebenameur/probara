@@ -1010,6 +1010,9 @@ export interface DashboardProblemMonitor {
   error_count: number;
   uptime: number;
   latest_failure_at: string | null;
+  /** error_message of the most recent failing check in range; absent when the
+   *  check had no message or raw results were already rolled up. */
+  latest_error_message?: string | null;
 }
 
 export interface DashboardFailureEvent {

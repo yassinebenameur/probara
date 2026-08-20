@@ -182,6 +182,21 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 			"monitor_id", "failure_count", "error_count", "latest_failure_at",
 		}).AddRow(monitorID, 2, 1, rangeEnd.Add(-time.Hour)))
 
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT DISTINCT ON (cr.monitor_id) cr.monitor_id, cr.error_message
+		FROM check_results cr
+		WHERE cr.tenant_id = $1
+		  AND cr.monitor_id = ANY($2)
+		  AND cr.status IN ('failure', 'error')
+		  AND cr.result_source <> 'platform'
+		  AND cr.created_at >= $3
+		  AND cr.created_at < $4
+		ORDER BY cr.monitor_id, cr.created_at DESC
+	`)).
+		WithArgs(tenantID, pq.Array([]uuid.UUID{monitorID}), rangeStart, rangeEnd).
+		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "error_message"}).
+			AddRow(monitorID, "timeout: context deadline exceeded"))
+
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{}, nil)
 
 	monitors, err := svc.getProblemMonitors(context.Background(), tenantID, models.DashboardRange30d, rangeStart, rangeEnd, problemMonitorLimit, nil)
@@ -193,6 +208,9 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 	}
 	if monitors[0].FailureCount != 2 || monitors[0].ErrorCount != 1 {
 		t.Fatalf("counts = (%d,%d), want (2,1)", monitors[0].FailureCount, monitors[0].ErrorCount)
+	}
+	if monitors[0].LatestErrorMessage == nil || *monitors[0].LatestErrorMessage != "timeout: context deadline exceeded" {
+		t.Fatalf("LatestErrorMessage = %v, want timeout message", monitors[0].LatestErrorMessage)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

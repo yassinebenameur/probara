@@ -44,9 +44,11 @@ import {
 } from 'lucide-react';
 import {
   ActivityTimelineItem,
+  FailureReasonCategory,
   OperationalSummary,
   buildActivityTimeline,
   buildOperationalSummary,
+  parseFailureReason,
   sortNeedsAttention,
 } from '@/lib/dashboard-view-model';
 import ServiceGroupsPanel from '@/components/dashboard/ServiceGroupsPanel';
@@ -197,6 +199,37 @@ function StatusPill({ status }: { status: string | null | undefined }) {
   );
 }
 
+// ─── Failure Reason Line ───────────────────────────────────────────────────────
+
+const REASON_CATEGORY_META: Record<FailureReasonCategory, { label: string; tone: PillTone }> = {
+  timeout: { label: 'Timeout', tone: 'warning' },
+  latency: { label: 'Latency', tone: 'warning' },
+  dns: { label: 'DNS', tone: 'danger' },
+  connect: { label: 'Connect', tone: 'danger' },
+  status: { label: 'Status', tone: 'warning' },
+  tls: { label: 'TLS', tone: 'warning' },
+};
+
+// One truncated line: optional category pill + the raw message. The full
+// untruncated message lives in the row's InfoTip popover.
+function FailureReasonLine({ message }: { message: string | null | undefined }) {
+  const reason = parseFailureReason(message);
+  if (!reason) return null;
+  const meta = reason.category ? REASON_CATEGORY_META[reason.category] : null;
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5">
+      {meta && (
+        <Pill tone={meta.tone} size="xs" className="shrink-0 uppercase tracking-wider">
+          {meta.label}
+        </Pill>
+      )}
+      <span className="min-w-0 truncate text-[11px] text-slate-400" title={reason.text}>
+        {reason.text}
+      </span>
+    </div>
+  );
+}
+
 // ─── Problem Monitor Item ──────────────────────────────────────────────────────
 
 function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
@@ -228,6 +261,12 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
     { label: 'Latest issue', value: monitor.latest_failure_at ? formatRelativeTime(monitor.latest_failure_at) : '—' },
     { label: 'Uptime', value: `${uptimePct.toFixed(2)}%` },
   ];
+  if (monitor.latest_error_message) {
+    infoEntries.push({
+      label: 'Reason',
+      value: <span className="break-words">{monitor.latest_error_message}</span>,
+    });
+  }
 
   return (
     <div className="-mx-2 rounded-lg px-2 py-3.5 transition-colors hover:bg-white/[0.025]">
@@ -258,6 +297,7 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
             {issueCount} issue{issueCount !== 1 ? 's' : ''}
             {monitor.latest_failure_at ? ` · last ${formatRelativeTime(monitor.latest_failure_at)}` : ''}
           </p>
+          <FailureReasonLine message={monitor.latest_error_message} />
         </div>
         <StatusPill status={monitor.current_status} />
       </div>
@@ -688,10 +728,22 @@ function WhatChangedTimeline({
                 {timelineIcon(item)}
                 <div className="min-w-0 flex-1 border-b border-white/[0.04] pb-4">
                   <div className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-white">{item.label}</p>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-start gap-2">
+                        <p className="text-sm font-medium text-white">{item.label}</p>
+                        {item.reason && (
+                          <InfoTip
+                            title={item.title}
+                            entries={[
+                              { label: 'Detail', value: item.detail || '—' },
+                              { label: 'Reason', value: <span className="break-words">{item.reason}</span> },
+                            ]}
+                          />
+                        )}
+                      </div>
                       <p className="mt-0.5 break-words text-sm text-slate-300">{item.title}</p>
                       {item.detail && <p className="mt-0.5 text-xs text-slate-500">{item.detail}</p>}
+                      <FailureReasonLine message={item.reason} />
                     </div>
                     <span className="shrink-0 text-xs text-slate-500">{item.relativeTime}</span>
                   </div>

@@ -165,6 +165,10 @@ type DashboardProblemMonitor struct {
 	ErrorCount      int        `json:"error_count"`
 	Uptime          float64    `json:"uptime"`
 	LatestFailureAt *time.Time `json:"latest_failure_at"`
+	// LatestErrorMessage is the error_message of the monitor's most recent
+	// failing check inside the requested range (nil when the check recorded
+	// no message or the failures fell outside raw check_results retention).
+	LatestErrorMessage *string `json:"latest_error_message,omitempty"`
 }
 
 // DashboardFailureEvent represents a recent failing check and its current state.
