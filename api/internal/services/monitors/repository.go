@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
@@ -37,6 +38,8 @@ type Repository interface {
 	ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error
 	DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error
 	GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error)
+	// GetAlertRoutingForMonitors reports which monitors' alerts reach nobody.
+	GetAlertRoutingForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]alertrouting.Status, error)
 	// monitor_locations management
 	SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error
 	// SetEnabled toggles pause/resume with the S-P2 state reset.
@@ -649,6 +652,59 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating monitor channels: %w", err)
+	}
+	return result, nil
+}
+
+// GetAlertRoutingForMonitors resolves each monitor's effective alert routing
+// and returns the reachability an operator sees, keyed by monitor ID.
+//
+// The routing rules live in shared/alertrouting, which the alerter uses to
+// dispatch — so a monitor reported unreachable here is exactly one whose
+// alerts the alerter would deliver to nobody.
+func (r *PostgresRepository) GetAlertRoutingForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]alertrouting.Status, error) {
+	result := make(map[uuid.UUID]alertrouting.Status)
+	if len(monitorIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT m.id, m.notification_mode,
+			`+alertrouting.ChannelCountExpr("m", true)+` AS own_active,
+			`+alertrouting.ChannelCountExpr("m", false)+` AS own_assigned,
+			`+alertrouting.SelfSilentGroupPredicate("m")+` AS self_silent,
+			g.id, g.name, COALESCE(g.enabled, FALSE) AS rollup_enabled,
+			COALESCE(`+alertrouting.ChannelCountExpr("g", true)+`, 0) AS rollup_active,
+			COALESCE(`+alertrouting.ChannelCountExpr("g", false)+`, 0) AS rollup_assigned
+		FROM monitors m
+		LEFT JOIN monitors g ON g.id = `+alertrouting.RollupGroupExpr("m.id")+`
+		WHERE m.id = ANY($1)
+	`, pq.Array(monitorIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query alert routing: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var counts alertrouting.Counts
+		var groupID uuid.NullUUID
+		var groupName sql.NullString
+		if err := rows.Scan(&monitorID, &counts.NotificationMode,
+			&counts.OwnActive, &counts.OwnAssigned, &counts.SelfSilentGroup,
+			&groupID, &groupName, &counts.RollupEnabled,
+			&counts.RollupActive, &counts.RollupAssigned); err != nil {
+			return nil, fmt.Errorf("failed to scan alert routing: %w", err)
+		}
+		if groupID.Valid {
+			id := groupID.UUID
+			counts.RollupGroupID = &id
+			counts.RollupGroupName = groupName.String
+		}
+		result[monitorID] = alertrouting.Classify(counts)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating alert routing: %w", err)
 	}
 	return result, nil
 }

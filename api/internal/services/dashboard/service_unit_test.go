@@ -667,6 +667,11 @@ func TestService_GetOpsSummary_CountsFollowStateMachine(t *testing.T) {
 	mock.ExpectQuery("FROM alerts").
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"active_alerts", "acknowledged_alerts"}).AddRow(0, 0))
+	// Unrouted-monitor count (shared/alertrouting); state counts come from the
+	// health rows, not this query.
+	mock.ExpectQuery("FROM monitors m").
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 
 	rowFor := func(state string, enabled bool) models.DashboardMonitorHealth {
 		return models.DashboardMonitorHealth{
@@ -696,6 +701,9 @@ func TestService_GetOpsSummary_CountsFollowStateMachine(t *testing.T) {
 	}
 	if summary.PausedMonitors != 1 {
 		t.Fatalf("PausedMonitors = %d, want 1", summary.PausedMonitors)
+	}
+	if summary.UnroutedMonitors != 3 {
+		t.Fatalf("UnroutedMonitors = %d, want 3 (straight from the routing query)", summary.UnroutedMonitors)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

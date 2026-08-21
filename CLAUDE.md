@@ -46,6 +46,18 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   identity (`alerts.metric_name`), notification wording, and status pages all
   go through it; `web/lib/metrics.ts` is its TS twin. Never invent a parallel
   series encoding.
+- **Alert routing**: `shared/alertrouting` owns which channels a monitor's
+  alerts reach — mode `custom`/`default`, active-channel filtering, and group
+  roll-up suppression — as SQL fragments plus `Classify`. The alerter builds
+  its dispatch queries from those fragments; the API builds the read-only
+  `alert_routing` field and the dashboard's `unrouted_monitors` count from
+  them, so "who gets notified" and "who we warn is unrouted" cannot disagree.
+  `UnreachablePredicate` is the SQL twin of `Classify().Reachable`; change
+  them together (`TestUnreachablePredicateMatchesClassify` pins the pair).
+  Note the roll-up asymmetry it exposes: member suppression ignores the
+  group's `enabled` flag while the group's own alert requires it, so a paused
+  `group`-rollup group silences its whole membership. Reachability *reports*
+  that (`group_rollup_paused`); dispatch still behaves that way.
 - **Monitor state semantics**: `docs/state-semantics.md` (rules `S-*`).
   Changes to state transitions, quorum aggregation, freshness/absence,
   pause/maintenance handling, or uptime accounting must update the rule

@@ -284,6 +284,13 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 		}
 	}
 
+	// Attach alert reachability (see ListMonitors)
+	if routingMap, err := s.repo.GetAlertRoutingForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		if status, ok := routingMap[monitorID]; ok {
+			monitor.AlertRouting = &status
+		}
+	}
+
 	// Attach the private-location selection + per-location breakdown
 	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
 		monitor.LocationIDs = locationMap[monitorID]
@@ -341,6 +348,16 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, monitorIDs); err == nil {
 		for i := range monitors {
 			monitors[i].LocationIDs = locationMap[monitors[i].ID]
+		}
+	}
+
+	// Attach alert reachability so the UI can flag monitors whose alerts
+	// would notify nobody.
+	if routingMap, err := s.repo.GetAlertRoutingForMonitors(ctx, monitorIDs); err == nil {
+		for i := range monitors {
+			if status, ok := routingMap[monitors[i].ID]; ok {
+				monitors[i].AlertRouting = &status
+			}
 		}
 	}
 

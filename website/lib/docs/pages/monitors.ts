@@ -73,6 +73,11 @@ export const MONITORS_PAGE: DocPage = {
               "Each item has `channel_id` and non-negative `delay_seconds`",
             ],
             [
+              "`alert_routing`",
+              "Read-only reachability: whether this monitor's alerts notify anyone, and why not — see [notification routing](/docs/alerting/#routing)",
+              "Computed per request; never accepted on write",
+            ],
+            [
               "`depends_on_ids`",
               "Upstream monitors used for root-cause annotation",
               "Tenant-scoped, live monitors; cycles rejected",
@@ -541,7 +546,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "`group` rollup",
               description:
-                "Suppresses member availability alerts covered by that group and creates one group-level availability alert.",
+                "Suppresses member availability alerts covered by that group and creates one group-level availability alert. Suppression ignores the group's own enabled flag, so pausing such a group silences its members too — see [group alert rollup](/docs/alerting/#group-rollup).",
             },
           ],
         },

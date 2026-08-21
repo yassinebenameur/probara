@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -871,6 +872,22 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 	}
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts); err != nil {
 		return summary, fmt.Errorf("failed to query ops summary alerts: %w", err)
+	}
+
+	unroutedQuery := `
+		SELECT COUNT(*)
+		FROM monitors m
+		WHERE m.tenant_id = $1
+		  AND m.deleted_at IS NULL
+		  AND m.enabled = TRUE
+		  AND ` + alertrouting.UnreachablePredicate("m")
+	unroutedArgs := []interface{}{tenantID}
+	if len(tags) > 0 {
+		unroutedQuery += ` AND m.tags @> $2::text[]`
+		unroutedArgs = append(unroutedArgs, pq.Array(tags))
+	}
+	if err := s.db.QueryRowContext(ctx, unroutedQuery, unroutedArgs...).Scan(&summary.UnroutedMonitors); err != nil {
+		return summary, fmt.Errorf("failed to query unrouted monitors: %w", err)
 	}
 
 	return summary, nil

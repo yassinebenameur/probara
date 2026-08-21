@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 )
 
 // MockRepository implements Repository interface for testing
@@ -143,6 +144,10 @@ func (m *MockRepository) DeleteMonitorChannels(ctx context.Context, monitorID uu
 
 func (m *MockRepository) GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error) {
 	return make(map[uuid.UUID][]models.MonitorChannelAssignment), nil
+}
+
+func (m *MockRepository) GetAlertRoutingForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]alertrouting.Status, error) {
+	return make(map[uuid.UUID]alertrouting.Status), nil
 }
 
 func (m *MockRepository) SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error {

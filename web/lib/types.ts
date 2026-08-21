@@ -830,6 +830,7 @@ export interface Monitor {
   member_alert_rollup?: MemberAlertRollup;
   notification_channels?: ChannelAssignment[];
   current_state?: MonitorState;
+  alert_routing?: AlertRouting; // Read-only; who this monitor's alerts reach
   in_maintenance?: boolean;
   maintenance_until?: string; // Latest ends_at among covering active windows
   // Old format fields (for backward compatibility during migration)
@@ -839,6 +840,33 @@ export interface Monitor {
   body?: string;
   expected_status?: number;
   expected_body_substring?: string;
+}
+
+/**
+ * Where a monitor's alerts actually go. Computed per request from
+ * shared/alertrouting — the same rules the alerter dispatches by — so
+ * `reachable: false` means an alert here would notify nobody.
+ */
+export interface AlertRouting {
+  reachable: boolean;
+  /**
+   * `custom` / `tenant_default`: the monitor's own routing applies.
+   * `group_rollup`: a group rolls its alerts up, so the group's routing decides.
+   * `members`: it is a group that never alerts itself; members alert individually.
+   */
+  source: 'custom' | 'tenant_default' | 'group_rollup' | 'members';
+  active_channels: number;
+  /** Includes disabled channels, which never deliver. */
+  assigned_channels: number;
+  reason?:
+    | 'no_custom_channels'
+    | 'custom_channels_disabled'
+    | 'no_tenant_default_channels'
+    | 'tenant_default_channels_disabled'
+    | 'group_rollup_unrouted'
+    | 'group_rollup_paused';
+  rollup_group_id?: string;
+  rollup_group_name?: string;
 }
 
 export interface CreateMonitorRequest {
@@ -1000,6 +1028,8 @@ export interface DashboardOpsSummary {
   maintenance_monitors: number;
   active_alerts: number;
   acknowledged_alerts: number;
+  /** Active monitors whose alerts would notify nobody. */
+  unrouted_monitors: number;
 }
 
 export interface DashboardProblemMonitor {

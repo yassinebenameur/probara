@@ -153,6 +153,10 @@ type DashboardOpsSummary struct {
 	MaintenanceMonitors int `json:"maintenance_monitors"`
 	ActiveAlerts        int `json:"active_alerts"`
 	AcknowledgedAlerts  int `json:"acknowledged_alerts"`
+	// UnroutedMonitors counts active monitors whose alerts would notify
+	// nobody — no active channel resolves for them (shared/alertrouting).
+	// Paused monitors are excluded: they never alert in the first place.
+	UnroutedMonitors int `json:"unrouted_monitors"`
 }
 
 // DashboardProblemMonitor represents a monitor that needs attention for the selected range.

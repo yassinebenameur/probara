@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, Layers } from 'lucide-react';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
@@ -14,6 +14,7 @@ import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import TagPill from '@/components/monitors/TagPill';
+import { AlertRoutingBadge } from '@/components/monitors/AlertRoutingBadge';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
   deleteMonitor,
@@ -475,6 +476,7 @@ function MonitorRow({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
           <TypeBadge type={monitor.type} />
+          <AlertRoutingBadge routing={monitor.alert_routing} enabled={monitor.enabled} />
           {status === 'maintenance' && (
             <span
               className="rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-300"
@@ -687,6 +689,7 @@ function GroupCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
             <span className="text-[10px] font-medium uppercase text-indigo-400">GROUP</span>
+            <AlertRoutingBadge routing={monitor.alert_routing} enabled={monitor.enabled} />
             {/* Tags */}
             {monitor.tags && monitor.tags.length > 0 && (
               <div className="flex items-center gap-1">
@@ -1244,6 +1247,15 @@ export default function MonitorsPage() {
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [showTypeFilter, setShowTypeFilter] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  // Deep-linked from the dashboard's unrouted warning (?routing=unrouted).
+  const [unroutedOnly, setUnroutedOnly] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('routing') === 'unrouted') {
+      setUnroutedOnly(true);
+    }
+  }, []);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [selectedMonitorId, setSelectedMonitorId] = useState<string | null>(null);
   const [checkResultsMap, setCheckResultsMap] = useState<Record<string, CheckResult[]>>({});
@@ -1555,6 +1567,14 @@ export default function MonitorsPage() {
     );
   }, [monitors]);
 
+  // Monitors whose alerts would notify nobody (server-computed per monitor in
+  // shared/alertrouting). Drives the filter chip and, with it, the dashboard's
+  // deep link.
+  const unroutedCount = useMemo(
+    () => monitors.filter((monitor) => monitor.enabled && monitor.alert_routing?.reachable === false).length,
+    [monitors],
+  );
+
   const toggleType = (type: string) => {
     const newSelected = new Set(selectedTypes);
     if (newSelected.has(type)) {
@@ -1601,7 +1621,9 @@ export default function MonitorsPage() {
       (statusFilter === 'maintenance' && status === 'maintenance');
     const matchesTags = selectedTags.size === 0 ||
       Boolean(monitor.tags && monitor.tags.some((tag) => selectedTags.has(tag)));
-    return matchesSearch && matchesType && matchesStatus && matchesTags;
+    const matchesRouting =
+      !unroutedOnly || (monitor.enabled && monitor.alert_routing?.reachable === false);
+    return matchesSearch && matchesType && matchesStatus && matchesTags && matchesRouting;
   };
 
   // A group also matches when any of its (nested) members match, so searching
@@ -1617,7 +1639,8 @@ export default function MonitorsPage() {
   };
 
   const hasActiveFilters =
-    searchTerm.trim() !== '' || selectedTypes.size > 0 || statusFilter !== 'all' || selectedTags.size > 0;
+    searchTerm.trim() !== '' || selectedTypes.size > 0 || statusFilter !== 'all' || selectedTags.size > 0 ||
+    unroutedOnly;
 
   // Filter monitors (exclude monitors that are members of a group - they only show under their group),
   // then show groups ahead of ungrouped monitors.
@@ -1894,6 +1917,18 @@ export default function MonitorsPage() {
               </FilterChip>
             ))}
           </div>
+
+          {(unroutedCount > 0 || unroutedOnly) && (
+            <FilterChip
+              selected={unroutedOnly}
+              count={unroutedCount > 0 ? unroutedCount : undefined}
+              icon={<BellOff strokeWidth={1.75} />}
+              onClick={() => setUnroutedOnly((v) => !v)}
+              title="Monitors whose alerts would notify nobody"
+            >
+              No alert route
+            </FilterChip>
+          )}
 
           {/* Tag Filter Toggle */}
           {allTags.length > 0 && (

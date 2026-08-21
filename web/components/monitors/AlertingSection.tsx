@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getNotificationSettings } from '@/lib/api';
-import type { ChannelAssignment, MemberAlertRollup, NotificationMode, NotificationSettings } from '@/lib/types';
+import type { AlertChannel, ChannelAssignment, MemberAlertRollup, NotificationMode, NotificationSettings } from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 
 interface AlertingSectionProps {
@@ -35,6 +35,7 @@ export function AlertingSection({
   rollup, onRollupChange,
 }: AlertingSectionProps) {
   const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [channels, setChannels] = useState<AlertChannel[]>([]);
   useEffect(() => { getNotificationSettings().then(setSettings).catch(() => setSettings(null)); }, []);
 
   const defaults = settings?.default_channels ?? [];
@@ -42,6 +43,15 @@ export function AlertingSection({
     ? defaults.map((c) => c.channel_name ?? c.channel_id).join(' · ')
     : null;
   const muted = mode === 'custom' && customChannels.length === 0;
+  // A selection made entirely of disabled channels delivers nothing either —
+  // the alerter skips inactive channels at dispatch.
+  const mutedByDisabled =
+    mode === 'custom' &&
+    customChannels.length > 0 &&
+    channels.length > 0 &&
+    customChannels.every((assignment) =>
+      channels.some((channel) => channel.id === assignment.channel_id && channel.is_active === false),
+    );
 
   // Switching to custom pre-checks the workspace default channels (spec §7.1).
   const switchToCustom = () => {
@@ -150,10 +160,16 @@ export function AlertingSection({
                 value={customChannels}
                 onChange={onCustomChannelsChange}
                 defaultChannelIds={defaults.map((c) => c.channel_id)}
+                onChannelsLoaded={setChannels}
               />
               {muted && (
                 <div className="rounded-lg border border-rose-700/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
                   🔕 This monitor is muted — alerts fire (status page, incidents) but notify no one.
+                </div>
+              )}
+              {mutedByDisabled && (
+                <div className="rounded-lg border border-rose-700/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+                  🔕 Every channel selected here is disabled — alerts fire but notify no one.
                 </div>
               )}
             </div>

@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 )
 
 // MonitorType represents the type of monitor
@@ -64,11 +66,15 @@ type Monitor struct {
 	LocationQuorum               int                        `json:"location_quorum"`        // Down when >= this many locations are down
 	Locations                    []MonitorLocationStatus    `json:"locations,omitempty"`    // Per-location breakdown (GetMonitor only)
 	CurrentState                 string                     `json:"current_state"`
-	InMaintenance                bool                       `json:"in_maintenance"`
-	MaintenanceUntil             *time.Time                 `json:"maintenance_until,omitempty"` // Latest ends_at among covering active windows
-	CreatedAt                    time.Time                  `json:"created_at"`
-	UpdatedAt                    time.Time                  `json:"updated_at"`
-	DeletedAt                    *time.Time                 `json:"deleted_at,omitempty"`
+	// AlertRouting is the effective notification reachability of this
+	// monitor: nil when not resolved, otherwise says whether an alert here
+	// would notify anyone and why not. Read-only, computed per request.
+	AlertRouting     *alertrouting.Status `json:"alert_routing,omitempty"`
+	InMaintenance    bool                 `json:"in_maintenance"`
+	MaintenanceUntil *time.Time           `json:"maintenance_until,omitempty"` // Latest ends_at among covering active windows
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	DeletedAt        *time.Time           `json:"deleted_at,omitempty"`
 }
 
 // CreateMonitorRequest represents a request to create a monitor

@@ -131,6 +131,44 @@ export const ALERTING_PAGE: DocPage = {
             "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
         },
         {
+          type: "paragraph",
+          text:
+            "Routing that resolves to nothing is not an error — an alert still opens, appears on the dashboard, and drives incidents and status pages; it simply notifies nobody. Because that is silent by design, every monitor read reports its effective reachability in `alert_routing`, and the dashboard counts affected monitors in `ops_summary.unrouted_monitors`.",
+        },
+        {
+          type: "table",
+          columns: ["`alert_routing` field", "Meaning"],
+          rows: [
+            [
+              "`reachable`",
+              "False when an alert on this monitor would notify nobody",
+            ],
+            [
+              "`source`",
+              "`custom` or `tenant_default` when the monitor's own routing applies; `group_rollup` when a group rolls its alerts up, so that group's routing decides; `members` for a group that never alerts itself",
+            ],
+            [
+              "`active_channels` / `assigned_channels`",
+              "Routed channels that would deliver, and the total including inactive ones — an assignment to an inactive channel counts as assigned but never delivers",
+            ],
+            [
+              "`reason`",
+              "Why an unreachable monitor is unreachable: `no_custom_channels`, `custom_channels_disabled`, `no_tenant_default_channels`, `tenant_default_channels_disabled`, or `group_rollup_unrouted`",
+            ],
+            [
+              "`rollup_group_id` / `rollup_group_name`",
+              "The group whose routing applies, present only for `group_rollup`",
+            ],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Three ways a monitor ends up notifying nobody",
+          text:
+            "Custom routing with no channel assigned; `default` mode while the workspace has no default routes; and routing whose every channel is deactivated — deactivation is not visible in the assignment list, only in the channel. A member of a group that rolls alerts up adds a fourth: its own channels never fire, so the group's routing is the one that must be set. The operator UI flags each case on the monitor list and detail pages, and the monitors list filters to the affected monitors.",
+        },
+        {
           type: "table",
           columns: ["Tenant notification setting", "Default / constraints"],
           rows: [
@@ -270,6 +308,18 @@ export const ALERTING_PAGE: DocPage = {
           title: "Rollup only changes group/member availability alerts",
           text:
             "It is not a general dependency suppression mechanism and does not merge unrelated latency, host metric, or mesh alerts.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Under `group` rollup the group's routing is the routing that matters: a suppressed member's own channels never fire, so its `alert_routing.source` reports `group_rollup` and names the group. A member covered by several rollup groups is reachable if any of them delivers, since each group alerts on its own.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Pausing a `group` rollup group silences its members",
+          text:
+            "Member suppression does not consider the group's enabled flag, so a paused rollup group keeps suppressing member alerts while never emitting its own — that whole subtree notifies nobody. Reachability reports it as `group_rollup_paused`; resume the group, or switch it to `per_monitor` so members alert for themselves.",
         },
       ],
     },

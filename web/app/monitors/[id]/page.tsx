@@ -9,6 +9,7 @@ import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, dele
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
+import { AlertRoutingNotice } from '@/components/monitors/AlertRoutingBadge';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
@@ -620,6 +621,8 @@ export default function EditMonitorPage() {
           </Button>
         }
       />
+
+      <AlertRoutingNotice routing={monitor.alert_routing} enabled={monitor.enabled} />
 
       {/* Tabs */}
       <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-slate-900/50 p-1 w-fit">

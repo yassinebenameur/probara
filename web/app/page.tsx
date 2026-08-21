@@ -932,7 +932,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-4">
-      <NotificationNudge />
+      <NotificationNudge unroutedMonitors={opsSummary?.unrouted_monitors ?? 0} />
 
       {/* Error Banner */}
       {error && (

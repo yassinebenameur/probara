@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/notifications"
 )
@@ -203,7 +205,7 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  -- A 'per_monitor' group never emits its own derived-down alert; its
 		  -- members alert individually instead.
-		  AND NOT (m.type = 'group' AND m.member_alert_rollup = 'per_monitor')
+		  AND NOT `+alertrouting.SelfSilentGroupPredicate("m")+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM alerts al
 			WHERE al.monitor_id = m.id AND al.kind = 'availability'
@@ -404,25 +406,17 @@ type channelTarget struct {
 	delay   time.Duration
 }
 
-// resolveChannelTargets returns the effective routing for a monitor:
-// monitor_channels when mode=custom, else tenant_default_channels.
+// resolveChannelTargets returns the effective routing for a monitor —
+// monitor_channels when mode=custom, else tenant_default_channels — using the
+// shared definition in shared/alertrouting so delivery and the API's
+// reachability warning cannot disagree.
 func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID uuid.UUID) ([]channelTarget, error) {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, x.delay_seconds
-		FROM (
-			SELECT mc.channel_id, mc.delay_seconds, 0 AS pos
-			FROM monitor_channels mc
-			JOIN monitors m ON m.id = mc.monitor_id
-			WHERE mc.monitor_id = $2 AND m.notification_mode = 'custom'
-			UNION ALL
-			SELECT tdc.channel_id, tdc.delay_seconds, tdc.position
-			FROM tenant_default_channels tdc
-			JOIN monitors m ON m.tenant_id = tdc.tenant_id
-			WHERE tdc.tenant_id = $1 AND m.id = $2 AND m.notification_mode = 'default'
-		) x
+		FROM (`+alertrouting.TargetsSQL()+`) x
 		JOIN alert_channels ac ON ac.id = x.channel_id
 		ORDER BY x.pos, ac.id
-	`, tenantID, monitorID)
+	`, tenantID, pq.Array([]uuid.UUID{monitorID}))
 	if err != nil {
 		return nil, fmt.Errorf("resolve channel targets: %w", err)
 	}
@@ -470,12 +464,9 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  -- A 'per_monitor' group does not dispatch its own alert (if one is still
 		  -- open from before the mode was changed, stay quiet on it).
-		  AND NOT (m.type = 'group' AND m.member_alert_rollup = 'per_monitor')
+		  AND NOT `+alertrouting.SelfSilentGroupPredicate("m")+`
 		  -- Suppress a member only when its group rolls members up into one alert.
-		  AND NOT EXISTS (
-			SELECT 1 FROM monitor_groups mg
-			JOIN monitors g ON g.id = mg.group_id AND g.deleted_at IS NULL
-			WHERE mg.monitor_id = al.monitor_id AND g.member_alert_rollup = 'group')
+		  AND NOT `+alertrouting.SuppressedByRollupPredicate("al.monitor_id")+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open alerts: %w", err)
