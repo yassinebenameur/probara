@@ -5,13 +5,34 @@ import { useRouter } from 'next/navigation';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import { previewImport, executeImport } from '@/lib/api';
-import type { 
-  ImportPreviewResponse, 
-  ImportRow, 
-  FieldMapping, 
+import type {
+  ImportPreviewResponse,
+  ImportRow,
+  FieldMapping,
   ImportExecuteResponse,
-  ImportRowResult 
+  ImportRowResult,
+  ImportSkippedRow
 } from '@/lib/types';
+import { IMPORT_SCHEMA_PORTABLE, IMPORT_SCHEMA_UPTIME_KUMA } from '@/lib/types';
+
+// Recognized schemas arrive pre-translated: every field is already mapped, so
+// the mapping step is informational rather than something to fill in.
+const PRE_MAPPED_SCHEMAS: string[] = [IMPORT_SCHEMA_PORTABLE, IMPORT_SCHEMA_UPTIME_KUMA];
+
+function isPreMapped(schema?: string): boolean {
+  return !!schema && PRE_MAPPED_SCHEMAS.includes(schema);
+}
+
+function describeSource(preview: ImportPreviewResponse): string {
+  switch (preview.schema) {
+    case IMPORT_SCHEMA_PORTABLE:
+      return `${preview.total_rows} monitors from a portable YAML export`;
+    case IMPORT_SCHEMA_UPTIME_KUMA:
+      return `${preview.total_rows} monitors translated from an Uptime Kuma export`;
+    default:
+      return `${preview.total_rows} rows in ${preview.format.toUpperCase()} format`;
+  }
+}
 
 // Target fields that can be mapped to
 const TARGET_FIELDS = [
@@ -31,6 +52,8 @@ const TARGET_FIELDS = [
   { key: 'tags', label: 'Tags', required: false },
   { key: 'enabled', label: 'Enabled', required: false },
   { key: 'group_members', label: 'Group Members', required: false },
+  { key: 'alert_policy_names', label: 'Alert Policy Names', required: false },
+  { key: 'consecutive_failures_threshold', label: 'Retries before down', required: false },
 ];
 
 type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';
@@ -238,6 +261,62 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
     return String(value);
   };
 
+  // Pre-translated sources (portable, Uptime Kuma) carry the target inside the
+  // nested config rather than as a mapped top-level field, so read through to
+  // it — otherwise the whole column is dashes for exactly the imports where
+  // reviewing the target matters most.
+  const getConfigValue = (row: ImportRow, key: string) => {
+    const configField = mapping.config;
+    if (!configField) return undefined;
+    const config = row.fields[configField];
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return undefined;
+    const value = (config as Record<string, unknown>)[key];
+    if (value === undefined || value === null || value === '') return undefined;
+    return String(value);
+  };
+
+  const resolve = (row: ImportRow, mappingKey: keyof FieldMapping, configKey: string) => {
+    const mapped = getFieldValue(row, mappingKey);
+    if (mapped !== '-') return mapped;
+    return getConfigValue(row, configKey) ?? '-';
+  };
+
+  const getTarget = (row: ImportRow, type: string) => {
+    switch (type) {
+      case 'ping':
+      case 'dns':
+        return resolve(row, 'host', 'host');
+      case 'grpc':
+      case 'tcp': {
+        const host = resolve(row, 'host', 'host');
+        if (host === '-') return '-';
+        const port = resolve(row, 'port', 'port');
+        return port === '-' ? host : `${host}:${port}`;
+      }
+      case 'group': {
+        const members = mapping.group_members ? row.fields[mapping.group_members] : undefined;
+        if (Array.isArray(members)) return `${members.length} member${members.length === 1 ? '' : 's'}`;
+        return '-';
+      }
+      case 'postgres':
+      case 'mysql':
+      case 'mongodb':
+      case 'redis':
+      case 'rabbitmq': {
+        const host = getConfigValue(row, 'host');
+        if (!host) return getConfigValue(row, 'connection_string') ?? '-';
+        const port = getConfigValue(row, 'port');
+        return port ? `${host}:${port}` : host;
+      }
+      case 'push':
+        return getConfigValue(row, 'expected_interval_seconds')
+          ? `every ${getConfigValue(row, 'expected_interval_seconds')}s`
+          : '-';
+      default:
+        return resolve(row, 'url', 'url');
+    }
+  };
+
   const getRawType = (row: ImportRow) => {
     const typeField = mapping.type;
     if (typeField) {
@@ -288,6 +367,7 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Type</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Target</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Status</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Notes</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
@@ -315,13 +395,7 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-400 truncate max-w-[200px]">
-                    {type === 'ping' || type === 'dns'
-                      ? getFieldValue(row, 'host')
-                      : type === 'grpc'
-                        ? `${getFieldValue(row, 'host')}:${getFieldValue(row, 'port') === '-' ? '443' : getFieldValue(row, 'port')}`
-                        : type === 'tcp'
-                          ? `${getFieldValue(row, 'host')}:${getFieldValue(row, 'port')}`
-                          : getFieldValue(row, 'url')}
+                    {getTarget(row, type)}
                   </td>
                   <td className="px-4 py-3">
                     {supported ? (
@@ -340,6 +414,22 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                       </span>
                     )}
                   </td>
+                  <td className="px-4 py-3 align-top">
+                    {row.warnings && row.warnings.length > 0 ? (
+                      <details className="group/notes max-w-[380px]">
+                        <summary className="cursor-pointer text-xs text-amber-400 hover:text-amber-300 list-none">
+                          {row.warnings.length} note{row.warnings.length === 1 ? '' : 's'}
+                        </summary>
+                        <ul className="mt-2 space-y-1 text-xs text-amber-300/80">
+                          {row.warnings.map((warning, i) => (
+                            <li key={i}>{warning}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : (
+                      <span className="text-xs text-slate-600">-</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
@@ -351,6 +441,47 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
           Showing 50 of {rows.length} rows
         </div>
       )}
+    </div>
+  );
+}
+
+// Records a format adapter refused to translate. Shown separately from the
+// preview rows so "34 of my 41 monitors" has a visible answer.
+function SkippedTable({ rows }: { rows: ImportSkippedRow[] }) {
+  return (
+    <div className="rounded-xl border border-amber-500/20 overflow-hidden">
+      <div className="px-4 py-3 bg-amber-500/10">
+        <h4 className="text-sm font-medium text-amber-300">
+          Not imported ({rows.length})
+        </h4>
+        <p className="text-xs text-amber-300/70 mt-0.5">
+          These monitors have no faithful equivalent and were left out rather than approximated.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-slate-800/50">
+              <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Name</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Source type</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Reason</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/[0.04]">
+            {rows.map((row, i) => (
+              <tr key={`${row.name}-${i}`}>
+                <td className="px-4 py-2 text-sm text-white truncate max-w-[200px]">{row.name}</td>
+                <td className="px-4 py-2">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-500/20 text-slate-400">
+                    {row.source_type || 'unknown'}
+                  </span>
+                </td>
+                <td className="px-4 py-2 text-sm text-slate-400">{row.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -602,9 +733,7 @@ export default function ImportPage() {
               <div>
                 <h2 className="text-lg font-medium text-white">Map Fields</h2>
                 <p className="text-sm text-slate-400 mt-0.5">
-                  {previewData.schema === 'portable_monitor_export'
-                    ? `Detected ${previewData.total_rows} monitors from a portable YAML export`
-                    : `Detected ${previewData.total_rows} rows in ${previewData.format.toUpperCase()} format`}
+                  Detected {describeSource(previewData)}
                 </p>
               </div>
               <span className="inline-flex items-center px-2 py-1 rounded bg-slate-700/50 text-xs text-slate-300">
@@ -629,12 +758,31 @@ export default function ImportPage() {
               </div>
             )}
 
-            {previewData.schema === 'portable_monitor_export' && (
+            {previewData.schema === IMPORT_SCHEMA_PORTABLE && (
               <div className="mb-6 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
                 <p className="text-sm text-cyan-300">
                   Portable export detected. The suggested mappings preserve raw monitor config, alert policy names,
                   and group membership by monitor name so this file can be reimported into another instance.
                 </p>
+              </div>
+            )}
+
+            {previewData.schema === IMPORT_SCHEMA_UPTIME_KUMA && (
+              <div className="mb-6 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
+                <p className="text-sm text-cyan-300">
+                  Uptime Kuma export detected. Monitor types, assertions and group nesting were translated
+                  automatically, so the mappings below are already complete.
+                </p>
+                <p className="text-xs text-cyan-300/70 mt-2">
+                  Uptime Kuma notifications are never migrated and no credential is imported. Check the per-monitor
+                  notes on the review step, then attach Probara alert channels once the monitors exist.
+                </p>
+              </div>
+            )}
+
+            {previewData.skipped_rows && previewData.skipped_rows.length > 0 && (
+              <div className="mb-6">
+                <SkippedTable rows={previewData.skipped_rows} />
               </div>
             )}
 
@@ -728,14 +876,20 @@ export default function ImportPage() {
               <div>
                 <h2 className="text-lg font-medium text-white">Review Import</h2>
                 <p className="text-sm text-slate-400 mt-0.5">
-                  {previewData.schema === 'portable_monitor_export'
-                    ? `${previewData.total_rows} monitors from the portable export will be recreated`
+                  {isPreMapped(previewData.schema)
+                    ? `${previewData.total_rows} monitors will be recreated`
                     : `${previewData.total_rows} monitors will be processed`}
                 </p>
               </div>
             </div>
 
             <PreviewTable rows={previewData.rows} mapping={mapping} typeMapping={typeMapping} />
+
+            {previewData.skipped_rows && previewData.skipped_rows.length > 0 && (
+              <div className="mt-6">
+                <SkippedTable rows={previewData.skipped_rows} />
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex items-center justify-between mt-6">

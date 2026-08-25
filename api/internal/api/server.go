@@ -299,7 +299,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			monitorHandlers.ConfigureDependencies(depservice.NewService(dbClient))
 
 			// Import service and handlers
-			importSvc := importservice.NewService(dbClient, monitorService)
+			importSvc := importservice.NewService(dbClient, monitorService, groupSvc)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
 
 			// Private locations (remote worker deployments)

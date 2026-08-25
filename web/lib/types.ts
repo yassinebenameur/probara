@@ -1833,6 +1833,8 @@ export type ImportFormat = 'json' | 'yaml' | 'csv';
 export interface ImportRow {
   index: number;
   fields: Record<string, unknown>;
+  /** Per-monitor translation caveats, set by format adapters (e.g. Uptime Kuma). */
+  warnings?: string[];
 }
 
 export interface FieldMapping {
@@ -1852,7 +1854,20 @@ export interface FieldMapping {
   tags?: string;
   enabled?: string;
   group_members?: string;
+  alert_policy_names?: string;
+  consecutive_failures_threshold?: string;
 }
+
+/** A source record a format adapter refused to translate. Informational only. */
+export interface ImportSkippedRow {
+  name: string;
+  source_type: string;
+  reason: string;
+}
+
+/** Recognized source schemas. Anything else goes through field mapping. */
+export const IMPORT_SCHEMA_PORTABLE = 'portable_monitor_export';
+export const IMPORT_SCHEMA_UPTIME_KUMA = 'uptime_kuma_export';
 
 export interface ImportPreviewResponse {
   format: ImportFormat;
@@ -1864,6 +1879,7 @@ export interface ImportPreviewResponse {
   total_rows: number;
   detected_types: string[];
   suggested_type_mapping: Record<string, string>;
+  skipped_rows?: ImportSkippedRow[];
 }
 
 export interface ImportExecuteRequest {

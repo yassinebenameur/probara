@@ -26,6 +26,10 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `collector/` — OCB manifest for `probara-collector`, the minimal OTel
   Collector distribution that agent monitors install on hosts (built by
   `scripts/build-collector.sh` into `static/collector/`; no in-repo agent code)
+- `scripts/kuma-export/` — standalone Go CLI that pulls monitors out of a live
+  Uptime Kuma over its socket.io API and writes Kuma's own backup shape (Kuma
+  2.0 removed the export button). Transport only — all translation lives in
+  `api/internal/services/import/kuma.go`
 - `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack
@@ -64,6 +68,35 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   table in the same commit; tests cite rule IDs
   (`shared/monitorstate/spec_test.go`). New aggregation surfaces delegate to
   `shared/monitorstate`, never invent parallel state rules.
+
+## Monitor import
+
+`api/internal/services/import/service.go` parses a source into `parsedSource`
+(rows + schema + warnings + skipped rows), then `ExecuteImport` creates
+monitors. Two paths, chosen by whether `FieldMapping.Config` is set:
+
+- **Raw path** (`useRawConfig`): rows carry an already-typed nested `config`
+  object. Supports every registry type, resolves group members by name in a
+  second pass, and validates through `validation.DefaultRegistry` before
+  create. Both recognized schemas take this path.
+- **Simple path**: generic CSV/JSON/YAML field mapping. Only http, ping, dns,
+  grpc and group; everything else is skipped.
+
+Adding a foreign source format means one adapter returning a `parsedSource`
+(see `parsePortableExport` and `parseKumaExport`), hooked into `parseJSON` or
+`parseYAML`. Build `ImportRow.Fields` **directly** — going through
+`flattenMap` dot-flattens the nested `config` and silently drops you onto the
+simple path. Records you refuse to translate go in `SkippedRows`, never as
+rows: `detectAndSuggestTypes` defaults unknown types to `http` and the UI
+auto-applies that suggestion, so an emitted row for an untranslatable monitor
+becomes a silent bad import.
+
+**Group membership is the junction table**, not `config.monitor_ids`.
+`Monitor.MemberIDs`, group alert roll-up, and the dashboards all read
+`monitor_groups`. The HTTP handler syncs it after create; the importer must
+call `groupService.AddMonitorsToGroup` itself (it does — `syncGroupMembers`),
+or imported groups come back empty. Any other path that creates groups through
+`monitorService.CreateMonitor` directly inherits the same obligation.
 
 ## Adding a monitor type (checklist)
 

@@ -352,7 +352,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Dependency creation rejects self-reference and transitive cycles with HTTP 409. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation.",
+            "Dependency creation rejects self-reference and transitive cycles with HTTP 409. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate.",
         },
       ],
     },

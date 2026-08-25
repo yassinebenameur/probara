@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build build-collector-static clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
+.PHONY: help up down restart logs build build-collector-static kuma-export clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
 # Default target
 help:
@@ -11,6 +11,7 @@ help:
 	@echo "  make logs        - View logs from all services"
 	@echo "  make build       - Build all Docker images"
 	@echo "  make build-collector-static - Build downloadable collector binaries"
+	@echo "  make kuma-export - Build the Uptime Kuma export helper"
 	@echo "  make rebuild     - Rebuild and restart all services"
 	@echo "  make clean       - Stop services and remove volumes"
 	@echo "  make ps          - Show running services"
@@ -76,6 +77,10 @@ build:
 
 build-collector-static:
 	@bash scripts/build-collector.sh
+
+# Build the Uptime Kuma export helper (see scripts/kuma-export/README.md)
+kuma-export:
+	go build -o bin/kuma-export ./scripts/kuma-export
 
 # Rebuild and restart
 rebuild:
