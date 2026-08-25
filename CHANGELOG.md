@@ -1,3 +1,12 @@
+# [1.0.0-alpha.70](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.69...v1.0.0-alpha.70) (2026-08-25)
+
+
+### Features
+
+* **alerting:** surface monitors whose alerts reach nobody ([1c7186c](https://github.com/yassinebenameur/probara/commit/1c7186c07f3468ed56d9d181bfa4971911b5fa32))
+* **dashboard:** surface failure reasons in needs-attention and what-changed panels ([cb46625](https://github.com/yassinebenameur/probara/commit/cb466257b00dbc434564e36641f97192a8252813))
+* **import:** migrate monitors from Uptime Kuma ([8a40dbe](https://github.com/yassinebenameur/probara/commit/8a40dbeb686bcc27cb6cf53ca3f8be128286de9a))
+
 # [1.0.0-alpha.69](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.68...v1.0.0-alpha.69) (2026-08-20)
 
 
