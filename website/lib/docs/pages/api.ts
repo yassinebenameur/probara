@@ -867,7 +867,7 @@ export const API_PAGE: DocPage = {
             "Retry GET requests with bounded exponential backoff; do not blindly retry create, run-now, import execution, notification tests, or incident timeline writes.",
             "Use import preview before import execution and monitor test before saving complex check configuration.",
             "Respect `401`, `403`, `404`, `409`, `410`, `422`, and rate/transport failures as distinct conditions.",
-            "Preserve `***` when updating masked designated secret fields; omitting a field from a replaced type config can clear it.",
+            "Send `***`, or leave the field out, to keep a masked designated secret field; send an empty string when you deliberately want to clear it.",
             "Page collections and retain returned coverage metadata for analytics.",
             "Store full API keys only in a secret manager; the API returns them once.",
             "Log resource IDs and status codes without logging bearer keys, push tokens, installer output, WebSocket headers, connection strings, or webhook secrets.",

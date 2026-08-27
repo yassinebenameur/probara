@@ -453,11 +453,17 @@ export default function DatabaseForm({
   const buildConfig = (): DatabaseConfig => {
     const config: DatabaseConfig = {};
 
+    // An omitted secret field means "keep the stored value" server-side, so
+    // every deliberate drop — the Clear affordances and the connection-mode
+    // switch — has to submit "" (the explicit clear) instead of leaving the
+    // field out.
     if (usingConnString) {
       // Blank + previously stored = keep the stored secret (write-only).
       config.connection_string = formData.connection_string.trim() || MASKED_SECRET;
+      if (storedPassword) config.password = '';
       if (meta.supportsTLSToggle && formData.tls_skip_verify) config.tls_skip_verify = true;
     } else {
+      if (storedConnString) config.connection_string = '';
       config.host = formData.host.trim();
       config.port = formData.port;
       if (formData.username.trim()) config.username = formData.username.trim();
@@ -465,6 +471,9 @@ export default function DatabaseForm({
         config.password = formData.password;
       } else if (hasStoredPassword) {
         config.password = MASKED_SECRET;
+      } else if (storedPassword) {
+        // "Clear" on the set-chip.
+        config.password = '';
       }
       if (type === 'redis' && formData.db_index > 0) config.db = formData.db_index;
       if (type === 'postgres') {
@@ -489,6 +498,10 @@ export default function DatabaseForm({
         config.tls_client_cert_pem = formData.tls_client_cert_pem.trim();
         // Blank + previously stored = keep the stored key (write-only).
         config.tls_client_key_pem = formData.tls_client_key_pem.trim() || MASKED_SECRET;
+      } else if (storedClientKey) {
+        // Client cert removed (or the stored key cleared): "" is the explicit
+        // clear — omitting the field would keep the stored key.
+        config.tls_client_key_pem = '';
       }
     }
 

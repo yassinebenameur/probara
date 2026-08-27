@@ -572,9 +572,10 @@ export const MONITORS_PAGE: DocPage = {
           type: "list",
           items: [
             "Submit `***` again to preserve the already stored value.",
+            "Omit the field entirely and the stored value is preserved as well, so an update that resubmits a config read back from the API cannot destroy a credential it was never shown.",
             "Submit a new value to replace and encrypt it.",
-            "Because a type config is replaced as a whole, omitting or clearing a protected field removes that value rather than implicitly retaining it.",
-            "WebSocket header names remain visible while their values are masked.",
+            "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
+            "WebSocket header names remain visible while their values are masked. Submitting the `headers` object edits it key by key, so a key left out of a submitted object is removed; omitting the whole object keeps the stored headers.",
           ],
         },
         {

@@ -115,7 +115,10 @@ export default function WebsocketForm({
     for (const row of formData.headers) {
       if (row.key.trim()) headers[row.key.trim()] = row.value || (row.hasStoredValue ? '***' : '');
     }
-    if (Object.keys(headers).length > 0) config.headers = headers;
+    // On edit, always submit the object: an absent `headers` field means "keep
+    // the stored headers" server-side, so removing every row has to send an
+    // empty object to clear them.
+    if (Object.keys(headers).length > 0 || isEditMode) config.headers = headers;
     if (isSecure && formData.tls_skip_verify) config.tls_skip_verify = true;
     if (formData.send_message) config.send_message = formData.send_message;
     if (formData.expected_substring) config.expected_substring = formData.expected_substring;

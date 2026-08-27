@@ -174,10 +174,12 @@ func TestMergeMonitorConfigSecrets(t *testing.T) {
 		wantPW   any
 	}{
 		{"masked placeholder keeps existing", `{"host":"new","password":"***"}`, "cipher-blob"},
-		// Updates replace the whole config: empty or absent secrets clear,
-		// only the explicit placeholder preserves.
+		// Clearing a secret has exactly one spelling: the empty string. An
+		// absent field keeps the stored secret, so a client that submits a
+		// config it read back (never containing plaintext secrets) cannot
+		// silently destroy the credential.
 		{"empty clears", `{"host":"new","password":""}`, nil},
-		{"missing clears", `{"host":"new"}`, nil},
+		{"missing keeps existing", `{"host":"new"}`, "cipher-blob"},
 		{"new value wins", `{"host":"new","password":"fresh"}`, "fresh"},
 	}
 	for _, tc := range cases {
@@ -203,6 +205,189 @@ func TestMergeMonitorConfigSecrets(t *testing.T) {
 	}
 	if _, ok := configMap(t, merged)["password"]; ok {
 		t.Fatal("placeholder with no stored secret should drop the field")
+	}
+}
+
+// TestMergeMonitorConfigSecrets_ScalarContract pins the full write-only
+// contract for a scalar secret field, on update and on create: absent and
+// "***" keep the stored secret, "" clears it, anything else replaces it. On
+// create there is nothing to keep, so both "keep" spellings drop the field.
+func TestMergeMonitorConfigSecrets_ScalarContract(t *testing.T) {
+	const stored = `{"host":"old","port":5432,"password":"stored-cipher"}`
+
+	cases := []struct {
+		name     string
+		incoming string
+		existing string
+		wantPW   any
+		wantAbs  bool
+	}{
+		{name: "update/absent keeps stored", incoming: `{"host":"new","port":5432}`, existing: stored, wantPW: "stored-cipher"},
+		{name: "update/masked keeps stored", incoming: `{"host":"new","password":"***"}`, existing: stored, wantPW: "stored-cipher"},
+		{name: "update/empty clears", incoming: `{"host":"new","password":""}`, existing: stored, wantAbs: true},
+		{name: "update/new value replaces", incoming: `{"host":"new","password":"rotated"}`, existing: stored, wantPW: "rotated"},
+
+		{name: "create/absent stays absent", incoming: `{"host":"new","port":5432}`, existing: "", wantAbs: true},
+		{name: "create/masked stays absent", incoming: `{"host":"new","password":"***"}`, existing: "", wantAbs: true},
+		{name: "create/empty stays absent", incoming: `{"host":"new","password":""}`, existing: "", wantAbs: true},
+		{name: "create/new value kept", incoming: `{"host":"new","password":"fresh"}`, existing: "", wantPW: "fresh"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var existing json.RawMessage
+			if tc.existing != "" {
+				existing = json.RawMessage(tc.existing)
+			}
+			merged, err := MergeMonitorConfigSecrets("postgres", json.RawMessage(tc.incoming), existing)
+			if err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+			m := configMap(t, merged)
+			got, present := m["password"]
+			if tc.wantAbs {
+				if present {
+					t.Fatalf("password = %v, want absent", got)
+				}
+				return
+			}
+			if got != tc.wantPW {
+				t.Fatalf("password = %v, want %v", got, tc.wantPW)
+			}
+			if m["host"] != "new" {
+				t.Fatalf("host = %v, want new (non-secret fields must pass through)", m["host"])
+			}
+		})
+	}
+}
+
+// TestMergeMonitorConfigSecrets_MapContract pins the same contract for a map
+// secret field. The whole-field rules mirror the scalar ones; per-key rules
+// only apply when the field is present, because editing a submitted map is
+// explicit intent.
+func TestMergeMonitorConfigSecrets_MapContract(t *testing.T) {
+	const stored = `{"url":"wss://old.test/socket","headers":{"Authorization":"stored-auth","Cookie":"stored-cookie"}}`
+
+	cases := []struct {
+		name        string
+		incoming    string
+		existing    string
+		wantHeaders map[string]string
+		wantAbsent  bool
+	}{
+		{
+			name:        "update/field absent keeps stored map",
+			incoming:    `{"url":"wss://new.test/socket"}`,
+			existing:    stored,
+			wantHeaders: map[string]string{"Authorization": "stored-auth", "Cookie": "stored-cookie"},
+		},
+		{
+			name:        "update/all keys masked keeps stored values",
+			incoming:    `{"url":"wss://new.test/socket","headers":{"Authorization":"***","Cookie":"***"}}`,
+			existing:    stored,
+			wantHeaders: map[string]string{"Authorization": "stored-auth", "Cookie": "stored-cookie"},
+		},
+		{
+			name:       "update/empty values clear the whole field",
+			incoming:   `{"url":"wss://new.test/socket","headers":{"Authorization":"","Cookie":""}}`,
+			existing:   stored,
+			wantAbsent: true,
+		},
+		{
+			name:        "update/new values replace",
+			incoming:    `{"url":"wss://new.test/socket","headers":{"Authorization":"rotated","Cookie":"fresh"}}`,
+			existing:    stored,
+			wantHeaders: map[string]string{"Authorization": "rotated", "Cookie": "fresh"},
+		},
+		{
+			name:        "update/present map still drops omitted keys",
+			incoming:    `{"url":"wss://new.test/socket","headers":{"Authorization":"***"}}`,
+			existing:    stored,
+			wantHeaders: map[string]string{"Authorization": "stored-auth"},
+		},
+		{
+			name:       "update/empty object clears the field",
+			incoming:   `{"url":"wss://new.test/socket","headers":{}}`,
+			existing:   stored,
+			wantAbsent: true,
+		},
+
+		{name: "create/field absent stays absent", incoming: `{"url":"wss://new.test/socket"}`, existing: "", wantAbsent: true},
+		{name: "create/masked keys stay absent", incoming: `{"url":"wss://new.test/socket","headers":{"Authorization":"***"}}`, existing: "", wantAbsent: true},
+		{name: "create/empty values stay absent", incoming: `{"url":"wss://new.test/socket","headers":{"Authorization":""}}`, existing: "", wantAbsent: true},
+		{
+			name:        "create/new values kept",
+			incoming:    `{"url":"wss://new.test/socket","headers":{"Authorization":"Bearer t"}}`,
+			existing:    "",
+			wantHeaders: map[string]string{"Authorization": "Bearer t"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var existing json.RawMessage
+			if tc.existing != "" {
+				existing = json.RawMessage(tc.existing)
+			}
+			merged, err := MergeMonitorConfigSecrets("websocket", json.RawMessage(tc.incoming), existing)
+			if err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+			m := configMap(t, merged)
+			raw, present := m["headers"]
+			if tc.wantAbsent {
+				if present {
+					t.Fatalf("headers = %v, want absent", raw)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("headers absent, want %v", tc.wantHeaders)
+			}
+			got, ok := stringMap(raw)
+			if !ok {
+				t.Fatalf("headers not a string map: %v", raw)
+			}
+			if len(got) != len(tc.wantHeaders) {
+				t.Fatalf("headers = %v, want %v", got, tc.wantHeaders)
+			}
+			for key, want := range tc.wantHeaders {
+				if got[key] != want {
+					t.Fatalf("header %q = %q, want %q", key, got[key], want)
+				}
+			}
+			if m["url"] != "wss://new.test/socket" {
+				t.Fatalf("url = %v, want the submitted value", m["url"])
+			}
+		})
+	}
+}
+
+// TestMergeMonitorConfigSecrets_TagEditKeepsPostgresPassword reproduces the
+// production incident: a postgres monitor edited only to change tags submitted
+// a config without a `password` key at all (not "***"), which used to drop the
+// stored credential and break every subsequent check with a SASL auth failure.
+// `password` is optional for the type (connection_string is the alternative),
+// so validation could not catch it.
+func TestMergeMonitorConfigSecrets_TagEditKeepsPostgresPassword(t *testing.T) {
+	existing := json.RawMessage(`{"host":"db.internal","port":5432,"database":"app","username":"probe","ssl_mode":"require","password":"v1:stored-ciphertext"}`)
+	incoming := json.RawMessage(`{"host":"db.internal","port":5432,"database":"app","username":"probe","ssl_mode":"require"}`)
+
+	merged, err := MergeMonitorConfigSecrets("postgres", incoming, existing)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	m := configMap(t, merged)
+	if m["password"] != "v1:stored-ciphertext" {
+		t.Fatalf("password = %v, want the stored ciphertext preserved", m["password"])
+	}
+	for field, want := range map[string]any{
+		"host":     "db.internal",
+		"database": "app",
+		"username": "probe",
+		"ssl_mode": "require",
+	} {
+		if m[field] != want {
+			t.Fatalf("%s = %v, want %v", field, m[field], want)
+		}
 	}
 }
 

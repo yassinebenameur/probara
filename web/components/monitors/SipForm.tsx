@@ -86,6 +86,10 @@ export default function SipForm({
     if (formData.username.trim()) {
       config.username = formData.username.trim();
       config.password = formData.password;
+    } else if (editSipConfig?.password) {
+      // Auth dropped: an omitted secret field means "keep the stored value"
+      // server-side, so clearing it takes an explicit empty string.
+      config.password = '';
     }
     if (formData.domain.trim()) config.domain = formData.domain.trim();
     if (formData.transport === 'tls' && formData.tls_skip_verify) config.tls_skip_verify = true;

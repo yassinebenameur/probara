@@ -44,6 +44,12 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   (`MonitorSecretFields` / `MonitorSecretMapFields`). One entry gives
   encryption at rest, `***` masking on reads, write-only merge on updates,
   and correct scheduler/worker/location handling — no per-type code.
+  The merge contract per secret field is: absent → keep stored, `***` → keep
+  stored, `""` → clear, anything else → replace (map fields keep the stored
+  map only when the whole field is absent; a submitted map is edited per key).
+  So a form that drops a stored secret on purpose — a Clear button, switching
+  a database monitor between connection-string and discrete-field mode — must
+  submit `""`, never omit the field.
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert
