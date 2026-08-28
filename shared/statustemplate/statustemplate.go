@@ -20,6 +20,17 @@ import (
 //go:embed default.gohtml
 var DefaultSource string
 
+// ServiceWorkerSource is the push service worker the status-page service
+// serves at /public/status/sw.js. It lives here beside the template because
+// the two are one unit: the template registers this worker, and the payload
+// fields the worker reads are produced by the push sender.
+//
+// It is the only status page asset that cannot be inlined -- a service worker
+// must be fetched from a real URL for its scope to mean anything.
+//
+//go:embed sw.js
+var ServiceWorkerSource string
+
 // MaxSourceSize bounds customer-supplied template sources. The default
 // template is ~130KB; 512KB leaves generous room without letting a template
 // balloon render cost or DB rows.

@@ -28,30 +28,41 @@ type Handlers struct {
 	logger  *logger.Logger
 	hub     *Hub
 	cache   *renderCache
+	// pushStore is the package's only Postgres write path (see push_store.go).
+	// Nil when browser notifications are not configured, which makes the push
+	// routes 404.
+	pushStore   *pushStore
+	pushLimiter *pushRateLimiter
 }
 
 // NewHandlers creates a new status page handlers
-func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Logger, hub *Hub, cache *renderCache) *Handlers {
+func NewHandlers(service *Service, cfg *config.StatusPageConfig, log *logger.Logger, hub *Hub, cache *renderCache, pushes *pushStore) *Handlers {
 	return &Handlers{
-		service: service,
-		config:  cfg,
-		logger:  log,
-		hub:     hub,
-		cache:   cache,
+		service:     service,
+		config:      cfg,
+		logger:      log,
+		hub:         hub,
+		cache:       cache,
+		pushStore:   pushes,
+		pushLimiter: newPushRateLimiter(),
 	}
 }
 
 // HandleStatusPage handles GET /public/status/{slug} and GET /public/status/{slug}/data
 func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	// Extract slug from path
 	path := strings.TrimPrefix(r.URL.Path, "/public/status/")
 	if path == "" {
 		http.Error(w, "Status page not found", http.StatusNotFound)
+		return
+	}
+
+	// The push routes are POST and do their own method checks. Every other
+	// route below is read-only, so the GET guard moved down here rather than
+	// staying above the sub-routing.
+	isPushRoute := strings.HasSuffix(path, "/push/subscribe") || strings.HasSuffix(path, "/push/unsubscribe")
+	if !isPushRoute && r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -70,6 +81,18 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 	// Check if this is a draft template preview request
 	if strings.HasSuffix(path, "/preview/draft") {
 		h.HandleDraftPreview(w, r, strings.TrimSuffix(path, "/preview/draft"))
+		return
+	}
+
+	// Push subscription management. These are POST, so they are dispatched
+	// here rather than above the method guard being moved -- see the guard at
+	// the top of this function, which only ever sees the GET routes.
+	if slug, ok := strings.CutSuffix(path, "/push/subscribe"); ok {
+		h.HandlePushSubscribe(w, r, slug)
+		return
+	}
+	if slug, ok := strings.CutSuffix(path, "/push/unsubscribe"); ok {
+		h.HandlePushUnsubscribe(w, r, slug)
 		return
 	}
 

@@ -158,6 +158,18 @@ export const STATUS_PAGES_PAGE: DocPage = {
               "`GET /public/status/{slug}/preview/draft`",
               "Draft-template preview, protected by a preview token when configured",
             ],
+            [
+              "`GET /public/status/sw.js`",
+              "Push service worker. Served from the parent path, not under a slug, so its scope covers the page URL; see [visitor notifications](#browser-notifications)",
+            ],
+            [
+              "`POST /public/status/{slug}/push/subscribe`",
+              "Stores a browser push subscription. Returns 404 unless the page enables notifications and the deployment has VAPID keys",
+            ],
+            [
+              "`POST /public/status/{slug}/push/unsubscribe`",
+              "Removes a browser push subscription. Always 204, so it cannot be used to probe which endpoints exist",
+            ],
           ],
         },
         {

@@ -373,6 +373,21 @@ go run ./cmd/admin/encrypt_existing_channels`,
           text:
             'The monitor dial guard does not automatically protect alerter/notification webhooks or arbitrary LLM provider base URLs. Restrict those services with network policy, proxy allowlists, DNS policy, or provider allowlists so tenant-controlled destinations cannot reach sensitive internal services.',
         },
+        {
+          type: 'paragraph',
+          text:
+            'Status page browser notifications add a third egress path with its own guard. The subscribe endpoint is the only unauthenticated write in the status-page service, and the endpoint it stores is a URL the platform later POSTs to, unattended, from inside the cluster — so an unguarded version would let any visitor turn the subscription table into a stored-SSRF and outbound spam primitive.',
+        },
+        {
+          type: 'list',
+          items: [
+            'Stored endpoints must be `https` and must match `STATUS_PAGE_PUSH_ENDPOINT_ALLOWLIST` (default: the Google, Mozilla, Microsoft, and Apple push services). Matching is on a dot boundary, so `fcm.googleapis.com.attacker.example` does not match `fcm.googleapis.com`.',
+            'Setting the allowlist to `*` disables the check for a self-hosted push service and re-opens this surface; restrict egress by network policy if you do.',
+            'Request bodies are capped, subscriptions are rate limited per client IP, and each page has a subscription cap so the table cannot grow without bound.',
+            '`X-Forwarded-For` is honored for rate-limit keying only when `STATUS_PAGE_TRUSTED_PROXY=true`, because the header is client-settable.',
+            'Subscriptions store only the opaque browser endpoint and its public keys — no visitor identity, no email address, and no page-visit history.',
+          ],
+        },
       ],
     },
     {
