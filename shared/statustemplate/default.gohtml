@@ -1301,6 +1301,8 @@
   data-allow-theme-toggle="{{if .AllowThemeToggle}}1{{else}}0{{end}}"
   data-default-range="{{.DefaultRange}}"
   data-default-mode="default"
+  data-push-enabled="{{if .PushEnabled}}1{{else}}0{{end}}"
+  data-push-key="{{.PushPublicKey}}"
 >
   <div class="kiosk-view">
     <div class="kiosk-bar">
@@ -1389,6 +1391,9 @@
         {{end}}
         {{if .AllowThemeToggle}}
           <button type="button" class="btn-s" id="themeToggleBtn">Theme</button>
+        {{end}}
+        {{if .PushEnabled}}
+          <button type="button" class="btn-s" id="pushToggleBtn" aria-pressed="false" hidden>Notify me</button>
         {{end}}
       </div>
     </div>
@@ -1726,6 +1731,7 @@
           rangeButtons: Array.from(document.querySelectorAll('[data-range-pill]')),
           modeButtons: Array.from(document.querySelectorAll('[data-mode]')),
           themeToggleBtn: document.getElementById('themeToggleBtn'),
+          pushToggleBtn: document.getElementById('pushToggleBtn'),
           kioskExitBtn: document.getElementById('kioskExitBtn'),
           strips: Array.from(document.querySelectorAll('.js-strip[data-active-range]')),
           monitorUptimeValues: Array.from(document.querySelectorAll('[data-monitor-uptime-value]')),
@@ -2331,8 +2337,188 @@
       setupClock();
       setupBarTooltip();
       setupKioskNamePopover();
+
+      // ---- Browser notifications (Web Push) --------------------------------
+      //
+      // The page and the service worker are two halves of one feature: this
+      // registers the worker served at /public/status/sw.js and stores the
+      // resulting subscription server-side; the sender encrypts payloads the
+      // worker knows how to render.
+
+      // Keyed per slug, matching the status-page-collapsed-<slug> convention
+      // above. slug is scoped to setupLiveRefresh, so read the body attribute
+      // directly rather than depending on that.
+      var pushSlug = body.dataset.statusPageSlug || '';
+      var PUSH_STATE_KEY = 'status-page-push-' + pushSlug;
+      var PUSH_SEEN_KEY = 'status-page-push-seen-' + pushSlug;
+
+      function pushSupported() {
+        // isSecureContext is the one that bites operationally: localhost is a
+        // secure context so development works, but a plain-HTTP staging host
+        // silently has no notifications at all.
+        return body.dataset.pushEnabled === '1' &&
+          !!body.dataset.pushKey &&
+          typeof window !== 'undefined' &&
+          window.isSecureContext &&
+          'serviceWorker' in navigator &&
+          'PushManager' in window &&
+          'Notification' in window;
+      }
+
+      // iOS and iPadOS only deliver Web Push to a site installed to the Home
+      // Screen; requestPermission in an ordinary Safari tab fails. Detect it
+      // and say so, rather than showing a button that does nothing.
+      function iosNeedsHomeScreen() {
+        var iOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        return iOS && !window.navigator.standalone;
+      }
+
+      function pushPaths() {
+        // Derived from the current path, never hardcoded, so the page keeps
+        // working behind a path prefix or on a custom domain.
+        var path = window.location.pathname.replace(/\/+$/, '');
+        var base = path.replace(/\/[^/]*$/, '');
+        return {
+          worker: base + '/sw.js',
+          scope: path + '/',
+          subscribe: path + '/push/subscribe',
+          unsubscribe: path + '/push/unsubscribe'
+        };
+      }
+
+      function urlBase64ToUint8Array(value) {
+        var padded = (value + '='.repeat((4 - (value.length % 4)) % 4))
+          .replace(/-/g, '+').replace(/_/g, '/');
+        var raw = window.atob(padded);
+        var out = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i += 1) { out[i] = raw.charCodeAt(i); }
+        return out;
+      }
+
+      function setPushButton(state, label) {
+        if (!dom.pushToggleBtn) return;
+        dom.pushToggleBtn.hidden = false;
+        dom.pushToggleBtn.textContent = label;
+        dom.pushToggleBtn.setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
+        dom.pushToggleBtn.disabled = state === 'blocked' || state === 'unavailable';
+        if (state === 'blocked') {
+          dom.pushToggleBtn.title = 'Notifications are blocked for this site in your browser settings.';
+        } else if (state === 'unavailable') {
+          dom.pushToggleBtn.title = 'Add this page to your Home Screen to enable notifications.';
+        } else {
+          dom.pushToggleBtn.removeAttribute('title');
+        }
+      }
+
+      function postPushJSON(url, payload) {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      function registerPushWorker() {
+        var paths = pushPaths();
+        // Register with a scope narrowed to THIS page. The worker is served
+        // from the parent directory so its max scope allows this; a worker
+        // served under the slug would have a scope that does not cover the
+        // page URL at all.
+        return navigator.serviceWorker.register(paths.worker, { scope: paths.scope });
+      }
+
+      function refreshPushSubscription(registration) {
+        // Touch the server roughly daily so last_seen_at stays fresh and the
+        // stale sweep does not retire an active subscriber.
+        var last = 0;
+        try { last = parseInt(window.localStorage.getItem(PUSH_SEEN_KEY) || '0', 10) || 0; } catch (e) {}
+        if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+
+        registration.pushManager.getSubscription().then(function (sub) {
+          if (!sub) return;
+          return postPushJSON(pushPaths().subscribe, sub.toJSON()).then(function () {
+            try { window.localStorage.setItem(PUSH_SEEN_KEY, String(Date.now())); } catch (e) {}
+          });
+        }).catch(function () {});
+      }
+
+      function enablePush() {
+        // requestPermission must be called from the click handler itself:
+        // Safari and Firefox both require a user gesture.
+        return Notification.requestPermission().then(function (permission) {
+          if (permission === 'denied') { setPushButton('blocked', 'Notifications blocked'); return; }
+          if (permission !== 'granted') { setPushButton('off', 'Notify me'); return; }
+
+          return registerPushWorker().then(function (registration) {
+            return registration.pushManager.subscribe({
+              // Required by Chrome, and it is what obliges the worker to show
+              // a notification for every push it receives.
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(body.dataset.pushKey)
+            });
+          }).then(function (sub) {
+            return postPushJSON(pushPaths().subscribe, sub.toJSON()).then(function (res) {
+              if (!res.ok) throw new Error('subscribe rejected');
+              try {
+                window.localStorage.setItem(PUSH_STATE_KEY, '1');
+                window.localStorage.setItem(PUSH_SEEN_KEY, String(Date.now()));
+              } catch (e) {}
+              setPushButton('on', 'Notifications on');
+            });
+          });
+        }).catch(function () {
+          setPushButton('off', 'Notify me');
+        });
+      }
+
+      function disablePush() {
+        return navigator.serviceWorker.ready.then(function (registration) {
+          return registration.pushManager.getSubscription();
+        }).then(function (sub) {
+          if (!sub) return;
+          // Tell the server BEFORE unsubscribing locally: if the order were
+          // reversed and the request failed, the row would linger and the
+          // visitor would keep getting notifications with no way to stop.
+          return postPushJSON(pushPaths().unsubscribe, { endpoint: sub.endpoint })
+            .then(function () { return sub.unsubscribe(); });
+        }).then(function () {
+          try { window.localStorage.removeItem(PUSH_STATE_KEY); } catch (e) {}
+          setPushButton('off', 'Notify me');
+        }).catch(function () {
+          setPushButton('off', 'Notify me');
+        });
+      }
+
+      function setupPush() {
+        if (!dom.pushToggleBtn || !pushSupported()) return;
+        if (iosNeedsHomeScreen()) { setPushButton('unavailable', 'Notify me'); return; }
+        if (Notification.permission === 'denied') { setPushButton('blocked', 'Notifications blocked'); return; }
+
+        // The browser is the source of truth, not localStorage: permission
+        // can be revoked in browser settings without the page ever knowing.
+        navigator.serviceWorker.getRegistration(pushPaths().scope).then(function (registration) {
+          if (!registration) { setPushButton('off', 'Notify me'); return; }
+          return registration.pushManager.getSubscription().then(function (sub) {
+            setPushButton(sub ? 'on' : 'off', sub ? 'Notifications on' : 'Notify me');
+            if (sub) refreshPushSubscription(registration);
+          });
+        }).catch(function () {
+          setPushButton('off', 'Notify me');
+        });
+
+        dom.pushToggleBtn.addEventListener('click', function () {
+          if (dom.pushToggleBtn.disabled) return;
+          var on = dom.pushToggleBtn.getAttribute('aria-pressed') === 'true';
+          dom.pushToggleBtn.disabled = true;
+          var done = function () { dom.pushToggleBtn.disabled = false; };
+          (on ? disablePush() : enablePush()).then(done, done);
+        });
+      }
+
       applyViewState();
       setupLiveRefresh();
+      setupPush();
     })();
   </script>
 </body>

@@ -245,6 +245,20 @@ services:
       # Shared with the api service; gates draft-template previews with a
       # token minted by the API. Leave unset to allow open previews (dev).
       STATUS_PAGE_PREVIEW_SECRET: "${STATUS_PAGE_PREVIEW_SECRET:-}"
+      # VAPID keypair for visitor browser notifications. Both halves must be
+      # set for the feature to exist; unset means no notification control is
+      # rendered and the push routes 404. Mint a pair with
+      # `go run ./cmd/admin/gen_vapid_keys` and export them before `up`.
+      #
+      # Never generate these per process: this service scales to more than one
+      # replica in production, and a subscription created against one replica
+      # is unusable by another holding a different key.
+      #
+      # The public key is not a credential -- it ships inside every rendered
+      # page as the applicationServerKey.
+      STATUS_PAGE_VAPID_PUBLIC_KEY: "${STATUS_PAGE_VAPID_PUBLIC_KEY:-}"
+      STATUS_PAGE_VAPID_PRIVATE_KEY: "${STATUS_PAGE_VAPID_PRIVATE_KEY:-}"
+      STATUS_PAGE_VAPID_SUBJECT: "${STATUS_PAGE_VAPID_SUBJECT:-}"
     ports:
       - "8082:8082"
       - "9093:9093"

@@ -187,6 +187,62 @@ export const STATUS_PAGES_PAGE: DocPage = {
       ],
     },
     {
+      id: "browser-notifications",
+      title: "Visitor browser notifications",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "A visitor can opt into browser push notifications for a status page. They are told when a component the page shows goes down, and again when it comes back up — including when the tab and the browser are closed. This is real Web Push (a service worker plus a VAPID keypair), not a notification raised by the open page.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Two things must both be true for the control to appear: the page sets `enable_push_notifications`, and the deployment configures `STATUS_PAGE_VAPID_PUBLIC_KEY` and `STATUS_PAGE_VAPID_PRIVATE_KEY`. Either alone renders nothing, because either alone would produce a button that cannot work.",
+        },
+        {
+          type: "table",
+          columns: ["Transition", "Notification"],
+          rows: [
+            ["A component enters `down`", "Sent"],
+            ["A component returns to `up` from `down`", "Sent"],
+            ["`degraded`, in either direction", "Not sent — some but not enough locations are failing, so the component is still up for most visitors"],
+            ["`suspect`", "Not sent — mid-confirmation, by design not yet an outage"],
+            ["`unknown`, or a paused monitor", "Not sent"],
+            ["Any monitor inside an active maintenance window", "Not sent"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Intermediate states are skipped rather than reported, so `up → suspect → down` is one notification, `down → suspect → down` is none, and `down → degraded → up` is a single recovery. A transition that reverses within about a minute never notifies at all.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Group components do not notify on their own",
+          text:
+            "A group monitor's state is derived by the alerter rather than written by the state machine, so it produces no state-transition record. A group shown on a page never raises a notification for itself; its member monitors do, and the notification names the member as the page labels it.",
+        },
+        {
+          type: "list",
+          items: [
+            "Notifications require a secure context. Localhost counts, so development works, but a plain-HTTP deployment shows no control at all.",
+            "On iPhone and iPad, Web Push only works for a page added to the Home Screen. The control says so rather than failing silently in an ordinary Safari tab.",
+            "Turning the setting off stops new notifications but keeps existing subscriptions, so re-enabling does not force everyone to opt in again.",
+            "Rotating the VAPID keypair invalidates every stored subscription — push services bind an endpoint to the key that created it — and every visitor must opt in again.",
+            "A page rendered by a custom template gets no control unless the author adds one; `.PushEnabled` and `.PushPublicKey` are available in the template context.",
+            "Subscriptions store only the opaque browser endpoint and its public keys. No visitor identity, email address, or visit history is recorded.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Delivery is driven by the recorded state timeline rather than by live events, so a notification is not lost when a message is dropped or a replica restarts. Transitions older than about fifteen minutes are discarded instead of delivered late: a notification saying a service is down, arriving after it recovered, is worse than none.",
+        },
+      ],
+    },
+    {
       id: "monitor-data",
       title: "Monitor data on a public page",
       blocks: [

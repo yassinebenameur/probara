@@ -493,3 +493,46 @@ func TestBuildStatusPageRenderView_PushRequiresSettingAndKey(t *testing.T) {
 		})
 	}
 }
+
+// The control must be absent -- not merely hidden -- when push is off, so a
+// page that never opted in ships no notification affordance at all.
+func TestRenderStatusPage_PushToggleFollowsPushEnabled(t *testing.T) {
+	base := &StatusPageData{
+		ID: "11111111-1111-1111-1111-111111111111", Slug: "acme", Title: "Acme",
+		AllowThemeToggle: true,
+	}
+
+	off, _, err := renderStatusPageHTML(base, false)
+	if err != nil {
+		t.Fatalf("renderStatusPageHTML() error = %v", err)
+	}
+	if strings.Contains(off, `id="pushToggleBtn"`) {
+		t.Fatalf("notification control rendered on a page that did not enable push")
+	}
+	if strings.Contains(off, `data-push-enabled="1"`) {
+		t.Fatalf("data-push-enabled is 1 on a page that did not enable push")
+	}
+
+	base.PushNotificationsEnabled = true
+	base.PushPublicKey = "BExampleApplicationServerKey"
+	on, _, err := renderStatusPageHTML(base, false)
+	if err != nil {
+		t.Fatalf("renderStatusPageHTML() error = %v", err)
+	}
+	if !strings.Contains(on, `id="pushToggleBtn"`) {
+		t.Fatalf("notification control missing when push is enabled")
+	}
+	// Rendered hidden: the script reveals it only once feature detection
+	// passes, so an unsupported browser never sees a dead button.
+	if !strings.Contains(on, `id="pushToggleBtn" aria-pressed="false" hidden`) {
+		t.Fatalf("notification control is not rendered hidden")
+	}
+	if !strings.Contains(on, `data-push-key="BExampleApplicationServerKey"`) {
+		t.Fatalf("application server key not exposed to the client script")
+	}
+	// The body attributes and the header both sit outside the regions the
+	// live refresh swaps, so the control survives an SSE-driven refresh.
+	if !strings.Contains(on, `data-push-enabled="1"`) {
+		t.Fatalf("data-push-enabled not set when push is enabled")
+	}
+}

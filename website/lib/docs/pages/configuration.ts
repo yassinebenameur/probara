@@ -708,7 +708,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_BASE_URL`',
               'Empty',
-              'Loaded into status config but currently has no runtime effect.',
+              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications); when empty, the notification opens the page via the service worker scope rather than a guessed host.',
             ],
             [
               '`STATUS_PAGE_API_BASE_URL`',
@@ -738,7 +738,37 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUSPAGE_UPDATES_SUBJECT`',
               '`statuspage.updates`',
-              'Core NATS live-invalidation subject shared by API, scheduler, and status service.',
+              'Core NATS live-invalidation subject shared by API, scheduler, and status service. Also wakes the push sender early; delivery does not depend on it.',
+            ],
+            [
+              '`STATUS_PAGE_VAPID_PUBLIC_KEY`',
+              'Empty',
+              'VAPID application server key for [visitor notifications](/docs/status-pages/#browser-notifications). Published inside every rendered page, so it is not a secret. Generate with `go run ./cmd/admin/gen_vapid_keys`.',
+            ],
+            [
+              '`STATUS_PAGE_VAPID_PRIVATE_KEY`',
+              'Empty',
+              'Signs the push JWT. A credential. Notifications are disabled unless both key halves are set; never generate per process, because replicas would disagree and a restart would invalidate every subscription.',
+            ],
+            [
+              '`STATUS_PAGE_VAPID_SUBJECT`',
+              'Empty',
+              '`mailto:` or `https:` operator contact for the VAPID `sub` claim. Some push services reject a missing or malformed value.',
+            ],
+            [
+              '`STATUS_PAGE_PUSH_ENDPOINT_ALLOWLIST`',
+              'Google, Mozilla, Microsoft, Apple push hosts',
+              'Comma-separated host suffixes a stored push endpoint may use. This is an [SSRF control](/docs/security/#ssrf-network-policy); `*` disables it for a self-hosted push service.',
+            ],
+            [
+              '`STATUS_PAGE_PUSH_MAX_SUBSCRIPTIONS_PER_PAGE`',
+              '`10000`',
+              'Cap on stored subscriptions per status page. Invalid or nonpositive input falls back to the default.',
+            ],
+            [
+              '`STATUS_PAGE_TRUSTED_PROXY`',
+              '`false`',
+              'Honor `X-Forwarded-For` when rate-limiting push subscribes. Off by default because the header is client-settable.',
             ],
           ],
         },

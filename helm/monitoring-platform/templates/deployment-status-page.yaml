@@ -67,6 +67,21 @@ spec:
         - name: STATUS_PAGE_BASE_URL
           value: "{{ .Values.statusPage.baseUrl }}"
         {{- end }}
+        {{- if .Values.statusPage.vapid.publicKey }}
+        # Rendered as a literal on purpose. The VAPID public key is published
+        # inside every status page as the applicationServerKey, so it is not a
+        # credential and does not belong in a Secret. Its private half below
+        # always goes through secretEnv.
+        - name: STATUS_PAGE_VAPID_PUBLIC_KEY
+          value: "{{ .Values.statusPage.vapid.publicKey }}"
+        {{- end }}
+        {{- if .Values.statusPage.vapid.subject }}
+        - name: STATUS_PAGE_VAPID_SUBJECT
+          value: "{{ .Values.statusPage.vapid.subject }}"
+        {{- end }}
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.statusPageVapidPrivateKey "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "STATUS_PAGE_VAPID_PRIVATE_KEY" "key" "status_page_vapid_private_key" "secret" .Values.secrets.statusPageVapidPrivateKeyExistingSecret "secretKey" .Values.secrets.statusPageVapidPrivateKeyExistingSecretKey) | nindent 8 }}
+        {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

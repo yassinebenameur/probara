@@ -68,6 +68,20 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   group's `enabled` flag while the group's own alert requires it, so a paused
   `group`-rollup group silences its whole membership. Reachability *reports*
   that (`group_rollup_paused`); dispatch still behaves that way.
+- **Status page push notifications**: `monitor_state_intervals` (migration
+  000082) is the trigger source, not `statuspage.updates`. The NATS subject
+  cannot carry it: push/agent/OTLP monitors discard the `Transition` from
+  `monitorstate.Record` and publish `check_result` unconditionally
+  (`api/internal/services/{push,agent,otlp}/service.go`), so the watchdog
+  announces their down and nothing announces their up; and the subject is
+  fire-and-forget core NATS with no redelivery. Anything that changes how
+  intervals are written now has a real-time consumer. The notify rule lives
+  twice — `classifyPushTransition` (Go) and the CASE in
+  `reconcileNotifications` (SQL); change them together. Page membership for
+  fan-out uses the **rendered** set (`status_page_section_monitors`, legacy
+  `status_page_monitors`), never `statusPageSlugQuery`, which resolves upward
+  through `monitor_groups` and would push a member's name to a page that only
+  lists its parent group.
 - **Monitor state semantics**: `docs/state-semantics.md` (rules `S-*`).
   Changes to state transitions, quorum aggregation, freshness/absence,
   pause/maintenance handling, or uptime accounting must update the rule
@@ -156,6 +170,17 @@ or imported groups come back empty. Any other path that creates groups through
   `APP_BASE_URL` is the operator-UI origin and only adds the "open the
   monitor" button to alert email — unset omits the button, never a guessed
   host.
+- **`STATUS_PAGE_VAPID_*`**: status-page only, and both key halves are
+  required or visitor notifications are off (no control rendered, push routes
+  404). The **public** key is deliberately a literal `value:` in the PodSpec —
+  the one documented exception to the never-a-literal rule, because it ships
+  inside every rendered page as the `applicationServerKey`. The private key
+  goes through `monitoring-platform.secretEnv` under canonical key
+  `status_page_vapid_private_key`. Never generate the pair at startup: the
+  deployment runs 2 replicas, so each would mint a different pair and a
+  subscription created against one would be unusable by another. Rotating the
+  pair invalidates **every** stored subscription. Mint with
+  `go run ./cmd/admin/gen_vapid_keys`.
 - **Helm `extraEnv`**: top-level (all workloads incl. migrations job) and
   `<service>.extraEnv`; `worker.extraEnv` also reaches location workers, and
   `worker.locations[]` entries can carry their own.
@@ -223,8 +248,10 @@ or imported groups come back empty. Any other path that creates groups through
   (landing/docs favicon), and an inline data-URI `<link rel="icon">` in
   `shared/statustemplate/default.gohtml` (status pages, monochrome variant
   that inverts with browser chrome). Same trace geometry, four copies —
-  status pages get a data URI because the service has no static-asset route
-  and pages render under arbitrary domains and path prefixes. Alert email is
+  status pages get a data URI because pages render under arbitrary domains
+  and path prefixes (the service now has exactly one static route — the push
+  service worker, which must be a real URL for its scope to mean anything —
+  but every other asset stays inlined). Alert email is
   the deliberate exception: `shared/notifications/plugin/builtin/email/alert.gohtml`
   draws a bar trace out of table cells because Gmail drops `data:` image URIs
   and every client can block remote ones — a masthead that vanishes is worse
@@ -239,6 +266,19 @@ or imported groups come back empty. Any other path that creates groups through
   `summaryFor`/`toneFor`/`metricFor`, never in the template. `smtp.go`
   assembles `multipart/alternative` with base64 parts (long styled lines
   otherwise trip the SMTP 998-octet limit) and RFC 2047 headers.
+
+- **status-page is read-only except for push.** The `Service` takes a
+  `db.Querier` and `service.go` stubs `ExecContext` into a refusal so stray
+  writes cannot compile. `pushStore` (`push_store.go`) is the single
+  deliberate exception and the only holder of a `*sql.DB` in the package; it
+  is constructed only when VAPID keys are set, so an unconfigured deployment
+  stays strictly read-only. Do not widen `Querier` to add a write.
+
+- **`Subscriber.handleEvent` early-returns** when no SSE client is connected
+  and the render cache is empty. That is exactly the situation browser
+  notifications exist for, so the push wake-up sits **above** that guard.
+  Anything else hooked in below it will never fire for the case it was built
+  to serve.
 
 - **rtk output filter** (user-global CLAUDE.md tool) truncates long command
   output in pipes — `helm template`, large `curl` responses. Use

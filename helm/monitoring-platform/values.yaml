@@ -167,6 +167,12 @@ secrets:
   oidcClientSecret: ""
   oidcClientSecretExistingSecret: ""
   oidcClientSecretExistingSecretKey: oidc_client_secret
+  # VAPID private key for status page visitor notifications (status-page only).
+  # Its public half is statusPage.vapid.publicKey and is NOT a secret.
+  # Generate both with `go run ./cmd/admin/gen_vapid_keys`.
+  statusPageVapidPrivateKey: ""
+  statusPageVapidPrivateKeyExistingSecret: ""
+  statusPageVapidPrivateKeyExistingSecretKey: status_page_vapid_private_key
 
 # Extra environment variables appended to EVERY workload (api, scheduler,
 # worker, location workers, alerter, status page, frontend, migrations job).
@@ -401,6 +407,26 @@ statusPage:
     limits:
       cpu: "200m"
       memory: "128Mi"
+  # Visitor browser notifications (Web Push). Both key halves must be set for
+  # the feature to exist: unset means no notification control is rendered and
+  # the push routes 404.
+  #
+  # Mint a pair once with `go run ./cmd/admin/gen_vapid_keys`. Never let the
+  # service generate them: this deployment runs multiple replicas, so each
+  # would mint a different pair and a subscription created against one replica
+  # would be unusable by another. Rotating the pair invalidates every stored
+  # subscription -- push services bind an endpoint to the key that created it
+  # -- and every visitor must opt in again.
+  vapid:
+    # The public key is rendered as a literal `value:` in the PodSpec. This is
+    # a deliberate exception to the chart's never-a-literal rule: it ships
+    # inside every rendered status page as the applicationServerKey, so it is
+    # published data, not a credential. Do not "fix" it into a Secret.
+    publicKey: ""
+    # Contact for the VAPID JWT "sub" claim: a mailto: or https: URI. Some
+    # push services reject a missing or malformed one.
+    subject: ""
+
   # Extra env vars for the status-page service only (Kubernetes EnvVar
   # entries), e.g. STATUS_PAGE_PREVIEW_SECRET.
   extraEnv: []
