@@ -161,15 +161,19 @@
     .header-right {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex-shrink: 0;
     }
     .mode-toggle {
       display: flex;
+      height: 32px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-pill);
       overflow: hidden;
+      /* Breathing room between the labelled group and the icon pair; the two
+         kinds of control read as separate clusters rather than one run. */
+      margin-right: 4px;
     }
     .mode-btn,
     .btn-s,
@@ -180,13 +184,15 @@
     }
     .mode-btn {
       appearance: none;
+      display: inline-flex;
+      align-items: center;
       background: none;
       border: none;
       color: var(--text-muted);
       font: 500 .72rem var(--mono);
       text-transform: uppercase;
       letter-spacing: .05em;
-      padding: 8px 12px;
+      padding: 0 12px;
       cursor: pointer;
     }
     .mode-btn:hover { color: var(--text); }
@@ -206,17 +212,33 @@
       font-size: .78rem;
       font-weight: 500;
     }
-    /* Icon-only variant: square padding so the glyph sits centred rather
-       than inheriting the text button's horizontal padding. */
+    /* Icon-only variant. Circular, at the shared 32px control height, so the
+       icon pair echoes the header capsule's pill geometry instead of sitting
+       as rounded rectangles inside it. */
     .btn-s.btn-icon {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       padding: 0;
-      width: 30px;
-      height: 30px;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-pill);
       color: var(--text-muted);
     }
+    .btn-s.btn-icon:hover { color: var(--text); }
+    /* Keyboard focus must be visible on icon-only controls; there is no text
+       underline or caret to fall back on. */
+    .mode-btn:focus-visible,
+    .btn-s:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--brand-primary) 55%, transparent);
+      outline-offset: 1px;
+    }
+    /* Sun in dark mode, moon in light: the icon names the theme the click
+       switches TO, matching the old text label's behaviour. Swapped purely in
+       CSS off body[data-theme], so a live refresh cannot desync it. */
+    #themeToggleBtn .icon-moon { display: none; }
+    body[data-theme="light"] #themeToggleBtn .icon-sun { display: none; }
+    body[data-theme="light"] #themeToggleBtn .icon-moon { display: block; }
     /* Notification toggle in its "on" state, coloured like the range pills so
        the state is legible at a glance -- an icon has no label to read. */
     .btn-s.btn-icon[aria-pressed="true"] {
@@ -1421,7 +1443,15 @@
           </div>
         {{end}}
         {{if .AllowThemeToggle}}
-          <button type="button" class="btn-s" id="themeToggleBtn">Theme</button>
+          <button type="button" class="btn-s btn-icon" id="themeToggleBtn" aria-label="Switch theme" title="Switch theme (T)">
+            <svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+            </svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          </button>
         {{end}}
         {{if .PushEnabled}}
           <button type="button" class="btn-s btn-icon" id="pushToggleBtn" aria-pressed="false" aria-label="Enable notifications" hidden>
@@ -2018,7 +2048,11 @@
         const nextTheme = theme === 'light' ? 'light' : 'dark';
         body.dataset.theme = nextTheme;
         if (dom.themeToggleBtn) {
-          dom.themeToggleBtn.textContent = nextTheme === 'dark' ? 'Light' : 'Dark';
+          // The sun/moon glyph swaps in CSS off body[data-theme]; only the
+          // accessible name needs updating here.
+          const target = nextTheme === 'dark' ? 'light' : 'dark';
+          dom.themeToggleBtn.setAttribute('aria-label', 'Switch to ' + target + ' theme');
+          dom.themeToggleBtn.title = 'Switch to ' + target + ' theme (T)';
         }
         if (syncUrl) {
           setParam('theme', nextTheme);
