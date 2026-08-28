@@ -1162,6 +1162,17 @@
       color: var(--text);
       border-color: color-mix(in srgb, var(--brand-primary) 24%, var(--border));
     }
+    /* The header's theme/notification toggles migrate here in kiosk mode
+       (placeIconControls); sized down to sit level with the exit button. */
+    .kiosk-clock .btn-s.btn-icon {
+      width: 26px;
+      height: 26px;
+      min-height: 26px;
+    }
+    .kiosk-clock .btn-s.btn-icon svg {
+      width: 13px;
+      height: 13px;
+    }
     .kiosk-grid-wrap {
       flex: 1;
       overflow-y: auto;
@@ -1372,7 +1383,7 @@
           <div class="kiosk-stat k-unknown"><span class="ks-dot"></span>{{.UnknownCount}} UNKNOWN</div>
         {{end}}
       </div>
-      <div class="kiosk-clock">
+      <div class="kiosk-clock" id="kioskClock">
         <span id="kioskTime"></span>
         <button type="button" class="kiosk-exit" id="kioskExitBtn">Esc Exit</button>
       </div>
@@ -1434,7 +1445,7 @@
           <span class="brand-slug">status // /{{.Slug}}</span>
         </div>
       </div>
-      <div class="header-right">
+      <div class="header-right" id="headerActions">
         {{if .ShowLayoutControl}}
           <div class="mode-toggle" role="group" aria-label="Display mode">
             <button type="button" class="mode-btn active" data-mode="default"><span>List</span></button>
@@ -2062,6 +2073,26 @@
         } catch (err) {}
       }
 
+      // Kiosk hides the whole header, and the theme/notification toggles live
+      // there — so the buttons themselves migrate into the kiosk bar and back.
+      // Moving the nodes (not cloning) keeps their runtime state — the bell's
+      // hidden/aria-pressed/slash and the theme label — and the delegated and
+      // attached click handlers, since both follow the element.
+      function placeIconControls(mode) {
+        const headerHome = document.getElementById('headerActions');
+        const kioskHome = document.getElementById('kioskClock');
+        const exitBtn = document.getElementById('kioskExitBtn');
+        ['themeToggleBtn', 'pushToggleBtn'].forEach(function (id) {
+          const btn = document.getElementById(id);
+          if (!btn) return;
+          if (mode === 'kiosk' && kioskHome) {
+            kioskHome.insertBefore(btn, exitBtn);
+          } else if (headerHome) {
+            headerHome.appendChild(btn);
+          }
+        });
+      }
+
       function setMode(mode, syncUrl) {
         const dom = getDom();
         const nextMode = ['default', 'compact', 'kiosk'].includes(mode || '') ? mode : defaultMode;
@@ -2071,6 +2102,7 @@
         } else if (nextMode === 'kiosk') {
           body.classList.add('kiosk');
         }
+        placeIconControls(nextMode);
         dom.modeButtons.forEach(function (btn) {
           btn.classList.toggle('active', btn.dataset.mode === nextMode);
         });
