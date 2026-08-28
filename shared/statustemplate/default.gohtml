@@ -206,6 +206,37 @@
       font-size: .78rem;
       font-weight: 500;
     }
+    /* Icon-only variant: square padding so the glyph sits centred rather
+       than inheriting the text button's horizontal padding. */
+    .btn-s.btn-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      width: 30px;
+      height: 30px;
+      color: var(--text-muted);
+    }
+    /* Notification toggle in its "on" state, coloured like the range pills so
+       the state is legible at a glance -- an icon has no label to read. */
+    .btn-s.btn-icon[aria-pressed="true"] {
+      color: var(--green);
+      border-color: color-mix(in srgb, var(--green) 22%, var(--border));
+      background: var(--green-a);
+    }
+    .btn-s.btn-icon[aria-pressed="true"] #pushBellBody {
+      fill: color-mix(in srgb, var(--green) 18%, transparent);
+    }
+    .btn-s.btn-icon:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+    /* SVG children do not pick up the HTML `hidden` attribute from the UA
+       stylesheet the way HTML elements do, so the strike-through must be
+       hidden explicitly or every bell renders as "notifications off". */
+    #pushBellSlash[hidden] {
+      display: none;
+    }
     .btn-s:hover {
       background: var(--surface-hover);
       border-color: color-mix(in srgb, var(--brand-primary) 24%, var(--border));
@@ -1393,7 +1424,13 @@
           <button type="button" class="btn-s" id="themeToggleBtn">Theme</button>
         {{end}}
         {{if .PushEnabled}}
-          <button type="button" class="btn-s" id="pushToggleBtn" aria-pressed="false" hidden>Notify me</button>
+          <button type="button" class="btn-s btn-icon" id="pushToggleBtn" aria-pressed="false" aria-label="Enable notifications" hidden>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path id="pushBellBody" d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              <line id="pushBellSlash" x1="3.5" y1="3.5" x2="20.5" y2="20.5" hidden />
+            </svg>
+          </button>
         {{end}}
       </div>
     </div>
@@ -2396,20 +2433,43 @@
         return out;
       }
 
-      function setPushButton(state, label) {
+      // The control is icon-only, so the title and aria-label carry all of
+      // its meaning -- including that it is a toggle. "On" with no way to
+      // discover the off switch would strand visitors in browser settings.
+      const PUSH_LABELS = {
+        on: {
+          aria: 'Turn off notifications',
+          title: 'Notifications are on for this page. Click to turn them off.'
+        },
+        off: {
+          aria: 'Enable notifications',
+          title: 'Get a browser notification when a service on this page goes down or recovers.'
+        },
+        blocked: {
+          aria: 'Notifications blocked',
+          title: 'Notifications are blocked for this site in your browser settings.'
+        },
+        unavailable: {
+          aria: 'Notifications unavailable',
+          title: 'Add this page to your Home Screen to enable notifications.'
+        }
+      };
+
+      function setPushButton(state) {
         const btn = getDom().pushToggleBtn;
         if (!btn) return;
+        const copy = PUSH_LABELS[state] || PUSH_LABELS.off;
+
         btn.hidden = false;
-        btn.textContent = label;
         btn.setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
+        btn.setAttribute('aria-label', copy.aria);
+        btn.title = copy.title;
         btn.disabled = state === 'blocked' || state === 'unavailable';
-        if (state === 'blocked') {
-          btn.title = 'Notifications are blocked for this site in your browser settings.';
-        } else if (state === 'unavailable') {
-          btn.title = 'Add this page to your Home Screen to enable notifications.';
-        } else {
-          btn.removeAttribute('title');
-        }
+
+        // A struck-through bell is the only state the colour change cannot
+        // convey on its own.
+        const slash = btn.querySelector('#pushBellSlash');
+        if (slash) slash.hidden = state !== 'blocked';
       }
 
       function postPushJSON(url, payload) {
@@ -2448,8 +2508,8 @@
         // requestPermission must be called from the click handler itself:
         // Safari and Firefox both require a user gesture.
         return Notification.requestPermission().then(function (permission) {
-          if (permission === 'denied') { setPushButton('blocked', 'Notifications blocked'); return; }
-          if (permission !== 'granted') { setPushButton('off', 'Notify me'); return; }
+          if (permission === 'denied') { setPushButton('blocked'); return; }
+          if (permission !== 'granted') { setPushButton('off'); return; }
 
           return registerPushWorker().then(function (registration) {
             return registration.pushManager.subscribe({
@@ -2465,17 +2525,25 @@
                 window.localStorage.setItem(PUSH_STATE_KEY, '1');
                 window.localStorage.setItem(PUSH_SEEN_KEY, String(Date.now()));
               } catch (e) {}
-              setPushButton('on', 'Notifications on');
+              setPushButton('on');
             });
           });
         }).catch(function () {
-          setPushButton('off', 'Notify me');
+          setPushButton('off');
         });
       }
 
       function disablePush() {
-        return navigator.serviceWorker.ready.then(function (registration) {
-          return registration.pushManager.getSubscription();
+        // getRegistration(scope), NOT navigator.serviceWorker.ready.
+        //
+        // The worker is registered with scope "<page>/" so one page's
+        // registration cannot clobber another's, and that scope does not
+        // cover the page URL "<page>" itself -- so the worker never controls
+        // this document and `ready` never resolves. Push delivery does not
+        // require the worker to control the page, but `ready` does, and using
+        // it here left the toggle stuck on with no way to opt out.
+        return navigator.serviceWorker.getRegistration(pushPaths().scope).then(function (registration) {
+          return registration ? registration.pushManager.getSubscription() : null;
         }).then(function (sub) {
           if (!sub) return;
           // Tell the server BEFORE unsubscribing locally: if the order were
@@ -2485,28 +2553,28 @@
             .then(function () { return sub.unsubscribe(); });
         }).then(function () {
           try { window.localStorage.removeItem(PUSH_STATE_KEY); } catch (e) {}
-          setPushButton('off', 'Notify me');
+          setPushButton('off');
         }).catch(function () {
-          setPushButton('off', 'Notify me');
+          setPushButton('off');
         });
       }
 
       function setupPush() {
         const dom = getDom();
         if (!dom.pushToggleBtn || !pushSupported()) return;
-        if (iosNeedsHomeScreen()) { setPushButton('unavailable', 'Notify me'); return; }
-        if (Notification.permission === 'denied') { setPushButton('blocked', 'Notifications blocked'); return; }
+        if (iosNeedsHomeScreen()) { setPushButton('unavailable'); return; }
+        if (Notification.permission === 'denied') { setPushButton('blocked'); return; }
 
         // The browser is the source of truth, not localStorage: permission
         // can be revoked in browser settings without the page ever knowing.
         navigator.serviceWorker.getRegistration(pushPaths().scope).then(function (registration) {
-          if (!registration) { setPushButton('off', 'Notify me'); return; }
+          if (!registration) { setPushButton('off'); return; }
           return registration.pushManager.getSubscription().then(function (sub) {
-            setPushButton(sub ? 'on' : 'off', sub ? 'Notifications on' : 'Notify me');
+            setPushButton(sub ? 'on' : 'off');
             if (sub) refreshPushSubscription(registration);
           });
         }).catch(function () {
-          setPushButton('off', 'Notify me');
+          setPushButton('off');
         });
 
         dom.pushToggleBtn.addEventListener('click', function () {

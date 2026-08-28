@@ -524,8 +524,19 @@ func TestRenderStatusPage_PushToggleFollowsPushEnabled(t *testing.T) {
 	}
 	// Rendered hidden: the script reveals it only once feature detection
 	// passes, so an unsupported browser never sees a dead button.
-	if !strings.Contains(on, `id="pushToggleBtn" aria-pressed="false" hidden`) {
+	if !strings.Contains(on, `id="pushToggleBtn"`) || !strings.Contains(on, `aria-pressed="false"`) {
+		t.Fatalf("notification control is missing its toggle state")
+	}
+	if !strings.Contains(on, `hidden>`) {
 		t.Fatalf("notification control is not rendered hidden")
+	}
+	// Icon-only, so it must carry an accessible name and an inline SVG --
+	// there is no static asset route to fetch one from.
+	if !strings.Contains(on, `aria-label="Enable notifications"`) {
+		t.Fatalf("icon-only control has no accessible name")
+	}
+	if !strings.Contains(on, `id="pushBellBody"`) {
+		t.Fatalf("notification control is missing its inline bell icon")
 	}
 	if !strings.Contains(on, `data-push-key="BExampleApplicationServerKey"`) {
 		t.Fatalf("application server key not exposed to the client script")
