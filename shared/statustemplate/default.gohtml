@@ -1322,6 +1322,31 @@
     .k-tile-bar .bar { opacity: .46; }
     .k-tile-bar .bar.warn { opacity: .74; }
     .k-tile-bar .bar.bad { opacity: .9; }
+    /* Kiosk auto-fit density tiers. fitKiosk() raises data-density on
+       .kiosk-view until every visible tile fits on screen without scrolling.
+       Tier 1 is the full tile — no overrides, so small pages keep the
+       original look. Each tier narrows columns and sheds tile detail. */
+    .kiosk-view[data-density="2"] .kiosk-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; }
+    .kiosk-view[data-density="2"] .k-tile { padding: 7px 9px 6px; gap: 3px; }
+    .kiosk-view[data-density="2"] .k-tile-metrics { display: none; }
+    .kiosk-view[data-density="3"] .kiosk-grid { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 3px; }
+    .kiosk-view[data-density="3"] .k-tile { padding: 5px 8px 4px; gap: 2px; }
+    .kiosk-view[data-density="3"] .k-tile-metrics,
+    .kiosk-view[data-density="3"] .k-tile-sub { display: none; }
+    .kiosk-view[data-density="3"] .k-tile-name { font-size: .72rem; }
+    .kiosk-view[data-density="3"] .k-tile-dot { margin-top: 3px; }
+    .kiosk-view[data-density="3"] .k-tile-bar { height: 2px; }
+    .kiosk-view[data-density="3"] .kiosk-section + .kiosk-section { margin-top: 10px; }
+    .kiosk-view[data-density="3"] .kiosk-section-head { margin-bottom: 5px; }
+    .kiosk-view[data-density="4"] .kiosk-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 3px; }
+    .kiosk-view[data-density="4"] .k-tile { padding: 4px 7px; gap: 0; border-left-width: 2px; }
+    .kiosk-view[data-density="4"] .k-tile-metrics,
+    .kiosk-view[data-density="4"] .k-tile-sub,
+    .kiosk-view[data-density="4"] .k-tile-bar { display: none; }
+    .kiosk-view[data-density="4"] .k-tile-name { font-size: .66rem; font-weight: 600; }
+    .kiosk-view[data-density="4"] .k-tile-dot { width: 5px; height: 5px; margin-top: 3px; }
+    .kiosk-view[data-density="4"] .kiosk-section + .kiosk-section { margin-top: 8px; }
+    .kiosk-view[data-density="4"] .kiosk-section-head { margin-bottom: 4px; }
     @media (max-width: 768px) {
       .hero h1 { font-size: 2.2rem; }
       .svc-right { gap: 10px; }
@@ -1796,6 +1821,7 @@
       let refreshTimer = null;
       let refreshInFlight = false;
       let refreshQueued = false;
+      let fitScheduled = false;
 
       function getDom() {
         return {
@@ -1998,7 +2024,10 @@
           const subEl = tile.querySelector('.k-tile-sub');
           const nameClipped = isClipped(nameEl);
           const subClipped = isClipped(subEl);
-          if (!nameClipped && !subClipped) {
+          // Density tiers 3-4 hide the sub line entirely (offsetParent null),
+          // so the popover becomes the only way to read type · last-check.
+          const subHidden = !!subEl && subEl.offsetParent === null;
+          if (!nameClipped && !subClipped && !subHidden) {
             hide();
             return;
           }
@@ -2020,6 +2049,34 @@
           }
         });
         document.addEventListener('scroll', hide, true);
+      }
+
+      // Raises kiosk density until every visible tile fits on screen. A
+      // measurement loop rather than arithmetic so tenant CustomCSS, font
+      // loading and zoom are all accounted for — scrollHeight is ground truth.
+      // The attribute lives on .kiosk-view, which survives the #kioskGrid
+      // live-refresh swap, so a refreshed grid renders at the fitted density.
+      function fitKiosk() {
+        if (!body.classList.contains('kiosk')) return;
+        const view = document.querySelector('.kiosk-view');
+        const wrap = document.getElementById('kioskGrid');
+        if (!view || !wrap) return;
+        for (let tier = 1; tier <= 4; tier++) {
+          view.dataset.density = String(tier);
+          // +1 tolerates sub-pixel rounding so we don't over-densify.
+          if (wrap.scrollHeight <= wrap.clientHeight + 1) return;
+        }
+        // Even the micro tier overflows (very large fleets / tiny displays):
+        // stay at 4 and let .kiosk-grid-wrap's overflow-y:auto take over.
+      }
+
+      function scheduleFitKiosk() {
+        if (fitScheduled) return;
+        fitScheduled = true;
+        window.requestAnimationFrame(function () {
+          fitScheduled = false;
+          fitKiosk();
+        });
       }
 
       function applyRange(range, syncUrl) {
@@ -2106,6 +2163,7 @@
         dom.modeButtons.forEach(function (btn) {
           btn.classList.toggle('active', btn.dataset.mode === nextMode);
         });
+        scheduleFitKiosk();
         if (syncUrl) {
           setParam('mode', nextMode);
         }
@@ -2163,6 +2221,9 @@
         if (dom.emptyState) {
           dom.emptyState.classList.toggle('hidden', visibleRows.length > 0);
         }
+
+        // Visible tile count changed, so the kiosk density tier may too.
+        scheduleFitKiosk();
       }
 
       function hydrateControlsFromUrl() {
@@ -2400,6 +2461,8 @@
 
           restoreOpenMonitorIds(expandedMonitorIds);
           applyTheme(body.dataset.theme || defaultTheme, false);
+          // setMode/applyViewState both re-schedule fitKiosk for the fresh
+          // #kioskGrid; the rAF debounce collapses them into one fit pass.
           setMode(currentMode(), false);
           applyRange(currentRange(), false);
           applyViewState();
@@ -2440,6 +2503,11 @@
       setupClock();
       setupBarTooltip();
       setupKioskNamePopover();
+      window.addEventListener('resize', scheduleFitKiosk);
+      if (document.fonts && document.fonts.ready) {
+        // Web-font metrics shift tile heights slightly; re-fit once loaded.
+        document.fonts.ready.then(scheduleFitKiosk);
+      }
 
       // ---- Browser notifications (Web Push) --------------------------------
       //
