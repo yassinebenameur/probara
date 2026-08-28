@@ -95,11 +95,18 @@ func (l *pushRateLimiter) allow(key string) bool {
 	return lim.Allow()
 }
 
-// pushSubscribeRequest mirrors the browser's PushSubscription JSON shape, so
-// the page can post `subscription.toJSON()` with no reshaping.
+// pushSubscribeRequest is the W3C PushSubscriptionJSON shape, so the page can
+// post `subscription.toJSON()` with no reshaping.
+//
+// ExpirationTime is declared but unused. The browser always includes it (as
+// null in practice, since no push service currently sets one), and the
+// decoder rejects unknown fields -- deliberately, for an unauthenticated
+// endpoint -- so omitting it here makes every real browser subscription fail
+// with 400 while hand-written test payloads pass.
 type pushSubscribeRequest struct {
-	Endpoint string `json:"endpoint"`
-	Keys     struct {
+	Endpoint       string `json:"endpoint"`
+	ExpirationTime *int64 `json:"expirationTime"`
+	Keys           struct {
 		P256dh string `json:"p256dh"`
 		Auth   string `json:"auth"`
 	} `json:"keys"`

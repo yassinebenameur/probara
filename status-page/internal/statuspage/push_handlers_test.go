@@ -1,6 +1,7 @@
 package statuspage
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -240,5 +241,42 @@ func TestHandlePushServiceWorker_HonoursIfNoneMatch(t *testing.T) {
 
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("matching If-None-Match = %d, want 304", rec.Code)
+	}
+}
+
+// The exact body a browser sends. PushSubscription.toJSON() always includes
+// expirationTime, and the decoder rejects unknown fields, so a struct without
+// it makes every REAL subscription fail with 400 while hand-written test
+// payloads pass -- which is precisely how this was missed until the page was
+// driven in an actual browser.
+func TestHandlePushSubscribe_AcceptsRealBrowserPayloadShape(t *testing.T) {
+	// Verbatim shape of PushSubscription.toJSON(), keys from the RFC example.
+	const browserBody = `{"endpoint":"https://fcm.googleapis.com/fcm/send/abcdefghijklmnop","expirationTime":null,"keys":{"p256dh":"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4","auth":"BTBZMqHH6r4Tts7J_aSIgg"}}`
+
+	var req pushSubscribeRequest
+	dec := json.NewDecoder(strings.NewReader(browserBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		t.Fatalf("a real browser subscription body was rejected: %v", err)
+	}
+	if req.Endpoint == "" || req.Keys.P256dh == "" || req.Keys.Auth == "" {
+		t.Fatalf("decoded body is missing fields: %+v", req)
+	}
+
+	// And a non-null expirationTime, which a push service is permitted to set.
+	const withExpiry = `{"endpoint":"https://fcm.googleapis.com/fcm/send/abcdefghijklmnop","expirationTime":1735689600000,"keys":{"p256dh":"x","auth":"y"}}`
+	dec2 := json.NewDecoder(strings.NewReader(withExpiry))
+	dec2.DisallowUnknownFields()
+	if err := dec2.Decode(&pushSubscribeRequest{}); err != nil {
+		t.Fatalf("a subscription with a non-null expirationTime was rejected: %v", err)
+	}
+
+	// Unknown fields must still be refused: this is an unauthenticated
+	// endpoint and the strictness is deliberate.
+	const unexpected = `{"endpoint":"https://fcm.googleapis.com/fcm/send/abcdefghijklmnop","surprise":1,"keys":{"p256dh":"x","auth":"y"}}`
+	dec3 := json.NewDecoder(strings.NewReader(unexpected))
+	dec3.DisallowUnknownFields()
+	if err := dec3.Decode(&pushSubscribeRequest{}); err == nil {
+		t.Fatalf("an unknown field was accepted; the decoder must stay strict")
 	}
 }
