@@ -660,6 +660,10 @@
       text-transform: uppercase;
       letter-spacing: .04em;
       flex-shrink: 0;
+      /* Uniform badge width keeps monitor names column-aligned across rows
+         regardless of label length (badges are at most five characters). */
+      min-width: 52px;
+      text-align: center;
     }
     .svc-right {
       display: flex;
@@ -1047,7 +1051,7 @@
     body.compact .svc-left { gap: 10px; }
     body.compact .svc-name { font-size: .82rem; }
     body.compact .svc-meta { display: none; }
-    body.compact .svc-type { font-size: .56rem; padding: 1px 5px; }
+    body.compact .svc-type { font-size: .56rem; padding: 1px 5px; min-width: 46px; }
     body.compact .svc-right { gap: 14px; }
     body.compact .svc-metric-label { display: none; }
     body.compact .status-badge { min-width: 84px; font-size: .64rem; }
@@ -1432,7 +1436,7 @@
                   <div class="k-tile-name">{{.Name}}</div>
                   <span class="k-tile-dot"></span>
                 </div>
-                <div class="k-tile-sub">{{.TypeLabel}} · {{.LastCheckAgo}}</div>
+                <div class="k-tile-sub">{{.TypeBadge}} · {{.LastCheckAgo}}</div>
                 <div class="k-tile-metrics">
                   <span>{{.LatencyText}}</span>
                   <span>{{.SummaryMetric}}</span>
@@ -1615,7 +1619,7 @@
               <details class="svc-row monitor-card" data-monitor-id="{{.ID}}" data-search="{{.SearchText}}" data-status="{{.Status}}">
                 <summary class="svc-header">
                   <div class="svc-left">
-                    <span class="svc-type">{{.TypeLabel}}</span>
+                    <span class="svc-type">{{.TypeBadge}}</span>
                     <div class="svc-main">
                       <div class="svc-name">{{.Name}}</div>
                       <div class="svc-meta">
