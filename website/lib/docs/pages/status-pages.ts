@@ -100,6 +100,10 @@ export const STATUS_PAGES_PAGE: DocPage = {
             ["`footer_text`", "Built-in custom footer text, up to 250 characters"],
             ["`default_theme`", "Initial built-in theme: `light` or `dark`"],
             ["`allow_theme_toggle`", "Allows the built-in visitor theme switch"],
+            [
+              "`enable_push_notifications`",
+              "Offers visitors a browser-notification opt-in. Off by default, and inert unless the deployment also configures a VAPID keypair — see [visitor notifications](#browser-notifications)",
+            ],
             ["`custom_css`", "Page-scoped custom stylesheet, up to 128 KiB"],
             [
               "`custom_head_html`",

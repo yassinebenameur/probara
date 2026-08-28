@@ -95,6 +95,7 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return "", err
 		}
+		data.PushPublicKey = h.webPushPublicKey()
 		page, customErr, err := renderStatusPageHTML(data, h.apiProxyEnabled())
 		if customErr != nil {
 			h.logger.WithFields(map[string]interface{}{
@@ -134,6 +135,17 @@ func (h *Handlers) HandleStatusPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) apiProxyEnabled() bool {
 	return h.config != nil && strings.TrimSpace(h.config.APIBaseURL) != ""
+}
+
+// webPushPublicKey returns the deployment's VAPID application server key, or ""
+// when browser notifications are not configured. The service layer has no
+// access to config, so the handler injects it into StatusPageData before
+// rendering; buildStatusPageRenderView ANDs it with the page's own setting.
+func (h *Handlers) webPushPublicKey() string {
+	if h.config == nil || !h.config.WebPushConfigured() {
+		return ""
+	}
+	return h.config.VAPIDPublicKey
 }
 
 // previewSecretEnvVar guards the draft-preview route. When set (it must match
@@ -186,6 +198,7 @@ func (h *Handlers) HandleDraftPreview(w http.ResponseWriter, r *http.Request, sl
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	data.PushPublicKey = h.webPushPublicKey()
 
 	var html string
 	if hasDraft {

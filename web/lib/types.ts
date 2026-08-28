@@ -1426,6 +1426,12 @@ export interface StatusPageSettings {
   footer_text?: string;
   default_theme?: string;
   allow_theme_toggle?: boolean;
+  /**
+   * Offer visitors a browser-notification opt-in on the public page. Off by
+   * default, and inert unless the deployment configures a VAPID keypair
+   * (STATUS_PAGE_VAPID_PUBLIC_KEY / _PRIVATE_KEY).
+   */
+  enable_push_notifications?: boolean;
   custom_css?: string;
   custom_head_html?: string;
   custom_footer_html?: string;

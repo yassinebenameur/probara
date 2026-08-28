@@ -456,3 +456,40 @@ func BenchmarkRenderPublicStatusPage(b *testing.B) {
 		}
 	}
 }
+
+// The notification control needs BOTH the page opt-in and a deployment VAPID
+// key. Either alone would render a control that cannot possibly work: without
+// the key pushManager.subscribe has no applicationServerKey, and without the
+// setting the operator never asked to prompt their visitors.
+func TestBuildStatusPageRenderView_PushRequiresSettingAndKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		key     string
+		want    bool
+	}{
+		{name: "setting and key", enabled: true, key: "BExampleKey", want: true},
+		{name: "setting without key", enabled: true, key: "", want: false},
+		{name: "key without setting", enabled: false, key: "BExampleKey", want: false},
+		{name: "neither", enabled: false, key: "", want: false},
+		{name: "blank key is not a key", enabled: true, key: "   ", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := buildStatusPageRenderView(&StatusPageData{
+				Slug:                     "acme",
+				Title:                    "Acme",
+				PushNotificationsEnabled: tt.enabled,
+				PushPublicKey:            tt.key,
+			}, false)
+
+			if view.PushEnabled != tt.want {
+				t.Fatalf("PushEnabled = %v, want %v", view.PushEnabled, tt.want)
+			}
+			if !tt.want && view.PushEnabled {
+				t.Fatalf("PushPublicKey must not be exposed when push is off")
+			}
+		})
+	}
+}

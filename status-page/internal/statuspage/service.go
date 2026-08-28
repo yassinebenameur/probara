@@ -46,6 +46,14 @@ type StatusPageData struct {
 	ShowMonitorTLS     bool                          `json:"-"` // For template use only
 	ShowLatencyCharts  bool                          `json:"-"` // For template use only
 	ShowAgentMetrics   bool                          `json:"-"` // For template use only
+	// PushNotificationsEnabled is the page's opt-in only; the render layer
+	// ANDs it with "the deployment has VAPID keys" before showing anything.
+	PushNotificationsEnabled bool `json:"-"` // For template use only
+	// PushPublicKey is the deployment's VAPID application server key, injected
+	// by the handler (the service layer has no config). Empty means the
+	// deployment cannot send push, which disables the control regardless of
+	// the page's own setting.
+	PushPublicKey string `json:"-"` // For template use only
 	// Tenant-authored branding injections (settings JSONB) applied to the
 	// built-in template; custom templates can also reference them.
 	CustomCSS        string `json:"-"` // For template use only
@@ -260,9 +268,12 @@ type statusPageSettingsPatch struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      *string `json:"default_theme,omitempty"`
 	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
-	CustomCSS         *string `json:"custom_css,omitempty"`
-	CustomHeadHTML    *string `json:"custom_head_html,omitempty"`
-	CustomFooterHTML  *string `json:"custom_footer_html,omitempty"`
+
+	EnablePushNotifications *bool `json:"enable_push_notifications,omitempty"`
+
+	CustomCSS        *string `json:"custom_css,omitempty"`
+	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
+	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -277,9 +288,12 @@ type statusPageSettingsStored struct {
 	FooterText        *string
 	DefaultTheme      string
 	AllowThemeToggle  bool
-	CustomCSS         string
-	CustomHeadHTML    string
-	CustomFooterHTML  string
+
+	EnablePushNotifications bool
+
+	CustomCSS        string
+	CustomHeadHTML   string
+	CustomFooterHTML string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -294,6 +308,9 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		ShowFooter:        true,
 		DefaultTheme:      "dark",
 		AllowThemeToggle:  true,
+		// Off by default: enabling it makes the page ask visitors for
+		// notification permission, which is the operator's call to make.
+		EnablePushNotifications: false,
 	}
 }
 
@@ -348,6 +365,9 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	}
 	if patch.AllowThemeToggle != nil {
 		stored.AllowThemeToggle = *patch.AllowThemeToggle
+	}
+	if patch.EnablePushNotifications != nil {
+		stored.EnablePushNotifications = *patch.EnablePushNotifications
 	}
 	if patch.CustomCSS != nil {
 		stored.CustomCSS = strings.TrimSpace(*patch.CustomCSS)
@@ -493,6 +513,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.ShowMonitorTLS = settings.ShowMonitorTLS
 	page.ShowLatencyCharts = settings.ShowLatencyCharts
 	page.ShowAgentMetrics = settings.ShowAgentMetrics
+	page.PushNotificationsEnabled = settings.EnablePushNotifications
 	page.CustomCSS = settings.CustomCSS
 	page.CustomHeadHTML = settings.CustomHeadHTML
 	page.CustomFooterHTML = settings.CustomFooterHTML

@@ -14,17 +14,25 @@ import (
 )
 
 type statusPageRenderView struct {
-	ID                  string
-	Slug                string
-	Title               string
-	Description         string
-	HasDescription      bool
-	LogoURL             *string
-	HasLogo             bool
-	PrimaryColor        string
-	SecondaryColor      string
-	DefaultTheme        string
-	AllowThemeToggle    bool
+	ID               string
+	Slug             string
+	Title            string
+	Description      string
+	HasDescription   bool
+	LogoURL          *string
+	HasLogo          bool
+	PrimaryColor     string
+	SecondaryColor   string
+	DefaultTheme     string
+	AllowThemeToggle bool
+	// PushEnabled is the page opt-in AND a configured VAPID keypair. The
+	// template renders the notification control only when it is true, and the
+	// subscribe handler re-checks the same conjunction server-side -- the
+	// control's presence is never the authority.
+	PushEnabled bool
+	// PushPublicKey is the VAPID application server key, base64url. Not a
+	// secret: it ships inside every rendered page by design.
+	PushPublicKey       string
 	ShowFooter          bool
 	FooterText          string
 	ShowGlobalUptime    bool
@@ -251,17 +259,21 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	}
 
 	view := statusPageRenderView{
-		ID:                data.ID,
-		Slug:              data.Slug,
-		Title:             data.Title,
-		Description:       strings.TrimSpace(derefString(data.Description)),
-		HasDescription:    strings.TrimSpace(derefString(data.Description)) != "",
-		LogoURL:           data.LogoURL,
-		HasLogo:           data.HasLogo,
-		PrimaryColor:      primary,
-		SecondaryColor:    secondary,
-		DefaultTheme:      normalizeTheme(data.DefaultTheme),
-		AllowThemeToggle:  data.AllowThemeToggle,
+		ID:               data.ID,
+		Slug:             data.Slug,
+		Title:            data.Title,
+		Description:      strings.TrimSpace(derefString(data.Description)),
+		HasDescription:   strings.TrimSpace(derefString(data.Description)) != "",
+		LogoURL:          data.LogoURL,
+		HasLogo:          data.HasLogo,
+		PrimaryColor:     primary,
+		SecondaryColor:   secondary,
+		DefaultTheme:     normalizeTheme(data.DefaultTheme),
+		AllowThemeToggle: data.AllowThemeToggle,
+		// Both halves required: the page opted in AND the deployment can
+		// actually send. Either alone renders a control that cannot work.
+		PushEnabled:       data.PushNotificationsEnabled && strings.TrimSpace(data.PushPublicKey) != "",
+		PushPublicKey:     strings.TrimSpace(data.PushPublicKey),
 		ShowFooter:        data.ShowFooter,
 		FooterText:        strings.TrimSpace(derefString(data.CustomFooterText)),
 		ShowGlobalUptime:  data.ShowGlobalUptime,
