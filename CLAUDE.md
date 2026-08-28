@@ -68,6 +68,16 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   group's `enabled` flag while the group's own alert requires it, so a paused
   `group`-rollup group silences its whole membership. Reachability *reports*
   that (`group_rollup_paused`); dispatch still behaves that way.
+- **Status page settings live in THREE mirrors**, all of which must change
+  together for a new setting to survive a round trip:
+  `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),
+  `api/internal/services/statuspages/service.go`
+  (`statusPageSettingsStored`/`applyPatch`/`toAPI` — the **write** path), and
+  `status-page/internal/statuspage/service.go` (the **read** path the public
+  renderer uses). Plus `web/lib/types.ts` for the UI. The API's stored struct
+  re-serializes only the fields it knows, so a setting added to the model but
+  not to `applyPatch`/`toAPI` is accepted by the endpoint, silently dropped on
+  write, and never reaches the page — no error anywhere.
 - **Status page push notifications**: `monitor_state_intervals` (migration
   000082) is the trigger source, not `statuspage.updates`. The NATS subject
   cannot carry it: push/agent/OTLP monitors discard the `Transition` from

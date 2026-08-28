@@ -170,9 +170,18 @@ start_service worker ./worker/cmd/worker 8083 9092 \
   WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-10}" \
   SIP_LOCALHOST_AS_HOST_GATEWAY="${SIP_LOCALHOST_AS_HOST_GATEWAY:-true}"
 
+# Visitor browser notifications need a VAPID keypair; without one the feature
+# is simply off. Mint a pair with `go run ./cmd/admin/gen_vapid_keys` and
+# export the three vars before running this script.
+#
+# http://localhost is a secure context, so Web Push works locally even without
+# TLS -- a plain-HTTP host that is NOT localhost will not.
 start_service status-page ./status-page/cmd/status-page 8082 9093 \
   STATUS_PAGE_BASE_URL="${STATUS_PAGE_BASE_URL:-http://localhost:8082}" \
-  STATUS_PAGE_API_BASE_URL="${STATUS_PAGE_API_BASE_URL:-http://localhost:8080}"
+  STATUS_PAGE_API_BASE_URL="${STATUS_PAGE_API_BASE_URL:-http://localhost:8080}" \
+  STATUS_PAGE_VAPID_PUBLIC_KEY="${STATUS_PAGE_VAPID_PUBLIC_KEY:-}" \
+  STATUS_PAGE_VAPID_PRIVATE_KEY="${STATUS_PAGE_VAPID_PRIVATE_KEY:-}" \
+  STATUS_PAGE_VAPID_SUBJECT="${STATUS_PAGE_VAPID_SUBJECT:-mailto:dev@localhost}"
 
 start_service alerter ./alerter/cmd/alerter 8084 9094 \
   ALERT_STREAM="${ALERT_STREAM:-ALERTS}" \
