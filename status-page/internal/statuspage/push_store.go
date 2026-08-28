@@ -159,3 +159,102 @@ func (s *pushStore) PruneSubscriptions(ctx context.Context, failureCap int, stal
 	n, _ := res.RowsAffected()
 	return n, nil
 }
+
+// pendingDelivery is one claimed notification, ready to fan out.
+type pendingDelivery struct {
+	ID          uuid.UUID
+	PageID      uuid.UUID
+	Slug        string
+	PageTitle   string
+	MonitorID   uuid.UUID
+	MonitorName string
+	Kind        string
+}
+
+// ClaimDeliveries takes ownership of up to limit pending notifications.
+//
+// FOR UPDATE SKIP LOCKED rather than an advisory lock or leader election: the
+// replicas partition the work instead of one blocking the other, and nothing
+// is held while the slow outbound HTTPS happens -- the rows are flipped to
+// 'sending' and the transaction commits before a single push goes out.
+//
+// Rows stuck in 'sending' (the claiming replica died mid-fan-out) are
+// reclaimed after staleAfter. That can re-send a notification the dead
+// replica had already delivered; duplicating a rare crash-window
+// notification is the better failure than dropping every notification a
+// crashed replica held.
+func (s *pushStore) ClaimDeliveries(ctx context.Context, limit int, staleAfter time.Duration) ([]pendingDelivery, error) {
+	const query = `
+		WITH claimed AS (
+			SELECT d.id
+			FROM status_page_push_deliveries d
+			WHERE d.status = 'pending'
+			   OR (d.status = 'sending' AND d.claimed_at < NOW() - make_interval(secs => $2))
+			ORDER BY d.created_at
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE status_page_push_deliveries d
+		SET status = 'sending', claimed_at = NOW()
+		FROM claimed c
+		JOIN status_page_push_deliveries dd ON dd.id = c.id
+		JOIN status_pages sp ON sp.id = dd.status_page_id
+		WHERE d.id = c.id
+		RETURNING d.id, d.status_page_id, sp.slug, sp.title, d.monitor_id, d.monitor_name, d.kind
+	`
+	rows, err := s.db.QueryContext(ctx, query, limit, staleAfter.Seconds())
+	if err != nil {
+		return nil, fmt.Errorf("claim push deliveries: %w", err)
+	}
+	defer rows.Close()
+
+	var out []pendingDelivery
+	for rows.Next() {
+		var d pendingDelivery
+		if err := rows.Scan(&d.ID, &d.PageID, &d.Slug, &d.PageTitle, &d.MonitorID, &d.MonitorName, &d.Kind); err != nil {
+			return nil, fmt.Errorf("scan claimed push delivery: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// SubscriptionsForPage returns every browser subscribed to a page.
+func (s *pushStore) SubscriptionsForPage(ctx context.Context, pageID uuid.UUID) ([]pushSubscriptionRow, error) {
+	const query = `
+		SELECT id, endpoint, p256dh, auth
+		FROM status_page_push_subscriptions
+		WHERE status_page_id = $1
+	`
+	rows, err := s.db.QueryContext(ctx, query, pageID)
+	if err != nil {
+		return nil, fmt.Errorf("load push subscriptions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []pushSubscriptionRow
+	for rows.Next() {
+		var sub pushSubscriptionRow
+		if err := rows.Scan(&sub.ID, &sub.Endpoint, &sub.P256dh, &sub.Auth); err != nil {
+			return nil, fmt.Errorf("scan push subscription: %w", err)
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
+}
+
+// CompleteDelivery records the outcome of one fan-out.
+func (s *pushStore) CompleteDelivery(ctx context.Context, id uuid.UUID, sent, failed int) error {
+	const query = `
+		UPDATE status_page_push_deliveries
+		SET status = CASE WHEN $2 > 0 OR $3 = 0 THEN 'sent' ELSE 'failed' END,
+			sent_at = NOW(),
+			sent_count = $2,
+			failed_count = $3
+		WHERE id = $1
+	`
+	if _, err := s.db.ExecContext(ctx, query, id, sent, failed); err != nil {
+		return fmt.Errorf("complete push delivery: %w", err)
+	}
+	return nil
+}
