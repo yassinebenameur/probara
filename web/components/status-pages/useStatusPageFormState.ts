@@ -26,6 +26,14 @@ export interface Basics {
 export interface FormState {
   basics: Basics;
   sections: EditableSection[];
+  /**
+   * Offer visitors a browser-notification opt-in on the public page. Stored in
+   * the page's settings JSONB rather than as a column. Off by default: it
+   * makes the page ask visitors for a browser permission, which is the
+   * operator's call, and it does nothing unless the deployment configures a
+   * VAPID keypair.
+   */
+  enablePushNotifications: boolean;
 }
 
 export const DEFAULT_PRIMARY = '#ff8a5c';
@@ -90,6 +98,7 @@ export function initialState(statusPage?: StatusPage): FormState {
   return {
     basics: basicsFromStatusPage(statusPage),
     sections: sectionsFromStatusPage(statusPage),
+    enablePushNotifications: statusPage?.settings?.enable_push_notifications === true,
   };
 }
 
@@ -118,7 +127,8 @@ export type Action =
   | { type: 'remove_monitor'; monitorId: string }
   | { type: 'move_monitor'; monitorId: string; targetSectionId: string; targetIndex?: number }
   | { type: 'reorder_monitor'; sectionId: string; monitorId: string; direction: 'up' | 'down' }
-  | { type: 'set_display_name'; sectionId: string; monitorId: string; value: string };
+  | { type: 'set_display_name'; sectionId: string; monitorId: string; value: string }
+  | { type: 'set_push_notifications'; value: boolean };
 
 export function reducer(state: FormState, action: Action): FormState {
   switch (action.type) {
@@ -127,6 +137,9 @@ export function reducer(state: FormState, action: Action): FormState {
 
     case 'set_basic':
       return { ...state, basics: { ...state.basics, [action.key]: action.value } };
+
+    case 'set_push_notifications':
+      return { ...state, enablePushNotifications: action.value };
 
     case 'add_section': {
       const section = makeSection(action.title || 'New section', action.id);

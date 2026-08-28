@@ -55,6 +55,7 @@ function snapshot(state: FormState): string {
       primary_color: state.basics.primary_color.trim(),
       secondary_color: state.basics.secondary_color.trim(),
     },
+    enablePushNotifications: state.enablePushNotifications,
     sections: state.sections.map((section) => ({
       title: section.title.trim(),
       monitors: section.monitors.map((m) => ({
@@ -231,6 +232,7 @@ export default function StatusPageForm({
       monitor_ids: orderedMonitorIds,
       monitor_display_names: monitorDisplayNames,
       sections: normalizedSections,
+      settings: { enable_push_notifications: state.enablePushNotifications },
     };
 
     await onSubmit(requestData);
@@ -320,6 +322,27 @@ export default function StatusPageForm({
                 onChange={(value) => setBasic('secondary_color', value)}
               />
             </div>
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/[0.07] bg-slate-950/30 px-3 py-2.5">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 accent-cyan-400"
+                checked={state.enablePushNotifications}
+                onChange={(event) =>
+                  dispatch({ type: 'set_push_notifications', value: event.target.checked })
+                }
+              />
+              <span className="min-w-0">
+                <span className="block text-[12px] font-medium text-slate-200">
+                  Browser notifications
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-600">
+                  Let visitors opt in to a browser notification when a component here goes
+                  down, and when it recovers. Requires a VAPID keypair on the status-page
+                  service; without one the control is not shown.
+                </span>
+              </span>
+            </label>
           </div>
 
           <PagePreview

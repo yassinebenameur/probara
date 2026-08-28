@@ -1498,6 +1498,7 @@ export interface CreateStatusPageRequest {
   monitor_ids?: string[];
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
+  settings?: StatusPageSettings;
 }
 
 export interface UpdateStatusPageRequest {
