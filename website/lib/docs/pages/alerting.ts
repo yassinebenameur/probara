@@ -131,6 +131,13 @@ export const ALERTING_PAGE: DocPage = {
             "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
         },
         {
+          type: "callout",
+          tone: "info",
+          title: "One notification per event, however many alerters run",
+          text:
+            "Before it sends, the alerter claims the (alert, channel, event) slot in `alert_notification_states` inside a transaction and commits only after the channel accepted the message. A second alerter replica racing on the same alert blocks on that row, then finds the slot taken and stays quiet, so `alerter.replicas` can be raised for availability without duplicating deliveries. A failed send rolls the claim back and is retried on the next cycle. The same guarded update makes exactly one replica resolve an alert and send its recovery notice.",
+        },
+        {
           type: "paragraph",
           text:
             "Routing that resolves to nothing is not an error — an alert still opens, appears on the dashboard, and drives incidents and status pages; it simply notifies nobody. Because that is silent by design, every monitor read reports its effective reachability in `alert_routing`, and the dashboard counts affected monitors in `ops_summary.unrouted_monitors`.",

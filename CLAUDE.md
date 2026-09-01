@@ -268,6 +268,18 @@ or imported groups come back empty. Any other path that creates groups through
   than an approximation. Recolour it with the other four; do not give it an
   `<img>`.
 
+- **Notification sends go through `deliverNotification`** in
+  `alerter/internal/alerter/notification_claim.go`, never `sendFunc` directly.
+  It claims the `(alert, channel, event)` slot in `alert_notification_states`
+  inside a transaction, sends, then commits, which is what makes
+  `alerter.replicas: 2` safe: replicas have no leader election and their
+  tickers stay in phase, so a read-then-send-then-upsert path sends every
+  DOWN and reminder twice. The claim predicates in `claimNotificationTx` and
+  the in-memory pre-filter `shouldSendNotification` encode the same due rules;
+  change them together. A lost `resolveAlert` race returns
+  `errAlertAlreadyResolved` and the loser skips notifications, so it is not
+  an error to log.
+
 - **Alert email rendering** lives entirely in
   `shared/notifications/plugin/builtin/email`: `view.go` builds one
   presentation model (`alertView`) that both `alert.gohtml` (HTML part) and

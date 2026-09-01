@@ -368,6 +368,8 @@ worker:
 # =============================================================================
 alerter:
   enabled: true
+  # Replicas share no leader; each notification is claimed atomically in
+  # Postgres before it is sent, so running several does not duplicate alerts.
   replicas: 2
   metricsPort: 9090
   logLevel: "info"

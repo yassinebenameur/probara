@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -389,6 +390,11 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 
 	for _, oa := range toResolve {
 		resolvedAt, err := a.resolveAlert(ctx, oa.record.ID, time.Now())
+		if errors.Is(err, errAlertAlreadyResolved) {
+			// A sibling replica resolved it first; it also owns the
+			// resolution notifications.
+			continue
+		}
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": oa.record.ID}).Error("Failed to resolve alert")
 			continue
@@ -532,28 +538,30 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			state := getNotificationState(states, oa.record.ID, target.channel.ID)
 			switch {
 			case state == nil && alertAge >= target.delay:
-				a.fireChannel(ctx, "created", binding, &oa.record, target.channel, now)
+				a.fireChannel(ctx, "created", binding, &oa.record, target.channel, now, reminderInterval)
 			case state != nil && state.LastEventType != "resolved" && reminderInterval > 0 &&
 				now.Sub(state.LastSentAt) >= reminderInterval:
-				a.fireChannel(ctx, "reminder", binding, &oa.record, target.channel, now)
+				a.fireChannel(ctx, "reminder", binding, &oa.record, target.channel, now, reminderInterval)
 			}
 		}
 	}
 	return nil
 }
 
-// fireChannel sends one event and records the notification state.
-func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, channel alertChannel, now time.Time) {
-	if err := a.sendFunc(ctx, channel, eventType, binding, alert, nil, now); err != nil {
-		a.logger.WithError(err).WithFields(map[string]interface{}{
-			"alert_id": alert.ID, "channel_id": channel.ID, "event_type": eventType,
-		}).Warn("Failed to send alert notification")
+// fireChannel sends one event through the atomic claim in deliverNotification.
+// The in-memory state the caller read is only a pre-filter: the claim is what
+// decides, so a sibling replica racing on the same alert silently loses here.
+func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, channel alertChannel, now time.Time, reminderInterval time.Duration) {
+	fields := map[string]interface{}{
+		"alert_id": alert.ID, "channel_id": channel.ID, "event_type": eventType,
+	}
+	sent, err := a.deliverNotification(ctx, eventType, binding, alert, nil, channel, now, reminderInterval)
+	if err != nil {
+		a.logger.WithError(err).WithFields(fields).Warn("Failed to send alert notification")
 		return
 	}
-	if err := a.upsertNotificationState(ctx, alert.ID, channel.ID, eventType, now); err != nil {
-		a.logger.WithError(err).WithFields(map[string]interface{}{
-			"alert_id": alert.ID, "channel_id": channel.ID,
-		}).Warn("Failed to update notification state")
+	if !sent {
+		a.logger.WithFields(fields).Debug("Notification already claimed by another alerter; skipping")
 	}
 }
 
@@ -591,6 +599,6 @@ func (a *Alerter) notifyFiredChannels(ctx context.Context, eventType string, bin
 		if fc.lastEventType == "resolved" || !fc.channel.IsActive {
 			continue
 		}
-		a.fireChannel(ctx, eventType, binding, alert, fc.channel, now)
+		a.fireChannel(ctx, eventType, binding, alert, fc.channel, now, 0)
 	}
 }
