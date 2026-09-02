@@ -87,6 +87,28 @@ func (a *Alerter) refreshAlertFailingLocations(ctx context.Context) error {
 	return nil
 }
 
+// maxImpactedMonitorsListed caps how many downstream names one notification
+// spells out; the count still reports the full blast radius.
+const maxImpactedMonitorsListed = 10
+
+// parseImpactedMonitors decodes the JSON array produced by
+// alertrouting.ImpactedMonitorsSubquery into the (possibly truncated) list a
+// notification prints and the full count.
+func parseImpactedMonitors(raw []byte) ([]notifications.ImpactedMonitor, int) {
+	if len(raw) == 0 {
+		return nil, 0
+	}
+	var all []notifications.ImpactedMonitor
+	if err := json.Unmarshal(raw, &all); err != nil || len(all) == 0 {
+		return nil, 0
+	}
+	listed := all
+	if len(listed) > maxImpactedMonitorsListed {
+		listed = listed[:maxImpactedMonitorsListed]
+	}
+	return listed, len(all)
+}
+
 // parseFailingLocations decodes the alerts.failing_locations JSONB column.
 func parseFailingLocations(raw []byte) []notifications.FailingLocation {
 	if len(raw) == 0 {
@@ -130,11 +152,22 @@ func rootCauseLateral(monitorCol string) string {
 // annotateOpenAlertRootCauses recomputes the root-cause annotation for every
 // open alert each tick: it catches upstreams detected after the alert opened
 // and clears the annotation when the upstream recovers.
+//
+// root_cause_cleared_at is the dependency-suppression grace clock: stamped
+// when an annotation clears, reset whenever one is set again, left alone
+// otherwise. SuppressedByDependencyPredicate keeps a downstream quiet for the
+// tenant's grace period after that stamp, so a downstream that recovers one
+// check after its upstream never pages.
 func (a *Alerter) annotateOpenAlertRootCauses(ctx context.Context) error {
 	_, err := a.db.ExecContext(ctx, `
 		UPDATE alerts al
 		SET root_cause_monitor_id = x.rc_id,
 			root_cause_down_since = x.rc_down_since,
+			root_cause_cleared_at = CASE
+				WHEN x.rc_id IS NOT NULL THEN NULL
+				WHEN al.root_cause_monitor_id IS NOT NULL THEN NOW()
+				ELSE al.root_cause_cleared_at
+			END,
 			updated_at = NOW()
 		FROM (
 			SELECT al2.id AS alert_id, rc.id AS rc_id, rc.last_state_change_at AS rc_down_since
@@ -446,13 +479,21 @@ func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID
 // dispatchOpenAlerts fires due escalation tiers and reminders for open alerts.
 // Group members are suppressed: the group's own alert speaks for them. Monitors
 // in an active maintenance window are muted; dispatch resumes when it ends.
+// A downstream whose upstream dependency is down is suppressed when the
+// dependency-suppression policy is on for it (S-M4): its alert stays open and
+// visible, and the root cause's own notification lists it under "also
+// affecting"; if the upstream recovers and the downstream is still down after
+// the grace period, it pages as a normal DOWN with escalation tiers counted
+// from that moment.
 func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.kind, al.triggered_at, al.failure_count, al.last_error,
 			al.root_cause_monitor_id, al.root_cause_down_since, rcm.name,
 			al.baseline_latency_ms, al.observed_latency_ms, al.anomaly_score,
 			al.metric_name, al.metric_value, al.threshold_value, al.failing_locations,
-			te.alert_reminder_seconds
+			te.alert_reminder_seconds,
+			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
+			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
@@ -473,6 +514,9 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		  AND NOT `+alertrouting.SelfSilentGroupPredicate("m")+`
 		  -- Suppress a member only when its group rolls members up into one alert.
 		  AND NOT `+alertrouting.SuppressedByRollupPredicate("al.monitor_id")+`
+		  -- Suppress a downstream while an upstream dependency explains it (and
+		  -- for the grace period after that upstream recovers).
+		  AND NOT `+alertrouting.SuppressedByDependencyPredicate("al", "m", "te")+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open alerts: %w", err)
@@ -483,6 +527,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		record          alertRecord
 		monitorName     string
 		reminderSeconds int
+		eligibleSince   time.Time
 	}
 	var open []openAlert
 	for rows.Next() {
@@ -494,18 +539,20 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		var baseline, observed, score sql.NullFloat64
 		var metricName sql.NullString
 		var metricValue, thresholdValue sql.NullFloat64
-		var failingLocations []byte
+		var failingLocations, impacted []byte
 		if err := rows.Scan(&oa.record.ID, &oa.record.TenantID, &oa.record.MonitorID, &oa.monitorName,
 			&oa.record.Kind, &oa.record.TriggeredAt, &oa.record.FailureCount, &lastError,
 			&rcID, &rcDownSince, &rcName,
 			&baseline, &observed, &score,
-			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds); err != nil {
+			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds,
+			&oa.eligibleSince, &impacted); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
 		if lastError.Valid {
 			oa.record.LastError = &lastError.String
 		}
 		oa.record.FailingLocations = parseFailingLocations(failingLocations)
+		oa.record.ImpactedMonitors, oa.record.ImpactedCount = parseImpactedMonitors(impacted)
 		setRootCause(&oa.record, rcID, rcName, rcDownSince)
 		setLatencyMetrics(&oa.record, baseline, observed, score)
 		setHostMetric(&oa.record, metricName, metricValue, thresholdValue)
@@ -528,7 +575,11 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			continue
 		}
 		binding := policyBinding{MonitorID: oa.record.MonitorID, TenantID: oa.record.TenantID, MonitorName: oa.monitorName}
-		alertAge := now.Sub(oa.record.TriggeredAt)
+		// Escalation delays count from when the alert became eligible to
+		// dispatch, not from when it opened: a downstream released from
+		// dependency suppression walks its tiers in order instead of firing
+		// every tier at once.
+		alertAge := now.Sub(oa.eligibleSince)
 		reminderInterval := time.Duration(oa.reminderSeconds) * time.Second
 
 		for _, target := range targets {

@@ -153,6 +153,11 @@ type DashboardOpsSummary struct {
 	MaintenanceMonitors int `json:"maintenance_monitors"`
 	ActiveAlerts        int `json:"active_alerts"`
 	AcknowledgedAlerts  int `json:"acknowledged_alerts"`
+	// SuppressedAlerts is how many of the open (active + acknowledged) alerts
+	// the alerter is currently sending no notification for because an
+	// upstream dependency explains them. It is a subset of the two counts
+	// above, not an additional bucket.
+	SuppressedAlerts int `json:"suppressed_alerts"`
 	// UnroutedMonitors counts active monitors whose alerts would notify
 	// nobody — no active channel resolves for them (shared/alertrouting).
 	// Paused monitors are excluded: they never alert in the first place.

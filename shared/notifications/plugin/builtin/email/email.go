@@ -328,6 +328,8 @@ func templateData(event notifications.AlertEvent, appBaseURL string) map[string]
 		"source_location_name": sourceLocation,
 		"target_location_name": targetLocation,
 		"failing_locations":    event.Alert.FailingLocationNames(),
+		"impacted_monitors":    event.Alert.ImpactedMonitorNames(),
+		"impacted_count":       event.Alert.ImpactedCount,
 
 		"label":              view.Label,
 		"status_label":       view.Tone.Label,

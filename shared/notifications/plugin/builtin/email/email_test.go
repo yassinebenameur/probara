@@ -196,3 +196,36 @@ func TestDefaultBody_RootCauseAnnotation(t *testing.T) {
 		t.Fatalf("template variable root_cause_monitor_name = %v", data["root_cause_monitor_name"])
 	}
 }
+
+func TestDefaultBody_ImpactedMonitors(t *testing.T) {
+	event := sampleEvent()
+	if strings.Contains(DefaultBody(event), "Also affecting") {
+		t.Fatal("impact list rendered without impacted monitors")
+	}
+
+	event.Alert.ImpactedMonitors = []notifications.ImpactedMonitor{{ID: "a", Name: "Backend API"}, {ID: "b", Name: "Checkout"}}
+	event.Alert.ImpactedCount = 5
+	body := DefaultBody(event)
+	for _, want := range []string{"Also affecting", "Backend API", "Checkout", "3 more"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("impact list missing %q from body:\n%s", want, body)
+		}
+	}
+	text := renderAlertText(newAlertView(event, ""))
+	if !strings.Contains(text, "Also affecting") || !strings.Contains(text, "Checkout") || !strings.Contains(text, "3 more") {
+		t.Fatalf("impact list missing from plain-text part:\n%s", text)
+	}
+
+	// A recovered root cause stands in for nothing: the list is dropped.
+	event.Type = "resolved"
+	event.Alert.Status = "resolved"
+	if strings.Contains(DefaultBody(event), "Also affecting") {
+		t.Fatal("impact list rendered on a resolved notification")
+	}
+
+	data := templateData(event, "")
+	names, _ := data["impacted_monitors"].([]string)
+	if len(names) != 2 || data["impacted_count"] != 5 {
+		t.Fatalf("template variables impacted_monitors=%v impacted_count=%v", data["impacted_monitors"], data["impacted_count"])
+	}
+}

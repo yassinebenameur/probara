@@ -666,7 +666,7 @@ func TestService_GetOpsSummary_CountsFollowStateMachine(t *testing.T) {
 	tenantID := uuid.New()
 	mock.ExpectQuery("FROM alerts").
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"active_alerts", "acknowledged_alerts"}).AddRow(0, 0))
+		WillReturnRows(sqlmock.NewRows([]string{"active_alerts", "acknowledged_alerts", "suppressed_alerts"}).AddRow(0, 0, 0))
 	// Unrouted-monitor count (shared/alertrouting); state counts come from the
 	// health rows, not this query.
 	mock.ExpectQuery("FROM monitors m").

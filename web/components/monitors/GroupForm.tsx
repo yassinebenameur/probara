@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, GroupMonitorConfig, NotificationMode, MemberAlertRollup, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, GroupMonitorConfig, DependencySuppression, NotificationMode, MemberAlertRollup, ChannelAssignment } from '@/lib/types';
 import { getMonitors } from '@/lib/api';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
@@ -37,6 +37,7 @@ export default function GroupForm({
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     member_alert_rollup: (monitor?.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
   });
@@ -56,6 +57,7 @@ export default function GroupForm({
         enabled: monitor.enabled ?? true,
         tags: monitor.tags?.join(', ') || '',
         notification_mode: (monitor.notification_mode ?? 'default') as NotificationMode,
+        dependency_suppression: (monitor.dependency_suppression ?? 'inherit') as DependencySuppression,
         member_alert_rollup: (monitor.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
         notification_channels: monitor.notification_channels ?? [],
       });
@@ -68,6 +70,7 @@ export default function GroupForm({
         tags: '',
         notification_mode: 'default',
         member_alert_rollup: 'per_monitor',
+        dependency_suppression: 'inherit',
         notification_channels: [],
       });
       setInitializedMonitorId(null);
@@ -109,6 +112,7 @@ export default function GroupForm({
     };
 
     requestData.notification_mode = formData.notification_mode;
+    requestData.dependency_suppression = formData.dependency_suppression;
     requestData.member_alert_rollup = formData.member_alert_rollup;
     requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
@@ -232,6 +236,8 @@ export default function GroupForm({
           onThresholdChange={() => {}}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          dependencySuppression={formData.dependency_suppression}
+          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
           rollup={formData.member_alert_rollup}

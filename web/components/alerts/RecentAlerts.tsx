@@ -230,11 +230,27 @@ export default function RecentAlerts({
                   {alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id && (
                     <Link
                       href={`/monitors/${alert.root_cause_monitor_id}`}
-                      className="mt-1 inline-flex max-w-full items-center gap-1 truncate rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400 hover:border-amber-500/40"
-                      title={`Likely caused by ${alert.root_cause_monitor_name}`}
+                      className={`mt-1 inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                        alert.suppression_reason === 'dependency'
+                          ? 'border-slate-500/30 bg-slate-500/10 text-slate-400 hover:border-slate-400/50'
+                          : 'border-amber-500/20 bg-amber-500/10 text-amber-400 hover:border-amber-500/40'
+                      }`}
+                      title={
+                        alert.suppression_reason === 'dependency'
+                          ? `Notifications suppressed: caused by ${alert.root_cause_monitor_name}`
+                          : `Likely caused by ${alert.root_cause_monitor_name}`
+                      }
                     >
-                      likely caused by: {alert.root_cause_monitor_name}
+                      {alert.suppression_reason === 'dependency' ? '🔕 suppressed · caused by' : 'likely caused by'}: {alert.root_cause_monitor_name}
                     </Link>
+                  )}
+                  {(alert.impacted_count ?? 0) > 0 && (
+                    <span
+                      className="mt-1 ml-1 inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"
+                      title="Downstream monitors whose notifications this alert stands in for"
+                    >
+                      affects {alert.impacted_count} monitor{alert.impacted_count === 1 ? '' : 's'}
+                    </span>
                   )}
                 </div>
                 {showActions && alert.status !== 'resolved' && (

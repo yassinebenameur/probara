@@ -56,6 +56,49 @@ func TestGetUpdateNotificationSettings(t *testing.T) {
 	}
 }
 
+func TestDependencySuppressionSettingsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "ns-dep")
+	svc := NewService(dbClient)
+
+	// Opt-in: off with a 120s grace for every existing tenant.
+	settings, err := svc.Get(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if settings.DependencySuppressionEnabled || settings.DependencySuppressionGraceSeconds != 120 {
+		t.Fatalf("unexpected defaults: enabled=%v grace=%d", settings.DependencySuppressionEnabled, settings.DependencySuppressionGraceSeconds)
+	}
+
+	settings, err = svc.Update(ctx, tenantID, UpdateRequest{
+		DependencySuppressionEnabled:      boolPtr(true),
+		DependencySuppressionGraceSeconds: intPtr(300),
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if !settings.DependencySuppressionEnabled || settings.DependencySuppressionGraceSeconds != 300 {
+		t.Fatalf("settings not persisted: enabled=%v grace=%d", settings.DependencySuppressionEnabled, settings.DependencySuppressionGraceSeconds)
+	}
+
+	// A partial update leaves the other field alone.
+	settings, err = svc.Update(ctx, tenantID, UpdateRequest{DependencySuppressionEnabled: boolPtr(false)})
+	if err != nil {
+		t.Fatalf("Update(partial) error = %v", err)
+	}
+	if settings.DependencySuppressionEnabled || settings.DependencySuppressionGraceSeconds != 300 {
+		t.Fatalf("partial update clobbered grace: enabled=%v grace=%d", settings.DependencySuppressionEnabled, settings.DependencySuppressionGraceSeconds)
+	}
+
+	for _, bad := range []int{-1, MaxDependencySuppressionGraceSeconds + 1} {
+		if _, err := svc.Update(ctx, tenantID, UpdateRequest{DependencySuppressionGraceSeconds: intPtr(bad)}); err == nil {
+			t.Fatalf("Update(grace=%d) must be rejected", bad)
+		}
+	}
+}
+
 // TestUpdateRejectsChannelFromOtherTenant asserts that Update returns
 // ErrChannelNotFound (wrapped) when the caller supplies a channel_id that
 // belongs to a different tenant, and that no row is persisted.

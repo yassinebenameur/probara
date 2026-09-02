@@ -7,6 +7,7 @@ import {
   UpdateMonitorRequest,
   CheckResult,
   MonitorType,
+  DependencySuppression,
   NotificationMode,
   ChannelAssignment,
   HTTPMonitorConfig,
@@ -974,6 +975,7 @@ export default function MonitorForm({
     timeout_seconds: sourceTimeoutSeconds,
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: (monitor?.notification_channels ?? []) as ChannelAssignment[],
     enabled: sourceEnabled,
     tags: sourceTags.join(', '),
@@ -1977,6 +1979,7 @@ export default function MonitorForm({
 
     requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
     requestData.notification_mode = formData.notification_mode;
+    requestData.dependency_suppression = formData.dependency_suppression;
     requestData.notification_channels =
       formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
@@ -3638,6 +3641,8 @@ export default function MonitorForm({
           onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          dependencySuppression={formData.dependency_suppression}
+          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />

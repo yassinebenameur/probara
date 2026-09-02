@@ -206,6 +206,9 @@ func ValidateMonitorWithRegistry(req *models.CreateMonitorRequest, registry *Val
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
+		return err
+	}
 
 	if err := ValidateMonitorLocationFields(req.Type, req.LocationIDs, req.LocationQuorum); err != nil {
 		return err
@@ -285,6 +288,9 @@ func ValidateMonitorUpdateWithRegistry(req *models.UpdateMonitorRequest, existin
 	if err := ValidateMonitorNotificationFields(req.ConsecutiveFailuresThreshold, req.NotificationMode, req.MemberAlertRollup, req.NotificationChannels); err != nil {
 		return err
 	}
+	if err := ValidateDependencySuppression(req.DependencySuppression); err != nil {
+		return err
+	}
 
 	var locationIDs []string
 	if req.LocationIDs != nil {
@@ -319,6 +325,19 @@ func ValidateMonitorLocationFields(monitorType models.MonitorType, locationIDs [
 		return fmt.Errorf("location_quorum must be at least 1")
 	}
 	return nil
+}
+
+// ValidateDependencySuppression validates a monitor's dependency_suppression
+// override: 'inherit' follows the workspace setting, 'on' / 'off' force it.
+func ValidateDependencySuppression(value *string) error {
+	if value == nil {
+		return nil
+	}
+	switch *value {
+	case "inherit", "on", "off":
+		return nil
+	}
+	return fmt.Errorf("dependency_suppression must be 'inherit', 'on' or 'off'")
 }
 
 // ValidateMonitorNotificationFields validates the notification-routing fields that can be set

@@ -858,9 +858,11 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 	query := `
 		SELECT
 			COUNT(*) FILTER (WHERE a.status = 'active') AS active_alerts,
-			COUNT(*) FILTER (WHERE a.status = 'acknowledged') AS acknowledged_alerts
+			COUNT(*) FILTER (WHERE a.status = 'acknowledged') AS acknowledged_alerts,
+			COUNT(*) FILTER (WHERE ` + alertrouting.SuppressedByDependencyPredicate("a", "m", "te") + `) AS suppressed_alerts
 		FROM alerts a
 		JOIN monitors m ON m.id = a.monitor_id AND m.tenant_id = a.tenant_id
+		JOIN tenants te ON te.id = a.tenant_id
 		WHERE a.tenant_id = $1
 		  AND a.status IN ('active', 'acknowledged')
 		  AND m.deleted_at IS NULL
@@ -870,7 +872,7 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 		query += ` AND m.tags @> $2::text[]`
 		args = append(args, pq.Array(tags))
 	}
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts, &summary.SuppressedAlerts); err != nil {
 		return summary, fmt.Errorf("failed to query ops summary alerts: %w", err)
 	}
 

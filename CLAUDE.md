@@ -68,6 +68,15 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   group's `enabled` flag while the group's own alert requires it, so a paused
   `group`-rollup group silences its whole membership. Reachability *reports*
   that (`group_rollup_paused`); dispatch still behaves that way.
+  **Dependency suppression** (S-M4) is the per-alert rule in the same package:
+  `SuppressedByDependencyPredicate(al, m, te)` is what the alerter's
+  `dispatchOpenAlerts` excludes on **and** what the API renders as
+  `suppression_reason` / the dashboard's `suppressed_alerts` — always use the
+  fragment, never re-derive it. The grace clock is `alerts.root_cause_cleared_at`,
+  stamped by `annotateOpenAlertRootCauses` when the annotation clears and reset
+  when one is set again; `DispatchEligibleSinceExpr` is what escalation delays
+  count from. `ImpactedMonitorsSubquery` lists only *suppressed* downstreams, so
+  with the policy off (the default) existing notifications do not change.
 - **Status page settings live in THREE mirrors**, all of which must change
   together for a new setting to survive a round trip:
   `api/internal/models/statuspages.go` (`StatusPageSettings`, the wire type),

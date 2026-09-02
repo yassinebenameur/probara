@@ -462,7 +462,10 @@ export const API_PAGE: DocPage = {
           type: "table",
           columns: ["Method and path", "Purpose"],
           rows: [
-            ["`GET /api/v1/alerts`", "Paginated/filterable alert list"],
+            [
+              "`GET /api/v1/alerts`",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since`, `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies",
+            ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
               "`GET /api/v1/alerts/stream`",

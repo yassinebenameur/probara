@@ -3,7 +3,14 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getNotificationSettings } from '@/lib/api';
-import type { AlertChannel, ChannelAssignment, MemberAlertRollup, NotificationMode, NotificationSettings } from '@/lib/types';
+import type {
+  AlertChannel,
+  ChannelAssignment,
+  DependencySuppression,
+  MemberAlertRollup,
+  NotificationMode,
+  NotificationSettings,
+} from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 
 interface AlertingSectionProps {
@@ -18,6 +25,16 @@ interface AlertingSectionProps {
   // Group-only: how alerts roll up across members. Omit for non-group monitors.
   rollup?: MemberAlertRollup;
   onRollupChange?: (r: MemberAlertRollup) => void;
+  // Whether this monitor pages while an upstream dependency is down. Omit to
+  // hide the control (the server keeps the stored value).
+  dependencySuppression?: DependencySuppression;
+  onDependencySuppressionChange?: (d: DependencySuppression) => void;
+}
+
+function graceLabel(seconds: number): string {
+  if (seconds <= 0) return 'immediately';
+  if (seconds % 60 === 0) return `after ${seconds / 60} min`;
+  return `after ${seconds}s`;
 }
 
 function detectionHint(threshold: number, intervalSeconds: number): string {
@@ -33,6 +50,7 @@ export function AlertingSection({
   isGroup, intervalSeconds, threshold, onThresholdChange,
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
+  dependencySuppression, onDependencySuppressionChange,
 }: AlertingSectionProps) {
   const [settings, setSettings] = useState<NotificationSettings | null>(null);
   const [channels, setChannels] = useState<AlertChannel[]>([]);
@@ -176,6 +194,66 @@ export function AlertingSection({
           )}
         </div>
       </div>
+      )}
+
+      {!perMonitorRollup && dependencySuppression && onDependencySuppressionChange && (
+        <div>
+          <label className="mb-2 block text-sm font-medium text-slate-200">
+            When an upstream dependency is down
+          </label>
+          <div className="space-y-2">
+            <label className="flex items-start gap-2 text-sm text-slate-300">
+              <input
+                type="radio"
+                className="mt-0.5"
+                checked={dependencySuppression === 'inherit'}
+                onChange={() => onDependencySuppressionChange('inherit')}
+              />
+              <span>
+                Follow the workspace setting
+                {settings && (
+                  <span className="ml-1 text-xs text-slate-500">
+                    — currently {settings.dependency_suppression_enabled ? 'suppress' : 'always page'}
+                  </span>
+                )}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-slate-300">
+              <input
+                type="radio"
+                className="mt-0.5"
+                checked={dependencySuppression === 'off'}
+                onChange={() => onDependencySuppressionChange('off')}
+              />
+              <span>
+                Always page
+                <span className="block text-xs text-slate-500">
+                  Notify even when the outage is explained by a dependency. For monitors that must never go quiet.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-slate-300">
+              <input
+                type="radio"
+                className="mt-0.5"
+                checked={dependencySuppression === 'on'}
+                onChange={() => onDependencySuppressionChange('on')}
+              />
+              <span>
+                Suppress notifications while an upstream is down
+                <span className="block text-xs text-slate-500">
+                  The alert still opens and the root cause&apos;s notification lists this monitor. If the upstream
+                  recovers and this monitor stays down, it pages{' '}
+                  {graceLabel(settings?.dependency_suppression_grace_seconds ?? 120)}.
+                </span>
+              </span>
+            </label>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            ⓘ Only applies when this monitor has upstream dependencies.{' '}
+            <Link href="/dependencies" className="text-cyan-400">Open the dependency graph</Link>
+          </p>
+        </div>
       )}
     </div>
   );

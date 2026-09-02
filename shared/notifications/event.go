@@ -61,6 +61,14 @@ type AlertDetails struct {
 	// per-location breakdown instead of splitting it across N alerts.
 	FailingLocations []FailingLocation `json:"failing_locations,omitempty"`
 
+	// Dependency blast radius: the downstream monitors whose own alerts name
+	// this alert's monitor as root cause and are suppressed because of it
+	// (refreshed while the alert stays open), so the one page that does go
+	// out says what else is affected. ImpactedCount is the full size of that
+	// set; ImpactedMonitors may be truncated for very wide outages.
+	ImpactedMonitors []ImpactedMonitor `json:"impacted_monitors,omitempty"`
+	ImpactedCount    int               `json:"impacted_count,omitempty"`
+
 	// Mesh-edge annotation: populated when Kind == "mesh_edge". The alert's
 	// subject is the directed source→target location path (MonitorID is the
 	// zero UUID for these; MonitorName carries a readable "mesh: A → B" label
@@ -76,6 +84,27 @@ type FailingLocation struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
 	DownSince *time.Time `json:"down_since,omitempty"`
+}
+
+// ImpactedMonitor is one downstream monitor whose alert a root cause's
+// notification stands in for.
+type ImpactedMonitor struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ImpactedMonitorNames returns the impacted monitors' display names, falling
+// back to the id when a name is missing.
+func (d AlertDetails) ImpactedMonitorNames() []string {
+	names := make([]string, 0, len(d.ImpactedMonitors))
+	for _, m := range d.ImpactedMonitors {
+		if m.Name != "" {
+			names = append(names, m.Name)
+		} else {
+			names = append(names, m.ID)
+		}
+	}
+	return names
 }
 
 // KindAvailability, KindLatencyAnomaly, KindHostMetric, KindMeshEdge and

@@ -16,6 +16,17 @@
 //     is the one that matters.
 //   - A group whose member_alert_rollup = 'per_monitor' never opens its own
 //     derived alert; its members alert individually.
+//
+// Dependency suppression is the one rule here that is per-alert rather than
+// per-monitor: when the policy is on for a monitor (its own
+// dependency_suppression, else the tenant's dependency_suppression_enabled)
+// and its open alert carries a root-cause annotation — or carried one until
+// less than the tenant's grace period ago — the alert opens and resolves
+// normally but dispatches nothing. The alerter gates dispatch with
+// SuppressedByDependencyPredicate and the API reports the same predicate as
+// the alert's suppression_reason, so what pages and what the UI calls
+// suppressed cannot disagree. Classify does not model it: routing reachability
+// is static configuration, dependency suppression follows live upstream state.
 package alertrouting
 
 import "github.com/google/uuid"
@@ -232,6 +243,74 @@ func SuppressedByRollupPredicate(monitorIDExpr string) string {
 		JOIN monitors g ON g.id = mg.group_id AND g.deleted_at IS NULL
 		WHERE mg.monitor_id = ` + monitorIDExpr + `
 		  AND g.member_alert_rollup = 'group')`
+}
+
+// SuppressionReasonDependency is the value the API reports in an alert's
+// suppression_reason when SuppressedByDependencyPredicate holds for it.
+const SuppressionReasonDependency = "dependency"
+
+// DependencySuppressionEffectiveExpr returns a SQL boolean that is TRUE when
+// dependency suppression applies to the monitor aliased by monAlias: its own
+// dependency_suppression ('on' / 'off') wins, and 'inherit' defers to the
+// tenant row aliased by tenantAlias.
+func DependencySuppressionEffectiveExpr(monAlias, tenantAlias string) string {
+	return `(CASE ` + monAlias + `.dependency_suppression
+		WHEN 'on' THEN TRUE
+		WHEN 'off' THEN FALSE
+		ELSE ` + tenantAlias + `.dependency_suppression_enabled
+	END)`
+}
+
+// dependencyGraceExpr is the tenant's grace period as a SQL interval.
+func dependencyGraceExpr(tenantAlias string) string {
+	return `make_interval(secs => ` + tenantAlias + `.dependency_suppression_grace_seconds)`
+}
+
+// SuppressedByDependencyPredicate returns a SQL boolean that is TRUE when the
+// open alert aliased by alertAlias, on the monitor aliased by monAlias in the
+// tenant aliased by tenantAlias, must not dispatch because an upstream
+// dependency explains it: the policy is on for the monitor and the alert is
+// annotated with a root cause, or its root cause cleared less than the grace
+// period ago. Only availability alerts carry the annotation, so the predicate
+// is naturally FALSE for every other kind.
+//
+// The result is never NULL: root_cause_cleared_at is NULL for an alert that
+// never had a root cause, and without the COALESCE a `NOT <predicate>` in a
+// WHERE clause would silently drop every such alert from dispatch.
+func SuppressedByDependencyPredicate(alertAlias, monAlias, tenantAlias string) string {
+	return `COALESCE(` + DependencySuppressionEffectiveExpr(monAlias, tenantAlias) + ` AND (
+		` + alertAlias + `.root_cause_monitor_id IS NOT NULL
+		OR ` + alertAlias + `.root_cause_cleared_at > NOW() - ` + dependencyGraceExpr(tenantAlias) + `
+	), FALSE)`
+}
+
+// DispatchEligibleSinceExpr returns a SQL timestamp: the moment from which the
+// alert aliased by alertAlias has been eligible to dispatch. For an alert that
+// never had a root cause this is its triggered_at; for one whose root cause
+// cleared it is the end of the grace period, so escalation-tier delays for a
+// late-paging downstream are measured from when it became unexplained rather
+// than firing every tier at once.
+func DispatchEligibleSinceExpr(alertAlias, tenantAlias string) string {
+	return `GREATEST(` + alertAlias + `.triggered_at,
+		COALESCE(` + alertAlias + `.root_cause_cleared_at + ` + dependencyGraceExpr(tenantAlias) + `, ` + alertAlias + `.triggered_at))`
+}
+
+// ImpactedMonitorsSubquery returns a SQL scalar subquery yielding a JSON array
+// of `{"id","name"}` objects (ordered by name) for the monitors whose open
+// availability alert names the monitor identified by monitorIDExpr as its root
+// cause — the blast radius a root cause's notification should list. Only alerts
+// whose monitor is actually suppressed are counted, so the list is exactly the
+// set of pages this alert is standing in for.
+func ImpactedMonitorsSubquery(monitorIDExpr string) string {
+	return `(
+		SELECT COALESCE(json_agg(json_build_object('id', dm.id, 'name', dm.name) ORDER BY dm.name), '[]'::json)
+		FROM alerts da
+		JOIN monitors dm ON dm.id = da.monitor_id AND dm.deleted_at IS NULL
+		JOIN tenants dt ON dt.id = da.tenant_id
+		WHERE da.root_cause_monitor_id = ` + monitorIDExpr + `
+		  AND da.status IN ('active', 'acknowledged')
+		  AND da.kind = 'availability'
+		  AND ` + DependencySuppressionEffectiveExpr("dm", "dt") + `)`
 }
 
 // UnreachablePredicate returns a SQL boolean that is TRUE when an alert on the

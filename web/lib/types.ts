@@ -635,6 +635,12 @@ export type NotificationMode = 'default' | 'custom';
 //   'group'       — members are suppressed; one group-level alert speaks for them.
 export type MemberAlertRollup = 'per_monitor' | 'group';
 
+// Whether a monitor pages while an upstream dependency it depends on is down:
+//   'inherit' — follow the workspace setting (NotificationSettings.dependency_suppression_enabled)
+//   'on'      — never page while an upstream is down; the root cause's alert speaks for it
+//   'off'     — always page, whatever the workspace says
+export type DependencySuppression = 'inherit' | 'on' | 'off';
+
 export interface ChannelAssignment {
   channel_id: string;
   channel_name?: string;
@@ -651,6 +657,10 @@ export interface NotificationSettings {
   latency_anomaly_sensitivity: number;
   latency_anomaly_min_breach_seconds: number;
   latency_anomaly_min_delta_pct: number;
+  // Dependency-aware alerting: suppress a monitor's notifications while an
+  // upstream dependency is down, and for the grace period after it recovers.
+  dependency_suppression_enabled: boolean;
+  dependency_suppression_grace_seconds: number;
 }
 
 export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry';
@@ -828,6 +838,7 @@ export interface Monitor {
   consecutive_failures_threshold: number;
   notification_mode: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
+  dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
   current_state?: MonitorState;
   alert_routing?: AlertRouting; // Read-only; who this monitor's alerts reach
@@ -882,6 +893,7 @@ export interface CreateMonitorRequest {
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
+  dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
   location_ids?: string[];
@@ -901,6 +913,7 @@ export interface UpdateMonitorRequest {
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
+  dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
   location_ids?: string[];
@@ -967,6 +980,13 @@ export interface Alert {
   root_cause_monitor_name?: string;
   source_location_name?: string;
   target_location_name?: string;
+  // Set while the alerter deliberately sends no notification for this open
+  // alert. 'dependency': an upstream dependency is down (or recovered less
+  // than the grace period ago) and dependency suppression is on.
+  suppression_reason?: 'dependency';
+  // How many open downstream alerts this alert's monitor is the suppressed
+  // root cause of (its notification lists them under "also affecting").
+  impacted_count?: number;
 }
 
 export interface AlertListResponse {
@@ -1028,6 +1048,8 @@ export interface DashboardOpsSummary {
   maintenance_monitors: number;
   active_alerts: number;
   acknowledged_alerts: number;
+  /** Open alerts whose notifications are suppressed because an upstream dependency explains them (subset of active + acknowledged). */
+  suppressed_alerts: number;
   /** Active monitors whose alerts would notify nobody. */
   unrouted_monitors: number;
 }

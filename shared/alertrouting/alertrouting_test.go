@@ -1,6 +1,7 @@
 package alertrouting
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -166,5 +167,38 @@ func TestClassifyIgnoresOwnRoutingWhenRolledUp(t *testing.T) {
 	})
 	if got.ActiveChannels != 1 {
 		t.Errorf("ActiveChannels = %d, want the group's 1 — a suppressed member's own channels never fire", got.ActiveChannels)
+	}
+}
+
+func TestDependencySuppressionFragments(t *testing.T) {
+	// The fragments are dropped into WHERE clauses under NOT and into CASE
+	// expressions; they must reference exactly the aliases they are given and
+	// never evaluate to NULL for an alert that has no root-cause history.
+	pred := SuppressedByDependencyPredicate("al", "m", "te")
+	for _, want := range []string{
+		"COALESCE(",
+		"m.dependency_suppression",
+		"te.dependency_suppression_enabled",
+		"al.root_cause_monitor_id IS NOT NULL",
+		"al.root_cause_cleared_at > NOW() - make_interval(secs => te.dependency_suppression_grace_seconds)",
+		", FALSE)",
+	} {
+		if !strings.Contains(pred, want) {
+			t.Fatalf("SuppressedByDependencyPredicate missing %q:\n%s", want, pred)
+		}
+	}
+
+	since := DispatchEligibleSinceExpr("al", "te")
+	for _, want := range []string{"GREATEST(al.triggered_at", "al.root_cause_cleared_at + make_interval(secs => te.dependency_suppression_grace_seconds)"} {
+		if !strings.Contains(since, want) {
+			t.Fatalf("DispatchEligibleSinceExpr missing %q:\n%s", want, since)
+		}
+	}
+
+	impacted := ImpactedMonitorsSubquery("al.monitor_id")
+	for _, want := range []string{"da.root_cause_monitor_id = al.monitor_id", "da.kind = 'availability'", "dm.dependency_suppression", "dt.dependency_suppression_enabled"} {
+		if !strings.Contains(impacted, want) {
+			t.Fatalf("ImpactedMonitorsSubquery missing %q:\n%s", want, impacted)
+		}
 	}
 }

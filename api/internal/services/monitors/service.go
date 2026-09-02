@@ -181,6 +181,10 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.MemberAlertRollup != nil {
 		memberAlertRollup = *req.MemberAlertRollup
 	}
+	dependencySuppression := "inherit" // DB default
+	if req.DependencySuppression != nil {
+		dependencySuppression = *req.DependencySuppression
+	}
 
 	locationIDs, err := parseLocationIDs(req.LocationIDs)
 	if err != nil {
@@ -208,6 +212,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
 		NotificationMode:             notificationMode,
 		MemberAlertRollup:            memberAlertRollup,
+		DependencySuppression:        dependencySuppression,
 		LocationQuorum:               locationQuorum,
 	}
 
@@ -512,6 +517,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	if req.MemberAlertRollup != nil {
 		setParts = append(setParts, fmt.Sprintf("member_alert_rollup = $%d", argIndex))
 		args = append(args, *req.MemberAlertRollup)
+		argIndex++
+	}
+
+	if req.DependencySuppression != nil {
+		setParts = append(setParts, fmt.Sprintf("dependency_suppression = $%d", argIndex))
+		args = append(args, *req.DependencySuppression)
 		argIndex++
 	}
 

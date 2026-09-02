@@ -88,6 +88,15 @@ func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// suppressed=true|false narrows to alerts whose notifications the alerter
+	// is (or is not) currently suppressing, e.g. because an upstream
+	// dependency is down.
+	if suppressedStr := r.URL.Query().Get("suppressed"); suppressedStr != "" {
+		if suppressed, err := strconv.ParseBool(suppressedStr); err == nil {
+			params.Suppressed = &suppressed
+		}
+	}
+
 	result, err := h.service.ListAlerts(r.Context(), tenantUUID, params)
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Download } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, AgentInstallCommand, ApiKey, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, AgentInstallCommand, ApiKey, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
 import { getAgentInstallCommand, getApiKeys } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
@@ -90,6 +90,7 @@ export default function AgentForm({
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
   });
   const [ruleDrafts, setRuleDrafts] = useState<MetricRuleDraft[]>(() => draftsFromRules(initialRules));
@@ -138,6 +139,7 @@ export default function AgentForm({
 
     requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
     requestData.notification_mode = formData.notification_mode;
+    requestData.dependency_suppression = formData.dependency_suppression;
     requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
@@ -546,6 +548,8 @@ export default function AgentForm({
           onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          dependencySuppression={formData.dependency_suppression}
+          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />

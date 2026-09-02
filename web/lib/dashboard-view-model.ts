@@ -91,6 +91,7 @@ export function formatRelativeTimeFrom(dateString: string, now = new Date()): st
 export function buildOperationalSummary(input: OperationalSummaryInput): OperationalSummary {
   const downMonitors = input.opsSummary?.down_monitors ?? 0;
   const activeAlerts = input.opsSummary?.active_alerts ?? 0;
+  const suppressedAlerts = input.opsSummary?.suppressed_alerts ?? 0;
   const pausedMonitors = input.opsSummary?.paused_monitors ?? 0;
   const maintenanceMonitors = input.opsSummary?.maintenance_monitors ?? 0;
   const attentionCount = Math.max(input.problemMonitorsCount, downMonitors + activeAlerts);
@@ -158,7 +159,12 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
       {
         label: 'Active alerts',
         value: String(activeAlerts),
-        detail: activeAlerts > 0 ? 'Needs review' : 'None',
+        detail:
+          activeAlerts > 0
+            ? suppressedAlerts > 0
+              ? `${suppressedAlerts} suppressed by dependency`
+              : 'Needs review'
+            : 'None',
         tone: activeAlerts > 0 ? 'critical' : 'clean',
       },
     ],

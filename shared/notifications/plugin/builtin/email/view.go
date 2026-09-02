@@ -71,7 +71,12 @@ type alertView struct {
 	LastError string
 	RootCause string
 	Locations []locationLine
-	Rows      []detailRow
+	// Impacted lists the downstream monitors this alert's notification stands
+	// in for (their own pages are suppressed by dependency); ImpactedMore is how
+	// many further monitors the list omits.
+	Impacted     []string
+	ImpactedMore int
+	Rows         []detailRow
 
 	ActionURL   string
 	ActionLabel string
@@ -125,6 +130,14 @@ func newAlertView(event notifications.AlertEvent, appBaseURL string) alertView {
 			line.DownSince = "down since " + humanTime(*loc.DownSince)
 		}
 		v.Locations = append(v.Locations, line)
+	}
+	// A recovered root cause no longer stands in for anything, so the blast
+	// radius is only worth printing while the outage is live.
+	if !resolved {
+		v.Impacted = alert.ImpactedMonitorNames()
+		if alert.ImpactedCount > len(v.Impacted) {
+			v.ImpactedMore = alert.ImpactedCount - len(v.Impacted)
+		}
 	}
 
 	v.Rows = detailRows(alert, elapsed)

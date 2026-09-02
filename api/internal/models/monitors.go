@@ -60,7 +60,8 @@ type Monitor struct {
 	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
 	NotificationMode             string                     `json:"notification_mode"`
-	MemberAlertRollup            string                     `json:"member_alert_rollup"` // 'per_monitor' | 'group'; only meaningful for group monitors
+	MemberAlertRollup            string                     `json:"member_alert_rollup"`    // 'per_monitor' | 'group'; only meaningful for group monitors
+	DependencySuppression        string                     `json:"dependency_suppression"` // 'inherit' | 'on' | 'off': page when an upstream dependency is down? 'inherit' follows the workspace setting
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
 	LocationIDs                  []uuid.UUID                `json:"location_ids,omitempty"` // Private locations checks fan out to; empty = default fleet
 	LocationQuorum               int                        `json:"location_quorum"`        // Down when >= this many locations are down
@@ -91,6 +92,7 @@ type CreateMonitorRequest struct {
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
+	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
 	LocationIDs                  []string                   `json:"location_ids,omitempty"`
@@ -111,6 +113,7 @@ type UpdateMonitorRequest struct {
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
+	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
 	LocationIDs                  *[]string                  `json:"location_ids,omitempty"`   // nil = unchanged, empty = default fleet

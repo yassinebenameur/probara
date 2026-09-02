@@ -199,6 +199,14 @@ export const ALERTING_PAGE: DocPage = {
             ["`latency_anomaly_sensitivity`", "Defaults to 3.5"],
             ["`latency_anomaly_min_breach_seconds`", "Defaults to 120"],
             ["`latency_anomaly_min_delta_pct`", "Defaults to 20 (percent)"],
+            [
+              "`dependency_suppression_enabled`",
+              "Defaults to false. When true, a monitor whose upstream dependency is down opens its alert but sends no notification — see [dependency-aware alerting](/docs/alerting/#dependencies). Monitors override it with `dependency_suppression`",
+            ],
+            [
+              "`dependency_suppression_grace_seconds`",
+              "Defaults to 120; 0 to 86,400. How long a suppressed downstream stays quiet after its upstream recovers before paging if still down",
+            ],
           ],
         },
       ],
@@ -428,24 +436,41 @@ export const ALERTING_PAGE: DocPage = {
     },
     {
       id: "dependencies",
-      title: "Dependency-aware root cause",
+      title: "Dependency-aware alerting",
       blocks: [
         {
           type: "paragraph",
           text:
-            "When a downstream availability alert opens, Probara inspects its [dependency graph](/docs/dependencies/#dependency-model) and annotates the alert with the deepest currently down upstream monitor. Ties prefer the upstream condition that became down earlier.",
+            "When a downstream availability alert opens, Probara inspects its [dependency graph](/docs/dependencies/#dependency-model) and annotates the alert with the deepest currently down upstream monitor. Ties prefer the upstream condition that became down earlier. The annotation is recomputed every evaluation tick and cleared when no qualifying cause remains; it is always on and always visible on the alert, in notifications (\"likely root cause\") and in the operator UI.",
         },
         {
           type: "paragraph",
           text:
-            "The annotation is recomputed as upstream state changes and is cleared when no qualifying cause remains. It improves triage context but does not suppress the downstream alert or its notifications.",
+            "Whether the annotation also **suppresses the downstream page** is a policy. It is off by default: enable `dependency_suppression_enabled` in the workspace [notification settings](/docs/alerting/#notification-routing) to page root causes only, and override it per monitor with `dependency_suppression` (`inherit`, `on`, `off`) in the monitor's Alerting section — `off` keeps a critical monitor paging whatever the workspace says.",
+        },
+        {
+          type: "list",
+          items: [
+            "A suppressed downstream alert still opens, still counts on the dashboard, still resolves and still drives incidents and status pages; only its notifications are withheld. The API reports it with `suppression_reason: \"dependency\"`, the alert list and dashboard flag it, and `GET /api/v1/alerts?suppressed=true` lists exactly those alerts.",
+            "The root cause's own DOWN and reminder notifications carry an **Also affecting** section naming the suppressed downstream monitors (`impacted_monitors` / `impacted_count`; the API exposes `impacted_count` on the alert), recomputed on every send.",
+            "When the upstream recovers but the downstream is still down, the downstream stays quiet for `dependency_suppression_grace_seconds` (default 120) so a monitor that recovers one check later never pages. After the grace it pages as a normal DOWN, with escalation-tier delays counted from that moment rather than from when the outage began.",
+            "A downstream that recovers while suppressed was never announced, so no recovery notification is sent for it. A downstream that paged before its upstream was detected keeps its recovery notification but stops sending reminders while the upstream explains it.",
+            "Suppression is decided at dispatch, from live state, by the same predicate the API uses to compute `suppression_reason`; it is not part of `alert_routing`, which describes static routing configuration.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Dependencies and group rollup compose",
+          text:
+            "Group rollup suppresses a member because its group alerts instead; dependency suppression suppresses a downstream because its upstream alerts instead. Both predicates apply at dispatch, so a rolled-up member with a down upstream is silent under either rule. Use rollup for one alert per composite service, dependencies for one alert per root cause.",
         },
         {
           type: "callout",
           tone: "warning",
-          title: "Dependencies annotate; group rollup suppresses",
+          title: "Known gaps",
           text:
-            "If you need one alert for a set of member monitors, use group rollup. Dependency edges preserve downstream alerts so operators can still see impact.",
+            "Only availability alerts are annotated and suppressed; latency, host-metric, certificate and mesh alerts are unaffected. Suppression follows `monitors.current_state = down` on the upstream — a degraded or suspect upstream does not suppress anything. A late-paging downstream's notification does not say which upstream it had been attributed to.",
         },
       ],
     },
