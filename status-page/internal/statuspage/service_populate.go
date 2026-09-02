@@ -335,7 +335,7 @@ func mapMonitorState(state string) string {
 }
 
 // batchUptimeSummary computes 24h/1h uptime and 1h/24h average latency for each monitor in one
-// query. Equivalent to CalculateUptime24h + CalculateUptime1h + CalculateAvgLatency(1h/24h).
+// query. Equivalent to uptimeForMonitors(24h/1h) + avgLatencyForMonitors(1h/24h).
 //
 // The rollup cursor is read first and all window bounds are computed in Go and passed as
 // parameters: bounds derived from a CTE join on rollup_job_state cannot be pushed into index
@@ -549,10 +549,7 @@ func (s *Service) batchHourlyUptime(ctx context.Context, monitorIDs []uuid.UUID,
 		if err := rows.Scan(&monitorID, &hour, &total, &successful); err != nil {
 			return nil, fmt.Errorf("failed to scan batch hourly uptime: %w", err)
 		}
-		uptime := -1.0
-		if total > 0 {
-			uptime = float64(successful) / float64(total) * 100.0
-		}
+		uptime := bucketUptime(total, successful)
 		result[monitorID] = append(result[monitorID], HourlyUptime{
 			Hour:   hour.Format("15:04"),
 			Uptime: uptime,
