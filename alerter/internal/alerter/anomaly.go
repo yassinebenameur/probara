@@ -324,6 +324,7 @@ func (a *Alerter) resolveLatencyAnomalyAlert(ctx context.Context, monitorID, ten
 // is no longer in the evaluated set (policy disabled, monitor deleted/disabled).
 // keep is the set of monitor IDs that were evaluated this tick.
 func (a *Alerter) resolveOrphanLatencyAlerts(ctx context.Context, keep []uuid.UUID) error {
+	keep = nonNilIDs(keep)
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.triggered_at
 		FROM alerts al

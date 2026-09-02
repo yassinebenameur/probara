@@ -169,3 +169,46 @@ func TestEvaluateLatencyAnomaliesCoexistsWithAvailabilityAlert(t *testing.T) {
 		t.Fatalf("total active alert count = %d, want 2 (availability + latency)", got)
 	}
 }
+
+// Disabling anomaly detection for the last enabled tenant empties the
+// evaluated set. The open latency alert must still resolve as an orphan —
+// this is the nil keep-set path that `NOT (monitor_id = ANY(NULL))` would
+// otherwise turn into a no-op.
+func TestEvaluateLatencyAnomaliesOrphanResolutionWhenNothingEnabled(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	enableTenantAnomaly(ctx, t, dbClient, tenantID)
+
+	now := time.Now().UTC()
+	seedFlatBaseline(ctx, t, dbClient, tenantID, monitorID, now, 12, 100)
+	for _, age := range []time.Duration{10, 30, 60, 90} {
+		testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID,
+			now.Add(-age*time.Second), "success", "monitor", testutil.IntPtr(500))
+	}
+
+	alerter := newAnomalyAlerter(dbClient)
+	if err := alerter.evaluateLatencyAnomalies(ctx); err != nil {
+		t.Fatalf("evaluateLatencyAnomalies(open) error = %v", err)
+	}
+	if got := countLatencyAlertsByStatus(ctx, t, dbClient, monitorID, "active"); got != 1 {
+		t.Fatalf("active latency alert count = %d, want 1", got)
+	}
+
+	if _, err := dbClient.ExecContext(ctx,
+		`UPDATE tenants SET latency_anomaly_enabled = FALSE WHERE id = $1`, tenantID); err != nil {
+		t.Fatalf("disable tenant anomaly: %v", err)
+	}
+	if err := alerter.evaluateLatencyAnomalies(ctx); err != nil {
+		t.Fatalf("evaluateLatencyAnomalies(orphan) error = %v", err)
+	}
+	if got := countLatencyAlertsByStatus(ctx, t, dbClient, monitorID, "active"); got != 0 {
+		t.Fatalf("active latency alert count after disabling = %d, want 0", got)
+	}
+	if got := countLatencyAlertsByStatus(ctx, t, dbClient, monitorID, "resolved"); got != 1 {
+		t.Fatalf("resolved latency alert count after disabling = %d, want 1", got)
+	}
+}

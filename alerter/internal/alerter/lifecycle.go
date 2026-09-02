@@ -653,3 +653,16 @@ func (a *Alerter) notifyFiredChannels(ctx context.Context, eventType string, bin
 		a.fireChannel(ctx, eventType, binding, alert, fc.channel, now, 0)
 	}
 }
+
+// nonNilIDs returns keep unchanged unless it is nil, in which case it returns
+// an empty, non-nil slice. The orphan resolvers pass keep through pq.Array as
+// the `NOT (monitor_id = ANY($1))` operand: a nil slice encodes as SQL NULL,
+// `= ANY(NULL)` is NULL for every row, and the NOT filters everything out —
+// so "nothing configured" would silently resolve nothing instead of
+// everything. An empty array keeps the intended semantics.
+func nonNilIDs(keep []uuid.UUID) []uuid.UUID {
+	if keep == nil {
+		return []uuid.UUID{}
+	}
+	return keep
+}
