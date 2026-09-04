@@ -1,3 +1,27 @@
+# [1.0.0-alpha.71](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.70...v1.0.0-alpha.71) (2026-08-28)
+
+
+### Bug Fixes
+
+* **secrets:** keep stored monitor secrets when an update omits the field ([5e85e41](https://github.com/yassinebenameur/probara/commit/5e85e4176d20052c9b78748ed8087e26a2752341))
+* **status-page:** align monitor titles with fixed-width type badges ([04e352e](https://github.com/yassinebenameur/probara/commit/04e352eaa09a3072248dcade61c9a145107f5738))
+* **status-page:** make the visitor notification toggle actually work ([7107990](https://github.com/yassinebenameur/probara/commit/71079905148253d605aafd72cde05aa4b06b7523))
+* **status-page:** persist enable_push_notifications through the API ([dd7d91c](https://github.com/yassinebenameur/probara/commit/dd7d91ceb555e0b1b7fdb2601c29bcb85b25e762))
+* **status-page:** show theme and notification toggles in kiosk mode ([c976a50](https://github.com/yassinebenameur/probara/commit/c976a5060b8a77469fc5b9fbb6dee6188bd5b81a))
+
+
+### Features
+
+* **status-page:** auto-fit kiosk tile density so every monitor stays on screen ([1b22b54](https://github.com/yassinebenameur/probara/commit/1b22b54233a24b70759e55cfc88fc12df87e917b)), closes [#kioskGrid](https://github.com/yassinebenameur/probara/issues/kioskGrid)
+* **status-page:** bell icon for the notification toggle, and fix unsubscribe ([0605dec](https://github.com/yassinebenameur/probara/commit/0605dec3f1898a55e2ee6b61408182f1b356cfe8))
+* **status-page:** icon theme toggle and header control polish ([d914dfe](https://github.com/yassinebenameur/probara/commit/d914dfe66a27d78eab43dd402491d59937c70e88))
+* **status-page:** push subscribe endpoints and service worker route ([8821c63](https://github.com/yassinebenameur/probara/commit/8821c63f7d27f69018c2804b6c4d42a1542d6966))
+* **status-page:** reconcile state transitions into browser push deliveries ([52036b0](https://github.com/yassinebenameur/probara/commit/52036b038f0c75e34cf03518b3980f710bff506a))
+* **status-page:** schema and settings for visitor push notifications ([b81fbb1](https://github.com/yassinebenameur/probara/commit/b81fbb1a14598b1248af552e39ac374a58e50838))
+* **status-page:** visitor notification toggle, VAPID config, and deployment ([fcb0f91](https://github.com/yassinebenameur/probara/commit/fcb0f9155cbb34a504bd9a8ead03a1caaa446d86))
+* **web:** enable visitor browser notifications from the status page form ([35d498c](https://github.com/yassinebenameur/probara/commit/35d498c98c980612e2cbfe1556de56271fe1b5b2))
+* **webpush:** RFC 8291 message encryption and RFC 8292 VAPID auth ([a992438](https://github.com/yassinebenameur/probara/commit/a99243842331b4a2d926cc1b3fc4fd3f98635d1d))
+
 # [1.0.0-alpha.70](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.69...v1.0.0-alpha.70) (2026-08-25)
 
 
