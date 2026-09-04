@@ -10,6 +10,7 @@ import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import FilterChip from '@/components/ui/FilterChip';
 import { AlertingSection } from './AlertingSection';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 
 interface PushFormProps {
   monitor?: Monitor;
@@ -28,6 +29,8 @@ export default function PushForm({
   onCancel,
   loading = false,
 }: PushFormProps) {
+  const { canWrite, loading: loadingUser } = useCurrentUser();
+  const canViewCredentials = canWrite && !loadingUser;
   const [showWebhookInfo, setShowWebhookInfo] = useState(false);
   const [pushInfo, setPushInfo] = useState<PushInfo | null>(null);
   const [loadingPushInfo, setLoadingPushInfo] = useState(false);
@@ -108,18 +111,17 @@ export default function PushForm({
     }
   };
 
-  const loadPushInfo = async () => {
-    if (!monitor?.id) return;
+  useEffect(() => {
+    if (!monitor?.id || !showWebhookInfo || !canViewCredentials) return;
+    let cancelled = false;
+    setPushInfo(null);
     setLoadingPushInfo(true);
-    try {
-      const info = await getPushInfo(monitor.id);
-      setPushInfo(info);
-    } catch (error) {
-      console.error('Failed to load push info:', error);
-    } finally {
-      setLoadingPushInfo(false);
-    }
-  };
+    getPushInfo(monitor.id)
+      .then(info => { if (!cancelled) setPushInfo(info); })
+      .catch(error => { if (!cancelled) console.error('Failed to load push info:', error); })
+      .finally(() => { if (!cancelled) setLoadingPushInfo(false); });
+    return () => { cancelled = true; };
+  }, [monitor?.id, showWebhookInfo, canViewCredentials]);
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -127,9 +129,7 @@ export default function PushForm({
     setTimeout(() => setCopiedField(null), 2000);
   };
 
-  if (isEditMode && monitor && showWebhookInfo) {
-    if (!pushInfo && !loadingPushInfo) loadPushInfo();
-
+  if (canViewCredentials && isEditMode && monitor && showWebhookInfo) {
     return (
       <div className="space-y-5">
         <FormSection title="Webhook information">
@@ -337,7 +337,7 @@ export default function PushForm({
         }}
       />
 
-      {isEditMode && monitor && (
+      {canViewCredentials && isEditMode && monitor && (
         <div className="border-t border-white/[0.06] pt-4">
           <Button
             variant="ghost"

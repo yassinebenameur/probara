@@ -60,15 +60,15 @@ func (s *Scheduler) runRollupMaintenance() (int, int64, error) {
 	ctx, cancel := context.WithTimeout(s.ctx, rollupMaintenanceTimeout)
 	defer cancel()
 
-	var locked bool
-	if err := s.db.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", rollupMaintenanceAdvisoryLock).Scan(&locked); err != nil {
+	lock, err := acquireMaintenanceLock(ctx, s.db.DB, rollupMaintenanceAdvisoryLock)
+	if err != nil {
 		return 0, 0, fmt.Errorf("failed to acquire rollup advisory lock: %w", err)
 	}
-	if !locked {
+	if lock == nil {
 		return 0, 0, nil
 	}
 	defer func() {
-		if _, err := s.db.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", rollupMaintenanceAdvisoryLock); err != nil {
+		if err := lock.release(); err != nil {
 			s.logger.WithError(err).Warn("Failed to release rollup advisory lock")
 		}
 	}()

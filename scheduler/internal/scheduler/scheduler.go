@@ -94,6 +94,8 @@ type Scheduler struct {
 	monitorsInBatch   *prometheus.HistogramVec
 	retentionRuns     *prometheus.CounterVec
 	retentionRows     *prometheus.CounterVec
+	retentionBacklog  *prometheus.GaugeVec
+	retentionOldest   *prometheus.GaugeVec
 	rollupRuns        *prometheus.CounterVec
 	rollupRows        *prometheus.CounterVec
 	rollupErrors      *prometheus.CounterVec
@@ -177,8 +179,18 @@ func NewScheduler(cfg *config.SchedulerConfig, log *logger.Logger, metricsRegist
 	)
 	s.retentionRows = metricsRegistry.NewCounter(
 		"retention_cleanup_rows_total",
-		"Total number of check result rows deleted by retention cleanup",
+		"Total number of monitoring data rows deleted by retention cleanup",
 		[]string{},
+	)
+	s.retentionBacklog = metricsRegistry.NewGauge(
+		"retention_cleanup_backlogged_tenants",
+		"Tenants with expired rows remaining after the last completed retention pass",
+		[]string{"store"},
+	)
+	s.retentionOldest = metricsRegistry.NewGauge(
+		"retention_cleanup_oldest_expired_timestamp_seconds",
+		"Oldest expired row remaining after the last completed retention pass, or zero when drained",
+		[]string{"store"},
 	)
 	s.rollupRuns = metricsRegistry.NewCounter(
 		"rollup_runs_total",
@@ -323,32 +335,16 @@ func (s *Scheduler) Start() error {
 }
 
 func (s *Scheduler) triggerRetentionCleanup() {
-	if !s.config.RetentionCleanupEnabled {
-		return
-	}
-
 	now := time.Now().UTC()
-	if now.Hour() < s.config.RetentionCleanupHourUTC {
+	if !s.beginRetentionCleanup(now) {
 		return
 	}
 	runDate := now.Format("2006-01-02")
+	go func() {
+		complete := false
+		defer func() { s.finishRetentionCleanup(runDate, complete) }()
 
-	s.retentionMu.Lock()
-	if s.retentionRunning || s.lastRetentionRunUTCDate == runDate {
-		s.retentionMu.Unlock()
-		return
-	}
-	s.retentionRunning = true
-	s.retentionMu.Unlock()
-
-	go func(runDate string) {
-		defer func() {
-			s.retentionMu.Lock()
-			s.retentionRunning = false
-			s.retentionMu.Unlock()
-		}()
-
-		executed, deletedRows, err := s.runRetentionCleanup()
+		executed, deletedRows, pending, err := s.runRetentionCleanup()
 		if err != nil {
 			s.logger.WithError(err).Error("Retention cleanup run failed")
 			return
@@ -356,11 +352,9 @@ func (s *Scheduler) triggerRetentionCleanup() {
 		if !executed {
 			return
 		}
-
-		s.retentionMu.Lock()
-		s.lastRetentionRunUTCDate = runDate
-		s.retentionMu.Unlock()
-
+		// A bounded pass is not a completed day while expired rows remain.
+		// Leave it eligible for another pass on the next one-minute tick.
+		complete = !pending
 		s.retentionRuns.With(prometheus.Labels{}).Inc()
 		if deletedRows > 0 {
 			s.retentionRows.With(prometheus.Labels{}).Add(float64(deletedRows))
@@ -369,24 +363,55 @@ func (s *Scheduler) triggerRetentionCleanup() {
 		s.logger.WithFields(logrus.Fields{
 			"run_date_utc":    runDate,
 			"deleted_rows":    deletedRows,
+			"backlog_pending": pending,
 			"target_hour_utc": s.config.RetentionCleanupHourUTC,
-		}).Info("Retention cleanup run completed")
-	}(runDate)
+		}).Info("Retention cleanup pass completed")
+	}()
 }
 
-func (s *Scheduler) runRetentionCleanup() (bool, int64, error) {
+func (s *Scheduler) beginRetentionCleanup(now time.Time) bool {
+	if !s.config.RetentionCleanupEnabled {
+		return false
+	}
+
+	now = now.UTC()
+	if now.Hour() < s.config.RetentionCleanupHourUTC {
+		return false
+	}
+	runDate := now.Format("2006-01-02")
+
+	s.retentionMu.Lock()
+	if s.retentionRunning || s.lastRetentionRunUTCDate == runDate {
+		s.retentionMu.Unlock()
+		return false
+	}
+	s.retentionRunning = true
+	s.retentionMu.Unlock()
+	return true
+}
+
+func (s *Scheduler) finishRetentionCleanup(runDate string, complete bool) {
+	s.retentionMu.Lock()
+	defer s.retentionMu.Unlock()
+	s.retentionRunning = false
+	if complete {
+		s.lastRetentionRunUTCDate = runDate
+	}
+}
+
+func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 	ctx, cancel := context.WithTimeout(s.ctx, retentionCleanupRunTimeout)
 	defer cancel()
 
-	var locked bool
-	if err := s.db.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", retentionCleanupAdvisoryLock).Scan(&locked); err != nil {
-		return false, 0, fmt.Errorf("failed to acquire retention cleanup advisory lock: %w", err)
+	lock, err := acquireMaintenanceLock(ctx, s.db.DB, retentionCleanupAdvisoryLock)
+	if err != nil {
+		return false, 0, false, fmt.Errorf("failed to acquire retention cleanup advisory lock: %w", err)
 	}
-	if !locked {
-		return false, 0, nil
+	if lock == nil {
+		return false, 0, false, nil
 	}
 	defer func() {
-		if _, err := s.db.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", retentionCleanupAdvisoryLock); err != nil {
+		if err := lock.release(); err != nil {
 			s.logger.WithError(err).Warn("Failed to release retention cleanup advisory lock")
 		}
 	}()
@@ -399,51 +424,81 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, error) {
 	`
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
-		return true, 0, fmt.Errorf("failed to list tenant retention settings: %w", err)
+		return true, 0, false, fmt.Errorf("failed to list tenant retention settings: %w", err)
 	}
 	defer rows.Close()
 
-	var totalDeleted int64
+	// Finish this small registry query before issuing deletes. Keeping its
+	// connection checked out would unnecessarily consume a third pool slot.
+	type tenantRetention struct {
+		id   uuid.UUID
+		days int
+	}
+	var tenants []tenantRetention
 	for rows.Next() {
-		var tenantID uuid.UUID
-		var retentionDays int
-		if err := rows.Scan(&tenantID, &retentionDays); err != nil {
-			return true, totalDeleted, fmt.Errorf("failed to scan tenant retention row: %w", err)
+		var tenant tenantRetention
+		if err := rows.Scan(&tenant.id, &tenant.days); err != nil {
+			return true, 0, false, fmt.Errorf("failed to scan tenant retention row: %w", err)
 		}
-
-		deleted, err := s.pruneTenantCheckResults(ctx, tenantID, retentionDays)
-		if err != nil {
-			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s: %w", tenantID, err)
-		}
-		totalDeleted += deleted
-
-		meshDeleted, err := s.pruneTenantMeshResults(ctx, tenantID, retentionDays)
-		if err != nil {
-			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s mesh results: %w", tenantID, err)
-		}
-		totalDeleted += meshDeleted
-
-		metricDeleted, err := s.pruneTenantMetricSamples(ctx, tenantID, retentionDays)
-		if err != nil {
-			return true, totalDeleted, fmt.Errorf("failed to prune tenant %s metric samples: %w", tenantID, err)
-		}
-		totalDeleted += metricDeleted
-
-		if deleted > 0 {
-			s.logger.WithFields(logrus.Fields{
-				"tenant_id":        tenantID,
-				"retention_days":   retentionDays,
-				"deleted_rows":     deleted,
-				"batch_size":       s.config.RetentionCleanupBatchSize,
-				"max_rows_per_run": s.config.RetentionCleanupMaxRowsPerRun,
-			}).Info("Pruned stale check results for tenant")
-		}
+		tenants = append(tenants, tenant)
 	}
 	if err := rows.Err(); err != nil {
-		return true, totalDeleted, fmt.Errorf("error iterating tenant retention rows: %w", err)
+		return true, 0, false, fmt.Errorf("error iterating tenant retention rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return true, 0, false, fmt.Errorf("failed to close tenant retention rows: %w", err)
 	}
 
-	return true, totalDeleted, nil
+	stores := []struct {
+		name  string
+		prune func(context.Context, uuid.UUID, int) (int64, error)
+	}{
+		{"check_results", s.pruneTenantCheckResults},
+		{"mesh_probe_results", s.pruneTenantMeshResults},
+		{"metric_samples", s.pruneTenantMetricSamples},
+	}
+	var totalDeleted int64
+	backlogged := make(map[string]int)
+	oldest := make(map[string]time.Time)
+	pending := false
+	for _, tenant := range tenants {
+		for _, store := range stores {
+			deleted, err := store.prune(ctx, tenant.id, tenant.days)
+			totalDeleted += deleted
+			if err != nil {
+				return true, totalDeleted, pending, fmt.Errorf("failed to prune tenant %s %s: %w", tenant.id, store.name, err)
+			}
+			if deleted < int64(s.retentionMaxRows()) {
+				continue
+			}
+			// Only a capped store needs another query. Read the oldest indexed
+			// candidate instead of counting every expired row in a large backlog.
+			cutoff := time.Now().UTC().AddDate(0, 0, -tenant.days)
+			ts, err := s.oldestExpiredRetentionRow(ctx, store.name, tenant.id, cutoff)
+			if err != nil {
+				return true, totalDeleted, pending, err
+			}
+			if ts.IsZero() {
+				continue
+			}
+			pending = true
+			backlogged[store.name]++
+			if oldest[store.name].IsZero() || ts.Before(oldest[store.name]) {
+				oldest[store.name] = ts
+			}
+		}
+	}
+	// Publish a consistent snapshot only after every tenant was visited.
+	for _, store := range stores {
+		s.retentionBacklog.WithLabelValues(store.name).Set(float64(backlogged[store.name]))
+		oldestUnix := float64(0)
+		if ts := oldest[store.name]; !ts.IsZero() {
+			oldestUnix = float64(ts.Unix())
+		}
+		s.retentionOldest.WithLabelValues(store.name).Set(oldestUnix)
+	}
+
+	return true, totalDeleted, pending, nil
 }
 
 func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.UUID, retentionDays int) (int64, error) {
@@ -465,13 +520,10 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 	`
 
 	var totalDeleted int64
-	maxRows := s.config.RetentionCleanupMaxRowsPerRun
+	maxRows := s.retentionMaxRows()
 	batchSize := s.config.RetentionCleanupBatchSize
 	if batchSize <= 0 {
 		batchSize = 5000
-	}
-	if maxRows <= 0 {
-		maxRows = 200000
 	}
 
 	for int(totalDeleted) < maxRows {

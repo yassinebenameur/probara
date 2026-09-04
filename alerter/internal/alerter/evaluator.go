@@ -40,6 +40,7 @@ type alertRecord struct {
 	Kind                 string
 	Status               string
 	TriggeredAt          time.Time
+	ResolvedAt           *time.Time
 	FailureCount         int
 	LastError            *string
 	RootCauseMonitorID   *uuid.UUID
@@ -1171,6 +1172,9 @@ func (a *Alerter) sendChannelNotification(
 	var resolvedAt *time.Time
 	if eventType == "resolved" {
 		resolvedAt = &now
+		if alert.ResolvedAt != nil {
+			resolvedAt = alert.ResolvedAt
+		}
 	}
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
 
@@ -1184,7 +1188,15 @@ func (a *Alerter) sendChannelNotification(
 			Event:       event,
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
-		headers := map[string][]string{"x-idempotency-key": {envelope.IdempotencyKey()}}
+		messageID := envelope.IdempotencyKey()
+		if eventType == "reminder" {
+			// Distinct reminder rounds must not be coalesced by JetStream.
+			messageID += ":" + now.UTC().Format(time.RFC3339Nano)
+		}
+		headers := map[string][]string{
+			"x-idempotency-key": {envelope.IdempotencyKey()},
+			"Nats-Msg-Id":       {messageID},
+		}
 		return a.nats.PublishJSON(ctx, subject, envelope, headers)
 	}
 

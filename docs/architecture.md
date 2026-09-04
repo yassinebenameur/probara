@@ -1,305 +1,138 @@
-# Architecture Documentation
+# Architecture
 
-## High-Level Architecture
+Probara is a Go monorepo with independently deployed API, scheduler, worker,
+alerter, and public status-page services. PostgreSQL is the source of truth;
+NATS JetStream transports durable work, while core NATS distributes live
+updates. The authenticated Next.js application (`web/`) and static product
+website (`website/`) are separate applications.
 
-The Probara monitoring platform follows a microservices architecture with clear separation of concerns. All services communicate via:
+## Service responsibilities
 
-- **HTTP/gRPC APIs**: For synchronous communication (API service)
-- **NATS JetStream**: For asynchronous job distribution
-- **PostgreSQL**: Shared database for metadata, monitors, users, alert rules, and results
+| Component | Responsibilities | Data access |
+|---|---|---|
+| `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, notification configuration, templates, locations, push and OTLP ingestion | PostgreSQL and NATS |
+| `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
+| `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
+| `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers also use PostgreSQL |
+| `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
+| `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
+| `web/` | Authenticated operator UI and `/api` proxy, including cookies and SSE streams | Go API |
+| `website/` | Statically exported public product website and documentation | No application database |
 
-```
-┌─────────────┐
-│   Clients   │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│                    API Service                           │
-│  (HTTP Server, CRUD Operations, Authentication)          │
-└──────┬──────────────────────────────┬────────────────────┘
-       │                              │
-       │                              │
-       ▼                              ▼
-┌──────────────┐              ┌──────────────┐
-│  PostgreSQL  │              │ NATS JetStream│
-│   (Shared)   │              │    (Queue)    │
-└──────┬───────┘              └──────┬───────┘
-       │                              │
-       │                              │
-       ▼                              ▼
-┌──────────────┐              ┌──────────────┐
-│  Scheduler   │              │    Worker    │
-│   Service    │──────────────▶│   Service    │
-│              │  (enqueues)  │              │
-└──────────────┘              └──────┬────────┘
-                                     │
-                                     │ (results)
-                                     ▼
-                            ┌──────────────┐
-                            │   Alerter    │
-                            │   Service    │
-                            └──────────────┘
-                                     │
-                                     │ (notifications)
-                                     ▼
-                            ┌──────────────┐
-                            │ Status Page  │
-                            │   Service    │
-                            └──────────────┘
-```
+Worker checkers include HTTP, ping, DNS, TCP, gRPC, SIP, synthetic API/browser,
+Redis, PostgreSQL, MongoDB, RabbitMQ, MySQL, and WebSocket checks. `agent`,
+`push`, and `group` monitors are passive and are not dispatched as worker checks.
 
-## Component Descriptions
+Host monitoring uses **probara-collector**, an OpenTelemetry Collector
+distribution defined by the OCB manifest in `collector/`. Collectors send OTLP
+metrics to the API at `/api/v1/otlp/v1/metrics`; there is no custom host-agent
+implementation in this repository.
 
-### API Service
+## Messaging contracts
 
-- **Purpose**: Main entry point for all CRUD operations
-- **Responsibilities**:
-  - Monitor management (create, read, update, delete)
-  - User and tenant management
-  - Alert rule configuration
-  - Status page configuration
-  - Authentication and authorization
-- **Interfaces**: HTTP REST API
-- **Dependencies**: PostgreSQL, NATS (for async operations)
+The following are defaults; consult `shared/config/config.go` and the deployed
+values for overrides.
 
-### Scheduler Service
+| Purpose | Transport / stream | Subject |
+|---|---|---|
+| Scheduled checks | JetStream `CHECK_JOBS` | `check.jobs`, with location-specific subjects |
+| Worker results | JetStream `CHECK_RESULTS` | `check.results`, with `.loc.<location-id>` variants |
+| Alert events | JetStream `ALERTS` | `alerts.*` |
+| Optional asynchronous notification delivery | JetStream `NOTIFICATIONS` | `alerts.dispatch.<plugin-type>` |
+| Optional incident AI analysis | JetStream `AI_RCA` | `ai.rca.jobs` |
+| Status-page/live monitor updates | Core NATS | `statuspage.updates` |
 
-- **Purpose**: Schedules monitor checks based on intervals
-- **Responsibilities**:
-  - Read monitor definitions from database
-  - Calculate next run times
-  - Enqueue check jobs to NATS JetStream
-  - Leader election (only one active scheduler)
-- **Interfaces**: Minimal HTTP (health/metrics only)
-- **Dependencies**: PostgreSQL, NATS JetStream
-
-### Worker Service
-
-- **Purpose**: Executes HTTP/API checks
-- **Responsibilities**:
-  - Consume jobs from NATS JetStream
-  - Execute HTTP requests to target endpoints
-  - Record results to database
-  - Expose Prometheus metrics
-- **Interfaces**: Minimal HTTP (health/metrics only)
-- **Dependencies**: NATS JetStream, PostgreSQL
-- **Scalability**: Horizontally scalable (multiple replicas)
-
-### Alerter Service
-
-- **Purpose**: Evaluates alert rules and sends notifications
-- **Responsibilities**:
-  - Read alert rules from database
-  - Evaluate rules against recent check results
-  - Send notifications (email, Slack, Discord, webhooks)
-  - Maintain alert state and deduplication
-- **Interfaces**: Minimal HTTP (health/metrics only)
-- **Dependencies**: PostgreSQL, NATS (for async notifications)
-
-### Status Page Service
-
-- **Purpose**: Public-facing status pages
-- **Responsibilities**:
-  - Render uptime statistics
-  - Display recent incident history
-  - Support custom branding (names, colors, logos)
-- **Interfaces**: HTTP (public-facing)
-- **Dependencies**: PostgreSQL (read-only)
-
-## Communication Patterns
-
-### Synchronous Communication
-
-- **API → Database**: Direct SQL queries for CRUD operations
-- **Status Page → Database**: Read-only queries for public data
-
-### Asynchronous Communication
-
-- **Scheduler → Worker**: Jobs published to NATS JetStream stream `jobs.checks`
-- **Worker → Alerter**: Results may trigger alert evaluation (via database or queue)
-- **Alerter → External**: Notifications sent via email, Slack, webhooks, etc.
-
-### Job Flow
-
-1. Scheduler reads monitors from database
-2. Scheduler enqueues check jobs to `jobs.checks` stream
-3. Worker consumes jobs from `jobs.checks`
-4. Worker executes HTTP check
-5. Worker writes result to database
-6. Alerter periodically evaluates alert rules against results
-7. Alerter sends notifications if conditions are met
-
-## Data Flow
-
-### Check Execution Flow
-
-```
-Monitor Definition (DB)
-    ↓
-Scheduler (reads, calculates next_run_at)
-    ↓
-NATS JetStream (job.checks stream)
-    ↓
-Worker (consumes, executes HTTP request)
-    ↓
-Result (written to DB)
-    ↓
-Alerter (evaluates rules, sends notifications)
+```mermaid
+flowchart LR
+    API[Go API] --> DB[(PostgreSQL)]
+    Scheduler[Scheduler] --> Jobs[CHECK_JOBS]
+    Jobs --> Worker[Check workers]
+    Worker --> Results[CHECK_RESULTS]
+    Results --> Ingest[Scheduler ingest]
+    Ingest --> DB
+    DB --> Alerter[Alerter]
+    Alerter --> Notify[Notification providers / NOTIFICATIONS]
+    Ingest --> Live[Core NATS live updates]
+    Live --> Status[Public status pages]
+    DB --> Status
 ```
 
-### Status Page Flow
+The scheduler claims due monitors using transactions and `FOR UPDATE SKIP
+LOCKED`, allowing multiple scheduler replicas. Result ingestion deduplicates
+deliveries and preserves evidence ordering; late checks remain in history
+without moving the current state backwards. See [state semantics](state-semantics.md)
+for transition, quorum, freshness, and availability rules.
 
-```
-Public Request
-    ↓
-Status Page Service
-    ↓
-Database (read-only queries)
-    ↓
-Rendered HTML/JSON Response
-```
+Private-location workers use location-scoped broker credentials and encrypted
+monitor configurations. The platform validates location result provenance
+before persistence. These workers do not receive the database connection or
+the platform encryption key. See [worker authentication](location-worker-auth.md).
 
-## Shared Components
+## Alert lifecycle and delivery
 
-### Configuration (`shared/config`)
+The alerter evaluates database state periodically. Availability outages have
+one open alert per monitor and kind, enforced by a partial unique index.
+Routing comes from monitor overrides or workspace defaults; maintenance,
+group rollup, and dependency suppression determine which channels may fire.
+Escalation delays and reminders are tracked per alert/channel.
 
-- Environment variable parsing
-- Service-specific config structs
-- Validation and fail-fast on missing required vars
+Group state is derived from enabled, nondeleted leaf descendants in one
+evaluation, including nested groups. No participating leaves means unknown.
+An empty group's old availability alert is resolved; group timeline integration
+remains a separate limitation documented in the state specification.
 
-### Logging (`shared/logger`)
+Notification claims are serialized in PostgreSQL. Failed recovery delivery
+is retried from durable resolved-alert and channel-state records, including
+after an alerter restart. Optional worker dispatch uses delayed retries and
+an acknowledgement timeout longer than the delivery deadline. Delivery to
+external providers is not an exactly-once transaction: a provider can accept
+a message before a client timeout or process failure. Receivers should use
+idempotency where supported.
 
-- Structured JSON logging (logrus)
-- Standard fields: timestamp, level, service, message
-- Context helpers for request ID, job ID, tenant ID
+## Storage and maintenance
 
-### Database (`shared/db`)
+Migrations live in `shared/db/migrations/`. The database stores tenants,
+monitors, raw results, per-location state, state intervals, incidents, alert
+delivery state, OTLP series/samples, and hourly/daily rollups.
 
-- PostgreSQL connection pool management
-- Health check functionality
-- Generic interface for future extension
+Retention and rollup maintenance hold PostgreSQL session advisory locks on
+dedicated connections, releasing the same session when a run ends. Retention
+works in bounded batches; expired data remaining after a run keeps cleanup
+eligible for subsequent passes. Backlog gauges expose affected tenant counts
+and the oldest expired timestamp without scanning every expired row.
 
-### Queue (`shared/queue`)
+Analytics choose raw, rollup, or interval-based calculations according to
+window coverage and the existing state semantics. Raw analytics stream
+results into accumulators; exact median/P95 calculations retain latency
+samples, so their memory still scales with the number of successful checks.
+See [correctness notes](correctness-notes.md) for sampled/interval differences.
 
-- NATS JetStream client wrapper
-- Generic publish/consume interface
-- Subject naming conventions
-- At-least-once delivery support
-- DLQ placeholder
+## Shared code and security boundaries
 
-### Models (`shared/models`)
+- `shared/monitorstate`, `shared/analytics`, and `shared/alertrouting` hold
+  state, availability, and notification-routing contracts shared by services.
+- `shared/queue` and `shared/statusupdates` separate durable work from live
+  fan-out. Database persistence must not depend on a core-NATS subscriber.
+- `shared/secrets`, `shared/locationauth`, and the notification plugin registry
+  handle encrypted configuration and delivery integrations.
+- API authorization is tenant-scoped and capability-aware. Read access does
+  not grant worker credentials, push tokens, or permission to send saved
+  monitor secrets to caller-selected destinations. See [auth and RBAC](auth-and-rbac.md).
 
-- Generic job envelope (ID, tenant, type, version, payload, deadline)
-- Generic result envelope (ID, job ID, status, timestamps, version)
-- Versionable structs for future compatibility
+## Deployment and verification
 
-### Metrics (`shared/metrics`)
+Docker Compose provides local PostgreSQL/NATS and optional service containers;
+`helm/monitoring-platform` defines Kubernetes deployment assets. Use
+`make start-all-local` for local Go services, or `make start-all` for the
+Docker-backed stack, with the corresponding stop/restart commands.
 
-- Prometheus registry setup
-- Standard Go runtime metrics
-- Generic service-level counters
-- HTTP handler for /metrics endpoint
+Operational endpoints `/healthz`, `/readyz`, and `/metrics` expose process
+health, dependency readiness, and Prometheus metrics. Inspect scheduler
+retention/rollup progress, consumer retries, worker freshness, and provider
+delivery errors when diagnosing missing or delayed monitoring data.
 
-## Deployment Architecture
-
-### Kubernetes Deployment
-
-- **Deployments**: One per service (API, Scheduler, Worker, Alerter, Status Page)
-- **Services**: ClusterIP for API and Status Page
-- **Ingress**: Optional, for external access
-- **HPA**: HorizontalPodAutoscaler for Worker service
-- **ConfigMap/Secrets**: Environment-based configuration
-
-### Scaling Strategy
-
-- **API**: Horizontally scalable (multiple replicas)
-- **Scheduler**: Single active (leader election), but can deploy multiple for HA
-- **Worker**: Horizontally scalable (multiple replicas, HPA enabled)
-- **Alerter**: Horizontally scalable (multiple replicas)
-- **Status Page**: Horizontally scalable (multiple replicas)
-
-## Observability
-
-### Logging
-
-- Structured JSON logs to stdout/stderr
-- Standard fields: timestamp, level, service, message
-- Context propagation: request ID, job ID, tenant ID
-
-### Metrics
-
-- Prometheus metrics endpoint on `/metrics`
-- Standard Go runtime metrics
-- Service-specific counters (to be added in future modules)
-
-### Health Checks
-
-- `/healthz`: Liveness probe (process is alive)
-- `/readyz`: Readiness probe (dependencies are available)
-
-## Security Considerations
-
-- Non-root user in containers
-- Read-only root filesystem (where possible)
-- Security context with dropped capabilities
-- Secrets management via Kubernetes Secrets
-- Network policies (to be configured in production)
-
-## Future Module Roadmap
-
-### Module 2: Database Schema
-- PostgreSQL migrations
-- Monitor, tenant, user, alert rule tables
-- Result storage schema
-
-### Module 3: Monitor CRUD
-- API endpoints for monitor management
-- Validation and business logic
-- Database operations
-
-### Module 4: Scheduling Logic
-- Leader election implementation
-- Next run calculation
-- Job enqueueing
-
-### Module 5: Check Execution
-- HTTP client implementation
-- Timeout and retry logic
-- Result recording
-
-### Module 6: Alerting
-- Rule evaluation engine
-- Notification channels (email, Slack, etc.)
-- Alert state management
-
-### Module 7: Status Pages
-- Page rendering
-- Uptime calculation
-- Incident history
-
-### Module 8: Authentication
-- JWT-based authentication
-- RBAC implementation
-- Tenant isolation
-
-### Module 9: Frontend
-- React + TypeScript UI
-- Monitor dashboard
-- Status page editor
-
-## Single Module Architecture Rationale
-
-The project uses a single Go module at the repository root with all services as subpackages. This approach:
-
-- Simplifies dependency management
-- Enables code sharing without version conflicts
-- Reduces build complexity
-- Facilitates refactoring across services
-- Aligns with Go best practices for monorepos
-
-All shared code lives in `shared/` and is imported directly:
-```go
-import "github.com/yassinebenameur/probara/shared/config"
-```
-
+Run `make test` and `make lint` for Go changes. Integration tests require a
+working Docker provider for disposable PostgreSQL/NATS instances. For the
+operator UI, run `npm test`, `npm run lint`, `npm run typecheck`, and
+`npm run build` in `web/`; frontend CI runs these checks. Run the corresponding
+lint/typecheck/build checks in `website/` when that application changes.

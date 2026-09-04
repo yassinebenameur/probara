@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -86,6 +87,8 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 	}
 }
 
+var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor type")
+
 // ResolveTestConfig resolves write-only secret placeholders ("***") in an
 // incoming config against the stored monitor's config so a test-connection
 // request can run with the real (still encrypted) secrets. With no monitorID
@@ -100,6 +103,9 @@ func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, mon
 		monitor, err := s.repo.GetByID(ctx, tenantID, *monitorID)
 		if err != nil {
 			return nil, err
+		}
+		if monitor.Type != monitorType {
+			return nil, ErrMonitorTypeMismatch
 		}
 		existing = monitor.Config
 	}

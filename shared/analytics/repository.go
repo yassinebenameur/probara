@@ -40,11 +40,12 @@ type rollupRow struct {
 }
 
 type uptimeAccumulator struct {
-	totalChecks   int
-	successChecks int
-	latencies     []float64
-	latestStatus  *string
-	latestCheckAt *time.Time
+	totalChecks         int
+	successChecks       int
+	latencySuccessSumMS float64
+	latencySuccessCount int
+	latestStatus        string
+	latestCheckAt       time.Time
 }
 
 type dayAccumulator struct {
@@ -407,73 +408,102 @@ func (r *Repository) getRawAnalytics(ctx context.Context, tenantID uuid.UUID, mo
 	}
 	defer rows.Close()
 
-	var rawRows []rawRow
+	builder := newRawResultBuilder(window, generatedAt)
 	for rows.Next() {
 		var row rawRow
 		if err := rows.Scan(&row.MonitorID, &row.Status, &row.LatencyMS, &row.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan raw analytics row: %w", err)
 		}
-		rawRows = append(rawRows, row)
+		builder.consume(row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating raw analytics rows: %w", err)
 	}
 
-	result := buildRawResult(window, generatedAt, rawRows)
-	result.Range = window.Range
-	result.Source = SourceRaw
-	return result, nil
+	return builder.result(), nil
 }
 
 func buildRawResult(window Window, generatedAt time.Time, rows []rawRow) *Result {
-	res := &Result{
-		Range:       window.Range,
-		GeneratedAt: generatedAt,
-		Source:      SourceRaw,
-		IsPartial:   true,
+	builder := newRawResultBuilder(window, generatedAt)
+	for _, row := range rows {
+		builder.consume(row)
 	}
-	if len(rows) == 0 {
-		res.Series = emptySeries(window)
+	return builder.result()
+}
+
+// rawResultBuilder consumes database rows in (created_at, id) order. Counts,
+// sums, and downtime transitions do not retain check rows. Only one latency
+// vector is retained for exact interpolated percentiles; rollup percentiles
+// cannot be combined without changing the meaning of the result.
+type rawResultBuilder struct {
+	window       Window
+	res          *Result
+	perMonitor   map[uuid.UUID]*uptimeAccumulator
+	perBucket    map[time.Time]map[uuid.UUID]*uptimeAccumulator
+	openDowntime map[uuid.UUID]time.Time
+	periods      []DowntimePeriod
+	allLatencies []float64
+}
+
+func newRawResultBuilder(window Window, generatedAt time.Time) *rawResultBuilder {
+	return &rawResultBuilder{
+		window: window,
+		res: &Result{
+			Range: window.Range, GeneratedAt: generatedAt, Source: SourceRaw, IsPartial: true,
+		},
+		perMonitor:   make(map[uuid.UUID]*uptimeAccumulator),
+		perBucket:    make(map[time.Time]map[uuid.UUID]*uptimeAccumulator),
+		openDowntime: make(map[uuid.UUID]time.Time),
+	}
+}
+
+func (b *rawResultBuilder) consume(row rawRow) {
+	ts := row.CreatedAt.UTC()
+	if b.res.CoverageStart == nil {
+		b.res.CoverageStart = new(time.Time)
+		*b.res.CoverageStart = ts
+		b.res.IsPartial = ts.After(b.window.Start)
+	}
+	acc := ensureRawAcc(b.perMonitor, row.MonitorID)
+	consumeRawRow(acc, row)
+	bucket := bucketForRaw(b.window, ts)
+	if b.perBucket[bucket] == nil {
+		b.perBucket[bucket] = make(map[uuid.UUID]*uptimeAccumulator)
+	}
+	consumeRawRow(ensureRawAcc(b.perBucket[bucket], row.MonitorID), row)
+	if row.Status == "success" {
+		if row.LatencyMS.Valid {
+			b.allLatencies = append(b.allLatencies, float64(row.LatencyMS.Int64))
+		}
+		if start, open := b.openDowntime[row.MonitorID]; open {
+			b.periods = append(b.periods, DowntimePeriod{Start: start, End: ts})
+			delete(b.openDowntime, row.MonitorID)
+		}
+	} else if _, open := b.openDowntime[row.MonitorID]; !open {
+		b.openDowntime[row.MonitorID] = ts
+	}
+}
+
+func (b *rawResultBuilder) result() *Result {
+	res := b.res
+	if res.CoverageStart == nil {
+		res.Series = emptySeries(b.window)
 		return res
 	}
-
-	coverageStart := rows[0].CreatedAt.UTC()
-	res.CoverageStart = &coverageStart
-	res.IsPartial = coverageStart.After(window.Start)
-
-	perMonitor := make(map[uuid.UUID]*uptimeAccumulator)
-	perBucket := make(map[time.Time]map[uuid.UUID]*uptimeAccumulator)
-	monitorDowntimeRows := make(map[uuid.UUID][]rawRow)
-	allLatencies := make([]float64, 0)
-
-	for _, row := range rows {
-		bucket := bucketForRaw(window, row.CreatedAt.UTC())
-		acc := ensureRawAcc(perMonitor, row.MonitorID)
-		consumeRawRow(acc, row, &allLatencies)
-		if _, ok := perBucket[bucket]; !ok {
-			perBucket[bucket] = make(map[uuid.UUID]*uptimeAccumulator)
-		}
-		bucketAcc := ensureRawAcc(perBucket[bucket], row.MonitorID)
-		consumeRawRow(bucketAcc, row, nil)
-		monitorDowntimeRows[row.MonitorID] = append(monitorDowntimeRows[row.MonitorID], row)
-	}
-
-	latestStatuses := make([]string, 0, len(perMonitor))
+	latestStatuses := make([]string, 0, len(b.perMonitor))
 	var latestCheckAt *time.Time
-	perMonitorUptimes := make([]float64, 0, len(perMonitor))
-	perMonitorLatencies := make([]float64, 0, len(perMonitor))
-	for _, acc := range perMonitor {
+	perMonitorUptimes := make([]float64, 0, len(b.perMonitor))
+	perMonitorLatencies := make([]float64, 0, len(b.perMonitor))
+	for _, acc := range b.perMonitor {
 		if acc.totalChecks > 0 {
 			perMonitorUptimes = append(perMonitorUptimes, (float64(acc.successChecks)/float64(acc.totalChecks))*100)
 		}
-		if len(acc.latencies) > 0 {
-			perMonitorLatencies = append(perMonitorLatencies, average(acc.latencies))
+		if acc.latencySuccessCount > 0 {
+			perMonitorLatencies = append(perMonitorLatencies, acc.latencySuccessSumMS/float64(acc.latencySuccessCount))
 		}
-		if acc.latestStatus != nil {
-			latestStatuses = append(latestStatuses, *acc.latestStatus)
-		}
-		if acc.latestCheckAt != nil && (latestCheckAt == nil || acc.latestCheckAt.After(*latestCheckAt)) {
-			latestCheckAt = cloneTimePtr(acc.latestCheckAt)
+		latestStatuses = append(latestStatuses, acc.latestStatus)
+		if latestCheckAt == nil || acc.latestCheckAt.After(*latestCheckAt) {
+			latestCheckAt = cloneTimePtr(&acc.latestCheckAt)
 		}
 	}
 
@@ -485,13 +515,16 @@ func buildRawResult(window Window, generatedAt time.Time, rows []rawRow) *Result
 	if len(perMonitorLatencies) > 0 {
 		res.Summary.AvgLatencyMS = PtrFloat64(average(perMonitorLatencies))
 	}
-	sort.Float64s(allLatencies)
-	res.Summary.MedianLatencyMS = percentile(allLatencies, 0.5)
-	res.Summary.P95LatencyMS = percentile(allLatencies, 0.95)
+	sort.Float64s(b.allLatencies)
+	res.Summary.MedianLatencyMS = percentile(b.allLatencies, 0.5)
+	res.Summary.P95LatencyMS = percentile(b.allLatencies, 0.95)
 	res.Summary.LatestStatus = aggregateStatus(latestStatuses)
 	res.Summary.LatestCheckAt = latestCheckAt
-	res.Series = buildRawSeries(window, perBucket)
-	res.Downtime = mergeDowntimePeriods(buildRawDowntimePeriods(monitorDowntimeRows, window.End))
+	res.Series = buildRawSeries(b.window, b.perBucket)
+	for _, start := range b.openDowntime {
+		b.periods = append(b.periods, DowntimePeriod{Start: start, End: b.window.End, IsOpen: true})
+	}
+	res.Downtime = mergeDowntimePeriods(b.periods)
 	return res
 }
 
@@ -514,22 +547,17 @@ func ensureRawAcc(target map[uuid.UUID]*uptimeAccumulator, monitorID uuid.UUID) 
 	return acc
 }
 
-func consumeRawRow(acc *uptimeAccumulator, row rawRow, allLatencies *[]float64) {
+func consumeRawRow(acc *uptimeAccumulator, row rawRow) {
 	acc.totalChecks++
 	if row.Status == "success" {
 		acc.successChecks++
 		if row.LatencyMS.Valid {
-			latency := float64(row.LatencyMS.Int64)
-			acc.latencies = append(acc.latencies, latency)
-			if allLatencies != nil {
-				*allLatencies = append(*allLatencies, latency)
-			}
+			acc.latencySuccessSumMS += float64(row.LatencyMS.Int64)
+			acc.latencySuccessCount++
 		}
 	}
-	status := row.Status
-	acc.latestStatus = &status
-	ts := row.CreatedAt.UTC()
-	acc.latestCheckAt = &ts
+	acc.latestStatus = row.Status
+	acc.latestCheckAt = row.CreatedAt.UTC()
 }
 
 func buildRawSeries(window Window, perBucket map[time.Time]map[uuid.UUID]*uptimeAccumulator) []SeriesPoint {
@@ -550,8 +578,8 @@ func buildRawSeries(window Window, perBucket map[time.Time]map[uuid.UUID]*uptime
 				uptimes = append(uptimes, (float64(acc.successChecks)/float64(acc.totalChecks))*100)
 				point.TotalChecks += acc.totalChecks
 			}
-			if len(acc.latencies) > 0 {
-				latencies = append(latencies, average(acc.latencies))
+			if acc.latencySuccessCount > 0 {
+				latencies = append(latencies, acc.latencySuccessSumMS/float64(acc.latencySuccessCount))
 			}
 		}
 		point.UptimePct = average(uptimes)
@@ -561,30 +589,6 @@ func buildRawSeries(window Window, perBucket map[time.Time]map[uuid.UUID]*uptime
 		series = append(series, point)
 	}
 	return series
-}
-
-func buildRawDowntimePeriods(perMonitor map[uuid.UUID][]rawRow, end time.Time) []DowntimePeriod {
-	periods := make([]DowntimePeriod, 0)
-	for _, rows := range perMonitor {
-		var openStart *time.Time
-		for _, row := range rows {
-			ts := row.CreatedAt.UTC()
-			if row.Status != "success" {
-				if openStart == nil {
-					openStart = &ts
-				}
-				continue
-			}
-			if openStart != nil {
-				periods = append(periods, DowntimePeriod{Start: *openStart, End: ts})
-				openStart = nil
-			}
-		}
-		if openStart != nil {
-			periods = append(periods, DowntimePeriod{Start: *openStart, End: end, IsOpen: true})
-		}
-	}
-	return periods
 }
 
 func (r *Repository) getRollupAnalytics(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, window Window, generatedAt time.Time) (*Result, error) {

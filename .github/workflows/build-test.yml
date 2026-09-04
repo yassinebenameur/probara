@@ -111,6 +111,11 @@ jobs:
         working-directory: ${{ matrix.directory }}
         run: npm exec -- tsc --noEmit
 
+      - name: Run unit tests
+        if: matrix.directory == 'web'
+        working-directory: ${{ matrix.directory }}
+        run: npm test
+
       - name: Run production build
         working-directory: ${{ matrix.directory }}
         env:

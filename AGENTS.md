@@ -19,7 +19,7 @@ Verification commands:
 
 - `make test` runs `go test -v -race -coverprofile=coverage.out` across the module.
 - `make lint` checks formatting and `go vet`; `make fmt` and `make vet` run them separately.
-- For frontend-only changes, run relevant commands in the touched project (`web/` or `website/`), usually `npm run lint`, `npm run typecheck`, and `npm run build`.
+- For frontend-only changes, run relevant commands in the touched project (`web/` or `website/`), usually `npm run lint`, `npm run typecheck`, and `npm run build`. In `web/`, also run `npm test` for the TypeScript unit tests.
 
 ## Coding Style & Naming Conventions
 Format Go code with `gofmt`; do not hand-align or mix spacing styles. Keep packages lowercase, exported identifiers in `CamelCase`, and filenames descriptive (`service.go`, `handlers.go`, `registry_test.go`). Follow existing service boundaries: reusable logic belongs in `shared/`, not copied between services. In `web/`, use TypeScript, PascalCase component filenames, and keep route files under `app/**/page.tsx`.
@@ -28,8 +28,8 @@ Format Go code with `gofmt`; do not hand-align or mix spacing styles. Keep packa
 Keep changes aligned with the current service boundaries:
 
 - `api/` owns CRUD, dashboard/admin flows, auth, imports, push handling, and writes the shared application data model.
-- `scheduler/` is responsible for scheduling monitor execution and retention cleanup; do not move check execution or alert evaluation logic into it.
-- `worker/` consumes check jobs, runs monitor checks (`http`, `ping`, `dns`, `grpc`, `sip`, `synthetic_api`, `synthetic_browser`), writes results, and publishes live status updates (`agent`/`push`/`group` are passive types the worker never executes).
+- `scheduler/` schedules monitor execution and maintenance; its `internal/ingest/` component persists worker results and advances monitor state. Do not move check execution or alert evaluation logic into it.
+- `worker/` consumes check jobs, runs registered monitor checkers, and publishes results over NATS (`agent`/`push`/`group` are passive types the worker never executes). Check execution requires no database; optional notification/AI consumers do.
 - `alerter/` evaluates alert policies from database state, manages alert lifecycle/notification deduplication, and publishes alert events.
 - `status-page/` is the public-facing Go service for rendered status pages and live updates; `web/` is the separate React/Next.js application for the main product UI.
 - Agent monitors are passive: hosts run `probara-collector` (an OTel Collector) pushing OTLP metrics to the API's `/api/v1/otlp/v1/metrics`; the `collector/` directory holds only the OCB build manifest.
@@ -38,6 +38,8 @@ Shared integration contracts matter more than internal implementation details:
 
 - PostgreSQL is the shared source of truth; preserve tenant isolation and avoid duplicating schema-specific logic across services.
 - Scheduler and worker communicate through NATS JetStream using `CHECK_JOBS` / `check.jobs` by default.
+- Workers publish to `CHECK_RESULTS` / `check.results` (with location-specific variants); scheduler ingest owns result persistence and status updates.
+- Session advisory locks must be acquired and released on the same pinned database connection, never separate connection-pool operations.
 - Live status-page fan-out uses core NATS on `statuspage.updates` by default via `shared/statusupdates`.
 - Alert events use the configured `ALERTS` stream and `alerts` subject by default.
 - Operational endpoints `/healthz`, `/readyz`, and `/metrics` are part of the standard service shape; keep them intact when touching service startup/server wiring.

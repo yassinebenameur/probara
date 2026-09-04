@@ -14,14 +14,24 @@ func testConsumer() *Consumer {
 	return &Consumer{logger: logger.New("test", "error")}
 }
 
+func TestConsumerAckDeadlineExceedsEntireDispatch(t *testing.T) {
+	opts := consumerOptions()
+	if opts.AckWait <= DispatchTimeout || len(opts.BackOff) != 0 {
+		t.Fatalf("consumer can redeliver during Send: %+v", opts)
+	}
+	if opts.MaxDeliver != len(DefaultBackOff)+1 {
+		t.Fatalf("retry schedule does not match attempt limit: %+v", opts)
+	}
+}
+
 func TestDeliveryAttempt_MissingHeader_DefaultsToOne(t *testing.T) {
 	if got := deliveryAttempt(&queue.Message{}); got != 1 {
 		t.Errorf("want 1, got %d", got)
 	}
 }
 
-func TestDeliveryAttempt_ParsesHeader(t *testing.T) {
-	msg := &queue.Message{Headers: map[string][]string{"Nats-Num-Delivered": {"4"}}}
+func TestDeliveryAttempt_UsesMetadata(t *testing.T) {
+	msg := &queue.Message{NumDelivered: 4, Headers: map[string][]string{"Nats-Num-Delivered": {"99"}}}
 	if got := deliveryAttempt(msg); got != 4 {
 		t.Errorf("want 4, got %d", got)
 	}

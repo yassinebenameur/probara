@@ -19,6 +19,7 @@ import {
   Location,
 } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import {
   Activity,
   CheckCircle2,
@@ -270,8 +271,10 @@ export default function DatabaseForm({
   onCancel,
   loading = false,
 }: DatabaseFormProps) {
+  const { canWrite, loading: loadingUser } = useCurrentUser();
   const meta = DB_TYPE_META[type];
   const isEditMode = Boolean(monitor);
+  const canTestConnection = !loadingUser && (!isEditMode || canWrite);
   const existingConfig =
     monitor && monitor.type === type
       ? ((monitor.config || {}) as DatabaseConfig)
@@ -543,6 +546,7 @@ export default function DatabaseForm({
   };
 
   const handleTestConnection = async () => {
+    if (!canTestConnection) return;
     // Test cares about connection validity, not monitor naming.
     const connectionErrors = validate();
     delete connectionErrors.name;
@@ -933,7 +937,8 @@ export default function DatabaseForm({
           <button
             type="button"
             onClick={handleTestConnection}
-            disabled={test.phase === 'running' || loading}
+            disabled={!canTestConnection || test.phase === 'running' || loading}
+            title={!canTestConnection ? 'Write access is required to test saved connections' : undefined}
             className="inline-flex items-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {test.phase === 'running' ? (

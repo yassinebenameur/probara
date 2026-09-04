@@ -210,6 +210,16 @@ All pending (Stages 3/6). Current sample-count semantics are documented in
 
 ## Conformance
 
+Group alert state is derived from enabled, nondeleted leaf descendants,
+deduplicated across nested membership paths. An empty group is `unknown` and
+its prior availability alert resolves. Failure and recovery reach every
+ancestor in one alerter evaluation; stored intermediate group states are not
+inputs. `TestGroupStatesRefreshNestedLeavesInOneTick` and
+`TestGroupStatesClearEmptyGroupOutages` cover nesting, cycles, and removal,
+pause, or deletion of the final participating member. This does not add group
+state intervals or change the separate sampled display/availability surfaces
+described above.
+
 Pure-layer rules are enforced by `shared/monitorstate/spec_test.go` (golden
 scenarios + fixed-seed property tests, each citing rule IDs) together with the
 pre-existing `state_test.go` / `aggregate_test.go`. Transactional rules

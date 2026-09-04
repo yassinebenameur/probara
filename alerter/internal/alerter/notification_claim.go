@@ -42,6 +42,22 @@ func (a *Alerter) deliverNotification(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Serialize with resolution as well as other sends. A dispatcher may have
+	// loaded an open alert just before another replica resolved it; it must
+	// not send a stale DOWN after that recovery. This lock also makes the
+	// fired-channel state visible before resolution can commit.
+	var status string
+	var resolvedAt *time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT status, resolved_at FROM alerts WHERE id = $1 FOR UPDATE`, alert.ID).Scan(&status, &resolvedAt); err != nil {
+		return false, fmt.Errorf("lock notification alert: %w", err)
+	}
+	if (eventType == "resolved") != (status == "resolved") {
+		return false, nil
+	}
+	if eventType == "resolved" {
+		alert.ResolvedAt = resolvedAt
+	}
+
 	claimed, err := claimNotificationTx(ctx, tx, alert.ID, channel.ID, eventType, now, reminderInterval)
 	if err != nil {
 		return false, err

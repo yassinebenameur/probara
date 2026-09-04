@@ -3,7 +3,10 @@ package alerter
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -15,13 +18,15 @@ import (
 
 // Alerter represents the alerter service
 type Alerter struct {
-	config    *config.AlerterConfig
-	logger    *logger.Logger
-	metrics   *metrics.Registry
-	db        *db.Client
-	nats      *queue.Client
-	encryptor secrets.Encryptor
-	stop      chan struct{}
+	config         *config.AlerterConfig
+	logger         *logger.Logger
+	metrics        *metrics.Registry
+	db             *db.Client
+	nats           *queue.Client
+	encryptor      secrets.Encryptor
+	stop           chan struct{}
+	recoveryMu     sync.Mutex
+	recoveryCursor uuid.UUID
 
 	// sendFunc dispatches one channel notification. It defaults to
 	// sendChannelNotification and is swapped in tests so the lifecycle can be

@@ -2,6 +2,7 @@ package push
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,6 +63,10 @@ func (h *Handler) HandlePushGet(w http.ResponseWriter, r *http.Request) {
 	payload := h.buildPayloadFromQuery(r)
 
 	// Process the push
+	if err := push.ValidateStatus(payload.Status); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := h.service.ProcessPush(ctx, token, payload); err != nil {
 		h.log.WithError(err).Warn("failed to process push")
 		if strings.Contains(err.Error(), "not found") {
@@ -94,37 +99,54 @@ func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload push.PushPayload
+	payload := h.buildPayloadFromQuery(r)
 
 	// Check if there's a JSON body
 	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "application/json") && r.ContentLength > 0 {
+	if strings.Contains(contentType, "application/json") {
 		// Parse JSON body
 		var bodyData map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&bodyData); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		err := decoder.Decode(&bodyData)
+		if err != nil && err != io.EOF {
 			h.log.WithError(err).Warn("failed to decode push payload")
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
 
-		// Extract reserved fields
-		if status, ok := bodyData["status"].(string); ok {
-			payload.Status = status
-			delete(bodyData, "status")
+		if err == nil {
+			var trailing interface{}
+			if bodyData == nil || decoder.Decode(&trailing) != io.EOF {
+				http.Error(w, "expected a single JSON object", http.StatusBadRequest)
+				return
+			}
+			payload = push.PushPayload{Metrics: bodyData}
+			if value, present := bodyData["status"]; present {
+				status, ok := value.(string)
+				if !ok {
+					http.Error(w, "status must be a string", http.StatusBadRequest)
+					return
+				}
+				payload.Status = status
+				delete(bodyData, "status")
+			}
+			if value, present := bodyData["error"]; present {
+				errMsg, ok := value.(string)
+				if !ok {
+					http.Error(w, "error must be a string", http.StatusBadRequest)
+					return
+				}
+				payload.Error = errMsg
+				delete(bodyData, "error")
+			}
 		}
-		if errMsg, ok := bodyData["error"].(string); ok {
-			payload.Error = errMsg
-			delete(bodyData, "error")
-		}
-
-		// Remaining fields are metrics
-		payload.Metrics = bodyData
-	} else {
-		// Build payload from query parameters
-		payload = h.buildPayloadFromQuery(r)
 	}
 
 	// Process the push
+	if err := push.ValidateStatus(payload.Status); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := h.service.ProcessPush(ctx, token, payload); err != nil {
 		h.log.WithError(err).Warn("failed to process push")
 		if strings.Contains(err.Error(), "not found") {
@@ -150,6 +172,10 @@ func (h *Handler) HandlePushPost(w http.ResponseWriter, r *http.Request) {
 // Returns webhook URL and usage instructions (requires authentication)
 func (h *Handler) HandleGetPushInfo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if !context.CanWrite(ctx) {
+		http.Error(w, "push credentials require write permission", http.StatusForbidden)
+		return
+	}
 
 	// Get tenant ID from context (set by auth middleware)
 	tenantIDStr, ok := context.GetTenantID(ctx)

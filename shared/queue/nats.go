@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -27,13 +28,30 @@ type Client struct {
 
 // Message represents a message from the queue
 type Message struct {
-	Data       []byte
-	Subject    string
-	Headers    map[string][]string
-	Ack        func() error
-	Nak        func() error
-	InProgress func() error
+	Data         []byte
+	Subject      string
+	Headers      map[string][]string
+	Ack          func() error
+	Nak          func() error
+	InProgress   func() error
+	NumDelivered uint64
 }
+
+// RetryAfter requests a delayed NAK instead of the immediate retry default.
+func RetryAfter(err error, delay time.Duration) error {
+	if err == nil {
+		return nil
+	}
+	return &retryAfterError{err: err, delay: delay}
+}
+
+type retryAfterError struct {
+	err   error
+	delay time.Duration
+}
+
+func (e *retryAfterError) Error() string { return e.err.Error() }
+func (e *retryAfterError) Unwrap() error { return e.err }
 
 // reconnectOptions keeps the connection retrying forever. The nats.go
 // default gives up after 60 attempts (~2 minutes) and leaves the connection
@@ -381,13 +399,15 @@ func (c *Client) Subscribe(subject string, handler func(*Message)) (*nats.Subscr
 
 // Consume consumes messages from a consumer
 func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handler func(*Message) error) error {
-	// Use FetchMaxWait to control the timeout for fetching messages
-	// This allows us to periodically check for context cancellation
+	// PullExpiry bounds broker requests, but the iterator renews idle pulls
+	// internally. Stop it on cancellation to unblock Next even with no traffic.
 	msgs, err := consumer.Messages(jetstream.PullMaxMessages(1), jetstream.PullExpiry(5*time.Second))
 	if err != nil {
 		return fmt.Errorf("failed to get messages: %w", err)
 	}
 	defer msgs.Stop()
+	stopCancellation := context.AfterFunc(ctx, msgs.Stop)
+	defer stopCancellation()
 
 	for {
 		select {
@@ -411,19 +431,31 @@ func (c *Client) Consume(ctx context.Context, consumer jetstream.Consumer, handl
 			}
 
 			// Convert to our Message type
+			metadata, err := msg.Metadata()
+			if err != nil {
+				return fmt.Errorf("read message metadata: %w", err)
+			}
 			queueMsg := &Message{
-				Data:       msg.Data(),
-				Subject:    msg.Subject(),
-				Headers:    msg.Headers(),
-				Ack:        msg.Ack,
-				Nak:        msg.Nak,
-				InProgress: msg.InProgress,
+				Data:         msg.Data(),
+				Subject:      msg.Subject(),
+				Headers:      msg.Headers(),
+				Ack:          msg.Ack,
+				Nak:          msg.Nak,
+				InProgress:   msg.InProgress,
+				NumDelivered: metadata.NumDelivered,
 			}
 
 			// Handle the message
 			if err := handler(queueMsg); err != nil {
-				// If handler fails, NAK the message for retry
-				if nakErr := msg.Nak(); nakErr != nil {
+				// Explicit NAKs bypass the server's BackOff configuration.
+				var retry *retryAfterError
+				var nakErr error
+				if errors.As(err, &retry) && retry.delay > 0 {
+					nakErr = msg.NakWithDelay(retry.delay)
+				} else {
+					nakErr = msg.Nak()
+				}
+				if nakErr != nil {
 					return fmt.Errorf("failed to NAK message: %w", nakErr)
 				}
 				continue

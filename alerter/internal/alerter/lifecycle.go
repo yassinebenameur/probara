@@ -20,6 +20,14 @@ import (
 // refresh group states, open alerts for down monitors, resolve alerts for
 // recovered monitors, dispatch notifications by escalation delay + reminders.
 func (a *Alerter) runLifecycle(ctx context.Context) error {
+	// Process fresh outage state before retrying historical recoveries. A
+	// broken provider must not consume the evaluation deadline before new
+	// alerts can open. The sweep has its own bound within the remaining budget.
+	defer func() {
+		if err := a.dispatchPendingRecoveries(ctx); err != nil && ctx.Err() == nil {
+			a.logger.WithError(err).Error("Recovery notification retry failed")
+		}
+	}()
 	if err := a.refreshGroupStates(ctx); err != nil {
 		return err
 	}
@@ -185,35 +193,50 @@ func (a *Alerter) annotateOpenAlertRootCauses(ctx context.Context) error {
 	return nil
 }
 
-// refreshGroupStates derives group monitor state from members: down if any
-// non-deleted enabled member is down, else up if all known up/suspect, else unknown.
+// refreshGroupStates derives every group from its enabled leaf descendants in
+// one snapshot. UNION deduplicates shared descendants and terminates cycles.
+// Empty and paused groups are unknown; stale child-group states never delay
+// detection or recovery at an ancestor.
 func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 	_, err := a.db.ExecContext(ctx, `
-		WITH member_states AS (
-			SELECT g.id AS group_id,
-				BOOL_OR(child.current_state = 'down') AS any_down,
-				BOOL_AND(child.current_state IN ('up', 'suspect', 'degraded')) AS all_known_up
+		WITH RECURSIVE descendants AS (
+			SELECT g.id AS group_id, g.tenant_id, child.id AS member_id
 			FROM monitors g
 			JOIN monitor_groups mg ON mg.group_id = g.id
 			JOIN monitors child ON child.id = mg.monitor_id
-				AND child.deleted_at IS NULL AND child.enabled = TRUE
-			WHERE g.type = 'group' AND g.deleted_at IS NULL
-			GROUP BY g.id
-		)
-		UPDATE monitors m
-		SET current_state = CASE
+				AND child.tenant_id = g.tenant_id
+				AND child.deleted_at IS NULL AND child.enabled
+			WHERE g.type = 'group' AND g.deleted_at IS NULL AND g.enabled
+			UNION
+			SELECT d.group_id, d.tenant_id, child.id
+			FROM descendants d
+			JOIN monitors parent ON parent.id = d.member_id AND parent.type = 'group'
+			JOIN monitor_groups mg ON mg.group_id = parent.id
+			JOIN monitors child ON child.id = mg.monitor_id
+				AND child.tenant_id = d.tenant_id
+				AND child.deleted_at IS NULL AND child.enabled
+		), member_states AS (
+			SELECT d.group_id,
+				BOOL_OR(child.current_state = 'down') AS any_down,
+				BOOL_AND(child.current_state IN ('up', 'suspect', 'degraded')) AS all_known_up
+			FROM descendants d
+			JOIN monitors child ON child.id = d.member_id AND child.type <> 'group'
+			GROUP BY d.group_id
+		), group_states AS (
+			SELECT g.id, CASE
 				WHEN ms.any_down THEN 'down'
 				WHEN ms.all_known_up THEN 'up'
-				ELSE 'unknown' END,
-			last_state_change_at = CASE
-				WHEN m.current_state IS DISTINCT FROM (CASE
-					WHEN ms.any_down THEN 'down'
-					WHEN ms.all_known_up THEN 'up'
-					ELSE 'unknown' END) THEN NOW()
-				ELSE m.last_state_change_at END,
+				ELSE 'unknown' END AS state
+			FROM monitors g
+			LEFT JOIN member_states ms ON ms.group_id = g.id
+			WHERE g.type = 'group' AND g.deleted_at IS NULL
+		)
+		UPDATE monitors m
+		SET current_state = gs.state,
+			last_state_change_at = NOW(),
 			updated_at = NOW()
-		FROM member_states ms
-		WHERE m.id = ms.group_id
+		FROM group_states gs
+		WHERE m.id = gs.id AND m.current_state IS DISTINCT FROM gs.state
 	`)
 	if err != nil {
 		return fmt.Errorf("refresh group states: %w", err)
@@ -388,7 +411,8 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
 		WHERE al.status IN ('active', 'acknowledged')
 		  AND al.kind = 'availability'
-		  AND (m.current_state = 'up' OR m.deleted_at IS NOT NULL OR m.enabled = FALSE)
+		  AND (m.current_state = 'up' OR m.deleted_at IS NOT NULL OR m.enabled = FALSE
+		       OR (m.type = 'group' AND m.current_state = 'unknown'))
 	`)
 	if err != nil {
 		return fmt.Errorf("query recovered alerts: %w", err)

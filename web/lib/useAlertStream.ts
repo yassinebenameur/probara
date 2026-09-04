@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { refreshSession } from './api';
 import { getApiKey } from './auth';
+import { createEventStreamParser } from './event-stream';
 import { clearSelectedTenantId, getSelectedTenantId, setSelectedTenantId } from './tenant';
 import type { Alert } from './types';
 
@@ -217,7 +218,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '';
+      const parseEvents = createEventStreamParser(handleEvent);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -229,24 +230,7 @@ export function useAlertStream(options: UseAlertStreamOptions = {}) {
           break;
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        let currentEvent = '';
-        let currentData = '';
-
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            currentEvent = line.slice(6).trim();
-          } else if (line.startsWith('data:')) {
-            currentData = line.slice(5).trim();
-          } else if (line === '' && currentEvent && currentData) {
-            handleEvent(currentEvent, currentData);
-            currentEvent = '';
-            currentData = '';
-          }
-        }
+        parseEvents(decoder.decode(value, { stream: true }));
       }
     } catch (error) {
       isConnectedRef.current = false;

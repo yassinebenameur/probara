@@ -227,10 +227,7 @@ func (s *Scheduler) pruneTenantMetricSamples(ctx context.Context, tenantID uuid.
 	if batchSize <= 0 {
 		batchSize = 5000
 	}
-	maxRows := s.config.RetentionCleanupMaxRowsPerRun
-	if maxRows <= 0 {
-		maxRows = 200000
-	}
+	maxRows := s.retentionMaxRows()
 
 	var totalDeleted int64
 	for totalDeleted < int64(maxRows) {
