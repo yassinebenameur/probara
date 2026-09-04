@@ -1,3 +1,17 @@
+# [1.0.0-alpha.72](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.71...v1.0.0-alpha.72) (2026-09-04)
+
+
+### Bug Fixes
+
+* **alerter:** claim each notification atomically so replicas never send it twice ([5e8d578](https://github.com/yassinebenameur/probara/commit/5e8d578dd8b2254e9cda5b81dda1c2c6ac1ced5e))
+* **alerter:** resolve orphaned latency-anomaly alerts when no tenant has anomaly enabled ([d342318](https://github.com/yassinebenameur/probara/commit/d342318dcab20015a71951070268156f1cfe83b6))
+* **platform:** secure credentials and improve monitoring reliability ([08ae85f](https://github.com/yassinebenameur/probara/commit/08ae85f21ae6b2764dbb6e03856a448dd82bd168))
+
+
+### Features
+
+* **alerting:** dependency-aware alerting — page root causes only ([fd8a8ff](https://github.com/yassinebenameur/probara/commit/fd8a8ffa46222386b3e61502b8025a8a870c6c5d))
+
 # [1.0.0-alpha.71](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.70...v1.0.0-alpha.71) (2026-08-28)
 
 
