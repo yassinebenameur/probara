@@ -43,6 +43,7 @@ import PushForm from './PushForm';
 import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
+import PrometheusForm from './PrometheusForm';
 import WebsocketForm from './WebsocketForm';
 import DatabaseForm, { type DatabaseMonitorType } from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
@@ -238,6 +239,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   { type: 'mysql', label: 'MySQL', description: 'Connect, auth, and query checks', icon: Cylinder, category: 'Databases & Brokers', namePlaceholder: 'MySQL production' },
   { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases & Brokers', namePlaceholder: 'Redis cache' },
   { type: 'mongodb', label: 'MongoDB', description: 'Connect, auth, and ping', icon: Leaf, category: 'Databases & Brokers', namePlaceholder: 'Mongo cluster' },
+  { type: 'prometheus', label: 'Prometheus', description: 'PromQL queries with numeric thresholds', icon: Radio, category: 'Infrastructure', namePlaceholder: 'API error rate' },
   { type: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect and auth checks', icon: MessageSquare, category: 'Databases & Brokers', namePlaceholder: 'RabbitMQ production' },
   { type: 'agent', label: 'Agent', description: 'Host metrics from an agent', icon: Server, category: 'Infrastructure', namePlaceholder: 'Production server' },
   { type: 'push', label: 'Push', description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure', namePlaceholder: 'My service health' },
@@ -2052,6 +2054,10 @@ export default function MonitorForm({
         <GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
+  }
+
+  if (monitorType === 'prometheus') {
+    return <div className="space-y-4">{typePicker}<PrometheusForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} /></div>;
   }
 
   if (monitorType === 'tcp') {

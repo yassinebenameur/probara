@@ -215,7 +215,8 @@ export type MonitorType =
   | "rabbitmq"
   | "tcp"
   | "mysql"
-  | "websocket";
+  | "websocket"
+  | "prometheus";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -313,6 +314,24 @@ export interface GRPCMonitorConfig {
   port?: number;
   service?: string;
   use_tls?: boolean;
+}
+
+export interface PrometheusMonitorConfig {
+  url: string;
+  query: string;
+  operator: 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'ne';
+  threshold: number;
+  no_data_status?: 'success' | 'failure' | 'error';
+  auth_type?: 'none' | 'basic' | 'bearer';
+  username?: string;
+  password?: string;
+  bearer_token?: string;
+}
+
+export interface PrometheusMetrics {
+  values: number[];
+  sample_count: number;
+  failed_count: number;
 }
 
 export interface TCPMonitorConfig {
@@ -626,7 +645,8 @@ export type MonitorConfig =
   | MongoDBMonitorConfig
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
-  | WebSocketMonitorConfig;
+  | WebSocketMonitorConfig
+  | PrometheusMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 

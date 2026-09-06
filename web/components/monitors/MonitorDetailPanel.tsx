@@ -31,6 +31,7 @@ import {
   calculateLatencyStats,
   getOperationalResults,
 } from '@/lib/monitor-utils';
+import PrometheusDetails from './PrometheusDetails';
 import Pill from '@/components/ui/Pill';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 
@@ -362,6 +363,11 @@ export default function MonitorDetailPanel({ monitor }: MonitorDetailPanelProps)
               Configuration
             </div>
             <ul className="flex flex-col gap-1.5 text-xs">
+              {monitor.type === 'prometheus' && (
+                <li className="rounded-[10px] border border-white/[0.06] bg-slate-900/[0.98] px-2 py-1.5">
+                  <PrometheusDetails monitor={monitor} result={checkResults[0]} size="compact" />
+                </li>
+              )}
               {monitor.type === 'http' && (() => {
                 const httpConfig = getHTTPConfig(monitor);
                 if (!httpConfig) return null;

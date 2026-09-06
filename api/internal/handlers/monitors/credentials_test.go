@@ -77,6 +77,7 @@ func TestTestMonitorRejectsCiphertextReplayWithoutSavedID(t *testing.T) {
 		monitorType string
 		config      map[string]any
 	}{
+		{"prometheus", map[string]any{"url": "https://attacker.example", "query": "up", "operator": "eq", "threshold": 1, "auth_type": "bearer", "bearer_token": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}},
 		{"redis", map[string]any{"host": "attacker.example", "password": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}},
 		{"websocket", map[string]any{"url": "wss://attacker.example", "headers": map[string]string{"Authorization": `{"alg":"aes-256-gcm","ct":"replayed-ciphertext"}`}}},
 	} {

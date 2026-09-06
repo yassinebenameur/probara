@@ -139,6 +139,7 @@ func validateUUIDString(fieldName, value string, allowEmpty bool) error {
 
 // activeCheckTypes are monitor types that require timeout validation
 var activeCheckTypes = map[models.MonitorType]bool{
+	models.MonitorTypePrometheus:       true,
 	models.MonitorTypeHTTP:             true,
 	models.MonitorTypePing:             true,
 	models.MonitorTypeSIP:              true,

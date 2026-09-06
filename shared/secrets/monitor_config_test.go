@@ -466,3 +466,46 @@ func TestWebSocketHeaderSecretLifecycle(t *testing.T) {
 		t.Fatalf("decrypted headers = %v", plainHeaders)
 	}
 }
+
+func TestPrometheusSecretsLifecycle(t *testing.T) {
+	enc := monitorTestEncryptor(t)
+	raw := json.RawMessage(`{"url":"https://prom.example.com","query":"up","password":"password-secret","bearer_token":"bearer-secret"}`)
+	encrypted, err := EncryptMonitorConfig(enc, "prometheus", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := configMap(t, encrypted)
+	for _, key := range []string{"password", "bearer_token"} {
+		if !LooksLikeEnvelope(fields[key].(string)) {
+			t.Fatalf("%s not encrypted", key)
+		}
+	}
+	masked, err := MaskMonitorConfig("prometheus", encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields = configMap(t, masked)
+	if fields["password"] != "***" || fields["bearer_token"] != "***" {
+		t.Fatal("secrets not masked")
+	}
+	merged, err := MergeMonitorConfigSecrets("prometheus", masked, encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decrypted, err := DecryptMonitorConfig(enc, "prometheus", merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields = configMap(t, decrypted)
+	if fields["password"] != "password-secret" || fields["bearer_token"] != "bearer-secret" {
+		t.Fatal("update lost secrets")
+	}
+	cleared, err := MergeMonitorConfigSecrets("prometheus", json.RawMessage(`{"password":"","bearer_token":""}`), encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields = configMap(t, cleared)
+	if fields["password"] != nil || fields["bearer_token"] != nil {
+		t.Fatal("explicit clear preserved secrets")
+	}
+}
