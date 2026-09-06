@@ -22,6 +22,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/locationauth"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -437,20 +438,8 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 		}
 	}
 
-	if len(resetIDs) > 0 {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE monitor_state_intervals SET ended_at = NOW()
-			WHERE monitor_id = ANY($1) AND ended_at IS NULL
-		`, pq.Array(resetIDs)); err != nil {
-			return 0, fmt.Errorf("failed to close state intervals: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO monitor_state_intervals (tenant_id, monitor_id, state, reason, started_at)
-			SELECT tenant_id, id, 'unknown', 'location_change', NOW()
-			FROM monitors WHERE id = ANY($1)
-		`, pq.Array(resetIDs)); err != nil {
-			return 0, fmt.Errorf("failed to open state intervals: %w", err)
-		}
+	if err := monitorstate.RecordIntervalsTx(ctx, tx, resetIDs, monitorstate.StateUnknown, monitorstate.IntervalReasonLocationChange); err != nil {
+		return 0, err
 	}
 
 	if err := tx.Commit(); err != nil {

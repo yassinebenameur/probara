@@ -7,12 +7,14 @@ package ingest
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -244,5 +246,95 @@ func TestIngestLocationLessResultForLocationBoundMonitorIsHistoryOnly(t *testing
 	}
 	if intervals := loadIntervals(ctx, t, dbClient, monitorID); len(intervals) != 0 {
 		t.Fatalf("intervals = %d, want 0 [S-E5]", len(intervals))
+	}
+}
+
+// S-O1/S-U4: the monitor lock serializes writers, but NOW() is the
+// transaction *start* time. A transaction that began first yet acquired the
+// lock second used to close an interval opened later than its own NOW() and
+// trip the `ended_at >= started_at` check (the flaky failure behind
+// TestQuorumConcurrentResultsNoDeadlock in CI). Force that exact interleaving
+// deterministically and require a monotonic, gap-free timeline instead.
+func TestRecordIntervalTxEarlierTransactionLosingTheLockStaysMonotonic(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "timeline-race")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+
+	lockMonitor := func(tx *sql.Tx) {
+		t.Helper()
+		if _, err := tx.ExecContext(ctx, `SELECT id FROM monitors WHERE id = $1 FOR UPDATE`, monitorID); err != nil {
+			t.Fatalf("lock monitor: %v", err)
+		}
+	}
+
+	// Transaction A starts first: its NOW() is pinned to the earlier instant.
+	txA, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin A: %v", err)
+	}
+	defer txA.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	var startA time.Time
+	if err := txA.QueryRowContext(ctx, `SELECT NOW()`).Scan(&startA); err != nil {
+		t.Fatalf("pin A's transaction timestamp: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Transaction B starts later but wins the lock and commits first, so the
+	// open interval now starts *after* A's NOW().
+	txB, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin B: %v", err)
+	}
+	lockMonitor(txB)
+	if err := monitorstate.RecordIntervalTx(ctx, txB, tenantID, monitorID, monitorstate.StateDown, monitorstate.IntervalReasonResult); err != nil {
+		t.Fatalf("B record interval: %v", err)
+	}
+	if err := txB.Commit(); err != nil {
+		t.Fatalf("commit B: %v", err)
+	}
+
+	// A takes the lock second and records its own transition.
+	lockMonitor(txA)
+	if err := monitorstate.RecordIntervalTx(ctx, txA, tenantID, monitorID, monitorstate.StateUp, monitorstate.IntervalReasonResult); err != nil {
+		t.Fatalf("A record interval after losing the lock race: %v", err)
+	}
+	if err := txA.Commit(); err != nil {
+		t.Fatalf("commit A: %v", err)
+	}
+
+	intervals := loadIntervals(ctx, t, dbClient, monitorID)
+	if len(intervals) != 2 {
+		t.Fatalf("intervals = %d, want 2 (B's closed down, A's open up): %+v", len(intervals), intervals)
+	}
+	// B's interval is zero-length (closed at its own start), so both rows share
+	// started_at and position in the timeline is not meaningful; pick by state.
+	closed, open := intervals[0], intervals[1]
+	if closed.Ended == nil {
+		closed, open = open, closed
+	}
+	if closed.State != "down" || closed.Ended == nil {
+		t.Fatalf("expected B's closed down interval, got %+v", closed)
+	}
+	if closed.Ended.Before(closed.Started) {
+		t.Fatalf("closed interval ends before it starts: %+v", closed)
+	}
+	if !closed.Started.After(startA) {
+		t.Fatalf("test precondition: B's interval (%s) must start after A's NOW() (%s)", closed.Started, startA)
+	}
+	if open.State != "up" || open.Ended != nil {
+		t.Fatalf("second interval should be A's open up interval: %+v", open)
+	}
+	if !open.Started.Equal(*closed.Ended) {
+		t.Fatalf("timeline gap: closed ends %s, open starts %s", *closed.Ended, open.Started)
+	}
+	var openCount int
+	if err := dbClient.QueryRowContext(ctx, `SELECT COUNT(*) FROM monitor_state_intervals WHERE monitor_id = $1 AND ended_at IS NULL`, monitorID).Scan(&openCount); err != nil {
+		t.Fatalf("count open intervals: %v", err)
+	}
+	if openCount != 1 {
+		t.Fatalf("open intervals = %d, want exactly 1", openCount)
 	}
 }
