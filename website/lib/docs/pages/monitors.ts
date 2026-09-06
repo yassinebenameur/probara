@@ -5,7 +5,7 @@ export const MONITORS_PAGE: DocPage = {
   group: "Use Probara",
   title: "Monitors",
   description:
-    "Configure active, passive, grouped, database, broker, WebSocket, and synthetic monitors.",
+    "Configure active, passive, grouped, database, broker, WebSocket, Prometheus query, and synthetic monitors.",
   eyebrow: "Product guide",
   readingTime: "35 min read",
   keywords: [
@@ -116,6 +116,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`tcp`", "TCP connection and optional TLS handshake", "Yes"],
             ["`sip`", "SIP `OPTIONS` ping or `REGISTER` auth probe", "Yes"],
             ["`websocket`", "WebSocket upgrade and optional message exchange", "Yes"],
+            ["`prometheus`", "PromQL instant query compared against a numeric threshold", "Yes"],
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
             ["`mysql`", "MySQL connect and optional query assertion", "Yes"],
@@ -343,6 +344,62 @@ export const MONITORS_PAGE: DocPage = {
       ],
     },
     {
+      id: "prometheus",
+      title: "Prometheus query monitors",
+      intro:
+        "A Prometheus monitor turns any PromQL instant query into an uptime signal. The worker POSTs the query to `/api/v1/query` on the configured base URL and compares every returned float sample against a threshold.",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Field", "Purpose"],
+          rows: [
+            ["`url`", "Required `http://` or `https://` Prometheus base URL, including any reverse-proxy prefix. Credentials, query parameters, and fragments are rejected."],
+            ["`query`", "Required PromQL expression, up to 16 KiB. Syntax is validated by Prometheus when the worker runs it."],
+            ["`operator`", "Required comparison: `gt`, `gte`, `lt`, `lte`, `eq`, or `ne`"],
+            ["`threshold`", "Required finite number in the query's own units; zero and negative values are valid"],
+            ["`no_data_status`", "Result when the query returns no samples: `failure` (default), `error`, or `success`"],
+            ["`auth_type`", "`none` (default), `basic` with `username` and `password`, or `bearer` with `bearer_token`"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The monitor is healthy only when **every** returned sample satisfies the comparison, so an instant vector with several series is treated as several assertions. Use PromQL aggregation such as `sum`, `max`, or `min` when one value should decide. Scalar and instant-vector float results are supported; range vectors, string results, and native histogram samples report an error.",
+        },
+        {
+          type: "table",
+          columns: ["Query", "Healthy condition"],
+          rows: [
+            ["`up{job=\"api\"}`", "`eq` 1"],
+            ["`sum(queue_depth)`", "`lt` 1000"],
+            ["`100 * sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))`", "`lt` 5"],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "NaN and infinite samples, including division by zero, report an error rather than a threshold verdict.",
+            "Query warnings from Prometheus indicate potentially partial evaluation and report an error, never a healthy result.",
+            "HTTP errors, malformed responses, redirects, and connection failures report an error. Redirects are never followed and HTTPS certificates are always verified.",
+            "Responses are capped at 2 MiB; aggregate large queries rather than relying on truncation.",
+            "The worker's SSRF policy and allowed CIDRs apply, including DNS resolution at connection time. Pick a private location whose worker can reach the endpoint when Prometheus is internal.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Check results record the sample count, the number of samples outside the threshold, and up to twenty numeric values. Labels and raw upstream error bodies are not stored. **Test query** in the form runs the current configuration through a worker without saving; when editing, saved masked credentials are resolved for that monitor.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Prefer a numeric query plus a Probara threshold",
+          text:
+            "A PromQL filter such as `up == 0` returns an empty vector when everything is healthy, which then falls under `no_data_status`. Querying the numeric value and expressing the threshold in Probara is easier to read and preview.",
+        },
+      ],
+    },
+    {
       id: "data-services",
       title: "Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ",
       intro:
@@ -566,7 +623,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password`, plus every WebSocket header value. API reads replace protected values with `***`.",
+            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password`, the Prometheus `password` and `bearer_token`, plus every WebSocket header value. API reads replace protected values with `***`.",
         },
         {
           type: "list",

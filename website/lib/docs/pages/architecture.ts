@@ -56,7 +56,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
             ],
             [
               "`worker/`",
-              "HTTP, ping, DNS, gRPC, SIP, TCP, database, broker, WebSocket, and synthetic execution",
+              "HTTP, ping, DNS, gRPC, SIP, TCP, database, broker, WebSocket, Prometheus query, and synthetic execution",
               "Application CRUD or direct database state mutation",
             ],
             [

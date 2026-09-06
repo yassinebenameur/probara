@@ -8,13 +8,13 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
 
 ## What it brings to the table
 
-- **17 monitor types, checked at the real protocol layer** — HTTP (status,
+- **18 monitor types, checked at the real protocol layer** — HTTP (status,
   body, JSON, and TLS-expiry assertions), ICMP ping, DNS records, TCP, gRPC
   health, WebSocket, SIP (OPTIONS and digest-auth REGISTER over udp/tcp/tls),
   Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, multi-step API sequences with
   variable extraction, scripted browser journeys (headless Chromium via
-  chromedp), push heartbeats, a host agent for CPU/memory/disk telemetry, and
-  monitor groups.
+  chromedp), push heartbeats, a host agent for CPU/memory/disk telemetry,
+  monitor groups, and Prometheus instant-query thresholds.
 - **Multi-location checks** — remote workers connect outbound to NATS only,
   never to Postgres, so a private location needs one egress rule. Results are
   tracked per location with a configurable failure quorum; fewer failing
@@ -84,7 +84,7 @@ Details: [`docs/architecture.md`](docs/architecture.md).
 Web & API: `http`, `synthetic_api`, `synthetic_browser`, `websocket`, `grpc`
 Network: `ping`, `dns`, `tcp`, `sip`
 Databases & brokers: `redis`, `postgres`, `mysql`, `mongodb`, `rabbitmq`
-Infrastructure: `agent`, `push`, `group`
+Infrastructure: `agent`, `push`, `group`, [`prometheus`](docs/prometheus-monitors.md)
 
 `grpc` monitors call `grpc.health.v1.Health/Check` and mark success only when
 status is `SERVING`.

@@ -13,6 +13,7 @@ import (
 type MonitorType string
 
 const (
+	MonitorTypePrometheus       MonitorType = "prometheus"
 	MonitorTypeHTTP             MonitorType = "http"
 	MonitorTypePing             MonitorType = "ping"
 	MonitorTypeDNS              MonitorType = "dns"

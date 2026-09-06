@@ -20,7 +20,8 @@ import {
   SyntheticAPIMonitorConfig,
   SyntheticBrowserMonitorConfig,
   TCPMonitorConfig,
-} from '@/lib/types';
+  PrometheusMonitorConfig,
+} from './types';
 
 function cloneObject<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -105,6 +106,12 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
         transport: cfg?.transport || 'udp',
         ...(cfg?.expected_status !== undefined ? { expected_status: cfg.expected_status } : {}),
       };
+    }
+    case 'prometheus': {
+      const cfg = cloneObject(monitor.config as PrometheusMonitorConfig);
+      if (cfg.password === MASKED_SECRET) delete cfg.password;
+      if (cfg.bearer_token === MASKED_SECRET) delete cfg.bearer_token;
+      return cfg;
     }
     case 'websocket': {
       const cfg = (monitor.config as WebSocketMonitorConfig | undefined) || { url: '' };

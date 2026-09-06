@@ -1,5 +1,6 @@
 'use client';
 
+import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
@@ -766,6 +767,11 @@ export default function EditMonitorPage() {
                     {monitor.enabled ? 'Enabled' : 'Paused'}
                   </span>
                 </div>
+                {monitor.type === 'prometheus' && (
+                  <div className="border-t border-dashed border-white/[0.06] pt-2">
+                    <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
+                  </div>
+                )}
                 {(() => {
                   // Server facts reported by the database/broker checkers
                   // (version, role, …) live in the latest result's metrics.

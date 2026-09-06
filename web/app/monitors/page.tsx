@@ -1,5 +1,6 @@
 'use client';
 
+import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -114,6 +115,7 @@ const TYPE_LABELS: Record<string, { label: string; short: string }> = {
   rabbitmq: { label: 'RabbitMQ', short: 'RABBITMQ' },
   mysql: { label: 'MySQL', short: 'MYSQL' },
   websocket: { label: 'WebSocket', short: 'WS' },
+  prometheus: { label: 'Prometheus', short: 'PROMQL' },
 };
 
 function monitorTypeLabel(type: string, variant: 'label' | 'short' = 'label') {
@@ -140,6 +142,7 @@ function TypeBadge({ type }: { type: string }) {
     rabbitmq: 'text-orange-300',
     mysql: 'text-sky-300',
     websocket: 'text-purple-400',
+    prometheus: 'text-orange-400',
   };
   return (
     <span className={`text-[10px] font-medium uppercase ${colors[type] || 'text-slate-400'}`}>
@@ -1151,6 +1154,13 @@ function DetailPanel({
           </div>
         </div>
       </div>
+
+      {monitor.type === 'prometheus' && (
+        <div className="p-4 border-b border-white/[0.06]">
+          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Prometheus query</h4>
+          <PrometheusDetails monitor={monitor} result={results[0]} size="compact" />
+        </div>
+      )}
 
       {/* Synthetic Browser Screenshot */}
       {monitor.type === 'synthetic_browser' && (

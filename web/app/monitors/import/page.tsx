@@ -77,6 +77,7 @@ const SUPPORTED_TYPES = [
   { value: 'mongodb', label: 'MongoDB', description: 'MongoDB connect + ping checks' },
   { value: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect + auth checks' },
   { value: 'websocket', label: 'WebSocket', description: 'WebSocket connect + message checks' },
+  { value: 'prometheus', label: 'Prometheus', description: 'PromQL query + numeric threshold checks' },
 ];
 
 // Step indicator component

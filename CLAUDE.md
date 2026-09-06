@@ -139,8 +139,10 @@ or imported groups come back empty. Any other path that creates groups through
 
 ## Adding a monitor type (checklist)
 
-1. `MonitorType` constant in `api/internal/models/monitors.go` + config struct
-   there and in `shared/models/check_job_payload.go` (two mirrors, keep in sync)
+1. `MonitorType` constant in `api/internal/models/monitors.go`; config struct in
+   `shared/models/` (one file per newer type, e.g. `prometheus.go`; older types
+   sit in `check_job_payload.go`). The API validator and the worker both consume
+   the shared struct, so put `Validate()` on it rather than duplicating rules
 2. Validator in `api/internal/validation/` + register in `registry.go`
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
@@ -150,6 +152,11 @@ or imported groups come back empty. Any other path that creates groups through
    `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`
 6. Docs: `website/lib/docs/pages/monitors.ts` (type table + protocol passage +
    secrets coverage) — import/export support is automatic via the registry
+7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
+   in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
+   `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
+   `web/app/monitors/page.tsx`, and the type count + `monitorGroups` on the
+   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
 
 ## Cross-service contracts
 

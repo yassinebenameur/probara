@@ -14,12 +14,13 @@ import (
 // credentials (redis://user:pass@host, postgres://user:pass@host/db, …);
 // tls_client_key_pem is the private half of an mTLS client pair.
 var MonitorSecretFields = map[string][]string{
-	"redis":    {"password", "connection_string", "tls_client_key_pem"},
-	"postgres": {"password", "connection_string", "tls_client_key_pem"},
-	"mongodb":  {"password", "connection_string", "tls_client_key_pem"},
-	"rabbitmq": {"password", "connection_string", "tls_client_key_pem"},
-	"mysql":    {"password", "connection_string", "tls_client_key_pem"},
-	"sip":      {"password"},
+	"prometheus": {"password", "bearer_token"},
+	"redis":      {"password", "connection_string", "tls_client_key_pem"},
+	"postgres":   {"password", "connection_string", "tls_client_key_pem"},
+	"mongodb":    {"password", "connection_string", "tls_client_key_pem"},
+	"rabbitmq":   {"password", "connection_string", "tls_client_key_pem"},
+	"mysql":      {"password", "connection_string", "tls_client_key_pem"},
+	"sip":        {"password"},
 	// Older push forms persisted a redundant copy of the webhook credential
 	// in config as well as monitors.push_token. Protect that copy on exports
 	// and all config reads too; the dedicated push-info endpoint owns access.
