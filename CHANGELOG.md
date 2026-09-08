@@ -1,3 +1,15 @@
+# [1.0.0-alpha.73](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.72...v1.0.0-alpha.73) (2026-09-06)
+
+
+### Bug Fixes
+
+* **monitorstate:** keep the state timeline monotonic when a writer loses the lock race ([195c2dc](https://github.com/yassinebenameur/probara/commit/195c2dcf496feb69228b98fe13c812673f746996))
+
+
+### Features
+
+* **monitors:** add Prometheus instant-query monitor type ([c817eb1](https://github.com/yassinebenameur/probara/commit/c817eb1f2eab34d655a7307f824d281bf5ad5fcd))
+
 # [1.0.0-alpha.72](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.71...v1.0.0-alpha.72) (2026-09-04)
 
 
