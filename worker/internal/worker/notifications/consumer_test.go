@@ -3,10 +3,13 @@ package notifications
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/queue"
 )
 
@@ -77,5 +80,18 @@ func TestHandle_RetriesOnUnknownPlugin(t *testing.T) {
 	err := c.handle(context.Background(), &queue.Message{Data: raw})
 	if err == nil {
 		t.Fatal("unknown plugin should return an error so JetStream retries; got nil")
+	}
+}
+
+func TestRetryDelay_HonoursProviderRetryAfter(t *testing.T) {
+	transient := errors.New("503")
+	if got := retryDelay(transient, 1); got != DefaultBackOff[0] {
+		t.Errorf("first retry = %v, want %v", got, DefaultBackOff[0])
+	}
+	if got := retryDelay(transient, 99); got != DefaultBackOff[len(DefaultBackOff)-1] {
+		t.Errorf("late retry = %v, want the last backoff step", got)
+	}
+	if got := retryDelay(plugin.RetryAfter(transient, 42*time.Second), 1); got != 42*time.Second {
+		t.Errorf("Retry-After = %v, want 42s", got)
 	}
 }

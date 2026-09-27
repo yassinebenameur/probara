@@ -5,6 +5,9 @@ import Button from '@/components/ui/Button';
 import FormField from '@/components/ui/FormField';
 import type { PluginField, PluginManifest } from '@/lib/types';
 
+// What the API substitutes for stored secret values on read.
+const MASKED_SECRET = '***';
+
 interface SchemaFormProps {
   manifest: PluginManifest;
   value: Record<string, unknown>;
@@ -57,7 +60,31 @@ function FieldRenderer({ field, value, error, isEdit, onChange }: FieldRendererP
       return (
         <BoolField field={field} value={Boolean(value)} onChange={onChange} error={error} />
       );
-    case 'textarea':
+    case 'textarea': {
+      // A secret textarea (e.g. webhook custom headers) arrives masked as
+      // "***" on edit; show it empty so the mask is never edited into the
+      // value, and let an untouched field keep the stored secret.
+      const masked = field.secret && value === MASKED_SECRET;
+      return (
+        <FormField
+          label={field.label}
+          required={field.required && !(field.secret && isEdit)}
+          description={field.help}
+          error={error}
+        >
+          <textarea
+            className="input min-h-[120px] resize-y"
+            rows={6}
+            placeholder={
+              field.secret && isEdit ? 'Leave blank to keep existing value' : field.placeholder
+            }
+            value={masked ? '' : typeof value === 'string' ? value : ''}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        </FormField>
+      );
+    }
+    case 'select':
       return (
         <FormField
           label={field.label}
@@ -65,13 +92,17 @@ function FieldRenderer({ field, value, error, isEdit, onChange }: FieldRendererP
           description={field.help}
           error={error}
         >
-          <textarea
-            className="input min-h-[120px] resize-y"
-            rows={6}
-            placeholder={field.placeholder}
-            value={typeof value === 'string' ? value : ''}
+          <select
+            className="input"
+            value={typeof value === 'string' ? value : String(field.default ?? '')}
             onChange={(e) => onChange(e.target.value)}
-          />
+          >
+            {(field.options ?? []).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </FormField>
       );
     case 'email_list':

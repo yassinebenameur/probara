@@ -127,9 +127,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	defer cancel()
 	defer func() {
 		if err != nil {
-			attempt := deliveryAttempt(msg)
-			index := min(attempt-1, len(DefaultBackOff)-1)
-			err = queue.RetryAfter(err, DefaultBackOff[index])
+			err = queue.RetryAfter(err, retryDelay(err, deliveryAttempt(msg)))
 		}
 	}()
 	var envelope notifications.DispatchEnvelope
@@ -209,7 +207,13 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		Attempt:   attempt,
 	})
 	if err != nil {
-		entry.WithError(err).WithField("attempt", attempt).Warn("Plugin Send failed; will retry per BackOff schedule")
+		if plugin.IsPermanent(err) {
+			// Retrying cannot fix a rejected credential or a deleted
+			// webhook; ack so the failure is logged once, not five times.
+			entry.WithError(err).WithField("attempt", attempt).Error("Plugin Send failed permanently; dropping message")
+			return nil
+		}
+		entry.WithError(err).WithField("attempt", attempt).Warn("Plugin Send failed; will retry")
 		return err
 	}
 
@@ -243,6 +247,15 @@ func (c *Consumer) loadChannel(ctx context.Context, channelIDStr string) (*loade
 	}
 	channel.Config = json.RawMessage(cfgBytes)
 	return &channel, nil
+}
+
+// retryDelay is the delayed-NAK interval after a failed attempt: the
+// provider's Retry-After when it sent one, else the BackOff schedule.
+func retryDelay(err error, attempt int) time.Duration {
+	if d, ok := plugin.RetryAfterDelay(err); ok {
+		return d
+	}
+	return DefaultBackOff[min(attempt-1, len(DefaultBackOff)-1)]
 }
 
 // deliveryAttempt uses JetStream metadata, defaulting to 1. Used to populate

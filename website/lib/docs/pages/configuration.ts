@@ -684,7 +684,28 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" button to alert email; omitted when unset. Read by the same three services.',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel; omitted when unset. Read by the same three services.',
+            ],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The same three services also read the [notification egress policy](/docs/security/#ssrf-network-policy), because each one can deliver through a channel plugin. It is independent of the worker\'s `HTTP_BLOCK_PRIVATE_IPS` and, unlike it, blocks by default.',
+        },
+        {
+          type: 'table',
+          columns: ['Notification variable', 'Code default', 'Important behavior'],
+          rows: [
+            [
+              '`NOTIFICATION_BLOCK_PRIVATE_IPS`',
+              '`true`; boolean',
+              'Refuse private, loopback, link-local and reserved destinations for every notification channel. Set `false` only when channels must reach internal hosts and network policy already contains them.',
+            ],
+            [
+              '`NOTIFICATION_ALLOWED_CIDRS`',
+              'Empty; comma-separated CIDRs',
+              'Destinations that stay reachable while blocking is on, e.g. an internal webhook receiver. Any invalid CIDR fails startup.',
             ],
           ],
         },

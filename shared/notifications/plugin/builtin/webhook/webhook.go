@@ -8,7 +8,6 @@
 package webhook
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -17,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -45,9 +43,11 @@ type Plugin struct {
 	httpClient *http.Client
 }
 
-// New constructs a plugin with the default HTTP client (10s timeout).
+// New constructs a plugin with the guarded notification HTTP client: the
+// target is tenant-supplied, so it dials through the egress (SSRF) policy and
+// never follows redirects.
 func New() *Plugin {
-	return &Plugin{httpClient: &http.Client{Timeout: 10 * time.Second}}
+	return &Plugin{httpClient: plugin.NewHTTPClient(10 * time.Second)}
 }
 
 // Manifest returns the generic webhook plugin self-description.
@@ -57,9 +57,8 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		DisplayName: "Generic Webhook",
 		Description: "POST the full alert event payload as JSON to any HTTPS endpoint, optionally signed with HMAC-SHA256.",
 		IconKey:     "webhook",
-		Version:     "1.0.0",
+		Version:     "1.1.0",
 		Capabilities: []plugin.Capability{
-			plugin.CapabilityRawEvent,
 			plugin.CapabilityTestable,
 		},
 		Fields: []plugin.Field{
@@ -84,8 +83,9 @@ func (p *Plugin) Manifest() plugin.Manifest {
 				Key:         "custom_headers",
 				Label:       "Custom Headers (JSON)",
 				Type:        plugin.FieldTypeTextarea,
+				Secret:      true,
 				Placeholder: `{"X-Source":"probara","Authorization":"Bearer ..."}`,
-				Help:        "Optional flat JSON object of additional headers to send with each request.",
+				Help:        "Optional flat JSON object of additional headers to send with each request. Stored encrypted and never shown again, because it usually carries a bearer token.",
 			},
 		},
 	}
@@ -97,15 +97,8 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if cfg.URL == "" {
-		return errors.New("url is required")
-	}
-	u, err := url.Parse(cfg.URL)
-	if err != nil {
-		return fmt.Errorf("url is not a valid URL: %w", err)
-	}
-	if u.Scheme != "https" {
-		return errors.New("url must use https")
+	if _, err := plugin.ParseHTTPSURL(cfg.URL, "url"); err != nil {
+		return err
 	}
 	if cfg.CustomHeadersJ != "" {
 		if _, err := parseCustomHeaders(cfg.CustomHeadersJ); err != nil {
@@ -116,49 +109,37 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 }
 
 // Send POSTs the AlertEvent to the configured URL with optional HMAC signing.
+// The body is the raw AlertEvent (the documented receiver contract), not the
+// presentation model.
 func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
-	target, ok := stringFromMap(req.Channel.Config, "url")
-	if !ok || target == "" {
-		return errors.New("generic_webhook channel missing url")
+	target := req.Channel.String("url")
+	if target == "" {
+		return plugin.Permanent(errors.New("generic_webhook channel missing url"))
 	}
 
 	body, err := json.Marshal(req.Event)
 	if err != nil {
-		return fmt.Errorf("marshal alert event: %w", err)
+		return plugin.Permanent(fmt.Errorf("marshal alert event: %w", err))
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build webhook request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set(eventTypeHeader, eventTypeOf(req))
-	httpReq.Header.Set(idempotencyHdr, fmt.Sprintf("%s:%s:%s", req.Event.Alert.ID, req.Channel.ID, eventTypeOf(req)))
-
-	if secret, ok := stringFromMap(req.Channel.Config, "hmac_secret"); ok && secret != "" {
-		httpReq.Header.Set(signatureHeader, signaturePrefix+computeSignature(secret, body))
-	}
-
-	if headersRaw, ok := stringFromMap(req.Channel.Config, "custom_headers"); ok && headersRaw != "" {
-		extra, err := parseCustomHeaders(headersRaw)
+	headers := map[string]string{}
+	if raw := req.Channel.String("custom_headers"); raw != "" {
+		extra, err := parseCustomHeaders(raw)
 		if err != nil {
-			return fmt.Errorf("parse custom_headers: %w", err)
+			return plugin.Permanent(fmt.Errorf("parse custom_headers: %w", err))
 		}
 		for k, v := range extra {
-			httpReq.Header.Set(k, v)
+			headers[k] = v
 		}
 	}
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("post webhook: %w", err)
+	// Protocol headers are set last so a custom header cannot spoof them.
+	headers[eventTypeHeader] = req.Type()
+	headers[idempotencyHdr] = fmt.Sprintf("%s:%s:%s", req.Event.Alert.ID, req.Channel.ID, req.Type())
+	if secret := req.Channel.String("hmac_secret"); secret != "" {
+		headers[signatureHeader] = signaturePrefix + computeSignature(secret, body)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
-	}
-	return nil
+	return plugin.Post(ctx, p.httpClient, target, "application/json", body, headers, "webhook")
 }
 
 func computeSignature(secret string, body []byte) string {
@@ -184,13 +165,6 @@ func parseCustomHeaders(raw string) (map[string]string, error) {
 	return headers, nil
 }
 
-func eventTypeOf(req plugin.DispatchRequest) string {
-	if req.EventType != "" {
-		return req.EventType
-	}
-	return req.Event.Type
-}
-
 func parseConfig(raw json.RawMessage) (Config, error) {
 	var cfg Config
 	if len(raw) == 0 {
@@ -201,18 +175,6 @@ func parseConfig(raw json.RawMessage) (Config, error) {
 	}
 	cfg.URL = strings.TrimSpace(cfg.URL)
 	return cfg, nil
-}
-
-func stringFromMap(m map[string]any, key string) (string, bool) {
-	if m == nil {
-		return "", false
-	}
-	v, ok := m[key]
-	if !ok {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
 }
 
 func init() {
