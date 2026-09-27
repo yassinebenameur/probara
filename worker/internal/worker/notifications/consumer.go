@@ -182,7 +182,22 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		return nil
 	}
 
-	superseded, err := c.eventSuperseded(ctx, envelope)
+	// Hold a share lock on the alert row from the status check through the
+	// send. Resolution is an UPDATE of that row, so it waits until this send
+	// has finished, and the resolve it then publishes is delivered after it.
+	// Without the lock a trigger that passed the check could still reach the
+	// provider after a concurrent worker delivered the resolve. Resolves need
+	// no lock: they are only published once the resolution committed.
+	var tx *sql.Tx
+	if envelope.EventType != "resolved" {
+		tx, err = c.db.BeginTx(ctx, nil)
+		if err != nil {
+			entry.WithError(err).Error("Failed to begin alert lock")
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+	}
+	superseded, err := eventSuperseded(ctx, tx, envelope)
 	if err != nil {
 		entry.WithError(err).Error("Failed to load alert status")
 		return err
@@ -240,8 +255,10 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 // resolved (or deleted). JetStream redelivers failed messages on a backoff,
 // so a created/reminder/acknowledged message can outlive the resolve the
 // alerter published after it; delivering it then would reopen the alert on
-// the provider side. Resolves always go through.
-func (c *Consumer) eventSuperseded(ctx context.Context, envelope notifications.DispatchEnvelope) (bool, error) {
+// the provider side. Resolves always go through (tx is nil for them). For
+// every other event it reads the status FOR SHARE inside tx, and the caller
+// keeps tx open until the send returns.
+func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (bool, error) {
 	if envelope.EventType == "resolved" {
 		return false, nil
 	}
@@ -250,7 +267,7 @@ func (c *Consumer) eventSuperseded(ctx context.Context, envelope notifications.D
 		return false, fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
 	}
 	var status string
-	err = c.db.QueryRowContext(ctx, `SELECT status FROM alerts WHERE id = $1`, alertID).Scan(&status)
+	err = tx.QueryRowContext(ctx, `SELECT status FROM alerts WHERE id = $1 FOR SHARE`, alertID).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return true, nil
 	}

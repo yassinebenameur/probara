@@ -63,12 +63,14 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 				WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
 					AddRow("pager", supersededStubType, []byte(`{}`), true))
 			if tc.eventType != "resolved" {
-				q := mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM alerts WHERE id = $1`)).WithArgs(alertID)
+				mock.ExpectBegin()
+				q := mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM alerts WHERE id = $1 FOR SHARE`)).WithArgs(alertID)
 				if tc.alertStatus == "" {
 					q.WillReturnRows(sqlmock.NewRows([]string{"status"}))
 				} else {
 					q.WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(tc.alertStatus))
 				}
+				mock.ExpectRollback()
 			}
 
 			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}

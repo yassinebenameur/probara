@@ -335,12 +335,17 @@ or imported groups come back empty. Any other path that creates groups through
   they skip reminders. Channel updates run the plugin's `Validate` on the
   merged config (`alertchannels.Service.validateMerged`) — create-time host
   checks are otherwise bypassable by editing. The async worker
-  (`Consumer.eventSuperseded`) drops any non-resolve envelope whose alert has
-  since resolved: JetStream redelivers failures on a backoff, so without it a
-  retried trigger could land after the resolve and leave a provider incident
-  open forever. Multi-recipient plugins must flatten a mixed error before
-  returning it — `plugin.IsPermanent` walks `errors.Join` children, so one
-  permanent child would stop the retry for the others.
+  (`eventSuperseded`) reads the alert `FOR SHARE` in a transaction held
+  through `Send`, and drops any non-resolve envelope whose alert has since
+  resolved. The lock is the ordering guarantee: resolution is an `UPDATE` of
+  that row, so it waits for an in-flight trigger (bounded by
+  `DispatchTimeout`), and the resolve is only published after it commits —
+  without it a trigger could reach PagerDuty after the resolve and leave the
+  incident open forever. Do not move `Send` out of that transaction.
+  Multi-recipient plugins must flatten a mixed error before returning it —
+  `plugin.IsPermanent` walks `errors.Join` children, so one permanent child
+  would stop the retry for the others — and carry the longest
+  `plugin.RetryAfterDelay` onto the flattened error.
 
 - **status-page is read-only except for push.** The `Service` takes a
   `db.Querier` and `service.go` stubs `ExecContext` into a refusal so stray

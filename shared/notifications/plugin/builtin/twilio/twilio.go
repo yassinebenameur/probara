@@ -201,12 +201,27 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	// The mixed case must be flattened: plugin.IsPermanent walks a joined
 	// error's children, so returning the join would let the permanent child
 	// mark the whole delivery permanent and drop the retryable recipient.
+	// The longest provider-requested delay (a 429's Retry-After) is carried
+	// over so the redelivery respects it for every recipient.
+	retryable := false
+	var delay time.Duration
 	for _, e := range errs {
-		if !plugin.IsPermanent(e) {
-			return errors.New(joined.Error())
+		if plugin.IsPermanent(e) {
+			continue
+		}
+		retryable = true
+		if d, ok := plugin.RetryAfterDelay(e); ok && d > delay {
+			delay = d
 		}
 	}
-	return plugin.Permanent(joined)
+	if !retryable {
+		return plugin.Permanent(joined)
+	}
+	flat := errors.New(joined.Error())
+	if delay > 0 {
+		return plugin.RetryAfter(flat, delay)
+	}
+	return flat
 }
 
 // maskNumber keeps phone numbers out of logs except the last digits.

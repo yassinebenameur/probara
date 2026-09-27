@@ -205,3 +205,48 @@ func TestSend_MixedPermanentAndTransientStaysRetryable(t *testing.T) {
 		t.Fatalf("err = %v, want a transient error so the 503 recipient is retried", err)
 	}
 }
+
+// A 429's Retry-After must survive aggregation: the longest requested delay
+// wins, whether one recipient or several were throttled.
+func TestSend_KeepsLongestRetryAfter(t *testing.T) {
+	cases := []struct {
+		name   string
+		byTo   map[string]string // recipient -> Retry-After ("" = 400 invalid number)
+		wantD  time.Duration
+		wantOK bool
+	}{
+		{"single throttled", map[string]string{"+15557654321": "120", "+447700900123": "ok"}, 120 * time.Second, true},
+		{"longest wins", map[string]string{"+15557654321": "30", "+447700900123": "120"}, 120 * time.Second, true},
+		{"mixed with permanent", map[string]string{"+15557654321": "", "+447700900123": "90"}, 90 * time.Second, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				form, _ := url.ParseQuery(string(raw))
+				switch ra := tc.byTo[form.Get("To")]; ra {
+				case "ok":
+					w.WriteHeader(http.StatusCreated)
+				case "":
+					w.WriteHeader(http.StatusBadRequest)
+				default:
+					w.Header().Set("Retry-After", ra)
+					w.WriteHeader(http.StatusTooManyRequests)
+				}
+			}))
+			defer srv.Close()
+			p := New()
+			p.base = srv.URL
+			err := p.Send(context.Background(), plugin.DispatchRequest{
+				Channel: plugin.ChannelRef{Config: config(nil)},
+				Event:   sampleEvent(),
+			})
+			if plugin.IsPermanent(err) {
+				t.Fatalf("err = %v, want retryable", err)
+			}
+			if d, ok := plugin.RetryAfterDelay(err); ok != tc.wantOK || d != tc.wantD {
+				t.Fatalf("Retry-After = %v (ok=%v), want %v", d, ok, tc.wantD)
+			}
+		})
+	}
+}
