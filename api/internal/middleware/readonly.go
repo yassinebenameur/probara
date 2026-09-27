@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/yassinebenameur/probara/api/internal/errors"
@@ -25,6 +26,25 @@ var postReadPaths = map[string]struct{}{
 	"/api/v1/ai-settings/test":                {},
 }
 
+// postReadPathPatterns extends the allowlist to parameterized routes. The
+// metric batch query is a POST purely because its query specs don't fit a
+// query string — it reads the metric store and writes nothing.
+var postReadPathPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^/api/v1/monitors/[^/]+/metrics/query$`),
+}
+
+func isPostReadPath(path string) bool {
+	if _, ok := postReadPaths[path]; ok {
+		return true
+	}
+	for _, re := range postReadPathPatterns {
+		if re.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
 // RequireWrite blocks mutating methods for read-only identities (viewer
 // members, read-scope API keys). Reads always pass; the postReadPaths
 // allowlist exempts compute-only POST endpoints.
@@ -36,11 +56,9 @@ func RequireWrite(next http.Handler) http.Handler {
 			return
 		}
 
-		if r.Method == http.MethodPost {
-			if _, ok := postReadPaths[strings.TrimSuffix(r.URL.Path, "/")]; ok {
-				next.ServeHTTP(w, r)
-				return
-			}
+		if r.Method == http.MethodPost && isPostReadPath(strings.TrimSuffix(r.URL.Path, "/")) {
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		if !ctxpkg.CanWrite(r.Context()) {

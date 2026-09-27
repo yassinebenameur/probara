@@ -106,10 +106,17 @@ type Subscriber struct {
 	resolveSlugs slugResolver
 	throttle     *slugThrottler
 	cache        renderInvalidator
+	// pushes is woken on a state change so browser notifications go out
+	// promptly. It is a LATENCY HINT ONLY: the sender's own ticker is what
+	// makes delivery correct, so a dropped or never-published event delays a
+	// notification to the next tick rather than losing it. That matters
+	// because push/agent/OTLP monitors publish "check_result" rather than
+	// "state_change" and never announce a recovery at all.
+	pushes *pushSender
 }
 
 // NewSubscriber creates a new status update subscriber. cache may be nil.
-func NewSubscriber(natsURL string, hub *Hub, dbClient shareddb.Querier, log *logger.Logger, cache *renderCache) (*Subscriber, error) {
+func NewSubscriber(natsURL string, hub *Hub, dbClient shareddb.Querier, log *logger.Logger, cache *renderCache, pushes *pushSender) (*Subscriber, error) {
 	sub, err := statusupdates.NewSubscriber(natsURL)
 	if err != nil {
 		return nil, err
@@ -121,6 +128,7 @@ func NewSubscriber(natsURL string, hub *Hub, dbClient shareddb.Querier, log *log
 		resolveSlugs: newCachingSlugResolver(newStatusPageSlugResolver(dbClient), slugCacheTTL, slugCacheMaxEntries, time.Now),
 		throttle:     newSlugThrottler(slugBroadcastInterval),
 		cache:        cache,
+		pushes:       pushes,
 	}, nil
 }
 
@@ -302,6 +310,16 @@ func (r statusPageSlugResolver) resolveSlugs(ctx context.Context, query string, 
 }
 
 func (s *Subscriber) handleEvent(event statusupdates.Event) {
+	// Wake the push sender FIRST, above every guard below.
+	//
+	// The early return further down skips work when no browser holds the page
+	// open and the render cache is empty -- which is exactly the situation
+	// browser notifications exist for. Anything hooked in below it would
+	// never fire for the case it was built to serve.
+	if s.pushes != nil {
+		s.pushes.Wake()
+	}
+
 	if s.hub == nil {
 		return
 	}

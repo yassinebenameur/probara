@@ -78,11 +78,11 @@ func TestRegistry_NilAndEmptyTypePanic(t *testing.T) {
 }
 
 func TestManifest_HasCapability(t *testing.T) {
-	m := Manifest{Capabilities: []Capability{CapabilityRenderedAlert, CapabilityTestable}}
-	if !m.HasCapability(CapabilityRenderedAlert) {
-		t.Error("expected RenderedAlert")
+	m := Manifest{Capabilities: []Capability{CapabilityAcknowledge, CapabilityTestable}}
+	if !m.HasCapability(CapabilityAcknowledge) {
+		t.Error("expected Acknowledge")
 	}
-	if m.HasCapability(CapabilityRawEvent) {
-		t.Error("did not expect RawEvent")
+	if m.HasCapability(Capability("unknown")) {
+		t.Error("did not expect an unknown capability")
 	}
 }

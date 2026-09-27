@@ -352,7 +352,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Dependency creation rejects self-reference and transitive cycles with HTTP 409. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation.",
+            "Dependency creation rejects self-reference and transitive cycles with HTTP 409. Export/import is not a universal secret-preserving round trip: masked fields and newer monitor types require explicit preview and remediation. Import preview reports a `schema` for recognized sources (`portable_monitor_export`, `uptime_kuma_export`), per-row `warnings`, and `skipped_rows` naming source records it declined to translate.",
         },
       ],
     },
@@ -462,7 +462,10 @@ export const API_PAGE: DocPage = {
           type: "table",
           columns: ["Method and path", "Purpose"],
           rows: [
-            ["`GET /api/v1/alerts`", "Paginated/filterable alert list"],
+            [
+              "`GET /api/v1/alerts`",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since`, `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies",
+            ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
               "`GET /api/v1/alerts/stream`",
@@ -671,12 +674,20 @@ export const API_PAGE: DocPage = {
           columns: ["Method and path", "Authorization and purpose"],
           rows: [
             [
+              "`POST /api/v1/otlp/v1/metrics`",
+              "Tenant write API key (Bearer) plus `X-Probara-Agent-Id`; OTLP/HTTP metric ingest for [collector agents](/docs/agents/#reporting)",
+            ],
+            [
               "`POST /api/v1/agent/metrics`",
-              "Tenant write API key; submit agent identity and host telemetry",
+              "Deprecated legacy-agent ingest (Sunset: 18 Nov 2026, then `410`); tenant write API key",
             ],
             [
               "`GET /api/v1/monitors/{id}/agent/install`",
-              "Authenticated; generated install command/information",
+              "Authenticated; generated install command/information incl. `collector_config` and `collector_version`",
+            ],
+            [
+              "`GET /api/v1/monitors/{id}/agent/config.yaml`",
+              "Authenticated; raw collector YAML for one `platform` (linux/darwin/windows)",
             ],
             [
               "`GET /api/v1/monitors/{id}/agent/install/script.sh`",
@@ -693,6 +704,14 @@ export const API_PAGE: DocPage = {
             [
               "`GET /api/v1/monitors/{id}/agent/uninstall/script.ps1`",
               "Authenticated Windows uninstaller",
+            ],
+            [
+              "`GET /api/v1/monitors/{id}/metrics/series`",
+              "Authenticated; discover stored metric series for an agent monitor",
+            ],
+            [
+              "`POST /api/v1/monitors/{id}/metrics/query`",
+              "Authenticated (read-only despite POST, viewer-accessible); batch range queries — ≤12 queries, ≤50 series and ≤2,000 points per series per response, automatic raw-vs-rollup selection for ranges over 48 h or steps ≥1 h",
             ],
             [
               "`GET /api/v1/monitors/{id}/push/info`",
@@ -851,7 +870,7 @@ export const API_PAGE: DocPage = {
             "Retry GET requests with bounded exponential backoff; do not blindly retry create, run-now, import execution, notification tests, or incident timeline writes.",
             "Use import preview before import execution and monitor test before saving complex check configuration.",
             "Respect `401`, `403`, `404`, `409`, `410`, `422`, and rate/transport failures as distinct conditions.",
-            "Preserve `***` when updating masked designated secret fields; omitting a field from a replaced type config can clear it.",
+            "Send `***`, or leave the field out, to keep a masked designated secret field; send an empty string when you deliberately want to clear it.",
             "Page collections and retain returned coverage metadata for analytics.",
             "Store full API keys only in a secret manager; the API returns them once.",
             "Log resource IDs and status codes without logging bearer keys, push tokens, installer output, WebSocket headers, connection strings, or webhook secrets.",

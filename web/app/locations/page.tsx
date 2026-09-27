@@ -9,6 +9,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { LocationDeployModal } from '@/components/locations/LocationDeployModal';
 import { Location } from '@/lib/types';
 import { createLocation, deleteLocation, getLocations, updateLocation } from '@/lib/api';
@@ -38,6 +39,8 @@ function connectionPill(location: Location) {
 
 export default function LocationsPage() {
   const { showToast } = useToast();
+  const { canWrite, loading: loadingUser } = useCurrentUser();
+  const canManageLocations = canWrite && !loadingUser;
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -159,7 +162,7 @@ export default function LocationsPage() {
     }
   };
 
-  const addAction = (
+  const addAction = canManageLocations ? (
     <Button
       variant="accent"
       size="sm"
@@ -168,7 +171,7 @@ export default function LocationsPage() {
     >
       Add location
     </Button>
-  );
+  ) : undefined;
 
   return (
     <div className="space-y-6">
@@ -178,7 +181,7 @@ export default function LocationsPage() {
         action={addAction}
       />
 
-      {showCreate && (
+      {canManageLocations && showCreate && (
         <Panel title="New location" subtitle="Name the network or site this location represents.">
           <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <div className="flex-1">
@@ -280,7 +283,7 @@ export default function LocationsPage() {
                 {locations.map((location) => (
                   <tr key={location.id}>
                     <td className="px-3 py-3">
-                      {renamingId === location.id ? (
+                      {canManageLocations && renamingId === location.id ? (
                         <div className="flex flex-wrap items-center gap-2">
                           <input
                             type="text"
@@ -356,7 +359,7 @@ export default function LocationsPage() {
                       {location.last_seen_at ? formatTimeAgo(location.last_seen_at) : '—'}
                     </td>
                     <td className="px-3 py-3">
-                      <div className="flex items-center gap-1.5">
+                      {canManageLocations && <div className="flex items-center gap-1.5">
                         <Button
                           variant="ghost"
                           size="xs"
@@ -381,7 +384,7 @@ export default function LocationsPage() {
                         >
                           Delete
                         </Button>
-                      </div>
+                      </div>}
                     </td>
                   </tr>
                 ))}
@@ -392,7 +395,7 @@ export default function LocationsPage() {
       </Panel>
 
       <ConfirmDialog
-        open={pendingDelete !== null}
+        open={canManageLocations && pendingDelete !== null}
         title="Delete location"
         description={
           pendingDelete
@@ -407,7 +410,7 @@ export default function LocationsPage() {
         onCancel={() => !deleting && setPendingDelete(null)}
       />
 
-      {deployLocation && (
+      {canManageLocations && deployLocation && (
         <LocationDeployModal location={deployLocation} onClose={() => setDeployLocation(null)} />
       )}
     </div>

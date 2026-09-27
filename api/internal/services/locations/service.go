@@ -22,6 +22,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/locationauth"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -348,28 +349,70 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 		return 0, ErrNotFound
 	}
 
-	rows, err := tx.QueryContext(ctx,
-		`DELETE FROM monitor_locations WHERE location_id = $1 RETURNING monitor_id`, locationID)
+	// S-O1 (docs/state-semantics.md): lock every affected monitor row, in
+	// deterministic order, before deleting membership/state rows — result
+	// ingest locks the monitor first and then upserts state, so deleting
+	// child rows without the monitor locks can deadlock against it or lose
+	// to a re-upsert of the just-removed location's state.
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id FROM monitors
+		WHERE id IN (SELECT monitor_id FROM monitor_locations WHERE location_id = $1)
+		ORDER BY id
+		FOR UPDATE
+	`, locationID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to detach monitors: %w", err)
+		return 0, fmt.Errorf("failed to lock affected monitors: %w", err)
 	}
 	var affected []uuid.UUID
 	for rows.Next() {
 		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("failed to scan detached monitor: %w", err)
+			return 0, fmt.Errorf("failed to scan affected monitor: %w", err)
 		}
 		affected = append(affected, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("error iterating detached monitors: %w", err)
+		return 0, fmt.Errorf("error iterating affected monitors: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM monitor_locations WHERE location_id = $1`, locationID); err != nil {
+		return 0, fmt.Errorf("failed to detach monitors: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM monitor_location_state WHERE location_id = $1`, locationID); err != nil {
 		return 0, fmt.Errorf("failed to clear location state: %w", err)
+	}
+
+	// Monitors losing their last location are reset to 'unknown' below;
+	// capture them (pre-reset state, memberships already deleted) so the
+	// transition lands on their timeline too.
+	var resetIDs []uuid.UUID
+	if len(affected) > 0 {
+		resetRows, err := tx.QueryContext(ctx, `
+			SELECT id FROM monitors
+			WHERE id = ANY($1)
+			  AND current_state <> 'unknown'
+			  AND NOT EXISTS (SELECT 1 FROM monitor_locations ml WHERE ml.monitor_id = monitors.id)
+		`, pq.Array(affected))
+		if err != nil {
+			return 0, fmt.Errorf("failed to find monitors losing all locations: %w", err)
+		}
+		for resetRows.Next() {
+			var id uuid.UUID
+			if err := resetRows.Scan(&id); err != nil {
+				resetRows.Close()
+				return 0, fmt.Errorf("failed to scan reset monitor: %w", err)
+			}
+			resetIDs = append(resetIDs, id)
+		}
+		resetRows.Close()
+		if err := resetRows.Err(); err != nil {
+			return 0, fmt.Errorf("error iterating reset monitors: %w", err)
+		}
 	}
 
 	if len(affected) > 0 {
@@ -393,6 +436,10 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID uuid.UUID) (i
 		`, pq.Array(affected)); err != nil {
 			return 0, fmt.Errorf("failed to reclamp monitor quorums: %w", err)
 		}
+	}
+
+	if err := monitorstate.RecordIntervalsTx(ctx, tx, resetIDs, monitorstate.StateUnknown, monitorstate.IntervalReasonLocationChange); err != nil {
+		return 0, err
 	}
 
 	if err := tx.Commit(); err != nil {

@@ -34,6 +34,14 @@ const SUSTAINED_LEVELS = [
   { label: '5 min', seconds: 300 },
   { label: '10 min', seconds: 600 },
 ];
+// How long a downstream stays quiet after its upstream recovers before paging
+// if it is still down itself. Long enough for one or two checks to confirm.
+const DEPENDENCY_GRACE_LEVELS = [
+  { label: 'none', seconds: 0 },
+  { label: '2 min', seconds: 120 },
+  { label: '5 min', seconds: 300 },
+  { label: '15 min', seconds: 900 },
+];
 
 // nearestIndex maps a stored numeric value back to the closest preset step.
 function nearestIndex<T>(levels: T[], get: (l: T) => number, value: number): number {
@@ -110,6 +118,8 @@ export function NotificationsPanel() {
   const [sensitivityIdx, setSensitivityIdx] = useState(1);
   const [baselineIdx, setBaselineIdx] = useState(2);
   const [sustainedIdx, setSustainedIdx] = useState(1);
+  const [dependencySuppression, setDependencySuppression] = useState(false);
+  const [dependencyGraceIdx, setDependencyGraceIdx] = useState(1);
 
   const loadSettings = async () => {
     try {
@@ -123,6 +133,8 @@ export function NotificationsPanel() {
       setSensitivityIdx(nearestIndex(SENSITIVITY_LEVELS, (l) => l.sigma, s.latency_anomaly_sensitivity ?? 3.5));
       setBaselineIdx(nearestIndex(BASELINE_LEVELS, (l) => l.hours, s.latency_baseline_window_hours ?? 168));
       setSustainedIdx(nearestIndex(SUSTAINED_LEVELS, (l) => l.seconds, s.latency_anomaly_min_breach_seconds ?? 120));
+      setDependencySuppression(s.dependency_suppression_enabled ?? false);
+      setDependencyGraceIdx(nearestIndex(DEPENDENCY_GRACE_LEVELS, (l) => l.seconds, s.dependency_suppression_grace_seconds ?? 120));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load notification settings');
     } finally {
@@ -147,6 +159,8 @@ export function NotificationsPanel() {
         latency_anomaly_sensitivity: sens.sigma,
         latency_anomaly_min_breach_seconds: SUSTAINED_LEVELS[sustainedIdx].seconds,
         latency_anomaly_min_delta_pct: sens.deltaPct,
+        dependency_suppression_enabled: dependencySuppression,
+        dependency_suppression_grace_seconds: DEPENDENCY_GRACE_LEVELS[dependencyGraceIdx].seconds,
       });
       showToast('Notification settings saved', 'success');
     } catch (err: unknown) {
@@ -262,6 +276,39 @@ export function NotificationsPanel() {
                     index={sustainedIdx}
                     onChange={setSustainedIdx}
                     hint="Ignore brief spikes shorter than this."
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Dependency-aware alerting */}
+            <div className="space-y-3 border-t border-white/[0.06] pt-5">
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  id="dependency-suppression"
+                  checked={dependencySuppression}
+                  onChange={(e) => setDependencySuppression(e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
+                />
+                <label htmlFor="dependency-suppression" className="text-sm text-slate-300 cursor-pointer">
+                  Page root causes only
+                  <span className="block text-xs text-slate-500">
+                    When a monitor goes down because an upstream dependency is down, open its alert but send no
+                    notification — the root cause&apos;s notification lists everything it affects. Monitors can
+                    override this in their Alerting section.
+                  </span>
+                </label>
+              </div>
+
+              {dependencySuppression && (
+                <div className="space-y-4 pl-7 pt-1">
+                  <SteppedSlider
+                    label="After the upstream recovers, hold for"
+                    options={DEPENDENCY_GRACE_LEVELS}
+                    index={dependencyGraceIdx}
+                    onChange={setDependencyGraceIdx}
+                    hint="A downstream still down after this pages as a normal outage."
                   />
                 </div>
               )}

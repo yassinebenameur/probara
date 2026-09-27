@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Link2 } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, PushMonitorConfig, PushInfo, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, PushMonitorConfig, PushInfo, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
 import { getPushInfo } from '@/lib/api';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
@@ -10,6 +10,7 @@ import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import FilterChip from '@/components/ui/FilterChip';
 import { AlertingSection } from './AlertingSection';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 
 interface PushFormProps {
   monitor?: Monitor;
@@ -28,6 +29,8 @@ export default function PushForm({
   onCancel,
   loading = false,
 }: PushFormProps) {
+  const { canWrite, loading: loadingUser } = useCurrentUser();
+  const canViewCredentials = canWrite && !loadingUser;
   const [showWebhookInfo, setShowWebhookInfo] = useState(false);
   const [pushInfo, setPushInfo] = useState<PushInfo | null>(null);
   const [loadingPushInfo, setLoadingPushInfo] = useState(false);
@@ -48,6 +51,7 @@ export default function PushForm({
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
   });
 
@@ -93,6 +97,7 @@ export default function PushForm({
 
     requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
     requestData.notification_mode = formData.notification_mode;
+    requestData.dependency_suppression = formData.dependency_suppression;
     requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
@@ -106,18 +111,17 @@ export default function PushForm({
     }
   };
 
-  const loadPushInfo = async () => {
-    if (!monitor?.id) return;
+  useEffect(() => {
+    if (!monitor?.id || !showWebhookInfo || !canViewCredentials) return;
+    let cancelled = false;
+    setPushInfo(null);
     setLoadingPushInfo(true);
-    try {
-      const info = await getPushInfo(monitor.id);
-      setPushInfo(info);
-    } catch (error) {
-      console.error('Failed to load push info:', error);
-    } finally {
-      setLoadingPushInfo(false);
-    }
-  };
+    getPushInfo(monitor.id)
+      .then(info => { if (!cancelled) setPushInfo(info); })
+      .catch(error => { if (!cancelled) console.error('Failed to load push info:', error); })
+      .finally(() => { if (!cancelled) setLoadingPushInfo(false); });
+    return () => { cancelled = true; };
+  }, [monitor?.id, showWebhookInfo, canViewCredentials]);
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -125,9 +129,7 @@ export default function PushForm({
     setTimeout(() => setCopiedField(null), 2000);
   };
 
-  if (isEditMode && monitor && showWebhookInfo) {
-    if (!pushInfo && !loadingPushInfo) loadPushInfo();
-
+  if (canViewCredentials && isEditMode && monitor && showWebhookInfo) {
     return (
       <div className="space-y-5">
         <FormSection title="Webhook information">
@@ -285,6 +287,8 @@ export default function PushForm({
           onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          dependencySuppression={formData.dependency_suppression}
+          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
@@ -333,7 +337,7 @@ export default function PushForm({
         }}
       />
 
-      {isEditMode && monitor && (
+      {canViewCredentials && isEditMode && monitor && (
         <div className="border-t border-white/[0.06] pt-4">
           <Button
             variant="ghost"

@@ -381,6 +381,10 @@ func computeDynamicLimit(since *time.Time, intervalSeconds int) int {
 
 func mapSummary(summary sharedanalytics.Summary) models.MonitorAnalyticsSummary {
 	return models.MonitorAnalyticsSummary{
+		HasData:         summary.HasData,
+		Method:          summary.Method,
+		AvailabilityPct: summary.AvailabilityPct,
+		CoveragePct:     summary.CoveragePct,
 		UptimePct:       summary.UptimePct,
 		SLAPct:          summary.SLAPct,
 		DowntimePct:     summary.DowntimePct,

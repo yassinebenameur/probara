@@ -391,7 +391,12 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Monitor imports support JSON, YAML, and CSV with format autodetection. JSON/YAML can contain an array, a single object, common wrappers such as `items`, `monitors`, or `data`, and a versioned portable YAML bundle. YAML also recognizes common source wrappers such as `services`, `endpoints`, and `checks`.",
+            "Monitor imports support JSON, YAML, and CSV with format autodetection. JSON/YAML can contain an array, a single object, common wrappers such as `items`, `monitors`, or `data`, a versioned portable YAML bundle, and an Uptime Kuma backup export. YAML also recognizes common source wrappers such as `services`, `endpoints`, and `checks`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Two source schemas are recognized and translated automatically, so the field-mapping step is already complete when preview reports them: the portable bundle (`portable_monitor_export`) and an Uptime Kuma export (`uptime_kuma_export`). Everything else goes through field mapping.",
         },
         {
           type: "list",
@@ -419,13 +424,53 @@ export const ADMINISTRATION_PAGE: DocPage = {
       ],
     },
     {
+      id: "import-uptime-kuma",
+      title: "Migrating from Uptime Kuma",
+      blocks: [
+        {
+          type: "paragraph",
+          text:
+            "Upload an Uptime Kuma backup export and the importer translates monitor types, assertions, tags, retry tolerance, and group nesting on its own. Uptime Kuma 1.x writes that file from Settings → Backup → Export. Version 2.0 removed the backup button and Uptime Kuma has never had a REST API, so `scripts/kuma-export` in this repository logs into a running instance over its socket.io API and writes the same file: `go run ./scripts/kuma-export -url https://kuma.internal -user admin` (password from `-pass` or `$KUMA_PASSWORD`, plus `-totp` when two-factor is enabled).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Translated types: `http`, `keyword` (a body assertion, inverted for invert-keyword), and `json-query` (a JSON path assertion) become HTTP monitors; `port` becomes TCP; `ping` and `dns` map directly; `push` becomes a push monitor; `grpc-keyword` becomes a gRPC health probe; `postgres`, `mysql`, `mongodb`, and `redis` map to their database monitors; and `group` becomes a group, with Uptime Kuma's parent links inverted into membership so nesting survives.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Accepted status codes become explicit status ranges, redirect limits and TLS verification carry over on HTTPS monitors, and Uptime Kuma's certificate-expiry notification becomes `tls_min_days_valid`, which raises a dedicated TLS-expiry alert rather than failing the check — the same notify-only behavior. Retry counts land in `consecutive_failures_threshold`, clamped to 1-10.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Monitors with no faithful equivalent are listed as not imported rather than approximated: `docker`, `sqlserver`, `steam`, `gamedig`, `mqtt`, `kafka-producer`, `radius`, `snmp`, `tailscale-ping`, `manual`, `smtp`, `real-browser`, and `rabbitmq` — Uptime Kuma polls the RabbitMQ management HTTP API while this platform performs an AMQP handshake, so recreate those by hand. Unsupported DNS record types and port monitors without a port are reported the same way.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Three behavior changes to expect",
+          text:
+            "Monitors using Uptime Kuma's \"upside down\" mode are skipped, because inverted up/down cannot be expressed and importing one would alert backwards. Push monitors receive a new token, so every heartbeat sender must be repointed at the new URL before the monitor is enabled. Database monitors are imported disabled: their password is deliberately not carried over, and the per-monitor notes name what to re-enter.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Notifications and credentials are never migrated",
+          text:
+            "Uptime Kuma notifier configuration holds credentials, so `notificationIDList` is ignored and each affected monitor carries a note naming the notifiers it referenced — attach alert channels after import. HTTP basic, OAuth2, NTLM, and client-certificate auth are dropped rather than folded into request headers, which are stored unencrypted, and credential-bearing headers are stripped. Monitor descriptions, retry intervals, resend intervals, and custom ICMP packet sizes have no equivalent and are reported as dropped.",
+        },
+      ],
+    },
+    {
       id: "export",
       title: "Export monitors",
       blocks: [
         {
           type: "paragraph",
           text:
-            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, and group membership names. Compatibility data can include legacy alert-policy names, but policy management is retired.",
+            "The monitor export endpoint produces a versioned YAML bundle with monitor configuration, tags, retry thresholds, and group membership names. Compatibility data can include legacy alert-policy names, but policy management is retired. Export only produces this portable bundle — there is no Uptime Kuma-direction export.",
         },
         {
           type: "callout",

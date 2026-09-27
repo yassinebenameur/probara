@@ -23,6 +23,12 @@ export interface ChannelPickerProps {
   onChange: (next: ChannelAssignment[]) => void;
   defaultChannelIds?: string[];
   showDelays?: boolean;
+  /**
+   * Called whenever the picker's channel list changes, so a parent can reason
+   * about the selection (e.g. warn that every selected channel is disabled)
+   * without fetching the channels a second time.
+   */
+  onChannelsLoaded?: (channels: AlertChannel[]) => void;
 }
 
 export default function ChannelPicker({
@@ -30,6 +36,7 @@ export default function ChannelPicker({
   onChange,
   defaultChannelIds = [],
   showDelays = true,
+  onChannelsLoaded,
 }: ChannelPickerProps) {
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loadingChannels, setLoadingChannels] = useState(true);
@@ -57,6 +64,13 @@ export default function ChannelPicker({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    onChannelsLoaded?.(channels);
+    // onChannelsLoaded is a render-stable callback in practice; keying the
+    // effect on it too would re-fire on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channels]);
 
   const selectedIds = new Set(value.map((a) => a.channel_id));
 
@@ -162,6 +176,14 @@ export default function ChannelPicker({
                     </span>
                     {isDefault && (
                       <span className="text-xs text-cyan-400/70 flex-shrink-0">(default)</span>
+                    )}
+                    {channel.is_active === false && (
+                      <span
+                        className="flex-shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1 text-[10px] uppercase tracking-wide text-amber-300"
+                        title="This channel is disabled — selecting it delivers nothing"
+                      >
+                        Disabled
+                      </span>
                     )}
                   </label>
 

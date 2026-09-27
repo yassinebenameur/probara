@@ -5,12 +5,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 )
 
 // MonitorType represents the type of monitor
 type MonitorType string
 
 const (
+	MonitorTypePrometheus       MonitorType = "prometheus"
 	MonitorTypeHTTP             MonitorType = "http"
 	MonitorTypePing             MonitorType = "ping"
 	MonitorTypeDNS              MonitorType = "dns"
@@ -58,17 +61,22 @@ type Monitor struct {
 	DependsOnIDs                 []uuid.UUID                `json:"depends_on_ids,omitempty"` // Upstream monitors this one depends on
 	ConsecutiveFailuresThreshold int                        `json:"consecutive_failures_threshold"`
 	NotificationMode             string                     `json:"notification_mode"`
-	MemberAlertRollup            string                     `json:"member_alert_rollup"` // 'per_monitor' | 'group'; only meaningful for group monitors
+	MemberAlertRollup            string                     `json:"member_alert_rollup"`    // 'per_monitor' | 'group'; only meaningful for group monitors
+	DependencySuppression        string                     `json:"dependency_suppression"` // 'inherit' | 'on' | 'off': page when an upstream dependency is down? 'inherit' follows the workspace setting
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels"`
 	LocationIDs                  []uuid.UUID                `json:"location_ids,omitempty"` // Private locations checks fan out to; empty = default fleet
 	LocationQuorum               int                        `json:"location_quorum"`        // Down when >= this many locations are down
 	Locations                    []MonitorLocationStatus    `json:"locations,omitempty"`    // Per-location breakdown (GetMonitor only)
 	CurrentState                 string                     `json:"current_state"`
-	InMaintenance                bool                       `json:"in_maintenance"`
-	MaintenanceUntil             *time.Time                 `json:"maintenance_until,omitempty"` // Latest ends_at among covering active windows
-	CreatedAt                    time.Time                  `json:"created_at"`
-	UpdatedAt                    time.Time                  `json:"updated_at"`
-	DeletedAt                    *time.Time                 `json:"deleted_at,omitempty"`
+	// AlertRouting is the effective notification reachability of this
+	// monitor: nil when not resolved, otherwise says whether an alert here
+	// would notify anyone and why not. Read-only, computed per request.
+	AlertRouting     *alertrouting.Status `json:"alert_routing,omitempty"`
+	InMaintenance    bool                 `json:"in_maintenance"`
+	MaintenanceUntil *time.Time           `json:"maintenance_until,omitempty"` // Latest ends_at among covering active windows
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	DeletedAt        *time.Time           `json:"deleted_at,omitempty"`
 }
 
 // CreateMonitorRequest represents a request to create a monitor
@@ -85,6 +93,7 @@ type CreateMonitorRequest struct {
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
+	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 []string                   `json:"depends_on_ids,omitempty"`
 	LocationIDs                  []string                   `json:"location_ids,omitempty"`
@@ -105,6 +114,7 @@ type UpdateMonitorRequest struct {
 	ConsecutiveFailuresThreshold *int                       `json:"consecutive_failures_threshold,omitempty"`
 	NotificationMode             *string                    `json:"notification_mode,omitempty"`
 	MemberAlertRollup            *string                    `json:"member_alert_rollup,omitempty"`
+	DependencySuppression        *string                    `json:"dependency_suppression,omitempty"`
 	NotificationChannels         []MonitorChannelAssignment `json:"notification_channels,omitempty"`
 	DependsOnIDs                 *[]string                  `json:"depends_on_ids,omitempty"` // nil = unchanged, empty = clear
 	LocationIDs                  *[]string                  `json:"location_ids,omitempty"`   // nil = unchanged, empty = default fleet
@@ -159,6 +169,15 @@ const (
 )
 
 type MonitorAnalyticsSummary struct {
+	// HasData false means no checks ran in the window: the percentage
+	// fields are meaningless zeros and the UI must render no-data (S-D1).
+	HasData bool `json:"has_data"`
+	// Method: "interval" = availability integrated over the state timeline;
+	// "sampled" = legacy success/total counting (window predates the
+	// timeline). coverage_pct is only present for "interval".
+	Method          string     `json:"method"`
+	AvailabilityPct float64    `json:"availability_pct"`
+	CoveragePct     *float64   `json:"coverage_pct,omitempty"`
 	UptimePct       float64    `json:"uptime_pct"`
 	SLAPct          float64    `json:"sla_pct"`
 	DowntimePct     float64    `json:"downtime_pct"`
@@ -209,21 +228,29 @@ type GroupConfig struct {
 	MonitorIDs []string `json:"monitor_ids"`
 }
 
-// AgentConfig represents the configuration for an agent monitor
+// AgentConfig represents the configuration for an agent monitor. Agents are
+// OpenTelemetry collectors pushing OTLP metrics; ExpectedIntervalSeconds is
+// both the collector's collection_interval and the freshness basis.
 type AgentConfig struct {
-	AgentID                 string                  `json:"agent_id"`
-	ExpectedIntervalSeconds int                     `json:"expected_interval_seconds"`
-	MetricThresholds        *MetricThresholdsConfig `json:"metric_thresholds,omitempty"`
+	AgentID                 string       `json:"agent_id"`
+	ExpectedIntervalSeconds int          `json:"expected_interval_seconds"`
+	MetricRules             []MetricRule `json:"metric_rules,omitempty"`
 }
 
-// MetricThresholdsConfig holds the per-monitor host-metric alert thresholds
-// (percent, 0-100) evaluated by the alerter. A nil or non-positive value means
-// the metric has no threshold and is not alerted on.
-type MetricThresholdsConfig struct {
-	CPUPercent    *float64 `json:"cpu_percent,omitempty"`
-	MemoryPercent *float64 `json:"memory_percent,omitempty"`
-	DiskPercent   *float64 `json:"disk_percent,omitempty"`
-	SwapPercent   *float64 `json:"swap_percent,omitempty"`
+// MetricRule is one host_metric alert rule over the monitor's metric store
+// series (replacing the fixed cpu/memory/disk/swap metric_thresholds;
+// migration 000085 rewrites old configs). Thresholds are in the metric's
+// NATIVE unit — a ratio 0-1 for *.utilization metrics, bytes for *.usage —
+// with percent↔ratio conversion owned by the UI. A rule without attribute
+// filters fans out to every matching series (e.g. one filesystem rule alerts
+// per mountpoint), each breaching series opening its own alert keyed by its
+// canonical series key (shared/metricstore.SeriesKeyString).
+type MetricRule struct {
+	MetricName         string            `json:"metric_name"`
+	AttributeFilters   map[string]string `json:"attribute_filters,omitempty"`
+	Operator           string            `json:"operator"` // ">=" (default) or "<="
+	Threshold          float64           `json:"threshold"`
+	ForDurationSeconds int               `json:"for_duration_seconds,omitempty"`
 }
 
 // PushConfig represents the configuration for a push monitor

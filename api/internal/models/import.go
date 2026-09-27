@@ -9,12 +9,27 @@ const (
 	ImportFormatCSV  ImportFormat = "csv"
 
 	ImportSchemaPortableMonitorExport = "portable_monitor_export"
+	ImportSchemaUptimeKumaExport      = "uptime_kuma_export"
 )
 
-// ImportRow represents a single row from the imported file
+// ImportRow represents a single row from the imported file.
+//
+// Warnings is deliberately a sibling of Fields rather than a key inside it:
+// ParseFile derives the preview's DetectedFields from the Fields keys, so a
+// warning stored in Fields would show up as a mappable target field.
 type ImportRow struct {
-	Index  int                    `json:"index"`
-	Fields map[string]interface{} `json:"fields"`
+	Index    int                    `json:"index"`
+	Fields   map[string]interface{} `json:"fields"`
+	Warnings []string               `json:"warnings,omitempty"`
+}
+
+// ImportSkippedRow describes a source record that a format adapter refused to
+// translate. Skipped records never become ImportRows — the preview must show
+// exactly what will be created — so they travel alongside them.
+type ImportSkippedRow struct {
+	Name       string `json:"name"`
+	SourceType string `json:"source_type"`
+	Reason     string `json:"reason"`
 }
 
 // FieldMapping represents the mapping from source field to target field
@@ -36,6 +51,9 @@ type FieldMapping struct {
 	Enabled          string `json:"enabled,omitempty"`
 	GroupMembers     string `json:"group_members,omitempty"` // For group type - comma-separated monitor names
 	AlertPolicyNames string `json:"alert_policy_names,omitempty"`
+	// ConsecutiveFailuresThreshold is the retry tolerance before a monitor is
+	// considered down. Clamped to [1,10] on import to match the column check.
+	ConsecutiveFailuresThreshold string `json:"consecutive_failures_threshold,omitempty"`
 }
 
 // ImportPreviewResponse is returned after parsing the uploaded file
@@ -49,6 +67,9 @@ type ImportPreviewResponse struct {
 	TotalRows            int               `json:"total_rows"`
 	DetectedTypes        []string          `json:"detected_types"`
 	SuggestedTypeMapping map[string]string `json:"suggested_type_mapping"`
+	// SkippedRows lists source records the adapter could not translate. They
+	// are informational only and are never sent back in ImportExecuteRequest.
+	SkippedRows []ImportSkippedRow `json:"skipped_rows,omitempty"`
 }
 
 // ImportExecuteRequest is sent to execute the import with confirmed mappings
@@ -85,13 +106,14 @@ type PortableMonitorExport struct {
 }
 
 type PortableExportMonitor struct {
-	Name             string      `json:"name" yaml:"name"`
-	Type             MonitorType `json:"type" yaml:"type"`
-	IntervalSeconds  int         `json:"interval_seconds" yaml:"interval_seconds"`
-	TimeoutSeconds   int         `json:"timeout_seconds" yaml:"timeout_seconds"`
-	Enabled          bool        `json:"enabled" yaml:"enabled"`
-	Tags             []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Config           interface{} `json:"config" yaml:"config"`
-	AlertPolicyNames []string    `json:"alert_policy_names,omitempty" yaml:"alert_policy_names,omitempty"`
-	GroupMembers     []string    `json:"group_members,omitempty" yaml:"group_members,omitempty"`
+	Name                         string      `json:"name" yaml:"name"`
+	Type                         MonitorType `json:"type" yaml:"type"`
+	IntervalSeconds              int         `json:"interval_seconds" yaml:"interval_seconds"`
+	TimeoutSeconds               int         `json:"timeout_seconds" yaml:"timeout_seconds"`
+	Enabled                      bool        `json:"enabled" yaml:"enabled"`
+	Tags                         []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Config                       interface{} `json:"config" yaml:"config"`
+	AlertPolicyNames             []string    `json:"alert_policy_names,omitempty" yaml:"alert_policy_names,omitempty"`
+	GroupMembers                 []string    `json:"group_members,omitempty" yaml:"group_members,omitempty"`
+	ConsecutiveFailuresThreshold int         `json:"consecutive_failures_threshold,omitempty" yaml:"consecutive_failures_threshold,omitempty"`
 }

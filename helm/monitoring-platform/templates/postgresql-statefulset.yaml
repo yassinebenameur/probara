@@ -28,16 +28,8 @@ spec:
               containerPort: 5432
               protocol: TCP
           env:
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "monitoring-platform.fullname" . }}-secret
-                  key: postgresql_username
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "monitoring-platform.fullname" . }}-secret
-                  key: postgresql_password
+            {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_USER" "key" "postgresql_username" "secret" .Values.postgresql.auth.existingSecret "secretKey" .Values.postgresql.auth.existingSecretUserKey) | nindent 12 }}
+            {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_PASSWORD" "key" "postgresql_password" "secret" .Values.postgresql.auth.existingSecret "secretKey" .Values.postgresql.auth.existingSecretPasswordKey) | nindent 12 }}
             - name: POSTGRES_DB
               value: "{{ .Values.postgresql.auth.database }}"
             - name: PGDATA

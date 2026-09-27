@@ -75,13 +75,8 @@ spec:
           value: "{{ .Values.worker.metricsPort }}"
         - name: LOG_LEVEL
           value: "{{ .Values.worker.logLevel }}"
-        - name: POSTGRES_URL
-          value: {{ include "monitoring-platform.postgresUrl" . | quote }}
-        - name: NATS_URL
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: nats_url
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_URL" "key" "nats_url" "secret" .Values.nats.existingSecret "secretKey" .Values.nats.existingSecretKey) | nindent 8 }}
         - name: CHECK_JOB_STREAM
           value: "{{ .Values.worker.checkJobStream }}"
         - name: CHECK_JOB_SUBJECT
@@ -90,12 +85,8 @@ spec:
           value: "{{ .Values.worker.consumerName }}"
         - name: WORKER_CONCURRENCY
           value: "{{ .Values.worker.concurrency }}"
-        {{- if .Values.secrets.probaraSecretsKey }}
-        - name: PROBARA_SECRETS_KEY
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: probara_secrets_key
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.probaraSecretsKey "secret" .Values.secrets.probaraSecretsKeyExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "PROBARA_SECRETS_KEY" "key" "probara_secrets_key" "secret" .Values.secrets.probaraSecretsKeyExistingSecret "secretKey" .Values.secrets.probaraSecretsKeyExistingSecretKey) | nindent 8 }}
         {{- end }}
         {{- with (include "monitoring-platform.smtpEnv" .) }}
         {{- . | nindent 8 }}

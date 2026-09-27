@@ -10,6 +10,8 @@ import type {
   CreateMonitorRequest,
   UpdateMonitorRequest,
   MonitorListResponse,
+  DBMetricsEnvelope,
+  PrometheusMetrics,
   Alert,
   AlertListResponse,
   AlertChannel,
@@ -89,6 +91,9 @@ import type {
   MeshResponse,
   MeshEdgeHistoryPoint,
   MeshProbeResponse,
+  MetricSeriesListResponse,
+  MetricQueryRequest,
+  MetricQueryResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -331,6 +336,9 @@ export interface TestMonitorConfigResponse {
   status: 'success' | 'failure' | 'error';
   latency_ms?: number;
   error_message?: string;
+  // Structured extras from the checker, same envelope as check results
+  // (e.g. metrics_data.mongodb.unavailable for skipped cluster checks).
+  metrics_data?: DBMetricsEnvelope & { prometheus?: PrometheusMetrics };
 }
 
 // Runs one ephemeral check on a worker so a config can be validated before
@@ -1011,6 +1019,23 @@ export async function removeMonitorsFromGroup(
 
 export async function getGroupMembers(groupId: string): Promise<Monitor[]> {
   return apiRequest<Monitor[]>('GET', `/v1/monitors/${groupId}/members`);
+}
+
+// Agent metric store API functions
+
+export async function getMonitorMetricSeries(
+  monitorId: string
+): Promise<MetricSeriesListResponse> {
+  return apiRequest<MetricSeriesListResponse>('GET', `/v1/monitors/${monitorId}/metrics/series`);
+}
+
+// Batch range query (read-only; viewers allowed). Buckets with no samples are
+// omitted from the response — callers insert gap rows client-side.
+export async function queryMonitorMetrics(
+  monitorId: string,
+  request: MetricQueryRequest
+): Promise<MetricQueryResponse> {
+  return apiRequest<MetricQueryResponse>('POST', `/v1/monitors/${monitorId}/metrics/query`, request);
 }
 
 // Agent API functions

@@ -6,6 +6,7 @@ import {
   CreateMonitorRequest,
   UpdateMonitorRequest,
   MonitorType,
+  DependencySuppression,
   NotificationMode,
   ChannelAssignment,
   RedisMonitorConfig,
@@ -18,7 +19,9 @@ import {
   Location,
 } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
+import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import {
+  Activity,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -33,6 +36,7 @@ import {
 } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
+import InfoTip from '@/components/ui/InfoTip';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
@@ -267,8 +271,10 @@ export default function DatabaseForm({
   onCancel,
   loading = false,
 }: DatabaseFormProps) {
+  const { canWrite, loading: loadingUser } = useCurrentUser();
   const meta = DB_TYPE_META[type];
   const isEditMode = Boolean(monitor);
+  const canTestConnection = !loadingUser && (!isEditMode || canWrite);
   const existingConfig =
     monitor && monitor.type === type
       ? ((monitor.config || {}) as DatabaseConfig)
@@ -308,12 +314,25 @@ export default function DatabaseForm({
     expected_role: existingConfig.expected_role || ('' as '' | 'master' | 'replica'),
     max_latency_ms: existingConfig.max_latency_ms ? String(existingConfig.max_latency_ms) : '',
     warn_latency_ms: existingConfig.warn_latency_ms ? String(existingConfig.warn_latency_ms) : '',
+    collect_replication: existingConfig.collect_replication ?? false,
+    collect_connections: existingConfig.collect_connections ?? false,
+    collect_cache: existingConfig.collect_cache ?? false,
+    collect_memory: existingConfig.collect_memory ?? false,
+    collect_network: existingConfig.collect_network ?? false,
+    collect_cpu: existingConfig.collect_cpu ?? false,
+    max_replication_lag_seconds: existingConfig.max_replication_lag_seconds
+      ? String(existingConfig.max_replication_lag_seconds)
+      : '',
+    warn_replication_lag_seconds: existingConfig.warn_replication_lag_seconds
+      ? String(existingConfig.warn_replication_lag_seconds)
+      : '',
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
     timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
     tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
     location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
     location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
@@ -330,6 +349,15 @@ export default function DatabaseForm({
   const [certsOpen, setCertsOpen] = useState(
     Boolean(formData.tls_ca_pem || formData.tls_client_cert_pem || storedClientKey)
   );
+  const clusterChecksEnabled = [
+    formData.collect_replication,
+    formData.collect_connections,
+    formData.collect_cache,
+    formData.collect_memory,
+    formData.collect_network,
+    formData.collect_cpu,
+  ].filter(Boolean).length;
+  const [clusterChecksOpen, setClusterChecksOpen] = useState(clusterChecksEnabled > 0);
   const [test, setTest] = useState<TestState>({ phase: 'idle' });
   // List shared by the Locations section (via onLocationsLoaded) so the
   // test-from picker can resolve location names.
@@ -404,6 +432,23 @@ export default function DatabaseForm({
     if (maxLatency && warnLatency && warnLatency >= maxLatency) {
       newErrors.warn_latency_ms = 'Must be lower than max latency';
     }
+    if (type === 'mongodb' && formData.collect_replication) {
+      const maxLag = formData.max_replication_lag_seconds.trim()
+        ? parseInt(formData.max_replication_lag_seconds, 10)
+        : undefined;
+      const warnLag = formData.warn_replication_lag_seconds.trim()
+        ? parseInt(formData.warn_replication_lag_seconds, 10)
+        : undefined;
+      if (formData.max_replication_lag_seconds.trim() && (!Number.isFinite(maxLag) || (maxLag as number) <= 0)) {
+        newErrors.max_replication_lag_seconds = 'Must be a positive number of seconds';
+      }
+      if (formData.warn_replication_lag_seconds.trim() && (!Number.isFinite(warnLag) || (warnLag as number) <= 0)) {
+        newErrors.warn_replication_lag_seconds = 'Must be a positive number of seconds';
+      }
+      if (maxLag && warnLag && warnLag >= maxLag) {
+        newErrors.warn_replication_lag_seconds = 'Must be lower than max replication lag';
+      }
+    }
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
@@ -413,11 +458,17 @@ export default function DatabaseForm({
   const buildConfig = (): DatabaseConfig => {
     const config: DatabaseConfig = {};
 
+    // An omitted secret field means "keep the stored value" server-side, so
+    // every deliberate drop — the Clear affordances and the connection-mode
+    // switch — has to submit "" (the explicit clear) instead of leaving the
+    // field out.
     if (usingConnString) {
       // Blank + previously stored = keep the stored secret (write-only).
       config.connection_string = formData.connection_string.trim() || MASKED_SECRET;
+      if (storedPassword) config.password = '';
       if (meta.supportsTLSToggle && formData.tls_skip_verify) config.tls_skip_verify = true;
     } else {
+      if (storedConnString) config.connection_string = '';
       config.host = formData.host.trim();
       config.port = formData.port;
       if (formData.username.trim()) config.username = formData.username.trim();
@@ -425,6 +476,9 @@ export default function DatabaseForm({
         config.password = formData.password;
       } else if (hasStoredPassword) {
         config.password = MASKED_SECRET;
+      } else if (storedPassword) {
+        // "Clear" on the set-chip.
+        config.password = '';
       }
       if (type === 'redis' && formData.db_index > 0) config.db = formData.db_index;
       if (type === 'postgres') {
@@ -449,10 +503,33 @@ export default function DatabaseForm({
         config.tls_client_cert_pem = formData.tls_client_cert_pem.trim();
         // Blank + previously stored = keep the stored key (write-only).
         config.tls_client_key_pem = formData.tls_client_key_pem.trim() || MASKED_SECRET;
+      } else if (storedClientKey) {
+        // Client cert removed (or the stored key cleared): "" is the explicit
+        // clear — omitting the field would keep the stored key.
+        config.tls_client_key_pem = '';
       }
     }
 
     if (type === 'redis' && formData.expected_role) config.expected_role = formData.expected_role;
+    if (type === 'mongodb') {
+      // Cluster checks apply in both connection modes — post-connect commands.
+      if (formData.collect_replication) config.collect_replication = true;
+      if (formData.collect_connections) config.collect_connections = true;
+      if (formData.collect_cache) config.collect_cache = true;
+      if (formData.collect_memory) config.collect_memory = true;
+      if (formData.collect_network) config.collect_network = true;
+      if (formData.collect_cpu) config.collect_cpu = true;
+      if (formData.collect_replication) {
+        const maxLag = formData.max_replication_lag_seconds.trim()
+          ? parseInt(formData.max_replication_lag_seconds, 10)
+          : undefined;
+        const warnLag = formData.warn_replication_lag_seconds.trim()
+          ? parseInt(formData.warn_replication_lag_seconds, 10)
+          : undefined;
+        if (maxLag) config.max_replication_lag_seconds = maxLag;
+        if (warnLag) config.warn_replication_lag_seconds = warnLag;
+      }
+    }
     if (QUERY_CAPABLE_TYPES.includes(type) && formData.query.trim()) {
       config.query = formData.query.trim();
       if (formData.query_value_op) {
@@ -469,6 +546,7 @@ export default function DatabaseForm({
   };
 
   const handleTestConnection = async () => {
+    if (!canTestConnection) return;
     // Test cares about connection validity, not monitor naming.
     const connectionErrors = validate();
     delete connectionErrors.name;
@@ -511,6 +589,7 @@ export default function DatabaseForm({
 
     requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
     requestData.notification_mode = formData.notification_mode;
+    requestData.dependency_suppression = formData.dependency_suppression;
     requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map((t) => t.trim()).filter((t) => t);
@@ -858,7 +937,8 @@ export default function DatabaseForm({
           <button
             type="button"
             onClick={handleTestConnection}
-            disabled={test.phase === 'running' || loading}
+            disabled={!canTestConnection || test.phase === 'running' || loading}
+            title={!canTestConnection ? 'Write access is required to test saved connections' : undefined}
             className="inline-flex items-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {test.phase === 'running' ? (
@@ -892,6 +972,13 @@ export default function DatabaseForm({
               Connected{typeof test.result.latency_ms === 'number' ? ` in ${test.result.latency_ms}ms` : ''}
             </p>
           )}
+          {test.phase === 'done' &&
+            test.result.status === 'success' &&
+            test.result.metrics_data?.mongodb?.unavailable?.some((u) => u.reason === 'unauthorized') && (
+              <p className="text-xs text-amber-400">
+                Cluster checks skipped — grant the monitoring user the clusterMonitor role
+              </p>
+            )}
           {test.phase === 'done' && test.result.status !== 'success' && (
             <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-400">
               <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
@@ -969,11 +1056,129 @@ export default function DatabaseForm({
             </select>
           </FormField>
         )}
+        {type === 'mongodb' && (
+          <div className="rounded-lg border border-white/[0.06] bg-slate-900/40">
+            <button
+              type="button"
+              onClick={() => setClusterChecksOpen(!clusterChecksOpen)}
+              className="flex w-full items-center justify-between px-4 py-3 text-left"
+              aria-expanded={clusterChecksOpen}
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-white">
+                <Activity className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
+                Cluster checks
+                <span className="text-xs font-normal text-slate-500">serverStatus / replSetGetStatus</span>
+                <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+                  requires clusterMonitor
+                </span>
+                {clusterChecksEnabled > 0 && (
+                  <span className="rounded-md bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-400">
+                    {clusterChecksEnabled} enabled
+                  </span>
+                )}
+              </span>
+              {clusterChecksOpen ? (
+                <ChevronDown className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+              )}
+            </button>
+            {clusterChecksOpen && (
+              <div className="space-y-2 border-t border-white/[0.06] px-4 py-4">
+                <div className="flex items-center gap-1.5 pb-1 text-xs text-slate-500">
+                  Read-only admin commands — skipped and flagged when the role is missing, never failing the check.
+                  <InfoTip inLabel ariaLabel="About cluster checks and permissions">
+                    Both commands are covered by MongoDB&apos;s built-in <code>clusterMonitor</code> role — no write or
+                    admin privileges: <code>db.grantRolesToUser(&quot;&lt;user&gt;&quot;, [&#123;role: &quot;clusterMonitor&quot;,
+                    db: &quot;admin&quot;&#125;])</code>. Without it the data is skipped and flagged on the monitor; only a
+                    configured max-lag threshold turns missing replication data into a failure.
+                  </InfoTip>
+                </div>
+                <ToggleRow
+                  title="Replication status"
+                  description="Member health and replication lag (replica sets only)"
+                  checked={formData.collect_replication}
+                  onChange={(v) =>
+                    setFormData({
+                      ...formData,
+                      collect_replication: v,
+                      // Lag thresholds are meaningless without the check.
+                      max_replication_lag_seconds: v ? formData.max_replication_lag_seconds : '',
+                      warn_replication_lag_seconds: v ? formData.warn_replication_lag_seconds : '',
+                    })
+                  }
+                />
+                <ToggleRow
+                  title="Connections"
+                  description="Current and available connections"
+                  checked={formData.collect_connections}
+                  onChange={(v) => setFormData({ ...formData, collect_connections: v })}
+                />
+                <ToggleRow
+                  title="WiredTiger cache"
+                  description="Cache used, configured max, and dirty bytes"
+                  checked={formData.collect_cache}
+                  onChange={(v) => setFormData({ ...formData, collect_cache: v })}
+                />
+                <ToggleRow
+                  title="Memory"
+                  description="Resident and virtual memory"
+                  checked={formData.collect_memory}
+                  onChange={(v) => setFormData({ ...formData, collect_memory: v })}
+                />
+                <ToggleRow
+                  title="Network & operations"
+                  description="Network I/O and operation counters"
+                  checked={formData.collect_network}
+                  onChange={(v) => setFormData({ ...formData, collect_network: v })}
+                />
+                <ToggleRow
+                  title="Process CPU"
+                  description="CPU time consumed by mongod (Linux servers)"
+                  checked={formData.collect_cpu}
+                  onChange={(v) => setFormData({ ...formData, collect_cpu: v })}
+                />
+                {formData.collect_replication && (
+                  <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
+                    <FormField
+                      label="Warn replication lag (s)"
+                      error={errors.warn_replication_lag_seconds}
+                      infoTip="Optional. Flags the check with a warning above this lag — without failing it."
+                    >
+                      <input
+                        type="number"
+                        value={formData.warn_replication_lag_seconds}
+                        onChange={(e) => setFormData({ ...formData, warn_replication_lag_seconds: e.target.value })}
+                        min={1}
+                        placeholder="e.g. 10"
+                        className="input"
+                      />
+                    </FormField>
+                    <FormField
+                      label="Max replication lag (s)"
+                      error={errors.max_replication_lag_seconds}
+                      infoTip="Optional. Fails the check when lag exceeds this — or when replication status can't be read at all (missing role, standalone, no primary) — and triggers availability alerts."
+                    >
+                      <input
+                        type="number"
+                        value={formData.max_replication_lag_seconds}
+                        onChange={(e) => setFormData({ ...formData, max_replication_lag_seconds: e.target.value })}
+                        min={1}
+                        placeholder="e.g. 30"
+                        className="input"
+                      />
+                    </FormField>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField
-            label="Warn latency (ms, optional)"
+            label="Warn latency (ms)"
             error={errors.warn_latency_ms}
-            description="Flag the check with a warning above this — without failing it"
+            infoTip="Optional. Flags the check with a warning above this round-trip time — without failing it."
           >
             <input
               type="number"
@@ -985,9 +1190,9 @@ export default function DatabaseForm({
             />
           </FormField>
           <FormField
-            label="Max latency (ms, optional)"
+            label="Max latency (ms)"
             error={errors.max_latency_ms}
-            description="Fail the check if the round trip takes longer than this"
+            infoTip="Optional. Fails the check if the round trip takes longer than this — triggers availability alerts."
           >
             <input
               type="number"
@@ -1048,6 +1253,8 @@ export default function DatabaseForm({
           onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          dependencySuppression={formData.dependency_suppression}
+          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />

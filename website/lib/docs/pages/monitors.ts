@@ -5,7 +5,7 @@ export const MONITORS_PAGE: DocPage = {
   group: "Use Probara",
   title: "Monitors",
   description:
-    "Configure active, passive, grouped, database, broker, WebSocket, and synthetic monitors.",
+    "Configure active, passive, grouped, database, broker, WebSocket, Prometheus query, and synthetic monitors.",
   eyebrow: "Product guide",
   readingTime: "35 min read",
   keywords: [
@@ -73,6 +73,11 @@ export const MONITORS_PAGE: DocPage = {
               "Each item has `channel_id` and non-negative `delay_seconds`",
             ],
             [
+              "`alert_routing`",
+              "Read-only reachability: whether this monitor's alerts notify anyone, and why not — see [notification routing](/docs/alerting/#routing)",
+              "Computed per request; never accepted on write",
+            ],
+            [
               "`depends_on_ids`",
               "Upstream monitors used for root-cause annotation",
               "Tenant-scoped, live monitors; cycles rejected",
@@ -111,15 +116,16 @@ export const MONITORS_PAGE: DocPage = {
             ["`tcp`", "TCP connection and optional TLS handshake", "Yes"],
             ["`sip`", "SIP `OPTIONS` ping or `REGISTER` auth probe", "Yes"],
             ["`websocket`", "WebSocket upgrade and optional message exchange", "Yes"],
+            ["`prometheus`", "PromQL instant query compared against a numeric threshold", "Yes"],
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
             ["`mysql`", "MySQL connect and optional query assertion", "Yes"],
-            ["`mongodb`", "MongoDB connectivity and optional topology constraint", "Yes"],
+            ["`mongodb`", "MongoDB connectivity, optional topology constraint, and optional clusterMonitor cluster checks", "Yes"],
             ["`rabbitmq`", "AMQP handshake, authentication, and virtual-host access", "Yes"],
             ["`synthetic_api`", "A sequence of templated HTTP API steps", "Yes"],
             ["`synthetic_browser`", "A Chromium browser journey", "Yes"],
             ["`group`", "Derived state from member monitors", "No"],
-            ["`agent`", "Host telemetry and freshness reported by an [installed agent](/docs/agents/#install)", "No"],
+            ["`agent`", "Host metrics and freshness pushed by an [installed OpenTelemetry collector](/docs/agents/#install)", "No"],
             ["`push`", "Token-based [passive heartbeat](/docs/agents/#push-config) freshness", "No"],
           ],
         },
@@ -338,6 +344,62 @@ export const MONITORS_PAGE: DocPage = {
       ],
     },
     {
+      id: "prometheus",
+      title: "Prometheus query monitors",
+      intro:
+        "A Prometheus monitor turns any PromQL instant query into an uptime signal. The worker POSTs the query to `/api/v1/query` on the configured base URL and compares every returned float sample against a threshold.",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Field", "Purpose"],
+          rows: [
+            ["`url`", "Required `http://` or `https://` Prometheus base URL, including any reverse-proxy prefix. Credentials, query parameters, and fragments are rejected."],
+            ["`query`", "Required PromQL expression, up to 16 KiB. Syntax is validated by Prometheus when the worker runs it."],
+            ["`operator`", "Required comparison: `gt`, `gte`, `lt`, `lte`, `eq`, or `ne`"],
+            ["`threshold`", "Required finite number in the query's own units; zero and negative values are valid"],
+            ["`no_data_status`", "Result when the query returns no samples: `failure` (default), `error`, or `success`"],
+            ["`auth_type`", "`none` (default), `basic` with `username` and `password`, or `bearer` with `bearer_token`"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The monitor is healthy only when **every** returned sample satisfies the comparison, so an instant vector with several series is treated as several assertions. Use PromQL aggregation such as `sum`, `max`, or `min` when one value should decide. Scalar and instant-vector float results are supported; range vectors, string results, and native histogram samples report an error.",
+        },
+        {
+          type: "table",
+          columns: ["Query", "Healthy condition"],
+          rows: [
+            ["`up{job=\"api\"}`", "`eq` 1"],
+            ["`sum(queue_depth)`", "`lt` 1000"],
+            ["`100 * sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))`", "`lt` 5"],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "NaN and infinite samples, including division by zero, report an error rather than a threshold verdict.",
+            "Query warnings from Prometheus indicate potentially partial evaluation and report an error, never a healthy result.",
+            "HTTP errors, malformed responses, redirects, and connection failures report an error. Redirects are never followed and HTTPS certificates are always verified.",
+            "Responses are capped at 2 MiB; aggregate large queries rather than relying on truncation.",
+            "The worker's SSRF policy and allowed CIDRs apply, including DNS resolution at connection time. Pick a private location whose worker can reach the endpoint when Prometheus is internal.",
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Check results record the sample count, the number of samples outside the threshold, and up to twenty numeric values. Labels and raw upstream error bodies are not stored. **Test query** in the form runs the current configuration through a worker without saving; when editing, saved masked credentials are resolved for that monitor.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Prefer a numeric query plus a Probara threshold",
+          text:
+            "A PromQL filter such as `up == 0` returns an empty vector when everything is healthy, which then falls under `no_data_status`. Querying the numeric value and expressing the threshold in Probara is easier to read and preview.",
+        },
+      ],
+    },
+    {
       id: "data-services",
       title: "Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ",
       intro:
@@ -365,7 +427,7 @@ export const MONITORS_PAGE: DocPage = {
             [
               "`mongodb`",
               "`mongodb://` / `mongodb+srv://` URI or `host`, `port` (27017), paired username/password, `auth_source`, TLS",
-              "Optional `replica_set` topology and reachable-primary requirement",
+              "Optional `replica_set` topology and reachable-primary requirement; optional cluster checks via `collect_replication`, `collect_connections`, `collect_cache`, `collect_memory`, `collect_network`, `collect_cpu`",
             ],
             [
               "`rabbitmq`",
@@ -383,6 +445,23 @@ export const MONITORS_PAGE: DocPage = {
           type: "paragraph",
           text:
             "These monitors share optional `max_latency_ms` and `warn_latency_ms`. The maximum is a hard failure; the warning threshold annotates metrics without changing a successful check to failure.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "MongoDB monitors can additionally enable per-feature cluster checks, each an individually toggleable read-only admin command: `collect_replication` runs `replSetGetStatus` (member states, health, and replication lag), while `collect_connections`, `collect_cache`, `collect_memory`, `collect_network`, and `collect_cpu` read their sections from a single `serverStatus` call (connections, WiredTiger cache, resident/virtual memory, network I/O and opcounters, and — on Linux servers — mongod process CPU time; host-level CPU is agent-monitor territory). Both commands are covered by MongoDB's built-in `clusterMonitor` role — no `clusterAdmin`, `root`, or write privileges. When the monitoring user lacks the role, the affected data is skipped and flagged in the check's metrics (`unavailable`) without failing the check; on a standalone server the replication check reports \"not a replica set\". Replication lag supports the same warn/max split as latency: `warn_replication_lag_seconds` annotates, `max_replication_lag_seconds` fails the check and flows through normal availability alerting — and it fails closed, so if replication status becomes unreadable (role revoked, command timeout, standalone target, no primary) the check fails rather than silently passing.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "The monitor detail page charts the collected cluster metrics over recent checks — replication lag (with the warn/max thresholds drawn as reference lines), connections, WiredTiger cache, memory, and, for the cumulative operation, network, and process-CPU counters, per-second rates derived between consecutive checks.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Granting clusterMonitor",
+          text:
+            "`db.grantRolesToUser(\"monitoring\", [{ role: \"clusterMonitor\", db: \"admin\" }])` is the only grant the cluster checks need. Without it the basic connect/ping/latency monitoring keeps working unchanged.",
         },
         {
           type: "table",
@@ -524,7 +603,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "`group` rollup",
               description:
-                "Suppresses member availability alerts covered by that group and creates one group-level availability alert.",
+                "Suppresses member availability alerts covered by that group and creates one group-level availability alert. Suppression ignores the group's own enabled flag, so pausing such a group silences its members too — see [group alert rollup](/docs/alerting/#group-rollup).",
             },
           ],
         },
@@ -544,15 +623,16 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password`, plus every WebSocket header value. API reads replace protected values with `***`.",
+            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password`, the Prometheus `password` and `bearer_token`, plus every WebSocket header value. API reads replace protected values with `***`.",
         },
         {
           type: "list",
           items: [
             "Submit `***` again to preserve the already stored value.",
+            "Omit the field entirely and the stored value is preserved as well, so an update that resubmits a config read back from the API cannot destroy a credential it was never shown.",
             "Submit a new value to replace and encrypt it.",
-            "Because a type config is replaced as a whole, omitting or clearing a protected field removes that value rather than implicitly retaining it.",
-            "WebSocket header names remain visible while their values are masked.",
+            "Submit an empty string to clear a protected field. That is the only spelling that removes a stored secret.",
+            "WebSocket header names remain visible while their values are masked. Submitting the `headers` object edits it key by key, so a key left out of a submitted object is removed; omitting the whole object keeps the stored headers.",
           ],
         },
         {
@@ -606,7 +686,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Analytics report uptime, SLA/availability summary fields, downtime duration, average/median/p95/latest latency, series data, downtime periods, source, coverage start, and whether the requested window is partially covered. Long ranges combine rollups with the current raw tail.",
+            "Analytics report uptime, SLA/availability summary fields, downtime duration, average/median/p95/latest latency, series data, downtime periods, source, coverage start, and whether the requested window is partially covered. Long ranges combine rollups with the current raw tail. The summary carries `has_data`: when no checks ran in the window the percentage fields are meaningless zeros and clients must render a no-data state, never 0% or 100%. It also carries `method`: `interval` means `availability_pct` is a time integration over the monitor's state timeline — unknown and paused time leave the denominator and surface as `coverage_pct`, and downtime inside maintenance windows counts as planned rather than unavailability; `sampled` means the window predates the timeline and the legacy success/total rate stands in.",
         },
         {
           type: "callout",

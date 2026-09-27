@@ -2,6 +2,7 @@ package email
 
 import (
 	"embed"
+	"fmt"
 	htmltemplate "html/template"
 	"strings"
 )
@@ -119,6 +120,18 @@ func renderAlertText(v alertView) string {
 				b.WriteString(")")
 			}
 			b.WriteString("\n")
+		}
+	}
+
+	if len(v.Impacted) > 0 {
+		b.WriteString("\nAlso affecting (notifications suppressed):\n")
+		for _, name := range v.Impacted {
+			b.WriteString("  - ")
+			b.WriteString(name)
+			b.WriteString("\n")
+		}
+		if v.ImpactedMore > 0 {
+			b.WriteString(fmt.Sprintf("  … and %d more\n", v.ImpactedMore))
 		}
 	}
 

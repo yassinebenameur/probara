@@ -104,6 +104,27 @@ func (m *portableMonitorServiceMock) BulkUpdateAlerting(ctx context.Context, ten
 	return len(monitorIDs), nil
 }
 
+// groupMembershipMock records the monitor_groups writes the importer makes, so
+// tests can assert that imported groups actually gain members instead of only
+// carrying monitor_ids in their config.
+type groupMembershipMock struct {
+	added map[uuid.UUID][]uuid.UUID
+	err   error
+}
+
+var _ GroupMembershipService = (*groupMembershipMock)(nil)
+
+func (m *groupMembershipMock) AddMonitorsToGroup(ctx context.Context, tenantID, groupID uuid.UUID, monitorIDs []uuid.UUID) error {
+	if m.err != nil {
+		return m.err
+	}
+	if m.added == nil {
+		m.added = make(map[uuid.UUID][]uuid.UUID)
+	}
+	m.added[groupID] = append(m.added[groupID], monitorIDs...)
+	return nil
+}
+
 func TestParseFile_PortableMonitorExport(t *testing.T) {
 	svc := &Service{}
 	data := []byte(`
@@ -217,7 +238,8 @@ func TestExportMonitors_PortableBundle(t *testing.T) {
 		WithArgs(tenantID, anyArrayArg{}).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(policyID, "Primary"))
 
-	svc := NewService(&db.Client{DB: sqlDB}, monitorSvc)
+	groupSvc := &groupMembershipMock{}
+	svc := NewService(&db.Client{DB: sqlDB}, monitorSvc, groupSvc)
 	data, err := svc.ExportMonitors(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("ExportMonitors() error = %v", err)
@@ -270,7 +292,8 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 		WithArgs(tenantID, "Primary").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(policyID))
 
-	svc := NewService(&db.Client{DB: sqlDB}, monitorSvc)
+	groupSvc := &groupMembershipMock{}
+	svc := NewService(&db.Client{DB: sqlDB}, monitorSvc, groupSvc)
 
 	req := &models.ImportExecuteRequest{
 		Rows: []models.ImportRow{
@@ -346,6 +369,20 @@ func TestExecuteImport_PortableBundleSupportsAllMonitorTypes(t *testing.T) {
 		t.Fatalf("group monitor_ids = %#v, want two imported member IDs", groupConfig["monitor_ids"])
 	}
 
+	// config.monitor_ids is not membership: Monitor.MemberIDs, the group alert
+	// roll-up and the dashboards all read the monitor_groups junction table, so
+	// the importer has to write it too.
+	groupID := monitorSvc.createdMonitors[16].ID
+	attached := groupSvc.added[groupID]
+	if len(attached) != len(memberIDs) {
+		t.Fatalf("group %s gained %d membership rows, want %d", groupID, len(attached), len(memberIDs))
+	}
+	for i, member := range memberIDs {
+		if attached[i].String() != member {
+			t.Fatalf("membership row %d = %s, want %v", i, attached[i], member)
+		}
+	}
+
 	for _, idx := range []int{9, 10, 11, 12, 13, 14, 15} {
 		if monitorSvc.createRequests[idx].TimeoutSeconds <= 0 {
 			t.Fatalf("active check type %s lost its timeout on import: %+v", monitorSvc.createRequests[idx].Type, monitorSvc.createRequests[idx])
@@ -371,7 +408,8 @@ func TestExecuteImport_SkipsAlreadyImportedMonitors(t *testing.T) {
 		},
 	}
 
-	svc := NewService(nil, monitorSvc)
+	groupSvc := &groupMembershipMock{}
+	svc := NewService(nil, monitorSvc, groupSvc)
 	result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
 		Rows: []models.ImportRow{
 			rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com/health", "method": "GET"}, nil, nil, 60, 30),
@@ -427,7 +465,8 @@ func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
 			WithArgs(tenantID, "Missing").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
-		svc := NewService(&db.Client{DB: sqlDB}, monitorSvc)
+		groupSvc := &groupMembershipMock{}
+		svc := NewService(&db.Client{DB: sqlDB}, monitorSvc, groupSvc)
 		result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
 			Rows: []models.ImportRow{
 				rowWithConfig(0, "API", "http", map[string]interface{}{"url": "https://example.com", "method": "GET"}, []string{"Missing"}, nil, 60, 30),
@@ -455,7 +494,8 @@ func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
 	t.Run("missing group member name fails row", func(t *testing.T) {
 		tenantID := uuid.New()
 		monitorSvc := &portableMonitorServiceMock{}
-		svc := NewService(nil, monitorSvc)
+		groupSvc := &groupMembershipMock{}
+		svc := NewService(nil, monitorSvc, groupSvc)
 
 		result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
 			Rows: []models.ImportRow{
@@ -480,7 +520,8 @@ func TestExecuteImport_PortableBundleRowFailures(t *testing.T) {
 	t.Run("duplicate group member name fails row", func(t *testing.T) {
 		tenantID := uuid.New()
 		monitorSvc := &portableMonitorServiceMock{}
-		svc := NewService(nil, monitorSvc)
+		groupSvc := &groupMembershipMock{}
+		svc := NewService(nil, monitorSvc, groupSvc)
 
 		result, err := svc.ExecuteImport(context.Background(), tenantID, &models.ImportExecuteRequest{
 			Rows: []models.ImportRow{

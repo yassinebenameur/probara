@@ -684,7 +684,28 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`APP_BASE_URL`',
               'Empty',
-              'Public origin of the operator UI. Adds an "open the monitor" button to alert email; omitted when unset. Read by the same three services.',
+              'Public origin of the operator UI. Adds an "open the monitor" link to alert email and every chat, paging and SMS channel; omitted when unset. Read by the same three services.',
+            ],
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The same three services also read the [notification egress policy](/docs/security/#ssrf-network-policy), because each one can deliver through a channel plugin. It is independent of the worker\'s `HTTP_BLOCK_PRIVATE_IPS` and, unlike it, blocks by default.',
+        },
+        {
+          type: 'table',
+          columns: ['Notification variable', 'Code default', 'Important behavior'],
+          rows: [
+            [
+              '`NOTIFICATION_BLOCK_PRIVATE_IPS`',
+              '`true`; boolean',
+              'Refuse private, loopback, link-local and reserved destinations for every notification channel. Set `false` only when channels must reach internal hosts and network policy already contains them.',
+            ],
+            [
+              '`NOTIFICATION_ALLOWED_CIDRS`',
+              'Empty; comma-separated CIDRs',
+              'Destinations that stay reachable while blocking is on, e.g. an internal webhook receiver. Any invalid CIDR fails startup.',
             ],
           ],
         },
@@ -708,7 +729,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUS_PAGE_BASE_URL`',
               'Empty',
-              'Loaded into status config but currently has no runtime effect.',
+              'Public origin of the status service. Supplies the deep link in [visitor push notifications](/docs/status-pages/#browser-notifications); when empty, the notification opens the page via the service worker scope rather than a guessed host.',
             ],
             [
               '`STATUS_PAGE_API_BASE_URL`',
@@ -738,7 +759,37 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`STATUSPAGE_UPDATES_SUBJECT`',
               '`statuspage.updates`',
-              'Core NATS live-invalidation subject shared by API, scheduler, and status service.',
+              'Core NATS live-invalidation subject shared by API, scheduler, and status service. Also wakes the push sender early; delivery does not depend on it.',
+            ],
+            [
+              '`STATUS_PAGE_VAPID_PUBLIC_KEY`',
+              'Empty',
+              'VAPID application server key for [visitor notifications](/docs/status-pages/#browser-notifications). Published inside every rendered page, so it is not a secret. Generate with `go run ./cmd/admin/gen_vapid_keys`.',
+            ],
+            [
+              '`STATUS_PAGE_VAPID_PRIVATE_KEY`',
+              'Empty',
+              'Signs the push JWT. A credential. Notifications are disabled unless both key halves are set; never generate per process, because replicas would disagree and a restart would invalidate every subscription.',
+            ],
+            [
+              '`STATUS_PAGE_VAPID_SUBJECT`',
+              'Empty',
+              '`mailto:` or `https:` operator contact for the VAPID `sub` claim. Some push services reject a missing or malformed value.',
+            ],
+            [
+              '`STATUS_PAGE_PUSH_ENDPOINT_ALLOWLIST`',
+              'Google, Mozilla, Microsoft, Apple push hosts',
+              'Comma-separated host suffixes a stored push endpoint may use. This is an [SSRF control](/docs/security/#ssrf-network-policy); `*` disables it for a self-hosted push service.',
+            ],
+            [
+              '`STATUS_PAGE_PUSH_MAX_SUBSCRIPTIONS_PER_PAGE`',
+              '`10000`',
+              'Cap on stored subscriptions per status page. Invalid or nonpositive input falls back to the default.',
+            ],
+            [
+              '`STATUS_PAGE_TRUSTED_PROXY`',
+              '`false`',
+              'Honor `X-Forwarded-For` when rate-limiting push subscribes. Off by default because the header is client-settable.',
             ],
           ],
         },
@@ -797,35 +848,27 @@ export const CONFIGURATION_PAGE: DocPage = {
     },
     {
       id: 'agent',
-      title: 'Standalone host agent settings',
+      title: 'Collector agent settings',
       blocks: [
         {
+          type: 'paragraph',
+          text:
+            'The host agent is `probara-collector`, an OpenTelemetry Collector distribution started as `probara-collector --config <path>`. Its generated configuration contains no secrets; credentials are supplied through the environment (systemd `EnvironmentFile`, launchd runner script, or the Windows service registry `Environment` value).',
+        },
+        {
           type: 'table',
-          columns: ['CLI flag', 'Default', 'Description'],
+          columns: ['Environment variable', 'Default', 'Description'],
           rows: [
-            ['`-backend-url`', 'None; required', 'Externally reachable API base URL.'],
-            ['`-agent-id`', 'None; required', 'Agent monitor identifier.'],
-            ['`-api-key`', 'None; required', 'Bearer API key used for reporting.'],
-            ['`-interval`', '`60`', 'Reporting interval in seconds.'],
-            ['`-disk-path`', '`/`', 'Filesystem path used for disk telemetry.'],
-            [
-              '`-allow-remote-disable`',
-              '`false`',
-              'Allows a server HTTP 410 response to initiate local disable/uninstall.',
-            ],
-            [
-              '`-remote-disable-command`',
-              'Empty',
-              'Script/command used only when remote disable is explicitly allowed.',
-            ],
+            ['`PROBARA_API_KEY`', 'None; required', 'Tenant write-scope API key sent as the `Authorization: Bearer` header.'],
+            ['`PROBARA_AGENT_ID`', 'None; required', 'Agent monitor identifier sent as the `X-Probara-Agent-Id` header.'],
           ],
         },
         {
           type: 'callout',
-          tone: 'warning',
-          title: 'CLI flags are authoritative',
+          tone: 'info',
+          title: 'Everything else lives in the collector config',
           text:
-            'The current agent executable does not read `BACKEND_URL`, `AGENT_ID`, `API_KEY`, `INTERVAL`, or `DISK_PATH` from the environment, despite older README and Dockerfile claims. The JSON-form container command also does not shell-expand `${…}` placeholders. Supply the CLI flags explicitly.',
+            'API origin, export interval, scrapers, and processors are all part of the generated collector YAML (`GET /api/v1/monitors/{id}/agent/config.yaml`), which references credentials only via `${env:…}` expansion. The legacy `probara-agent` CLI flags — including `-allow-remote-disable` — are retired with that binary; see the [migration guide](/docs/agents/#migrating-legacy).',
         },
       ],
     },
@@ -841,8 +884,8 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`ADMIN_USERNAME`', 'Required', '`go run ./cmd/admin` administrator upsert.'],
             ['`ADMIN_PASSWORD`', 'Required', '`go run ./cmd/admin`; do not expose in shell history in production.'],
             ['`BOOTSTRAP_DB_USER`', '`probara`', '`scripts/bootstrap-local-db.sh`.'],
-            ['`VERSION`', '`1.0.0`', '`scripts/build-agent.sh`.'],
-            ['`BUILD_DIR`', '`./static/agent`', 'Output directory for downloadable agent binaries.'],
+            ['`OCB_VERSION`', '`v0.159.0`', '`scripts/build-collector.sh`; pinned OpenTelemetry Collector Builder version, must match `collector/manifest.yaml`.'],
+            ['`BUILD_DIR`', '`./static/collector`', 'Output directory for downloadable collector binaries and `checksums.txt`.'],
             [
               '`GHCR_OWNER`',
               'Falls back to `GITHUB_REPOSITORY_OWNER`; then required',

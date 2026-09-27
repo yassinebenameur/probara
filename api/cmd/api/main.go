@@ -15,6 +15,8 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/netguard"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 )
@@ -48,6 +50,16 @@ func main() {
 		log.WithError(err).Fatal("Failed to run migrations")
 	}
 	log.Info("Database migrations completed")
+
+	// Process-level plugin runtime: deep-link origin and the egress (SSRF)
+	// policy every notification channel dials through.
+	plugin.Configure(plugin.Runtime{
+		AppBaseURL: cfg.AppBaseURL,
+		Egress: netguard.Policy{
+			BlockPrivate: cfg.NotificationBlockPrivateIPs,
+			AllowedCIDRs: cfg.NotificationAllowedCIDRs,
+		},
+	})
 
 	// Wire the SMTP backend into the email plugin. The API never dispatches
 	// real alerts — that is the alerter's job — but POST

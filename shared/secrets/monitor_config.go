@@ -14,12 +14,17 @@ import (
 // credentials (redis://user:pass@host, postgres://user:pass@host/db, …);
 // tls_client_key_pem is the private half of an mTLS client pair.
 var MonitorSecretFields = map[string][]string{
-	"redis":    {"password", "connection_string", "tls_client_key_pem"},
-	"postgres": {"password", "connection_string", "tls_client_key_pem"},
-	"mongodb":  {"password", "connection_string", "tls_client_key_pem"},
-	"rabbitmq": {"password", "connection_string", "tls_client_key_pem"},
-	"mysql":    {"password", "connection_string", "tls_client_key_pem"},
-	"sip":      {"password"},
+	"prometheus": {"password", "bearer_token"},
+	"redis":      {"password", "connection_string", "tls_client_key_pem"},
+	"postgres":   {"password", "connection_string", "tls_client_key_pem"},
+	"mongodb":    {"password", "connection_string", "tls_client_key_pem"},
+	"rabbitmq":   {"password", "connection_string", "tls_client_key_pem"},
+	"mysql":      {"password", "connection_string", "tls_client_key_pem"},
+	"sip":        {"password"},
+	// Older push forms persisted a redundant copy of the webhook credential
+	// in config as well as monitors.push_token. Protect that copy on exports
+	// and all config reads too; the dedicated push-info endpoint owns access.
+	"push": {"push_token"},
 }
 
 // MonitorSecretMapFields maps monitor types to config objects whose values are
@@ -80,13 +85,32 @@ func MaskMonitorConfig(monitorType string, raw json.RawMessage) (json.RawMessage
 }
 
 // MergeMonitorConfigSecrets resolves write-only secret placeholders in
-// `incoming` against the previously stored config. Exactly the MaskedSecret
-// placeholder ("***") means "keep the stored value" — the preserved value is
-// the stored ciphertext, which EncryptMonitorConfig later passes through.
-// Anything else is taken literally: monitor updates replace the whole config,
-// so an absent or empty secret field clears it (this is what lets the UI
-// switch between connection-string and discrete-field modes without a stale
-// secret surviving the switch). Empty strings are dropped for cleanliness.
+// `incoming` against the previously stored config. A preserved value is the
+// stored ciphertext, which EncryptMonitorConfig later passes through.
+//
+// Per scalar secret field the contract is:
+//
+//	absent                    -> keep the stored secret
+//	MaskedSecret ("***")      -> keep the stored secret
+//	"" (empty string)         -> clear the secret
+//	any other value           -> replace with that value
+//
+// "Absent keeps" is deliberate and unambiguous because clearing already has an
+// explicit spelling (""). A monitor update replaces the whole config, so a
+// client that simply round-trips the config it read back — which never carries
+// plaintext secrets — would otherwise silently destroy the credential. That is
+// what happened to postgres monitors edited only to change tags. A UI switching
+// between connection-string and discrete-field modes must therefore send the
+// field it abandons as "" rather than omitting it.
+//
+// Map secret fields (MonitorSecretMapFields) follow the same rule at the level
+// of the whole object: an entirely absent map field keeps the stored map. When
+// the field IS present, its per-key semantics are unchanged — a key set to
+// MaskedSecret keeps its stored value, a key set to "" or omitted from the
+// submitted object is removed, because editing a map is explicit intent.
+//
+// On create `existing` is empty, so every "keep" degenerates to dropping the
+// field and the rules above are a no-op.
 func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMessage) (json.RawMessage, error) {
 	fields := MonitorSecretFields[monitorType]
 	mapFields := MonitorSecretMapFields[monitorType]
@@ -108,6 +132,11 @@ func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMe
 	for _, field := range fields {
 		v, present := in[field]
 		if !present {
+			// Absent means "keep": carry the stored secret forward instead of
+			// destroying it. Clearing has its own spelling ("").
+			if prevVal, ok := prev[field]; ok {
+				in[field] = prevVal
+			}
 			continue
 		}
 		s, ok := v.(string)
@@ -127,6 +156,14 @@ func MergeMonitorConfigSecrets(monitorType string, incoming, existing json.RawMe
 	}
 
 	for _, field := range mapFields {
+		if _, present := in[field]; !present {
+			// The whole map field is absent: keep the stored map rather than
+			// dropping every value. A present map is edited per key below.
+			if prevVal, ok := prev[field]; ok {
+				in[field] = prevVal
+			}
+			continue
+		}
 		incomingValues, ok := stringMap(in[field])
 		if !ok {
 			continue

@@ -27,6 +27,14 @@ spec:
             {{- if .Values.nats.auth.enabled }}
             - "-c"
             - "/etc/nats/nats.conf"
+            # The platform user lives here rather than in nats.conf so the
+            # password never passes through the config parser: Kubernetes
+            # substitutes $(NATS_PLATFORM_PASSWORD) literally, which nats.conf's
+            # own $VAR expansion cannot do safely.
+            - "--user"
+            - {{ .Values.nats.auth.platformUser | quote }}
+            - "--pass"
+            - "$(NATS_PLATFORM_PASSWORD)"
             {{- else }}
             - "-js"
             - "-m"
@@ -34,6 +42,12 @@ spec:
             - "-sd"
             - "/data"
             {{- end }}
+          {{- if .Values.nats.auth.enabled }}
+          env:
+            # Referenced as $(NATS_PLATFORM_PASSWORD) in args above, substituted
+            # by Kubernetes, so the password stays out of the ConfigMap.
+            {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_PLATFORM_PASSWORD" "key" "nats_platform_password" "secret" .Values.nats.auth.platformPasswordExistingSecret "secretKey" .Values.nats.auth.platformPasswordExistingSecretKey) | nindent 12 }}
+          {{- end }}
           ports:
             - name: client
               containerPort: 4222

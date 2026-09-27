@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"crypto/md5"  //nolint:gosec // MD5 is mandated by RFC 3261 digest auth
+	"crypto/md5" //nolint:gosec // MD5 is mandated by RFC 3261 digest auth
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"

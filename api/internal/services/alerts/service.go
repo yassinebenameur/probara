@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
@@ -33,7 +34,7 @@ func NewService(db *db.Client, incidents incidentAutomation) *Service {
 // alertDetailSelect is the shared projection for AlertWithDetails. Monitors
 // are LEFT JOINed because mesh_edge alerts have no monitor — their subject is
 // a directed location pair (sl → tl).
-const alertDetailSelect = `
+var alertDetailSelect = `
 	SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 		a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,
 		a.last_error, a.kind, a.baseline_latency_ms, a.observed_latency_ms, a.anomaly_score,
@@ -41,14 +42,29 @@ const alertDetailSelect = `
 		a.created_at, a.updated_at,
 		m.name as monitor_name, ap.name as policy_name,
 		a.root_cause_monitor_id, a.root_cause_down_since, rcm.name as root_cause_monitor_name,
-		a.source_location_id, a.target_location_id, sl.name, tl.name
+		a.source_location_id, a.target_location_id, sl.name, tl.name,
+		CASE WHEN ` + alertSuppressedPredicate + ` THEN '` + alertrouting.SuppressionReasonDependency + `' END,
+		CASE WHEN a.status IN ('active', 'acknowledged') AND a.kind = 'availability'
+			THEN json_array_length(` + alertrouting.ImpactedMonitorsSubquery("a.monitor_id") + `) ELSE 0 END
 	FROM alerts a
 	LEFT JOIN monitors m ON a.monitor_id = m.id
+	LEFT JOIN tenants te ON te.id = a.tenant_id
 	LEFT JOIN alert_policies ap ON a.alert_policy_id = ap.id
 	LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
 	LEFT JOIN locations sl ON sl.id = a.source_location_id
 	LEFT JOIN locations tl ON tl.id = a.target_location_id
 `
+
+// alertSuppressedPredicate is TRUE for an open alert whose notifications the
+// alerter is currently suppressing. It is the very predicate the alerter's
+// dispatch query excludes on, so the API never calls an alert suppressed that
+// would in fact page (or vice versa). Resolved alerts are never suppressed:
+// there is nothing left to dispatch. Expects aliases a (alerts), m (monitors)
+// and te (tenants); m is NULL for mesh alerts, which makes the CASE inside
+// fall through to the tenant default and the root-cause test NULL → not
+// suppressed.
+var alertSuppressedPredicate = `(a.status IN ('active', 'acknowledged') AND COALESCE(` +
+	alertrouting.SuppressedByDependencyPredicate("a", "m", "te") + `, FALSE))`
 
 // alertVisibleClause hides alerts of soft-deleted monitors while keeping
 // monitor-less (mesh) alerts visible.
@@ -66,6 +82,7 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 		&alert.MonitorName, &alert.PolicyName,
 		&alert.RootCauseMonitorID, &alert.RootCauseDownSince, &alert.RootCauseMonitorName,
 		&alert.SourceLocationID, &alert.TargetLocationID, &alert.SourceLocationName, &alert.TargetLocationName,
+		&alert.SuppressionReason, &alert.ImpactedCount,
 	)
 	if err != nil {
 		return nil, err
@@ -110,6 +127,12 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 		argIndex++
 	}
 
+	if params.Suppressed != nil {
+		whereParts = append(whereParts, fmt.Sprintf("%s = $%d", alertSuppressedPredicate, argIndex))
+		args = append(args, *params.Suppressed)
+		argIndex++
+	}
+
 	whereClause := strings.Join(whereParts, " AND ")
 
 	// Count total
@@ -117,6 +140,7 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 		SELECT COUNT(*)
 		FROM alerts a
 		LEFT JOIN monitors m ON a.monitor_id = m.id
+		LEFT JOIN tenants te ON te.id = a.tenant_id
 		WHERE %s AND %s
 	`, whereClause, alertVisibleClause)
 	var total int

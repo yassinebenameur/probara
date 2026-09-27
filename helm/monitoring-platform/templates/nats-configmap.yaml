@@ -1,3 +1,18 @@
+{{- /*
+Server config for the embedded broker. It must stay free of secret material,
+so the platform user is NOT declared here: the StatefulSet passes it as
+--user/--pass, with the password substituted by Kubernetes from a Secret-backed
+env var. nats-server merges those flags with this authorization block, leaving
+auth_callout active for every other user (verified: the platform user connects
+immediately, others still go through callout).
+
+Do not move the password back into this file via nats-server's $VAR expansion.
+It re-parses the expanded token as configuration, so passwords that are purely
+numeric, look boolean, or contain a space, comma or brace abort startup — and
+quoting the reference suppresses expansion entirely, silently making the
+literal "$NATS_PLATFORM_PASSWORD" the password. The issuer public key below is
+public by construction and safe to template.
+*/}}
 {{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
 apiVersion: v1
 kind: ConfigMap
@@ -13,15 +28,9 @@ data:
     }
     http_port: 8222
     authorization {
-      users: [
-        {
-          user: {{ required "nats.auth.platformUser is required when nats.auth.enabled" .Values.nats.auth.platformUser | quote }}
-          password: {{ required "nats.auth.platformPassword is required when nats.auth.enabled" .Values.nats.auth.platformPassword | quote }}
-        }
-      ]
       auth_callout {
         issuer: {{ required "nats.auth.locationIssuerPublicKey is required when nats.auth.enabled" .Values.nats.auth.locationIssuerPublicKey | quote }}
-        auth_users: [{{ .Values.nats.auth.platformUser | quote }}]
+        auth_users: [{{ required "nats.auth.platformUser is required when nats.auth.enabled" .Values.nats.auth.platformUser | quote }}]
       }
     }
 {{- end }}

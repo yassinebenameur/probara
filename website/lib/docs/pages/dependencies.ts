@@ -92,10 +92,10 @@ export const DEPENDENCIES_PAGE: DocPage = {
         },
         {
           type: "callout",
-          tone: "warning",
-          title: "Downstream alerts are not suppressed",
+          tone: "info",
+          title: "Annotation is always on; suppression is opt-in",
           text:
-            "Dependencies enrich each downstream availability alert with likely cause; they do not prevent that alert or its notifications. Use [monitor-group alert rollup](/docs/alerting/#group-rollup) when the intended behavior is one alert for a member set.",
+            "Every downstream availability alert is annotated. Whether the annotation also withholds the downstream's notifications — paging the root cause only, with an \"also affecting\" list on its notification and a grace period after the upstream recovers — is the workspace `dependency_suppression_enabled` setting, overridable per monitor. See [dependency-aware alerting](/docs/alerting/#dependencies). Use [monitor-group alert rollup](/docs/alerting/#group-rollup) when the intended behavior is one alert for a member set rather than one per root cause.",
         },
       ],
     },

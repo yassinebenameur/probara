@@ -211,13 +211,10 @@ func (s *Scheduler) pruneTenantMeshResults(ctx context.Context, tenantID uuid.UU
 	`
 
 	var totalDeleted int64
-	maxRows := s.config.RetentionCleanupMaxRowsPerRun
+	maxRows := s.retentionMaxRows()
 	batchSize := s.config.RetentionCleanupBatchSize
 	if batchSize <= 0 {
 		batchSize = 5000
-	}
-	if maxRows <= 0 {
-		maxRows = 200000
 	}
 
 	for int(totalDeleted) < maxRows {

@@ -256,7 +256,7 @@ export const SECURITY_PAGE: DocPage = {
           items: [
             'Never commit `.env`, Helm production values, generated location snippets, backup files, or decrypted configuration.',
             'Kubernetes Secrets are base64 transport objects, not encrypted storage by themselves. Enable etcd encryption and use workload identity/external secret management where available.',
-            'Helm stores release values in-cluster; avoid putting secrets into command history and protect the namespace/release metadata.',
+            'Helm stores release values in-cluster; avoid putting secrets into command history and protect the namespace/release metadata. Every chart credential can instead be [read from a Secret you supply](/docs/deployment/#external-secrets), which keeps it out of the release values entirely.',
             'The local launcher chmods the development JWT file to 0600, but the development encryption-key file relies on the current umask. Verify and restrict its permissions.',
             'Use separate secrets for preview signing, JWT signing, encryption, webhooks, NATS issuer, and location credentials; do not reuse one master string.',
           ],
@@ -369,9 +369,54 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'callout',
           tone: 'warning',
-          title: 'Notification and LLM egress are separate',
+          title: 'LLM egress is separate',
           text:
-            'The monitor dial guard does not automatically protect alerter/notification webhooks or arbitrary LLM provider base URLs. Restrict those services with network policy, proxy allowlists, DNS policy, or provider allowlists so tenant-controlled destinations cannot reach sensitive internal services.',
+            'Neither guard below protects arbitrary LLM provider base URLs. Restrict that path with network policy, proxy allowlists, DNS policy, or provider allowlists so tenant-controlled destinations cannot reach sensitive internal services.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Notification channels (generic webhook, Slack, Discord, Teams, PagerDuty, Opsgenie, Telegram, Twilio) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets.',
+        },
+        {
+          type: 'table',
+          columns: ['Control', 'Default', 'Effect'],
+          rows: [
+            [
+              '`NOTIFICATION_BLOCK_PRIVATE_IPS`',
+              '`true`',
+              'Refuse loopback, private, link-local (including cloud metadata), CGNAT, multicast, documentation and reserved destinations for every channel. A refusal is a permanent delivery failure, not retried.',
+            ],
+            [
+              '`NOTIFICATION_ALLOWED_CIDRS`',
+              'Empty',
+              'Ranges that stay reachable while blocking is on — an internal webhook receiver or chat server. Invalid CIDR fails startup.',
+            ],
+          ],
+        },
+        {
+          type: 'list',
+          items: [
+            'Set both on the API (channel test), alerter (synchronous delivery) and worker (asynchronous delivery); a service that never receives the policy fails closed.',
+            'Redirects are never followed, so an allowed host cannot bounce a request to a blocked one.',
+            'Transport errors are logged without the request URL, because webhook paths and Telegram bot tokens are credentials.',
+            'With an `HTTPS_PROXY` configured, the policy vets the proxy address (allow-list it) and destination control becomes the proxy\'s job.',
+          ],
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Status page browser notifications add a third egress path with its own guard. The subscribe endpoint is the only unauthenticated write in the status-page service, and the endpoint it stores is a URL the platform later POSTs to, unattended, from inside the cluster — so an unguarded version would let any visitor turn the subscription table into a stored-SSRF and outbound spam primitive.',
+        },
+        {
+          type: 'list',
+          items: [
+            'Stored endpoints must be `https` and must match `STATUS_PAGE_PUSH_ENDPOINT_ALLOWLIST` (default: the Google, Mozilla, Microsoft, and Apple push services). Matching is on a dot boundary, so `fcm.googleapis.com.attacker.example` does not match `fcm.googleapis.com`.',
+            'Setting the allowlist to `*` disables the check for a self-hosted push service and re-opens this surface; restrict egress by network policy if you do.',
+            'Request bodies are capped, subscriptions are rate limited per client IP, and each page has a subscription cap so the table cannot grow without bound.',
+            '`X-Forwarded-For` is honored for rate-limit keying only when `STATUS_PAGE_TRUSTED_PROXY=true`, because the header is client-settable.',
+            'Subscriptions store only the opaque browser endpoint and its public keys — no visitor identity, no email address, and no page-visit history.',
+          ],
         },
       ],
     },

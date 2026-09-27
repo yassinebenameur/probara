@@ -161,15 +161,19 @@
     .header-right {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex-shrink: 0;
     }
     .mode-toggle {
       display: flex;
+      height: 32px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-pill);
       overflow: hidden;
+      /* Breathing room between the labelled group and the icon pair; the two
+         kinds of control read as separate clusters rather than one run. */
+      margin-right: 4px;
     }
     .mode-btn,
     .btn-s,
@@ -180,13 +184,15 @@
     }
     .mode-btn {
       appearance: none;
+      display: inline-flex;
+      align-items: center;
       background: none;
       border: none;
       color: var(--text-muted);
       font: 500 .72rem var(--mono);
       text-transform: uppercase;
       letter-spacing: .05em;
-      padding: 8px 12px;
+      padding: 0 12px;
       cursor: pointer;
     }
     .mode-btn:hover { color: var(--text); }
@@ -205,6 +211,53 @@
       cursor: pointer;
       font-size: .78rem;
       font-weight: 500;
+    }
+    /* Icon-only variant. Circular, at the shared 32px control height, so the
+       icon pair echoes the header capsule's pill geometry instead of sitting
+       as rounded rectangles inside it. */
+    .btn-s.btn-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-pill);
+      color: var(--text-muted);
+    }
+    .btn-s.btn-icon:hover { color: var(--text); }
+    /* Keyboard focus must be visible on icon-only controls; there is no text
+       underline or caret to fall back on. */
+    .mode-btn:focus-visible,
+    .btn-s:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--brand-primary) 55%, transparent);
+      outline-offset: 1px;
+    }
+    /* Sun in dark mode, moon in light: the icon names the theme the click
+       switches TO, matching the old text label's behaviour. Swapped purely in
+       CSS off body[data-theme], so a live refresh cannot desync it. */
+    #themeToggleBtn .icon-moon { display: none; }
+    body[data-theme="light"] #themeToggleBtn .icon-sun { display: none; }
+    body[data-theme="light"] #themeToggleBtn .icon-moon { display: block; }
+    /* Notification toggle in its "on" state, coloured like the range pills so
+       the state is legible at a glance -- an icon has no label to read. */
+    .btn-s.btn-icon[aria-pressed="true"] {
+      color: var(--green);
+      border-color: color-mix(in srgb, var(--green) 22%, var(--border));
+      background: var(--green-a);
+    }
+    .btn-s.btn-icon[aria-pressed="true"] #pushBellBody {
+      fill: color-mix(in srgb, var(--green) 18%, transparent);
+    }
+    .btn-s.btn-icon:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+    /* SVG children do not pick up the HTML `hidden` attribute from the UA
+       stylesheet the way HTML elements do, so the strike-through must be
+       hidden explicitly or every bell renders as "notifications off". */
+    #pushBellSlash[hidden] {
+      display: none;
     }
     .btn-s:hover {
       background: var(--surface-hover);
@@ -607,6 +660,10 @@
       text-transform: uppercase;
       letter-spacing: .04em;
       flex-shrink: 0;
+      /* Uniform badge width keeps monitor names column-aligned across rows
+         regardless of label length (badges are at most five characters). */
+      min-width: 52px;
+      text-align: center;
     }
     .svc-right {
       display: flex;
@@ -994,7 +1051,7 @@
     body.compact .svc-left { gap: 10px; }
     body.compact .svc-name { font-size: .82rem; }
     body.compact .svc-meta { display: none; }
-    body.compact .svc-type { font-size: .56rem; padding: 1px 5px; }
+    body.compact .svc-type { font-size: .56rem; padding: 1px 5px; min-width: 46px; }
     body.compact .svc-right { gap: 14px; }
     body.compact .svc-metric-label { display: none; }
     body.compact .status-badge { min-width: 84px; font-size: .64rem; }
@@ -1108,6 +1165,17 @@
     .kiosk-exit:hover {
       color: var(--text);
       border-color: color-mix(in srgb, var(--brand-primary) 24%, var(--border));
+    }
+    /* The header's theme/notification toggles migrate here in kiosk mode
+       (placeIconControls); sized down to sit level with the exit button. */
+    .kiosk-clock .btn-s.btn-icon {
+      width: 26px;
+      height: 26px;
+      min-height: 26px;
+    }
+    .kiosk-clock .btn-s.btn-icon svg {
+      width: 13px;
+      height: 13px;
     }
     .kiosk-grid-wrap {
       flex: 1;
@@ -1258,6 +1326,31 @@
     .k-tile-bar .bar { opacity: .46; }
     .k-tile-bar .bar.warn { opacity: .74; }
     .k-tile-bar .bar.bad { opacity: .9; }
+    /* Kiosk auto-fit density tiers. fitKiosk() raises data-density on
+       .kiosk-view until every visible tile fits on screen without scrolling.
+       Tier 1 is the full tile — no overrides, so small pages keep the
+       original look. Each tier narrows columns and sheds tile detail. */
+    .kiosk-view[data-density="2"] .kiosk-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; }
+    .kiosk-view[data-density="2"] .k-tile { padding: 7px 9px 6px; gap: 3px; }
+    .kiosk-view[data-density="2"] .k-tile-metrics { display: none; }
+    .kiosk-view[data-density="3"] .kiosk-grid { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 3px; }
+    .kiosk-view[data-density="3"] .k-tile { padding: 5px 8px 4px; gap: 2px; }
+    .kiosk-view[data-density="3"] .k-tile-metrics,
+    .kiosk-view[data-density="3"] .k-tile-sub { display: none; }
+    .kiosk-view[data-density="3"] .k-tile-name { font-size: .72rem; }
+    .kiosk-view[data-density="3"] .k-tile-dot { margin-top: 3px; }
+    .kiosk-view[data-density="3"] .k-tile-bar { height: 2px; }
+    .kiosk-view[data-density="3"] .kiosk-section + .kiosk-section { margin-top: 10px; }
+    .kiosk-view[data-density="3"] .kiosk-section-head { margin-bottom: 5px; }
+    .kiosk-view[data-density="4"] .kiosk-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 3px; }
+    .kiosk-view[data-density="4"] .k-tile { padding: 4px 7px; gap: 0; border-left-width: 2px; }
+    .kiosk-view[data-density="4"] .k-tile-metrics,
+    .kiosk-view[data-density="4"] .k-tile-sub,
+    .kiosk-view[data-density="4"] .k-tile-bar { display: none; }
+    .kiosk-view[data-density="4"] .k-tile-name { font-size: .66rem; font-weight: 600; }
+    .kiosk-view[data-density="4"] .k-tile-dot { width: 5px; height: 5px; margin-top: 3px; }
+    .kiosk-view[data-density="4"] .kiosk-section + .kiosk-section { margin-top: 8px; }
+    .kiosk-view[data-density="4"] .kiosk-section-head { margin-bottom: 4px; }
     @media (max-width: 768px) {
       .hero h1 { font-size: 2.2rem; }
       .svc-right { gap: 10px; }
@@ -1301,6 +1394,8 @@
   data-allow-theme-toggle="{{if .AllowThemeToggle}}1{{else}}0{{end}}"
   data-default-range="{{.DefaultRange}}"
   data-default-mode="default"
+  data-push-enabled="{{if .PushEnabled}}1{{else}}0{{end}}"
+  data-push-key="{{.PushPublicKey}}"
 >
   <div class="kiosk-view">
     <div class="kiosk-bar">
@@ -1317,7 +1412,7 @@
           <div class="kiosk-stat k-unknown"><span class="ks-dot"></span>{{.UnknownCount}} UNKNOWN</div>
         {{end}}
       </div>
-      <div class="kiosk-clock">
+      <div class="kiosk-clock" id="kioskClock">
         <span id="kioskTime"></span>
         <button type="button" class="kiosk-exit" id="kioskExitBtn">Esc Exit</button>
       </div>
@@ -1341,7 +1436,7 @@
                   <div class="k-tile-name">{{.Name}}</div>
                   <span class="k-tile-dot"></span>
                 </div>
-                <div class="k-tile-sub">{{.TypeLabel}} · {{.LastCheckAgo}}</div>
+                <div class="k-tile-sub">{{.TypeBadge}} · {{.LastCheckAgo}}</div>
                 <div class="k-tile-metrics">
                   <span>{{.LatencyText}}</span>
                   <span>{{.SummaryMetric}}</span>
@@ -1379,7 +1474,7 @@
           <span class="brand-slug">status // /{{.Slug}}</span>
         </div>
       </div>
-      <div class="header-right">
+      <div class="header-right" id="headerActions">
         {{if .ShowLayoutControl}}
           <div class="mode-toggle" role="group" aria-label="Display mode">
             <button type="button" class="mode-btn active" data-mode="default"><span>List</span></button>
@@ -1388,7 +1483,24 @@
           </div>
         {{end}}
         {{if .AllowThemeToggle}}
-          <button type="button" class="btn-s" id="themeToggleBtn">Theme</button>
+          <button type="button" class="btn-s btn-icon" id="themeToggleBtn" aria-label="Switch theme" title="Switch theme (T)">
+            <svg class="icon-sun" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+            </svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          </button>
+        {{end}}
+        {{if .PushEnabled}}
+          <button type="button" class="btn-s btn-icon" id="pushToggleBtn" aria-pressed="false" aria-label="Enable notifications" hidden>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path id="pushBellBody" d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              <line id="pushBellSlash" x1="3.5" y1="3.5" x2="20.5" y2="20.5" hidden />
+            </svg>
+          </button>
         {{end}}
       </div>
     </div>
@@ -1507,7 +1619,7 @@
               <details class="svc-row monitor-card" data-monitor-id="{{.ID}}" data-search="{{.SearchText}}" data-status="{{.Status}}">
                 <summary class="svc-header">
                   <div class="svc-left">
-                    <span class="svc-type">{{.TypeLabel}}</span>
+                    <span class="svc-type">{{.TypeBadge}}</span>
                     <div class="svc-main">
                       <div class="svc-name">{{.Name}}</div>
                       <div class="svc-meta">
@@ -1713,6 +1825,7 @@
       let refreshTimer = null;
       let refreshInFlight = false;
       let refreshQueued = false;
+      let fitScheduled = false;
 
       function getDom() {
         return {
@@ -1726,6 +1839,7 @@
           rangeButtons: Array.from(document.querySelectorAll('[data-range-pill]')),
           modeButtons: Array.from(document.querySelectorAll('[data-mode]')),
           themeToggleBtn: document.getElementById('themeToggleBtn'),
+          pushToggleBtn: document.getElementById('pushToggleBtn'),
           kioskExitBtn: document.getElementById('kioskExitBtn'),
           strips: Array.from(document.querySelectorAll('.js-strip[data-active-range]')),
           monitorUptimeValues: Array.from(document.querySelectorAll('[data-monitor-uptime-value]')),
@@ -1914,7 +2028,10 @@
           const subEl = tile.querySelector('.k-tile-sub');
           const nameClipped = isClipped(nameEl);
           const subClipped = isClipped(subEl);
-          if (!nameClipped && !subClipped) {
+          // Density tiers 3-4 hide the sub line entirely (offsetParent null),
+          // so the popover becomes the only way to read type · last-check.
+          const subHidden = !!subEl && subEl.offsetParent === null;
+          if (!nameClipped && !subClipped && !subHidden) {
             hide();
             return;
           }
@@ -1936,6 +2053,34 @@
           }
         });
         document.addEventListener('scroll', hide, true);
+      }
+
+      // Raises kiosk density until every visible tile fits on screen. A
+      // measurement loop rather than arithmetic so tenant CustomCSS, font
+      // loading and zoom are all accounted for — scrollHeight is ground truth.
+      // The attribute lives on .kiosk-view, which survives the #kioskGrid
+      // live-refresh swap, so a refreshed grid renders at the fitted density.
+      function fitKiosk() {
+        if (!body.classList.contains('kiosk')) return;
+        const view = document.querySelector('.kiosk-view');
+        const wrap = document.getElementById('kioskGrid');
+        if (!view || !wrap) return;
+        for (let tier = 1; tier <= 4; tier++) {
+          view.dataset.density = String(tier);
+          // +1 tolerates sub-pixel rounding so we don't over-densify.
+          if (wrap.scrollHeight <= wrap.clientHeight + 1) return;
+        }
+        // Even the micro tier overflows (very large fleets / tiny displays):
+        // stay at 4 and let .kiosk-grid-wrap's overflow-y:auto take over.
+      }
+
+      function scheduleFitKiosk() {
+        if (fitScheduled) return;
+        fitScheduled = true;
+        window.requestAnimationFrame(function () {
+          fitScheduled = false;
+          fitKiosk();
+        });
       }
 
       function applyRange(range, syncUrl) {
@@ -1975,7 +2120,11 @@
         const nextTheme = theme === 'light' ? 'light' : 'dark';
         body.dataset.theme = nextTheme;
         if (dom.themeToggleBtn) {
-          dom.themeToggleBtn.textContent = nextTheme === 'dark' ? 'Light' : 'Dark';
+          // The sun/moon glyph swaps in CSS off body[data-theme]; only the
+          // accessible name needs updating here.
+          const target = nextTheme === 'dark' ? 'light' : 'dark';
+          dom.themeToggleBtn.setAttribute('aria-label', 'Switch to ' + target + ' theme');
+          dom.themeToggleBtn.title = 'Switch to ' + target + ' theme (T)';
         }
         if (syncUrl) {
           setParam('theme', nextTheme);
@@ -1983,6 +2132,26 @@
         try {
           localStorage.setItem('status-page-theme', nextTheme);
         } catch (err) {}
+      }
+
+      // Kiosk hides the whole header, and the theme/notification toggles live
+      // there — so the buttons themselves migrate into the kiosk bar and back.
+      // Moving the nodes (not cloning) keeps their runtime state — the bell's
+      // hidden/aria-pressed/slash and the theme label — and the delegated and
+      // attached click handlers, since both follow the element.
+      function placeIconControls(mode) {
+        const headerHome = document.getElementById('headerActions');
+        const kioskHome = document.getElementById('kioskClock');
+        const exitBtn = document.getElementById('kioskExitBtn');
+        ['themeToggleBtn', 'pushToggleBtn'].forEach(function (id) {
+          const btn = document.getElementById(id);
+          if (!btn) return;
+          if (mode === 'kiosk' && kioskHome) {
+            kioskHome.insertBefore(btn, exitBtn);
+          } else if (headerHome) {
+            headerHome.appendChild(btn);
+          }
+        });
       }
 
       function setMode(mode, syncUrl) {
@@ -1994,9 +2163,11 @@
         } else if (nextMode === 'kiosk') {
           body.classList.add('kiosk');
         }
+        placeIconControls(nextMode);
         dom.modeButtons.forEach(function (btn) {
           btn.classList.toggle('active', btn.dataset.mode === nextMode);
         });
+        scheduleFitKiosk();
         if (syncUrl) {
           setParam('mode', nextMode);
         }
@@ -2054,6 +2225,9 @@
         if (dom.emptyState) {
           dom.emptyState.classList.toggle('hidden', visibleRows.length > 0);
         }
+
+        // Visible tile count changed, so the kiosk density tier may too.
+        scheduleFitKiosk();
       }
 
       function hydrateControlsFromUrl() {
@@ -2291,6 +2465,8 @@
 
           restoreOpenMonitorIds(expandedMonitorIds);
           applyTheme(body.dataset.theme || defaultTheme, false);
+          // setMode/applyViewState both re-schedule fitKiosk for the fresh
+          // #kioskGrid; the rAF debounce collapses them into one fit pass.
           setMode(currentMode(), false);
           applyRange(currentRange(), false);
           applyViewState();
@@ -2331,8 +2507,230 @@
       setupClock();
       setupBarTooltip();
       setupKioskNamePopover();
+      window.addEventListener('resize', scheduleFitKiosk);
+      if (document.fonts && document.fonts.ready) {
+        // Web-font metrics shift tile heights slightly; re-fit once loaded.
+        document.fonts.ready.then(scheduleFitKiosk);
+      }
+
+      // ---- Browser notifications (Web Push) --------------------------------
+      //
+      // The page and the service worker are two halves of one feature: this
+      // registers the worker served at /public/status/sw.js and stores the
+      // resulting subscription server-side; the sender encrypts payloads the
+      // worker knows how to render.
+
+      // Keyed per slug, matching the status-page-collapsed-<slug> convention
+      // above. slug is scoped to setupLiveRefresh, so read the body attribute
+      // directly rather than depending on that.
+      var pushSlug = body.dataset.statusPageSlug || '';
+      var PUSH_STATE_KEY = 'status-page-push-' + pushSlug;
+      var PUSH_SEEN_KEY = 'status-page-push-seen-' + pushSlug;
+
+      function pushSupported() {
+        // isSecureContext is the one that bites operationally: localhost is a
+        // secure context so development works, but a plain-HTTP staging host
+        // silently has no notifications at all.
+        return body.dataset.pushEnabled === '1' &&
+          !!body.dataset.pushKey &&
+          typeof window !== 'undefined' &&
+          window.isSecureContext &&
+          'serviceWorker' in navigator &&
+          'PushManager' in window &&
+          'Notification' in window;
+      }
+
+      // iOS and iPadOS only deliver Web Push to a site installed to the Home
+      // Screen; requestPermission in an ordinary Safari tab fails. Detect it
+      // and say so, rather than showing a button that does nothing.
+      function iosNeedsHomeScreen() {
+        var iOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        return iOS && !window.navigator.standalone;
+      }
+
+      function pushPaths() {
+        // Derived from the current path, never hardcoded, so the page keeps
+        // working behind a path prefix or on a custom domain.
+        var path = window.location.pathname.replace(/\/+$/, '');
+        var base = path.replace(/\/[^/]*$/, '');
+        return {
+          worker: base + '/sw.js',
+          scope: path + '/',
+          subscribe: path + '/push/subscribe',
+          unsubscribe: path + '/push/unsubscribe'
+        };
+      }
+
+      function urlBase64ToUint8Array(value) {
+        var padded = (value + '='.repeat((4 - (value.length % 4)) % 4))
+          .replace(/-/g, '+').replace(/_/g, '/');
+        var raw = window.atob(padded);
+        var out = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i += 1) { out[i] = raw.charCodeAt(i); }
+        return out;
+      }
+
+      // The control is icon-only, so the title and aria-label carry all of
+      // its meaning -- including that it is a toggle. "On" with no way to
+      // discover the off switch would strand visitors in browser settings.
+      const PUSH_LABELS = {
+        on: {
+          aria: 'Turn off notifications',
+          title: 'Notifications are on for this page. Click to turn them off.'
+        },
+        off: {
+          aria: 'Enable notifications',
+          title: 'Get a browser notification when a service on this page goes down or recovers.'
+        },
+        blocked: {
+          aria: 'Notifications blocked',
+          title: 'Notifications are blocked for this site in your browser settings.'
+        },
+        unavailable: {
+          aria: 'Notifications unavailable',
+          title: 'Add this page to your Home Screen to enable notifications.'
+        }
+      };
+
+      function setPushButton(state) {
+        const btn = getDom().pushToggleBtn;
+        if (!btn) return;
+        const copy = PUSH_LABELS[state] || PUSH_LABELS.off;
+
+        btn.hidden = false;
+        btn.setAttribute('aria-pressed', state === 'on' ? 'true' : 'false');
+        btn.setAttribute('aria-label', copy.aria);
+        btn.title = copy.title;
+        btn.disabled = state === 'blocked' || state === 'unavailable';
+
+        // A struck-through bell is the only state the colour change cannot
+        // convey on its own.
+        const slash = btn.querySelector('#pushBellSlash');
+        if (slash) slash.hidden = state !== 'blocked';
+      }
+
+      function postPushJSON(url, payload) {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      function registerPushWorker() {
+        var paths = pushPaths();
+        // Register with a scope narrowed to THIS page. The worker is served
+        // from the parent directory so its max scope allows this; a worker
+        // served under the slug would have a scope that does not cover the
+        // page URL at all.
+        return navigator.serviceWorker.register(paths.worker, { scope: paths.scope });
+      }
+
+      function refreshPushSubscription(registration) {
+        // Touch the server roughly daily so last_seen_at stays fresh and the
+        // stale sweep does not retire an active subscriber.
+        var last = 0;
+        try { last = parseInt(window.localStorage.getItem(PUSH_SEEN_KEY) || '0', 10) || 0; } catch (e) {}
+        if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+
+        registration.pushManager.getSubscription().then(function (sub) {
+          if (!sub) return;
+          return postPushJSON(pushPaths().subscribe, sub.toJSON()).then(function () {
+            try { window.localStorage.setItem(PUSH_SEEN_KEY, String(Date.now())); } catch (e) {}
+          });
+        }).catch(function () {});
+      }
+
+      function enablePush() {
+        // requestPermission must be called from the click handler itself:
+        // Safari and Firefox both require a user gesture.
+        return Notification.requestPermission().then(function (permission) {
+          if (permission === 'denied') { setPushButton('blocked'); return; }
+          if (permission !== 'granted') { setPushButton('off'); return; }
+
+          return registerPushWorker().then(function (registration) {
+            return registration.pushManager.subscribe({
+              // Required by Chrome, and it is what obliges the worker to show
+              // a notification for every push it receives.
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(body.dataset.pushKey)
+            });
+          }).then(function (sub) {
+            return postPushJSON(pushPaths().subscribe, sub.toJSON()).then(function (res) {
+              if (!res.ok) throw new Error('subscribe rejected');
+              try {
+                window.localStorage.setItem(PUSH_STATE_KEY, '1');
+                window.localStorage.setItem(PUSH_SEEN_KEY, String(Date.now()));
+              } catch (e) {}
+              setPushButton('on');
+            });
+          });
+        }).catch(function () {
+          setPushButton('off');
+        });
+      }
+
+      function disablePush() {
+        // getRegistration(scope), NOT navigator.serviceWorker.ready.
+        //
+        // The worker is registered with scope "<page>/" so one page's
+        // registration cannot clobber another's, and that scope does not
+        // cover the page URL "<page>" itself -- so the worker never controls
+        // this document and `ready` never resolves. Push delivery does not
+        // require the worker to control the page, but `ready` does, and using
+        // it here left the toggle stuck on with no way to opt out.
+        return navigator.serviceWorker.getRegistration(pushPaths().scope).then(function (registration) {
+          return registration ? registration.pushManager.getSubscription() : null;
+        }).then(function (sub) {
+          if (!sub) return;
+          // Tell the server BEFORE unsubscribing locally: if the order were
+          // reversed and the request failed, the row would linger and the
+          // visitor would keep getting notifications with no way to stop.
+          return postPushJSON(pushPaths().unsubscribe, { endpoint: sub.endpoint })
+            .then(function () { return sub.unsubscribe(); });
+        }).then(function () {
+          try { window.localStorage.removeItem(PUSH_STATE_KEY); } catch (e) {}
+          setPushButton('off');
+        }).catch(function () {
+          setPushButton('off');
+        });
+      }
+
+      function setupPush() {
+        const dom = getDom();
+        if (!dom.pushToggleBtn || !pushSupported()) return;
+        if (iosNeedsHomeScreen()) { setPushButton('unavailable'); return; }
+        if (Notification.permission === 'denied') { setPushButton('blocked'); return; }
+
+        // The browser is the source of truth, not localStorage: permission
+        // can be revoked in browser settings without the page ever knowing.
+        navigator.serviceWorker.getRegistration(pushPaths().scope).then(function (registration) {
+          if (!registration) { setPushButton('off'); return; }
+          return registration.pushManager.getSubscription().then(function (sub) {
+            setPushButton(sub ? 'on' : 'off');
+            if (sub) refreshPushSubscription(registration);
+          });
+        }).catch(function () {
+          setPushButton('off');
+        });
+
+        dom.pushToggleBtn.addEventListener('click', function () {
+          const btn = getDom().pushToggleBtn;
+          if (!btn || btn.disabled) return;
+          var on = btn.getAttribute('aria-pressed') === 'true';
+          btn.disabled = true;
+          var done = function () {
+            const after = getDom().pushToggleBtn;
+            if (after) after.disabled = false;
+          };
+          (on ? disablePush() : enablePush()).then(done, done);
+        });
+      }
+
       applyViewState();
       setupLiveRefresh();
+      setupPush();
     })();
   </script>
 </body>

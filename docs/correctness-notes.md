@@ -4,6 +4,11 @@ Concise reference for the intentional semantics (and known limits) of the
 uptime/SLA numbers the product displays. Each section points at the code that
 implements the behavior.
 
+State *transition* semantics (up/suspect/down/degraded/unknown, quorum
+aggregation, pause/maintenance handling) are specified normatively in
+`state-semantics.md`; this file covers the analytics/rollup layer built on
+top of them.
+
 ## SLA aggregation semantics (post-D2)
 
 Headline SLA/uptime for any scope (monitor, group, tenant) is a
@@ -35,6 +40,21 @@ are not required to average back to the headline stat (see the Decision D4
 comment in `getTrend`, `api/internal/services/dashboard/service.go`, near the
 "pooled (sum-of-success / sum-of-total) bucket uptime" note). Do not "fix"
 charts to match the scalar, or vice versa.
+
+## Time-based availability (method: interval vs sampled)
+
+`GetScopeAnalytics` headlines now prefer **time integration over
+`monitor_state_intervals`** (`shared/analytics/interval_availability.go`,
+spec S-U1–S-U5): availability = available time ÷ (available + unplanned down
+time), with unknown/paused time excluded from the denominator and reported as
+`coverage_pct`, and down∩maintenance excluded as planned (S-M3). The summary
+labels the math via `method`: `"interval"` when every monitor's timeline
+reaches the window start, `"sampled"` (the D2 count-based math below)
+otherwise — never silently mixed. Currently interval-based: the monitor
+analytics headline and the dashboard long-range `overall_uptime`. Still
+sampled: batch/status-page surfaces, the 24h/1h stitched dashboard scalars,
+per-bucket series (deliberately bucket-scoped sample rates), and any scope
+containing a group monitor (no timeline).
 
 ## Percentiles are raw-range only
 
@@ -68,11 +88,37 @@ its uptime computed over only the checked half. Consequences:
 - Dashboard aggregate queries additionally filter `m.enabled = TRUE`, so
   currently-paused monitors drop out of tenant-level stats entirely
   (`api/internal/services/dashboard/service.go`, `groups.go`).
-- Group aggregation convention (`api/internal/services/dashboard/groups.go`):
-  a member monitor (or sparkline bucket) with **zero checks in the window
-  defaults to 100% uptime** (`CASE WHEN total_checks > 0 ... ELSE 100.0` and
-  the `TotalChecks == 0 → 100.0` branches). No data is treated as "not known
-  to be down", which biases group uptime up when members are paused or new.
+- **Zero-data convention (S-D1, `state-semantics.md`)**: no checks in the
+  window is *no data*, never a percentage. The analytics summary carries
+  `has_data` (`shared/analytics`); dashboard `overall_uptime`, group/member
+  uptime, and sparkline buckets are `null` when nothing was checked
+  (`api/internal/services/dashboard`); the UI renders "—" or a gap. The old
+  convention — group members and sparkline buckets defaulting to **100%** on
+  zero checks, and empty analytics summaries reading 0% (a red "SLA Breach")
+  — is retired. Group uptime is now the mean over members *with* data.
+
+## Rollup dirty-bucket ledger
+
+Every monitor-source `check_results` insert marks its `(monitor_id,
+bucket_hour)` in `rollup_dirty` **in the same transaction**
+(`shared/monitorstate/record.go`, migration 000083), and rollup maintenance
+(`scheduler/internal/scheduler/rollups_dirty.go`) consumes the ledger by
+rebuilding each marked hourly bucket **wholesale** from raw rows (REPLACE
+semantics, the same math as `scripts/backfill_hourly_rollups.sql`), then
+re-deriving the affected daily buckets from the hourly table. Whenever a row
+commits — late, redelivered, behind any clock — its bucket is marked, which
+is exact by construction: the retired incremental cursor scanned worker-clock
+`created_at` and permanently skipped late-visible rows (the ~0.1–0.6%
+undercount), and its poison-skip replay path could drop rows outright. A
+failed batch now simply leaves its marks for the next run. `rollup_job_state`
+survives as a **completeness watermark** for the 24h stitchers: it advances
+to the newest monitor-source row only after a run that drains the ledger (see
+the updated contract in `shared/analytics/rollup_cursor.go`). Downtime tables
+are now a projection of `monitor_state_intervals` (closed `down` intervals →
+periods, open `down` interval → `monitor_downtime_open`); pre-timeline
+downtime rows are preserved, and group monitors (no timeline yet) keep their
+frozen rows until their state derivation is unified. The backfill script
+remains the repair tool for pre-ledger history.
 
 ## Rollup-era failure vs error split
 

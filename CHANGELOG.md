@@ -1,3 +1,108 @@
+# [1.0.0-alpha.73](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.72...v1.0.0-alpha.73) (2026-09-06)
+
+
+### Bug Fixes
+
+* **monitorstate:** keep the state timeline monotonic when a writer loses the lock race ([195c2dc](https://github.com/yassinebenameur/probara/commit/195c2dcf496feb69228b98fe13c812673f746996))
+
+
+### Features
+
+* **monitors:** add Prometheus instant-query monitor type ([c817eb1](https://github.com/yassinebenameur/probara/commit/c817eb1f2eab34d655a7307f824d281bf5ad5fcd))
+
+# [1.0.0-alpha.72](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.71...v1.0.0-alpha.72) (2026-09-04)
+
+
+### Bug Fixes
+
+* **alerter:** claim each notification atomically so replicas never send it twice ([5e8d578](https://github.com/yassinebenameur/probara/commit/5e8d578dd8b2254e9cda5b81dda1c2c6ac1ced5e))
+* **alerter:** resolve orphaned latency-anomaly alerts when no tenant has anomaly enabled ([d342318](https://github.com/yassinebenameur/probara/commit/d342318dcab20015a71951070268156f1cfe83b6))
+* **platform:** secure credentials and improve monitoring reliability ([08ae85f](https://github.com/yassinebenameur/probara/commit/08ae85f21ae6b2764dbb6e03856a448dd82bd168))
+
+
+### Features
+
+* **alerting:** dependency-aware alerting — page root causes only ([fd8a8ff](https://github.com/yassinebenameur/probara/commit/fd8a8ffa46222386b3e61502b8025a8a870c6c5d))
+
+# [1.0.0-alpha.71](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.70...v1.0.0-alpha.71) (2026-08-28)
+
+
+### Bug Fixes
+
+* **secrets:** keep stored monitor secrets when an update omits the field ([5e85e41](https://github.com/yassinebenameur/probara/commit/5e85e4176d20052c9b78748ed8087e26a2752341))
+* **status-page:** align monitor titles with fixed-width type badges ([04e352e](https://github.com/yassinebenameur/probara/commit/04e352eaa09a3072248dcade61c9a145107f5738))
+* **status-page:** make the visitor notification toggle actually work ([7107990](https://github.com/yassinebenameur/probara/commit/71079905148253d605aafd72cde05aa4b06b7523))
+* **status-page:** persist enable_push_notifications through the API ([dd7d91c](https://github.com/yassinebenameur/probara/commit/dd7d91ceb555e0b1b7fdb2601c29bcb85b25e762))
+* **status-page:** show theme and notification toggles in kiosk mode ([c976a50](https://github.com/yassinebenameur/probara/commit/c976a5060b8a77469fc5b9fbb6dee6188bd5b81a))
+
+
+### Features
+
+* **status-page:** auto-fit kiosk tile density so every monitor stays on screen ([1b22b54](https://github.com/yassinebenameur/probara/commit/1b22b54233a24b70759e55cfc88fc12df87e917b)), closes [#kioskGrid](https://github.com/yassinebenameur/probara/issues/kioskGrid)
+* **status-page:** bell icon for the notification toggle, and fix unsubscribe ([0605dec](https://github.com/yassinebenameur/probara/commit/0605dec3f1898a55e2ee6b61408182f1b356cfe8))
+* **status-page:** icon theme toggle and header control polish ([d914dfe](https://github.com/yassinebenameur/probara/commit/d914dfe66a27d78eab43dd402491d59937c70e88))
+* **status-page:** push subscribe endpoints and service worker route ([8821c63](https://github.com/yassinebenameur/probara/commit/8821c63f7d27f69018c2804b6c4d42a1542d6966))
+* **status-page:** reconcile state transitions into browser push deliveries ([52036b0](https://github.com/yassinebenameur/probara/commit/52036b038f0c75e34cf03518b3980f710bff506a))
+* **status-page:** schema and settings for visitor push notifications ([b81fbb1](https://github.com/yassinebenameur/probara/commit/b81fbb1a14598b1248af552e39ac374a58e50838))
+* **status-page:** visitor notification toggle, VAPID config, and deployment ([fcb0f91](https://github.com/yassinebenameur/probara/commit/fcb0f9155cbb34a504bd9a8ead03a1caaa446d86))
+* **web:** enable visitor browser notifications from the status page form ([35d498c](https://github.com/yassinebenameur/probara/commit/35d498c98c980612e2cbfe1556de56271fe1b5b2))
+* **webpush:** RFC 8291 message encryption and RFC 8292 VAPID auth ([a992438](https://github.com/yassinebenameur/probara/commit/a99243842331b4a2d926cc1b3fc4fd3f98635d1d))
+
+# [1.0.0-alpha.70](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.69...v1.0.0-alpha.70) (2026-08-25)
+
+
+### Features
+
+* **alerting:** surface monitors whose alerts reach nobody ([1c7186c](https://github.com/yassinebenameur/probara/commit/1c7186c07f3468ed56d9d181bfa4971911b5fa32))
+* **dashboard:** surface failure reasons in needs-attention and what-changed panels ([cb46625](https://github.com/yassinebenameur/probara/commit/cb466257b00dbc434564e36641f97192a8252813))
+* **import:** migrate monitors from Uptime Kuma ([8a40dbe](https://github.com/yassinebenameur/probara/commit/8a40dbeb686bcc27cb6cf53ca3f8be128286de9a))
+
+# [1.0.0-alpha.69](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.68...v1.0.0-alpha.69) (2026-08-20)
+
+
+### Bug Fixes
+
+* **api:** ship collector binaries in the api image and unbreak CI ([e71c473](https://github.com/yassinebenameur/probara/commit/e71c473c89bd85ec02c3614fc87d331a55747267))
+
+# [1.0.0-alpha.68](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.67...v1.0.0-alpha.68) (2026-08-20)
+
+
+### Bug Fixes
+
+* **api:** stop rejecting agent monitor edits on timeout validation ([d6d663a](https://github.com/yassinebenameur/probara/commit/d6d663aa1500f6da98ceb2f0e4fcbf49103ddf91))
+* **scheduler:** replace the rollup cursor with a dirty-bucket ledger ([1dbc041](https://github.com/yassinebenameur/probara/commit/1dbc0413509384d5ee6752b8e9c6cd666b3d9628)), closes [hi#water](https://github.com/hi/issues/water)
+* **scheduler:** retry result ingest indefinitely instead of dropping ([c15711e](https://github.com/yassinebenameur/probara/commit/c15711eb6e685c496e48b5a9568c295bed03553b))
+
+
+### Features
+
+* **agent:** move host monitoring to OpenTelemetry and a generic metric store ([79dc315](https://github.com/yassinebenameur/probara/commit/79dc315d18de80cef44aa44ac79dd03e2b359d81))
+* **monitors:** add clusterMonitor-backed cluster checks to the MongoDB monitor ([3c6b3c2](https://github.com/yassinebenameur/probara/commit/3c6b3c2c4b53e5eb00603fe3747663dc178b1cd9))
+* **monitors:** add mongod process-CPU cluster check ([69dc29a](https://github.com/yassinebenameur/probara/commit/69dc29ae4d368a00ed631c70e03fb98a08a8b1be))
+* **monitors:** record a state timeline and stop inventing uptime ([d7b9cf1](https://github.com/yassinebenameur/probara/commit/d7b9cf18a50f831b66da6836cd9e32cc534b7e84))
+* **web:** chart MongoDB cluster metrics on the monitor detail page ([6ce5bd8](https://github.com/yassinebenameur/probara/commit/6ce5bd8d84a1676ed3eb82d6c0f0f471fcf4551b))
+
+# [1.0.0-alpha.67](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.66...v1.0.0-alpha.67) (2026-08-11)
+
+
+### Bug Fixes
+
+* **website:** respect GitHub Pages base path ([d187cef](https://github.com/yassinebenameur/probara/commit/d187cef5eb436f7917fb5c80b154403c73331382))
+
+# [1.0.0-alpha.66](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.65...v1.0.0-alpha.66) (2026-08-11)
+
+
+### Features
+
+* **helm:** source every secret from existing or external secrets ([87215dc](https://github.com/yassinebenameur/probara/commit/87215dca63d2ac331f011bc60ac69760b5a99ded))
+
+# [1.0.0-alpha.65](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.64...v1.0.0-alpha.65) (2026-08-10)
+
+
+### Bug Fixes
+
+* **deps:** remediate runtime vulnerabilities ([e1b4ef0](https://github.com/yassinebenameur/probara/commit/e1b4ef03ea2cd3c1a5807a582856d083c07eb806))
+
 # [1.0.0-alpha.64](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.63...v1.0.0-alpha.64) (2026-08-10)
 
 

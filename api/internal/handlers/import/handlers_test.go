@@ -62,7 +62,7 @@ func TestHandlers_Export(t *testing.T) {
 
 func TestHandlers_PreviewPortableExportYAML(t *testing.T) {
 	log := logger.New("test", "debug")
-	service := importservice.NewService(nil, nil)
+	service := importservice.NewService(nil, nil, nil)
 	handlers := NewHandlers(service, log)
 	tenantID := uuid.New()
 

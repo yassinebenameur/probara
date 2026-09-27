@@ -14,6 +14,10 @@ import (
 	"github.com/yassinebenameur/probara/shared/models"
 )
 
+// legacyAgentSunset is the HTTP Sunset date advertised on the legacy
+// /agent/metrics endpoint; after the window it becomes a 410 tombstone.
+const legacyAgentSunset = "Wed, 18 Nov 2026 00:00:00 GMT"
+
 // Handler handles agent-related HTTP requests
 type Handler struct {
 	service       agent.AgentService
@@ -49,9 +53,17 @@ func (h *Handler) resolveBackendURL(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-// HandleReceiveMetrics handles POST /api/v1/agent/metrics
+// HandleReceiveMetrics handles POST /api/v1/agent/metrics — the LEGACY
+// custom-agent push protocol, kept through the deprecation window so
+// already-deployed agents keep reporting. New installs run the OTel
+// Collector against POST /api/v1/otlp/v1/metrics. The Deprecation/Sunset
+// headers and the warn log below are the operator's straggler finder.
 func (h *Handler) HandleReceiveMetrics(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", legacyAgentSunset)
+	w.Header().Set("Link", "<https://probara.dev/docs/agents#migrating-from-the-legacy-agent>; rel=\"deprecation\"")
 
 	// Get tenant ID from context (set by auth middleware)
 	tenantIDStr, ok := context.GetTenantID(ctx)
@@ -82,6 +94,13 @@ func (h *Handler) HandleReceiveMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent_id is required", http.StatusBadRequest)
 		return
 	}
+
+	// Per-report straggler visibility: which tenants/agents still run the
+	// legacy binary (the OTLP path never hits this handler).
+	h.log.WithFields(map[string]interface{}{
+		"tenant_id": tenantIDStr,
+		"agent_id":  payload.AgentID,
+	}).Warn("legacy agent push received (deprecated endpoint)")
 
 	// Process metrics
 	if err := h.service.ProcessMetrics(ctx, payload, tenantID); err != nil {
@@ -143,7 +162,7 @@ func (h *Handler) HandleGetInstallCommand(w http.ResponseWriter, r *http.Request
 	}
 
 	// Generate install command
-	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey, allowRemoteDisable(r))
+	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate install command")
 		http.Error(w, "failed to generate install command", http.StatusInternalServerError)
@@ -193,7 +212,7 @@ func (h *Handler) HandleGetInstallScript(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Generate install command
-	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey, allowRemoteDisable(r))
+	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate install command")
 		http.Error(w, "failed to generate install command", http.StatusInternalServerError)
@@ -239,7 +258,7 @@ func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.R
 		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey, allowRemoteDisable(r))
+	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate install command")
 		http.Error(w, "failed to generate install command", http.StatusInternalServerError)
@@ -249,6 +268,42 @@ func (h *Handler) HandleGetWindowsInstallScript(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", "inline; filename=install-probara-agent.ps1")
 	w.Write([]byte(installCmd.WindowsInstallScript))
+}
+
+// HandleGetCollectorConfig handles GET /api/v1/monitors/{id}/agent/config.yaml
+// (?platform=linux|darwin|windows, default linux) — the raw collector config
+// for config-management users and stock otelcol-contrib installs.
+func (h *Handler) HandleGetCollectorConfig(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	tenantIDStr, ok := context.GetTenantID(ctx)
+	if !ok {
+		h.log.Warn("tenant_id not found in context")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	tenantID, err := uuid.Parse(tenantIDStr)
+	if err != nil {
+		h.log.WithError(err).Error("invalid tenant_id in context")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid monitor ID", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := h.service.GenerateCollectorConfig(ctx, monitorID, tenantID, h.resolveBackendURL(r), r.URL.Query().Get("platform"))
+	if err != nil {
+		h.log.WithError(err).Error("failed to generate collector config")
+		http.Error(w, "failed to generate collector config", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("Content-Disposition", "inline; filename=config.yaml")
+	w.Write([]byte(cfg))
 }
 
 // HandleGetUninstallScript handles GET /api/v1/monitors/{id}/agent/uninstall/script.sh
@@ -284,7 +339,7 @@ func (h *Handler) HandleGetUninstallScript(w http.ResponseWriter, r *http.Reques
 		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey, false)
+	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate uninstall command")
 		http.Error(w, "failed to generate uninstall command", http.StatusInternalServerError)
@@ -329,7 +384,7 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 		apiKey = strings.TrimPrefix(authHeader, "Bearer ")
 	}
 
-	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey, false)
+	installCmd, err := h.service.GenerateInstallCommand(ctx, monitorID, tenantID, backendURL, apiKey)
 	if err != nil {
 		h.log.WithError(err).Error("failed to generate uninstall command")
 		http.Error(w, "failed to generate uninstall command", http.StatusInternalServerError)
@@ -339,9 +394,4 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", "inline; filename=uninstall-probara-agent.ps1")
 	w.Write([]byte(installCmd.WindowsUninstallScript))
-}
-
-func allowRemoteDisable(r *http.Request) bool {
-	value := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("allow_remote_disable")))
-	return value == "1" || value == "true" || value == "yes"
 }

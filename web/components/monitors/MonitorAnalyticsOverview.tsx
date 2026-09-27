@@ -269,7 +269,9 @@ export default function MonitorAnalyticsOverview({
   const latencyHeadlineValue = summary?.p95_latency_ms ?? summary?.avg_latency_ms;
   const hasData = Boolean(chartData.some((point) => point.hasData));
   const hasLatencyData = Boolean(chartData.some((point) => typeof point.latency === 'number'));
-  const isSlaCompliant = (summary?.sla_pct ?? 0) >= SLA_TARGET;
+  const summaryHasData = summary?.has_data ?? false;
+  const headlinePct = summary?.availability_pct ?? summary?.sla_pct ?? 0;
+  const isSlaCompliant = summaryHasData && headlinePct >= SLA_TARGET;
   const effectiveStatus = getEffectiveMonitorStatus(monitor, results);
 
   if (loading) {
@@ -299,21 +301,23 @@ export default function MonitorAnalyticsOverview({
         <div className="relative grid gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] lg:items-center">
           <div className="flex justify-center lg:justify-start">
             <UptimeHeroGauge
-              uptime={summary?.sla_pct || 0}
-              hasData={hasData}
+              uptime={headlinePct}
+              hasData={summaryHasData}
               rangeLabel={formatRangeWindowLabel(timeRange)}
             />
           </div>
 
           <div className="space-y-4">
             <span
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${isSlaCompliant
-                  ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300'
-                  : 'border-rose-400/30 bg-rose-400/10 text-rose-300'
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${!summaryHasData
+                  ? 'border-slate-500/30 bg-slate-500/10 text-slate-400'
+                  : isSlaCompliant
+                    ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300'
+                    : 'border-rose-400/30 bg-rose-400/10 text-rose-300'
                 }`}
             >
-              <span className={`h-1.5 w-1.5 rounded-full ${isSlaCompliant ? 'bg-cyan-400' : 'bg-rose-400'}`} />
-              {isSlaCompliant ? 'SLA Compliant' : 'SLA Breach'}
+              <span className={`h-1.5 w-1.5 rounded-full ${!summaryHasData ? 'bg-slate-400' : isSlaCompliant ? 'bg-cyan-400' : 'bg-rose-400'}`} />
+              {!summaryHasData ? 'No Data Yet' : isSlaCompliant ? 'SLA Compliant' : 'SLA Breach'}
             </span>
 
             <div className="space-y-1">
@@ -328,8 +332,11 @@ export default function MonitorAnalyticsOverview({
               </div>
               <p className="text-sm text-slate-400">
                 target {SLA_TARGET.toFixed(1)}%
+                {summary?.method === 'interval' && summary.coverage_pct !== undefined && (
+                  <span> · {summary.coverage_pct.toFixed(1)}% of window observed</span>
+                )}
               </p>
-              {summary?.downtime_pct !== undefined && summary.downtime_pct > 0 && (
+              {summaryHasData && summary?.downtime_pct !== undefined && summary.downtime_pct > 0 && (
                 <p className="text-sm font-medium text-slate-300">
                   {summary.downtime_pct.toFixed(2)}% total downtime
                 </p>

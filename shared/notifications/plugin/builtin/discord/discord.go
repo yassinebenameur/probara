@@ -1,24 +1,21 @@
 // Package discord implements the Discord incoming-webhook alert plugin.
 //
 // Discord renders rich messages via the "embeds" field
-// (https://discord.com/developers/docs/resources/channel#embed-object).
-// This plugin uses CapabilityRenderedAlert because the embed layout is a
-// good fit for the shared RenderedAlert structure and doesn't need raw event
-// access.
+// (https://discord.com/developers/docs/resources/channel#embed-object),
+// built here from the shared presentation in package present.
 package discord
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 const pluginType = "discord"
@@ -33,9 +30,9 @@ type Plugin struct {
 	httpClient *http.Client
 }
 
-// New constructs a plugin with the default HTTP client (10s timeout).
+// New constructs a plugin with the guarded notification HTTP client.
 func New() *Plugin {
-	return &Plugin{httpClient: &http.Client{Timeout: 10 * time.Second}}
+	return &Plugin{httpClient: plugin.NewHTTPClient(10 * time.Second)}
 }
 
 // Manifest returns the Discord plugin self-description.
@@ -46,9 +43,8 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		Description: "Post alerts to a Discord channel using a webhook URL.",
 		IconKey:     "discord",
 		DocsURL:     "https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks",
-		Version:     "1.0.0",
+		Version:     "1.1.0",
 		Capabilities: []plugin.Capability{
-			plugin.CapabilityRenderedAlert,
 			plugin.CapabilityTestable,
 		},
 		Fields: []plugin.Field{
@@ -71,65 +67,47 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if cfg.WebhookURL == "" {
-		return errors.New("webhook_url is required")
-	}
-	u, err := url.Parse(cfg.WebhookURL)
+	u, err := plugin.ParseHTTPSURL(cfg.WebhookURL, "webhook_url")
 	if err != nil {
-		return fmt.Errorf("webhook_url is not a valid URL: %w", err)
+		return err
 	}
-	if u.Scheme != "https" {
-		return errors.New("webhook_url must use https")
-	}
-	if !strings.HasSuffix(u.Host, "discord.com") && !strings.HasSuffix(u.Host, "discordapp.com") {
+	if !plugin.HostMatches(u.Host, "discord.com", "discordapp.com") {
 		return errors.New("webhook_url must point at a discord.com host")
 	}
 	return nil
 }
 
-// Send posts an embed payload to the channel's webhook URL.
+// Send posts an embed payload to the channel's webhook URL. Discord returns
+// 204 No Content on success.
 func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
-	webhook, ok := stringFromMap(req.Channel.Config, "webhook_url")
-	if !ok || webhook == "" {
-		return errors.New("discord channel missing webhook_url")
+	webhook := req.Channel.String("webhook_url")
+	if webhook == "" {
+		return plugin.Permanent(errors.New("discord channel missing webhook_url"))
 	}
-
-	payload, err := json.Marshal(buildEmbed(req))
-	if err != nil {
-		return fmt.Errorf("marshal discord payload: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("build discord request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("post discord webhook: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Discord returns 204 No Content on success.
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("discord webhook returned status %d", resp.StatusCode)
-	}
-	return nil
+	return plugin.PostJSON(ctx, p.httpClient, webhook, buildEmbed(req.View()), nil, "discord webhook")
 }
 
 type discordPayload struct {
-	Username string         `json:"username,omitempty"`
-	Content  string         `json:"content,omitempty"`
-	Embeds   []discordEmbed `json:"embeds,omitempty"`
+	Username        string          `json:"username,omitempty"`
+	Content         string          `json:"content,omitempty"`
+	Embeds          []discordEmbed  `json:"embeds,omitempty"`
+	AllowedMentions allowedMentions `json:"allowed_mentions"`
+}
+
+// allowedMentions with an empty Parse list stops any "@everyone" or role
+// mention inside alert text from pinging.
+type allowedMentions struct {
+	Parse []string `json:"parse"`
 }
 
 type discordEmbed struct {
-	Title     string              `json:"title,omitempty"`
-	Color     int                 `json:"color,omitempty"`
-	Timestamp string              `json:"timestamp,omitempty"`
-	Footer    *discordEmbedFooter `json:"footer,omitempty"`
-	Fields    []discordEmbedField `json:"fields,omitempty"`
+	Title       string              `json:"title,omitempty"`
+	Description string              `json:"description,omitempty"`
+	URL         string              `json:"url,omitempty"`
+	Color       int                 `json:"color,omitempty"`
+	Timestamp   string              `json:"timestamp,omitempty"`
+	Footer      *discordEmbedFooter `json:"footer,omitempty"`
+	Fields      []discordEmbedField `json:"fields,omitempty"`
 }
 
 type discordEmbedField struct {
@@ -142,100 +120,59 @@ type discordEmbedFooter struct {
 	Text string `json:"text"`
 }
 
-func buildEmbed(req plugin.DispatchRequest) discordPayload {
-	event := req.Event
-	eventType := eventTypeOf(req)
-	ts := event.Timestamp
-	if ts.IsZero() {
-		ts = time.Now()
-	}
+// Discord embed limits.
+const (
+	maxTitle      = 256
+	maxFieldValue = 1024
+	maxFields     = 25
+)
 
-	fields := []discordEmbedField{
-		{Name: "Monitor", Value: event.Alert.MonitorName, Inline: true},
-		{Name: "Policy", Value: event.Alert.PolicyName, Inline: true},
-		{Name: "Status", Value: event.Alert.Status, Inline: true},
-		{Name: "Failure Count", Value: fmt.Sprintf("%d", event.Alert.FailureCount), Inline: true},
-	}
-	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
-		fields = append(fields, discordEmbedField{Name: "Last Error", Value: *event.Alert.LastError})
-	}
-	if summary := event.Alert.MetricSummary(); summary != "" {
-		fields = append(fields, discordEmbedField{Name: event.Alert.MetricLabel(), Value: summary, Inline: true})
-	}
-	if names := event.Alert.FailingLocationNames(); names != "" {
-		fields = append(fields, discordEmbedField{Name: "Failing Locations", Value: names})
-	}
-	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
-		value := *event.Alert.RootCauseMonitorName
-		if event.Alert.RootCauseDownSince != nil {
-			value = fmt.Sprintf("%s (down since %s)", value, event.Alert.RootCauseDownSince.Format(time.RFC1123))
+func buildEmbed(m present.Message) discordPayload {
+	var fields []discordEmbedField
+	for _, f := range m.Facts() {
+		if len(fields) == maxFields {
+			break
 		}
-		fields = append(fields, discordEmbedField{Name: "Likely Caused By", Value: value})
+		fields = append(fields, discordEmbedField{Name: f.Label, Value: truncate(f.Value, maxFieldValue), Inline: len(f.Value) <= 40})
 	}
-
-	title := titleFor(eventType, event.Alert.MonitorName, event.Alert.IsLatencyAnomaly())
-	if event.Alert.IsHostMetric() {
-		title = fmt.Sprintf("%s: %s", event.Alert.HostMetricLabel(eventType), event.Alert.MonitorName)
-	}
-	if event.Alert.IsTLSExpiry() {
-		title = fmt.Sprintf("%s: %s", event.Alert.TLSExpiryLabel(eventType), event.Alert.MonitorName)
+	if m.LastError != "" && len(fields) < maxFields {
+		fields = append(fields, discordEmbedField{Name: "Last error", Value: truncate(m.LastError, maxFieldValue)})
 	}
 
 	return discordPayload{
 		Embeds: []discordEmbed{{
-			Title:     title,
-			Color:     colorFor(eventType),
-			Timestamp: ts.UTC().Format(time.RFC3339),
-			Footer:    &discordEmbedFooter{Text: fmt.Sprintf("event: %s · tenant: %s", eventType, event.TenantID)},
-			Fields:    fields,
+			Title:       truncate(m.Title, maxTitle),
+			Description: m.Summary,
+			URL:         m.ActionURL,
+			Color:       colorFor(m.Tone),
+			Timestamp:   m.Timestamp.UTC().Format(time.RFC3339),
+			Footer:      &discordEmbedFooter{Text: fmt.Sprintf("%s · workspace %s", m.StatusWord, m.TenantID)},
+			Fields:      fields,
 		}},
+		AllowedMentions: allowedMentions{Parse: []string{}},
 	}
 }
 
-func titleFor(eventType, monitorName string, latency bool) string {
-	if latency {
-		switch eventType {
-		case "created":
-			return fmt.Sprintf("Latency Degraded: %s", monitorName)
-		case "resolved":
-			return fmt.Sprintf("Latency Recovered: %s", monitorName)
-		case "reminder":
-			return fmt.Sprintf("Latency Still Degraded: %s", monitorName)
-		default:
-			return fmt.Sprintf("Latency Anomaly: %s", monitorName)
-		}
-	}
-	switch eventType {
-	case "created":
-		return fmt.Sprintf("Alert Triggered: %s", monitorName)
-	case "resolved":
-		return fmt.Sprintf("Alert Resolved: %s", monitorName)
-	case "reminder":
-		return fmt.Sprintf("Alert Still Active: %s", monitorName)
-	default:
-		return fmt.Sprintf("Alert: %s", monitorName)
-	}
-}
-
-// Discord embed color is a decimal integer encoding RGB hex. Picked to match
-// common severity conventions: red for fired, green for resolved, amber for
-// reminder.
-func colorFor(eventType string) int {
-	switch eventType {
-	case "resolved":
+// Discord embed color is a decimal integer encoding RGB hex.
+func colorFor(t present.Tone) int {
+	switch t {
+	case present.ToneUp:
 		return 0x2ECC71
-	case "reminder":
+	case present.ToneWarn:
 		return 0xF1C40F
+	case present.ToneInfo:
+		return 0x3498DB
 	default:
 		return 0xE74C3C
 	}
 }
 
-func eventTypeOf(req plugin.DispatchRequest) string {
-	if req.EventType != "" {
-		return req.EventType
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-	return req.Event.Type
+	return string(r[:n-1]) + "…"
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {
@@ -248,18 +185,6 @@ func parseConfig(raw json.RawMessage) (Config, error) {
 	}
 	cfg.WebhookURL = strings.TrimSpace(cfg.WebhookURL)
 	return cfg, nil
-}
-
-func stringFromMap(m map[string]any, key string) (string, bool) {
-	if m == nil {
-		return "", false
-	}
-	v, ok := m[key]
-	if !ok {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
 }
 
 func init() {

@@ -263,8 +263,10 @@ func TestBackfillScript_MatchesIncrementalJobOutput(t *testing.T) {
 	tenantID := insertTenant(ctx, t, dbClient)
 	monitorID := insertMonitor(ctx, t, dbClient, tenantID, "rollup-backfill-equivalence")
 
+	// All compared data sits strictly in the day BEFORE the sentinel: the
+	// script caps daily rebuilds to full days strictly before the cursor's
+	// day, so the cursor day itself is out of its scope.
 	base := time.Date(2026, time.February, 3, 6, 0, 0, 0, time.UTC)
-	src := string(sharedmodels.ResultSourceMonitor)
 	statuses := []struct {
 		offset  time.Duration
 		status  string
@@ -277,14 +279,16 @@ func TestBackfillScript_MatchesIncrementalJobOutput(t *testing.T) {
 		{130 * time.Minute, string(sharedmodels.ResultStatusSuccess), 30},
 	}
 	for _, c := range statuses {
-		insertCheckResult(ctx, t, dbClient, tenantID, monitorID, base.Add(c.offset), c.status, src, c.latency)
+		insertMarkedCheckResult(ctx, t, dbClient, tenantID, monitorID, base.Add(c.offset), c.status, c.latency)
 	}
-	// Sentinel row on the next day so the incremental cursor lands past every
-	// full hour/day above (its own buckets are excluded from the comparison).
+	// Sentinel row on the next day so the completeness watermark lands past
+	// every full hour/day above (its own buckets are excluded from the
+	// script's caps and therefore compared untouched).
 	sentinelAt := base.Add(20 * time.Hour)
-	insertCheckResult(ctx, t, dbClient, tenantID, monitorID, sentinelAt, string(sharedmodels.ResultStatusSuccess), src, 10)
+	insertMarkedCheckResult(ctx, t, dbClient, tenantID, monitorID, sentinelAt, string(sharedmodels.ResultStatusSuccess), 10)
 
-	// Reference: let the incremental job process everything.
+	// Reference: let the dirty-ledger consumer rebuild everything and advance
+	// the watermark to the sentinel.
 	if _, _, err := s.runRollupMaintenance(); err != nil {
 		t.Fatalf("runRollupMaintenance() error = %v", err)
 	}

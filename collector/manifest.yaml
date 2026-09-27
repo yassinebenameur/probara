@@ -1,0 +1,27 @@
+# OpenTelemetry Collector Builder (OCB) manifest for probara-collector — the
+# minimal collector distribution served from the API's /static/collector/ and
+# installed on customer hosts by the generated install scripts.
+#
+# Components are the exact set the generated config uses (hostmetrics →
+# metricstransform/resourcedetection/resource/memory_limiter/batch →
+# otlphttp). Adding a component here without bumping
+# scripts/build-collector.sh's pinned OCB version (and vice versa) breaks the
+# build — bump them together.
+dist:
+  name: probara-collector
+  description: Probara host metrics collector
+  version: 0.159.0
+  output_path: ./dist
+
+receivers:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver v0.159.0
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.159.0
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.159.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.159.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.159.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.159.0
+
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.159.0

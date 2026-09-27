@@ -215,7 +215,8 @@ export type MonitorType =
   | "rabbitmq"
   | "tcp"
   | "mysql"
-  | "websocket";
+  | "websocket"
+  | "prometheus";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -315,6 +316,24 @@ export interface GRPCMonitorConfig {
   use_tls?: boolean;
 }
 
+export interface PrometheusMonitorConfig {
+  url: string;
+  query: string;
+  operator: 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'ne';
+  threshold: number;
+  no_data_status?: 'success' | 'failure' | 'error';
+  auth_type?: 'none' | 'basic' | 'bearer';
+  username?: string;
+  password?: string;
+  bearer_token?: string;
+}
+
+export interface PrometheusMetrics {
+  values: number[];
+  sample_count: number;
+  failed_count: number;
+}
+
 export interface TCPMonitorConfig {
   host: string;
   port: number;
@@ -326,17 +345,21 @@ export interface GroupMonitorConfig {
   monitor_ids: string[];
 }
 
-export interface MetricThresholdsConfig {
-  cpu_percent?: number;
-  memory_percent?: number;
-  disk_percent?: number;
-  swap_percent?: number;
+// Generic metric alert rule evaluated by the alerter against the metric
+// store. Thresholds are in the metric's NATIVE unit: *.utilization metrics
+// are ratios 0-1 (the UI shows percent and converts on submit/display).
+export interface MetricRule {
+  metric_name: string;
+  attribute_filters?: Record<string, string>;
+  operator: '>=' | '<=';
+  threshold: number;
+  for_duration_seconds?: number; // 0/absent = instant
 }
 
 export interface AgentMonitorConfig {
   agent_id: string;
   expected_interval_seconds: number;
-  metric_thresholds?: MetricThresholdsConfig;
+  metric_rules?: MetricRule[];
 }
 
 export interface PushMonitorConfig {
@@ -417,6 +440,19 @@ export interface MongoDBMonitorConfig extends DBTLSMaterial {
   replica_set?: string;
   max_latency_ms?: number;
   warn_latency_ms?: number;
+  // Cluster checks (read-only admin commands; need MongoDB's built-in
+  // clusterMonitor role). Missing privileges never fail the check unless a
+  // hard threshold below depends on the data.
+  collect_replication?: boolean; // replSetGetStatus
+  collect_connections?: boolean; // serverStatus.connections
+  collect_cache?: boolean; // serverStatus.wiredTiger.cache
+  collect_memory?: boolean; // serverStatus.mem
+  collect_network?: boolean; // serverStatus.network + opcounters
+  collect_cpu?: boolean; // serverStatus.extra_info process CPU time (Linux)
+  // Max fails the check (and fails closed when lag can't be evaluated);
+  // warn only annotates. Both require collect_replication.
+  max_replication_lag_seconds?: number;
+  warn_replication_lag_seconds?: number;
 }
 
 export interface RabbitMQMonitorConfig extends DBTLSMaterial {
@@ -470,7 +506,51 @@ export interface DBMetrics {
   latency_warn_ms?: number;
 }
 
-export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "mongodb" | "rabbitmq" | "mysql", DBMetrics>>;
+export interface MongoDBReplicationMember {
+  name: string;
+  state: string; // PRIMARY/SECONDARY/ARBITER/...
+  health: boolean;
+  lag_seconds?: number;
+}
+
+export interface MongoDBReplicationMetrics {
+  set?: string;
+  primary?: string; // "" / absent = the set has no primary
+  members_total: number;
+  members_healthy: number;
+  max_lag_seconds?: number; // absent = no primary or no secondaries
+  members?: MongoDBReplicationMember[];
+}
+
+export interface MongoDBUnavailableCheck {
+  check: "server_status" | "repl_set_status";
+  reason: "unauthorized" | "not_replica_set" | "error";
+  message?: string;
+}
+
+// MongoDB cluster-check extras (clusterMonitor role), flat siblings of the
+// shared DBMetrics fields under metrics_data.mongodb.
+export interface MongoDBMetrics extends DBMetrics {
+  uptime_seconds?: number;
+  connections_available?: number;
+  mem_virtual_bytes?: number;
+  cache_used_bytes?: number;
+  cache_max_bytes?: number;
+  cache_dirty_bytes?: number;
+  network_bytes_in?: number; // cumulative since restart
+  network_bytes_out?: number; // cumulative since restart
+  network_requests?: number;
+  opcounters?: Record<string, number>;
+  cpu_user_us?: number; // mongod process CPU time, cumulative µs (Linux)
+  cpu_system_us?: number;
+  replication?: MongoDBReplicationMetrics;
+  replication_lag_warn_seconds?: number;
+  unavailable?: MongoDBUnavailableCheck[];
+}
+
+export type DBMetricsEnvelope = Partial<Record<"redis" | "postgres" | "rabbitmq" | "mysql", DBMetrics>> & {
+  mongodb?: MongoDBMetrics;
+};
 
 export type SyntheticFailureMode = "fail_fast" | "continue";
 
@@ -565,7 +645,8 @@ export type MonitorConfig =
   | MongoDBMonitorConfig
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
-  | WebSocketMonitorConfig;
+  | WebSocketMonitorConfig
+  | PrometheusMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 
@@ -573,6 +654,12 @@ export type NotificationMode = 'default' | 'custom';
 //   'per_monitor' — each member alerts individually; the group emits no alert.
 //   'group'       — members are suppressed; one group-level alert speaks for them.
 export type MemberAlertRollup = 'per_monitor' | 'group';
+
+// Whether a monitor pages while an upstream dependency it depends on is down:
+//   'inherit' — follow the workspace setting (NotificationSettings.dependency_suppression_enabled)
+//   'on'      — never page while an upstream is down; the root cause's alert speaks for it
+//   'off'     — always page, whatever the workspace says
+export type DependencySuppression = 'inherit' | 'on' | 'off';
 
 export interface ChannelAssignment {
   channel_id: string;
@@ -590,6 +677,10 @@ export interface NotificationSettings {
   latency_anomaly_sensitivity: number;
   latency_anomaly_min_breach_seconds: number;
   latency_anomaly_min_delta_pct: number;
+  // Dependency-aware alerting: suppress a monitor's notifications while an
+  // upstream dependency is down, and for the grace period after it recovers.
+  dependency_suppression_enabled: boolean;
+  dependency_suppression_grace_seconds: number;
 }
 
 export type AlertKind = 'availability' | 'latency_anomaly' | 'host_metric' | 'mesh_edge' | 'tls_expiry';
@@ -767,8 +858,10 @@ export interface Monitor {
   consecutive_failures_threshold: number;
   notification_mode: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
+  dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
   current_state?: MonitorState;
+  alert_routing?: AlertRouting; // Read-only; who this monitor's alerts reach
   in_maintenance?: boolean;
   maintenance_until?: string; // Latest ends_at among covering active windows
   // Old format fields (for backward compatibility during migration)
@@ -778,6 +871,33 @@ export interface Monitor {
   body?: string;
   expected_status?: number;
   expected_body_substring?: string;
+}
+
+/**
+ * Where a monitor's alerts actually go. Computed per request from
+ * shared/alertrouting — the same rules the alerter dispatches by — so
+ * `reachable: false` means an alert here would notify nobody.
+ */
+export interface AlertRouting {
+  reachable: boolean;
+  /**
+   * `custom` / `tenant_default`: the monitor's own routing applies.
+   * `group_rollup`: a group rolls its alerts up, so the group's routing decides.
+   * `members`: it is a group that never alerts itself; members alert individually.
+   */
+  source: 'custom' | 'tenant_default' | 'group_rollup' | 'members';
+  active_channels: number;
+  /** Includes disabled channels, which never deliver. */
+  assigned_channels: number;
+  reason?:
+    | 'no_custom_channels'
+    | 'custom_channels_disabled'
+    | 'no_tenant_default_channels'
+    | 'tenant_default_channels_disabled'
+    | 'group_rollup_unrouted'
+    | 'group_rollup_paused';
+  rollup_group_id?: string;
+  rollup_group_name?: string;
 }
 
 export interface CreateMonitorRequest {
@@ -793,6 +913,7 @@ export interface CreateMonitorRequest {
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
+  dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
   location_ids?: string[];
@@ -812,6 +933,7 @@ export interface UpdateMonitorRequest {
   consecutive_failures_threshold?: number;
   notification_mode?: NotificationMode;
   member_alert_rollup?: MemberAlertRollup;
+  dependency_suppression?: DependencySuppression;
   notification_channels?: ChannelAssignment[];
   depends_on_ids?: string[];
   location_ids?: string[];
@@ -878,6 +1000,13 @@ export interface Alert {
   root_cause_monitor_name?: string;
   source_location_name?: string;
   target_location_name?: string;
+  // Set while the alerter deliberately sends no notification for this open
+  // alert. 'dependency': an upstream dependency is down (or recovered less
+  // than the grace period ago) and dependency suppression is on.
+  suppression_reason?: 'dependency';
+  // How many open downstream alerts this alert's monitor is the suppressed
+  // root cause of (its notification lists them under "also affecting").
+  impacted_count?: number;
 }
 
 export interface AlertListResponse {
@@ -903,7 +1032,8 @@ export interface DashboardStats {
   active_monitors: number;
   http_monitors: number;
   agent_monitors: number;
-  overall_uptime: number;
+  /** null = no checks in the window; render as no-data, never 0% (S-D1). */
+  overall_uptime: number | null;
   avg_response_ms: number;
 }
 
@@ -938,6 +1068,10 @@ export interface DashboardOpsSummary {
   maintenance_monitors: number;
   active_alerts: number;
   acknowledged_alerts: number;
+  /** Open alerts whose notifications are suppressed because an upstream dependency explains them (subset of active + acknowledged). */
+  suppressed_alerts: number;
+  /** Active monitors whose alerts would notify nobody. */
+  unrouted_monitors: number;
 }
 
 export interface DashboardProblemMonitor {
@@ -948,6 +1082,9 @@ export interface DashboardProblemMonitor {
   error_count: number;
   uptime: number;
   latest_failure_at: string | null;
+  /** error_message of the most recent failing check in range; absent when the
+   *  check had no message or raw results were already rolled up. */
+  latest_error_message?: string | null;
 }
 
 export interface DashboardFailureEvent {
@@ -993,14 +1130,16 @@ export interface DashboardSummaryResponse {
 export interface DashboardGroupMember {
   monitor_id: string;
   monitor_name: string;
-  uptime: number;
+  /** null = no checks in the window (paused, new); render "—", never 100%. */
+  uptime: number | null;
   current_status: string | null;
 }
 
 export interface DashboardGroup {
   tag: string | null;
   monitor_count: number;
-  uptime: number;
+  /** Mean over members with data; null when no member has any. */
+  uptime: number | null;
   attention_count: number;
   worst_member: DashboardGroupMember | null;
   members: DashboardGroupMember[];
@@ -1009,7 +1148,8 @@ export interface DashboardGroup {
 export interface DashboardGroupSparklineResponse {
   tag: string | null;
   range: DashboardRange;
-  buckets: number[];
+  /** null buckets = no checks landed in them; render gaps. */
+  buckets: (number | null)[];
 }
 
 export interface DashboardProblemMonitorsResponse {
@@ -1274,9 +1414,15 @@ export type PluginFieldType =
   | 'email_list'
   | 'textarea'
   | 'secret'
-  | 'bool';
+  | 'bool'
+  | 'select';
 
-export type PluginCapability = 'rendered_alert' | 'raw_event' | 'testable';
+export type PluginCapability = 'testable' | 'acknowledge';
+
+export interface PluginFieldOption {
+  value: string;
+  label: string;
+}
 
 export interface PluginField {
   key: string;
@@ -1287,6 +1433,7 @@ export interface PluginField {
   required?: boolean;
   secret?: boolean;
   default?: unknown;
+  options?: PluginFieldOption[];
 }
 
 export interface PluginManifest {
@@ -1328,6 +1475,12 @@ export interface StatusPageSettings {
   footer_text?: string;
   default_theme?: string;
   allow_theme_toggle?: boolean;
+  /**
+   * Offer visitors a browser-notification opt-in on the public page. Off by
+   * default, and inert unless the deployment configures a VAPID keypair
+   * (STATUS_PAGE_VAPID_PUBLIC_KEY / _PRIVATE_KEY).
+   */
+  enable_push_notifications?: boolean;
   custom_css?: string;
   custom_head_html?: string;
   custom_footer_html?: string;
@@ -1394,6 +1547,7 @@ export interface CreateStatusPageRequest {
   monitor_ids?: string[];
   monitor_display_names?: Record<string, string>;
   sections?: StatusPageSection[];
+  settings?: StatusPageSettings;
 }
 
 export interface UpdateStatusPageRequest {
@@ -1438,7 +1592,9 @@ export interface CheckResult {
   created_at: string;
 }
 
-// Agent Metrics types
+// Legacy agent metrics blob (pre-OTel host agent). New agent monitors emit
+// heartbeat check results without metrics_data; historical results may still
+// carry this shape, so the list-page mini view keeps rendering it.
 export interface AgentDiskMount {
   path: string;
   used: number;
@@ -1468,7 +1624,7 @@ export interface AgentMetrics {
   timestamp: string;
 }
 
-// Agent Install Command types
+// Agent Install Command types (OpenTelemetry Collector distribution)
 export interface AgentInstallCommand {
   agent_id: string;
   backend_url: string;
@@ -1476,9 +1632,70 @@ export interface AgentInstallCommand {
   windows_install_script: string;
   uninstall_script: string;
   windows_uninstall_script: string;
-  config_template: string;
+  // Generated collector YAML (linux variant); per-platform variants come from
+  // GET /v1/monitors/{id}/agent/config.yaml?platform=linux|darwin|windows.
+  collector_config: string;
+  collector_version: string;
   download_url: string;
   interval_seconds: number;
+}
+
+// Generic metric store types (agent monitors push OTLP metrics)
+
+export type MetricType = 'gauge' | 'counter';
+
+export interface MetricSeriesInfo {
+  series_key: string;
+  metric_name: string;
+  attributes: Record<string, string>;
+  unit: string;
+  metric_type: MetricType;
+  last_seen_at: string;
+}
+
+export interface MetricSeriesListResponse {
+  items: MetricSeriesInfo[];
+}
+
+export type MetricAgg = 'avg' | 'min' | 'max' | 'sum' | 'last';
+
+export interface MetricQuerySpec {
+  ref: string;
+  metric_name: string;
+  // Subset match; omitted = fan-out to every matching series.
+  attribute_filters?: Record<string, string>;
+  agg: MetricAgg;
+  // Per-second rate; only valid for counter series (server 422s otherwise).
+  rate?: boolean;
+}
+
+export interface MetricQueryRequest {
+  start: string;
+  end: string;
+  step_seconds: number; // 10..86400
+  queries: MetricQuerySpec[]; // max 12
+}
+
+export interface MetricSeriesData {
+  series_key: string;
+  metric_name: string;
+  attributes: Record<string, string>;
+  unit: string;
+  metric_type: MetricType;
+  // [epoch_ms, value]; buckets with no samples are omitted.
+  points: [number, number][];
+}
+
+export interface MetricQueryRefResult {
+  ref: string;
+  step_seconds: number;
+  source: 'raw' | 'rollup';
+  truncated: boolean;
+  series: MetricSeriesData[];
+}
+
+export interface MetricQueryResponse {
+  results: MetricQueryRefResult[];
 }
 
 // Push Info types
@@ -1606,6 +1823,13 @@ export type MonitorAnalyticsRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' |
 export type AnalyticsSource = 'raw' | 'rollup';
 
 export interface MonitorAnalyticsSummary {
+  /** false = no checks in the window; the percentages are meaningless zeros. */
+  has_data: boolean;
+  /** "interval" = time-based availability from the state timeline; "sampled" = legacy count-based. */
+  method: 'interval' | 'sampled';
+  availability_pct: number;
+  /** Observed share of the window; only present for method "interval". */
+  coverage_pct?: number;
   uptime_pct: number;
   sla_pct: number;
   downtime_pct: number;
@@ -1665,6 +1889,8 @@ export type ImportFormat = 'json' | 'yaml' | 'csv';
 export interface ImportRow {
   index: number;
   fields: Record<string, unknown>;
+  /** Per-monitor translation caveats, set by format adapters (e.g. Uptime Kuma). */
+  warnings?: string[];
 }
 
 export interface FieldMapping {
@@ -1684,7 +1910,20 @@ export interface FieldMapping {
   tags?: string;
   enabled?: string;
   group_members?: string;
+  alert_policy_names?: string;
+  consecutive_failures_threshold?: string;
 }
+
+/** A source record a format adapter refused to translate. Informational only. */
+export interface ImportSkippedRow {
+  name: string;
+  source_type: string;
+  reason: string;
+}
+
+/** Recognized source schemas. Anything else goes through field mapping. */
+export const IMPORT_SCHEMA_PORTABLE = 'portable_monitor_export';
+export const IMPORT_SCHEMA_UPTIME_KUMA = 'uptime_kuma_export';
 
 export interface ImportPreviewResponse {
   format: ImportFormat;
@@ -1696,6 +1935,7 @@ export interface ImportPreviewResponse {
   total_rows: number;
   detected_types: string[];
   suggested_type_mapping: Record<string, string>;
+  skipped_rows?: ImportSkippedRow[];
 }
 
 export interface ImportExecuteRequest {

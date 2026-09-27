@@ -126,6 +126,14 @@ func TestMongoDBConfigValidator(t *testing.T) {
 		{"username without password", `{"host":"mongo.internal","username":"probe"}`, true},
 		{"invalid max latency", `{"host":"mongo.internal","max_latency_ms":-5}`, true},
 		{"invalid json", `{`, true},
+		{"cluster toggles alone ok", `{"host":"mongo.internal","collect_replication":true,"collect_connections":true,"collect_cache":true,"collect_memory":true,"collect_network":true}`, false},
+		{"toggles on connection string ok", `{"connection_string":"mongodb://mongo.internal","collect_replication":true,"max_replication_lag_seconds":30}`, false},
+		{"valid lag thresholds", `{"host":"mongo.internal","collect_replication":true,"warn_replication_lag_seconds":10,"max_replication_lag_seconds":30}`, false},
+		{"lag thresholds require collect_replication", `{"host":"mongo.internal","max_replication_lag_seconds":30}`, true},
+		{"warn lag requires collect_replication", `{"host":"mongo.internal","warn_replication_lag_seconds":10}`, true},
+		{"zero max lag", `{"host":"mongo.internal","collect_replication":true,"max_replication_lag_seconds":0}`, true},
+		{"negative warn lag", `{"host":"mongo.internal","collect_replication":true,"warn_replication_lag_seconds":-1}`, true},
+		{"warn lag not below max", `{"host":"mongo.internal","collect_replication":true,"warn_replication_lag_seconds":30,"max_replication_lag_seconds":30}`, true},
 	})
 }
 

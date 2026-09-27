@@ -28,6 +28,20 @@ const (
 )
 
 type Summary struct {
+	// HasData is false when no monitor in scope had a single check in the
+	// window; the percentage fields are then meaningless zeros and must
+	// render as no-data, never as 0% or 100% (S-D1, docs/state-semantics.md).
+	HasData bool
+	// Method labels how AvailabilityPct was computed (S-U5): "interval" =
+	// time integration over monitor_state_intervals; "sampled" = the legacy
+	// success/total count (used when any monitor's timeline starts after the
+	// window start). Never silently mixed.
+	Method          string
+	AvailabilityPct float64
+	// CoveragePct is the observed share of the window (unknown and paused
+	// time excluded from the denominator show up here instead — S-U2). Only
+	// set for Method "interval".
+	CoveragePct     *float64
 	UptimePct       float64
 	SLAPct          float64
 	DowntimePct     float64

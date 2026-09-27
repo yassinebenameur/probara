@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -85,6 +87,8 @@ func (s *Service) maskSecrets(monitor *models.Monitor) {
 	}
 }
 
+var ErrMonitorTypeMismatch = errors.New("test type must match the saved monitor type")
+
 // ResolveTestConfig resolves write-only secret placeholders ("***") in an
 // incoming config against the stored monitor's config so a test-connection
 // request can run with the real (still encrypted) secrets. With no monitorID
@@ -99,6 +103,9 @@ func (s *Service) ResolveTestConfig(ctx context.Context, tenantID uuid.UUID, mon
 		monitor, err := s.repo.GetByID(ctx, tenantID, *monitorID)
 		if err != nil {
 			return nil, err
+		}
+		if monitor.Type != monitorType {
+			return nil, ErrMonitorTypeMismatch
 		}
 		existing = monitor.Config
 	}
@@ -180,6 +187,10 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 	if req.MemberAlertRollup != nil {
 		memberAlertRollup = *req.MemberAlertRollup
 	}
+	dependencySuppression := "inherit" // DB default
+	if req.DependencySuppression != nil {
+		dependencySuppression = *req.DependencySuppression
+	}
 
 	locationIDs, err := parseLocationIDs(req.LocationIDs)
 	if err != nil {
@@ -207,6 +218,7 @@ func (s *Service) CreateMonitor(ctx context.Context, tenantID uuid.UUID, req *mo
 		ConsecutiveFailuresThreshold: consecutiveFailuresThreshold,
 		NotificationMode:             notificationMode,
 		MemberAlertRollup:            memberAlertRollup,
+		DependencySuppression:        dependencySuppression,
 		LocationQuorum:               locationQuorum,
 	}
 
@@ -283,6 +295,13 @@ func (s *Service) GetMonitor(ctx context.Context, tenantID, monitorID uuid.UUID)
 		}
 	}
 
+	// Attach alert reachability (see ListMonitors)
+	if routingMap, err := s.repo.GetAlertRoutingForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
+		if status, ok := routingMap[monitorID]; ok {
+			monitor.AlertRouting = &status
+		}
+	}
+
 	// Attach the private-location selection + per-location breakdown
 	if locationMap, err := s.repo.GetLocationIDsForMonitors(ctx, []uuid.UUID{monitorID}); err == nil {
 		monitor.LocationIDs = locationMap[monitorID]
@@ -343,6 +362,16 @@ func (s *Service) ListMonitors(ctx context.Context, tenantID uuid.UUID, tag *str
 		}
 	}
 
+	// Attach alert reachability so the UI can flag monitors whose alerts
+	// would notify nobody.
+	if routingMap, err := s.repo.GetAlertRoutingForMonitors(ctx, monitorIDs); err == nil {
+		for i := range monitors {
+			if status, ok := routingMap[monitors[i].ID]; ok {
+				monitors[i].AlertRouting = &status
+			}
+		}
+	}
+
 	for i := range monitors {
 		s.maskSecrets(&monitors[i])
 	}
@@ -381,11 +410,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
+	effectiveType := existing.Type
+	if req.Type != nil {
+		effectiveType = *req.Type
+	}
+
 	if len(req.Config) > 0 {
-		effectiveType := existing.Type
-		if req.Type != nil {
-			effectiveType = *req.Type
-		}
 		config, err := s.prepareConfigForWrite(effectiveType, req.Config, existing.Config)
 		if err != nil {
 			return nil, err
@@ -411,8 +441,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
-	// Validate timeout < interval
-	if timeoutSeconds >= intervalSeconds {
+	// Validate timeout < interval — active check types only. Passive types
+	// (agent/push/group) never execute a check, so timeout is meaningless for
+	// them; the DB constraint exempts them likewise (migration 000012), and
+	// the agent form has always written timeout == interval, which made every
+	// UI edit of an agent monitor fail here.
+	if validation.IsActiveCheckType(effectiveType) && timeoutSeconds >= intervalSeconds {
 		return nil, fmt.Errorf("timeout_seconds must be less than interval_seconds")
 	}
 
@@ -464,11 +498,9 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		}
 	}
 
-	if req.Enabled != nil {
-		setParts = append(setParts, fmt.Sprintf("enabled = $%d", argIndex))
-		args = append(args, *req.Enabled)
-		argIndex++
-	}
+	// Enabled is handled by repo.SetEnabled below, not the dynamic UPDATE: a
+	// real toggle must reset state and record a pause/resume interval in one
+	// locked transaction (S-P2, docs/state-semantics.md).
 
 	if req.Tags != nil {
 		setParts = append(setParts, fmt.Sprintf("tags = $%d", argIndex))
@@ -491,6 +523,12 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	if req.MemberAlertRollup != nil {
 		setParts = append(setParts, fmt.Sprintf("member_alert_rollup = $%d", argIndex))
 		args = append(args, *req.MemberAlertRollup)
+		argIndex++
+	}
+
+	if req.DependencySuppression != nil {
+		setParts = append(setParts, fmt.Sprintf("dependency_suppression = $%d", argIndex))
+		args = append(args, *req.DependencySuppression)
 		argIndex++
 	}
 
@@ -529,7 +567,7 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		argIndex++
 	}
 
-	if len(setParts) == 0 && req.NotificationChannels == nil {
+	if len(setParts) == 0 && req.NotificationChannels == nil && req.Enabled == nil && req.LocationIDs == nil {
 		// No fields to update, return existing
 		return existing, nil
 	}
@@ -552,6 +590,16 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 			return nil, err
 		}
 		*monitor = *loaded
+	}
+
+	if req.Enabled != nil {
+		if err := s.repo.SetEnabled(ctx, tenantID, monitorID, *req.Enabled); err != nil {
+			return nil, err
+		}
+		monitor.Enabled = *req.Enabled
+		if existing.Enabled != *req.Enabled {
+			monitor.CurrentState = "unknown"
+		}
 	}
 
 	if updatePolicies {

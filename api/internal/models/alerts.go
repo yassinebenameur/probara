@@ -61,6 +61,15 @@ type AlertWithDetails struct {
 	RootCauseMonitorName *string `json:"root_cause_monitor_name,omitempty"`
 	SourceLocationName   *string `json:"source_location_name,omitempty"`
 	TargetLocationName   *string `json:"target_location_name,omitempty"`
+	// SuppressionReason is set while the alerter is deliberately sending no
+	// notification for this open alert. Today the only value is "dependency":
+	// an upstream dependency is down (or recovered less than the grace period
+	// ago) and dependency suppression is on for the monitor. Computed with the
+	// same SQL predicate the alerter dispatches with (shared/alertrouting).
+	SuppressionReason *string `json:"suppression_reason,omitempty"`
+	// ImpactedCount is how many open downstream alerts this alert's monitor is
+	// the suppressed root cause of — the blast radius its notification lists.
+	ImpactedCount int `json:"impacted_count,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts
@@ -82,6 +91,9 @@ type AlertListParams struct {
 	Status    *AlertStatus
 	MonitorID *uuid.UUID
 	Since     *time.Time
-	Page      int
-	PageSize  int
+	// Suppressed filters on whether the alerter is currently suppressing the
+	// alert's notifications (see AlertWithDetails.SuppressionReason).
+	Suppressed *bool
+	Page       int
+	PageSize   int
 }

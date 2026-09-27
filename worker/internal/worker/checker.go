@@ -20,6 +20,7 @@ import (
 	probing "github.com/prometheus-community/pro-bing"
 	"github.com/tidwall/gjson"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/netguard"
 )
 
 // Checker is an interface for different monitor types
@@ -524,35 +525,10 @@ func (c *HTTPChecker) isIPAllowed(ip net.IP) bool {
 	return true
 }
 
+// isPrivateOrReservedIP delegates to the shared SSRF range table so the
+// worker and notification egress refuse exactly the same addresses.
 func isPrivateOrReservedIP(ip net.IP) bool {
-	privateCIDRs := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16",  // link-local + cloud metadata
-		"100.64.0.0/10",   // CGNAT
-		"192.0.0.0/24",    // IETF protocol assignments
-		"192.0.2.0/24",    // TEST-NET-1
-		"198.51.100.0/24", // TEST-NET-2
-		"203.0.113.0/24",  // TEST-NET-3
-		"224.0.0.0/4",     // multicast
-		"240.0.0.0/4",     // reserved
-		"::1/128",
-		"fc00::/7",  // unique local
-		"fe80::/10", // link-local
-	}
-
-	for _, cidr := range privateCIDRs {
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if network.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return netguard.IsPrivateOrReserved(ip)
 }
 
 func evaluateHeaderAssertions(headers http.Header, assertions []models.HTTPHeaderAssertion) []string {

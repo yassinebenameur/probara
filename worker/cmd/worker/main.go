@@ -17,6 +17,8 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/netguard"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/queue"
@@ -64,6 +66,16 @@ func main() {
 
 	// Create worker
 	w := worker.NewWorker(cfg, log, metricsRegistry, queueClient)
+
+	// Process-level plugin runtime: deep-link origin and the egress (SSRF)
+	// policy every notification channel dials through.
+	plugin.Configure(plugin.Runtime{
+		AppBaseURL: cfg.AppBaseURL,
+		Egress: netguard.Policy{
+			BlockPrivate: cfg.NotificationBlockPrivateIPs,
+			AllowedCIDRs: cfg.NotificationAllowedCIDRs,
+		},
+	})
 
 	// Wire SMTP backend into the email plugin so the notifications consumer
 	// can dispatch email alerts. No-op when SMTP is unset — email plugin Send

@@ -4,19 +4,31 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
 // runLifecycle is the transition-driven replacement for evaluateAlerts (spec §6):
 // refresh group states, open alerts for down monitors, resolve alerts for
 // recovered monitors, dispatch notifications by escalation delay + reminders.
 func (a *Alerter) runLifecycle(ctx context.Context) error {
+	// Process fresh outage state before retrying historical recoveries. A
+	// broken provider must not consume the evaluation deadline before new
+	// alerts can open. The sweep has its own bound within the remaining budget.
+	defer func() {
+		if err := a.dispatchPendingRecoveries(ctx); err != nil && ctx.Err() == nil {
+			a.logger.WithError(err).Error("Recovery notification retry failed")
+		}
+	}()
 	if err := a.refreshGroupStates(ctx); err != nil {
 		return err
 	}
@@ -46,7 +58,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.refreshAlertFailingLocations(ctx); err != nil {
 		return err
 	}
-	return a.dispatchOpenAlerts(ctx)
+	if err := a.dispatchOpenAlerts(ctx); err != nil {
+		return err
+	}
+	return a.dispatchAcknowledgements(ctx)
 }
 
 // failingLocationsSubquery selects the JSON breakdown of the monitor's
@@ -82,6 +97,28 @@ func (a *Alerter) refreshAlertFailingLocations(ctx context.Context) error {
 		return fmt.Errorf("refresh alert failing locations: %w", err)
 	}
 	return nil
+}
+
+// maxImpactedMonitorsListed caps how many downstream names one notification
+// spells out; the count still reports the full blast radius.
+const maxImpactedMonitorsListed = 10
+
+// parseImpactedMonitors decodes the JSON array produced by
+// alertrouting.ImpactedMonitorsSubquery into the (possibly truncated) list a
+// notification prints and the full count.
+func parseImpactedMonitors(raw []byte) ([]notifications.ImpactedMonitor, int) {
+	if len(raw) == 0 {
+		return nil, 0
+	}
+	var all []notifications.ImpactedMonitor
+	if err := json.Unmarshal(raw, &all); err != nil || len(all) == 0 {
+		return nil, 0
+	}
+	listed := all
+	if len(listed) > maxImpactedMonitorsListed {
+		listed = listed[:maxImpactedMonitorsListed]
+	}
+	return listed, len(all)
 }
 
 // parseFailingLocations decodes the alerts.failing_locations JSONB column.
@@ -127,11 +164,22 @@ func rootCauseLateral(monitorCol string) string {
 // annotateOpenAlertRootCauses recomputes the root-cause annotation for every
 // open alert each tick: it catches upstreams detected after the alert opened
 // and clears the annotation when the upstream recovers.
+//
+// root_cause_cleared_at is the dependency-suppression grace clock: stamped
+// when an annotation clears, reset whenever one is set again, left alone
+// otherwise. SuppressedByDependencyPredicate keeps a downstream quiet for the
+// tenant's grace period after that stamp, so a downstream that recovers one
+// check after its upstream never pages.
 func (a *Alerter) annotateOpenAlertRootCauses(ctx context.Context) error {
 	_, err := a.db.ExecContext(ctx, `
 		UPDATE alerts al
 		SET root_cause_monitor_id = x.rc_id,
 			root_cause_down_since = x.rc_down_since,
+			root_cause_cleared_at = CASE
+				WHEN x.rc_id IS NOT NULL THEN NULL
+				WHEN al.root_cause_monitor_id IS NOT NULL THEN NOW()
+				ELSE al.root_cause_cleared_at
+			END,
 			updated_at = NOW()
 		FROM (
 			SELECT al2.id AS alert_id, rc.id AS rc_id, rc.last_state_change_at AS rc_down_since
@@ -149,35 +197,50 @@ func (a *Alerter) annotateOpenAlertRootCauses(ctx context.Context) error {
 	return nil
 }
 
-// refreshGroupStates derives group monitor state from members: down if any
-// non-deleted enabled member is down, else up if all known up/suspect, else unknown.
+// refreshGroupStates derives every group from its enabled leaf descendants in
+// one snapshot. UNION deduplicates shared descendants and terminates cycles.
+// Empty and paused groups are unknown; stale child-group states never delay
+// detection or recovery at an ancestor.
 func (a *Alerter) refreshGroupStates(ctx context.Context) error {
 	_, err := a.db.ExecContext(ctx, `
-		WITH member_states AS (
-			SELECT g.id AS group_id,
-				BOOL_OR(child.current_state = 'down') AS any_down,
-				BOOL_AND(child.current_state IN ('up', 'suspect', 'degraded')) AS all_known_up
+		WITH RECURSIVE descendants AS (
+			SELECT g.id AS group_id, g.tenant_id, child.id AS member_id
 			FROM monitors g
 			JOIN monitor_groups mg ON mg.group_id = g.id
 			JOIN monitors child ON child.id = mg.monitor_id
-				AND child.deleted_at IS NULL AND child.enabled = TRUE
-			WHERE g.type = 'group' AND g.deleted_at IS NULL
-			GROUP BY g.id
-		)
-		UPDATE monitors m
-		SET current_state = CASE
+				AND child.tenant_id = g.tenant_id
+				AND child.deleted_at IS NULL AND child.enabled
+			WHERE g.type = 'group' AND g.deleted_at IS NULL AND g.enabled
+			UNION
+			SELECT d.group_id, d.tenant_id, child.id
+			FROM descendants d
+			JOIN monitors parent ON parent.id = d.member_id AND parent.type = 'group'
+			JOIN monitor_groups mg ON mg.group_id = parent.id
+			JOIN monitors child ON child.id = mg.monitor_id
+				AND child.tenant_id = d.tenant_id
+				AND child.deleted_at IS NULL AND child.enabled
+		), member_states AS (
+			SELECT d.group_id,
+				BOOL_OR(child.current_state = 'down') AS any_down,
+				BOOL_AND(child.current_state IN ('up', 'suspect', 'degraded')) AS all_known_up
+			FROM descendants d
+			JOIN monitors child ON child.id = d.member_id AND child.type <> 'group'
+			GROUP BY d.group_id
+		), group_states AS (
+			SELECT g.id, CASE
 				WHEN ms.any_down THEN 'down'
 				WHEN ms.all_known_up THEN 'up'
-				ELSE 'unknown' END,
-			last_state_change_at = CASE
-				WHEN m.current_state IS DISTINCT FROM (CASE
-					WHEN ms.any_down THEN 'down'
-					WHEN ms.all_known_up THEN 'up'
-					ELSE 'unknown' END) THEN NOW()
-				ELSE m.last_state_change_at END,
+				ELSE 'unknown' END AS state
+			FROM monitors g
+			LEFT JOIN member_states ms ON ms.group_id = g.id
+			WHERE g.type = 'group' AND g.deleted_at IS NULL
+		)
+		UPDATE monitors m
+		SET current_state = gs.state,
+			last_state_change_at = NOW(),
 			updated_at = NOW()
-		FROM member_states ms
-		WHERE m.id = ms.group_id
+		FROM group_states gs
+		WHERE m.id = gs.id AND m.current_state IS DISTINCT FROM gs.state
 	`)
 	if err != nil {
 		return fmt.Errorf("refresh group states: %w", err)
@@ -203,7 +266,7 @@ func (a *Alerter) openAlertsForDownMonitors(ctx context.Context) error {
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  -- A 'per_monitor' group never emits its own derived-down alert; its
 		  -- members alert individually instead.
-		  AND NOT (m.type = 'group' AND m.member_alert_rollup = 'per_monitor')
+		  AND NOT `+alertrouting.SelfSilentGroupPredicate("m")+`
 		  AND NOT EXISTS (
 			SELECT 1 FROM alerts al
 			WHERE al.monitor_id = m.id AND al.kind = 'availability'
@@ -352,7 +415,8 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 		LEFT JOIN monitors rcm ON rcm.id = al.root_cause_monitor_id
 		WHERE al.status IN ('active', 'acknowledged')
 		  AND al.kind = 'availability'
-		  AND (m.current_state = 'up' OR m.deleted_at IS NOT NULL OR m.enabled = FALSE)
+		  AND (m.current_state = 'up' OR m.deleted_at IS NOT NULL OR m.enabled = FALSE
+		       OR (m.type = 'group' AND m.current_state = 'unknown'))
 	`)
 	if err != nil {
 		return fmt.Errorf("query recovered alerts: %w", err)
@@ -387,6 +451,11 @@ func (a *Alerter) resolveAlertsForRecoveredMonitors(ctx context.Context) error {
 
 	for _, oa := range toResolve {
 		resolvedAt, err := a.resolveAlert(ctx, oa.record.ID, time.Now())
+		if errors.Is(err, errAlertAlreadyResolved) {
+			// A sibling replica resolved it first; it also owns the
+			// resolution notifications.
+			continue
+		}
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": oa.record.ID}).Error("Failed to resolve alert")
 			continue
@@ -404,25 +473,17 @@ type channelTarget struct {
 	delay   time.Duration
 }
 
-// resolveChannelTargets returns the effective routing for a monitor:
-// monitor_channels when mode=custom, else tenant_default_channels.
+// resolveChannelTargets returns the effective routing for a monitor —
+// monitor_channels when mode=custom, else tenant_default_channels — using the
+// shared definition in shared/alertrouting so delivery and the API's
+// reachability warning cannot disagree.
 func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID uuid.UUID) ([]channelTarget, error) {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT ac.id, ac.name, ac.type, ac.config, ac.is_active, x.delay_seconds
-		FROM (
-			SELECT mc.channel_id, mc.delay_seconds, 0 AS pos
-			FROM monitor_channels mc
-			JOIN monitors m ON m.id = mc.monitor_id
-			WHERE mc.monitor_id = $2 AND m.notification_mode = 'custom'
-			UNION ALL
-			SELECT tdc.channel_id, tdc.delay_seconds, tdc.position
-			FROM tenant_default_channels tdc
-			JOIN monitors m ON m.tenant_id = tdc.tenant_id
-			WHERE tdc.tenant_id = $1 AND m.id = $2 AND m.notification_mode = 'default'
-		) x
+		FROM (`+alertrouting.TargetsSQL()+`) x
 		JOIN alert_channels ac ON ac.id = x.channel_id
 		ORDER BY x.pos, ac.id
-	`, tenantID, monitorID)
+	`, tenantID, pq.Array([]uuid.UUID{monitorID}))
 	if err != nil {
 		return nil, fmt.Errorf("resolve channel targets: %w", err)
 	}
@@ -446,13 +507,21 @@ func (a *Alerter) resolveChannelTargets(ctx context.Context, tenantID, monitorID
 // dispatchOpenAlerts fires due escalation tiers and reminders for open alerts.
 // Group members are suppressed: the group's own alert speaks for them. Monitors
 // in an active maintenance window are muted; dispatch resumes when it ends.
+// A downstream whose upstream dependency is down is suppressed when the
+// dependency-suppression policy is on for it (S-M4): its alert stays open and
+// visible, and the root cause's own notification lists it under "also
+// affecting"; if the upstream recovers and the downstream is still down after
+// the grace period, it pages as a normal DOWN with escalation tiers counted
+// from that moment.
 func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.kind, al.triggered_at, al.failure_count, al.last_error,
 			al.root_cause_monitor_id, al.root_cause_down_since, rcm.name,
 			al.baseline_latency_ms, al.observed_latency_ms, al.anomaly_score,
 			al.metric_name, al.metric_value, al.threshold_value, al.failing_locations,
-			te.alert_reminder_seconds
+			te.alert_reminder_seconds,
+			`+alertrouting.DispatchEligibleSinceExpr("al", "te")+`,
+			CASE WHEN al.kind = 'availability' THEN `+alertrouting.ImpactedMonitorsSubquery("al.monitor_id")+` END
 		FROM alerts al
 		JOIN monitors m ON m.id = al.monitor_id
 		JOIN tenants te ON te.id = al.tenant_id
@@ -470,12 +539,12 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		  AND NOT `+maintenance.InMaintenancePredicate("m")+`
 		  -- A 'per_monitor' group does not dispatch its own alert (if one is still
 		  -- open from before the mode was changed, stay quiet on it).
-		  AND NOT (m.type = 'group' AND m.member_alert_rollup = 'per_monitor')
+		  AND NOT `+alertrouting.SelfSilentGroupPredicate("m")+`
 		  -- Suppress a member only when its group rolls members up into one alert.
-		  AND NOT EXISTS (
-			SELECT 1 FROM monitor_groups mg
-			JOIN monitors g ON g.id = mg.group_id AND g.deleted_at IS NULL
-			WHERE mg.monitor_id = al.monitor_id AND g.member_alert_rollup = 'group')
+		  AND NOT `+alertrouting.SuppressedByRollupPredicate("al.monitor_id")+`
+		  -- Suppress a downstream while an upstream dependency explains it (and
+		  -- for the grace period after that upstream recovers).
+		  AND NOT `+alertrouting.SuppressedByDependencyPredicate("al", "m", "te")+`
 	`)
 	if err != nil {
 		return fmt.Errorf("query open alerts: %w", err)
@@ -486,6 +555,7 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		record          alertRecord
 		monitorName     string
 		reminderSeconds int
+		eligibleSince   time.Time
 	}
 	var open []openAlert
 	for rows.Next() {
@@ -497,18 +567,20 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 		var baseline, observed, score sql.NullFloat64
 		var metricName sql.NullString
 		var metricValue, thresholdValue sql.NullFloat64
-		var failingLocations []byte
+		var failingLocations, impacted []byte
 		if err := rows.Scan(&oa.record.ID, &oa.record.TenantID, &oa.record.MonitorID, &oa.monitorName,
 			&oa.record.Kind, &oa.record.TriggeredAt, &oa.record.FailureCount, &lastError,
 			&rcID, &rcDownSince, &rcName,
 			&baseline, &observed, &score,
-			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds); err != nil {
+			&metricName, &metricValue, &thresholdValue, &failingLocations, &oa.reminderSeconds,
+			&oa.eligibleSince, &impacted); err != nil {
 			return fmt.Errorf("scan open alert: %w", err)
 		}
 		if lastError.Valid {
 			oa.record.LastError = &lastError.String
 		}
 		oa.record.FailingLocations = parseFailingLocations(failingLocations)
+		oa.record.ImpactedMonitors, oa.record.ImpactedCount = parseImpactedMonitors(impacted)
 		setRootCause(&oa.record, rcID, rcName, rcDownSince)
 		setLatencyMetrics(&oa.record, baseline, observed, score)
 		setHostMetric(&oa.record, metricName, metricValue, thresholdValue)
@@ -531,7 +603,11 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			continue
 		}
 		binding := policyBinding{MonitorID: oa.record.MonitorID, TenantID: oa.record.TenantID, MonitorName: oa.monitorName}
-		alertAge := now.Sub(oa.record.TriggeredAt)
+		// Escalation delays count from when the alert became eligible to
+		// dispatch, not from when it opened: a downstream released from
+		// dependency suppression walks its tiers in order instead of firing
+		// every tier at once.
+		alertAge := now.Sub(oa.eligibleSince)
 		reminderInterval := time.Duration(oa.reminderSeconds) * time.Second
 
 		for _, target := range targets {
@@ -541,28 +617,102 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 			state := getNotificationState(states, oa.record.ID, target.channel.ID)
 			switch {
 			case state == nil && alertAge >= target.delay:
-				a.fireChannel(ctx, "created", binding, &oa.record, target.channel, now)
+				a.fireChannel(ctx, "created", binding, &oa.record, target.channel, now, reminderInterval)
 			case state != nil && state.LastEventType != "resolved" && reminderInterval > 0 &&
 				now.Sub(state.LastSentAt) >= reminderInterval:
-				a.fireChannel(ctx, "reminder", binding, &oa.record, target.channel, now)
+				a.fireChannel(ctx, "reminder", binding, &oa.record, target.channel, now, reminderInterval)
 			}
 		}
 	}
 	return nil
 }
 
-// fireChannel sends one event and records the notification state.
-func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, channel alertChannel, now time.Time) {
-	if err := a.sendFunc(ctx, channel, eventType, binding, alert, nil, now); err != nil {
-		a.logger.WithError(err).WithFields(map[string]interface{}{
-			"alert_id": alert.ID, "channel_id": channel.ID, "event_type": eventType,
-		}).Warn("Failed to send alert notification")
+// dispatchAcknowledgements tells paging channels (plugins advertising
+// plugin.CapabilityAcknowledge) that an operator acknowledged an alert they
+// were paged for, so the provider stops its own escalation. It only targets
+// channels that already fired for the alert, once each; chat and email
+// channels never receive it. Maintenance and suppression do not gate it: an
+// ack is an operator action on a page that already went out.
+func (a *Alerter) dispatchAcknowledgements(ctx context.Context) error {
+	var ackTypes []string
+	for _, m := range plugin.DefaultRegistry.All() {
+		if m.HasCapability(plugin.CapabilityAcknowledge) {
+			ackTypes = append(ackTypes, m.Type)
+		}
+	}
+	if len(ackTypes) == 0 {
+		return nil
+	}
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT al.id, al.tenant_id, al.monitor_id, COALESCE(m.name, ''), al.kind, al.triggered_at,
+			al.failure_count, al.last_error,
+			ac.id, ac.name, ac.type, ac.config, ac.is_active
+		FROM alert_notification_states ans
+		JOIN alerts al ON al.id = ans.alert_id
+		JOIN alert_channels ac ON ac.id = ans.channel_id
+		LEFT JOIN monitors m ON m.id = al.monitor_id
+		WHERE al.status = 'acknowledged'
+		  AND ans.acknowledged_sent_at IS NULL
+		  AND ans.last_event_type <> 'resolved'
+		  AND ac.is_active
+		  AND ac.type = ANY($1)
+	`, pq.Array(ackTypes))
+	if err != nil {
+		return fmt.Errorf("query acknowledged alerts: %w", err)
+	}
+	defer rows.Close()
+
+	type pending struct {
+		binding policyBinding
+		record  alertRecord
+		channel alertChannel
+	}
+	var todo []pending
+	for rows.Next() {
+		var p pending
+		var lastError sql.NullString
+		var configBytes []byte
+		if err := rows.Scan(&p.record.ID, &p.record.TenantID, &p.record.MonitorID, &p.binding.MonitorName,
+			&p.record.Kind, &p.record.TriggeredAt, &p.record.FailureCount, &lastError,
+			&p.channel.ID, &p.channel.Name, &p.channel.Type, &configBytes, &p.channel.IsActive); err != nil {
+			return fmt.Errorf("scan acknowledged alert: %w", err)
+		}
+		if lastError.Valid {
+			p.record.LastError = &lastError.String
+		}
+		p.record.Status = "acknowledged"
+		p.binding.MonitorID = p.record.MonitorID
+		p.binding.TenantID = p.record.TenantID
+		p.channel.Config = json.RawMessage(configBytes)
+		todo = append(todo, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for i := range todo {
+		p := &todo[i]
+		a.fireChannel(ctx, "acknowledged", p.binding, &p.record, p.channel, now, 0)
+	}
+	return nil
+}
+
+// fireChannel sends one event through the atomic claim in deliverNotification.
+// The in-memory state the caller read is only a pre-filter: the claim is what
+// decides, so a sibling replica racing on the same alert silently loses here.
+func (a *Alerter) fireChannel(ctx context.Context, eventType string, binding policyBinding, alert *alertRecord, channel alertChannel, now time.Time, reminderInterval time.Duration) {
+	fields := map[string]interface{}{
+		"alert_id": alert.ID, "channel_id": channel.ID, "event_type": eventType,
+	}
+	sent, err := a.deliverNotification(ctx, eventType, binding, alert, nil, channel, now, reminderInterval)
+	if err != nil {
+		a.logger.WithError(err).WithFields(fields).Warn("Failed to send alert notification")
 		return
 	}
-	if err := a.upsertNotificationState(ctx, alert.ID, channel.ID, eventType, now); err != nil {
-		a.logger.WithError(err).WithFields(map[string]interface{}{
-			"alert_id": alert.ID, "channel_id": channel.ID,
-		}).Warn("Failed to update notification state")
+	if !sent {
+		a.logger.WithFields(fields).Debug("Notification already claimed by another alerter; skipping")
 	}
 }
 
@@ -600,6 +750,19 @@ func (a *Alerter) notifyFiredChannels(ctx context.Context, eventType string, bin
 		if fc.lastEventType == "resolved" || !fc.channel.IsActive {
 			continue
 		}
-		a.fireChannel(ctx, eventType, binding, alert, fc.channel, now)
+		a.fireChannel(ctx, eventType, binding, alert, fc.channel, now, 0)
 	}
+}
+
+// nonNilIDs returns keep unchanged unless it is nil, in which case it returns
+// an empty, non-nil slice. The orphan resolvers pass keep through pq.Array as
+// the `NOT (monitor_id = ANY($1))` operand: a nil slice encodes as SQL NULL,
+// `= ANY(NULL)` is NULL for every row, and the NOT filters everything out —
+// so "nothing configured" would silently resolve nothing instead of
+// everything. An empty array keeps the intended semantics.
+func nonNilIDs(keep []uuid.UUID) []uuid.UUID {
+	if keep == nil {
+		return []uuid.UUID{}
+	}
+	return keep
 }

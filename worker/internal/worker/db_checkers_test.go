@@ -103,6 +103,20 @@ func TestMongoDBChecker_ConnectionRefused(t *testing.T) {
 	}
 }
 
+// Cluster-check toggles and lag thresholds only matter after a successful
+// ping; a connection failure must classify identically with them enabled.
+func TestMongoDBChecker_ConnectionRefusedWithClusterChecks(t *testing.T) {
+	c := NewMongoDBChecker(false, nil)
+	config := fmt.Sprintf(`{"host":"127.0.0.1","port":%d,
+		"collect_replication":true,"collect_connections":true,"collect_cache":true,
+		"collect_memory":true,"collect_network":true,
+		"warn_replication_lag_seconds":5,"max_replication_lag_seconds":30}`, closedPort(t))
+	result := c.Check(context.Background(), json.RawMessage(config), 2)
+	if result.Status != "error" {
+		t.Fatalf("status = %s, want error", result.Status)
+	}
+}
+
 func TestBuildPostgresURI(t *testing.T) {
 	cases := []struct {
 		name   string

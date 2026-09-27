@@ -6,31 +6,44 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/yassinebenameur/probara/shared/netguard"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
+
+func TestMain(m *testing.M) {
+	// httptest servers listen on loopback, which the default egress policy
+	// refuses; TestSend_RefusesPrivateTargetsUnderDefaultPolicy re-enables it.
+	plugin.Configure(plugin.Runtime{})
+	os.Exit(m.Run())
+}
 
 func TestManifest(t *testing.T) {
 	m := New().Manifest()
 	if m.Type != pluginType {
 		t.Errorf("Type = %q", m.Type)
 	}
-	if !m.HasCapability(plugin.CapabilityRawEvent) {
-		t.Error("expected CapabilityRawEvent")
+	if !m.HasCapability(plugin.CapabilityTestable) {
+		t.Error("expected CapabilityTestable")
 	}
 	if len(m.Fields) != 3 {
 		t.Fatalf("expected 3 fields, got %d", len(m.Fields))
 	}
-	// url + hmac_secret must be Secret so the encryption layer protects them.
-	if !m.Fields[0].Secret || !m.Fields[1].Secret {
-		t.Error("url and hmac_secret must both be Secret-typed")
+	// url, hmac_secret and custom_headers (usually a bearer token) must be
+	// Secret so the encryption layer protects them and reads mask them.
+	for _, f := range m.Fields {
+		if !f.Secret {
+			t.Errorf("field %q must be Secret", f.Key)
+		}
 	}
 }
 
@@ -151,6 +164,94 @@ func TestSend_FailsOnNon2xx(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("expected 403 error, got %v", err)
+	}
+}
+
+func TestSend_RefusesPrivateTargetsUnderDefaultPolicy(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+	}))
+	defer srv.Close()
+
+	plugin.Configure(plugin.Runtime{Egress: netguard.Policy{BlockPrivate: true}})
+	defer plugin.Configure(plugin.Runtime{})
+
+	err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: map[string]any{"url": srv.URL}},
+		Event:   sampleEvent(),
+	})
+	if hit {
+		t.Fatal("request reached a loopback target despite the egress policy")
+	}
+	if !plugin.IsPermanent(err) || !errors.Is(err, netguard.ErrBlocked) {
+		t.Fatalf("err = %v, want a permanent ssrf_blocked error", err)
+	}
+}
+
+func TestSend_DoesNotFollowRedirects(t *testing.T) {
+	redirected := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirected = true
+	}))
+	defer target.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+
+	err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: map[string]any{"url": srv.URL}},
+		Event:   sampleEvent(),
+	})
+	if redirected {
+		t.Fatal("webhook followed a redirect")
+	}
+	if !plugin.IsPermanent(err) {
+		t.Fatalf("err = %v, want a permanent error for a 3xx answer", err)
+	}
+}
+
+func TestSend_CustomHeadersCannotSpoofProtocolHeaders(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+	}))
+	defer srv.Close()
+
+	err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{ID: "ch", Config: map[string]any{
+			"url":            srv.URL,
+			"hmac_secret":    "k",
+			"custom_headers": `{"x-probara-signature":"sha256=forged","X-PROBARA-EVENT-TYPE":"resolved","Authorization":"Bearer t"}`,
+		}},
+		Event:     sampleEvent(),
+		EventType: "created",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got.Get(eventTypeHeader) != "created" {
+		t.Errorf("%s = %q, want created", eventTypeHeader, got.Get(eventTypeHeader))
+	}
+	if got.Get("Authorization") != "Bearer t" {
+		t.Errorf("custom Authorization header not forwarded")
+	}
+	if sig := got.Values(signatureHeader); len(sig) != 1 || sig[0] == "sha256=forged" {
+		t.Errorf("%s = %v, want exactly the computed signature", signatureHeader, sig)
+	}
+}
+
+func TestValidate_RejectsReservedAndCaseCollidingHeaders(t *testing.T) {
+	for _, headers := range []string{
+		`{"x-probara-signature":"sha256=forged"}`,
+		`{"X-Probara-Idempotency-Key":"k"}`,
+		`{"x-source":"a","X-Source":"b"}`,
+	} {
+		raw, _ := json.Marshal(map[string]string{"url": "https://example.com/h", "custom_headers": headers})
+		if err := New().Validate(raw); err == nil {
+			t.Errorf("Validate accepted custom_headers %s", headers)
+		}
 	}
 }
 

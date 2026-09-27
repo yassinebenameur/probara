@@ -36,7 +36,20 @@ type Settings struct {
 	LatencyAnomalySensitivity      float64 `json:"latency_anomaly_sensitivity"`
 	LatencyAnomalyMinBreachSeconds int     `json:"latency_anomaly_min_breach_seconds"`
 	LatencyAnomalyMinDeltaPct      float64 `json:"latency_anomaly_min_delta_pct"`
+
+	// Dependency-aware alerting (workspace default; monitors can override
+	// with their own dependency_suppression). When enabled, a monitor whose
+	// upstream dependency is down opens its alert but sends no notification;
+	// the root cause's notification lists it instead. After the upstream
+	// recovers the downstream stays quiet for the grace period, then pages if
+	// still down.
+	DependencySuppressionEnabled      bool `json:"dependency_suppression_enabled"`
+	DependencySuppressionGraceSeconds int  `json:"dependency_suppression_grace_seconds"`
 }
+
+// MaxDependencySuppressionGraceSeconds bounds the grace period at one day: a
+// longer hold would mean a genuinely broken downstream is never announced.
+const MaxDependencySuppressionGraceSeconds = 86400
 
 // UpdateRequest carries the fields to update; nil pointer fields are left unchanged.
 type UpdateRequest struct {
@@ -49,6 +62,9 @@ type UpdateRequest struct {
 	LatencyAnomalySensitivity      *float64 `json:"latency_anomaly_sensitivity,omitempty"`
 	LatencyAnomalyMinBreachSeconds *int     `json:"latency_anomaly_min_breach_seconds,omitempty"`
 	LatencyAnomalyMinDeltaPct      *float64 `json:"latency_anomaly_min_delta_pct,omitempty"`
+
+	DependencySuppressionEnabled      *bool `json:"dependency_suppression_enabled,omitempty"`
+	DependencySuppressionGraceSeconds *int  `json:"dependency_suppression_grace_seconds,omitempty"`
 }
 
 // Service provides workspace notification settings CRUD.
@@ -63,11 +79,13 @@ func (s *Service) Get(ctx context.Context, tenantID uuid.UUID) (*Settings, error
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT alert_reminder_seconds, auto_create_incident,
 			latency_anomaly_enabled, latency_baseline_window_hours, latency_anomaly_sensitivity,
-			latency_anomaly_min_breach_seconds, latency_anomaly_min_delta_pct
+			latency_anomaly_min_breach_seconds, latency_anomaly_min_delta_pct,
+			dependency_suppression_enabled, dependency_suppression_grace_seconds
 		FROM tenants WHERE id = $1
 	`, tenantID).Scan(&settings.AlertReminderSeconds, &settings.AutoCreateIncident,
 		&settings.LatencyAnomalyEnabled, &settings.LatencyBaselineWindowHours, &settings.LatencyAnomalySensitivity,
-		&settings.LatencyAnomalyMinBreachSeconds, &settings.LatencyAnomalyMinDeltaPct); err != nil {
+		&settings.LatencyAnomalyMinBreachSeconds, &settings.LatencyAnomalyMinDeltaPct,
+		&settings.DependencySuppressionEnabled, &settings.DependencySuppressionGraceSeconds); err != nil {
 		return nil, fmt.Errorf("load tenant alert settings: %w", err)
 	}
 
@@ -141,11 +159,16 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 	if req.LatencyAnomalyMinDeltaPct != nil && *req.LatencyAnomalyMinDeltaPct < 0 {
 		return nil, fmt.Errorf("latency_anomaly_min_delta_pct must be >= 0")
 	}
+	if req.DependencySuppressionGraceSeconds != nil &&
+		(*req.DependencySuppressionGraceSeconds < 0 || *req.DependencySuppressionGraceSeconds > MaxDependencySuppressionGraceSeconds) {
+		return nil, fmt.Errorf("dependency_suppression_grace_seconds must be between 0 and %d", MaxDependencySuppressionGraceSeconds)
+	}
 
 	if req.AlertReminderSeconds != nil || req.AutoCreateIncident != nil ||
 		req.LatencyAnomalyEnabled != nil || req.LatencyBaselineWindowHours != nil ||
 		req.LatencyAnomalySensitivity != nil || req.LatencyAnomalyMinBreachSeconds != nil ||
-		req.LatencyAnomalyMinDeltaPct != nil {
+		req.LatencyAnomalyMinDeltaPct != nil ||
+		req.DependencySuppressionEnabled != nil || req.DependencySuppressionGraceSeconds != nil {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE tenants SET
 				alert_reminder_seconds = COALESCE($1, alert_reminder_seconds),
@@ -155,11 +178,14 @@ func (s *Service) Update(ctx context.Context, tenantID uuid.UUID, req UpdateRequ
 				latency_anomaly_sensitivity = COALESCE($5, latency_anomaly_sensitivity),
 				latency_anomaly_min_breach_seconds = COALESCE($6, latency_anomaly_min_breach_seconds),
 				latency_anomaly_min_delta_pct = COALESCE($7, latency_anomaly_min_delta_pct),
+				dependency_suppression_enabled = COALESCE($9, dependency_suppression_enabled),
+				dependency_suppression_grace_seconds = COALESCE($10, dependency_suppression_grace_seconds),
 				updated_at = NOW()
 			WHERE id = $8
 		`, req.AlertReminderSeconds, req.AutoCreateIncident,
 			req.LatencyAnomalyEnabled, req.LatencyBaselineWindowHours, req.LatencyAnomalySensitivity,
-			req.LatencyAnomalyMinBreachSeconds, req.LatencyAnomalyMinDeltaPct, tenantID); err != nil {
+			req.LatencyAnomalyMinBreachSeconds, req.LatencyAnomalyMinDeltaPct, tenantID,
+			req.DependencySuppressionEnabled, req.DependencySuppressionGraceSeconds); err != nil {
 			return nil, fmt.Errorf("update tenant alert settings: %w", err)
 		}
 	}

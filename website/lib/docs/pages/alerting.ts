@@ -38,8 +38,8 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`host_metric`",
-              "Agent CPU, memory, disk, or swap exceeds its configured threshold",
-              "The metric returns below threshold or its threshold is removed",
+              "A metric series reported by an agent's collector breaches a configured metric rule",
+              "The series returns within the rule, the rule is removed, or the readings go stale",
             ],
             [
               "`mesh_edge`",
@@ -70,7 +70,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "warning",
           title: "Acknowledgement does not silence reminders",
           text:
-            "Acknowledging records operator ownership but leaves the condition open. Reminder notifications continue at the configured interval until resolution or until reminders are disabled.",
+            "Acknowledging records operator ownership but leaves the condition open. Reminder notifications to chat, email, SMS and webhook channels continue at the configured interval until resolution or until reminders are disabled. Paging channels (PagerDuty, Opsgenie / JSM) are the exception: they receive the acknowledgement itself and never receive reminders, because the provider runs its own escalation.",
         },
       ],
     },
@@ -131,6 +131,51 @@ export const ALERTING_PAGE: DocPage = {
             "Delays implement escalation: a zero-delay route fires immediately, while a later route fires only if the alert is still open when its delay elapses. Resolution notifications are limited to routes that actually fired, avoiding a recovery message on a channel that never saw the outage.",
         },
         {
+          type: "callout",
+          tone: "info",
+          title: "One notification per event, however many alerters run",
+          text:
+            "Before it sends, the alerter claims the (alert, channel, event) slot in `alert_notification_states` inside a transaction and commits only after the channel accepted the message. A second alerter replica racing on the same alert blocks on that row, then finds the slot taken and stays quiet, so `alerter.replicas` can be raised for availability without duplicating deliveries. A failed send rolls the claim back and is retried on the next cycle. The same guarded update makes exactly one replica resolve an alert and send its recovery notice.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Routing that resolves to nothing is not an error — an alert still opens, appears on the dashboard, and drives incidents and status pages; it simply notifies nobody. Because that is silent by design, every monitor read reports its effective reachability in `alert_routing`, and the dashboard counts affected monitors in `ops_summary.unrouted_monitors`.",
+        },
+        {
+          type: "table",
+          columns: ["`alert_routing` field", "Meaning"],
+          rows: [
+            [
+              "`reachable`",
+              "False when an alert on this monitor would notify nobody",
+            ],
+            [
+              "`source`",
+              "`custom` or `tenant_default` when the monitor's own routing applies; `group_rollup` when a group rolls its alerts up, so that group's routing decides; `members` for a group that never alerts itself",
+            ],
+            [
+              "`active_channels` / `assigned_channels`",
+              "Routed channels that would deliver, and the total including inactive ones — an assignment to an inactive channel counts as assigned but never delivers",
+            ],
+            [
+              "`reason`",
+              "Why an unreachable monitor is unreachable: `no_custom_channels`, `custom_channels_disabled`, `no_tenant_default_channels`, `tenant_default_channels_disabled`, or `group_rollup_unrouted`",
+            ],
+            [
+              "`rollup_group_id` / `rollup_group_name`",
+              "The group whose routing applies, present only for `group_rollup`",
+            ],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Three ways a monitor ends up notifying nobody",
+          text:
+            "Custom routing with no channel assigned; `default` mode while the workspace has no default routes; and routing whose every channel is deactivated — deactivation is not visible in the assignment list, only in the channel. A member of a group that rolls alerts up adds a fourth: its own channels never fire, so the group's routing is the one that must be set. The operator UI flags each case on the monitor list and detail pages, and the monitors list filters to the affected monitors.",
+        },
+        {
           type: "table",
           columns: ["Tenant notification setting", "Default / constraints"],
           rows: [
@@ -154,6 +199,14 @@ export const ALERTING_PAGE: DocPage = {
             ["`latency_anomaly_sensitivity`", "Defaults to 3.5"],
             ["`latency_anomaly_min_breach_seconds`", "Defaults to 120"],
             ["`latency_anomaly_min_delta_pct`", "Defaults to 20 (percent)"],
+            [
+              "`dependency_suppression_enabled`",
+              "Defaults to false. When true, a monitor whose upstream dependency is down opens its alert but sends no notification — see [dependency-aware alerting](/docs/alerting/#dependencies). Monitors override it with `dependency_suppression`",
+            ],
+            [
+              "`dependency_suppression_grace_seconds`",
+              "Defaults to 120; 0 to 86,400. How long a suppressed downstream stays quiet after its upstream recovers before paging if still down",
+            ],
           ],
         },
       ],
@@ -173,22 +226,42 @@ export const ALERTING_PAGE: DocPage = {
             ],
             [
               "`slack`",
-              "Approved HTTPS `webhook_url` on Slack webhook hosts",
-              "Slack incoming webhook",
+              "HTTPS `webhook_url` on `slack.com` or a subdomain of it",
+              "Slack incoming webhook (Block Kit, with an open-the-monitor button when `APP_BASE_URL` is set)",
             ],
             [
               "`discord`",
-              "Approved Discord HTTPS webhook URL",
-              "Discord webhook",
+              "HTTPS `webhook_url` on `discord.com` / `discordapp.com` or a subdomain",
+              "Discord webhook embed; mentions inside alert text never ping",
             ],
             [
               "`teams`",
-              "Approved Microsoft webhook URL",
-              "Teams/Workflow-compatible webhook",
+              "Any HTTPS `webhook_url`",
+              "Adaptive Card for a Teams Workflows (Power Automate) webhook; legacy MessageCard for Office 365 connector URLs (`*.webhook.office.com`, `outlook.office.com`)",
+            ],
+            [
+              "`pagerduty`",
+              "32-character Events API v2 `routing_key`, `region` `us` or `eu`",
+              "Triggers, acknowledges and resolves one PagerDuty alert per Probara alert (`dedup_key` `probara:<alert id>`)",
+            ],
+            [
+              "`opsgenie`",
+              "Integration `api_key`, `site` `us`, `eu` or `jsm` (Jira Service Management), outage `priority` `P1`–`P5`",
+              "Creates, acknowledges and closes one alert per Probara alert (alias `probara-<alert id>`). Degradations are sent one level below the outage priority, never above `P3`",
+            ],
+            [
+              "`telegram`",
+              "Bot `bot_token`, `chat_id` (numeric or `@channel`), optional forum `message_thread_id`",
+              "HTML-formatted message through your own bot",
+            ],
+            [
+              "`twilio_sms`",
+              "`account_sid`, optional `api_key_sid`, `auth_token` (API key secret or account token), `from` number or Messaging Service SID, up to 10 E.164 `to` numbers",
+              "One SMS per recipient per event, the short form of the alert plus the deep link",
             ],
             [
               "`generic_webhook`",
-              "HTTPS `url`, optional `hmac_secret`, optional custom headers encoded as JSON",
+              "HTTPS `url`, optional `hmac_secret`, optional custom headers encoded as JSON (stored encrypted and write-only)",
               "Structured Probara event JSON",
             ],
           ],
@@ -196,23 +269,50 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
+        },
+        {
+          type: "table",
+          columns: ["Event", "Chat, email, SMS, webhook", "PagerDuty, Opsgenie / JSM"],
+          rows: [
+            ["`created`", "Message", "Trigger / create"],
+            ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
+            ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
+            ["`resolved`", "Message", "Resolve / close"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
         },
         {
           type: "list",
           items: [
-            "Create a channel from a registered plugin and save its plugin-specific configuration.",
-            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission. Email tests are served by the API process, so they need the same [platform SMTP configuration](/docs/configuration/#alerter-and-smtp) as the alerter; without it the test reports `mailer not configured` even when alert email is being delivered.",
+            "Create a channel from a registered plugin and save its plugin-specific configuration. Updates are validated by the plugin against the merged configuration, including kept secrets, so an edit cannot move a channel to a host create would have rejected.",
+            "Use the channel test action before assigning production monitors. Tests send a real notification and require write permission. PagerDuty and Opsgenie tests open an informational alert and resolve it immediately, which may still notify whoever is on call. Email tests are served by the API process, so they need the same [platform SMTP configuration](/docs/configuration/#alerter-and-smtp) as the alerter; without it the test reports `mailer not configured` even when alert email is being delivered.",
             "Activate or deactivate the channel. Inactive channels remain configured but are skipped for delivery.",
             "Assign it in tenant defaults or in a monitor's custom routing.",
           ],
         },
         {
+          type: "paragraph",
+          text:
+            "Delivery failures are classified. A rejected configuration — revoked key, deleted webhook, unknown chat, invalid number, any other 4xx — is permanent: it is logged once and not retried, so a broken channel does not re-fail every evaluation cycle. Timeouts, 5xx and 429 responses are retried; a provider `Retry-After` is honoured (capped at ten minutes) on the asynchronous path. An SMS send is retried whenever any recipient failed transiently, even if another was rejected for good, and waits for the longest delay any recipient's provider response asked for. Redirects are never followed and count as permanent failures. With asynchronous dispatch, a retried trigger, reminder or acknowledgement is dropped once its alert has resolved, and one already being delivered holds the alert until it finishes, so resolving waits for it (at most the 15-second delivery timeout). Either way the resolve reaches the provider last, so a delayed or concurrent trigger can never leave a PagerDuty or Opsgenie alert open after recovery.",
+        },
+        {
           type: "callout",
           tone: "warning",
-          title: "Webhook hosts are validated",
+          title: "Channel destinations are egress-guarded",
           text:
-            "Built-in chat plugins accept only their approved HTTPS webhook hosts, and generic webhooks require HTTPS. Redirects and DNS/network policy are still security-sensitive; keep egress narrowly controlled.",
+            "Every channel dials through the [notification egress policy](/docs/security/#ssrf-network-policy): private, loopback, link-local (including cloud metadata) and reserved addresses are refused by default, checked against the resolved IP at connect time. A webhook receiver on an internal network needs its range in `NOTIFICATION_ALLOWED_CIDRS`. Slack and Discord additionally require their own HTTPS hosts; Teams and generic webhooks accept any HTTPS host.",
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Known gaps",
+          text:
+            "Acknowledgement syncs one way: acknowledging in Probara acknowledges the PagerDuty or Opsgenie alert, but acknowledging or resolving in the provider does not change the Probara alert. When one SMS recipient fails transiently the whole send is retried, so recipients that already received it can get a duplicate. A stored secret field — including generic-webhook custom headers — cannot be cleared from the form; leaving it blank keeps the stored value.",
         },
       ],
     },
@@ -271,6 +371,18 @@ export const ALERTING_PAGE: DocPage = {
           text:
             "It is not a general dependency suppression mechanism and does not merge unrelated latency, host metric, or mesh alerts.",
         },
+        {
+          type: "paragraph",
+          text:
+            "Under `group` rollup the group's routing is the routing that matters: a suppressed member's own channels never fire, so its `alert_routing.source` reports `group_rollup` and names the group. A member covered by several rollup groups is reachable if any of them delivers, since each group alerts on its own.",
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Pausing a `group` rollup group silences its members",
+          text:
+            "Member suppression does not consider the group's enabled flag, so a paused rollup group keeps suppressing member alerts while never emitting its own — that whole subtree notifies nobody. Reachability reports it as `group_rollup_paused`; resume the group, or switch it to `per_monitor` so members alert for themselves.",
+        },
       ],
     },
     {
@@ -306,7 +418,12 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "An [agent monitor](/docs/agents/#thresholds) can define positive percentage thresholds for CPU, memory, disk, and swap. Each breached metric opens its own `host_metric` alert and resolves independently. Removing a threshold resolves an alert that no longer has a configured condition.",
+            "An [agent monitor](/docs/agents/#thresholds) defines `metric_rules`: up to 50 threshold rules over any metric its collector reports, compared in the metric's native unit (`*.utilization` metrics are ratios, so 90% is `0.9`), with optional attribute filters and an optional sustained-for duration that must hold for the whole window before the alert opens. A rule without filters fans out per matching series — one filesystem rule opens one `host_metric` alert per breaching mountpoint.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Each alert is keyed by its canonical series key (for example `system.filesystem.utilization{device=/dev/sda1,mode=rw,mountpoint=/data,type=ext4}`) and resolves independently when the series returns within the rule or the rule is removed. Evaluation is freshness-bounded to three monitor intervals (90-second floor), so a dead collector's last stale readings cannot keep metric alerts open — the availability alert covers that outage. Alerts migrated from the retired `metric_thresholds` fields keep working; their legacy names still render on existing alert records.",
         },
         {
           type: "paragraph",
@@ -366,24 +483,41 @@ export const ALERTING_PAGE: DocPage = {
     },
     {
       id: "dependencies",
-      title: "Dependency-aware root cause",
+      title: "Dependency-aware alerting",
       blocks: [
         {
           type: "paragraph",
           text:
-            "When a downstream availability alert opens, Probara inspects its [dependency graph](/docs/dependencies/#dependency-model) and annotates the alert with the deepest currently down upstream monitor. Ties prefer the upstream condition that became down earlier.",
+            "When a downstream availability alert opens, Probara inspects its [dependency graph](/docs/dependencies/#dependency-model) and annotates the alert with the deepest currently down upstream monitor. Ties prefer the upstream condition that became down earlier. The annotation is recomputed every evaluation tick and cleared when no qualifying cause remains; it is always on and always visible on the alert, in notifications (\"likely root cause\") and in the operator UI.",
         },
         {
           type: "paragraph",
           text:
-            "The annotation is recomputed as upstream state changes and is cleared when no qualifying cause remains. It improves triage context but does not suppress the downstream alert or its notifications.",
+            "Whether the annotation also **suppresses the downstream page** is a policy. It is off by default: enable `dependency_suppression_enabled` in the workspace [notification settings](/docs/alerting/#notification-routing) to page root causes only, and override it per monitor with `dependency_suppression` (`inherit`, `on`, `off`) in the monitor's Alerting section — `off` keeps a critical monitor paging whatever the workspace says.",
+        },
+        {
+          type: "list",
+          items: [
+            "A suppressed downstream alert still opens, still counts on the dashboard, still resolves and still drives incidents and status pages; only its notifications are withheld. The API reports it with `suppression_reason: \"dependency\"`, the alert list and dashboard flag it, and `GET /api/v1/alerts?suppressed=true` lists exactly those alerts.",
+            "The root cause's own DOWN and reminder notifications carry an **Also affecting** section naming the suppressed downstream monitors (`impacted_monitors` / `impacted_count`; the API exposes `impacted_count` on the alert), recomputed on every send.",
+            "When the upstream recovers but the downstream is still down, the downstream stays quiet for `dependency_suppression_grace_seconds` (default 120) so a monitor that recovers one check later never pages. After the grace it pages as a normal DOWN, with escalation-tier delays counted from that moment rather than from when the outage began.",
+            "A downstream that recovers while suppressed was never announced, so no recovery notification is sent for it. A downstream that paged before its upstream was detected keeps its recovery notification but stops sending reminders while the upstream explains it.",
+            "Suppression is decided at dispatch, from live state, by the same predicate the API uses to compute `suppression_reason`; it is not part of `alert_routing`, which describes static routing configuration.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Dependencies and group rollup compose",
+          text:
+            "Group rollup suppresses a member because its group alerts instead; dependency suppression suppresses a downstream because its upstream alerts instead. Both predicates apply at dispatch, so a rolled-up member with a down upstream is silent under either rule. Use rollup for one alert per composite service, dependencies for one alert per root cause.",
         },
         {
           type: "callout",
           tone: "warning",
-          title: "Dependencies annotate; group rollup suppresses",
+          title: "Known gaps",
           text:
-            "If you need one alert for a set of member monitors, use group rollup. Dependency edges preserve downstream alerts so operators can still see impact.",
+            "Only availability alerts are annotated and suppressed; latency, host-metric, certificate and mesh alerts are unaffected. Suppression follows `monitors.current_state = down` on the upstream — a degraded or suspect upstream does not suppress anything. A late-paging downstream's notification does not say which upstream it had been attributed to.",
         },
       ],
     },

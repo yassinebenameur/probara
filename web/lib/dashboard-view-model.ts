@@ -28,16 +28,49 @@ export type ActivityTimelineItem = {
   label: string;
   title: string;
   detail: string;
+  /** Full check error_message for failure items; undefined for alert items. */
+  reason?: string;
   occurredAt: string;
   relativeTime: string;
   tone: 'success' | 'warning' | 'danger' | 'info';
 };
 
+// ─── Failure reason parsing ─────────────────────────────────────────────────
+// Workers prefix HTTP error messages with a category (timeout:/dns:/connect:,
+// worker/internal/worker/checker.go) and assertion failures with the assertion
+// name (status_code:/latency:/tls:). Unrecognized prefixes get no category —
+// the raw message is still displayed, just without a pill.
+
+export type FailureReasonCategory = 'timeout' | 'dns' | 'connect' | 'status' | 'latency' | 'tls';
+
+const REASON_PREFIX_CATEGORIES: Record<string, FailureReasonCategory> = {
+  timeout: 'timeout',
+  dns: 'dns',
+  connect: 'connect',
+  status_code: 'status',
+  latency: 'latency',
+  tls: 'tls',
+};
+
+export type FailureReason = {
+  category: FailureReasonCategory | null;
+  text: string;
+};
+
+export function parseFailureReason(message: string | null | undefined): FailureReason | null {
+  const text = message?.trim();
+  if (!text) return null;
+  const colon = text.indexOf(':');
+  const prefix = colon > 0 ? text.slice(0, colon).trim().toLowerCase() : '';
+  return { category: REASON_PREFIX_CATEGORIES[prefix] ?? null, text };
+}
+
 type OperationalSummaryInput = {
   opsSummary?: DashboardOpsSummary | null;
   problemMonitorsCount: number;
   recentFailuresCount: number;
-  overallUptime: number;
+  /** null = no checks in the window; the tile renders "—", never "0.00%". */
+  overallUptime: number | null;
   avgResponseMs: number;
   rangeLabel?: string;
 };
@@ -58,6 +91,7 @@ export function formatRelativeTimeFrom(dateString: string, now = new Date()): st
 export function buildOperationalSummary(input: OperationalSummaryInput): OperationalSummary {
   const downMonitors = input.opsSummary?.down_monitors ?? 0;
   const activeAlerts = input.opsSummary?.active_alerts ?? 0;
+  const suppressedAlerts = input.opsSummary?.suppressed_alerts ?? 0;
   const pausedMonitors = input.opsSummary?.paused_monitors ?? 0;
   const maintenanceMonitors = input.opsSummary?.maintenance_monitors ?? 0;
   const attentionCount = Math.max(input.problemMonitorsCount, downMonitors + activeAlerts);
@@ -94,9 +128,16 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
     metrics: [
       {
         label: 'Uptime',
-        value: formatPercent(input.overallUptime),
-        detail: input.rangeLabel ?? 'Selected range',
-        tone: input.overallUptime >= 99 ? 'clean' : input.overallUptime >= 95 ? 'attention' : 'critical',
+        value: input.overallUptime == null ? '—' : formatPercent(input.overallUptime),
+        detail: input.overallUptime == null ? 'No checks in range' : input.rangeLabel ?? 'Selected range',
+        tone:
+          input.overallUptime == null
+            ? undefined
+            : input.overallUptime >= 99
+              ? 'clean'
+              : input.overallUptime >= 95
+                ? 'attention'
+                : 'critical',
       },
       {
         label: 'Avg response',
@@ -118,7 +159,12 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
       {
         label: 'Active alerts',
         value: String(activeAlerts),
-        detail: activeAlerts > 0 ? 'Needs review' : 'None',
+        detail:
+          activeAlerts > 0
+            ? suppressedAlerts > 0
+              ? `${suppressedAlerts} suppressed by dependency`
+              : 'Needs review'
+            : 'None',
         tone: activeAlerts > 0 ? 'critical' : 'clean',
       },
     ],
@@ -186,6 +232,7 @@ export function buildActivityTimeline(input: BuildActivityTimelineInput): Activi
       failure.result_source === 'platform' ? 'Platform event' : failure.status,
       typeof failure.latency_ms === 'number' ? `${failure.latency_ms}ms` : undefined,
     ].filter(Boolean).join(' · '),
+    reason: failure.error_message || undefined,
     occurredAt: failure.occurred_at,
     relativeTime: formatRelativeTimeFrom(failure.occurred_at, now),
     tone: failureTone(failure),

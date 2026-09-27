@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -39,12 +40,15 @@ type alertRecord struct {
 	Kind                 string
 	Status               string
 	TriggeredAt          time.Time
+	ResolvedAt           *time.Time
 	FailureCount         int
 	LastError            *string
 	RootCauseMonitorID   *uuid.UUID
 	RootCauseMonitorName *string
 	RootCauseDownSince   *time.Time
 	FailingLocations     []notifications.FailingLocation
+	ImpactedMonitors     []notifications.ImpactedMonitor
+	ImpactedCount        int
 	BaselineLatencyMs    *float64
 	ObservedLatencyMs    *float64
 	AnomalyScore         *float64
@@ -67,8 +71,9 @@ type alertChannel struct {
 }
 
 type notificationState struct {
-	LastSentAt    time.Time
-	LastEventType string
+	LastSentAt         time.Time
+	LastEventType      string
+	AcknowledgedSentAt *time.Time
 }
 
 type groupMember struct {
@@ -387,7 +392,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 	}
 
 	query := `
-		SELECT alert_id, channel_id, last_sent_at, last_event_type
+		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at
 		FROM alert_notification_states
 		WHERE alert_id = ANY($1)
 	`
@@ -402,7 +407,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 		var alertID uuid.UUID
 		var channelID uuid.UUID
 		var state notificationState
-		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType); err != nil {
+		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt); err != nil {
 			return nil, fmt.Errorf("failed to scan notification state: %w", err)
 		}
 		if _, ok := states[alertID]; !ok {
@@ -727,6 +732,12 @@ func (a *Alerter) createAlert(ctx context.Context, binding policyBinding, failur
 	return &record, nil
 }
 
+// errAlertAlreadyResolved is returned by resolveAlert when the alert was no
+// longer open — normally because a sibling alerter replica resolved it a moment
+// earlier. The guarded UPDATE makes exactly one replica win; the loser must
+// neither publish nor notify, and this is not an error worth logging.
+var errAlertAlreadyResolved = errors.New("alert already resolved")
+
 func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.Time) (time.Time, error) {
 	query := `
 		UPDATE alerts
@@ -745,6 +756,9 @@ func (a *Alerter) resolveAlert(ctx context.Context, alertID uuid.UUID, now time.
 
 	var resolvedAt time.Time
 	if err := tx.QueryRowContext(ctx, query, now, alertID).Scan(&resolvedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, errAlertAlreadyResolved
+		}
 		return time.Time{}, fmt.Errorf("failed to resolve alert: %w", err)
 	}
 
@@ -1070,6 +1084,9 @@ func (a *Alerter) publishAlertEvent(ctx context.Context, eventType string, bindi
 	}
 }
 
+// dispatchNotifications fans one event out to the given channels through the
+// atomic claim in deliverNotification. The states map is a pre-filter and a
+// per-cycle memo, never the authority on whether a send is due.
 func (a *Alerter) dispatchNotifications(
 	ctx context.Context,
 	eventType string,
@@ -1096,7 +1113,8 @@ func (a *Alerter) dispatchNotifications(
 			continue
 		}
 
-		if err := a.sendChannelNotification(ctx, channel, eventType, binding, alert, groupInfo, now); err != nil {
+		sent, err := a.deliverNotification(ctx, eventType, binding, alert, groupInfo, channel, now, reminderInterval)
+		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{
 				"alert_id":   alert.ID,
 				"channel_id": channel.ID,
@@ -1104,12 +1122,8 @@ func (a *Alerter) dispatchNotifications(
 			}).Warn("Failed to send alert notification")
 			continue
 		}
-
-		if err := a.upsertNotificationState(ctx, alert.ID, channel.ID, eventType, now); err != nil {
-			a.logger.WithError(err).WithFields(map[string]interface{}{
-				"alert_id":   alert.ID,
-				"channel_id": channel.ID,
-			}).Warn("Failed to update notification state")
+		if !sent {
+			continue
 		}
 
 		if _, ok := states[alert.ID]; !ok {
@@ -1119,6 +1133,26 @@ func (a *Alerter) dispatchNotifications(
 			LastSentAt:    now,
 			LastEventType: eventType,
 		}
+	}
+}
+
+// shouldSendNotification is the in-memory pre-filter mirroring the claim
+// predicates in claimNotificationTx. Keep the two in step.
+func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration) bool {
+	switch eventType {
+	case "created":
+		return state == nil
+	case "resolved":
+		return state == nil || state.LastEventType != "resolved"
+	case "reminder":
+		if state == nil || state.LastEventType == "resolved" || reminderInterval <= 0 {
+			return false
+		}
+		return now.Sub(state.LastSentAt) >= reminderInterval
+	case "acknowledged":
+		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
+	default:
+		return false
 	}
 }
 
@@ -1141,6 +1175,9 @@ func (a *Alerter) sendChannelNotification(
 	var resolvedAt *time.Time
 	if eventType == "resolved" {
 		resolvedAt = &now
+		if alert.ResolvedAt != nil {
+			resolvedAt = alert.ResolvedAt
+		}
 	}
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
 
@@ -1154,7 +1191,15 @@ func (a *Alerter) sendChannelNotification(
 			Event:       event,
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
-		headers := map[string][]string{"x-idempotency-key": {envelope.IdempotencyKey()}}
+		messageID := envelope.IdempotencyKey()
+		if eventType == "reminder" {
+			// Distinct reminder rounds must not be coalesced by JetStream.
+			messageID += ":" + now.UTC().Format(time.RFC3339Nano)
+		}
+		headers := map[string][]string{
+			"x-idempotency-key": {envelope.IdempotencyKey()},
+			"Nats-Msg-Id":       {messageID},
+		}
 		return a.nats.PublishJSON(ctx, subject, envelope, headers)
 	}
 
@@ -1181,41 +1226,6 @@ func (a *Alerter) sendChannelNotification(
 	})
 }
 
-func (a *Alerter) upsertNotificationState(ctx context.Context, alertID, channelID uuid.UUID, eventType string, sentAt time.Time) error {
-	query := `
-		INSERT INTO alert_notification_states (
-			alert_id, channel_id, last_sent_at, last_event_type, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, NOW(), NOW())
-		ON CONFLICT (alert_id, channel_id)
-		DO UPDATE SET last_sent_at = $3, last_event_type = $4, updated_at = NOW()
-	`
-
-	_, err := a.db.ExecContext(ctx, query, alertID, channelID, sentAt, eventType)
-	if err != nil {
-		return fmt.Errorf("failed to upsert notification state: %w", err)
-	}
-	return nil
-}
-
-func shouldSendNotification(eventType string, state *notificationState, now time.Time, reminderInterval time.Duration) bool {
-	switch eventType {
-	case "created":
-		return state == nil
-	case "resolved":
-		return state == nil || state.LastEventType != "resolved"
-	case "reminder":
-		if state == nil {
-			return false
-		}
-		if state.LastEventType == "resolved" {
-			return false
-		}
-		return now.Sub(state.LastSentAt) >= reminderInterval
-	default:
-		return false
-	}
-}
-
 func getNotificationState(states map[uuid.UUID]map[uuid.UUID]*notificationState, alertID, channelID uuid.UUID) *notificationState {
 	if alertStates, ok := states[alertID]; ok {
 		return alertStates[channelID]
@@ -1229,8 +1239,11 @@ func alertKey(monitorID, policyID uuid.UUID) string {
 
 func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time, timestamp time.Time) notifications.AlertEvent {
 	status := "active"
-	if eventType == "resolved" {
+	switch eventType {
+	case "resolved":
 		status = "resolved"
+	case "acknowledged":
+		status = "acknowledged"
 	}
 
 	var rootCauseID *string
@@ -1274,6 +1287,8 @@ func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord
 			RootCauseMonitorName: alert.RootCauseMonitorName,
 			RootCauseDownSince:   alert.RootCauseDownSince,
 			FailingLocations:     alert.FailingLocations,
+			ImpactedMonitors:     alert.ImpactedMonitors,
+			ImpactedCount:        alert.ImpactedCount,
 			BaselineLatencyMs:    alert.BaselineLatencyMs,
 			ObservedLatencyMs:    alert.ObservedLatencyMs,
 			AnomalyScore:         alert.AnomalyScore,

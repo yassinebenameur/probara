@@ -58,8 +58,16 @@ spec:
           value: "{{ $.Values.worker.metricsPort }}"
         - name: LOG_LEVEL
           value: "{{ $.Values.worker.logLevel }}"
+        {{- if .existingSecret }}
         - name: NATS_URL
-          value: {{ required "each worker.locations entry needs its location-authenticated natsUrl" .natsUrl | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .existingSecret | quote }}
+              key: {{ .natsUrlKey | default "nats_url" | quote }}
+        {{- else }}
+        - name: NATS_URL
+          value: {{ required "each worker.locations entry needs its location-authenticated natsUrl (or an existingSecret supplying it)" .natsUrl | quote }}
+        {{- end }}
         - name: CHECK_JOB_STREAM
           value: "{{ $.Values.worker.checkJobStream }}"
         - name: CHECK_JOB_SUBJECT
@@ -70,8 +78,16 @@ spec:
           value: "check-workers"
         - name: WORKER_LOCATION_ID
           value: {{ required "each worker.locations entry needs locationId (the location UUID)" .locationId | quote }}
+        {{- if .existingSecret }}
         - name: LOCATION_CREDENTIAL
-          value: {{ required "each worker.locations entry needs credential from the location deploy info" .credential | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .existingSecret | quote }}
+              key: {{ .credentialKey | default "credential" | quote }}
+        {{- else }}
+        - name: LOCATION_CREDENTIAL
+          value: {{ required "each worker.locations entry needs credential from the location deploy info (or an existingSecret supplying it)" .credential | quote }}
+        {{- end }}
         - name: WORKER_CONCURRENCY
           value: "{{ .concurrency | default $.Values.worker.concurrency }}"
         {{- with $.Values.extraEnv }}

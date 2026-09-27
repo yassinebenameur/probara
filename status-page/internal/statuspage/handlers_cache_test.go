@@ -54,7 +54,7 @@ func TestHandleStatusPageETagRoundTrip(t *testing.T) {
 
 	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
 	cache := newRenderCache(time.Minute)
-	h := NewHandlers(svc, nil, logger.New("status-page", "debug"), NewHub(), cache)
+	h := NewHandlers(svc, nil, logger.New("status-page", "debug"), NewHub(), cache, nil)
 
 	get := func(ifNoneMatch string) *httptest.ResponseRecorder {
 		t.Helper()

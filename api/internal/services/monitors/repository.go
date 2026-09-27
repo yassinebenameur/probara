@@ -3,6 +3,7 @@ package monitors
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,8 +11,10 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // Repository defines the interface for monitor data access
@@ -35,8 +38,12 @@ type Repository interface {
 	ReplaceMonitorChannels(ctx context.Context, tenantID, monitorID uuid.UUID, channels []models.MonitorChannelAssignment) error
 	DeleteMonitorChannels(ctx context.Context, monitorID uuid.UUID) error
 	GetChannelsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]models.MonitorChannelAssignment, error)
+	// GetAlertRoutingForMonitors reports which monitors' alerts reach nobody.
+	GetAlertRoutingForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]alertrouting.Status, error)
 	// monitor_locations management
 	SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error
+	// SetEnabled toggles pause/resume with the S-P2 state reset.
+	SetEnabled(ctx context.Context, tenantID, monitorID uuid.UUID, enabled bool) error
 	GetLocationIDsForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 	GetLocationStatuses(ctx context.Context, monitorID uuid.UUID) ([]models.MonitorLocationStatus, error)
 }
@@ -53,37 +60,57 @@ func NewPostgresRepository(database db.DB) *PostgresRepository {
 
 // Create inserts a new monitor into the database
 func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin create transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	query := `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, $16, $17, $18, $19)
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, $16, $17, $18, $19, $20)
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state
 	`
 
 	var tags []string
 
-	err := r.db.QueryRowContext(ctx, query,
+	err = tx.QueryRowContext(ctx, query,
 		monitor.ID, monitor.TenantID, monitor.Name, monitor.Type, monitor.Config,
 		monitor.IntervalSeconds, monitor.TimeoutSeconds, monitor.AlertPolicyID,
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
 		monitor.CreatedAt, monitor.UpdatedAt,
-		monitor.ConsecutiveFailuresThreshold, monitor.NotificationMode, monitor.MemberAlertRollup, monitor.LocationQuorum,
+		monitor.ConsecutiveFailuresThreshold, monitor.NotificationMode, monitor.MemberAlertRollup, monitor.DependencySuppression, monitor.LocationQuorum,
 	).Scan(
 		&monitor.ID, &monitor.TenantID, &monitor.Name, &monitor.Type,
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 	)
 
 	if err != nil {
 		return fmt.Errorf("failed to create monitor: %w", err)
+	}
+
+	// The timeline starts at creation: every non-group monitor always has
+	// exactly one open state interval (S-U4, docs/state-semantics.md). Group
+	// state is derived by the alerter's SQL roll-up and has no timeline yet.
+	if monitor.Type != models.MonitorTypeGroup {
+		if err := monitorstate.RecordIntervalTx(ctx, tx, monitor.TenantID, monitor.ID,
+			monitorstate.State(monitor.CurrentState), monitorstate.IntervalReasonCreated); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit create transaction: %w", err)
 	}
 
 	monitor.Tags = tags
@@ -96,7 +123,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
 			` + maintenance.InMaintenancePredicate("monitors") + ` AS in_maintenance,
 			` + maintenance.MaintenanceUntilExpr("monitors") + ` AS maintenance_until
 		FROM monitors
@@ -111,7 +138,7 @@ func (r *PostgresRepository) GetByID(ctx context.Context, tenantID, monitorID uu
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 		&monitor.InMaintenance, &monitor.MaintenanceUntil,
 	)
 
@@ -160,7 +187,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 		SELECT id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state,
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state,
 			%s AS in_maintenance,
 			%s AS maintenance_until
 		FROM monitors
@@ -187,7 +214,7 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID uuid.UUID, tag *
 			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 			&monitor.AlertPolicyID, &monitor.Enabled,
 			pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
+			&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 			&monitor.InMaintenance, &monitor.MaintenanceUntil,
 		)
 		if err != nil {
@@ -236,7 +263,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		RETURNING id, tenant_id, name, type, config,
 			interval_seconds, timeout_seconds, alert_policy_id, enabled, tags,
 			agent_id, push_token, next_run_at, created_at, updated_at, deleted_at,
-			consecutive_failures_threshold, notification_mode, member_alert_rollup, location_quorum, current_state
+			consecutive_failures_threshold, notification_mode, member_alert_rollup, dependency_suppression, location_quorum, current_state
 	`, setClause, whereArgIndex, whereArgIndex+1)
 
 	var tags []string
@@ -246,7 +273,7 @@ func (r *PostgresRepository) Update(ctx context.Context, monitor *models.Monitor
 		&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 		&monitor.AlertPolicyID, &monitor.Enabled,
 		pq.Array(&tags), &monitor.AgentID, &monitor.PushToken, &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt, &monitor.DeletedAt,
-		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.LocationQuorum, &monitor.CurrentState,
+		&monitor.ConsecutiveFailuresThreshold, &monitor.NotificationMode, &monitor.MemberAlertRollup, &monitor.DependencySuppression, &monitor.LocationQuorum, &monitor.CurrentState,
 	)
 
 	if err != nil {
@@ -334,6 +361,9 @@ func (r *PostgresRepository) DeleteHistory(ctx context.Context, tenantID uuid.UU
 		`DELETE FROM monitor_hourly_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM monitor_daily_rollups WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
 		`DELETE FROM check_results WHERE tenant_id = $1 AND monitor_id = ANY($2)`,
+		// Closed intervals are history; the open one stays — a live monitor
+		// always keeps exactly one open interval (S-U4).
+		`DELETE FROM monitor_state_intervals WHERE tenant_id = $1 AND monitor_id = ANY($2) AND ended_at IS NOT NULL`,
 	}
 
 	for _, stmt := range deleteStatements {
@@ -626,17 +656,93 @@ func (r *PostgresRepository) GetChannelsForMonitors(ctx context.Context, monitor
 	return result, nil
 }
 
+// GetAlertRoutingForMonitors resolves each monitor's effective alert routing
+// and returns the reachability an operator sees, keyed by monitor ID.
+//
+// The routing rules live in shared/alertrouting, which the alerter uses to
+// dispatch — so a monitor reported unreachable here is exactly one whose
+// alerts the alerter would deliver to nobody.
+func (r *PostgresRepository) GetAlertRoutingForMonitors(ctx context.Context, monitorIDs []uuid.UUID) (map[uuid.UUID]alertrouting.Status, error) {
+	result := make(map[uuid.UUID]alertrouting.Status)
+	if len(monitorIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT m.id, m.notification_mode,
+			`+alertrouting.ChannelCountExpr("m", true)+` AS own_active,
+			`+alertrouting.ChannelCountExpr("m", false)+` AS own_assigned,
+			`+alertrouting.SelfSilentGroupPredicate("m")+` AS self_silent,
+			g.id, g.name, COALESCE(g.enabled, FALSE) AS rollup_enabled,
+			COALESCE(`+alertrouting.ChannelCountExpr("g", true)+`, 0) AS rollup_active,
+			COALESCE(`+alertrouting.ChannelCountExpr("g", false)+`, 0) AS rollup_assigned
+		FROM monitors m
+		LEFT JOIN monitors g ON g.id = `+alertrouting.RollupGroupExpr("m.id")+`
+		WHERE m.id = ANY($1)
+	`, pq.Array(monitorIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query alert routing: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var counts alertrouting.Counts
+		var groupID uuid.NullUUID
+		var groupName sql.NullString
+		if err := rows.Scan(&monitorID, &counts.NotificationMode,
+			&counts.OwnActive, &counts.OwnAssigned, &counts.SelfSilentGroup,
+			&groupID, &groupName, &counts.RollupEnabled,
+			&counts.RollupActive, &counts.RollupAssigned); err != nil {
+			return nil, fmt.Errorf("failed to scan alert routing: %w", err)
+		}
+		if groupID.Valid {
+			id := groupID.UUID
+			counts.RollupGroupID = &id
+			counts.RollupGroupName = groupName.String
+		}
+		result[monitorID] = alertrouting.Classify(counts)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating alert routing: %w", err)
+	}
+	return result, nil
+}
+
 // SetLocations atomically replaces a monitor's private-location set. Every
 // location must be a live location of the tenant. Per-location state rows for
 // removed locations are deleted so they can never resurface in the quorum
 // aggregate; when the set becomes empty, the monitor returns to the default
 // fleet and restarts the legacy state machine from 'unknown'.
+//
+// Lock ordering (S-O1, docs/state-semantics.md): the monitor row is locked
+// first, matching result ingest — which holds the same lock while touching
+// monitor_location_state — so the child-row deletes below can neither
+// deadlock against an in-flight result nor lose to one that re-upserts a
+// removed location's state row after its membership check.
 func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitorID uuid.UUID, locationIDs []uuid.UUID) error {
+	// A nil slice must behave like an empty one: pq.Array(nil) encodes SQL
+	// NULL and `!= ALL(NULL)` matches nothing, silently keeping every
+	// membership and state row while the monitor still resets to 'unknown'.
+	if locationIDs == nil {
+		locationIDs = []uuid.UUID{}
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	var prevState string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT current_state FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
+	`, monitorID, tenantID).Scan(&prevState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("monitor not found")
+		}
+		return fmt.Errorf("failed to lock monitor: %w", err)
+	}
 
 	if len(locationIDs) > 0 {
 		var count int
@@ -679,10 +785,75 @@ func (r *PostgresRepository) SetLocations(ctx context.Context, tenantID, monitor
 		`, monitorID, tenantID); err != nil {
 			return fmt.Errorf("failed to reset monitor state: %w", err)
 		}
+		if prevState != string(monitorstate.StateUnknown) {
+			if err := monitorstate.RecordIntervalTx(ctx, tx, tenantID, monitorID,
+				monitorstate.StateUnknown, monitorstate.IntervalReasonLocationChange); err != nil {
+				return err
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit monitor locations: %w", err)
+	}
+	return nil
+}
+
+// SetEnabled toggles a monitor's enabled flag. A real toggle resets observed
+// state to 'unknown' with the per-location machinery cleared (S-P2,
+// docs/state-semantics.md): the pre-pause state must not survive into resume
+// — a monitor paused while down would otherwise re-open an availability
+// alert on unpause before any fresh check runs. Lock order per S-O1.
+func (r *PostgresRepository) SetEnabled(ctx context.Context, tenantID, monitorID uuid.UUID, enabled bool) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var current bool
+	var monitorType string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT enabled, type FROM monitors WHERE id = $1 AND tenant_id = $2 FOR UPDATE
+	`, monitorID, tenantID).Scan(&current, &monitorType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("monitor not found")
+		}
+		return fmt.Errorf("failed to lock monitor: %w", err)
+	}
+	if current == enabled {
+		return tx.Commit()
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE monitors
+		SET enabled = $2,
+			current_state = 'unknown',
+			consecutive_failures = 0,
+			last_state_change_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1
+	`, monitorID, enabled); err != nil {
+		return fmt.Errorf("failed to toggle monitor: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM monitor_location_state WHERE monitor_id = $1
+	`, monitorID); err != nil {
+		return fmt.Errorf("failed to clear location state: %w", err)
+	}
+	if monitorType != string(models.MonitorTypeGroup) {
+		reason := monitorstate.IntervalReasonPause
+		if enabled {
+			reason = monitorstate.IntervalReasonResume
+		}
+		if err := monitorstate.RecordIntervalTx(ctx, tx, tenantID, monitorID,
+			monitorstate.StateUnknown, reason); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit enabled toggle: %w", err)
 	}
 	return nil
 }

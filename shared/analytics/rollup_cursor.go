@@ -11,10 +11,16 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 )
 
-// RollupCursor is the high-water mark of the monitor_daily_rollups job: every
+// RollupCursor is the completeness watermark of rollup maintenance: every
 // check_result at or before (LastCreatedAt, LastCheckResultID) has been folded
 // into monitor_hourly_rollups / monitor_daily_rollups. A nil LastCreatedAt
 // means the job has never completed a run.
+//
+// Since the dirty-ledger consumer (scheduler rollups_dirty.go) replaced the
+// incremental cursor scan, the watermark advances to the newest monitor-source
+// row only after a run that fully DRAINED the ledger, and old buckets are no
+// longer immutable: a late-committing row rebuilds its (past) bucket wholesale
+// on the next run.
 //
 // Callers read the cursor with this one-row lookup FIRST and then pass the
 // bounds they derive from it as plain query parameters. Joining
@@ -28,23 +34,19 @@ import (
 //
 //   - Callers that cap their rollup reads at the Go-computed RollupEnd
 //     (loadExactRolling24hSummary, batchUptimeSummary) cannot double count:
-//     their rollup region ends at date_trunc('hour', LastCreatedAt) and the
-//     rollup job only mutates buckets at or after that hour, so buckets below
-//     RollupEnd are immutable once the cursor is read.
+//     their raw region is time-bounded strictly after the cursor, so a late
+//     row rebuilt into an older bucket only ever appears in the rollup
+//     region (which just becomes MORE accurate).
 //
 //   - Tuple-comparison callers (loadHourlyBucketSeries24h, batchHourlyUptime,
-//     GetGlobalHourlyUptime) read ALL in-window rollup buckets — including the
-//     partial bucket for the cursor's current hour — and exclude raw rows via
-//     the stale cursor tuple (created_at, id) > (LastCreatedAt, LastCheckResultID).
-//     The scheduler commits rollup upserts and the cursor advance atomically
-//     per batch, so if a batch commits between the two queries, raw rows in
-//     (oldCursor, newCursor] are counted twice: once in the freshly-upserted
-//     rollup buckets and once in the raw branch. The over-count is transient
-//     and bounded — at most one scheduler batch (<=5000 rows) — and
-//     self-corrects on the next request, which sees the new cursor. This is an
-//     accepted trade-off for display-only data; wrapping both queries in one
-//     REPEATABLE READ transaction would eliminate it but isn't worth the
-//     complexity.
+//     GetGlobalHourlyUptime) read ALL in-window rollup buckets and exclude raw
+//     rows via the stale cursor tuple (created_at, id) > (LastCreatedAt,
+//     LastCheckResultID). A row that commits with an older created_at after
+//     the ledger drained is excluded from the raw branch (tuple <= cursor)
+//     but not yet folded — a transient UNDER-count of at most one maintenance
+//     tick, self-healing because its dirty mark is already in the ledger.
+//     (The old incremental job had the mirror-image transient over-count of
+//     one batch.) Accepted trade-off for display-only data.
 type RollupCursor struct {
 	LastCreatedAt     *time.Time
 	LastCheckResultID uuid.UUID // uuid.Nil when unset; only meaningful alongside LastCreatedAt

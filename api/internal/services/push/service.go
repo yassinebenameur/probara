@@ -29,6 +29,9 @@ func NewService(db *sql.DB, publisher *statusupdates.Publisher) *Service {
 
 // ProcessPush processes incoming push data and stores it as a check result
 func (s *Service) ProcessPush(ctx context.Context, token string, payload PushPayload) error {
+	if err := ValidateStatus(payload.Status); err != nil {
+		return err
+	}
 	// Look up the monitor by push token
 	var monitorID uuid.UUID
 	var tenantID uuid.UUID

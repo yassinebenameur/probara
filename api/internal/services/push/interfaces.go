@@ -2,11 +2,24 @@ package push
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 )
+
+var ErrInvalidStatus = errors.New("status must be up, down, or error")
+
+// ValidateStatus also accepts the omitted status used by simple heartbeats.
+func ValidateStatus(status string) error {
+	switch status {
+	case "", "up", "down", "error":
+		return nil
+	default:
+		return ErrInvalidStatus
+	}
+}
 
 // PushPayload represents the data received from a push request
 type PushPayload struct {

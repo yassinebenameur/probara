@@ -21,8 +21,12 @@ type DispatchEnvelope struct {
 	// the NATS subject but kept here so consumers don't have to parse it.
 	ChannelType string `json:"channel_type"`
 
-	// AlertID + EventType combine into the idempotency key used by the worker
-	// to deduplicate redeliveries.
+	// AlertID + EventType (with ChannelID) form the idempotency key that rides
+	// along to receivers. Deduplication itself happens before publish: the
+	// alerter claims the (alert, channel, event) slot in
+	// alert_notification_states atomically. Publishing also sets Nats-Msg-Id
+	// for broker deduplication if a process dies before committing its claim.
+	// External delivery is at least once: receivers should honor the key.
 	AlertID   string `json:"alert_id"`
 	EventType string `json:"event_type"`
 
@@ -31,9 +35,9 @@ type DispatchEnvelope struct {
 	Event AlertEvent `json:"event"`
 }
 
-// IdempotencyKey returns the deterministic key the worker writes into the
-// NATS message header (x-idempotency-key) and uses to dedupe in
-// alert_notification_states.
+// IdempotencyKey returns the deterministic key the alerter sets as the
+// x-idempotency-key NATS header and webhook plugins forward as
+// X-Probara-Idempotency-Key, so receivers can dedupe retried deliveries.
 func (e DispatchEnvelope) IdempotencyKey() string {
 	return e.AlertID + ":" + e.ChannelID + ":" + e.EventType
 }

@@ -29,9 +29,12 @@ type statusPageSettingsStored struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      string  `json:"default_theme"`
 	AllowThemeToggle  bool    `json:"allow_theme_toggle"`
-	CustomCSS         *string `json:"custom_css,omitempty"`
-	CustomHeadHTML    *string `json:"custom_head_html,omitempty"`
-	CustomFooterHTML  *string `json:"custom_footer_html,omitempty"`
+
+	EnablePushNotifications bool `json:"enable_push_notifications"`
+
+	CustomCSS        *string `json:"custom_css,omitempty"`
+	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
+	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
 }
 
 type statusPageSectionInput struct {
@@ -64,6 +67,9 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		ShowFooter:        true,
 		DefaultTheme:      "dark",
 		AllowThemeToggle:  true,
+		// Off by default: it makes the public page ask visitors for a browser
+		// permission, which is the operator's call to make.
+		EnablePushNotifications: false,
 	}
 }
 
@@ -114,6 +120,9 @@ func (s statusPageSettingsStored) applyPatch(patch *models.StatusPageSettings) s
 	if patch.AllowThemeToggle != nil {
 		s.AllowThemeToggle = *patch.AllowThemeToggle
 	}
+	if patch.EnablePushNotifications != nil {
+		s.EnablePushNotifications = *patch.EnablePushNotifications
+	}
 	if patch.CustomCSS != nil {
 		s.CustomCSS = trimOptionalString(patch.CustomCSS)
 	}
@@ -149,21 +158,23 @@ func (s statusPageSettingsStored) toAPI() *models.StatusPageSettings {
 	showFooter := s.ShowFooter
 	defaultTheme := s.DefaultTheme
 	allowThemeToggle := s.AllowThemeToggle
+	enablePushNotifications := s.EnablePushNotifications
 	return &models.StatusPageSettings{
-		ShowMonitorTags:   &showMonitorTags,
-		ShowMonitorURL:    &showMonitorURL,
-		ShowMonitorUptime: &showMonitorUptime,
-		ShowMonitorTLS:    &showMonitorTLS,
-		ShowLatencyCharts: &showLatencyCharts,
-		ShowAgentMetrics:  &showAgentMetrics,
-		ShowGlobalUptime:  &showGlobalUptime,
-		ShowFooter:        &showFooter,
-		FooterText:        s.FooterText,
-		DefaultTheme:      &defaultTheme,
-		AllowThemeToggle:  &allowThemeToggle,
-		CustomCSS:         s.CustomCSS,
-		CustomHeadHTML:    s.CustomHeadHTML,
-		CustomFooterHTML:  s.CustomFooterHTML,
+		ShowMonitorTags:         &showMonitorTags,
+		ShowMonitorURL:          &showMonitorURL,
+		ShowMonitorUptime:       &showMonitorUptime,
+		ShowMonitorTLS:          &showMonitorTLS,
+		ShowLatencyCharts:       &showLatencyCharts,
+		ShowAgentMetrics:        &showAgentMetrics,
+		ShowGlobalUptime:        &showGlobalUptime,
+		ShowFooter:              &showFooter,
+		FooterText:              s.FooterText,
+		DefaultTheme:            &defaultTheme,
+		AllowThemeToggle:        &allowThemeToggle,
+		EnablePushNotifications: &enablePushNotifications,
+		CustomCSS:               s.CustomCSS,
+		CustomHeadHTML:          s.CustomHeadHTML,
+		CustomFooterHTML:        s.CustomFooterHTML,
 	}
 }
 
