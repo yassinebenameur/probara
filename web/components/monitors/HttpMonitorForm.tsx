@@ -11,27 +11,10 @@ import {
   HTTPJSONAssertion,
   HTTPJSONAssertionOp,
 } from '@/lib/types';
+import { type HeaderKV, isSensitiveHeaderName } from '@/lib/monitor-form/common';
+import type { HttpFormData } from '@/lib/monitor-form/http';
 
-type HeaderKV = { key: string; value: string; reveal?: boolean };
-
-export interface HttpFormData {
-  url: string;
-  method: string;
-  status_rules: string;
-  request_headers: HeaderKV[];
-  body: string;
-  body_assertions: HTTPBodyAssertion[];
-  response_header_assertions: HTTPHeaderAssertion[];
-  json_assertions: HTTPJSONAssertion[];
-  max_latency_ms: string;
-  follow_redirects: boolean;
-  max_redirects: number;
-  tls_skip_verify: boolean;
-  tls_min_days_valid: string;
-  tls_server_name: string;
-  tls_ca_pem: string;
-  collect_timing: boolean;
-}
+export type { HttpFormData };
 
 export const SECTION_IDS = {
   request: 'section-request',
@@ -46,20 +29,6 @@ interface HttpMonitorFormProps {
   openSections?: Record<string, boolean>;
   onToggleSection?: (id: string, open: boolean) => void;
 }
-
-const isSensitiveHeaderName = (name: string) => {
-  const n = name.trim().toLowerCase();
-  if (!n) return false;
-  return (
-    n === 'authorization' ||
-    n === 'cookie' ||
-    n === 'x-api-key' ||
-    n === 'api-key' ||
-    n === 'x-auth-token' ||
-    n.includes('token') ||
-    n.includes('secret')
-  );
-};
 
 function MethodUrlRow({
   method,

@@ -30,7 +30,8 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   Uptime Kuma over its socket.io API and writes Kuma's own backup shape (Kuma
   2.0 removed the export button). Transport only — all translation lives in
   `api/internal/services/import/kuma.go`
-- `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry)
+- `web/` — Next.js operator UI (`components/monitors/MonitorTypePicker.tsx` holds the
+  UI type registry `MONITOR_TYPE_META`; `MonitorForm.tsx` dispatches each type to its editor)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack
 
@@ -148,8 +149,9 @@ or imported groups come back empty. Any other path that creates groups through
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
 4. Secret fields → `MonitorSecretFields`
-5. UI: form component in `web/components/monitors/`, wire into
-   `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`
+5. UI: form component in `web/components/monitors/`, an entry in `MONITOR_TYPE_META`
+   (`MonitorTypePicker.tsx`) and in `DELEGATED_FORMS` (`MonitorForm.tsx`; keyed
+   exhaustively by `MonitorType`, so tsc flags a missing one), types in `web/lib/types.ts`
 6. Docs: `website/lib/docs/pages/monitors.ts` (type table + protocol passage +
    secrets coverage) — import/export support is automatic via the registry
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
@@ -243,6 +245,12 @@ or imported groups come back empty. Any other path that creates groups through
   `go build ./...` and `go test ./...` from the module dir. Full api suite
   takes >2 min — run in background.
 - Web/website: `npx tsc --noEmit` in `web/` or `website/`.
+- Web unit tests (`npm test` in `web/`) compile only `lib/*.test.ts` via
+  `tsconfig.test.json` (rootDir `lib`, CommonJS, no `@/` alias), so tested code
+  must live under `lib/` and import relatively. MonitorForm's inline types (http,
+  ping, dns, synthetic API/browser) validate and build payloads in pure
+  `lib/monitor-form/` functions pinned by `lib/monitor-form.test.ts`; change the
+  wire shape there, keep React out of it.
 - Helm: `helm lint helm/monitoring-platform` and `helm template` (see gotcha).
 - Compose: `docker compose config` validates env wiring.
 
