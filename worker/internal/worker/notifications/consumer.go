@@ -182,6 +182,20 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		return nil
 	}
 
+	superseded, err := c.eventSuperseded(ctx, envelope)
+	if err != nil {
+		entry.WithError(err).Error("Failed to load alert status")
+		return err
+	}
+	if superseded {
+		// A retried trigger/reminder/ack must never land after the resolve:
+		// PagerDuty and Opsgenie accept a resolve for an alert they do not
+		// have yet as a no-op, so a late trigger would open an incident that
+		// nothing ever closes.
+		entry.Info("Alert resolved since publish; dropping superseded event")
+		return nil
+	}
+
 	configMap := map[string]any{}
 	if len(channel.Config) > 0 {
 		if err := json.Unmarshal(channel.Config, &configMap); err != nil {
@@ -219,6 +233,31 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 
 	entry.WithField("attempt", attempt).Debug("Notification delivered")
 	return nil
+}
+
+// eventSuperseded reports whether envelope describes an alert state the
+// alert has since left: any non-resolve event for an alert that is now
+// resolved (or deleted). JetStream redelivers failed messages on a backoff,
+// so a created/reminder/acknowledged message can outlive the resolve the
+// alerter published after it; delivering it then would reopen the alert on
+// the provider side. Resolves always go through.
+func (c *Consumer) eventSuperseded(ctx context.Context, envelope notifications.DispatchEnvelope) (bool, error) {
+	if envelope.EventType == "resolved" {
+		return false, nil
+	}
+	alertID, err := uuid.Parse(envelope.AlertID)
+	if err != nil {
+		return false, fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+	}
+	var status string
+	err = c.db.QueryRowContext(ctx, `SELECT status FROM alerts WHERE id = $1`, alertID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == "resolved", nil
 }
 
 type loadedChannel struct {

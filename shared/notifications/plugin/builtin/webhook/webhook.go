@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -101,7 +102,7 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 		return err
 	}
 	if cfg.CustomHeadersJ != "" {
-		if _, err := parseCustomHeaders(cfg.CustomHeadersJ); err != nil {
+		if _, err := parseCustomHeaders(cfg.CustomHeadersJ, true); err != nil {
 			return fmt.Errorf("custom_headers: %w", err)
 		}
 	}
@@ -124,7 +125,9 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 
 	headers := map[string]string{}
 	if raw := req.Channel.String("custom_headers"); raw != "" {
-		extra, err := parseCustomHeaders(raw)
+		// Validate rejects reserved and case-colliding names; a config saved
+		// before that check still delivers, minus the reserved ones.
+		extra, err := parseCustomHeaders(raw, false)
 		if err != nil {
 			return plugin.Permanent(fmt.Errorf("parse custom_headers: %w", err))
 		}
@@ -148,19 +151,55 @@ func computeSignature(secret string, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func parseCustomHeaders(raw string) (map[string]string, error) {
+// reservedHeaders are set by the plugin itself and may not be supplied as
+// custom headers: receivers rely on them to authenticate and deduplicate.
+var reservedHeaders = map[string]bool{
+	http.CanonicalHeaderKey(signatureHeader): true,
+	http.CanonicalHeaderKey(eventTypeHeader): true,
+	http.CanonicalHeaderKey(idempotencyHdr):  true,
+}
+
+// parseCustomHeaders decodes the custom-headers JSON into canonical header
+// names. HTTP header names are case-insensitive, so keys are compared in
+// canonical form. strict (Validate) rejects a reserved name in any casing and
+// keys differing only in case. Lenient mode (Send, for configs saved before
+// that check) drops reserved names and resolves case collisions
+// deterministically, so the result never depends on map iteration order.
+func parseCustomHeaders(raw string, strict bool) (map[string]string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil, nil
 	}
-	var headers map[string]string
-	if err := json.Unmarshal([]byte(trimmed), &headers); err != nil {
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
 		return nil, fmt.Errorf("must be a flat JSON object of strings: %w", err)
 	}
-	for k := range headers {
-		if strings.TrimSpace(k) == "" {
+	keys := make([]string, 0, len(decoded))
+	for k := range decoded {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	headers := make(map[string]string, len(decoded))
+	for _, k := range keys {
+		name := strings.TrimSpace(k)
+		if name == "" {
 			return nil, errors.New("header keys must be non-empty")
 		}
+		canonical := http.CanonicalHeaderKey(name)
+		if reservedHeaders[canonical] {
+			if strict {
+				return nil, fmt.Errorf("%s is set by Probara and cannot be overridden", canonical)
+			}
+			continue
+		}
+		if _, dup := headers[canonical]; dup {
+			if strict {
+				return nil, fmt.Errorf("header %s is given more than once (names are case-insensitive)", canonical)
+			}
+			continue
+		}
+		headers[canonical] = decoded[k]
 	}
 	return headers, nil
 }

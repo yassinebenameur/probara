@@ -198,9 +198,12 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	joined := errors.Join(errs...)
 	// Retry unless every failure was permanent (bad credentials, invalid
 	// numbers): a transient failure on one recipient is worth redelivering.
+	// The mixed case must be flattened: plugin.IsPermanent walks a joined
+	// error's children, so returning the join would let the permanent child
+	// mark the whole delivery permanent and drop the retryable recipient.
 	for _, e := range errs {
 		if !plugin.IsPermanent(e) {
-			return joined
+			return errors.New(joined.Error())
 		}
 	}
 	return plugin.Permanent(joined)

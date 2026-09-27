@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -131,4 +132,59 @@ func TestSend_ChatNotFoundIsPermanent(t *testing.T) {
 	if strings.Contains(err.Error(), token) {
 		t.Fatal("error leaked the bot token")
 	}
+}
+
+// assertWellFormed checks what Telegram's HTML parser rejects: a bare or
+// partial entity, or an unbalanced tag.
+func assertWellFormed(t *testing.T, text string) {
+	t.Helper()
+	if n := len([]rune(text)); n > maxMessage {
+		t.Fatalf("len = %d, over the %d limit", n, maxMessage)
+	}
+	for i := strings.IndexByte(text, '&'); i >= 0; {
+		rest := text[i:]
+		if !regexp.MustCompile(`^&(amp|lt|gt|quot|#[0-9]+);`).MatchString(rest) {
+			t.Fatalf("broken entity at %q", rest[:min(len(rest), 12)])
+		}
+		next := strings.IndexByte(rest[1:], '&')
+		if next < 0 {
+			break
+		}
+		i += next + 1
+	}
+	for _, tag := range []string{"b", "pre", "a"} {
+		open := strings.Count(text, "<"+tag+">") + strings.Count(text, "<"+tag+" ")
+		if open != strings.Count(text, "</"+tag+">") {
+			t.Fatalf("unbalanced <%s> in %q", tag, text[len(text)-120:])
+		}
+	}
+}
+
+// Characters that expand when escaped must not push markup past the limit:
+// the old renderer measured the error before escaping, then cut the finished
+// HTML, leaving an unclosed <pre> that Telegram rejects outright.
+func TestRender_ExpandingErrorStaysWellFormed(t *testing.T) {
+	for _, s := range []string{
+		strings.Repeat("&", 5000),
+		strings.Repeat(`<"x">`, 3000),
+		strings.Repeat("é&", 4000),
+	} {
+		ev := sampleEvent()
+		ev.Alert.LastError = &s
+		text := render(plugin.DispatchRequest{Event: ev}.View())
+		assertWellFormed(t, text)
+		if !strings.HasSuffix(text, "Open the monitor</a>") {
+			t.Fatalf("link was dropped")
+		}
+	}
+}
+
+func TestRender_HugeFactsStayWellFormed(t *testing.T) {
+	ev := sampleEvent()
+	for i := 0; i < 200; i++ {
+		ev.Alert.ImpactedMonitors = append(ev.Alert.ImpactedMonitors, notifications.ImpactedMonitor{ID: "x", Name: strings.Repeat("&<>", 40)})
+	}
+	name := strings.Repeat("&", 2000)
+	ev.Alert.RootCauseMonitorName = &name
+	assertWellFormed(t, render(plugin.DispatchRequest{Event: ev}.View()))
 }

@@ -180,3 +180,28 @@ func TestSend_AllPermanentFailuresArePermanent(t *testing.T) {
 		t.Fatalf("err = %v, want permanent", err)
 	}
 }
+
+// One recipient rejected for good (invalid number) and another failing
+// transiently must still be retried as a whole.
+func TestSend_MixedPermanentAndTransientStaysRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(raw))
+		if form.Get("To") == "+15557654321" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"code":21211,"message":"Invalid 'To' Phone Number"}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	p := New()
+	p.base = srv.URL
+	err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: config(nil)},
+		Event:   sampleEvent(),
+	})
+	if err == nil || plugin.IsPermanent(err) {
+		t.Fatalf("err = %v, want a transient error so the 503 recipient is retried", err)
+	}
+}

@@ -153,44 +153,72 @@ func emojiFor(t present.Tone) string {
 	}
 }
 
-// render builds the HTML message. Every interpolated value is escaped: Telegram
-// rejects the whole message (400) on malformed markup, and a probe error can
-// contain anything.
+// render builds the HTML message. Every interpolated value is escaped and
+// every length budget is measured on the escaped text: Telegram rejects the
+// whole message (a 400, treated as permanent) on malformed markup, so
+// truncation must never split an entity or cut a closing tag off. Optional
+// parts are dropped whole — error block first, then facts from the end —
+// until the message fits.
 func render(m present.Message) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s <b>%s</b>\n", emojiFor(m.Tone), html.EscapeString(m.Title))
+	head := fmt.Sprintf("%s <b>%s</b>\n", emojiFor(m.Tone), clip(m.Title, 256))
 	if m.Summary != "" {
-		b.WriteString(html.EscapeString(m.Summary))
-		b.WriteString("\n")
+		head += clip(m.Summary, 1024) + "\n"
 	}
-	if facts := m.Facts(); len(facts) > 0 {
-		b.WriteString("\n")
-		for _, f := range facts {
-			fmt.Fprintf(&b, "<b>%s:</b> %s\n", html.EscapeString(f.Label), html.EscapeString(f.Value))
-		}
+	var facts []string
+	for _, f := range m.Facts() {
+		facts = append(facts, fmt.Sprintf("<b>%s:</b> %s\n", clip(f.Label, 64), clip(f.Value, 512)))
 	}
-	// Reserve room for the link so truncating a long error cannot drop it.
 	var tail string
 	if m.ActionURL != "" {
-		tail = fmt.Sprintf("\n<a href=\"%s\">%s</a>", html.EscapeString(m.ActionURL), html.EscapeString(m.ActionLabel))
+		tail = fmt.Sprintf("\n<a href=\"%s\">%s</a>", html.EscapeString(m.ActionURL), clip(m.ActionLabel, 64))
 	}
-	if m.LastError != "" {
-		room := maxMessage - len([]rune(b.String())) - len([]rune(tail)) - len("\n<pre></pre>\n") - 16
-		if room > 0 {
-			fmt.Fprintf(&b, "\n<pre>%s</pre>\n", html.EscapeString(truncate(m.LastError, room)))
+
+	compose := func(facts []string, errBlock string) string {
+		var b strings.Builder
+		b.WriteString(head)
+		if len(facts) > 0 {
+			b.WriteString("\n")
+			for _, f := range facts {
+				b.WriteString(f)
+			}
 		}
+		b.WriteString(errBlock)
+		b.WriteString(tail)
+		return b.String()
 	}
-	b.WriteString(tail)
-	return truncate(b.String(), maxMessage)
+
+	for {
+		base := compose(facts, "")
+		var errBlock string
+		if m.LastError != "" {
+			const wrapper = "\n<pre></pre>\n"
+			if room := maxMessage - runeLen(base) - runeLen(wrapper); room > 16 {
+				errBlock = "\n<pre>" + clip(m.LastError, room) + "</pre>\n"
+			}
+		}
+		if out := compose(facts, errBlock); runeLen(out) <= maxMessage || len(facts) == 0 {
+			return out
+		}
+		facts = facts[:len(facts)-1]
+	}
 }
 
-func truncate(s string, n int) string {
-	r := []rune(s)
+// clip HTML-escapes s and bounds the escaped result to n runes, cutting only
+// between whole entities and marking the cut with an ellipsis.
+func clip(s string, n int) string {
+	escaped := html.EscapeString(s)
+	r := []rune(escaped)
 	if len(r) <= n {
-		return s
+		return escaped
 	}
-	return string(r[:n-1]) + "…"
+	cut := string(r[:n-1])
+	if i := strings.LastIndexByte(cut, '&'); i >= 0 && !strings.Contains(cut[i:], ";") {
+		cut = cut[:i] // do not leave a partial "&am"
+	}
+	return cut + "…"
 }
+
+func runeLen(s string) int { return len([]rune(s)) }
 
 func parseConfig(raw json.RawMessage) (Config, error) {
 	var cfg Config

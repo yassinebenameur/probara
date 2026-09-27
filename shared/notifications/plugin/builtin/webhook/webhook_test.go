@@ -222,7 +222,8 @@ func TestSend_CustomHeadersCannotSpoofProtocolHeaders(t *testing.T) {
 	err := New().Send(context.Background(), plugin.DispatchRequest{
 		Channel: plugin.ChannelRef{ID: "ch", Config: map[string]any{
 			"url":            srv.URL,
-			"custom_headers": `{"X-Probara-Event-Type":"resolved","Authorization":"Bearer t"}`,
+			"hmac_secret":    "k",
+			"custom_headers": `{"x-probara-signature":"sha256=forged","X-PROBARA-EVENT-TYPE":"resolved","Authorization":"Bearer t"}`,
 		}},
 		Event:     sampleEvent(),
 		EventType: "created",
@@ -235,6 +236,22 @@ func TestSend_CustomHeadersCannotSpoofProtocolHeaders(t *testing.T) {
 	}
 	if got.Get("Authorization") != "Bearer t" {
 		t.Errorf("custom Authorization header not forwarded")
+	}
+	if sig := got.Values(signatureHeader); len(sig) != 1 || sig[0] == "sha256=forged" {
+		t.Errorf("%s = %v, want exactly the computed signature", signatureHeader, sig)
+	}
+}
+
+func TestValidate_RejectsReservedAndCaseCollidingHeaders(t *testing.T) {
+	for _, headers := range []string{
+		`{"x-probara-signature":"sha256=forged"}`,
+		`{"X-Probara-Idempotency-Key":"k"}`,
+		`{"x-source":"a","X-Source":"b"}`,
+	} {
+		raw, _ := json.Marshal(map[string]string{"url": "https://example.com/h", "custom_headers": headers})
+		if err := New().Validate(raw); err == nil {
+			t.Errorf("Validate accepted custom_headers %s", headers)
+		}
 	}
 }
 

@@ -334,7 +334,13 @@ or imported groups come back empty. Any other path that creates groups through
   created/reminder/resolved machine in `last_event_type` is untouched), and
   they skip reminders. Channel updates run the plugin's `Validate` on the
   merged config (`alertchannels.Service.validateMerged`) — create-time host
-  checks are otherwise bypassable by editing.
+  checks are otherwise bypassable by editing. The async worker
+  (`Consumer.eventSuperseded`) drops any non-resolve envelope whose alert has
+  since resolved: JetStream redelivers failures on a backoff, so without it a
+  retried trigger could land after the resolve and leave a provider incident
+  open forever. Multi-recipient plugins must flatten a mixed error before
+  returning it — `plugin.IsPermanent` walks `errors.Join` children, so one
+  permanent child would stop the retry for the others.
 
 - **status-page is read-only except for push.** The `Service` takes a
   `db.Querier` and `service.go` stubs `ExecContext` into a refusal so stray
