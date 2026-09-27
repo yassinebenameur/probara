@@ -13,7 +13,7 @@
 Scheduler → NATS JetStream `check-jobs` stream → pool of stateless Go workers executing checks. Monitor types: HTTP, ping, DNS, gRPC, SIP, synthetic API, synthetic browser, push, agent (host metrics), group (rollup).
 
 - Checker registry: `worker/internal/worker/registry.go`
-- Frontend type registry: `MONITOR_TYPE_META` in `web/components/monitors/MonitorForm.tsx`
+- Frontend type registry: `MONITOR_TYPE_META` in `web/components/monitors/MonitorTypePicker.tsx`
 - Job payload: `shared/models/check_job_payload.go`
 
 ### What works for a multi-VPC architecture today
@@ -119,7 +119,7 @@ multi-VPC AWS estate:
 
 ## 4. Monitor type roadmap
 
-Each new type is cheap to add structurally (checker in `worker/internal/worker/registry.go`, entry in `MONITOR_TYPE_META` in `web/components/monitors/MonitorForm.tsx`); the cost is config UI and assertion design.
+Each new type is cheap to add structurally (checker in `worker/internal/worker/registry.go`, entry in `MONITOR_TYPE_META` in `web/components/monitors/MonitorTypePicker.tsx`); the cost is config UI and assertion design.
 
 ### Tier 1 — urgent (table stakes vs. free competition)
 
