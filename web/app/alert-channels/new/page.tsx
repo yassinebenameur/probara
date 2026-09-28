@@ -48,7 +48,6 @@ function NewAlertChannelPageInner() {
       <PageHeader
         breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Channels', href: '/settings?tab=channels' }, { label: 'New' }]}
         title="Create alert channel"
-        subtitle="Configure where alerts should be delivered."
       />
 
       <FormCard>

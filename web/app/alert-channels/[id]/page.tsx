@@ -80,7 +80,6 @@ export default function EditAlertChannelPage() {
       <PageHeader
         breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Channels', href: '/settings?tab=channels' }, { label: channel.name }]}
         title="Edit alert channel"
-        subtitle="Update delivery settings and recipients."
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

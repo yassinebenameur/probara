@@ -38,7 +38,6 @@ export default function AlertChannelCatalogPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Alert channel catalog"
-        subtitle="Browse the integrations bundled with this Probara installation."
         action={
           <Button variant="ghost" size="sm" icon={<ArrowLeft strokeWidth={1.75} />} asChild>
             <Link href="/settings?tab=channels">Back to channels</Link>

@@ -110,9 +110,6 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               Monitor
             </th>
             <th>
-              Policy
-            </th>
-            <th>
               Triggered
             </th>
             <th>
@@ -121,8 +118,8 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
             <th>
               Failures
             </th>
-            <th className="text-right">
-              Actions
+            <th>
+              <span className="sr-only">Actions</span>
             </th>
           </tr>
         </thead>
@@ -245,11 +242,6 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                     affects {alert.impacted_count} monitor{alert.impacted_count === 1 ? '' : 's'}
                   </span>
                 )}
-              </td>
-              <td>
-                <span className="text-slate-400">
-                  {alert.policy_name || 'Unknown'}
-                </span>
               </td>
               <td className="text-slate-400">
                 <div>{formatDateTime(alert.triggered_at)}</div>

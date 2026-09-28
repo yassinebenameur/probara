@@ -60,7 +60,6 @@ export default function StatusPagesPage() {
   const header = (
     <PageHeader
       title="Status pages"
-      subtitle="Public pages to display your service status."
       action={
         canWrite ? (
           <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>

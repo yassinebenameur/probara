@@ -1793,7 +1793,7 @@ export default function MonitorsPage() {
               placeholder="Search…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="input input-sm pl-8"
+              className="input input-sm !pl-8"
             />
           </div>
 
@@ -1862,6 +1862,16 @@ export default function MonitorsPage() {
                   strokeWidth={1.75}
                 />
               </span>
+            </FilterChip>
+          )}
+
+          {!selectionMode && filteredMonitors.length > 0 && (
+            <FilterChip
+              className="ml-auto"
+              icon={<CheckSquare strokeWidth={1.75} />}
+              onClick={() => setSelectionMode(true)}
+            >
+              Select
             </FilterChip>
           )}
         </div>
@@ -1945,8 +1955,8 @@ export default function MonitorsPage() {
         <div className={`grid gap-5 ${selectedMonitor ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : ''}`}>
           {/* Monitor List */}
           <div className="min-w-0 space-y-2">
-            {/* Selection Mode Toggle & Actions Bar */}
-            {filteredMonitors.length > 0 && (
+            {/* Bulk actions bar (selection mode is entered from the filter row) */}
+            {selectionMode && filteredMonitors.length > 0 && (
               <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
                 {/* Selection mode toggle */}
                 <Button

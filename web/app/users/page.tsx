@@ -86,7 +86,6 @@ export default function UsersPage() {
   const header = (
     <PageHeader
       title="Users"
-      subtitle="Manage platform admin accounts."
       action={
         !apiKeyMode ? (
           <div className="flex items-center gap-2">

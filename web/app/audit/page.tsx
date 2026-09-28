@@ -179,7 +179,7 @@ export default function AuditLogPage() {
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-white/[0.06]">
                 <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                  <tr className="text-left text-xs text-slate-500">
                     <th className="w-8 px-2 py-2" />
                     <th className="px-3 py-2">Time</th>
                     <th className="px-3 py-2">Actor</th>
@@ -215,16 +215,12 @@ export default function AuditLogPage() {
                           <td className="px-3 py-3">
                             <div className="flex items-center gap-2">
                               <span>{actorLabel(event)}</span>
-                              <Pill
-                                tone={event.actor_type === 'admin_user' ? 'neutral' : 'info'}
-                                size="xs"
-                              >
-                                {event.actor_type === 'admin_user'
-                                  ? 'user'
-                                  : event.actor_type === 'api_key'
-                                    ? 'key'
-                                    : 'anon'}
-                              </Pill>
+                              {/* Users are the common case; only mark keys and anonymous calls. */}
+                              {event.actor_type !== 'admin_user' && (
+                                <Pill tone="info" size="xs">
+                                  {event.actor_type === 'api_key' ? 'key' : 'anon'}
+                                </Pill>
+                              )}
                             </div>
                           </td>
                           <td className="px-3 py-3 font-mono text-xs">{event.action}</td>
@@ -235,9 +231,13 @@ export default function AuditLogPage() {
                             )}
                           </td>
                           <td className="px-3 py-3">
-                            <Pill tone={OUTCOME_TONE[event.outcome] || 'neutral'} size="xs" dot>
-                              {event.outcome}
-                            </Pill>
+                            {event.outcome === 'success' ? (
+                              <span className="text-xs text-slate-500">success</span>
+                            ) : (
+                              <Pill tone={OUTCOME_TONE[event.outcome] || 'neutral'} size="xs" dot>
+                                {event.outcome}
+                              </Pill>
+                            )}
                           </td>
                           <td className="px-3 py-3 font-mono text-xs text-slate-400">{event.ip || '—'}</td>
                         </tr>

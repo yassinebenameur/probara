@@ -181,24 +181,6 @@ function SectionLoadingState({ message }: { message: string }) {
   );
 }
 
-// ─── Status Pill ───────────────────────────────────────────────────────────────
-
-const STATUS_TONE: Record<string, PillTone> = {
-  success: 'success',
-  error: 'warning',
-  failure: 'danger',
-};
-
-function StatusPill({ status }: { status: string | null | undefined }) {
-  const normalized = status || 'paused';
-  const tone = STATUS_TONE[normalized] ?? 'neutral';
-  return (
-    <Pill tone={tone} size="xs" className="uppercase tracking-wider">
-      {normalized}
-    </Pill>
-  );
-}
-
 // ─── Failure Reason Line ───────────────────────────────────────────────────────
 
 const REASON_CATEGORY_META: Record<FailureReasonCategory, { label: string; tone: PillTone }> = {
@@ -219,7 +201,7 @@ function FailureReasonLine({ message }: { message: string | null | undefined }) 
   return (
     <div className="mt-1 flex min-w-0 items-center gap-1.5">
       {meta && (
-        <Pill tone={meta.tone} size="xs" className="shrink-0 uppercase tracking-wider">
+        <Pill tone={meta.tone} size="xs" className="shrink-0">
           {meta.label}
         </Pill>
       )}
@@ -299,7 +281,6 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
           </p>
           <FailureReasonLine message={monitor.latest_error_message} />
         </div>
-        <StatusPill status={monitor.current_status} />
       </div>
     </div>
   );
@@ -469,7 +450,7 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
                     : 'text-white';
             return (
               <div key={metric.label} className="min-h-24 rounded-lg border border-white/[0.06] bg-slate-950/35 p-4 transition-colors hover:border-white/[0.12]">
-                <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{metric.label}</p>
+                <p className="text-xs font-medium text-slate-500">{metric.label}</p>
                 <p className={`mt-2 text-2xl font-semibold tabular-nums ${metricTone}`}>{metric.value}</p>
                 {metric.detail && <p className="mt-1 text-xs text-slate-500">{metric.detail}</p>}
               </div>
@@ -922,11 +903,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 border-b border-white/[0.06] pb-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-500">Real-time overview of your monitoring environment</p>
-        </div>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight text-white">Dashboard</h1>
         <div className="flex flex-wrap items-center gap-2">
           <TagFilterPicker
             availableTags={availableTags}

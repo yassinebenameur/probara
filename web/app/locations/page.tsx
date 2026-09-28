@@ -181,11 +181,7 @@ export default function LocationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Private locations"
-        subtitle={
-          tab === 'mesh'
-            ? 'Connectivity between your locations, measured from each side'
-            : 'Run checks from your own networks via remote workers'
-        }
+        subtitle={tab === 'locations' ? 'Run checks from your own networks via remote workers' : undefined}
         action={tab === 'locations' ? (
           <>
             <Button
