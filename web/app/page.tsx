@@ -954,7 +954,7 @@ export default function DashboardPage() {
             onToggleTag={toggleTag}
             onClear={clearTags}
           />
-          <Button variant="ghost" icon={<Plus strokeWidth={1.75} />} asChild>
+          <Button variant="accent" icon={<Plus strokeWidth={1.75} />} asChild>
             <Link href="/monitors/new">Add monitor</Link>
           </Button>
           <button

@@ -178,7 +178,19 @@ export default function LocationsPage() {
       <PageHeader
         title="Private locations"
         subtitle="Run checks from your own networks via remote workers"
-        action={addAction}
+        action={(
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RefreshCw strokeWidth={1.75} />}
+              onClick={() => loadLocations()}
+            >
+              Refresh
+            </Button>
+            {addAction}
+          </>
+        )}
       />
 
       {canManageLocations && showCreate && (
@@ -237,20 +249,7 @@ export default function LocationsPage() {
         </Panel>
       )}
 
-      <Panel
-        title="Locations"
-        subtitle="Each location groups the workers deployed in one of your networks."
-        actions={(
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={<RefreshCw strokeWidth={1.75} />}
-            onClick={() => loadLocations()}
-          >
-            Refresh
-          </Button>
-        )}
-      >
+      <Panel>
         {loading ? (
           <div className="text-sm text-slate-500">Loading locations…</div>
         ) : error ? (
@@ -269,14 +268,14 @@ export default function LocationsPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-white/[0.06]">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                <tr className="text-left text-xs text-slate-500">
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Slug</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Mesh</th>
                   <th className="px-3 py-2">Monitors</th>
                   <th className="px-3 py-2">Last seen</th>
-                  <th className="px-3 py-2">Actions</th>
+                  <th className="px-3 py-2"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.04] text-sm text-slate-200">
@@ -344,10 +343,7 @@ export default function LocationsPage() {
                     <td className="px-3 py-3">{connectionPill(location)}</td>
                     <td className="px-3 py-3">
                       {location.mesh_endpoint ? (
-                        <div className="flex items-center gap-1.5">
-                          <Pill tone="info" size="xs">Mesh</Pill>
-                          <span className="font-mono text-xs text-slate-400">{location.mesh_endpoint}</span>
-                        </div>
+                        <span className="font-mono text-xs text-slate-400">{location.mesh_endpoint}</span>
                       ) : (
                         <span className="text-xs text-slate-500">—</span>
                       )}
@@ -359,30 +355,33 @@ export default function LocationsPage() {
                       {location.last_seen_at ? formatTimeAgo(location.last_seen_at) : '—'}
                     </td>
                     <td className="px-3 py-3">
-                      {canManageLocations && <div className="flex items-center gap-1.5">
+                      {canManageLocations && <div className="flex items-center justify-end gap-0.5">
                         <Button
-                          variant="ghost"
+                          variant="subtle"
                           size="xs"
                           icon={<Rocket strokeWidth={1.75} />}
                           onClick={() => setDeployLocation(location)}
+                          title="Deploy"
                         >
-                          Deploy
+                          <span className="sr-only">Deploy</span>
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="subtle"
                           size="xs"
                           icon={<Pencil strokeWidth={1.75} />}
                           onClick={() => startRename(location)}
+                          title="Rename"
                         >
-                          Rename
+                          <span className="sr-only">Rename</span>
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="subtle"
                           size="xs"
                           icon={<Trash2 strokeWidth={1.75} />}
                           onClick={() => setPendingDelete(location)}
+                          title="Delete"
                         >
-                          Delete
+                          <span className="sr-only">Delete</span>
                         </Button>
                       </div>}
                     </td>

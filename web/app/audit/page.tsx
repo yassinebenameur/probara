@@ -125,7 +125,7 @@ export default function AuditLogPage() {
     <div className="space-y-6">
       {header}
 
-      <Panel title="Events" subtitle="Most recent first.">
+      <Panel>
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <div className="w-full sm:w-56">
             <label className="mb-1.5 block text-xs font-medium text-slate-400">Action</label>

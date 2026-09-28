@@ -1869,7 +1869,7 @@ export default function MonitorsPage() {
               </Button>
             )}
             {canWrite && (
-              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+              <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
                 <Link href="/monitors/new">Add monitor</Link>
               </Button>
             )}

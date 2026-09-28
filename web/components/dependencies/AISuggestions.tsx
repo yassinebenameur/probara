@@ -16,7 +16,9 @@ const CONFIDENCE_TONE: Record<string, PillTone> = {
   low: 'neutral',
 };
 
-export default function AISuggestions({ onAccepted }: { onAccepted?: () => void }) {
+// Returns the scan trigger (for the page header) and the results panel,
+// which stays hidden until a scan has run.
+export function useAISuggestions(onAccepted?: () => void) {
   const { showToast } = useToast();
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
@@ -64,27 +66,20 @@ export default function AISuggestions({ onAccepted }: { onAccepted?: () => void 
     setSuggestions((prev) => prev.filter((x) => keyOf(x) !== keyOf(s)));
   };
 
-  return (
+  const button = (
+    <Button variant="ghost" size="sm" loading={loading} disabled={loading} onClick={run}>
+      {ran ? 'Re-scan with AI' : 'Suggest with AI'}
+    </Button>
+  );
+
+  const results = !error && !ran ? null : (
     <Panel
       title="AI dependency suggestions"
-      subtitle="Infer likely dependencies from co-firing alerts, names, tags, and groups"
-      dotColor="#ff5a24"
-      actions={(
-        <Button variant="accent" size="xs" loading={loading} disabled={loading} onClick={run}>
-          {ran ? 'Re-scan' : 'Suggest with AI'}
-        </Button>
-      )}
+      subtitle="Inferred from co-firing alerts, names, tags, and groups. Accepting adds the dependency to the graph."
     >
       {error && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
           {error}
-        </div>
-      )}
-
-      {!error && !ran && (
-        <div className="text-sm text-slate-500">
-          Run a scan to get AI-proposed dependency edges from co-firing alerts, monitor names, tags, and
-          groups. Review each and accept the ones that look right — accepting adds the dependency to the graph.
         </div>
       )}
 
@@ -132,4 +127,6 @@ export default function AISuggestions({ onAccepted }: { onAccepted?: () => void 
       )}
     </Panel>
   );
+
+  return { button, results };
 }

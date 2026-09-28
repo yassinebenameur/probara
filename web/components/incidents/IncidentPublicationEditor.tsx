@@ -101,7 +101,6 @@ export default function IncidentPublicationEditor({
     <Panel
       title="Status Page Publication"
       subtitle="Publish or remove the incident from a public status page."
-      dotColor="var(--info)"
     >
       <div className="space-y-4">
         {loading ? (

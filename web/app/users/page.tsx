@@ -142,10 +142,7 @@ export default function UsersPage() {
     <div className="space-y-6">
       {header}
 
-      <Panel
-        title="Admin users"
-        subtitle="Create, update, and remove admin accounts."
-      >
+      <Panel>
         {loading ? (
           <p className="text-sm text-slate-500">Loading users…</p>
         ) : error ? (
