@@ -238,8 +238,11 @@ func (s *Service) ListIncidents(ctx context.Context, tenantID uuid.UUID, page, p
 
 	offset := (page - 1) * pageSize
 
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM incidents WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+	var total, openTotal int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE state <> 'resolved')
+		FROM incidents WHERE tenant_id = $1
+	`, tenantID).Scan(&total, &openTotal); err != nil {
 		return nil, fmt.Errorf("count incidents: %w", err)
 	}
 
@@ -293,10 +296,11 @@ func (s *Service) ListIncidents(ctx context.Context, tenantID uuid.UUID, page, p
 	}
 
 	return &models.IncidentListResponse{
-		Items:    items,
-		Page:     page,
-		PageSize: pageSize,
-		Total:    total,
+		Items:     items,
+		Page:      page,
+		PageSize:  pageSize,
+		Total:     total,
+		OpenTotal: openTotal,
 	}, nil
 }
 

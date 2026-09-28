@@ -539,7 +539,7 @@ export const API_PAGE: DocPage = {
           type: "table",
           columns: ["Method and path", "Purpose"],
           rows: [
-            ["`GET /api/v1/incidents`", "List incidents"],
+            ["`GET /api/v1/incidents`", "List incidents (paginated; `total` counts all, `open_total` counts unresolved)"],
             ["`POST /api/v1/incidents`", "Create an incident"],
             ["`GET /api/v1/incidents/{id}`", "Get full incident context"],
             ["`PATCH /api/v1/incidents/{id}`", "Update metadata"],

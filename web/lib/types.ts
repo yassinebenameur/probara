@@ -1332,6 +1332,8 @@ export interface IncidentListResponse {
   page: number;
   page_size: number;
   total: number;
+  /** Unresolved incidents for the tenant, independent of pagination. */
+  open_total: number;
 }
 
 export interface CreateIncidentRequest {

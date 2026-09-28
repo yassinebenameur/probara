@@ -94,7 +94,9 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
   const suppressedAlerts = input.opsSummary?.suppressed_alerts ?? 0;
   const pausedMonitors = input.opsSummary?.paused_monitors ?? 0;
   const maintenanceMonitors = input.opsSummary?.maintenance_monitors ?? 0;
-  const attentionCount = Math.max(input.problemMonitorsCount, downMonitors + activeAlerts);
+  // A down monitor normally also has an open outage alert, so adding the two
+  // counted it twice. Alerts have their own tile.
+  const attentionCount = Math.max(input.problemMonitorsCount, downMonitors);
   const actionNeeded = downMonitors > 0 || activeAlerts > 0;
   const hasRecentResolvedHistory = input.recentFailuresCount > 0 || input.problemMonitorsCount > 0;
 

@@ -113,7 +113,7 @@ export default function Sidebar() {
       setCounts({
         monitors: monitorsRes.total || 0,
         statusPages: pagesRes.total || 0,
-        incidents: incidentsRes.total || 0,
+        incidents: incidentsRes.open_total || 0,
         alertChannels: channelsRes.total || 0,
       });
     } catch (error) {

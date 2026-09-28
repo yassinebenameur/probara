@@ -33,6 +33,29 @@ test('buildOperationalSummary reports action needed for active outage signals', 
   assert.equal(summary.primaryActionLabel, 'View monitors');
 });
 
+test('buildOperationalSummary counts a down monitor once even when it has an open alert', () => {
+  const summary = buildOperationalSummary({
+    opsSummary: {
+      up_monitors: 8,
+      down_monitors: 12,
+      paused_monitors: 1,
+      maintenance_monitors: 0,
+      active_alerts: 10,
+      acknowledged_alerts: 0,
+      suppressed_alerts: 0,
+      unrouted_monitors: 0,
+    },
+    problemMonitorsCount: 5,
+    recentFailuresCount: 0,
+    overallUptime: 44.4,
+    avgResponseMs: 53,
+  });
+
+  assert.equal(summary.attentionCount, 12);
+  assert.equal(summary.metrics.find((metric) => metric.label === 'Attention')?.value, '12');
+  assert.equal(summary.metrics.find((metric) => metric.label === 'Active alerts')?.value, '10');
+});
+
 test('buildOperationalSummary avoids contradictory operational copy when only resolved history exists', () => {
   const summary = buildOperationalSummary({
     opsSummary: {

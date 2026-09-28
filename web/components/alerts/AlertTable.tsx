@@ -93,7 +93,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
       <EmptyState
         icon={<Bell className="h-9 w-9" strokeWidth={1.5} />}
         title="No alerts found"
-        description="Alerts will appear here when monitors fail and trigger alert policies."
+        description="Alerts appear here when a monitor goes down."
       />
     );
   }

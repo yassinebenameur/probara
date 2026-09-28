@@ -36,6 +36,10 @@ function expiryTone(expiresAt: string): 'danger' | 'warning' | 'neutral' {
   return 'neutral';
 }
 
+function isExpired(expiresAt?: string | null): boolean {
+  return Boolean(expiresAt) && new Date(expiresAt as string).getTime() <= Date.now();
+}
+
 function expiryLabel(expiresAt: string): string {
   const remainingMs = new Date(expiresAt).getTime() - Date.now();
   if (remainingMs <= 0) return 'Expired';
@@ -443,10 +447,12 @@ export default function SettingsPage() {
                           {expiryLabel(key.expires_at)}
                         </Pill>
                       )}
-                      <Pill tone={key.revoked_at ? 'danger' : 'success'} size="xs" dot>
-                        {key.revoked_at ? 'Revoked' : 'Active'}
-                      </Pill>
-                      {!key.revoked_at && canManageKeys && (
+                      {key.revoked_at ? (
+                        <Pill tone="danger" size="xs" dot>Revoked</Pill>
+                      ) : !isExpired(key.expires_at) && (
+                        <Pill tone="success" size="xs" dot>Active</Pill>
+                      )}
+                      {!key.revoked_at && !isExpired(key.expires_at) && canManageKeys && (
                         <Button
                           variant="danger"
                           size="xs"
