@@ -382,6 +382,12 @@ or imported groups come back empty. Any other path that creates groups through
   loopback targets to `host.docker.internal` (compose worker only).
 - `alert_policies` are retired (API returns 410); workspace alert config
   lives on tenants via `/notification-settings`.
+- **Folded web routes stay as redirects**: Mesh is a tab of Locations and
+  the alert channel list is a tab of Settings (`?tab=`, via
+  `components/ui/Tabs.tsx` `useUrlTab`). `/mesh` and `/alert-channels` are
+  kept as redirects — mesh-edge notifications deep-link to `/mesh`
+  (`shared/notifications/present`) — and `/alert-channels/{new,catalog,[id]}`
+  remain real routes. Link to the tabs, not the old list pages.
 - **Web overlays must portal**: pages wrap content in `space-y-*`, which puts a
   `margin-top` on a `fixed inset-0` sibling, so the backdrop stops covering the
   viewport (and `main`'s `overflow-x-clip` can clip it). Wrap modal roots in
