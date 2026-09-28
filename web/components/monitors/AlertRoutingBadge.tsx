@@ -18,7 +18,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         title: 'Alerts reach nobody',
         detail:
           'This monitor uses custom routing but has no channel assigned. Assign one, or switch it to the workspace default routing.',
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'custom_channels_disabled':
       return {
@@ -26,7 +26,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         detail: `All ${routing.assigned_channels} channel${routing.assigned_channels === 1 ? '' : 's'} assigned to this monitor ${
           routing.assigned_channels === 1 ? 'is' : 'are'
         } disabled, so nothing is delivered. Re-enable one or assign another.`,
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'no_tenant_default_channels':
       return {
@@ -40,7 +40,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         title: 'Alerts reach nobody',
         detail:
           'Every channel in the workspace default routing is disabled, so nothing is delivered. Re-enable one in settings.',
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'group_rollup_unrouted':
       return {
@@ -48,7 +48,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         detail: `${
           routing.rollup_group_name ? `Group "${routing.rollup_group_name}"` : 'A group'
         } rolls this monitor's alerts into its own, and that group has no active channel — so this monitor's own channels never fire.`,
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'group_rollup_paused':
       return {
@@ -62,7 +62,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
       return {
         title: 'Alerts reach nobody',
         detail: 'No active notification channel resolves for this monitor.',
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
   }
 }

@@ -263,7 +263,7 @@ export default function AgentForm({
       });
 
       if (options.length === 0 && apiKeys.length > 0) {
-        setApiKeyError('No stored API key secrets found. Create a key in Settings to use here.');
+        setApiKeyError('No stored API key secrets found. Create a key in Settings → Access to use here.');
       }
     } finally {
       setLoadingApiKeys(false);
@@ -388,7 +388,7 @@ export default function AgentForm({
                     </div>
                     {apiKeyError && <p className="text-xs text-amber-300">{apiKeyError}</p>}
                     {!apiKeyError && apiKeyOptions.length === 0 && (
-                      <p className="text-xs text-slate-500">No stored API keys. Create one in Settings to auto-fill.</p>
+                      <p className="text-xs text-slate-500">No stored API keys. Create one in Settings → Access to auto-fill.</p>
                     )}
                   </div>
                 </FormField>

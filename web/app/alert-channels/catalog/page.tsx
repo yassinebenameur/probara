@@ -41,7 +41,7 @@ export default function AlertChannelCatalogPage() {
         subtitle="Browse the integrations bundled with this Probara installation."
         action={
           <Button variant="ghost" size="sm" icon={<ArrowLeft strokeWidth={1.75} />} asChild>
-            <Link href="/alert-channels">Back to channels</Link>
+            <Link href="/settings?tab=channels">Back to channels</Link>
           </Button>
         }
       />

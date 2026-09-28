@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Copy, KeyRound, Plus, RefreshCw, X } from 'lucide-react';
+import { Copy, KeyRound, Plus, X } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
@@ -21,6 +21,8 @@ import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
 import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection';
 import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
 import { AISettingsPanel } from '@/components/settings/AISettingsPanel';
+import AlertChannelList from '@/components/alert-channels/AlertChannelList';
+import Tabs, { useUrlTab } from '@/components/ui/Tabs';
 
 function formatFingerprint(prefix: string | undefined): string {
   if (!prefix) return '-';
@@ -70,6 +72,8 @@ export default function SettingsPage() {
   const [revoking, setRevoking] = useState(false);
   const [browserKeyPresent, setBrowserKeyPresent] = useState(false);
   const [groupTags, setGroupTags] = useState<string[]>([]);
+  const [showInactiveKeys, setShowInactiveKeys] = useState(false);
+  const [tab, setTab] = useUrlTab(['general', 'channels', 'ai', 'access'] as const);
 
   useEffect(() => {
     setBrowserKeyPresent(Boolean(getApiKey()));
@@ -204,6 +208,9 @@ export default function SettingsPage() {
     }
   };
 
+  const activeKeys = apiKeys.filter((key) => !key.revoked_at && !isExpired(key.expires_at));
+  const inactiveCount = apiKeys.length - activeKeys.length;
+
   const presets: Array<{ label: string; value: string }> = [
     { label: 'Unlimited', value: '' },
     { label: '30 days', value: '30' },
@@ -213,29 +220,32 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" subtitle="Manage retention, API access, and integrations." />
+      <PageHeader title="Settings" />
 
-      <NotificationsPanel />
+      <Tabs
+        tabs={[
+          { id: 'general', label: 'General' },
+          { id: 'channels', label: 'Channels' },
+          { id: 'ai', label: 'AI' },
+          { id: 'access', label: 'Access' },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
 
-      <AISettingsPanel />
+      {tab === 'general' && <NotificationsPanel />}
 
-      {isSuperadmin && <SSOPanel />}
+      {tab === 'channels' && <AlertChannelList />}
 
-      {isSuperadmin && <OidcGroupMappingsPanel />}
+      {tab === 'ai' && <AISettingsPanel />}
 
-      <Panel
+      {tab === 'access' && isSuperadmin && <SSOPanel />}
+
+      {tab === 'access' && isSuperadmin && <OidcGroupMappingsPanel />}
+
+      {tab === 'general' && <Panel
         title="Data retention"
-        subtitle="Control how long check result history is kept for this tenant."
-        actions={(
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={<RefreshCw strokeWidth={1.75} />}
-            onClick={loadRetentionSettings}
-          >
-            Refresh
-          </Button>
-        )}
+        subtitle="How long check result history is kept for this workspace."
       >
         {retentionLoading ? (
           <div className="text-sm text-slate-500">Loading retention settings…</div>
@@ -246,15 +256,6 @@ export default function SettingsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-              <p className="text-sm font-medium text-white">
-                Current retention: {retentionDays === 0 ? 'Unlimited' : `${retentionDays} days`}
-              </p>
-              <p className="mt-1 text-xs text-slate-400">
-                0 means unlimited history. Any value from 30 to 3650 deletes older check data during daily cleanup.
-              </p>
-            </div>
-
             <div className="space-y-2">
               <span className="block text-xs font-medium text-slate-400">Presets</span>
               <div className="flex flex-wrap gap-1.5">
@@ -284,7 +285,8 @@ export default function SettingsPage() {
                   className="input"
                 />
                 <p className="mt-1 text-xs text-slate-500">
-                  Leave empty to store 0 (Unlimited), or enter a value between 30 and 3650.
+                  Currently {retentionDays === 0 ? 'unlimited' : `${retentionDays} days`}. Empty keeps
+                  history forever; 30–3650 deletes older check data in the daily cleanup.
                 </p>
               </div>
               <Button
@@ -299,26 +301,16 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
-      </Panel>
+      </Panel>}
 
-      <DashboardGroupsSection
+      {tab === 'general' && <DashboardGroupsSection
         initialTags={groupTags}
         onSaved={(next) => setGroupTags(next)}
-      />
+      />}
 
-      <Panel
+      {tab === 'access' && <Panel
         title="API keys"
-        subtitle="Create and revoke keys used by agents, scripts, and integrations."
-        actions={(
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={<RefreshCw strokeWidth={1.75} />}
-            onClick={loadKeys}
-          >
-            Refresh
-          </Button>
-        )}
+        subtitle="Keys used by agents, scripts, and integrations."
       >
         {loading ? (
           <div className="text-sm text-slate-500">Loading API keys…</div>
@@ -329,21 +321,9 @@ export default function SettingsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-white">Connected API key</p>
-                  <p className="text-xs text-slate-400">
-                    {browserKeyPresent
-                      ? 'A key is stored in this browser for API key mode.'
-                      : 'No key stored in this browser. Use /connect to add one.'}
-                  </p>
-                </div>
-                <Pill tone={browserKeyPresent ? 'success' : 'neutral'} size="xs" dot>
-                  {browserKeyPresent ? 'Connected' : 'Not set'}
-                </Pill>
-              </div>
-            </div>
+            {browserKeyPresent && (
+              <p className="text-xs text-slate-400">This browser is signed in with a stored API key.</p>
+            )}
 
             {canManageKeys && (
             <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
@@ -421,7 +401,7 @@ export default function SettingsPage() {
               />
             ) : (
               <div className="space-y-2">
-                {apiKeys.map((key) => (
+                {(showInactiveKeys ? apiKeys : activeKeys).map((key) => (
                   <div
                     key={key.id}
                     className="flex flex-col gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
@@ -447,11 +427,7 @@ export default function SettingsPage() {
                           {expiryLabel(key.expires_at)}
                         </Pill>
                       )}
-                      {key.revoked_at ? (
-                        <Pill tone="danger" size="xs" dot>Revoked</Pill>
-                      ) : !isExpired(key.expires_at) && (
-                        <Pill tone="success" size="xs" dot>Active</Pill>
-                      )}
+                      {key.revoked_at && <Pill tone="danger" size="xs" dot>Revoked</Pill>}
                       {!key.revoked_at && !isExpired(key.expires_at) && canManageKeys && (
                         <Button
                           variant="danger"
@@ -465,11 +441,22 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 ))}
+                {inactiveCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowInactiveKeys((v) => !v)}
+                    className="text-xs text-slate-500 hover:text-slate-300"
+                  >
+                    {showInactiveKeys
+                      ? 'Hide revoked and expired keys'
+                      : `Show ${inactiveCount} revoked or expired key${inactiveCount === 1 ? '' : 's'}`}
+                  </button>
+                )}
               </div>
             )}
           </div>
         )}
-      </Panel>
+      </Panel>}
 
       <ConfirmDialog
         open={pendingRevoke !== null}

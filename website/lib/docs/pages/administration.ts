@@ -257,7 +257,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Superadmins can map identity-provider groups to roles under Settings → OIDC group mappings (or via `/api/v1/oidc-group-mappings`). A mapping targets either one tenant with a role (`admin`, `editor`, `viewer`) or the platform (grants `superadmin`). Groups are read from the ID-token claim named by [`OIDC_GROUPS_CLAIM`](/docs/configuration/#oidc); request the `groups` scope via `OIDC_SCOPES` so the provider sends it.",
+            "Superadmins can map identity-provider groups to roles under Settings → Access → OIDC group mappings (or via `/api/v1/oidc-group-mappings`). A mapping targets either one tenant with a role (`admin`, `editor`, `viewer`) or the platform (grants `superadmin`). Groups are read from the ID-token claim named by [`OIDC_GROUPS_CLAIM`](/docs/configuration/#oidc); request the `groups` scope via `OIDC_SCOPES` so the provider sends it.",
         },
         {
           type: "list",

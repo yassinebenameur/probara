@@ -248,7 +248,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`OIDC_GROUPS_CLAIM`',
               '`groups`',
-              'ID-token claim read for group→role mappings. The mapping rules themselves live in the database (Settings → OIDC group mappings), not in environment variables.',
+              'ID-token claim read for group→role mappings. The mapping rules themselves live in the database (Settings → Access → OIDC group mappings), not in environment variables.',
             ],
             ['`OIDC_PROVIDER_LABEL`', '`SSO`', 'Human-readable login-provider label.'],
             [

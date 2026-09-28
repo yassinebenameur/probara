@@ -40,7 +40,7 @@ export function useAISuggestions(onAccepted?: () => void) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'request failed';
       setError(
-        `Couldn't get suggestions (${msg}). Make sure AI is enabled in Settings → AI root cause analysis.`
+        `Couldn't get suggestions (${msg}). Make sure AI is enabled in Settings → AI.`
       );
     } finally {
       setLoading(false);

@@ -21,7 +21,7 @@ export default function ServiceGroupsPanel({ groupTags, groups, range, filterTag
           Group monitors by tag to see health by team or service.
         </p>
         <Link
-          href="/settings#dashboard-groups"
+          href="/settings"
           className="mt-4 inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3.5 py-2 text-sm font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20"
         >
           Choose group tags <ArrowRight className="h-4 w-4" />
