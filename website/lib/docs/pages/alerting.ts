@@ -493,7 +493,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Whether the annotation also **suppresses the downstream page** is a policy. It is off by default: enable `dependency_suppression_enabled` in the workspace [notification settings](/docs/alerting/#notification-routing) to page root causes only, and override it per monitor with `dependency_suppression` (`inherit`, `on`, `off`) in the monitor's Alerting section — `off` keeps a critical monitor paging whatever the workspace says.",
+            "Whether the annotation also **suppresses the downstream page** is a policy. It is off by default: enable `dependency_suppression_enabled` in the workspace [notification settings](/docs/alerting/#notification-routing) to page root causes only, and override it per monitor with `dependency_suppression` (`inherit`, `on`, `off`) in the monitor's Alerting section (shown once the monitor has upstream dependencies, or when a non-default value is stored) — `off` keeps a critical monitor paging whatever the workspace says.",
         },
         {
           type: "list",

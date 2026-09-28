@@ -29,6 +29,9 @@ interface AlertingSectionProps {
   // hide the control (the server keeps the stored value).
   dependencySuppression?: DependencySuppression;
   onDependencySuppressionChange?: (d: DependencySuppression) => void;
+  // The control only matters with upstream dependencies, so it is hidden
+  // without them — unless a non-default value is stored, which stays visible.
+  hasDependencies: boolean;
 }
 
 function graceLabel(seconds: number): string {
@@ -50,7 +53,7 @@ export function AlertingSection({
   isGroup, intervalSeconds, threshold, onThresholdChange,
   mode, onModeChange, customChannels, onCustomChannelsChange,
   rollup, onRollupChange,
-  dependencySuppression, onDependencySuppressionChange,
+  dependencySuppression, onDependencySuppressionChange, hasDependencies,
 }: AlertingSectionProps) {
   const [settings, setSettings] = useState<NotificationSettings | null>(null);
   const [channels, setChannels] = useState<AlertChannel[]>([]);
@@ -196,7 +199,8 @@ export function AlertingSection({
       </div>
       )}
 
-      {!perMonitorRollup && dependencySuppression && onDependencySuppressionChange && (
+      {!perMonitorRollup && dependencySuppression && onDependencySuppressionChange &&
+        (hasDependencies || dependencySuppression !== 'inherit') && (
         <div>
           <label className="mb-2 block text-sm font-medium text-slate-200">
             When an upstream dependency is down
@@ -249,10 +253,12 @@ export function AlertingSection({
               </span>
             </label>
           </div>
-          <p className="mt-1 text-xs text-slate-500">
-            ⓘ Only applies when this monitor has upstream dependencies.{' '}
-            <Link href="/dependencies" className="text-cyan-400">Open the dependency graph</Link>
-          </p>
+          {!hasDependencies && (
+            <p className="mt-1 text-xs text-slate-500">
+              ⓘ This monitor has no upstream dependencies, so this setting has no effect yet.{' '}
+              <Link href="/dependencies" className="text-cyan-400">Open the dependency graph</Link>
+            </p>
+          )}
         </div>
       )}
     </div>
