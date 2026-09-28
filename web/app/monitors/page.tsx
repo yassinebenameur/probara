@@ -4,7 +4,7 @@ import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers } from 'lucide-react';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
@@ -15,7 +15,6 @@ import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import TagPill from '@/components/monitors/TagPill';
-import { AlertRoutingBadge } from '@/components/monitors/AlertRoutingBadge';
 import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
 import {
   deleteMonitor,
@@ -122,30 +121,10 @@ function monitorTypeLabel(type: string, variant: 'label' | 'short' = 'label') {
   return TYPE_LABELS[type]?.[variant] ?? type.replace(/_/g, ' ');
 }
 
-// Type badge component
+// Type badge: one muted colour — status colours are reserved for state.
 function TypeBadge({ type }: { type: string }) {
-  const colors: Record<string, string> = {
-    http: 'text-cyan-400',
-    ping: 'text-violet-400',
-    dns: 'text-sky-400',
-    grpc: 'text-teal-400',
-    tcp: 'text-lime-400',
-    agent: 'text-amber-400',
-    group: 'text-indigo-400',
-    push: 'text-emerald-400',
-    sip: 'text-orange-400',
-    synthetic_api: 'text-fuchsia-400',
-    synthetic_browser: 'text-pink-400',
-    redis: 'text-red-400',
-    postgres: 'text-blue-400',
-    mongodb: 'text-green-400',
-    rabbitmq: 'text-orange-300',
-    mysql: 'text-sky-300',
-    websocket: 'text-purple-400',
-    prometheus: 'text-orange-400',
-  };
   return (
-    <span className={`text-[10px] font-medium uppercase ${colors[type] || 'text-slate-400'}`}>
+    <span className="text-[10px] font-medium uppercase text-slate-500">
       {monitorTypeLabel(type, 'short')}
     </span>
   );
@@ -479,7 +458,6 @@ function MonitorRow({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
           <TypeBadge type={monitor.type} />
-          <AlertRoutingBadge routing={monitor.alert_routing} enabled={monitor.enabled} />
           {status === 'maintenance' && (
             <span
               className="rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-300"
@@ -691,8 +669,7 @@ function GroupCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.name}</span>
-            <span className="text-[10px] font-medium uppercase text-indigo-400">GROUP</span>
-            <AlertRoutingBadge routing={monitor.alert_routing} enabled={monitor.enabled} />
+            <TypeBadge type="group" />
             {/* Tags */}
             {monitor.tags && monitor.tags.length > 0 && (
               <div className="flex items-center gap-1">
@@ -840,12 +817,14 @@ function DetailPanel({
   members = [],
   memberResults = {},
   onSelectMember,
+  onClose,
 }: {
   monitor: Monitor | null;
   results: CheckResult[];
   members?: Monitor[];
   memberResults?: Record<string, CheckResult[]>;
   onSelectMember?: (id: string) => void;
+  onClose?: () => void;
 }) {
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
@@ -980,7 +959,19 @@ function DetailPanel({
               <p className="text-xs text-slate-500 mt-0.5">{monitor.type}</p>
             )}
           </div>
-          <StatusDot status={status} />
+          <div className="flex items-center gap-2">
+            <StatusDot status={status} />
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded p-0.5 text-slate-500 hover:text-white"
+                aria-label="Close preview"
+              >
+                <X className="h-4 w-4" strokeWidth={1.75} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1294,7 +1285,8 @@ export default function MonitorsPage() {
       router.push(`/monitors/${id}`);
       return;
     }
-    setSelectedMonitorId(id);
+    // The preview panel is opt-in: clicking the previewed row again closes it.
+    setSelectedMonitorId((current) => (current === id ? null : id));
   };
 
   useEffect(() => {
@@ -1336,10 +1328,6 @@ export default function MonitorsPage() {
       });
       // #endregion
       setMonitors(monitorsList);
-
-      if (monitorsList.length > 0 && !selectedMonitorId) {
-        setSelectedMonitorId(monitorsList[0].id);
-      }
 
       // FIX: Progressive loading - show UI immediately, load results in background
       // Stop showing loading spinner now - monitors list is ready
@@ -1489,7 +1477,7 @@ export default function MonitorsPage() {
       await deleteMonitor(id);
       setMonitors(monitors.filter((m) => m.id !== id));
       if (selectedMonitorId === id) {
-        setSelectedMonitorId(monitors.find((m) => m.id !== id)?.id || null);
+        setSelectedMonitorId(null);
       }
       showToast('Monitor deleted', 'success');
       setPendingDelete(null);
@@ -2036,7 +2024,7 @@ export default function MonitorsPage() {
       ) : monitors.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className={`grid gap-5 ${selectedMonitor ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : ''}`}>
           {/* Monitor List */}
           <div className="min-w-0 space-y-2">
             {/* Selection Mode Toggle & Actions Bar */}
@@ -2196,17 +2184,18 @@ export default function MonitorsPage() {
           </div>
 
           {/* Detail Panel */}
-          <div className="hidden lg:block">
-            <div className="dashboard-scroll sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto overscroll-contain rounded-xl">
+          {selectedMonitor && <div className="hidden lg:block">
+            <div className="dashboard-scroll sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto overscroll-contain rounded-xl">
               <DetailPanel
                 monitor={selectedMonitor}
                 results={selectedMonitor ? checkResultsMap[selectedMonitor.id] || [] : []}
                 members={selectedMonitor ? groupMembersMap[selectedMonitor.id] || [] : []}
                 memberResults={checkResultsMap}
                 onSelectMember={setSelectedMonitorId}
+                onClose={() => setSelectedMonitorId(null)}
               />
             </div>
-          </div>
+          </div>}
         </div>
       )}
 

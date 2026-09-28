@@ -173,7 +173,7 @@ export const ALERTING_PAGE: DocPage = {
           tone: "warning",
           title: "Three ways a monitor ends up notifying nobody",
           text:
-            "Custom routing with no channel assigned; `default` mode while the workspace has no default routes; and routing whose every channel is deactivated — deactivation is not visible in the assignment list, only in the channel. A member of a group that rolls alerts up adds a fourth: its own channels never fire, so the group's routing is the one that must be set. The operator UI flags each case on the monitor list and detail pages, and the monitors list filters to the affected monitors.",
+            "Custom routing with no channel assigned; `default` mode while the workspace has no default routes; and routing whose every channel is deactivated — deactivation is not visible in the assignment list, only in the channel. A member of a group that rolls alerts up adds a fourth: its own channels never fire, so the group's routing is the one that must be set. The operator UI explains each case on the monitor's detail page, the dashboard counts them, and the monitors list's **No alert route** filter narrows to the affected monitors.",
         },
         {
           type: "table",

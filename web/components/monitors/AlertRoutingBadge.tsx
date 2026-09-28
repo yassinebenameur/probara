@@ -68,31 +68,9 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
 }
 
 /**
- * Icon-only marker for list rows, where a text pill would crowd the name, type,
- * and tags. The reason lives in the tooltip and the accessible label; the
- * detail page carries the full sentence. Renders nothing when alerts are
- * routed, or when the monitor is paused — a paused monitor never alerts, so its
- * routing is moot until it resumes (the same rule the dashboard count applies).
- */
-export function AlertRoutingBadge({ routing, enabled = true }: { routing?: AlertRouting; enabled?: boolean }) {
-  const described = describeAlertRouting(routing);
-  if (!described || !enabled) return null;
-
-  return (
-    <span
-      className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-300"
-      title={`No alert route — ${described.detail}`}
-      aria-label={`No alert route — ${described.detail}`}
-      role="img"
-    >
-      <BellOff className="h-2.5 w-2.5" strokeWidth={2} />
-    </span>
-  );
-}
-
-/**
  * Full-width callout for the monitor detail view, with a link to the fix.
- * Silent for paused monitors (see AlertRoutingBadge).
+ * Silent for paused monitors: a paused monitor never alerts, so its routing
+ * is moot until it resumes (the same rule the dashboard count applies).
  */
 export function AlertRoutingNotice({ routing, enabled = true }: { routing?: AlertRouting; enabled?: boolean }) {
   const described = describeAlertRouting(routing);
