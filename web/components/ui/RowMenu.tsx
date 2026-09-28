@@ -3,6 +3,7 @@
 import { createContext, ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { MoreVertical } from 'lucide-react';
+import { ICON_BUTTON_CLASS } from './IconButton';
 
 const CloseContext = createContext<() => void>(() => {});
 
@@ -56,9 +57,9 @@ export default function RowMenu({ label, children }: { label: string; children: 
         title={label}
         aria-label={label}
         aria-expanded={Boolean(anchor)}
-        className="rounded-[10px] p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white"
+        className={ICON_BUTTON_CLASS}
       >
-        <MoreVertical className="h-3.5 w-3.5" strokeWidth={1.75} />
+        <MoreVertical strokeWidth={1.75} />
       </button>
       {anchor && (
         <div

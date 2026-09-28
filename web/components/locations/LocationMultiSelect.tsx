@@ -53,7 +53,7 @@ export function LocationMultiSelect({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search locations..."
-            className="input pl-9"
+            className="input !pl-9"
           />
         </div>
       </div>
