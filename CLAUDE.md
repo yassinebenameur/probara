@@ -19,10 +19,15 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 
 - `api/` — REST API (chi), validation registry, monitor/import/auth services
 - `scheduler/` — cron-style dispatch, JetStream stream provisioning, results ingest
-- `worker/` — check execution (all monitor types), `dial_guard.go` SSRF policy
+- `worker/` — check execution (all monitor types); checkers dial through
+  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`)
 - `alerter/` — alert evaluation and notification delivery
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, AI provider
+- `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
+  (take the next free number), applied by `cmd/migrate` — from the repo root
+  it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
+  Compose job, Helm a post-install/upgrade hook Job
 - `collector/` — OCB manifest for `probara-collector`, the minimal OTel
   Collector distribution that agent monitors install on hosts (built by
   `scripts/build-collector.sh` into `static/collector/`; no in-repo agent code)
@@ -202,7 +207,7 @@ or imported groups come back empty. Any other path that creates groups through
   skips `plugin.Configure` fails closed (private egress blocked, no links).
   This policy is independent of the worker's `HTTP_BLOCK_PRIVATE_IPS`
   (default false); both use `shared/netguard`, the single SSRF range table
-  and resolve-then-dial guard (`worker/dial_guard.go` is an alias of it).
+  and resolve-then-dial guard (the worker's `dialGuard` is an alias of it).
 - **`STATUS_PAGE_VAPID_*`**: status-page only, and both key halves are
   required or visitor notifications are off (no control rendered, push routes
   404). The **public** key is deliberately a literal `value:` in the PodSpec —
@@ -246,27 +251,44 @@ or imported groups come back empty. Any other path that creates groups through
 
 ## Build, test, verify
 
-- Go (per module: `api/`, `worker/`, `scheduler/`, `shared/`, `alerter/`):
-  `go build ./...` and `go test ./...` from the module dir. Full api suite
-  takes >2 min — run in background.
+- Go is a single module at the repo root (`go.mod`) — run everything from
+  there: `go build ./...`, then `go test` scoped to what you touched
+  (`go test ./api/...`, `go test ./shared/notifications/...`). `make test`
+  runs the whole module with `-race` (skipping `scripts/`). The full api
+  suite takes >2 min — run it in the background.
 - Integration tests (`testutil.SetupPostgresDB`) use testcontainers by
   default; without a Docker daemon set
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
   (role needs CREATEDB) and each test gets a scratch database on that server.
 - Web/website: `npx tsc --noEmit` in `web/` or `website/`.
-- Helm: `helm lint helm/monitoring-platform` and `helm template` (see gotcha).
+- Helm: `helm lint helm/monitoring-platform` and
+  `helm template helm/monitoring-platform` (long output — write it to a file).
 - Compose: `docker compose config` validates env wiring.
 
 ## Local dev environment
 
-- App services run as local processes (api :8080, scheduler :9091 metrics,
-  worker :9092 metrics, web :3000); Compose provides infra only (postgres,
-  nats, dex). Credentials: `admin` / `change-me`; default tenant ID
+- `make start-all-local` is the usual stack: Compose runs only postgres
+  (`probara`/`probara`, :5432) and nats (:4222, monitoring :8222); the
+  target applies migrations, builds the collector binaries, then runs the Go
+  services as local processes (binaries in `/tmp/probara-bin`, logs in
+  `/tmp/probara-<service>.log`) and the UI as `next dev`. HTTP/metrics
+  ports: api 8080/9090, scheduler 8081/9091, status-page 8082/9093, worker
+  8083/9092, alerter 8084/9094; web 3000. Stop and restart with the matching
+  `stop-all-local` / `restart-all-local`. `make start-all` / `stop-all`
+  instead run the backend in Compose (`docker-compose.yml` defines every
+  service). Dex (test OIDC IdP, :5556) is opt-in in either mode:
+  `docker compose --profile sso up -d dex`.
+- The start script refuses any Go except the minor on `go.mod`'s `go` line
+  (1.26.x). With a newer local Go, prefix the command:
+  `GOTOOLCHAIN=go1.26.7 make start-all-local`.
+- Credentials: `admin` / `change-me`; default tenant ID
   `00000000-0000-0000-0000-000000000001`.
 - API auth is cookie-based: POST `/api/v1/auth/login`, keep a cookie jar, and
   pass `tenant_id` as a query param on tenant-scoped routes.
 - Locally running binaries are stale after code changes — verify new worker/
-  api behavior through unit tests or restart the processes.
+  api behavior through unit tests, or restart the processes
+  (`scripts/start-local-services.sh` rebuilds and restarts just the Go
+  services).
 
 ## Gotchas
 
@@ -373,9 +395,6 @@ or imported groups come back empty. Any other path that creates groups through
   Anything else hooked in below it will never fire for the case it was built
   to serve.
 
-- **rtk output filter** (user-global CLAUDE.md tool) truncates long command
-  output in pipes — `helm template`, large `curl` responses. Use
-  `rtk proxy <cmd>` for raw output or write to a file and read that.
 - `expected_status` etc. reuse `HTTPStatus` fields for non-HTTP protocols
   (SIP status codes ride in `http_status`).
 - SIP dev against the host: `SIP_LOCALHOST_AS_HOST_GATEWAY=true` rewrites
