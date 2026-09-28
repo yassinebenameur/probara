@@ -4,7 +4,7 @@ import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
-import { Clock, Settings as SettingsIcon, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
@@ -13,6 +13,7 @@ import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
 import { AlertRoutingNotice } from '@/components/monitors/AlertRoutingBadge';
 import MonitorDetailHistory from '@/components/monitors/MonitorDetailHistory';
 import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
+import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
 import PageHeader from '@/components/ui/PageHeader';
@@ -612,14 +613,19 @@ export default function EditMonitorPage() {
           </span>
         }
         action={
-          <Button
-            variant="danger"
-            size="sm"
-            icon={<Trash2 strokeWidth={1.75} />}
-            onClick={() => setConfirmDelete(true)}
-          >
-            Delete
-          </Button>
+          <>
+            <Button variant="ghost" size="sm" onClick={openHistoryResetModal}>
+              {monitor.type === 'group' ? 'Clear group history' : 'Clear history'}
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              icon={<Trash2 strokeWidth={1.75} />}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete
+            </Button>
+          </>
         }
       />
 
@@ -713,60 +719,21 @@ export default function EditMonitorPage() {
         {/* Sidebar - Quick Stats (visible on overview) */}
         {activeTab === 'overview' && (
           <div className="space-y-4">
-            <FormCard className="p-4">
-              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Quick actions</h3>
-              <div className="space-y-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={<SettingsIcon strokeWidth={1.75} />}
-                  className="w-full justify-start"
-                  onClick={() => setActiveTab('settings')}
-                >
-                  Edit settings
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={<Clock strokeWidth={1.75} />}
-                  className="w-full justify-start"
-                  onClick={() => setActiveTab('history')}
-                >
-                  View history
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  icon={<Trash2 strokeWidth={1.75} />}
-                  className="w-full justify-start"
-                  onClick={openHistoryResetModal}
-                >
-                  {monitor.type === 'group' ? 'Clear group history' : 'Clear history'}
-                </Button>
-              </div>
-            </FormCard>
+            {monitor.type === 'group' && <GroupMembersCard groupId={monitor.id} />}
 
             <FormCard className="p-4">
               <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Configuration</h3>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Type</span>
-                  <span className="text-slate-300 uppercase">{monitor.type}</span>
-                </div>
-                <div className="flex justify-between">
                   <span className="text-slate-500">Interval</span>
                   <span className="text-slate-300">{monitor.interval_seconds}s</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Timeout</span>
-                  <span className="text-slate-300">{monitor.timeout_seconds}s</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Status</span>
-                  <span className={monitor.enabled ? 'text-emerald-400' : 'text-slate-500'}>
-                    {monitor.enabled ? 'Enabled' : 'Paused'}
-                  </span>
-                </div>
+                {monitor.type !== 'group' && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Timeout</span>
+                    <span className="text-slate-300">{monitor.timeout_seconds}s</span>
+                  </div>
+                )}
                 {monitor.type === 'prometheus' && (
                   <div className="border-t border-dashed border-white/[0.06] pt-2">
                     <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />

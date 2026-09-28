@@ -8,10 +8,9 @@ export const SLA_TARGET = 99.9;
 interface UptimeHeroGaugeProps {
   uptime: number;
   hasData: boolean;
-  rangeLabel?: string;
 }
 
-export function UptimeHeroGauge({ uptime, hasData, rangeLabel = '30 Day Window' }: UptimeHeroGaugeProps) {
+export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     const id = requestAnimationFrame(() => setMounted(true));
@@ -149,12 +148,6 @@ export function UptimeHeroGauge({ uptime, hasData, rangeLabel = '30 Day Window' 
           </div>
         </div>
       </div>
-
-      <p className="mt-3 text-center text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-        Uptime Aggregate&nbsp;
-        <span className="text-slate-600">{'//'}</span>
-        &nbsp;{rangeLabel}
-      </p>
     </div>
   );
 }
