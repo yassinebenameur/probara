@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,6 +118,8 @@ func TestSend_OneFormPostPerRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
+	// Recipients are texted concurrently, so arrival order is not fixed.
+	sort.Slice(forms, func(i, j int) bool { return forms[i].Get("To") < forms[j].Get("To") })
 	if len(forms) != 2 || forms[0].Get("To") != "+15557654321" || forms[1].Get("To") != "+447700900123" {
 		t.Fatalf("forms = %+v", forms)
 	}
@@ -136,10 +140,12 @@ func TestSend_OneFormPostPerRecipient(t *testing.T) {
 }
 
 func TestSend_PartialTransientFailureRetries(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls == 1 {
+		calls.Add(1)
+		raw, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(raw))
+		if form.Get("To") == "+15557654321" {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -156,8 +162,8 @@ func TestSend_PartialTransientFailureRetries(t *testing.T) {
 	if err == nil || plugin.IsPermanent(err) {
 		t.Fatalf("err = %v, want a transient error so the send is retried", err)
 	}
-	if calls != 2 {
-		t.Fatalf("calls = %d, want every recipient attempted", calls)
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("calls = %d, want every recipient attempted", n)
 	}
 	if strings.Contains(err.Error(), "+15557654321") {
 		t.Fatalf("error leaked a full phone number: %v", err)
@@ -248,5 +254,36 @@ func TestSend_KeepsLongestRetryAfter(t *testing.T) {
 				t.Fatalf("Retry-After = %v (ok=%v), want %v", d, ok, tc.wantD)
 			}
 		})
+	}
+}
+
+// A slow Messages API must not serialize the fan-out: with recipients texted
+// one after another, the dispatch deadline runs out part-way through and the
+// redelivery re-texts everyone who already got the message.
+func TestSend_TextsRecipientsConcurrently(t *testing.T) {
+	var inFlight, peak atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := inFlight.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		inFlight.Add(-1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	p := New()
+	p.base = srv.URL
+	if err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: config(nil)},
+		Event:   sampleEvent(),
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if peak.Load() < 2 {
+		t.Fatalf("peak concurrent sends = %d, want recipients texted in parallel", peak.Load())
 	}
 }

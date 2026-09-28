@@ -58,10 +58,9 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.refreshAlertFailingLocations(ctx); err != nil {
 		return err
 	}
-	if err := a.dispatchOpenAlerts(ctx); err != nil {
-		return err
-	}
-	return a.dispatchAcknowledgements(ctx)
+	// Independent phases: a failing open-alert dispatch must not also stop
+	// the acknowledgements that halt a paging provider's escalation.
+	return errors.Join(a.dispatchOpenAlerts(ctx), a.dispatchAcknowledgements(ctx))
 }
 
 // failingLocationsSubquery selects the JSON breakdown of the monitor's

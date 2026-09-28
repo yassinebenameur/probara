@@ -44,13 +44,21 @@ func (a *Alerter) deliverNotification(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Serialize with resolution as well as other sends. A dispatcher may have
-	// loaded an open alert just before another replica resolved it; it must
-	// not send a stale DOWN after that recovery. This lock also makes the
-	// fired-channel state visible before resolution can commit.
+	// Serialize with resolution. A dispatcher may have loaded an open alert
+	// just before another replica resolved it; it must not send a stale DOWN
+	// after that recovery. This lock also makes the fired-channel state
+	// visible before resolution can commit.
+	//
+	// FOR SHARE, not FOR UPDATE: resolution is an UPDATE of this row, so a
+	// share lock blocks it just the same. Concurrent sends need no mutual
+	// exclusion here — two claimants of the same (alert, channel) slot
+	// serialize on the alert_notification_states row in claimNotificationTx.
+	// An exclusive lock would also conflict with the share lock the async
+	// worker holds through its provider call, stalling this loop (and every
+	// other channel of the alert) on webhook latency.
 	var status string
 	var resolvedAt *time.Time
-	if err := tx.QueryRowContext(ctx, `SELECT status, resolved_at FROM alerts WHERE id = $1 FOR UPDATE`, alert.ID).Scan(&status, &resolvedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT status, resolved_at FROM alerts WHERE id = $1 FOR SHARE`, alert.ID).Scan(&status, &resolvedAt); err != nil {
 		return false, fmt.Errorf("lock notification alert: %w", err)
 	}
 	if (eventType == "resolved") != (status == "resolved") {

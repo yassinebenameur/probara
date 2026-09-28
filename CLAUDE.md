@@ -342,6 +342,19 @@ or imported groups come back empty. Any other path that creates groups through
   `DispatchTimeout`), and the resolve is only published after it commits —
   without it a trigger could reach PagerDuty after the resolve and leave the
   incident open forever. Do not move `Send` out of that transaction.
+  Acknowledgement has the mirror race: the alerter publishes `acknowledged`
+  once the created slot is *claimed*, not delivered, so an ack can overtake a
+  trigger sitting on a retry backoff and be dropped by the provider. The
+  worker therefore follows a `created` it delivers to an ack-capable channel
+  of an `acknowledged` alert with an `acknowledged` send (`ackOvertaken`).
+  The alerter's own claim lock in `deliverNotification` is `FOR SHARE` for
+  the same reason as the worker's: it still blocks resolution, while an
+  exclusive lock would queue every claim behind in-flight async sends.
+  Channel secrets merge differently from monitor secrets
+  (`secrets.MergePreserveSecrets`): absent, `""` and `***` all **keep** the
+  stored value (the form submits every secret input blank on edit), and
+  `null` **clears** it — SchemaForm's "Remove stored value", offered only for
+  optional secret fields.
   Multi-recipient plugins must flatten a mixed error before returning it —
   `plugin.IsPermanent` walks `errors.Join` children, so one permanent child
   would stop the retry for the others — and carry the longest

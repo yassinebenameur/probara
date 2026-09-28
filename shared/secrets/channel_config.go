@@ -83,7 +83,16 @@ func MaskConfig(manifest plugin.Manifest, in map[string]any) map[string]any {
 // MergePreserveSecrets fills in any missing secret fields in `incoming` from
 // `existing`. The frontend submits empty secret fields when the user wants to
 // keep the current value; this helper makes that semantics concrete on the
-// backend.
+// backend. Per secret field:
+//
+//   - absent, "" or MaskedSecret → keep the stored value
+//   - null                       → clear it (the form's Clear button)
+//   - anything else              → replace
+//
+// "" cannot mean clear here, unlike monitor secrets: the channel form sends
+// every secret input blank on edit, so clearing on "" would wipe each stored
+// token the operator did not retype. A cleared required field is then
+// rejected by the plugin's Validate on the merged config.
 func MergePreserveSecrets(manifest plugin.Manifest, incoming, existing map[string]any) map[string]any {
 	out := copyMap(incoming)
 	for _, f := range manifest.Fields {
@@ -92,6 +101,10 @@ func MergePreserveSecrets(manifest plugin.Manifest, incoming, existing map[strin
 		}
 		v, present := out[f.Key]
 		if present {
+			if v == nil {
+				delete(out, f.Key)
+				continue
+			}
 			s, ok := v.(string)
 			if ok && s != "" && s != MaskedSecret {
 				continue

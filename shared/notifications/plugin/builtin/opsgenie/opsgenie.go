@@ -48,11 +48,18 @@ type Plugin struct {
 	httpClient *http.Client
 	// base overrides the site lookup in tests.
 	base string
+	// pollInterval spaces the test send's "has the create landed yet"
+	// lookups; testPollAttempts bounds them.
+	pollInterval time.Duration
 }
+
+// testPollAttempts × pollInterval is how long a test send waits for
+// Opsgenie to process its create before closing it.
+const testPollAttempts = 10
 
 // New constructs a plugin with the guarded notification HTTP client.
 func New() *Plugin {
-	return &Plugin{httpClient: plugin.NewHTTPClient(10 * time.Second)}
+	return &Plugin{httpClient: plugin.NewHTTPClient(10 * time.Second), pollInterval: 400 * time.Millisecond}
 }
 
 // Manifest returns the plugin self-description.
@@ -141,6 +148,11 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	if cfg.APIKey == "" {
 		return plugin.Permanent(errors.New("opsgenie channel missing api_key"))
 	}
+	if !priorities[cfg.Priority] {
+		// Rows written before update-time validation can hold anything;
+		// priorityFor indexes the value, so refuse it here instead.
+		return plugin.Permanent(fmt.Errorf("opsgenie channel has invalid priority %q", cfg.Priority))
+	}
 	base := p.base
 	if base == "" {
 		var ok bool
@@ -164,7 +176,20 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 			return nil
 		}
 		// A test proves the key works without leaving an open alert behind.
-		return plugin.PostJSON(ctx, p.httpClient, actionURL(base, alias, "close"), note("Probara test notification — closed automatically."), headers, "opsgenie alert api")
+		// The Alert API is asynchronous (202 + requestId): a close sent right
+		// after the create can be processed first, fail as "alert does not
+		// exist", and leave the test alert open. Wait until it is visible.
+		visible, err := p.awaitAlert(ctx, base, alias, headers)
+		if err != nil {
+			return err
+		}
+		if err := plugin.PostJSON(ctx, p.httpClient, actionURL(base, alias, "close"), note("Probara test notification — closed automatically."), headers, "opsgenie alert api"); err != nil {
+			return err
+		}
+		if !visible {
+			return fmt.Errorf("opsgenie accepted the test alert but had not processed it after %s; if it appears, close alert %q manually", time.Duration(testPollAttempts)*p.pollInterval, alias)
+		}
+		return nil
 	case present.EventAcknowledged:
 		return plugin.PostJSON(ctx, p.httpClient, actionURL(base, alias, "acknowledge"), note("Acknowledged in Probara."), headers, "opsgenie alert api")
 	case present.EventResolved:
@@ -179,6 +204,50 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 // opened.
 func Alias(alertID string) string {
 	return "probara-" + alertID
+}
+
+// awaitAlert polls Get Alert by alias until Opsgenie has processed the
+// create. It reports false when the alert is still unknown once the attempts
+// run out; a 404 is the "not processed yet" answer, anything else non-2xx is
+// a real error.
+func (p *Plugin) awaitAlert(ctx context.Context, base, alias string, headers map[string]string) (bool, error) {
+	target := fmt.Sprintf("%s/%s?identifierType=alias", base, url.PathEscape(alias))
+	for attempt := 0; attempt < testPollAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-time.After(p.pollInterval):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return false, plugin.Permanent(fmt.Errorf("build opsgenie alert lookup: %w", err))
+		}
+		req.Header.Set("User-Agent", "Probara-Alerts/1.0")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := p.httpClient.Do(req)
+		if err != nil {
+			var urlErr *url.Error
+			if errors.As(err, &urlErr) {
+				err = urlErr.Err
+			}
+			return false, fmt.Errorf("get opsgenie alert: %w", err)
+		}
+		status := resp.StatusCode
+		checkErr := plugin.CheckResponse(resp, "opsgenie alert api")
+		resp.Body.Close()
+		if status == http.StatusNotFound {
+			continue
+		}
+		if checkErr != nil {
+			return false, checkErr
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func actionURL(base, alias, action string) string {

@@ -5,8 +5,15 @@ import Button from '@/components/ui/Button';
 import FormField from '@/components/ui/FormField';
 import type { PluginField, PluginManifest } from '@/lib/types';
 
-// What the API substitutes for stored secret values on read.
+// What the API substitutes for stored secret values on read. It is only
+// present when a value is stored, so it doubles as "there is something to
+// clear".
 const MASKED_SECRET = '***';
+
+// A null secret in the submitted config asks the API to delete the stored
+// value; blank means "keep" (see MergePreserveSecrets). Only optional secrets
+// offer it — clearing a required one would just fail validation.
+export const CLEARED_SECRET = null;
 
 interface SchemaFormProps {
   manifest: PluginManifest;
@@ -81,6 +88,7 @@ function FieldRenderer({ field, value, error, isEdit, onChange }: FieldRendererP
             value={masked ? '' : typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
           />
+          <StoredSecretClear field={field} value={value} isEdit={isEdit} onChange={onChange} />
         </FormField>
       );
     }
@@ -113,7 +121,7 @@ function FieldRenderer({ field, value, error, isEdit, onChange }: FieldRendererP
       return (
         <SecretField
           field={field}
-          value={typeof value === 'string' ? value : ''}
+          value={value}
           error={error}
           isEdit={isEdit}
           onChange={onChange}
@@ -242,12 +250,13 @@ function SecretField({
   onChange,
 }: {
   field: PluginField;
-  value: string;
+  value: unknown;
   error?: string;
   isEdit: boolean;
-  onChange: (v: string) => void;
+  onChange: (v: unknown) => void;
 }) {
   const [reveal, setReveal] = useState(false);
+  const text = typeof value === 'string' && value !== MASKED_SECRET ? value : '';
   const placeholder = isEdit
     ? 'Leave blank to keep existing value'
     : field.placeholder;
@@ -264,7 +273,7 @@ function SecretField({
           type={reveal ? 'text' : 'password'}
           className="input"
           placeholder={placeholder}
-          value={value}
+          value={text}
           onChange={(e) => onChange(e.target.value)}
           autoComplete="off"
         />
@@ -272,7 +281,45 @@ function SecretField({
           {reveal ? 'Hide' : 'Show'}
         </Button>
       </div>
+      <StoredSecretClear field={field} value={value} isEdit={isEdit} onChange={onChange} />
     </FormField>
+  );
+}
+
+/**
+ * Remove a stored optional secret (a webhook's custom headers or signing
+ * secret). A blank input keeps the stored value, so without this there is no
+ * way to drop one short of recreating the channel.
+ */
+function StoredSecretClear({
+  field,
+  value,
+  isEdit,
+  onChange,
+}: {
+  field: PluginField;
+  value: unknown;
+  isEdit: boolean;
+  onChange: (v: unknown) => void;
+}) {
+  if (!isEdit || !field.secret || field.required) return null;
+  if (value === CLEARED_SECRET) {
+    return (
+      <p className="mt-2 flex items-center gap-2 text-xs text-amber-400">
+        The stored value will be removed when you save.
+        <Button variant="ghost" size="sm" type="button" onClick={() => onChange(MASKED_SECRET)}>
+          Undo
+        </Button>
+      </p>
+    );
+  }
+  if (value !== MASKED_SECRET) return null;
+  return (
+    <div className="mt-2">
+      <Button variant="ghost" size="sm" type="button" onClick={() => onChange(CLEARED_SECRET)}>
+        Remove stored value
+      </Button>
+    </div>
   );
 }
 

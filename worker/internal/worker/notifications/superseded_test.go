@@ -91,3 +91,77 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 		})
 	}
 }
+
+const pagingStubType = "test_paging_stub"
+
+type pagingPlugin struct{ countingPlugin }
+
+func (p *pagingPlugin) Manifest() plugin.Manifest {
+	return plugin.Manifest{Type: pagingStubType, Capabilities: []plugin.Capability{plugin.CapabilityAcknowledge}}
+}
+func (p *pagingPlugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
+	return p.countingPlugin.Send(ctx, req)
+}
+
+var pagingStub = &pagingPlugin{}
+
+func init() { plugin.Register(pagingStub) }
+
+// An operator acknowledged while the trigger sat on a retry backoff, so the
+// acknowledge reached the provider first and was dropped as unknown. A paging
+// channel must get the acknowledge again right after the late trigger, or its
+// incident escalates forever; a chat channel just gets the trigger.
+func TestHandle_AcknowledgesTriggerThatLandedAfterAck(t *testing.T) {
+	cases := []struct {
+		name        string
+		channelType string
+		sends       func() []string
+		alertStatus string
+		want        []string
+	}{
+		{"paging/acknowledged", pagingStubType, func() []string { return pagingStub.sends }, "acknowledged", []string{"created", "acknowledged"}},
+		{"paging/active", pagingStubType, func() []string { return pagingStub.sends }, "active", []string{"created"}},
+		{"chat/acknowledged", supersededStubType, func() []string { return stub.sends }, "acknowledged", []string{"created"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sqlDB, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sqlDB.Close()
+			stub.sends, pagingStub.sends = nil, nil
+
+			channelID, alertID := uuid.New(), uuid.New()
+			mock.ExpectQuery(regexp.QuoteMeta(`FROM alert_channels`)).WithArgs(channelID).
+				WillReturnRows(sqlmock.NewRows([]string{"name", "type", "config", "is_active"}).
+					AddRow("pager", tc.channelType, []byte(`{}`), true))
+			mock.ExpectBegin()
+			mock.ExpectQuery(regexp.QuoteMeta(`SELECT status FROM alerts WHERE id = $1 FOR SHARE`)).WithArgs(alertID).
+				WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(tc.alertStatus))
+			mock.ExpectRollback()
+
+			c := &Consumer{logger: logger.New("test", "error"), db: &db.Client{DB: sqlDB}, encryptor: secrets.NoOpEncryptor{}}
+			raw, _ := json.Marshal(notifications.DispatchEnvelope{
+				V: 1, ChannelID: channelID.String(), ChannelType: tc.channelType,
+				AlertID: alertID.String(), EventType: "created",
+				Event: notifications.AlertEvent{Type: "created"},
+			})
+			if err := c.handle(context.Background(), &queue.Message{Data: raw}); err != nil {
+				t.Fatalf("handle: %v", err)
+			}
+			got := tc.sends()
+			if len(got) != len(tc.want) {
+				t.Fatalf("sends = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("sends = %v, want %v", got, tc.want)
+				}
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

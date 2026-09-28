@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
@@ -199,5 +200,25 @@ func sampleEvent() notifications.AlertEvent {
 			FailureCount: 3,
 			LastError:    &lastErr,
 		},
+	}
+}
+
+// An HTML error page is mostly '<' and '>', which escaping triples; the
+// limit must hold after escaping or Slack rejects the whole message.
+func TestEscapeTruncate_LimitAppliesAfterEscaping(t *testing.T) {
+	in := strings.Repeat("<b>x</b>", 1000)
+	out := escapeTruncate(in, maxLastError)
+	if n := utf8.RuneCountInString(out); n > maxLastError {
+		t.Fatalf("escaped length = %d, want <= %d", n, maxLastError)
+	}
+	if strings.Contains(strings.TrimSuffix(out, "…"), "<") {
+		t.Fatal("unescaped '<' in output")
+	}
+	body := strings.TrimSuffix(out, "…")
+	if i := strings.LastIndex(body, "&"); i >= 0 && !strings.HasSuffix(body[i:], ";") && !strings.Contains(body[i:], ";") {
+		t.Fatalf("cut splits an entity: %q", body[i:])
+	}
+	if got := escapeTruncate("a<b", 10); got != "a&lt;b" {
+		t.Fatalf("short input = %q, want untouched escape", got)
 	}
 }

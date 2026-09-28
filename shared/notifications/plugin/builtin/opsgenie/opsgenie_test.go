@@ -24,8 +24,8 @@ func TestMain(m *testing.M) {
 }
 
 type call struct {
-	path, query, auth string
-	body              map[string]any
+	method, path, query, auth string
+	body                      map[string]any
 }
 
 func recordServer(t *testing.T, status int) (*httptest.Server, *[]call) {
@@ -34,7 +34,7 @@ func recordServer(t *testing.T, status int) (*httptest.Server, *[]call) {
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
-		calls = append(calls, call{path: r.URL.Path, query: r.URL.RawQuery, auth: r.Header.Get("Authorization"), body: body})
+		calls = append(calls, call{method: r.Method, path: r.URL.Path, query: r.URL.RawQuery, auth: r.Header.Get("Authorization"), body: body})
 		if status != 0 {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"message":"Key format is not valid!"}`))
@@ -132,11 +132,73 @@ func TestSend_TestCreatesThenCloses(t *testing.T) {
 	if err := send(p, "created", true); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if len(*calls) != 2 || !strings.HasSuffix((*calls)[1].path, "/close") {
-		t.Fatalf("calls = %+v, want create then close", *calls)
+	if len(*calls) != 3 || (*calls)[1].method != http.MethodGet || !strings.HasSuffix((*calls)[2].path, "/close") {
+		t.Fatalf("calls = %+v, want create, lookup, close", *calls)
 	}
 	if (*calls)[0].body["priority"] != "P5" {
 		t.Errorf("test priority = %v, want P5", (*calls)[0].body["priority"])
+	}
+}
+
+// The Alert API processes requests asynchronously, so the test send must not
+// close the alert until a lookup finds it — a close processed before the
+// create fails and leaves the test alert open.
+func TestSend_TestWaitsForCreateBeforeClosing(t *testing.T) {
+	var calls []string
+	lookups := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodGet {
+			lookups++
+			if lookups < 3 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(srv.Close)
+	p := New()
+	p.base = srv.URL + "/v2/alerts"
+	p.pollInterval = time.Millisecond
+	if err := send(p, "created", true); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(calls) != 5 || !strings.HasSuffix(calls[4], "/close") || lookups != 3 {
+		t.Fatalf("calls = %v, want create, 3 lookups, close", calls)
+	}
+}
+
+func TestSend_TestReportsAlertThatNeverAppeared(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(srv.Close)
+	p := New()
+	p.base = srv.URL + "/v2/alerts"
+	p.pollInterval = time.Millisecond
+	err := send(p, "created", true)
+	if err == nil || plugin.IsPermanent(err) {
+		t.Fatalf("err = %v, want a non-permanent 'not processed' error", err)
+	}
+}
+
+func TestSend_InvalidPriorityIsPermanent(t *testing.T) {
+	p := New()
+	p.base = "http://unused.invalid/v2/alerts"
+	err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel:   plugin.ChannelRef{Config: map[string]any{"api_key": "k-123", "priority": "P"}},
+		Event:     sampleEvent(),
+		EventType: "created",
+	})
+	if !plugin.IsPermanent(err) {
+		t.Fatalf("err = %v, want permanent", err)
 	}
 }
 

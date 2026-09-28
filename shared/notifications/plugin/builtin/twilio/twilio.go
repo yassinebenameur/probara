@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
@@ -31,6 +32,9 @@ const (
 	// maxRecipients bounds fan-out per channel; larger lists belong in a
 	// paging tool.
 	maxRecipients = 10
+	// maxConcurrentSends caps in-flight Messages API calls per delivery,
+	// well under Twilio's per-account concurrency limit.
+	maxConcurrentSends = 5
 )
 
 var (
@@ -180,16 +184,35 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	target := fmt.Sprintf("%s/2010-04-01/Accounts/%s/Messages.json", p.base, url.PathEscape(cfg.AccountSID))
 	body := truncate(req.View().Short(), maxBody)
 
+	// Text recipients concurrently. One after another, a slow API spends the
+	// dispatcher's deadline on the first few numbers, the rest fail with a
+	// context timeout, and the redelivery re-texts (and re-bills) everyone
+	// who already got it.
+	results := make([]error, len(to))
+	sem := make(chan struct{}, maxConcurrentSends)
+	var wg sync.WaitGroup
+	for i, number := range to {
+		wg.Add(1)
+		go func(i int, number string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			form := url.Values{"To": {number}, "Body": {body}}
+			if strings.HasPrefix(cfg.From, "MG") {
+				form.Set("MessagingServiceSid", cfg.From)
+			} else {
+				form.Set("From", cfg.From)
+			}
+			if err := plugin.Post(ctx, p.httpClient, target, "application/x-www-form-urlencoded", []byte(form.Encode()), headers, "twilio messages api"); err != nil {
+				results[i] = fmt.Errorf("%s: %w", maskNumber(number), err)
+			}
+		}(i, number)
+	}
+	wg.Wait()
 	var errs []error
-	for _, number := range to {
-		form := url.Values{"To": {number}, "Body": {body}}
-		if strings.HasPrefix(cfg.From, "MG") {
-			form.Set("MessagingServiceSid", cfg.From)
-		} else {
-			form.Set("From", cfg.From)
-		}
-		if err := plugin.Post(ctx, p.httpClient, target, "application/x-www-form-urlencoded", []byte(form.Encode()), headers, "twilio messages api"); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", maskNumber(number), err))
+	for _, err := range results {
+		if err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if len(errs) == 0 {

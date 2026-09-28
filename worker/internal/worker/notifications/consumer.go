@@ -30,6 +30,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -197,7 +198,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		}
 		defer func() { _ = tx.Rollback() }()
 	}
-	superseded, err := eventSuperseded(ctx, tx, envelope)
+	superseded, alertStatus, err := eventSuperseded(ctx, tx, envelope)
 	if err != nil {
 		entry.WithError(err).Error("Failed to load alert status")
 		return err
@@ -225,16 +226,31 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 
 	attempt := deliveryAttempt(msg)
-	err = p.Send(ctx, plugin.DispatchRequest{
-		Channel: plugin.ChannelRef{
-			ID:     envelope.ChannelID,
-			Name:   channel.Name,
-			Config: configMap,
-		},
-		Event:     envelope.Event,
-		EventType: envelope.EventType,
-		Attempt:   attempt,
-	})
+	send := func(eventType string, event notifications.AlertEvent) error {
+		return p.Send(ctx, plugin.DispatchRequest{
+			Channel: plugin.ChannelRef{
+				ID:     envelope.ChannelID,
+				Name:   channel.Name,
+				Config: configMap,
+			},
+			Event:     event,
+			EventType: eventType,
+			Attempt:   attempt,
+		})
+	}
+	err = send(envelope.EventType, envelope.Event)
+	if err == nil && ackOvertaken(p.Manifest(), envelope.EventType, alertStatus) {
+		// The operator acknowledged while this trigger sat on a retry
+		// backoff, so the "acknowledged" envelope has already been delivered
+		// and the provider dropped it as a no-op for an incident it did not
+		// have yet. It is never re-sent (acknowledged_sent_at is set), so the
+		// incident just opened would escalate forever. Acknowledge it now,
+		// still under the share lock, so nothing else can reorder the pair.
+		ack := envelope.Event
+		ack.Type = present.EventAcknowledged
+		ack.Alert.Status = alertStatus
+		err = send(present.EventAcknowledged, ack)
+	}
 	if err != nil {
 		if plugin.IsPermanent(err) {
 			// Retrying cannot fix a rejected credential or a deleted
@@ -242,12 +258,28 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 			entry.WithError(err).WithField("attempt", attempt).Error("Plugin Send failed permanently; dropping message")
 			return nil
 		}
+		// A failed follow-up acknowledge also retries the trigger. Paging
+		// providers dedupe triggers on the alert's key, so the redelivery
+		// re-opens nothing and gets the acknowledge a second chance.
 		entry.WithError(err).WithField("attempt", attempt).Warn("Plugin Send failed; will retry")
 		return err
 	}
 
 	entry.WithField("attempt", attempt).Debug("Notification delivered")
 	return nil
+}
+
+// ackOvertaken reports whether a just-delivered trigger landed after the
+// alert was acknowledged, on a channel that tracks acknowledgement state.
+// That happens when a trigger fails and waits on the JetStream backoff while
+// the operator acknowledges: the alerter publishes "acknowledged" as soon as
+// the created slot is claimed, not when it is delivered, so the ack can
+// overtake it. It also covers a later escalation tier paging a channel after
+// the ack.
+func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
+	return eventType == present.EventCreated &&
+		alertStatus == "acknowledged" &&
+		m.HasCapability(plugin.CapabilityAcknowledge)
 }
 
 // eventSuperseded reports whether envelope describes an alert state the
@@ -258,23 +290,22 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 // the provider side. Resolves always go through (tx is nil for them). For
 // every other event it reads the status FOR SHARE inside tx, and the caller
 // keeps tx open until the send returns.
-func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (bool, error) {
+func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded bool, status string, err error) {
 	if envelope.EventType == "resolved" {
-		return false, nil
+		return false, "", nil
 	}
 	alertID, err := uuid.Parse(envelope.AlertID)
 	if err != nil {
-		return false, fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+		return false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
 	}
-	var status string
 	err = tx.QueryRowContext(ctx, `SELECT status FROM alerts WHERE id = $1 FOR SHARE`, alertID).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
-		return true, nil
+		return true, "", nil
 	}
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
-	return status == "resolved", nil
+	return status == "resolved", status, nil
 }
 
 type loadedChannel struct {

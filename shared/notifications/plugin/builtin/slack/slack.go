@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/present"
@@ -108,10 +109,15 @@ type slackButton struct {
 	URL  string    `json:"url"`
 }
 
-// Slack caps a section at 10 fields and a header at 150 characters.
+// Slack caps a section at 10 fields, a header at 150 characters and a
+// section's text at 3000. An over-long block fails the whole message with 400
+// invalid_blocks, which is permanent, so the notification is lost — budget
+// the variable part and leave room for the fixed markup around it.
 const (
-	maxFields    = 10
-	maxHeaderLen = 150
+	maxFields     = 10
+	maxHeaderLen  = 150
+	maxSectionLen = 3000
+	maxLastError  = maxSectionLen - 100
 )
 
 func buildBlockKit(m present.Message) slackPayload {
@@ -119,7 +125,7 @@ func buildBlockKit(m present.Message) slackPayload {
 
 	blocks := []slackBlock{
 		{Type: "header", Text: &slackText{Type: "plain_text", Text: truncate(header, maxHeaderLen)}},
-		{Type: "section", Text: &slackText{Type: "mrkdwn", Text: escape(m.Summary)}},
+		{Type: "section", Text: &slackText{Type: "mrkdwn", Text: escapeTruncate(m.Summary, maxSectionLen)}},
 	}
 
 	var fields []slackText
@@ -135,7 +141,7 @@ func buildBlockKit(m present.Message) slackPayload {
 	if m.LastError != "" {
 		blocks = append(blocks, slackBlock{
 			Type: "section",
-			Text: &slackText{Type: "mrkdwn", Text: "*Last error*\n```" + escape(truncate(m.LastError, 2800)) + "```"},
+			Text: &slackText{Type: "mrkdwn", Text: "*Last error*\n```" + escapeTruncate(m.LastError, maxLastError) + "```"},
 		})
 	}
 	if m.ActionURL != "" {
@@ -176,6 +182,27 @@ func emojiFor(t present.Tone) string {
 // sequences, so a probe error containing "<!channel>" cannot ping a channel.
 func escape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+}
+
+// escapeTruncate escapes s and cuts the result to at most n runes. The limit
+// applies after escaping — Slack counts "&lt;" as four characters — and a cut
+// never splits an entity.
+func escapeTruncate(s string, n int) string {
+	if e := escape(s); utf8.RuneCountInString(e) <= n {
+		return e
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		piece := escape(string(r))
+		w := utf8.RuneCountInString(piece)
+		if used+w > n-1 {
+			break
+		}
+		b.WriteString(piece)
+		used += w
+	}
+	return b.String() + "…"
 }
 
 func truncate(s string, n int) string {

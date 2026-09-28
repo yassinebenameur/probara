@@ -160,3 +160,51 @@ func TestDeliverNotificationKeepsClaimOnPermanentFailure(t *testing.T) {
 		t.Fatalf("permanent failure must keep the created claim, got %q ok=%v", eventType, ok)
 	}
 }
+
+// The async worker holds the alert row FOR SHARE across its provider call.
+// The alerter's claim must not queue behind it (that stalled dispatch to every
+// other channel on webhook latency), but resolution still must.
+func TestDeliverNotificationDoesNotWaitOnInFlightWorkerSend(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "sharelock")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "API")
+	channelID := insertTypedChannel(ctx, t, dbClient, tenantID, "slack")
+	alertID := openDownAlert(ctx, t, dbClient, tenantID, monitorID)
+
+	// Stand-in for a worker mid-send on another channel of the same alert.
+	worker, err := dbClient.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Rollback() }()
+	if _, err := worker.ExecContext(ctx, `SELECT status FROM alerts WHERE id = $1 FOR SHARE`, alertID); err != nil {
+		t.Fatal(err)
+	}
+
+	sent := 0
+	a := newIntegrationAlerter(dbClient)
+	a.sendFunc = func(context.Context, alertChannel, string, policyBinding, *alertRecord, *groupDetail, time.Time) error {
+		sent++
+		return nil
+	}
+	claimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := a.dispatchOpenAlerts(claimCtx); err != nil {
+		t.Fatalf("dispatchOpenAlerts: %v", err)
+	}
+	if sent != 1 {
+		t.Fatalf("sent = %d, want the claim to proceed alongside the worker's share lock", sent)
+	}
+	if eventType, _, ok := notificationStateFor(ctx, t, dbClient, alertID, channelID); !ok || eventType != "created" {
+		t.Fatalf("created claim not recorded: %q ok=%v", eventType, ok)
+	}
+
+	// Resolution is still ordered after the in-flight send.
+	resolveCtx, cancelResolve := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancelResolve()
+	if _, err := dbClient.ExecContext(resolveCtx, `UPDATE alerts SET status = 'resolved', resolved_at = NOW() WHERE id = $1`, alertID); err == nil {
+		t.Fatal("resolution committed while a worker send held the alert")
+	}
+}
