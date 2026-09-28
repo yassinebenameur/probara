@@ -2,12 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Bell, Network } from 'lucide-react';
+import { Bell, CircleCheck, Eye, Network } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { formatAlertValue, formatSeriesLabel } from '@/lib/metrics';
-import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import EmptyState from '@/components/ui/EmptyState';
 
 interface AlertTableProps {
@@ -265,26 +265,21 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td className="text-right">
                 <div className="flex items-center justify-end gap-1">
                   {alert.status === 'active' && (
-                    <Button
-                      variant="ghost"
-                      size="xs"
+                    <IconButton
+                      icon={<Eye strokeWidth={1.75} />}
+                      label="Acknowledge"
                       onClick={() => handleAcknowledge(alert.id)}
                       disabled={processingId === alert.id}
-                      loading={processingId === alert.id}
-                    >
-                      {processingId === alert.id ? '…' : 'Acknowledge'}
-                    </Button>
+                    />
                   )}
                   {(alert.status === 'active' || alert.status === 'acknowledged') && (
-                    <Button
-                      variant="accent"
-                      size="xs"
+                    <IconButton
+                      icon={<CircleCheck strokeWidth={1.75} />}
+                      label="Resolve"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}
                       loading={processingId === alert.id}
-                    >
-                      {processingId === alert.id ? '…' : 'Resolve'}
-                    </Button>
+                    />
                   )}
                   {alert.status === 'resolved' && (
                     <span className="text-[10px] text-slate-500">

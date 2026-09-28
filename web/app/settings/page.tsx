@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Copy, KeyRound, Plus, X } from 'lucide-react';
+import { Ban, Copy, KeyRound, Plus } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
@@ -429,14 +430,12 @@ export default function SettingsPage() {
                       )}
                       {key.revoked_at && <Pill tone="danger" size="xs" dot>Revoked</Pill>}
                       {!key.revoked_at && !isExpired(key.expires_at) && canManageKeys && (
-                        <Button
-                          variant="danger"
-                          size="xs"
-                          icon={<X strokeWidth={1.75} />}
+                        <IconButton
+                          icon={<Ban strokeWidth={1.75} />}
+                          label="Revoke"
                           onClick={() => setPendingRevoke(key)}
-                        >
-                          Revoke
-                        </Button>
+                          danger
+                        />
                       )}
                     </div>
                   </div>

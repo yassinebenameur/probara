@@ -267,8 +267,8 @@ export function OidcGroupMappingsPanel() {
                       </td>
                       <td className="py-2.5 text-right">
                         <Button
-                          variant="ghost"
-                          size="sm"
+                          variant="subtle"
+                          size="xs"
                           onClick={() => handleDelete(m.id)}
                           icon={confirmDeleteId === m.id ? undefined : <Trash2 strokeWidth={1.75} />}
                           className={confirmDeleteId === m.id ? 'text-rose-400 hover:text-rose-300' : ''}

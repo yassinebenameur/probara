@@ -388,6 +388,10 @@ or imported groups come back empty. Any other path that creates groups through
   kept as redirects — mesh-edge notifications deep-link to `/mesh`
   (`shared/notifications/present`) — and `/alert-channels/{new,catalog,[id]}`
   remain real routes. Link to the tabs, not the old list pages.
+- **Row actions** in tables and lists use `components/ui/IconButton.tsx`
+  (icon only, named by its tooltip, `danger` last) for up to three
+  actions, and `components/ui/RowMenu.tsx` (⋮, position:fixed, flips up)
+  beyond that. Don't put text buttons in rows.
 - **Web overlays must portal**: pages wrap content in `space-y-*`, which puts a
   `margin-top` on a `fixed inset-0` sibling, so the backdrop stops covering the
   viewport (and `main`'s `overflow-x-clip` can clip it). Wrap modal roots in

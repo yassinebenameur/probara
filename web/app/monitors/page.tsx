@@ -4,7 +4,8 @@ import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers, X } from 'lucide-react';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers, X, Pencil, Copy, Pause, Play } from 'lucide-react';
+import RowMenu, { RowMenuItem, RowMenuSeparator, useCloseRowMenu } from '@/components/ui/RowMenu';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
@@ -238,6 +239,34 @@ function SelectCheckbox({
   );
 }
 
+function SnoozeOptions({ onSnooze }: { onSnooze: (minutes: number) => void }) {
+  const close = useCloseRowMenu();
+  return (
+    <>
+      <div className="px-2.5 pt-0.5 text-[10px] text-slate-500">Snooze alerts</div>
+      <div className="flex gap-1 px-2.5 pb-1 pt-1">
+        {[
+          { label: '1h', minutes: 60 },
+          { label: '4h', minutes: 240 },
+          { label: '24h', minutes: 1440 },
+        ].map(({ label, minutes }) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => {
+              close();
+              onSnooze(minutes);
+            }}
+            className="flex-1 rounded border border-white/[0.08] px-1.5 py-1 text-[10px] text-slate-300 transition-colors hover:border-sky-500/40 hover:bg-sky-500/10 hover:text-sky-300"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function MonitorActionsMenu({
   monitor,
   onToggleEnabled,
@@ -251,132 +280,21 @@ function MonitorActionsMenu({
   onDelete: () => void;
   onSnooze: (monitor: Monitor, durationMinutes: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-
-  // The menu renders position:fixed so it can escape the group children's
-  // overflow-y-auto container; anchor it to the trigger on open.
-  const MENU_WIDTH = 144;
-  const MENU_HEIGHT = 196;
-
-  const toggle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const openUp = rect.bottom + 4 + MENU_HEIGHT > window.innerHeight;
-    setPos({
-      top: openUp ? rect.top - 4 - MENU_HEIGHT : rect.bottom + 4,
-      left: Math.max(8, rect.right - MENU_WIDTH),
-    });
-    setOpen(true);
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    window.addEventListener('click', close);
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('scroll', close, true);
-      window.removeEventListener('resize', close);
-    };
-  }, [open]);
-
-  const itemClass =
-    'block w-full rounded px-2.5 py-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white';
-
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={toggle}
-        aria-label="Monitor actions"
-        aria-expanded={open}
-        className="rounded p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white cursor-pointer"
+    <RowMenu label="Monitor actions">
+      <RowMenuItem href={`/monitors/${monitorId}`} icon={<Pencil strokeWidth={1.75} />}>Edit</RowMenuItem>
+      <RowMenuItem href={`/monitors/new?clone=${monitorId}`} icon={<Copy strokeWidth={1.75} />}>Clone</RowMenuItem>
+      <RowMenuItem
+        onSelect={() => onToggleEnabled(monitor)}
+        icon={monitor.enabled ? <Pause strokeWidth={1.75} /> : <Play strokeWidth={1.75} />}
       >
-        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6h.01M12 12h.01M12 18h.01" />
-        </svg>
-      </button>
-      {open && pos && (
-        <div
-          className="fixed z-50 w-36 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-lg backdrop-blur-sm"
-          style={{ top: pos.top, left: pos.left }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Link
-            href={`/monitors/${monitorId}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-            }}
-            className={itemClass}
-          >
-            Edit
-          </Link>
-          <Link
-            href={`/monitors/new?clone=${monitorId}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-            }}
-            className={itemClass}
-          >
-            Clone
-          </Link>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-              onToggleEnabled(monitor);
-            }}
-            className={itemClass}
-          >
-            {monitor.enabled ? 'Pause' : 'Start'}
-          </button>
-          <div className="my-1 border-t border-white/[0.06] px-2.5 pt-1 text-[9px] uppercase tracking-wider text-slate-500">
-            Snooze alerts
-          </div>
-          <div className="flex gap-1 px-2.5 pb-1">
-            {[
-              { label: '1h', minutes: 60 },
-              { label: '4h', minutes: 240 },
-              { label: '24h', minutes: 1440 },
-            ].map(({ label, minutes }) => (
-              <button
-                key={label}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpen(false);
-                  onSnooze(monitor, minutes);
-                }}
-                className="flex-1 rounded border border-white/[0.08] px-1.5 py-1 text-[10px] text-slate-300 transition-colors hover:border-sky-500/40 hover:bg-sky-500/10 hover:text-sky-300"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-              onDelete();
-            }}
-            className="block w-full rounded px-2.5 py-1.5 text-left text-xs text-rose-300 transition-colors hover:bg-rose-500/10 hover:text-rose-200"
-          >
-            Delete
-          </button>
-        </div>
-      )}
-    </>
+        {monitor.enabled ? 'Pause' : 'Start'}
+      </RowMenuItem>
+      <RowMenuSeparator />
+      <SnoozeOptions onSnooze={(minutes) => onSnooze(monitor, minutes)} />
+      <RowMenuSeparator />
+      <RowMenuItem onSelect={onDelete} icon={<Trash2 strokeWidth={1.75} />} danger>Delete</RowMenuItem>
+    </RowMenu>
   );
 }
 

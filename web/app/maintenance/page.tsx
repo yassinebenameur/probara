@@ -5,6 +5,7 @@ import { CalendarClock, Pencil, Plus, Square, Trash2, Wrench } from 'lucide-reac
 import type { MaintenanceWindow, MaintenanceWindowStatus } from '@/lib/types';
 import { deleteMaintenanceWindow, getMaintenanceWindows, updateMaintenanceWindow } from '@/lib/api';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
@@ -102,7 +103,7 @@ export default function MaintenancePage() {
         title="Maintenance"
         subtitle="Planned windows during which alerts are suppressed. Checks keep running and status pages show maintenance."
         action={
-          <Button size="sm" icon={<Plus strokeWidth={1.75} />} onClick={openCreate}>
+          <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} onClick={openCreate}>
             Schedule maintenance
           </Button>
         }
@@ -194,35 +195,25 @@ export default function MaintenancePage() {
 
               <div className="flex flex-shrink-0 items-center gap-1">
                 {window.status === 'active' && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                  <IconButton
                     icon={<Square strokeWidth={1.75} />}
+                    label="End now"
                     onClick={() => handleEndNow(window)}
-                  >
-                    End now
-                  </Button>
+                  />
                 )}
                 {window.status !== 'past' && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                  <IconButton
                     icon={<Pencil strokeWidth={1.75} />}
+                    label="Edit"
                     onClick={() => openEdit(window)}
-                    aria-label={`Edit ${window.title}`}
-                  >
-                    Edit
-                  </Button>
+                  />
                 )}
-                <Button
-                  variant="ghost"
-                  size="sm"
+                <IconButton
                   icon={<Trash2 strokeWidth={1.75} />}
+                  label="Delete"
                   onClick={() => setPendingDelete(window)}
-                  aria-label={`Delete ${window.title}`}
-                >
-                  Delete
-                </Button>
+                  danger
+                />
               </div>
             </div>
           ))}

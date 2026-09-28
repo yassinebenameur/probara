@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MapPin, Plus, RefreshCw, Rocket, Pencil, Trash2 } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
@@ -374,33 +375,22 @@ export default function LocationsPage() {
                     </td>
                     <td className="px-3 py-3">
                       {canManageLocations && <div className="flex items-center justify-end gap-0.5">
-                        <Button
-                          variant="subtle"
-                          size="xs"
+                        <IconButton
                           icon={<Rocket strokeWidth={1.75} />}
+                          label="Deploy a worker"
                           onClick={() => setDeployLocation(location)}
-                          title="Deploy"
-                        >
-                          <span className="sr-only">Deploy</span>
-                        </Button>
-                        <Button
-                          variant="subtle"
-                          size="xs"
+                        />
+                        <IconButton
                           icon={<Pencil strokeWidth={1.75} />}
+                          label="Edit name and mesh endpoint"
                           onClick={() => startRename(location)}
-                          title="Edit name and mesh endpoint"
-                        >
-                          <span className="sr-only">Edit</span>
-                        </Button>
-                        <Button
-                          variant="subtle"
-                          size="xs"
+                        />
+                        <IconButton
                           icon={<Trash2 strokeWidth={1.75} />}
+                          label="Delete"
                           onClick={() => setPendingDelete(location)}
-                          title="Delete"
-                        >
-                          <span className="sr-only">Delete</span>
-                        </Button>
+                          danger
+                        />
                       </div>}
                     </td>
                   </tr>

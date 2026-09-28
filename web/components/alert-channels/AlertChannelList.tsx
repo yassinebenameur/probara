@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { LayoutGrid, Plus, Send, Trash2 } from 'lucide-react';
+import { LayoutGrid, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { AlertChannel } from '@/lib/types';
 import { deleteAlertChannel, getAlertChannels, testAlertChannel } from '@/lib/api';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -119,24 +120,22 @@ export default function AlertChannelList() {
                   </td>
                   <td className="text-right">
                     <div className="inline-flex items-center gap-0.5">
-                      <Button
-                        variant="subtle"
-                        size="xs"
+                      <IconButton
                         icon={<Send strokeWidth={1.75} />}
+                        label="Send a test notification"
                         onClick={() => handleTest(channel.id)}
-                        title="Send a test notification"
-                      >
-                        <span className="sr-only">Test</span>
-                      </Button>
-                      <Button
-                        variant="subtle"
-                        size="xs"
+                      />
+                      <IconButton
+                        icon={<Pencil strokeWidth={1.75} />}
+                        label="Edit"
+                        href={`/alert-channels/${channel.id}`}
+                      />
+                      <IconButton
                         icon={<Trash2 strokeWidth={1.75} />}
+                        label="Delete"
                         onClick={() => setPendingDelete(channel)}
-                        title="Delete"
-                      >
-                        <span className="sr-only">Delete</span>
-                      </Button>
+                        danger
+                      />
                     </div>
                   </td>
                 </tr>

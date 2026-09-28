@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Select from '@/components/ui/Select';
 import type { MembershipInput, Tenant, TenantRole } from '@/lib/types';
 
@@ -70,16 +71,13 @@ export default function MembershipsEditor({
               ))}
             </Select>
           </div>
-          <Button
-            variant="ghost"
-            size="xs"
+          <IconButton
             icon={<Trash2 strokeWidth={1.75} />}
+            label="Remove membership"
             disabled={disabled}
             onClick={() => onChange(memberships.filter((_, i) => i !== index))}
-            aria-label="Remove membership"
-          >
-            Remove
-          </Button>
+            danger
+          />
         </div>
       ))}
       <div className="flex items-center justify-between">

@@ -8,6 +8,7 @@ import { getStatusPages, deleteStatusPage } from '@/lib/api';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { pluralize } from '@/lib/format';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -135,15 +136,12 @@ export default function StatusPagesPage() {
                     <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
                   </a>
                 </div>
-                <Button
-                  variant="subtle"
-                  size="xs"
+                <IconButton
                   icon={<Trash2 strokeWidth={1.75} />}
+                  label="Delete"
                   onClick={() => setPendingDelete(page)}
-                  title="Delete"
-                >
-                  <span className="sr-only">Delete</span>
-                </Button>
+                  danger
+                />
               </div>
 
               {page.description && (
