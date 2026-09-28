@@ -193,9 +193,16 @@ or imported groups come back empty. Any other path that creates groups through
   top-level `smtp:` and `appBaseURL:` values render the env into all three
   workloads via the `smtpEnv` helper. Compose wires none of it.
   `SMTP_USE_TLS=true` is implicit TLS (port 465), never STARTTLS.
-  `APP_BASE_URL` is the operator-UI origin and only adds the "open the
-  monitor" button to alert email — unset omits the button, never a guessed
-  host.
+  `APP_BASE_URL` is the operator-UI origin and only adds "open the monitor"
+  deep links to notifications (every channel, via `plugin.Configure`) —
+  unset omits them, never a guessed host. The same three workloads read
+  `NOTIFICATION_BLOCK_PRIVATE_IPS` (default **true**) /
+  `NOTIFICATION_ALLOWED_CIDRS` (`loadNotificationEgressConfig`); each main
+  passes both to `plugin.Configure` next to `email.SetMailer`. A binary that
+  skips `plugin.Configure` fails closed (private egress blocked, no links).
+  This policy is independent of the worker's `HTTP_BLOCK_PRIVATE_IPS`
+  (default false); both use `shared/netguard`, the single SSRF range table
+  and resolve-then-dial guard (`worker/dial_guard.go` is an alias of it).
 - **`STATUS_PAGE_VAPID_*`**: status-page only, and both key halves are
   required or visitor notifications are off (no control rendered, push routes
   404). The **public** key is deliberately a literal `value:` in the PodSpec —
@@ -242,6 +249,10 @@ or imported groups come back empty. Any other path that creates groups through
 - Go (per module: `api/`, `worker/`, `scheduler/`, `shared/`, `alerter/`):
   `go build ./...` and `go test ./...` from the module dir. Full api suite
   takes >2 min — run in background.
+- Integration tests (`testutil.SetupPostgresDB`) use testcontainers by
+  default; without a Docker daemon set
+  `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
+  (role needs CREATEDB) and each test gets a scratch database on that server.
 - Web/website: `npx tsc --noEmit` in `web/` or `website/`.
 - Helm: `helm lint helm/monitoring-platform` and `helm template` (see gotcha).
 - Compose: `docker compose config` validates env wiring.
@@ -296,14 +307,45 @@ or imported groups come back empty. Any other path that creates groups through
   `errAlertAlreadyResolved` and the loser skips notifications, so it is not
   an error to log.
 
-- **Alert email rendering** lives entirely in
-  `shared/notifications/plugin/builtin/email`: `view.go` builds one
-  presentation model (`alertView`) that both `alert.gohtml` (HTML part) and
-  `renderAlertText` (plain-text part) consume, so the two MIME parts of a
-  message cannot describe different alerts. Add a new alert kind's wording in
-  `summaryFor`/`toneFor`/`metricFor`, never in the template. `smtp.go`
-  assembles `multipart/alternative` with base64 parts (long styled lines
-  otherwise trip the SMTP 998-octet limit) and RFC 2047 headers.
+- **Alert wording lives in `shared/notifications/present`**, for every
+  channel. `present.Build` turns an event into one `Message` (label, summary,
+  metric, facts, deep link, tone); plugins reach it via
+  `DispatchRequest.View()` and own layout only. Add a new alert kind's or
+  event type's wording in `labelFor`/`summaryFor`/`toneFor`/`metricFor`
+  there, never in a plugin or template. Email wraps it (`email/view.go`:
+  `alertView` = `present.Message` + palette) so `alert.gohtml` (HTML part)
+  and `renderAlertText` (plain-text part) still render from one model.
+  `smtp.go` assembles `multipart/alternative` with base64 parts (long styled
+  lines otherwise trip the SMTP 998-octet limit) and RFC 2047 headers.
+
+- **Notification plugins** (`shared/notifications/plugin/builtin/<type>/`,
+  registered in `builtin.go`) must: build their client with
+  `plugin.NewHTTPClient` (egress-guarded, no redirects) and send through
+  `plugin.PostJSON`/`plugin.Post` (classifies responses; strips the URL from
+  transport errors, because webhook paths and bot tokens are credentials);
+  mark permanent failures with `plugin.Permanent` (the worker then stops
+  redelivering and the sync alerter keeps the claim instead of re-failing
+  every cycle); validate hosts with `plugin.HostMatches` (label-boundary,
+  never `strings.Contains`/`HasSuffix`); and treat `req.Test` as a real send
+  that must not leave provider state behind. Paging plugins advertise
+  `plugin.CapabilityAcknowledge`: the alerter's `dispatchAcknowledgements`
+  sends them `acknowledged` once per paged channel
+  (`alert_notification_states.acknowledged_sent_at`, a separate column so the
+  created/reminder/resolved machine in `last_event_type` is untouched), and
+  they skip reminders. Channel updates run the plugin's `Validate` on the
+  merged config (`alertchannels.Service.validateMerged`) — create-time host
+  checks are otherwise bypassable by editing. The async worker
+  (`eventSuperseded`) reads the alert `FOR SHARE` in a transaction held
+  through `Send`, and drops any non-resolve envelope whose alert has since
+  resolved. The lock is the ordering guarantee: resolution is an `UPDATE` of
+  that row, so it waits for an in-flight trigger (bounded by
+  `DispatchTimeout`), and the resolve is only published after it commits —
+  without it a trigger could reach PagerDuty after the resolve and leave the
+  incident open forever. Do not move `Send` out of that transaction.
+  Multi-recipient plugins must flatten a mixed error before returning it —
+  `plugin.IsPermanent` walks `errors.Join` children, so one permanent child
+  would stop the retry for the others — and carry the longest
+  `plugin.RetryAfterDelay` onto the flattened error.
 
 - **status-page is read-only except for push.** The `Service` takes a
   `db.Querier` and `service.go` stubs `ExecContext` into a refusal so stray

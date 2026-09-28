@@ -1414,9 +1414,15 @@ export type PluginFieldType =
   | 'email_list'
   | 'textarea'
   | 'secret'
-  | 'bool';
+  | 'bool'
+  | 'select';
 
-export type PluginCapability = 'rendered_alert' | 'raw_event' | 'testable';
+export type PluginCapability = 'testable' | 'acknowledge';
+
+export interface PluginFieldOption {
+  value: string;
+  label: string;
+}
 
 export interface PluginField {
   key: string;
@@ -1427,6 +1433,7 @@ export interface PluginField {
   required?: boolean;
   secret?: boolean;
   default?: unknown;
+  options?: PluginFieldOption[];
 }
 
 export interface PluginManifest {

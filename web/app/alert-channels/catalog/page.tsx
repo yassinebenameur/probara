@@ -12,9 +12,8 @@ import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 
 const CAPABILITY_LABELS: Record<string, string> = {
-  rendered_alert: 'Rendered',
-  raw_event: 'Native format',
   testable: 'Test from UI',
+  acknowledge: 'Syncs acknowledgements',
 };
 
 export default function AlertChannelCatalogPage() {

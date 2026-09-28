@@ -2,6 +2,7 @@ package alertchannels
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"net/http"
 	"strconv"
 
@@ -186,6 +187,10 @@ func (h *Handlers) UpdateAlertChannel(w http.ResponseWriter, r *http.Request) {
 
 	channel, err := h.service.UpdateAlertChannel(r.Context(), tenantUUID, channelID, &req)
 	if err != nil {
+		if stderrors.Is(err, alertchannelservice.ErrInvalidConfig) {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
 		if err.Error() == "alert channel not found" {
 			errors.WriteNotFoundError(w, "alert channel not found")
 			return

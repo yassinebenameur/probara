@@ -379,7 +379,7 @@ kubectl -n probara get jobs`,
             [
               '`extraEnv`, `<service>.extraEnv`',
               '`[]`',
-              'Standard EnvVar entries appended to workloads: top-level `extraEnv` reaches every workload (including the migrations job); per-service lists (`api`, `scheduler`, `worker`, `alerter`, `statusPage`, `frontend`, `migrations`) reach one. `worker.extraEnv` also applies to location workers, and each `worker.locations` entry may carry its own `extraEnv`. Use this for any supported runtime variable without a dedicated chart value (LLM, rotation keys, SSRF policy).',
+              'Standard EnvVar entries appended to workloads: top-level `extraEnv` reaches every workload (including the migrations job); per-service lists (`api`, `scheduler`, `worker`, `alerter`, `statusPage`, `frontend`, `migrations`) reach one. `worker.extraEnv` also applies to location workers, and each `worker.locations` entry may carry its own `extraEnv`. Use this for any supported runtime variable without a dedicated chart value (LLM, rotation keys, SSRF policy). Notification egress (`NOTIFICATION_BLOCK_PRIVATE_IPS`, `NOTIFICATION_ALLOWED_CIDRS`) blocks private destinations by default; to let channels reach an internal receiver, set the allow-list through top-level `extraEnv` so the API, worker and alerter all get it.',
             ],
             [
               '`smtp.host`, `.port`, `.useTLS`, `.from`, `.username`, `.password`, `.existingSecret`, `.existingSecretKey`',

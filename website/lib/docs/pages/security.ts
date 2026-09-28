@@ -369,9 +369,39 @@ go run ./cmd/admin/encrypt_existing_channels`,
         {
           type: 'callout',
           tone: 'warning',
-          title: 'Notification and LLM egress are separate',
+          title: 'LLM egress is separate',
           text:
-            'The monitor dial guard does not automatically protect alerter/notification webhooks or arbitrary LLM provider base URLs. Restrict those services with network policy, proxy allowlists, DNS policy, or provider allowlists so tenant-controlled destinations cannot reach sensitive internal services.',
+            'Neither guard below protects arbitrary LLM provider base URLs. Restrict that path with network policy, proxy allowlists, DNS policy, or provider allowlists so tenant-controlled destinations cannot reach sensitive internal services.',
+        },
+        {
+          type: 'paragraph',
+          text:
+            'Notification channels (generic webhook, Slack, Discord, Teams, PagerDuty, Opsgenie, Telegram, Twilio) have their own policy, because their destinations are tenant-supplied and the requests leave the API, alerter and worker unattended. It uses the same address table and resolve-then-validate dialer as the monitor guard, but it is on by default and configured separately, so enabling internal monitoring never opens internal notification targets.',
+        },
+        {
+          type: 'table',
+          columns: ['Control', 'Default', 'Effect'],
+          rows: [
+            [
+              '`NOTIFICATION_BLOCK_PRIVATE_IPS`',
+              '`true`',
+              'Refuse loopback, private, link-local (including cloud metadata), CGNAT, multicast, documentation and reserved destinations for every channel. A refusal is a permanent delivery failure, not retried.',
+            ],
+            [
+              '`NOTIFICATION_ALLOWED_CIDRS`',
+              'Empty',
+              'Ranges that stay reachable while blocking is on — an internal webhook receiver or chat server. Invalid CIDR fails startup.',
+            ],
+          ],
+        },
+        {
+          type: 'list',
+          items: [
+            'Set both on the API (channel test), alerter (synchronous delivery) and worker (asynchronous delivery); a service that never receives the policy fails closed.',
+            'Redirects are never followed, so an allowed host cannot bounce a request to a blocked one.',
+            'Transport errors are logged without the request URL, because webhook paths and Telegram bot tokens are credentials.',
+            'With an `HTTPS_PROXY` configured, the policy vets the proxy address (allow-list it) and destination control becomes the proxy\'s job.',
+          ],
         },
         {
           type: 'paragraph',

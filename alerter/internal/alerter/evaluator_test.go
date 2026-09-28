@@ -27,6 +27,11 @@ func TestShouldSendNotification(t *testing.T) {
 		{"reminder_recent", "reminder", &notificationState{LastEventType: "created", LastSentAt: now.Add(-5 * time.Minute)}, now, false},
 		{"reminder_overdue", "reminder", &notificationState{LastEventType: "created", LastSentAt: now.Add(-15 * time.Minute)}, now, true},
 		{"reminder_after_resolved", "reminder", &notificationState{LastEventType: "resolved", LastSentAt: now.Add(-15 * time.Minute)}, now, false},
+		{"acknowledged_never_paged", "acknowledged", nil, now, false},
+		{"acknowledged_after_created", "acknowledged", &notificationState{LastEventType: "created"}, now, true},
+		{"acknowledged_after_reminder", "acknowledged", &notificationState{LastEventType: "reminder"}, now, true},
+		{"acknowledged_twice", "acknowledged", &notificationState{LastEventType: "created", AcknowledgedSentAt: &now}, now, false},
+		{"acknowledged_after_resolved", "acknowledged", &notificationState{LastEventType: "resolved"}, now, false},
 	}
 
 	for _, test := range tests {

@@ -71,8 +71,9 @@ type alertChannel struct {
 }
 
 type notificationState struct {
-	LastSentAt    time.Time
-	LastEventType string
+	LastSentAt         time.Time
+	LastEventType      string
+	AcknowledgedSentAt *time.Time
 }
 
 type groupMember struct {
@@ -391,7 +392,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 	}
 
 	query := `
-		SELECT alert_id, channel_id, last_sent_at, last_event_type
+		SELECT alert_id, channel_id, last_sent_at, last_event_type, acknowledged_sent_at
 		FROM alert_notification_states
 		WHERE alert_id = ANY($1)
 	`
@@ -406,7 +407,7 @@ func (a *Alerter) loadNotificationStates(ctx context.Context, alertIDs []uuid.UU
 		var alertID uuid.UUID
 		var channelID uuid.UUID
 		var state notificationState
-		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType); err != nil {
+		if err := rows.Scan(&alertID, &channelID, &state.LastSentAt, &state.LastEventType, &state.AcknowledgedSentAt); err != nil {
 			return nil, fmt.Errorf("failed to scan notification state: %w", err)
 		}
 		if _, ok := states[alertID]; !ok {
@@ -1148,6 +1149,8 @@ func shouldSendNotification(eventType string, state *notificationState, now time
 			return false
 		}
 		return now.Sub(state.LastSentAt) >= reminderInterval
+	case "acknowledged":
+		return state != nil && state.LastEventType != "resolved" && state.AcknowledgedSentAt == nil
 	default:
 		return false
 	}
@@ -1236,8 +1239,11 @@ func alertKey(monitorID, policyID uuid.UUID) string {
 
 func buildAlertEvent(eventType string, binding policyBinding, alert *alertRecord, resolvedAt *time.Time, timestamp time.Time) notifications.AlertEvent {
 	status := "active"
-	if eventType == "resolved" {
+	switch eventType {
+	case "resolved":
 		status = "resolved"
+	case "acknowledged":
+		status = "acknowledged"
 	}
 
 	var rootCauseID *string

@@ -14,6 +14,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
 // runLifecycle is the transition-driven replacement for evaluateAlerts (spec §6):
@@ -57,7 +58,10 @@ func (a *Alerter) runLifecycle(ctx context.Context) error {
 	if err := a.refreshAlertFailingLocations(ctx); err != nil {
 		return err
 	}
-	return a.dispatchOpenAlerts(ctx)
+	if err := a.dispatchOpenAlerts(ctx); err != nil {
+		return err
+	}
+	return a.dispatchAcknowledgements(ctx)
 }
 
 // failingLocationsSubquery selects the JSON breakdown of the monitor's
@@ -619,6 +623,78 @@ func (a *Alerter) dispatchOpenAlerts(ctx context.Context) error {
 				a.fireChannel(ctx, "reminder", binding, &oa.record, target.channel, now, reminderInterval)
 			}
 		}
+	}
+	return nil
+}
+
+// dispatchAcknowledgements tells paging channels (plugins advertising
+// plugin.CapabilityAcknowledge) that an operator acknowledged an alert they
+// were paged for, so the provider stops its own escalation. It only targets
+// channels that already fired for the alert, once each; chat and email
+// channels never receive it. Maintenance and suppression do not gate it: an
+// ack is an operator action on a page that already went out.
+func (a *Alerter) dispatchAcknowledgements(ctx context.Context) error {
+	var ackTypes []string
+	for _, m := range plugin.DefaultRegistry.All() {
+		if m.HasCapability(plugin.CapabilityAcknowledge) {
+			ackTypes = append(ackTypes, m.Type)
+		}
+	}
+	if len(ackTypes) == 0 {
+		return nil
+	}
+
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT al.id, al.tenant_id, al.monitor_id, COALESCE(m.name, ''), al.kind, al.triggered_at,
+			al.failure_count, al.last_error,
+			ac.id, ac.name, ac.type, ac.config, ac.is_active
+		FROM alert_notification_states ans
+		JOIN alerts al ON al.id = ans.alert_id
+		JOIN alert_channels ac ON ac.id = ans.channel_id
+		LEFT JOIN monitors m ON m.id = al.monitor_id
+		WHERE al.status = 'acknowledged'
+		  AND ans.acknowledged_sent_at IS NULL
+		  AND ans.last_event_type <> 'resolved'
+		  AND ac.is_active
+		  AND ac.type = ANY($1)
+	`, pq.Array(ackTypes))
+	if err != nil {
+		return fmt.Errorf("query acknowledged alerts: %w", err)
+	}
+	defer rows.Close()
+
+	type pending struct {
+		binding policyBinding
+		record  alertRecord
+		channel alertChannel
+	}
+	var todo []pending
+	for rows.Next() {
+		var p pending
+		var lastError sql.NullString
+		var configBytes []byte
+		if err := rows.Scan(&p.record.ID, &p.record.TenantID, &p.record.MonitorID, &p.binding.MonitorName,
+			&p.record.Kind, &p.record.TriggeredAt, &p.record.FailureCount, &lastError,
+			&p.channel.ID, &p.channel.Name, &p.channel.Type, &configBytes, &p.channel.IsActive); err != nil {
+			return fmt.Errorf("scan acknowledged alert: %w", err)
+		}
+		if lastError.Valid {
+			p.record.LastError = &lastError.String
+		}
+		p.record.Status = "acknowledged"
+		p.binding.MonitorID = p.record.MonitorID
+		p.binding.TenantID = p.record.TenantID
+		p.channel.Config = json.RawMessage(configBytes)
+		todo = append(todo, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for i := range todo {
+		p := &todo[i]
+		a.fireChannel(ctx, "acknowledged", p.binding, &p.record, p.channel, now, 0)
 	}
 	return nil
 }

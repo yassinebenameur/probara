@@ -1,8 +1,16 @@
-// Package teams implements the Microsoft Teams incoming-webhook alert plugin.
+// Package teams implements the Microsoft Teams webhook alert plugin.
+//
+// Teams has two webhook generations. Office 365 connector webhooks
+// (*.webhook.office.com, outlook.office.com) take the legacy MessageCard
+// schema and are being retired by Microsoft; their replacement, a Power
+// Automate "Workflows" webhook, takes an Adaptive Card wrapped in a message
+// envelope and ignores MessageCard. The plugin picks the format from the URL
+// host so existing connector channels keep working and new Workflows URLs
+// render properly. Both are built from the shared presentation in package
+// present.
 package teams
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 const pluginType = "teams"
@@ -29,9 +37,9 @@ type Plugin struct {
 	httpClient *http.Client
 }
 
-// New constructs a plugin with default HTTP client (10s timeout).
+// New constructs a plugin with the guarded notification HTTP client.
 func New() *Plugin {
-	return &Plugin{httpClient: &http.Client{Timeout: 10 * time.Second}}
+	return &Plugin{httpClient: plugin.NewHTTPClient(10 * time.Second)}
 }
 
 // Manifest returns the Teams plugin self-description.
@@ -39,12 +47,11 @@ func (p *Plugin) Manifest() plugin.Manifest {
 	return plugin.Manifest{
 		Type:        pluginType,
 		DisplayName: "Microsoft Teams",
-		Description: "Post alerts to a Microsoft Teams channel using an incoming webhook URL.",
+		Description: "Post alerts to a Microsoft Teams channel through a Workflows (Power Automate) webhook or a legacy incoming-webhook connector.",
 		IconKey:     "teams",
-		DocsURL:     "https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook",
-		Version:     "1.0.0",
+		DocsURL:     "https://support.microsoft.com/office/create-incoming-webhooks-with-workflows-for-microsoft-teams-8ae491c7-0394-4861-ba59-055e33f75498",
+		Version:     "1.1.0",
 		Capabilities: []plugin.Capability{
-			plugin.CapabilityRawEvent,
 			plugin.CapabilityTestable,
 		},
 		Fields: []plugin.Field{
@@ -54,72 +61,64 @@ func (p *Plugin) Manifest() plugin.Manifest {
 				Type:        plugin.FieldTypeSecret,
 				Required:    true,
 				Secret:      true,
-				Placeholder: "https://outlook.office.com/webhook/...",
-				Help:        "Generate this in Teams via Channel → Connectors → Incoming Webhook.",
+				Placeholder: "https://…/workflows/…/triggers/manual/paths/invoke?…",
+				Help:        "In Teams: channel ⋯ → Workflows → \"Post to a channel when a webhook request is received\", then copy the URL. Legacy connector URLs (webhook.office.com) still work.",
 			},
 		},
 	}
 }
 
-// Validate checks the raw config blob before persisting.
+// Validate checks the raw config blob before persisting. Teams webhook hosts
+// are not pinned: Microsoft has moved Workflows URLs between domains more
+// than once, and the egress policy already keeps them off private addresses.
 func (p *Plugin) Validate(raw json.RawMessage) error {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return err
 	}
-	if cfg.WebhookURL == "" {
-		return errors.New("webhook_url is required")
-	}
-	u, err := url.Parse(cfg.WebhookURL)
-	if err != nil {
-		return fmt.Errorf("webhook_url is not a valid URL: %w", err)
-	}
-	if u.Scheme != "https" {
-		return errors.New("webhook_url must use https")
-	}
-	return nil
+	_, err = plugin.ParseHTTPSURL(cfg.WebhookURL, "webhook_url")
+	return err
 }
 
-// Send posts a MessageCard payload to the channel's webhook URL.
+// Send posts the card format the webhook's host understands.
 func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
-	webhook, ok := stringFromMap(req.Channel.Config, "webhook_url")
-	if !ok || webhook == "" {
-		return errors.New("teams channel missing webhook_url")
+	webhook := req.Channel.String("webhook_url")
+	if webhook == "" {
+		return plugin.Permanent(errors.New("teams channel missing webhook_url"))
 	}
-
-	card := buildMessageCard(req)
-	payload, err := json.Marshal(card)
-	if err != nil {
-		return fmt.Errorf("marshal teams card: %w", err)
+	msg := req.View()
+	var body any
+	if isLegacyConnector(webhook) {
+		body = buildMessageCard(msg)
+	} else {
+		body = buildAdaptiveCardMessage(msg)
 	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("build teams request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("post teams webhook: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("teams webhook returned status %d", resp.StatusCode)
-	}
-	return nil
+	return plugin.PostJSON(ctx, p.httpClient, webhook, body, nil, "teams webhook")
 }
 
-// messageCard is the Office 365 connector card schema accepted by Teams
-// incoming webhooks. https://learn.microsoft.com/outlook/actionable-messages/message-card-reference
+// isLegacyConnector reports whether target is an Office 365 connector
+// webhook, which only renders MessageCard.
+func isLegacyConnector(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	return plugin.HostMatches(u.Host, "webhook.office.com", "outlook.office.com", "outlook.office365.com")
+}
+
+// --- legacy MessageCard ------------------------------------------------------
+
+// messageCard is the Office 365 connector card schema.
+// https://learn.microsoft.com/outlook/actionable-messages/message-card-reference
 type messageCard struct {
-	Type     string    `json:"@type"`
-	Context  string    `json:"@context"`
-	Summary  string    `json:"summary,omitempty"`
-	Title    string    `json:"title,omitempty"`
-	Text     string    `json:"text,omitempty"`
-	Sections []section `json:"sections,omitempty"`
+	Type            string          `json:"@type"`
+	Context         string          `json:"@context"`
+	Summary         string          `json:"summary,omitempty"`
+	ThemeColor      string          `json:"themeColor,omitempty"`
+	Title           string          `json:"title,omitempty"`
+	Text            string          `json:"text,omitempty"`
+	Sections        []section       `json:"sections,omitempty"`
+	PotentialAction []openURIAction `json:"potentialAction,omitempty"`
 }
 
 type section struct {
@@ -133,89 +132,129 @@ type fact struct {
 	Value string `json:"value"`
 }
 
-func buildMessageCard(req plugin.DispatchRequest) messageCard {
-	event := req.Event
-	prefix := titlePrefix(eventTypeOf(req))
-	if event.Alert.IsLatencyAnomaly() {
-		prefix = latencyTitlePrefix(eventTypeOf(req))
-	} else if event.Alert.IsHostMetric() {
-		prefix = event.Alert.HostMetricLabel(eventTypeOf(req))
-	} else if event.Alert.IsTLSExpiry() {
-		prefix = event.Alert.TLSExpiryLabel(eventTypeOf(req))
-	}
-	title := fmt.Sprintf("%s: %s", prefix, event.Alert.MonitorName)
-	timestamp := event.Timestamp
-	if timestamp.IsZero() {
-		timestamp = time.Now()
-	}
+type openURIAction struct {
+	Type    string      `json:"@type"`
+	Name    string      `json:"name"`
+	Targets []uriTarget `json:"targets"`
+}
 
-	facts := []fact{
-		{Name: "Monitor", Value: event.Alert.MonitorName},
-		{Name: "Policy", Value: event.Alert.PolicyName},
-		{Name: "Status", Value: event.Alert.Status},
-		{Name: "Failure Count", Value: fmt.Sprintf("%d", event.Alert.FailureCount)},
-	}
-	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
-		facts = append(facts, fact{Name: "Last Error", Value: *event.Alert.LastError})
-	}
-	if summary := event.Alert.MetricSummary(); summary != "" {
-		facts = append(facts, fact{Name: event.Alert.MetricLabel(), Value: summary})
-	}
-	if names := event.Alert.FailingLocationNames(); names != "" {
-		facts = append(facts, fact{Name: "Failing Locations", Value: names})
-	}
-	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
-		value := *event.Alert.RootCauseMonitorName
-		if event.Alert.RootCauseDownSince != nil {
-			value = fmt.Sprintf("%s (down since %s)", value, event.Alert.RootCauseDownSince.Format(time.RFC1123))
-		}
-		facts = append(facts, fact{Name: "Likely Caused By", Value: value})
-	}
+type uriTarget struct {
+	OS  string `json:"os"`
+	URI string `json:"uri"`
+}
 
-	return messageCard{
-		Type:    "MessageCard",
-		Context: "https://schema.org/extensions",
-		Summary: title,
-		Title:   title,
-		Text:    fmt.Sprintf("Event: **%s** at %s", eventTypeOf(req), timestamp.Format(time.RFC1123)),
-		Sections: []section{{
-			Facts:    facts,
-			Markdown: true,
+func buildMessageCard(m present.Message) messageCard {
+	var facts []fact
+	for _, f := range m.Facts() {
+		facts = append(facts, fact{Name: f.Label, Value: f.Value})
+	}
+	if m.LastError != "" {
+		facts = append(facts, fact{Name: "Last error", Value: m.LastError})
+	}
+	card := messageCard{
+		Type:       "MessageCard",
+		Context:    "https://schema.org/extensions",
+		Summary:    m.Title,
+		ThemeColor: hexFor(m.Tone),
+		Title:      m.Title,
+		Text:       m.Summary,
+		Sections:   []section{{Facts: facts, Markdown: false}},
+	}
+	if m.ActionURL != "" {
+		card.PotentialAction = []openURIAction{{
+			Type:    "OpenUri",
+			Name:    m.ActionLabel,
+			Targets: []uriTarget{{OS: "default", URI: m.ActionURL}},
+		}}
+	}
+	return card
+}
+
+// --- Workflows Adaptive Card -------------------------------------------------
+
+// adaptiveMessage is the envelope the Workflows "post to a channel when a
+// webhook request is received" trigger expects.
+type adaptiveMessage struct {
+	Type        string               `json:"type"`
+	Attachments []adaptiveAttachment `json:"attachments"`
+}
+
+type adaptiveAttachment struct {
+	ContentType string       `json:"contentType"`
+	Content     adaptiveCard `json:"content"`
+}
+
+type adaptiveCard struct {
+	Schema  string           `json:"$schema"`
+	Type    string           `json:"type"`
+	Version string           `json:"version"`
+	Body    []map[string]any `json:"body"`
+	Actions []map[string]any `json:"actions,omitempty"`
+	MSTeams map[string]any   `json:"msteams,omitempty"`
+}
+
+func buildAdaptiveCardMessage(m present.Message) adaptiveMessage {
+	body := []map[string]any{
+		{"type": "TextBlock", "text": m.StatusWord, "weight": "Bolder", "size": "Small", "color": adaptiveColor(m.Tone), "spacing": "None"},
+		{"type": "TextBlock", "text": m.Title, "weight": "Bolder", "size": "Medium", "wrap": true, "spacing": "Small"},
+		{"type": "TextBlock", "text": m.Summary, "wrap": true},
+	}
+	var facts []map[string]any
+	for _, f := range m.Facts() {
+		facts = append(facts, map[string]any{"title": f.Label, "value": f.Value})
+	}
+	if len(facts) > 0 {
+		body = append(body, map[string]any{"type": "FactSet", "facts": facts})
+	}
+	if m.LastError != "" {
+		body = append(body,
+			map[string]any{"type": "TextBlock", "text": "Last error", "weight": "Bolder", "spacing": "Medium"},
+			map[string]any{"type": "TextBlock", "text": m.LastError, "wrap": true, "fontType": "Monospace", "spacing": "Small"},
+		)
+	}
+	card := adaptiveCard{
+		Schema:  "http://adaptivecards.io/schemas/adaptive-card.json",
+		Type:    "AdaptiveCard",
+		Version: "1.4",
+		Body:    body,
+		MSTeams: map[string]any{"width": "Full"},
+	}
+	if m.ActionURL != "" {
+		card.Actions = []map[string]any{{"type": "Action.OpenUrl", "title": m.ActionLabel, "url": m.ActionURL}}
+	}
+	return adaptiveMessage{
+		Type: "message",
+		Attachments: []adaptiveAttachment{{
+			ContentType: "application/vnd.microsoft.card.adaptive",
+			Content:     card,
 		}},
 	}
 }
 
-func titlePrefix(eventType string) string {
-	switch eventType {
-	case "created":
-		return "Alert Triggered"
-	case "resolved":
-		return "Alert Resolved"
-	case "reminder":
-		return "Alert Still Active"
+func adaptiveColor(t present.Tone) string {
+	switch t {
+	case present.ToneUp:
+		return "Good"
+	case present.ToneWarn:
+		return "Warning"
+	case present.ToneInfo:
+		return "Accent"
 	default:
-		return "Alert"
+		return "Attention"
 	}
 }
 
-func latencyTitlePrefix(eventType string) string {
-	switch eventType {
-	case "created":
-		return "Latency Degraded"
-	case "resolved":
-		return "Latency Recovered"
-	case "reminder":
-		return "Latency Still Degraded"
+func hexFor(t present.Tone) string {
+	switch t {
+	case present.ToneUp:
+		return "00A35F"
+	case present.ToneWarn:
+		return "D38D00"
+	case present.ToneInfo:
+		return "2563EB"
 	default:
-		return "Latency Anomaly"
+		return "DA1B69"
 	}
-}
-
-func eventTypeOf(req plugin.DispatchRequest) string {
-	if req.EventType != "" {
-		return req.EventType
-	}
-	return req.Event.Type
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {
@@ -230,23 +269,6 @@ func parseConfig(raw json.RawMessage) (Config, error) {
 	return cfg, nil
 }
 
-func stringFromMap(m map[string]any, key string) (string, bool) {
-	if m == nil {
-		return "", false
-	}
-	v, ok := m[key]
-	if !ok {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
-}
-
 func init() {
 	plugin.Register(New())
 }
-
-// _ ensures the notifications package is referenced even if no other symbol
-// from it appears in this file (defensive — the type may currently be reached
-// only via plugin.DispatchRequest.Event indirection).
-var _ = notifications.AlertEvent{}
