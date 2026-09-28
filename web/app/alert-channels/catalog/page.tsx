@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, BookOpen, Plus } from 'lucide-react';
+import { ArrowLeft, BookOpen, Plus } from 'lucide-react';
 import type { PluginManifest } from '@/lib/types';
 import { getAlertChannelPlugins } from '@/lib/api';
 import { iconFor } from '@/components/alert-channels/icons';
-import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 
@@ -35,7 +35,7 @@ export default function AlertChannelCatalogPage() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="space-y-6">
       <PageHeader
         title="Alert channel catalog"
         action={
@@ -46,15 +46,11 @@ export default function AlertChannelCatalogPage() {
       />
 
       {loading ? (
-        <Panel title="Catalog" subtitle="Loading">
-          <div className="text-sm text-slate-500">Loading plugins…</div>
-        </Panel>
+        <p className="text-sm text-slate-500">Loading plugins…</p>
       ) : error ? (
-        <Panel title="Catalog" subtitle="Failed to load">
-          <div className="text-sm text-rose-400">{error}</div>
-        </Panel>
+        <Callout tone="danger" title="Failed to load">{error}</Callout>
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {plugins.map((manifest) => (
             <PluginCard key={manifest.type} manifest={manifest} />
           ))}
@@ -68,53 +64,47 @@ function PluginCard({ manifest }: { manifest: PluginManifest }) {
   const Icon = iconFor(manifest.icon_key);
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 p-4 transition hover:border-white/[0.12] hover:bg-slate-900/60">
+    <div className="glass flex flex-col gap-4 p-5">
       <div className="flex items-start gap-3">
-        <div className="rounded-lg bg-slate-800/70 p-2 text-cyan-300">
-          <Icon className="h-5 w-5" strokeWidth={1.75} />
-        </div>
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-well-hover text-slate-300">
+          <Icon className="h-4 w-4" strokeWidth={1.75} />
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-medium text-white">{manifest.display_name}</h3>
-            <span className="text-[10px] uppercase tracking-wide text-slate-500">
-              v{manifest.version}
-            </span>
+          <div>
+            <h3 className="inline text-[15px] font-semibold text-white">{manifest.display_name}</h3>
+            <span className="ml-2 whitespace-nowrap text-xs tabular-nums text-slate-500">v{manifest.version}</span>
           </div>
-          <p className="mt-1 text-xs text-slate-400">{manifest.description}</p>
+          <p className="mt-1 text-[13px] text-slate-400">{manifest.description}</p>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
-        {manifest.capabilities.map((cap) => (
-          <Pill key={cap} tone="neutral" size="xs">
-            {CAPABILITY_LABELS[cap] ?? cap}
-          </Pill>
-        ))}
-      </div>
+      {manifest.capabilities.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {manifest.capabilities.map((cap) => (
+            <Pill key={cap} tone="neutral" size="xs">
+              {CAPABILITY_LABELS[cap] ?? cap}
+            </Pill>
+          ))}
+        </div>
+      )}
 
-      <div className="mt-auto flex items-center justify-between border-t border-white/[0.05] pt-3">
+      <div className="mt-auto flex items-center justify-between gap-3">
         {manifest.docs_url ? (
           <a
             href={manifest.docs_url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-cyan-300"
+            className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-white"
           >
             <BookOpen strokeWidth={1.75} className="h-3.5 w-3.5" />
             Setup docs
           </a>
         ) : (
-          <span className="text-xs text-slate-600">No docs link</span>
+          <span />
         )}
-        <Button
-          variant="ghost"
-          size="xs"
-          icon={<Plus strokeWidth={1.75} />}
-          asChild
-        >
+        <Button variant="ghost" size="xs" icon={<Plus strokeWidth={1.75} />} asChild>
           <Link href={`/alert-channels/new?type=${encodeURIComponent(manifest.type)}`}>
             Add channel
-            <ArrowRight strokeWidth={1.75} className="h-3 w-3 ml-1" />
           </Link>
         </Button>
       </div>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import { getNotificationSettings, updateNotificationSettings } from '@/lib/api';
@@ -71,8 +72,8 @@ function SteppedSlider({ label, options, index, onChange, hint }: SteppedSliderP
   return (
     <div>
       <div className="mb-1.5 flex items-baseline justify-between">
-        <label className="text-xs font-medium text-slate-400">{label}</label>
-        <span className="text-xs font-semibold text-cyan-300">{options[index].label}</span>
+        <label className="text-[13px] font-medium text-slate-300">{label}</label>
+        <span className="text-[13px] font-medium text-white">{options[index].label}</span>
       </div>
       <input
         type="range"
@@ -82,7 +83,7 @@ function SteppedSlider({ label, options, index, onChange, hint }: SteppedSliderP
         value={index}
         aria-label={label}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-cyan-500 cursor-pointer"
+        className="w-full cursor-pointer accent-cyan-500"
       />
       <div className="mt-1 flex justify-between">
         {options.map((o, i) => (
@@ -90,8 +91,8 @@ function SteppedSlider({ label, options, index, onChange, hint }: SteppedSliderP
             type="button"
             key={o.label}
             onClick={() => onChange(i)}
-            className={`cursor-pointer text-[10px] transition-colors ${
-              i === index ? 'font-medium text-cyan-300' : 'text-slate-500 hover:text-slate-300'
+            className={`cursor-pointer text-[11px] transition-colors ${
+              i === index ? 'font-medium text-slate-200' : 'text-slate-500 hover:text-slate-300'
             }`}
           >
             {o.label}
@@ -102,6 +103,8 @@ function SteppedSlider({ label, options, index, onChange, hint }: SteppedSliderP
     </div>
   );
 }
+
+const CHECKBOX_CLASS = 'mt-0.5 h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500';
 
 export function NotificationsPanel() {
   const [loading, setLoading] = useState(true);
@@ -171,165 +174,158 @@ export function NotificationsPanel() {
   };
 
   return (
-    <>
-      <Panel
-        title="Notifications"
-        subtitle="Every monitor notifies these channels unless it has a custom list."
-      >
-        {loading ? (
-          <div className="text-sm text-slate-500">Loading notification settings…</div>
-        ) : error ? (
-          <div className="space-y-3">
-            <p className="text-sm text-rose-400">{error}</p>
-            <Button variant="ghost" size="sm" onClick={loadSettings}>Retry</Button>
+    <Panel
+      title="Notifications"
+      subtitle="Every monitor notifies these channels unless it has a custom list."
+    >
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading notification settings…</p>
+      ) : error ? (
+        <Callout
+          tone="danger"
+          action={<Button variant="ghost" size="xs" onClick={loadSettings}>Retry</Button>}
+        >
+          {error}
+        </Callout>
+      ) : (
+        <div className="space-y-6">
+          <div>
+            <label className="mb-1.5 block text-[13px] font-medium text-slate-300">
+              Default notification channels
+            </label>
+            <ChannelPicker
+              value={defaultChannels}
+              onChange={setDefaultChannels}
+              showDelays
+            />
           </div>
-        ) : (
-          <div className="space-y-5">
-            {/* Default channels */}
-            <div>
-              <label className="mb-2 block text-xs font-medium text-slate-400">
-                Default notification channels
-              </label>
-              <ChannelPicker
-                value={defaultChannels}
-                onChange={setDefaultChannels}
-                showDelays
-              />
-            </div>
 
-            {/* Reminder interval */}
-            <div>
-              <label
-                htmlFor="reminder-select"
-                className="mb-1.5 block text-xs font-medium text-slate-400"
-              >
-                Alert reminder
-              </label>
-              <select
-                id="reminder-select"
-                value={reminderSeconds}
-                onChange={(e) => setReminderSeconds(Number(e.target.value))}
-                className="rounded border border-white/[0.08] bg-slate-800 px-3 py-2 text-xs text-slate-300 focus:border-cyan-500/50 focus:outline-none cursor-pointer"
-              >
-                {REMINDER_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-slate-500">
-                Re-notify on still-open alerts at this interval.
-              </p>
-            </div>
+          <div>
+            <label
+              htmlFor="reminder-select"
+              className="mb-1.5 block text-[13px] font-medium text-slate-300"
+            >
+              Alert reminder
+            </label>
+            <select
+              id="reminder-select"
+              value={reminderSeconds}
+              onChange={(e) => setReminderSeconds(Number(e.target.value))}
+              className="input h-10 cursor-pointer sm:!w-60"
+            >
+              {REMINDER_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">
+              Re-notify on still-open alerts at this interval.
+            </p>
+          </div>
 
-            {/* Auto-create incident */}
+          <div className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              id="auto-incident"
+              checked={autoCreateIncident}
+              onChange={(e) => setAutoCreateIncident(e.target.checked)}
+              className={CHECKBOX_CLASS}
+            />
+            <label htmlFor="auto-incident" className="cursor-pointer text-sm text-slate-200">
+              Open an incident when a monitor goes down
+            </label>
+          </div>
+
+          <div className="space-y-4">
             <div className="flex items-start gap-3">
               <input
                 type="checkbox"
-                id="auto-incident"
-                checked={autoCreateIncident}
-                onChange={(e) => setAutoCreateIncident(e.target.checked)}
-                className="mt-0.5 h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
+                id="anomaly-enabled"
+                checked={anomalyEnabled}
+                onChange={(e) => setAnomalyEnabled(e.target.checked)}
+                className={CHECKBOX_CLASS}
               />
-              <label htmlFor="auto-incident" className="text-sm text-slate-300 cursor-pointer">
-                Open an incident when a monitor goes down
+              <label htmlFor="anomaly-enabled" className="cursor-pointer text-sm text-slate-200">
+                Detect latency degradation
+                <span className="mt-0.5 block max-w-2xl text-xs text-slate-500">
+                  Alert when a monitor&apos;s response time rises well above its own baseline — before it goes hard down.
+                </span>
               </label>
             </div>
 
-            {/* Latency anomaly detection */}
-            <div className="space-y-3 border-t border-white/[0.06] pt-5">
-              <div className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  id="anomaly-enabled"
-                  checked={anomalyEnabled}
-                  onChange={(e) => setAnomalyEnabled(e.target.checked)}
-                  className="mt-0.5 h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
+            {anomalyEnabled && (
+              <div className="space-y-4 pl-7">
+                <SteppedSlider
+                  label="Sensitivity"
+                  options={SENSITIVITY_LEVELS}
+                  index={sensitivityIdx}
+                  onChange={setSensitivityIdx}
+                  hint={SENSITIVITY_LEVELS[sensitivityIdx].hint}
                 />
-                <label htmlFor="anomaly-enabled" className="text-sm text-slate-300 cursor-pointer">
-                  Detect latency degradation
-                  <span className="block text-xs text-slate-500">
-                    Alert when a monitor&apos;s response time rises well above its own baseline — before it goes hard down.
-                  </span>
-                </label>
-              </div>
-
-              {anomalyEnabled && (
-                <div className="space-y-4 pl-7 pt-1">
-                  <SteppedSlider
-                    label="Sensitivity"
-                    options={SENSITIVITY_LEVELS}
-                    index={sensitivityIdx}
-                    onChange={setSensitivityIdx}
-                    hint={SENSITIVITY_LEVELS[sensitivityIdx].hint}
-                  />
-                  <SteppedSlider
-                    label="Baseline window"
-                    options={BASELINE_LEVELS}
-                    index={baselineIdx}
-                    onChange={setBaselineIdx}
-                    hint="How much history to compare recent latency against."
-                  />
-                  <SteppedSlider
-                    label="Must stay slow for"
-                    options={SUSTAINED_LEVELS}
-                    index={sustainedIdx}
-                    onChange={setSustainedIdx}
-                    hint="Ignore brief spikes shorter than this."
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Dependency-aware alerting */}
-            <div className="space-y-3 border-t border-white/[0.06] pt-5">
-              <div className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  id="dependency-suppression"
-                  checked={dependencySuppression}
-                  onChange={(e) => setDependencySuppression(e.target.checked)}
-                  className="mt-0.5 h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
+                <SteppedSlider
+                  label="Baseline window"
+                  options={BASELINE_LEVELS}
+                  index={baselineIdx}
+                  onChange={setBaselineIdx}
+                  hint="How much history to compare recent latency against."
                 />
-                <label htmlFor="dependency-suppression" className="text-sm text-slate-300 cursor-pointer">
-                  Page root causes only
-                  <span className="block text-xs text-slate-500">
-                    When a monitor goes down because an upstream dependency is down, open its alert but send no
-                    notification — the root cause&apos;s notification lists everything it affects. Monitors can
-                    override this in their Alerting section.
-                  </span>
-                </label>
+                <SteppedSlider
+                  label="Must stay slow for"
+                  options={SUSTAINED_LEVELS}
+                  index={sustainedIdx}
+                  onChange={setSustainedIdx}
+                  hint="Ignore brief spikes shorter than this."
+                />
               </div>
-
-              {dependencySuppression && (
-                <div className="space-y-4 pl-7 pt-1">
-                  <SteppedSlider
-                    label="After the upstream recovers, hold for"
-                    options={DEPENDENCY_GRACE_LEVELS}
-                    index={dependencyGraceIdx}
-                    onChange={setDependencyGraceIdx}
-                    hint="A downstream still down after this pages as a normal outage."
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Save */}
-            <div className="flex justify-end">
-              <Button
-                variant="accent"
-                size="sm"
-                onClick={handleSave}
-                disabled={saving}
-                loading={saving}
-              >
-                {saving ? 'Saving…' : 'Save notifications'}
-              </Button>
-            </div>
+            )}
           </div>
-        )}
-      </Panel>
 
-    </>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                id="dependency-suppression"
+                checked={dependencySuppression}
+                onChange={(e) => setDependencySuppression(e.target.checked)}
+                className={CHECKBOX_CLASS}
+              />
+              <label htmlFor="dependency-suppression" className="cursor-pointer text-sm text-slate-200">
+                Page root causes only
+                <span className="mt-0.5 block max-w-2xl text-xs text-slate-500">
+                  When a monitor goes down because an upstream dependency is down, open its alert but send no
+                  notification — the root cause&apos;s notification lists everything it affects. Monitors can
+                  override this in their Alerting section.
+                </span>
+              </label>
+            </div>
+
+            {dependencySuppression && (
+              <div className="pl-7">
+                <SteppedSlider
+                  label="After the upstream recovers, hold for"
+                  options={DEPENDENCY_GRACE_LEVELS}
+                  index={dependencyGraceIdx}
+                  onChange={setDependencyGraceIdx}
+                  hint="A downstream still down after this pages as a normal outage."
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end">
+            <Button
+              variant="accent"
+              size="sm"
+              onClick={handleSave}
+              disabled={saving}
+              loading={saving}
+            >
+              {saving ? 'Saving…' : 'Save notifications'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Panel>
   );
 }

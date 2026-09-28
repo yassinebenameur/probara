@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CircleCheck, CircleDot, Palette } from 'lucide-react';
+import { CircleCheck, CircleDot } from 'lucide-react';
 import type {
   CreateStatusPageRequest,
   Monitor,
@@ -249,15 +249,10 @@ export default function StatusPageForm({
       : `${state.sections.length} section${state.sections.length === 1 ? '' : 's'} · ${derived.membershipCount} monitor${derived.membershipCount === 1 ? '' : 's'}`;
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} className="space-y-5">
-      <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/50">
-        <div className="flex items-center gap-2 border-b border-white/[0.06] bg-slate-950/40 px-4 py-2.5">
-          <Palette className="h-3.5 w-3.5 flex-shrink-0 text-cyan-400/80" strokeWidth={1.75} aria-hidden="true" />
-          <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-300">
-            Identity & branding
-          </h4>
-        </div>
-        <div className="grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
+    <form ref={formRef} onSubmit={handleSubmit} className="space-y-6">
+      <section className="glass p-6">
+        <h3 className="mb-5 text-[15px] font-semibold text-white">Identity & branding</h3>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
           <div className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField label="Title" required error={errors.title}>
@@ -279,7 +274,7 @@ export default function StatusPageForm({
                   className="input font-mono"
                   spellCheck={false}
                 />
-                <p className="mt-1 text-[11px] text-slate-600">
+                <p className="mt-1 text-xs text-slate-500">
                   {!statusPage && !slugTouchedRef.current
                     ? 'Generated from the title — edit to customize'
                     : 'Lowercase letters, numbers, and hyphens'}
@@ -305,12 +300,12 @@ export default function StatusPageForm({
                 placeholder="https://example.com/logo.png"
                 className="input"
               />
-              <p className="mt-1 text-[11px] text-slate-600">
+              <p className="mt-1 text-xs text-slate-500">
                 Square image works best; leave empty for a brand-colored mark
               </p>
             </FormField>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <ColorField
                 label="Primary color"
                 value={state.basics.primary_color}
@@ -323,20 +318,20 @@ export default function StatusPageForm({
               />
             </div>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/[0.07] bg-slate-950/30 px-3 py-2.5">
+            <label className="glass-well flex cursor-pointer items-start gap-3 p-4">
               <input
                 type="checkbox"
-                className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 accent-cyan-400"
+                className="mt-0.5 h-4 w-4 flex-shrink-0 accent-cyan-500"
                 checked={state.enablePushNotifications}
                 onChange={(event) =>
                   dispatch({ type: 'set_push_notifications', value: event.target.checked })
                 }
               />
               <span className="min-w-0">
-                <span className="block text-[12px] font-medium text-slate-200">
+                <span className="block text-sm font-medium text-white">
                   Browser notifications
                 </span>
-                <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-600">
+                <span className="mt-0.5 block text-xs leading-relaxed text-slate-400">
                   Let visitors opt in to a browser notification when a component here goes
                   down, and when it recovers. Requires a VAPID keypair on the status-page
                   service; without one the control is not shown.
@@ -364,7 +359,7 @@ export default function StatusPageForm({
         onAddSection={handleAddSection}
       />
 
-      <div className="sticky bottom-4 z-20 flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.08] bg-slate-900/95 px-4 py-3 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur">
+      <div className="glass-overlay sticky bottom-4 z-20 flex flex-wrap items-center gap-3 !rounded-2xl px-4 py-3">
         <div className="mr-auto flex min-w-0 items-center gap-2 text-xs">
           {isDirty ? (
             <span className="flex items-center gap-1.5 text-amber-300">
@@ -372,7 +367,7 @@ export default function StatusPageForm({
               Unsaved changes
             </span>
           ) : statusPage ? (
-            <span className="flex items-center gap-1.5 text-emerald-400/80">
+            <span className="flex items-center gap-1.5 text-emerald-300">
               <CircleCheck className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
               All changes saved
             </span>
@@ -382,21 +377,23 @@ export default function StatusPageForm({
             {summary}
           </span>
         </div>
-        {onCancel && (
-          <Button variant="ghost" size="sm" type="button" onClick={onCancel} disabled={loading}>
-            Cancel
+        <div className="ml-auto flex items-center gap-2">
+          {onCancel && (
+            <Button variant="ghost" size="sm" type="button" onClick={onCancel} disabled={loading}>
+              Cancel
+            </Button>
+          )}
+          <Button
+            variant="accent"
+            size="sm"
+            type="submit"
+            loading={loading}
+            disabled={loading || (!!statusPage && !isDirty)}
+            title="⌘S"
+          >
+            {statusPage ? 'Save changes' : 'Create status page'}
           </Button>
-        )}
-        <Button
-          variant="accent"
-          size="sm"
-          type="submit"
-          loading={loading}
-          disabled={loading || (!!statusPage && !isDirty)}
-          title="⌘S"
-        >
-          {statusPage ? 'Save changes' : 'Create status page'}
-        </Button>
+        </div>
       </div>
     </form>
   );
@@ -412,9 +409,9 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
   const safeValue = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) ? value : '#000000';
   return (
     <FormField label={label}>
-      <div className="flex items-center gap-2 rounded-md border border-white/[0.06] bg-slate-900/60 p-1 pl-1.5 transition-colors focus-within:border-cyan-500/40 focus-within:shadow-[0_0_0_3px_rgba(255,90,36,0.12)]">
+      <div className="flex items-center gap-2.5 rounded-lg border border-edge-control bg-control p-[5px] pr-3 transition-colors hover:border-[var(--control-edge-strong)] focus-within:border-cyan-500 focus-within:bg-control-hover focus-within:shadow-[0_0_0_3px_rgba(var(--accent-rgb),0.16)]">
         <label
-          className="relative h-7 w-7 flex-shrink-0 cursor-pointer overflow-hidden rounded border border-white/[0.06]"
+          className="relative h-7 w-7 flex-shrink-0 cursor-pointer overflow-hidden rounded-md border border-edge-control"
           style={{ backgroundColor: safeValue }}
           aria-label={`${label} picker`}
           title={`Pick ${label.toLowerCase()}`}
@@ -431,7 +428,7 @@ function ColorField({ label, value, onChange }: ColorFieldProps) {
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="w-full bg-transparent font-mono text-xs uppercase tracking-wider text-slate-200 placeholder:text-slate-600 focus:outline-none"
+          className="w-full bg-transparent font-mono text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none"
           placeholder="#ff5a24"
           spellCheck={false}
         />

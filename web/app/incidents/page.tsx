@@ -9,6 +9,7 @@ import IncidentList from '@/components/incidents/IncidentList';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 
 export default function IncidentsPage() {
   const [incidents, setIncidents] = useState<IncidentListItem[]>([]);
@@ -70,38 +71,29 @@ export default function IncidentsPage() {
         }
       />
 
-      {usersLoading ? (
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 px-4 py-3 text-sm text-slate-500">
-          Loading users for incident ownership...
-        </div>
-      ) : usersError ? (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          <span>{usersError}</span>
-          <Button variant="ghost" size="xs" onClick={loadUsers}>
-            Retry
-          </Button>
-        </div>
+      {usersLoading ? null : usersError ? (
+        <Callout
+          tone="danger"
+          action={<Button variant="subtle" size="xs" onClick={loadUsers}>Retry</Button>}
+        >
+          {usersError}
+        </Callout>
       ) : users.length === 0 ? (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-          No users are available to assign as incident owners.
-        </div>
+        <Callout tone="warning">No users are available to assign as incident owners.</Callout>
       ) : null}
 
       {loading ? (
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6 text-sm text-slate-500">
-          Loading incidents...
-        </div>
+        <div className="glass p-8 text-center text-sm text-slate-500">Loading incidents…</div>
       ) : error ? (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          <span>{error}</span>
-          <Button variant="ghost" size="xs" onClick={loadIncidents}>
-            Retry
-          </Button>
-        </div>
+        <Callout
+          tone="danger"
+          action={<Button variant="subtle" size="xs" onClick={loadIncidents}>Retry</Button>}
+        >
+          {error}
+        </Callout>
       ) : (
         <IncidentList incidents={incidents} />
       )}
-
     </div>
   );
 }

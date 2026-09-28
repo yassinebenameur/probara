@@ -1,13 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Info } from 'lucide-react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
+import Switch from '@/components/ui/Switch';
 
 interface SipFormProps {
   monitor?: Monitor;
@@ -138,7 +138,7 @@ export default function SipForm({
           />
         </FormField>
 
-        <FormField label="Host" required error={errors.host} description="Hostname or IP">
+        <FormField label="Host" required error={errors.host}>
           <input
             type="text"
             value={formData.host}
@@ -146,10 +146,11 @@ export default function SipForm({
             placeholder="sip.example.com"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Hostname or IP</p>
         </FormField>
 
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Port" required error={errors.port} description="Default: 5060">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Port" required error={errors.port}>
             <input
               type="number"
               value={formData.port}
@@ -158,8 +159,9 @@ export default function SipForm({
               max={65535}
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Default: 5060</p>
           </FormField>
-          <FormField label="Transport" description="SIP transport protocol">
+          <FormField label="Transport">
             <select
               value={formData.transport}
               onChange={(e) => {
@@ -181,32 +183,21 @@ export default function SipForm({
               <option value="tcp">TCP</option>
               <option value="tls">TLS</option>
             </select>
+            <p className="mt-1 text-xs text-slate-500">SIP transport protocol</p>
           </FormField>
         </div>
 
         {formData.transport === 'tls' && (
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-white">Skip certificate verification</p>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-200">Skip certificate verification</p>
               <p className="text-xs text-slate-500">For lab servers with self-signed certificates</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })}
-              className={`relative h-5 w-9 rounded-full transition-colors ${
-                formData.tls_skip_verify ? 'bg-cyan-500' : 'bg-slate-700'
-              }`}
-              aria-pressed={formData.tls_skip_verify}
-              aria-label="Toggle certificate verification skip"
-            >
-              <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                formData.tls_skip_verify ? 'translate-x-4' : ''
-              }`} />
-            </button>
+            <Switch checked={formData.tls_skip_verify} onChange={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })} label="Toggle certificate verification skip" />
           </div>
         )}
 
-        <FormField label="Expected status code" description="Default: 200 OK">
+        <FormField label="Expected status code">
           <input
             type="number"
             value={formData.expected_status}
@@ -216,11 +207,12 @@ export default function SipForm({
             max={699}
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Default: 200 OK</p>
         </FormField>
       </FormSection>
 
       <FormSection title="Check">
-        <FormField label="Method" description="What the probe proves">
+        <FormField label="Method">
           <select
             value={formData.method}
             onChange={(e) => setFormData({ ...formData, method: e.target.value as 'options' | 'register' })}
@@ -229,13 +221,15 @@ export default function SipForm({
             <option value="options">OPTIONS — server availability ping</option>
             <option value="register">REGISTER — registrar + authentication probe</option>
           </select>
+          <p className="mt-1 text-xs text-slate-500">
+            {formData.method === 'register'
+              ? 'Sends a query-style REGISTER (no Contact) that exercises the registrar and its digest authentication without creating or removing any bindings.'
+              : 'Sends a SIP OPTIONS request to test server availability without initiating a call. Answers digest challenges when credentials are configured.'}
+          </p>
         </FormField>
 
         {formData.method === 'register' && (
-          <FormField
-            label="SIP domain"
-            description="Domain of the address-of-record. Defaults to the host."
-          >
+          <FormField label="SIP domain">
             <input
               type="text"
               value={formData.domain}
@@ -243,14 +237,14 @@ export default function SipForm({
               placeholder="example.com"
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Domain of the address-of-record. Defaults to the host.</p>
           </FormField>
         )}
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField
             label="Username"
             error={errors.username}
-            description="Digest auth user (optional)"
           >
             <input
               type="text"
@@ -260,11 +254,9 @@ export default function SipForm({
               autoComplete="off"
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Digest auth user (optional)</p>
           </FormField>
-          <FormField
-            label="Password"
-            description={isEditMode ? 'Leave *** to keep the stored password' : 'Stored encrypted'}
-          >
+          <FormField label="Password">
             <input
               type="password"
               value={formData.password}
@@ -272,13 +264,14 @@ export default function SipForm({
               autoComplete="new-password"
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">{isEditMode ? 'Leave *** to keep the stored password' : 'Stored encrypted'}</p>
           </FormField>
         </div>
       </FormSection>
 
       <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Interval (seconds)" description="How often to check">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Interval (seconds)">
             <input
               type="number"
               value={formData.interval_seconds}
@@ -291,7 +284,6 @@ export default function SipForm({
           <FormField
             label="Timeout (seconds)"
             error={errors.timeout_seconds}
-            description="Must be less than interval"
           >
             <input
               type="number"
@@ -300,6 +292,7 @@ export default function SipForm({
               min={1}
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
           </FormField>
         </div>
       </FormSection>
@@ -335,7 +328,7 @@ export default function SipForm({
       </FormSection>
 
       <FormSection title="Meta">
-        <FormField label="Tags" description="Comma-separated, e.g. production, voip, critical">
+        <FormField label="Tags">
           <input
             type="text"
             value={formData.tags}
@@ -343,46 +336,19 @@ export default function SipForm({
             placeholder="production, voip, critical"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
         </FormField>
 
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Monitor enabled</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
             <p className="text-xs text-slate-500">
               Run SIP {formData.method === 'register' ? 'REGISTER' : 'OPTIONS'} checks on schedule
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle monitor enabled"
-          >
-            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              formData.enabled ? 'translate-x-4' : ''
-            }`} />
-          </button>
+          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
         </div>
       </FormSection>
-
-      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
-        <div className="flex items-start gap-3">
-          <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300" strokeWidth={1.75} />
-          <div>
-            <p className="mb-1 text-xs font-medium text-white">
-              {formData.method === 'register' ? 'SIP REGISTER probe' : 'SIP OPTIONS request'}
-            </p>
-            <p className="text-xs text-slate-400">
-              {formData.method === 'register'
-                ? 'Sends a query-style REGISTER (no Contact) that exercises the registrar and its digest authentication without creating or removing any bindings.'
-                : 'Sends a SIP OPTIONS request to test server availability without initiating a call. Answers digest challenges when credentials are configured.'}
-            </p>
-          </div>
-        </div>
-      </div>
 
       <FormActions
         middle={

@@ -18,10 +18,10 @@ export default function FilterChip({
   ...props
 }: FilterChipProps) {
   const base =
-    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed';
+    'inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-xs font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 disabled:opacity-40 disabled:cursor-not-allowed';
   const palette = selected
-    ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200'
-    : 'border-white/10 bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] hover:text-white';
+    ? 'border-cyan-500/40 bg-cyan-500/[0.14] text-cyan-300'
+    : 'border-edge-control bg-control text-slate-400 hover:bg-control-hover hover:text-white';
   return (
     <button
       type="button"
@@ -33,8 +33,8 @@ export default function FilterChip({
       <span>{children}</span>
       {typeof count === 'number' && (
         <span
-          className={`ml-0.5 rounded-full px-1.5 py-px text-[0.6rem] ${
-            selected ? 'bg-cyan-500/25 text-cyan-100' : 'bg-white/[0.06] text-slate-400'
+          className={`ml-0.5 rounded-full px-1.5 text-[11px] leading-4 tabular-nums ${
+            selected ? 'bg-cyan-500/20 text-cyan-200' : 'bg-well-hover text-slate-400'
           }`}
         >
           {count}

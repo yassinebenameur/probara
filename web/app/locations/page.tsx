@@ -5,7 +5,8 @@ import { MapPin, Plus, RefreshCw, Rocket, Pencil, Trash2 } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
-import Pill from '@/components/ui/Pill';
+import Input from '@/components/ui/Input';
+import Callout from '@/components/ui/Callout';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -18,25 +19,17 @@ import { Location } from '@/lib/types';
 import { createLocation, deleteLocation, getLocations, updateLocation } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/monitor-utils';
 
-function connectionPill(location: Location) {
-  if (location.connected) {
-    return (
-      <Pill tone="success" size="xs" dot>
-        Connected
-      </Pill>
-    );
-  }
-  if (!location.last_seen_at) {
-    return (
-      <Pill tone="neutral" size="xs">
-        Never connected
-      </Pill>
-    );
-  }
+function connectionStatus(location: Location) {
+  const [dot, label] = location.connected
+    ? ['bg-emerald-500', 'Connected']
+    : !location.last_seen_at
+      ? ['bg-slate-500', 'Never connected']
+      : ['bg-rose-500', 'Disconnected'];
   return (
-    <Pill tone="danger" size="xs" dot>
-      Disconnected
-    </Pill>
+    <span className="inline-flex items-center gap-2 whitespace-nowrap text-[13px] text-slate-300">
+      <span className={`h-2 w-2 rounded-full ${dot}`} aria-hidden="true" />
+      {label}
+    </span>
   );
 }
 
@@ -85,7 +78,6 @@ export default function LocationsPage() {
     // Refresh connected status while the page is open.
     const interval = setInterval(() => loadLocations(false), 30_000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCreate = async (event: React.FormEvent) => {
@@ -181,7 +173,7 @@ export default function LocationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Private locations"
-        subtitle={tab === 'locations' ? 'Run checks from your own networks via remote workers' : undefined}
+        subtitle="Run checks from your own networks via remote workers"
         action={tab === 'locations' ? (
           <>
             <Button
@@ -212,41 +204,34 @@ export default function LocationsPage() {
         <Panel title="New location" subtitle="Name the network or site this location represents.">
           <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <div className="flex-1">
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">Name</label>
-              <input
+              <Input
+                label="Name"
                 type="text"
                 value={newName}
                 onChange={(event) => setNewName(event.target.value)}
                 placeholder="e.g. Paris VPC"
-                className="input"
                 autoFocus
               />
             </div>
             <div className="flex-1">
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">
-                Description (optional)
-              </label>
-              <input
+              <Input
+                label="Description (optional)"
                 type="text"
                 value={newDescription}
                 onChange={(event) => setNewDescription(event.target.value)}
                 placeholder="e.g. Production VPC in eu-west-3"
-                className="input"
               />
             </div>
-            <div className="flex-1">
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">
-                Mesh endpoint (optional)
-              </label>
-              <input
+            <div className="flex-1 lg:flex-[1.3]">
+              <Input
+                label="Mesh endpoint (optional)"
                 type="text"
                 value={newMeshEndpoint}
                 onChange={(event) => setNewMeshEndpoint(event.target.value)}
                 placeholder="host:port reachable from your other locations"
-                className="input"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 lg:h-10">
               <Button type="submit" variant="accent" size="sm" disabled={creating} loading={creating}>
                 {creating ? 'Creating…' : 'Create'}
               </Button>
@@ -264,14 +249,16 @@ export default function LocationsPage() {
         </Panel>
       )}
 
-      {tab === 'locations' && <Panel>
-        {loading ? (
-          <div className="text-sm text-slate-500">Loading locations…</div>
+      {tab === 'locations' && (
+        loading ? (
+          <div className="glass p-5 text-sm text-slate-500">Loading locations…</div>
         ) : error ? (
-          <div className="space-y-3">
-            <p className="text-sm text-rose-400">{error}</p>
-            <Button variant="ghost" size="sm" onClick={() => loadLocations()}>Retry</Button>
-          </div>
+          <Callout
+            tone="danger"
+            action={<Button variant="ghost" size="xs" onClick={() => loadLocations()}>Retry</Button>}
+          >
+            {error}
+          </Callout>
         ) : locations.length === 0 ? (
           <EmptyState
             icon={<MapPin strokeWidth={1.5} />}
@@ -280,122 +267,126 @@ export default function LocationsPage() {
             action={addAction}
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-white/[0.06]">
-              <thead>
-                <tr className="text-left text-xs text-slate-500">
-                  <th className="px-3 py-2">Name</th>
-                  <th className="px-3 py-2">Slug</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Mesh</th>
-                  <th className="px-3 py-2">Monitors</th>
-                  <th className="px-3 py-2">Last seen</th>
-                  <th className="px-3 py-2"><span className="sr-only">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04] text-sm text-slate-200">
-                {locations.map((location) => (
-                  <tr key={location.id}>
-                    <td className="px-3 py-3">
-                      {canManageLocations && renamingId === location.id ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <input
-                            type="text"
-                            value={renameValue}
-                            onChange={(event) => setRenameValue(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault();
-                                handleRename();
-                              }
-                              if (event.key === 'Escape') setRenamingId(null);
-                            }}
-                            className="input max-w-[14rem]"
-                            autoFocus
-                          />
-                          <input
-                            type="text"
-                            value={renameMeshValue}
-                            onChange={(event) => setRenameMeshValue(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault();
-                                handleRename();
-                              }
-                              if (event.key === 'Escape') setRenamingId(null);
-                            }}
-                            placeholder="Mesh endpoint host:port (empty = off)"
-                            className="input max-w-[16rem]"
-                          />
-                          <Button
-                            variant="accent"
-                            size="xs"
-                            onClick={handleRename}
-                            disabled={savingRename}
-                            loading={savingRename}
-                          >
-                            Save
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() => setRenamingId(null)}
-                            disabled={savingRename}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      ) : (
-                        <div>
-                          <p className="font-medium text-white">{location.name}</p>
-                          {location.description && (
-                            <p className="text-xs text-slate-500">{location.description}</p>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 font-mono text-xs text-slate-400">{location.slug}</td>
-                    <td className="px-3 py-3">{connectionPill(location)}</td>
-                    <td className="px-3 py-3">
-                      {location.mesh_endpoint ? (
-                        <span className="font-mono text-xs text-slate-400">{location.mesh_endpoint}</span>
-                      ) : (
-                        <span className="text-xs text-slate-500">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-xs text-slate-400 tabular-nums">
-                      {location.monitor_count}
-                    </td>
-                    <td className="px-3 py-3 text-xs text-slate-400">
-                      {location.last_seen_at ? formatTimeAgo(location.last_seen_at) : '—'}
-                    </td>
-                    <td className="px-3 py-3">
-                      {canManageLocations && <div className="flex items-center justify-end gap-0.5">
-                        <IconButton
-                          icon={<Rocket strokeWidth={1.75} />}
-                          label="Deploy a worker"
-                          onClick={() => setDeployLocation(location)}
-                        />
-                        <IconButton
-                          icon={<Pencil strokeWidth={1.75} />}
-                          label="Edit name and mesh endpoint"
-                          onClick={() => startRename(location)}
-                        />
-                        <IconButton
-                          icon={<Trash2 strokeWidth={1.75} />}
-                          label="Delete"
-                          onClick={() => setPendingDelete(location)}
-                          danger
-                        />
-                      </div>}
-                    </td>
+          <div className="glass overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Slug</th>
+                    <th>Status</th>
+                    <th>Mesh</th>
+                    <th>Monitors</th>
+                    <th>Last seen</th>
+                    <th><span className="sr-only">Actions</span></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="text-sm text-slate-200">
+                  {locations.map((location) => (
+                    <tr key={location.id}>
+                      <td>
+                        {canManageLocations && renamingId === location.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={renameValue}
+                              onChange={(event) => setRenameValue(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  handleRename();
+                                }
+                                if (event.key === 'Escape') setRenamingId(null);
+                              }}
+                              className="input input-sm h-8 w-28 !py-0"
+                              autoFocus
+                            />
+                            <input
+                              type="text"
+                              value={renameMeshValue}
+                              onChange={(event) => setRenameMeshValue(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  handleRename();
+                                }
+                                if (event.key === 'Escape') setRenamingId(null);
+                              }}
+                              placeholder="Mesh endpoint host:port (empty = off)"
+                              className="input input-sm h-8 w-40 !py-0"
+                            />
+                            <Button
+                              variant="accent"
+                              size="xs"
+                              className="!h-8"
+                              onClick={handleRename}
+                              disabled={savingRename}
+                              loading={savingRename}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="!h-8"
+                              onClick={() => setRenamingId(null)}
+                              disabled={savingRename}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : (
+                          <div>
+                            <p className="whitespace-nowrap font-medium text-white">{location.name}</p>
+                            {location.description && (
+                              <p className="mt-0.5 text-xs text-slate-500">{location.description}</p>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap font-mono text-xs text-slate-400">{location.slug}</td>
+                      <td>{connectionStatus(location)}</td>
+                      <td>
+                        {location.mesh_endpoint ? (
+                          <span className="whitespace-nowrap font-mono text-xs text-slate-400">{location.mesh_endpoint}</span>
+                        ) : (
+                          <span className="text-xs text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="text-[13px] tabular-nums text-slate-300">
+                        {location.monitor_count}
+                      </td>
+                      <td className="whitespace-nowrap text-[13px] text-slate-400">
+                        {location.last_seen_at ? formatTimeAgo(location.last_seen_at) : '—'}
+                      </td>
+                      <td className="!py-2">
+                        {canManageLocations && <div className="flex items-center justify-end gap-0.5">
+                          <IconButton
+                            icon={<Rocket strokeWidth={1.75} />}
+                            label="Deploy a worker"
+                            onClick={() => setDeployLocation(location)}
+                          />
+                          <IconButton
+                            icon={<Pencil strokeWidth={1.75} />}
+                            label="Edit name and mesh endpoint"
+                            onClick={() => startRename(location)}
+                          />
+                          <IconButton
+                            icon={<Trash2 strokeWidth={1.75} />}
+                            label="Delete"
+                            onClick={() => setPendingDelete(location)}
+                            danger
+                          />
+                        </div>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        )}
-      </Panel>}
+        )
+      )}
 
       <ConfirmDialog
         open={canManageLocations && pendingDelete !== null}

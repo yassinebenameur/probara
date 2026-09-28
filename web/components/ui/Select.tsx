@@ -16,18 +16,18 @@ export default function Select({
   return (
     <div>
       {label && (
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">
+        <label className="mb-1.5 block text-[13px] font-medium text-slate-300">
           {label}
         </label>
       )}
       <select
-        className={`input ${error ? 'border-rose-500/60 focus:border-rose-500/60' : ''} ${className}`}
+        className={`input ${error ? '!border-rose-500/60 focus:!border-rose-500' : ''} ${className}`}
         {...props}
       >
         {children}
       </select>
       {error && (
-        <p className="mt-1 text-xs text-rose-400">{error}</p>
+        <p className="mt-1 text-xs text-rose-300">{error}</p>
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import { getAlerts } from '@/lib/api';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import AlertTable from '@/components/alerts/AlertTable';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import FilterChip from '@/components/ui/FilterChip';
 import PageHeader from '@/components/ui/PageHeader';
 
@@ -101,26 +102,25 @@ export default function AlertsPage() {
   };
 
   const statusOptions: { value: AlertStatus | 'all'; label: string }[] = [
-    { value: 'all', label: 'All Statuses' },
+    { value: 'all', label: 'All statuses' },
     { value: 'active', label: 'Active' },
     { value: 'acknowledged', label: 'Acknowledged' },
     { value: 'resolved', label: 'Resolved' },
   ];
 
   const timeOptions: { value: TimeFilter; label: string }[] = [
-    { value: '1h', label: 'Last Hour' },
-    { value: '24h', label: 'Last 24 Hours' },
-    { value: '7d', label: 'Last 7 Days' },
-    { value: '30d', label: 'Last 30 Days' },
-    { value: 'all', label: 'All Time' },
+    { value: '1h', label: 'Last hour' },
+    { value: '24h', label: 'Last 24 hours' },
+    { value: '7d', label: 'Last 7 days' },
+    { value: '30d', label: 'Last 30 days' },
+    { value: 'all', label: 'All time' },
   ];
 
   const activeCount = alerts.filter(a => a.status === 'active').length;
   const acknowledgedCount = alerts.filter(a => a.status === 'acknowledged').length;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Header */}
+    <div className="space-y-6">
       <PageHeader
         title="Alerts"
         subtitle={
@@ -135,57 +135,47 @@ export default function AlertsPage() {
         }
       />
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">Status:</span>
-          <div className="flex flex-wrap gap-1.5">
-            {statusOptions.map(opt => (
-              <FilterChip
-                key={opt.value}
-                selected={statusFilter === opt.value}
-                onClick={() => { setStatusFilter(opt.value); setPage(1); }}
-              >
-                {opt.label}
-              </FilterChip>
-            ))}
-          </div>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex flex-wrap gap-1.5">
+          {statusOptions.map(opt => (
+            <FilterChip
+              key={opt.value}
+              selected={statusFilter === opt.value}
+              onClick={() => { setStatusFilter(opt.value); setPage(1); }}
+            >
+              {opt.label}
+            </FilterChip>
+          ))}
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">Time:</span>
-          <div className="flex flex-wrap gap-1.5">
-            {timeOptions.map(opt => (
-              <FilterChip
-                key={opt.value}
-                selected={timeFilter === opt.value}
-                onClick={() => { setTimeFilter(opt.value); setPage(1); }}
-              >
-                {opt.label}
-              </FilterChip>
-            ))}
-          </div>
+        <div className="flex flex-wrap gap-1.5">
+          {timeOptions.map(opt => (
+            <FilterChip
+              key={opt.value}
+              selected={timeFilter === opt.value}
+              onClick={() => { setTimeFilter(opt.value); setPage(1); }}
+            >
+              {opt.label}
+            </FilterChip>
+          ))}
         </div>
       </div>
 
-      {/* Error */}
       {error && (
-        <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+        <Callout
+          tone="danger"
+          action={<Button variant="subtle" size="xs" onClick={loadAlerts}>Retry</Button>}
+        >
           {error}
-          <button onClick={loadAlerts} className="ml-2 underline hover:no-underline">
-            Retry
-          </button>
-        </div>
+        </Callout>
       )}
 
-      {/* Alerts Table */}
       <AlertTable
         alerts={alerts}
         onAlertUpdate={handleAlertTableUpdate}
         loading={loading}
       />
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
           <Button
@@ -196,7 +186,7 @@ export default function AlertsPage() {
           >
             Previous
           </Button>
-          <span className="text-sm text-slate-500">
+          <span className="text-[13px] tabular-nums text-slate-400">
             Page {page} of {totalPages}
           </span>
           <Button

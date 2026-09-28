@@ -9,20 +9,20 @@ export default function Input({ label, error, className = '', ...props }: InputP
   return (
     <div>
       {label && (
-        <label className="mb-1.5 block text-xs font-medium text-slate-400">
+        <label className="mb-1.5 block text-[13px] font-medium text-slate-300">
           {label}
         </label>
       )}
       <input
         className={`input ${
           error
-            ? 'border-rose-500/50 bg-rose-500/5 focus:border-rose-500/70 focus:ring-1 focus:ring-rose-500/20'
+            ? '!border-rose-500/60 focus:!border-rose-500 focus:!shadow-[0_0_0_3px_rgba(240,74,90,0.16)]'
             : ''
         } ${className}`}
         {...props}
       />
       {error && (
-        <p className="mt-1 text-xs text-rose-400">{error}</p>
+        <p className="mt-1 text-xs text-rose-300">{error}</p>
       )}
     </div>
   );

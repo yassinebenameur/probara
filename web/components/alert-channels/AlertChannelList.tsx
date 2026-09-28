@@ -6,6 +6,7 @@ import { LayoutGrid, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { AlertChannel } from '@/lib/types';
 import { deleteAlertChannel, getAlertChannels, testAlertChannel } from '@/lib/api';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import EmptyState from '@/components/ui/EmptyState';
@@ -63,85 +64,98 @@ export default function AlertChannelList() {
     }
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-slate-500">Where alert notifications are delivered.</p>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" icon={<LayoutGrid strokeWidth={1.75} />} asChild>
-            <Link href="/alert-channels/catalog">Browse catalog</Link>
-          </Button>
-          <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-            <Link href="/alert-channels/new">New channel</Link>
-          </Button>
-        </div>
-      </div>
+  const actions = (
+    <div className="flex items-center gap-2">
+      <Button variant="ghost" size="sm" icon={<LayoutGrid strokeWidth={1.75} />} asChild>
+        <Link href="/alert-channels/catalog">Browse catalog</Link>
+      </Button>
+      <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+        <Link href="/alert-channels/new">New channel</Link>
+      </Button>
+    </div>
+  );
 
-      {loading ? (
-        <div className="text-sm text-slate-500">Loading alert channels…</div>
-      ) : error ? (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          <span>{error}</span>
-          <Button variant="ghost" size="xs" onClick={loadChannels}>Retry</Button>
-        </div>
-      ) : channels.length === 0 ? (
+  return (
+    <div>
+      {!loading && !error && channels.length === 0 ? (
         <EmptyState
           icon={<Send strokeWidth={1.5} />}
           title="No alert channels yet"
           description="Add a channel so alerts reach your team."
+          action={actions}
         />
       ) : (
-        <div className="table-card">
-          <table className="data-table text-xs">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th><span className="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {channels.map((channel, idx) => (
-                <tr key={channel.id} className={idx % 2 === 1 ? 'bg-slate-900/[0.35]' : ''}>
-                  <td>
-                    <Link
-                      href={`/alert-channels/${channel.id}`}
-                      className="text-sm font-medium text-white hover:text-cyan-400"
-                    >
-                      {channel.name}
-                    </Link>
-                  </td>
-                  <td className="text-slate-400">{channel.type}</td>
-                  <td>
-                    <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
-                      {channel.is_active ? 'Active' : 'Inactive'}
-                    </Pill>
-                  </td>
-                  <td className="text-right">
-                    <div className="inline-flex items-center gap-0.5">
-                      <IconButton
-                        icon={<Send strokeWidth={1.75} />}
-                        label="Send a test notification"
-                        onClick={() => handleTest(channel.id)}
-                      />
-                      <IconButton
-                        icon={<Pencil strokeWidth={1.75} />}
-                        label="Edit"
-                        href={`/alert-channels/${channel.id}`}
-                      />
-                      <IconButton
-                        icon={<Trash2 strokeWidth={1.75} />}
-                        label="Delete"
-                        onClick={() => setPendingDelete(channel)}
-                        danger
-                      />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="glass overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+            <p className="text-[13px] text-slate-400">Where alert notifications are delivered.</p>
+            {actions}
+          </div>
+
+          {loading ? (
+            <p className="px-4 pb-4 text-sm text-slate-500">Loading alert channels…</p>
+          ) : error ? (
+            <div className="px-4 pb-4">
+              <Callout
+                tone="danger"
+                action={<Button variant="ghost" size="xs" onClick={loadChannels}>Retry</Button>}
+              >
+                {error}
+              </Callout>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="data-table text-sm">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th><span className="sr-only">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {channels.map((channel) => (
+                    <tr key={channel.id}>
+                      <td>
+                        <Link
+                          href={`/alert-channels/${channel.id}`}
+                          className="font-medium text-white transition-colors hover:text-cyan-300"
+                        >
+                          {channel.name}
+                        </Link>
+                      </td>
+                      <td className="text-[13px] text-slate-400">{channel.type}</td>
+                      <td>
+                        <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
+                          {channel.is_active ? 'Active' : 'Inactive'}
+                        </Pill>
+                      </td>
+                      <td className="text-right">
+                        <div className="inline-flex items-center gap-0.5">
+                          <IconButton
+                            icon={<Send strokeWidth={1.75} />}
+                            label="Send a test notification"
+                            onClick={() => handleTest(channel.id)}
+                          />
+                          <IconButton
+                            icon={<Pencil strokeWidth={1.75} />}
+                            label="Edit"
+                            href={`/alert-channels/${channel.id}`}
+                          />
+                          <IconButton
+                            icon={<Trash2 strokeWidth={1.75} />}
+                            label="Delete"
+                            onClick={() => setPendingDelete(channel)}
+                            danger
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

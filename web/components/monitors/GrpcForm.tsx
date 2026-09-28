@@ -15,6 +15,7 @@ import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
+import Switch from '@/components/ui/Switch';
 
 interface GrpcFormProps {
   monitor?: Monitor;
@@ -128,18 +129,21 @@ export default function GrpcForm({
           />
         </FormField>
 
-        <FormField label="Host" required error={errors.host} description="gRPC server hostname or IP">
-          <input
-            type="text"
-            value={formData.host}
-            onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-            placeholder="grpc.example.com"
-            className="input"
-          />
-        </FormField>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="sm:col-span-2">
+            <FormField label="Host" required error={errors.host}>
+              <input
+                type="text"
+                value={formData.host}
+                onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                placeholder="grpc.example.com"
+                className="input"
+              />
+              <p className="mt-1 text-xs text-slate-500">gRPC server hostname or IP</p>
+            </FormField>
+          </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Port" required error={errors.port} description={`Default: ${formData.use_tls ? 443 : 80}`}>
+          <FormField label="Port" required error={errors.port}>
             <input
               type="number"
               value={formData.port}
@@ -148,42 +152,25 @@ export default function GrpcForm({
               max={65535}
               className="input"
             />
-          </FormField>
-
-          <FormField label="TLS" description="Use TLS for gRPC connection">
-            <div className="flex h-10 items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-3">
-              <span className={`text-sm ${formData.use_tls ? 'text-cyan-300' : 'text-slate-400'}`}>
-                {formData.use_tls ? 'Enabled' : 'Disabled'}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  const nextUseTLS = !formData.use_tls;
-                  let nextPort = formData.port;
-                  if (formData.port === 443 && !nextUseTLS) nextPort = 80;
-                  if (formData.port === 80 && nextUseTLS) nextPort = 443;
-                  setFormData({ ...formData, use_tls: nextUseTLS, port: nextPort });
-                }}
-                className={`relative h-5 w-9 rounded-full transition-colors ${
-                  formData.use_tls ? 'bg-cyan-500' : 'bg-slate-700'
-                }`}
-                aria-pressed={formData.use_tls}
-                aria-label="Toggle TLS"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                    formData.use_tls ? 'translate-x-4' : ''
-                  }`}
-                />
-              </button>
-            </div>
+            <p className="mt-1 text-xs text-slate-500">Default: {formData.use_tls ? 443 : 80}</p>
           </FormField>
         </div>
 
-        <FormField
-          label="Service"
-          description="Optional. Passed to grpc.health.v1.Health/Check"
-        >
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">TLS</p>
+            <p className="text-xs text-slate-500">Use TLS for gRPC connection</p>
+          </div>
+          <Switch checked={formData.use_tls} onChange={() => {
+              const nextUseTLS = !formData.use_tls;
+              let nextPort = formData.port;
+              if (formData.port === 443 && !nextUseTLS) nextPort = 80;
+              if (formData.port === 80 && nextUseTLS) nextPort = 443;
+              setFormData({ ...formData, use_tls: nextUseTLS, port: nextPort });
+            }} label="Toggle TLS" />
+        </div>
+
+        <FormField label="Service">
           <input
             type="text"
             value={formData.service}
@@ -191,12 +178,13 @@ export default function GrpcForm({
             placeholder="my.package.Service"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Optional. Passed to grpc.health.v1.Health/Check</p>
         </FormField>
       </FormSection>
 
       <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Interval (seconds)" description="How often to check">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Interval (seconds)">
             <input
               type="number"
               value={formData.interval_seconds}
@@ -210,7 +198,6 @@ export default function GrpcForm({
           <FormField
             label="Timeout (seconds)"
             error={errors.timeout_seconds}
-            description="Must be less than interval"
           >
             <input
               type="number"
@@ -219,6 +206,7 @@ export default function GrpcForm({
               min={1}
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
           </FormField>
         </div>
       </FormSection>
@@ -254,7 +242,7 @@ export default function GrpcForm({
       </FormSection>
 
       <FormSection title="Meta">
-        <FormField label="Tags" description="Comma-separated, e.g. production, grpc, critical">
+        <FormField label="Tags">
           <input
             type="text"
             value={formData.tags}
@@ -262,28 +250,15 @@ export default function GrpcForm({
             placeholder="production, grpc, critical"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
         </FormField>
 
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Monitor enabled</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
             <p className="text-xs text-slate-500">Run gRPC health checks on schedule</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle monitor enabled"
-          >
-            <span
-              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                formData.enabled ? 'translate-x-4' : ''
-              }`}
-            />
-          </button>
+          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
         </div>
       </FormSection>
 
@@ -295,7 +270,7 @@ export default function GrpcForm({
         }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Update monitor' : 'Create monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',

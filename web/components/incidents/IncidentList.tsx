@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { Siren } from 'lucide-react';
 
 import type { IncidentListItem } from '@/lib/types';
 import { formatDateTime, pluralize } from '@/lib/format';
@@ -11,7 +12,7 @@ interface IncidentListProps {
   incidents: IncidentListItem[];
 }
 
-function stateTone(state: IncidentListItem['state']): PillTone {
+export function incidentStateTone(state: IncidentListItem['state']): PillTone {
   switch (state) {
     case 'resolved':
       return 'success';
@@ -29,6 +30,7 @@ export default function IncidentList({ incidents }: IncidentListProps) {
   if (incidents.length === 0) {
     return (
       <EmptyState
+        icon={<Siren strokeWidth={1.75} />}
         title="No incidents yet"
         description="Create one manually, or have monitors open incidents automatically in Settings."
       />
@@ -36,60 +38,67 @@ export default function IncidentList({ incidents }: IncidentListProps) {
   }
 
   return (
-    <div className="table-card">
-      <table className="data-table text-xs">
-        <thead>
-          <tr>
-            <th>Incident</th>
-            <th>State</th>
-            <th>Links</th>
-            <th>Published</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {incidents.map((incident, index) => {
-            const links = [
-              incident.linked_alert_count > 0 ? pluralize(incident.linked_alert_count, 'alert') : null,
-              incident.linked_monitor_count > 0 ? pluralize(incident.linked_monitor_count, 'monitor') : null,
-            ].filter(Boolean);
-            return (
-              <tr key={incident.id} className={index % 2 === 1 ? 'bg-slate-900/[0.35]' : ''}>
-                <td>
-                  <Link
-                    href={`/incidents/${incident.id}`}
-                    className="text-sm font-medium text-white hover:text-cyan-400"
-                  >
-                    {incident.title}
-                  </Link>
-                  {(incident.source === 'auto' || incident.resolved_at) && (
-                    <div className="mt-1 flex items-center gap-2 text-[0.7rem] text-slate-500">
-                      {incident.source === 'auto' && (
-                        <Pill tone="warning" size="xs">Auto</Pill>
-                      )}
-                      {incident.resolved_at ? (
-                        <span>Resolved {formatDateTime(incident.resolved_at)}</span>
-                      ) : null}
-                    </div>
-                  )}
-                </td>
-                <td>
-                  <Pill tone={stateTone(incident.state)} size="xs" dot className="capitalize">
-                    {incident.state}
-                  </Pill>
-                </td>
-                <td className="text-slate-400">{links.length > 0 ? links.join(' · ') : '—'}</td>
-                <td className="text-slate-400">
-                  {incident.publication_count > 0 ? pluralize(incident.publication_count, 'page') : '—'}
-                </td>
-                <td className="text-slate-400">
-                  {formatDateTime(incident.updated_at)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="glass overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="data-table text-[13px]">
+          <thead>
+            <tr>
+              <th className="w-full">Incident</th>
+              <th>State</th>
+              <th className="hidden md:table-cell">Links</th>
+              <th className="hidden md:table-cell">Published</th>
+              <th className="hidden sm:table-cell">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {incidents.map((incident) => {
+              const links = [
+                incident.linked_alert_count > 0 ? pluralize(incident.linked_alert_count, 'alert') : null,
+                incident.linked_monitor_count > 0 ? pluralize(incident.linked_monitor_count, 'monitor') : null,
+              ].filter(Boolean);
+              return (
+                <tr key={incident.id} className="transition-colors hover:bg-well">
+                  <td>
+                    <Link
+                      href={`/incidents/${incident.id}`}
+                      className="text-sm font-medium text-white transition-colors hover:text-cyan-300"
+                    >
+                      {incident.title}
+                    </Link>
+                    {(incident.source === 'auto' || incident.resolved_at) && (
+                      <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                        {incident.source === 'auto' && (
+                          <Pill tone="neutral" size="xs">Auto</Pill>
+                        )}
+                        {incident.resolved_at ? (
+                          <span>Resolved {formatDateTime(incident.resolved_at)}</span>
+                        ) : null}
+                      </div>
+                    )}
+                    {!incident.resolved_at && (
+                      <div className="mt-1 text-xs text-slate-500 sm:hidden">
+                        Updated {formatDateTime(incident.updated_at)}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <Pill tone={incidentStateTone(incident.state)} size="xs" dot className="capitalize">
+                      {incident.state}
+                    </Pill>
+                  </td>
+                  <td className="hidden whitespace-nowrap text-slate-400 md:table-cell">{links.length > 0 ? links.join(' · ') : '—'}</td>
+                  <td className="hidden whitespace-nowrap text-slate-400 md:table-cell">
+                    {incident.publication_count > 0 ? pluralize(incident.publication_count, 'page') : '—'}
+                  </td>
+                  <td className="hidden whitespace-nowrap text-slate-400 sm:table-cell">
+                    {formatDateTime(incident.updated_at)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

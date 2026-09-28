@@ -6,6 +6,7 @@ import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import type { PillTone } from '@/components/ui/Pill';
+import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
 import { suggestDependencies, addMonitorDependency } from '@/lib/api';
 import type { DependencySuggestion } from '@/lib/types';
@@ -77,11 +78,7 @@ export function useAISuggestions(onAccepted?: () => void) {
       title="AI dependency suggestions"
       subtitle="Inferred from co-firing alerts, names, tags, and groups. Accepting adds the dependency to the graph."
     >
-      {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-          {error}
-        </div>
-      )}
+      {error && <Callout tone="danger">{error}</Callout>}
 
       {!error && ran && suggestions.length === 0 && (
         <div className="text-sm text-slate-500">
@@ -90,26 +87,26 @@ export function useAISuggestions(onAccepted?: () => void) {
       )}
 
       {suggestions.length > 0 && (
-        <div className="space-y-2">
+        <div className="-mx-5 -mb-5 divide-y divide-divider">
           {suggestions.map((s) => (
             <div
               key={keyOf(s)}
-              className="flex items-start justify-between gap-4 rounded-xl border border-white/[0.06] bg-slate-950/40 px-4 py-3"
+              className="flex items-start justify-between gap-4 px-5 py-3.5 transition-colors hover:bg-well"
             >
               <div className="min-w-0">
-                <div className="flex items-center gap-2 text-sm text-white">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-white">
                   <span className="font-medium">{s.monitor_name}</span>
                   <span className="text-slate-500">depends on</span>
                   <span className="font-medium">{s.depends_on_name}</span>
-                  <Pill tone={CONFIDENCE_TONE[s.confidence] ?? 'neutral'} size="xs">
+                  <Pill tone={CONFIDENCE_TONE[s.confidence] ?? 'neutral'} size="xs" className="capitalize">
                     {s.confidence}
                   </Pill>
                 </div>
-                {s.reason && <div className="mt-1 text-xs text-slate-400">{s.reason}</div>}
+                {s.reason && <div className="mt-1 text-[13px] text-slate-400">{s.reason}</div>}
               </div>
               <div className="flex flex-shrink-0 items-center gap-2">
                 <Button
-                  variant="accent"
+                  variant="ghost"
                   size="xs"
                   loading={acceptingKey === keyOf(s)}
                   disabled={acceptingKey !== null}
@@ -117,7 +114,7 @@ export function useAISuggestions(onAccepted?: () => void) {
                 >
                   Accept
                 </Button>
-                <Button variant="ghost" size="xs" disabled={acceptingKey !== null} onClick={() => dismiss(s)}>
+                <Button variant="subtle" size="xs" disabled={acceptingKey !== null} onClick={() => dismiss(s)}>
                   Dismiss
                 </Button>
               </div>

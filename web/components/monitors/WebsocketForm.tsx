@@ -14,8 +14,11 @@ import { Plus, X } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
+import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
+import Switch from '@/components/ui/Switch';
 
 interface WebsocketFormProps {
   monitor?: Monitor;
@@ -165,20 +168,20 @@ export default function WebsocketForm({
           />
         </FormField>
 
-        <FormField label="URL" required error={errors.url} description="ws:// or wss:// endpoint to connect to">
+        <FormField label="URL" required error={errors.url}>
           <input
             type="text"
             value={formData.url}
             onChange={(e) => setFormData({ ...formData, url: e.target.value })}
             placeholder="wss://api.example.com/socket"
-            className="input font-mono text-xs"
+            className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">ws:// or wss:// endpoint to connect to</p>
         </FormField>
 
         <FormField
           label="Handshake headers (optional)"
           error={errors.headers}
-          description="Sent with the upgrade request — e.g. Authorization or Origin"
         >
           <div className="space-y-2">
             {formData.headers.map((row, i) => (
@@ -213,82 +216,65 @@ export default function WebsocketForm({
                   aria-label={`Header ${i + 1} value`}
                   className="input flex-1"
                 />
-                <button
-                  type="button"
+                <IconButton
+                  icon={<X strokeWidth={1.75} />}
+                  label={`Remove header ${i + 1}`}
                   onClick={() => setFormData({ ...formData, headers: formData.headers.filter((_, j) => j !== i) })}
-                  className="rounded p-1.5 text-slate-500 transition-colors hover:text-rose-400"
-                  aria-label={`Remove header ${i + 1}`}
-                >
-                  <X className="h-3.5 w-3.5" strokeWidth={1.75} />
-                </button>
+                  danger
+                />
               </div>
             ))}
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="xs"
+              icon={<Plus strokeWidth={1.75} />}
               onClick={() => setFormData({ ...formData, headers: [...formData.headers, { key: '', value: '', hasStoredValue: false }] })}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-400 transition-colors hover:text-cyan-300"
             >
-              <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
               Add header
-            </button>
+            </Button>
           </div>
+          <p className="mt-2 text-xs text-slate-500">Sent with the upgrade request — e.g. Authorization or Origin</p>
         </FormField>
 
         {isSecure && (
-          <FormField label="Skip certificate verification" description="Accept self-signed or mismatched certificates">
-            <div className="flex h-10 items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-3">
-              <span className={`text-sm ${formData.tls_skip_verify ? 'text-amber-300' : 'text-slate-400'}`}>
-                {formData.tls_skip_verify ? 'Verification off' : 'Verification on'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })}
-                className={`relative h-5 w-9 rounded-full transition-colors ${
-                  formData.tls_skip_verify ? 'bg-amber-500' : 'bg-slate-700'
-                }`}
-                aria-pressed={formData.tls_skip_verify}
-                aria-label="Toggle certificate verification"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                    formData.tls_skip_verify ? 'translate-x-4' : ''
-                  }`}
-                />
-              </button>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-200">Skip certificate verification</p>
+              <p className="text-xs text-slate-500">Accept self-signed or mismatched certificates</p>
             </div>
-          </FormField>
+            <Switch checked={formData.tls_skip_verify} onChange={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })} label="Toggle certificate verification" tone="warning" />
+          </div>
         )}
       </FormSection>
 
       <FormSection title="Checks">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Send message (optional)" description="Text frame written after the handshake">
+          <FormField label="Send message (optional)">
             <input
               type="text"
               value={formData.send_message}
               onChange={(e) => setFormData({ ...formData, send_message: e.target.value })}
               placeholder='{"type":"ping"}'
-              className="input font-mono text-xs"
+              className="input font-mono"
             />
+            <p className="mt-1 text-xs text-slate-500">Text frame written after the handshake</p>
           </FormField>
-          <FormField
-            label="Expected reply contains (optional)"
-            description="Fail unless the first reply contains this text"
-          >
+          <FormField label="Expected reply contains (optional)">
             <input
               type="text"
               value={formData.expected_substring}
               onChange={(e) => setFormData({ ...formData, expected_substring: e.target.value })}
               placeholder="pong"
-              className="input font-mono text-xs"
+              className="input font-mono"
             />
+            <p className="mt-1 text-xs text-slate-500">Fail unless the first reply contains this text</p>
           </FormField>
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField
             label="Warn latency (ms, optional)"
             error={errors.warn_latency_ms}
-            description="Flag the check with a warning above this — without failing it"
           >
             <input
               type="number"
@@ -298,11 +284,11 @@ export default function WebsocketForm({
               placeholder="e.g. 250"
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Flag the check with a warning above this — without failing it</p>
           </FormField>
           <FormField
             label="Max latency (ms, optional)"
             error={errors.max_latency_ms}
-            description="Fail the check if the round trip takes longer than this"
           >
             <input
               type="number"
@@ -312,13 +298,14 @@ export default function WebsocketForm({
               placeholder="e.g. 1000"
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Fail the check if the round trip takes longer than this</p>
           </FormField>
         </div>
       </FormSection>
 
       <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Interval (seconds)" description="How often to check">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Interval (seconds)">
             <input
               type="number"
               value={formData.interval_seconds}
@@ -328,7 +315,7 @@ export default function WebsocketForm({
               className="input"
             />
           </FormField>
-          <FormField label="Timeout (seconds)" error={errors.timeout_seconds} description="Must be less than interval">
+          <FormField label="Timeout (seconds)" error={errors.timeout_seconds}>
             <input
               type="number"
               value={formData.timeout_seconds}
@@ -336,6 +323,7 @@ export default function WebsocketForm({
               min={1}
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
           </FormField>
         </div>
       </FormSection>
@@ -371,7 +359,7 @@ export default function WebsocketForm({
       </FormSection>
 
       <FormSection title="Meta">
-        <FormField label="Tags" description="Comma-separated, e.g. production, realtime, critical">
+        <FormField label="Tags">
           <input
             type="text"
             value={formData.tags}
@@ -379,28 +367,15 @@ export default function WebsocketForm({
             placeholder="production, realtime, critical"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
         </FormField>
 
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Monitor enabled</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
             <p className="text-xs text-slate-500">Run WebSocket checks on schedule</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle monitor enabled"
-          >
-            <span
-              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                formData.enabled ? 'translate-x-4' : ''
-              }`}
-            />
-          </button>
+          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
         </div>
       </FormSection>
 
@@ -416,7 +391,7 @@ export default function WebsocketForm({
         }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Update monitor' : 'Create monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',

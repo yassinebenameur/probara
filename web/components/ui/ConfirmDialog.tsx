@@ -4,6 +4,7 @@ import { ReactNode, useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 import Button from '@/components/ui/Button';
+import ModalPortal from '@/components/ui/ModalPortal';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -40,8 +41,9 @@ export default function ConfirmDialog({
   if (!open) return null;
 
   return (
+    <ModalPortal>
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm"
+      className="glass-scrim fixed inset-0 z-50 flex items-center justify-center px-4"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !loading) onCancel();
       }}
@@ -49,10 +51,10 @@ export default function ConfirmDialog({
       aria-modal="true"
       aria-label={title}
     >
-      <div className="w-full max-w-md rounded-2xl border border-white/[0.08] bg-slate-950 shadow-2xl">
+      <div className="glass-overlay w-full max-w-md">
         <div className="flex items-start gap-4 px-6 py-5">
           {tone === 'danger' && (
-            <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-400">
+            <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/[0.13] text-rose-400">
               <AlertTriangle className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
             </div>
           )}
@@ -63,7 +65,7 @@ export default function ConfirmDialog({
             )}
           </div>
         </div>
-        <div className="flex items-center justify-end gap-3 border-t border-white/[0.06] px-6 py-4">
+        <div className="flex items-center justify-end gap-2 px-6 pb-5">
           <Button variant="ghost" onClick={onCancel} disabled={loading}>
             {cancelLabel}
           </Button>
@@ -78,5 +80,6 @@ export default function ConfirmDialog({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

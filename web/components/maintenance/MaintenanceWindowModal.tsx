@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import { createMaintenanceWindow, getGroupMembers, updateMaintenanceWindow } from '@/lib/api';
 import type { MaintenanceWindow, Monitor } from '@/lib/types';
 import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import IconButton from '@/components/ui/IconButton';
 import ModalPortal from '@/components/ui/ModalPortal';
 import { MonitorMultiSelect } from '@/components/monitors/MonitorMultiSelect';
 
@@ -13,6 +16,8 @@ interface MaintenanceWindowModalProps {
   onDone: () => void;
   onCancel: () => void;
 }
+
+const labelClass = 'mb-1.5 block text-[13px] font-medium text-slate-300';
 
 // datetime-local inputs work in the browser's local timezone; the API speaks
 // ISO/UTC. Convert at the edges.
@@ -115,30 +120,23 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
 
   return (
     <ModalPortal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-        <div className="dashboard-scroll max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-xl border border-white/[0.08] bg-slate-900/95 p-6 shadow-2xl">
-          {/* Header */}
-          <div className="mb-5 flex items-start justify-between">
+      <div className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="glass-overlay flex max-h-[90vh] w-full max-w-xl flex-col">
+          <div className="flex items-start justify-between gap-4 px-6 pt-5">
             <div>
               <h2 className="text-base font-semibold text-white">
                 {window ? 'Edit maintenance window' : 'Schedule maintenance'}
               </h2>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-[13px] text-slate-400">
                 Alerts for the selected monitors are suppressed during the window. Checks keep running.
               </p>
             </div>
-            <button
-              onClick={onCancel}
-              className="text-slate-400 hover:text-white transition-colors"
-              aria-label="Close"
-            >
-              ×
-            </button>
+            <IconButton icon={<X strokeWidth={1.75} />} label="Close" onClick={onCancel} />
           </div>
 
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-title">
+              <label className={labelClass} htmlFor="mw-title">
                 Title
               </label>
               <input
@@ -147,13 +145,13 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Database upgrade"
-                className="input input-sm w-full"
+                className="input"
               />
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-description">
-                Description <span className="text-slate-600">(shown on status pages)</span>
+              <label className={labelClass} htmlFor="mw-description">
+                Description <span className="font-normal text-slate-500">(shown on status pages)</span>
               </label>
               <textarea
                 id="mw-description"
@@ -161,13 +159,13 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
                 onChange={(e) => setDescription(e.target.value)}
                 rows={2}
                 placeholder="Optional details for status page viewers"
-                className="input input-sm w-full resize-none"
+                className="input resize-none"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-start">
+                <label className={labelClass} htmlFor="mw-start">
                   Starts
                 </label>
                 <input
@@ -175,11 +173,11 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
                   type="datetime-local"
                   value={startsAt}
                   onChange={(e) => setStartsAt(e.target.value)}
-                  className="input input-sm w-full"
+                  className="input h-10"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-400" htmlFor="mw-end">
+                <label className={labelClass} htmlFor="mw-end">
                   Ends
                 </label>
                 <input
@@ -187,20 +185,20 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
                   type="datetime-local"
                   value={endsAt}
                   onChange={(e) => setEndsAt(e.target.value)}
-                  className="input input-sm w-full"
+                  className="input h-10"
                 />
               </div>
             </div>
             {startsAt && endsAt && new Date(endsAt) <= new Date(startsAt) && (
-              <p className="text-xs text-rose-400">End time must be after start time.</p>
+              <p className="text-xs text-rose-300">End time must be after start time.</p>
             )}
 
             <div>
-              <span className="mb-1 block text-xs font-medium text-slate-400">
-                Monitors <span className="text-slate-600">— pick a group to cover its members</span>
+              <span className={labelClass}>
+                Monitors <span className="font-normal text-slate-500">— pick a group to cover its members</span>
               </span>
               {monitorsLoading ? (
-                <div className="rounded-lg border border-white/[0.06] bg-slate-950/40 px-2 py-6">
+                <div className="glass-well px-2 py-6">
                   <p className="text-center text-xs text-slate-500">Loading monitors…</p>
                 </div>
               ) : (
@@ -215,16 +213,16 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
               )}
             </div>
 
-            {error && <p className="text-xs text-rose-400">{error}</p>}
+            {error && <Callout tone="danger">{error}</Callout>}
+          </div>
 
-            <div className="flex justify-end gap-2 pt-1">
-              <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
-                Cancel
-              </Button>
-              <Button size="sm" onClick={save} disabled={!canSave} loading={saving}>
-                {window ? 'Save changes' : 'Schedule'}
-              </Button>
-            </div>
+          <div className="flex justify-end gap-2 px-6 pb-5">
+            <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
+              Cancel
+            </Button>
+            <Button variant="accent" size="sm" onClick={save} disabled={!canSave} loading={saving}>
+              {window ? 'Save changes' : 'Schedule'}
+            </Button>
           </div>
         </div>
       </div>

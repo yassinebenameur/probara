@@ -2,6 +2,7 @@
 
 import { createContext, ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { createPortal } from 'react-dom';
 import { MoreVertical } from 'lucide-react';
 import { ICON_BUTTON_CLASS } from './IconButton';
 
@@ -11,7 +12,9 @@ const MENU_WIDTH = 160;
 
 // "⋮" menu for rows with more actions than fit as icon buttons. The menu is
 // position:fixed so it escapes scrolling/overflow containers, and flips up
-// when there is no room below the trigger.
+// when there is no room below the trigger. It portals to <body>: rows sit in
+// glass panels, and backdrop-filter would make the panel the containing block
+// of a fixed child, offsetting and clipping the menu.
 export default function RowMenu({ label, children }: { label: string; children: ReactNode }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -61,11 +64,11 @@ export default function RowMenu({ label, children }: { label: string; children: 
       >
         <MoreVertical strokeWidth={1.75} />
       </button>
-      {anchor && (
+      {anchor && createPortal(
         <div
           ref={menuRef}
           role="menu"
-          className="fixed z-50 rounded-lg border border-white/[0.08] bg-slate-900/95 p-1 shadow-lg backdrop-blur-sm"
+          className="glass-overlay fixed z-50 !rounded-xl p-1"
           style={{
             width: MENU_WIDTH,
             top: pos?.top ?? 0,
@@ -75,7 +78,8 @@ export default function RowMenu({ label, children }: { label: string; children: 
           onClick={(e) => e.stopPropagation()}
         >
           <CloseContext.Provider value={close}>{children}</CloseContext.Provider>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
@@ -95,10 +99,10 @@ export function RowMenuItem({
   children: ReactNode;
 }) {
   const close = useContext(CloseContext);
-  const className = `flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs transition-colors ${
+  const className = `flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors ${
     danger
       ? 'text-rose-300 hover:bg-rose-500/10 hover:text-rose-200'
-      : 'text-slate-300 hover:bg-white/[0.06] hover:text-white'
+      : 'text-slate-300 hover:bg-well-hover hover:text-white'
   }`;
   const content = (
     <>
@@ -129,7 +133,7 @@ export function RowMenuItem({
 }
 
 export function RowMenuSeparator() {
-  return <div className="my-1 border-t border-white/[0.06]" />;
+  return <div className="my-1 border-t border-divider" />;
 }
 
 // Closes the menu from custom content (e.g. a row of option buttons).

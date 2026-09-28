@@ -27,14 +27,14 @@ export function SSOPanel() {
       subtitle="OIDC SSO is configured through the OIDC_* environment variables (or helm auth.oidc values)."
     >
       {status === null ? (
-        <div className="text-sm text-slate-500">Checking SSO status…</div>
+        <p className="text-sm text-slate-500">Checking SSO status…</p>
       ) : (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
             <p className="text-sm font-medium text-white">
               {status.enabled ? `Login with “${status.label || 'SSO'}” is active` : 'SSO is not configured'}
             </p>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-0.5 text-[13px] text-slate-400">
               {status.enabled
                 ? 'Users can sign in through the identity provider from the login page.'
                 : 'Set OIDC_ENABLED=true with issuer, client ID and secret to offer SSO login.'}

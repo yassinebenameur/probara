@@ -35,7 +35,7 @@ export default function MembershipsEditor({
   return (
     <div className="space-y-2">
       {memberships.length === 0 && (
-        <p className="text-xs text-slate-500">
+        <p className="text-[13px] text-slate-500">
           No tenant memberships. The user will not be able to access any workspace.
         </p>
       )}
@@ -43,6 +43,7 @@ export default function MembershipsEditor({
         <div key={membership.tenant_id || index} className="flex items-center gap-2">
           <div className="flex-1">
             <Select
+              className="h-10"
               value={membership.tenant_id}
               disabled={disabled}
               onChange={(e) => update(index, { tenant_id: e.target.value })}
@@ -60,6 +61,7 @@ export default function MembershipsEditor({
           </div>
           <div className="w-40">
             <Select
+              className="h-10"
               value={membership.role}
               disabled={disabled}
               onChange={(e) => update(index, { role: e.target.value as TenantRole })}
@@ -80,7 +82,7 @@ export default function MembershipsEditor({
           />
         </div>
       ))}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
         <Button
           variant="ghost"
           size="xs"
@@ -93,7 +95,7 @@ export default function MembershipsEditor({
         >
           Add tenant
         </Button>
-        <p className="text-[0.7rem] text-slate-500">
+        <p className="text-xs text-slate-500">
           Admin: manage · Editor: modify · Viewer: read-only
         </p>
       </div>

@@ -9,6 +9,9 @@ import {
   getTenantSettings,
 } from '@/lib/api';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import IconButton from '@/components/ui/IconButton';
+import PageHeader from '@/components/ui/PageHeader';
 import Pill, { PillTone } from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
 import InfoTip, { InfoTipEntry } from '@/components/ui/InfoTip';
@@ -125,32 +128,31 @@ function TagFilterPicker({
 
   return (
     <div className="relative" ref={ref}>
-      <button
+      <Button
+        variant="ghost"
         onClick={() => setOpen((value) => !value)}
-        className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors ${
-          hasSelection
-            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
-            : 'border-white/[0.06] bg-slate-900/50 text-slate-300 hover:text-white'
-        }`}
+        icon={<Tags className="h-4 w-4" strokeWidth={1.75} />}
+        iconTrailing={
+          <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={1.75} />
+        }
+        className={hasSelection ? '!border-cyan-500/40 !text-cyan-300' : ''}
       >
-        <Tags className="h-3.5 w-3.5" strokeWidth={1.8} />
-        <span>Tags</span>
+        Tags
         {hasSelection && (
-          <span className="rounded-full bg-cyan-500/20 px-1.5 py-0.5 text-[10px] text-cyan-200">
+          <span className="ml-1.5 rounded-full bg-cyan-500/[0.14] px-1.5 py-px text-[11px] tabular-nums text-cyan-300">
             {selectedTags.length}
           </span>
         )}
-        <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2} />
-      </button>
+      </Button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border border-white/[0.08] bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Filter dashboard by tags</p>
+        <div className="glass-overlay absolute right-0 z-50 mt-2 w-80 !rounded-xl p-3">
+          <div className="mb-3 flex h-7 items-center justify-between">
+            <p className="text-xs font-medium text-slate-400">Filter dashboard by tags</p>
             {hasSelection && (
-              <button onClick={onClear} className="text-[11px] text-slate-400 transition-colors hover:text-white">
+              <Button variant="subtle" size="xs" onClick={onClear}>
                 Clear all
-              </button>
+              </Button>
             )}
           </div>
           <div className="flex max-h-56 flex-wrap gap-2 overflow-y-auto pr-1">
@@ -170,13 +172,15 @@ function TagFilterPicker({
   );
 }
 
+// Scrolling lists fade out at the bottom edge instead of slicing a row in half.
+const SCROLL_LIST =
+  'dashboard-scroll divide-y divide-divider overflow-y-auto pb-4 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1.5rem),transparent)]';
+
 function SectionLoadingState({ message }: { message: string }) {
   return (
-    <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-white/[0.08] bg-slate-950/25">
-      <div className="flex items-center gap-2 text-sm text-slate-500">
-        <RefreshCw className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
-        <span>{message}</span>
-      </div>
+    <div className="flex min-h-40 flex-1 items-center justify-center gap-2 px-5 pb-5 text-sm text-slate-500">
+      <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+      <span>{message}</span>
     </div>
   );
 }
@@ -192,12 +196,14 @@ const REASON_CATEGORY_META: Record<FailureReasonCategory, { label: string; tone:
   tls: { label: 'TLS', tone: 'warning' },
 };
 
-// One truncated line: optional category pill + the raw message. The full
-// untruncated message lives in the row's InfoTip popover.
+// One truncated line: optional category pill + the message, minus the prefix
+// the pill already names. The full untruncated message lives in the row's
+// InfoTip popover and the line's title.
 function FailureReasonLine({ message }: { message: string | null | undefined }) {
   const reason = parseFailureReason(message);
   if (!reason) return null;
   const meta = reason.category ? REASON_CATEGORY_META[reason.category] : null;
+  const shown = meta ? reason.text.slice(reason.text.indexOf(':') + 1).trim() || reason.text : reason.text;
   return (
     <div className="mt-1 flex min-w-0 items-center gap-1.5">
       {meta && (
@@ -205,8 +211,8 @@ function FailureReasonLine({ message }: { message: string | null | undefined }) 
           {meta.label}
         </Pill>
       )}
-      <span className="min-w-0 truncate text-[11px] text-slate-400" title={reason.text}>
-        {reason.text}
+      <span className="min-w-0 truncate text-xs text-slate-400" title={reason.text}>
+        {shown}
       </span>
     </div>
   );
@@ -220,20 +226,15 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
   const uptimeGood = uptimePct >= 99;
   const uptimeMid = uptimePct >= 95;
   const barColor = uptimeGood
-    ? 'bg-emerald-400'
+    ? 'bg-emerald-500'
     : uptimeMid
-      ? 'bg-amber-400'
-      : 'bg-rose-400';
-  const trackColor = uptimeGood
-    ? 'bg-slate-800/80'
-    : uptimeMid
-      ? 'bg-amber-500/10'
-      : 'bg-rose-500/10';
+      ? 'bg-amber-500'
+      : 'bg-rose-500';
   const uptimeTextColor = uptimeGood
-    ? 'text-emerald-400'
+    ? 'text-slate-200'
     : uptimeMid
-      ? 'text-amber-400'
-      : 'text-rose-400';
+      ? 'text-amber-300'
+      : 'text-rose-300';
   const barWidth = uptimePct > 0 ? Math.max(uptimePct, 2) : 0;
 
   const infoEntries: PopoverEntry[] = [
@@ -251,37 +252,32 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
   }
 
   return (
-    <div className="-mx-2 rounded-lg px-2 py-3.5 transition-colors hover:bg-white/[0.025]">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start gap-2">
-            <Link
-              href={`/monitors/${monitor.monitor_id}`}
-              className="min-w-0 whitespace-normal break-all text-sm font-medium text-white transition-colors hover:text-cyan-400"
-            >
-              {monitor.monitor_name}
-            </Link>
-            <InfoTip entries={infoEntries} title={monitor.monitor_name} />
-          </div>
-          <div className="mt-2.5 flex items-center gap-3">
-            {/* Uptime bar */}
-            <div className={`h-1.5 flex-1 overflow-hidden rounded-full ${trackColor}`}>
-              <div
-                className={`h-full rounded-full ${barColor} transition-all`}
-                style={{ width: `${barWidth}%` }}
-              />
-            </div>
-            <span className={`shrink-0 text-xs font-medium tabular-nums ${uptimeTextColor}`}>
-              {uptimePct.toFixed(1)}%
-            </span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-500">
-            {issueCount} issue{issueCount !== 1 ? 's' : ''}
-            {monitor.latest_failure_at ? ` · last ${formatRelativeTime(monitor.latest_failure_at)}` : ''}
-          </p>
-          <FailureReasonLine message={monitor.latest_error_message} />
+    <div className="px-5 py-3.5 transition-colors hover:bg-well">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2">
+          <Link
+            href={`/monitors/${monitor.monitor_id}`}
+            className="min-w-0 whitespace-normal break-all text-sm font-medium text-white transition-colors hover:text-cyan-300"
+          >
+            {monitor.monitor_name}
+          </Link>
+          <InfoTip entries={infoEntries} title={monitor.monitor_name} />
         </div>
+        <span className={`shrink-0 text-[13px] font-medium tabular-nums ${uptimeTextColor}`}>
+          {uptimePct.toFixed(1)}%
+        </span>
       </div>
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-well-hover">
+        <div
+          className={`h-full rounded-full ${barColor} transition-all`}
+          style={{ width: `${barWidth}%` }}
+        />
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        {issueCount} issue{issueCount !== 1 ? 's' : ''}
+        {monitor.latest_failure_at ? ` · last ${formatRelativeTime(monitor.latest_failure_at)}` : ''}
+      </p>
+      <FailureReasonLine message={monitor.latest_error_message} />
     </div>
   );
 }
@@ -293,11 +289,24 @@ const TOOLTIP_SERIES: Record<string, { label: string; dot: string; unit: string 
   responseTime: { label: 'Response time', dot: 'bg-sky-400', unit: 'ms' },
 };
 
+const TOOLTIP_STYLE: React.CSSProperties = {
+  background: 'var(--glass-fill-strong)',
+  border: '1px solid var(--glass-edge-strong)',
+  borderRadius: 12,
+  backdropFilter: 'blur(20px)',
+  WebkitBackdropFilter: 'blur(20px)',
+  color: 'var(--text-primary)',
+};
+
+const AXIS_TICK = { fill: 'var(--text-muted)', fontSize: 11 };
+
+const UPTIME_TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 25];
+
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border border-white/10 bg-slate-900/95 px-3.5 py-2.5 shadow-2xl backdrop-blur">
-      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-slate-500">{label}</p>
+    <div className="px-3.5 py-2.5" style={TOOLTIP_STYLE}>
+      <p className="mb-1.5 text-xs font-medium text-slate-400">{label}</p>
       <div className="space-y-1">
         {payload.map((entry: any, idx: number) => {
           const series = TOOLTIP_SERIES[entry.name] ?? { label: entry.name, dot: 'bg-slate-400', unit: '' };
@@ -327,26 +336,19 @@ function CustomTooltip({ active, payload, label }: any) {
 
 function LoadingSkeleton() {
   return (
-    <div className="animate-pulse space-y-4">
+    <div className="animate-pulse space-y-6">
       <div className="flex items-center justify-between">
-        <div className="space-y-2">
-          <div className="h-6 w-40 rounded-lg bg-slate-800/60" />
-          <div className="h-4 w-72 rounded-lg bg-slate-800/40" />
-        </div>
-        <div className="hidden h-9 w-48 rounded-lg bg-slate-800/50 sm:block" />
+        <div className="h-8 w-40 rounded-lg bg-well-hover" />
+        <div className="hidden h-9 w-48 rounded-lg bg-well-hover sm:block" />
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[...Array(4)].map((_, i) => (
-          <div key={i} className="h-24 rounded-xl bg-slate-800/50" />
-        ))}
+      <div className="glass h-36" />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
+        <div className="glass h-[22rem]" />
+        <div className="glass h-[22rem]" />
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="h-64 rounded-xl bg-slate-800/50" />
-        <div className="h-64 rounded-xl bg-slate-800/50" />
-      </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="h-72 rounded-xl bg-slate-800/50" />
-        <div className="h-72 rounded-xl bg-slate-800/50" />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
+        <div className="glass h-72" />
+        <div className="glass h-72" />
       </div>
     </div>
   );
@@ -354,9 +356,9 @@ function LoadingSkeleton() {
 
 function EmptyState({ message, sub }: { message: string; sub?: string }) {
   return (
-    <div className="flex min-h-[168px] flex-col items-center justify-center rounded-lg border border-dashed border-white/[0.06] bg-slate-950/20 px-4 text-center">
+    <div className="flex min-h-[168px] flex-1 flex-col items-center justify-center px-5 pb-5 text-center">
       <p className="text-sm font-medium text-slate-300">{message}</p>
-      {sub && <p className="mt-1 max-w-sm text-xs text-slate-500">{sub}</p>}
+      {sub && <p className="mt-1 max-w-sm text-[13px] text-slate-500">{sub}</p>}
     </div>
   );
 }
@@ -375,88 +377,59 @@ function SectionCard({
   className?: string;
 }) {
   return (
-    <div className={`min-w-0 overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-subtle ${className ?? ''}`}>
-      <div className="flex min-h-14 min-w-0 flex-wrap items-center justify-between gap-2 border-b border-white/[0.05] bg-slate-950/20 px-5 py-3">
-        <h3 className="min-w-0 text-sm font-semibold text-white">{title}</h3>
-        {action && <div className="min-w-0 text-xs text-slate-500">{action}</div>}
+    <div className={`glass flex min-w-0 flex-col overflow-hidden ${className ?? ''}`}>
+      <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 px-5 py-4">
+        <h3 className="min-w-0 text-[15px] font-semibold text-white">{title}</h3>
+        {action && <div className="min-w-0 text-[13px] text-slate-500">{action}</div>}
       </div>
-      <div className="min-w-0 p-5">{children}</div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
     </div>
   );
 }
 
 function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
-  const toneStyles: Record<OperationalSummary['tone'], { ring: string; text: string; glow: string }> = {
-    critical: {
-      ring: 'border-rose-500/20',
-      text: 'text-rose-300',
-      glow: 'rgba(240,74,90, 0.08)',
-    },
-    attention: {
-      ring: 'border-amber-500/20',
-      text: 'text-amber-300',
-      glow: 'rgba(230,178,63, 0.07)',
-    },
-    stable: {
-      ring: 'border-emerald-500/20',
-      text: 'text-emerald-300',
-      glow: 'rgba(70,209,127, 0.07)',
-    },
-    clean: {
-      ring: 'border-emerald-500/20',
-      text: 'text-emerald-300',
-      glow: 'rgba(70,209,127, 0.07)',
-    },
-  };
-  const tone = toneStyles[summary.tone];
+  const dot =
+    summary.tone === 'critical'
+      ? 'bg-rose-500'
+      : summary.tone === 'attention'
+        ? 'bg-amber-500'
+        : 'bg-emerald-500';
 
   return (
-    <section
-      className={`overflow-hidden rounded-xl border ${tone.ring} bg-slate-900/60 shadow-subtle`}
-      style={{ backgroundImage: `radial-gradient(ellipse 60% 90% at 8% 0%, ${tone.glow}, transparent)` }}
-    >
-      <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
-        <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-2.5 w-2.5">
-                {summary.tone === 'critical' && (
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-60" />
-                )}
-                <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${summary.tone === 'critical' ? 'bg-rose-400' : summary.tone === 'attention' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
-              </span>
-              <h2 className={`text-lg font-semibold tracking-tight ${tone.text}`}>{summary.label}</h2>
-            </div>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{summary.description}</p>
-            <Link
-              href={summary.primaryActionHref}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-white/[0.08]"
-            >
-              {summary.primaryActionLabel}
-              <ArrowRight className="h-4 w-4" strokeWidth={1.8} />
-            </Link>
-          </div>
+    <section className="glass grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-center">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2.5">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+          <h2 className="text-lg font-semibold text-white">{summary.label}</h2>
         </div>
+        <p className="mt-1.5 max-w-xl text-sm text-slate-400">{summary.description}</p>
+        <Button
+          variant="ghost"
+          asChild
+          className="mt-4"
+          iconTrailing={<ArrowRight className="h-4 w-4" strokeWidth={1.75} />}
+        >
+          <Link href={summary.primaryActionHref}>{summary.primaryActionLabel}</Link>
+        </Button>
+      </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {summary.metrics.map((metric) => {
-            const metricTone =
-              metric.tone === 'critical'
-                ? 'text-rose-300'
-                : metric.tone === 'attention'
-                  ? 'text-amber-300'
-                  : metric.tone === 'clean'
-                    ? 'text-emerald-300'
-                    : 'text-white';
-            return (
-              <div key={metric.label} className="min-h-24 rounded-lg border border-white/[0.06] bg-slate-950/35 p-4 transition-colors hover:border-white/[0.12]">
-                <p className="text-xs font-medium text-slate-500">{metric.label}</p>
-                <p className={`mt-2 text-2xl font-semibold tabular-nums ${metricTone}`}>{metric.value}</p>
-                {metric.detail && <p className="mt-1 text-xs text-slate-500">{metric.detail}</p>}
-              </div>
-            );
-          })}
-        </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {summary.metrics.map((metric) => {
+          // Healthy values stay neutral so only a problem carries colour.
+          const valueTone =
+            metric.tone === 'critical'
+              ? 'text-rose-300'
+              : metric.tone === 'attention'
+                ? 'text-amber-300'
+                : 'text-white';
+          return (
+            <div key={metric.label} className="glass-well p-4">
+              <p className="text-xs text-slate-400">{metric.label}</p>
+              <p className={`mt-1 text-2xl font-semibold tabular-nums ${valueTone}`}>{metric.value}</p>
+              {metric.detail && <p className="mt-1 text-xs text-slate-500">{metric.detail}</p>}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -497,40 +470,43 @@ function UptimeResponseChart({
   setTimeRange: (range: DashboardPageRange) => void;
   noMatchingMonitors: boolean;
 }) {
-  const uptimeDomain = useMemo<[number, number]>(() => {
+  const uptimeAxis = useMemo(() => {
     const values = trendData
       .map((point) => point.uptime)
       .filter((value): value is number => typeof value === 'number');
-    if (values.length === 0) return [98.5, 100];
-    const min = Math.min(...values);
-    const padded = min - Math.max(0.25, (100 - min) * 0.08);
-    return [Math.max(0, Math.floor(padded * 10) / 10), 100];
+    const min = values.length === 0 ? 98.5 : Math.min(...values);
+    const padded = Math.max(0, min - Math.max(0.25, (100 - min) * 0.08));
+    // Evenly spaced ticks ending at 100%, so the axis never skips a label.
+    const step = UPTIME_TICK_STEPS.find((s) => (100 - padded) / s <= 4) ?? 25;
+    const count = Math.max(1, Math.ceil((100 - padded) / step - 1e-9));
+    const ticks = Array.from({ length: count + 1 }, (_, i) => Math.round((100 - step * (count - i)) * 10) / 10);
+    return { domain: [ticks[0], 100] as [number, number], ticks };
   }, [trendData]);
 
   return (
-    <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-slate-900/55 shadow-subtle">
-      <div className="flex flex-col gap-3 border-b border-white/[0.05] bg-slate-950/20 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+    <section className="glass min-w-0 overflow-hidden">
+      <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-semibold text-white">Uptime & response time</h3>
+            <h3 className="text-[15px] font-semibold text-white">Uptime & response time</h3>
             <InfoTip
               entries={[{ label: 'Metric', value: 'Uptime and average HTTP latency for the selected range' }]}
               title="Uptime & response time"
             />
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs">
-            <span className="flex items-center gap-1.5 text-emerald-300">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" /> Uptime (%)
+          <div className="mt-1.5 flex flex-wrap items-center gap-4 text-xs text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" /> Uptime (%)
             </span>
-            <span className="flex items-center gap-1.5 text-sky-300">
-              <span className="h-2 w-2 rounded-full bg-sky-400" /> Response time (ms)
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-sky-500" /> Response time (ms)
             </span>
           </div>
         </div>
         <RangeControls timeRange={timeRange} setTimeRange={setTimeRange} />
       </div>
 
-      <div className="p-5">
+      <div className="px-5 pb-5">
         {hasEnoughTrendData ? (
           <div className="h-64 min-w-0">
             <ResponsiveContainer width="100%" height="100%">
@@ -541,15 +517,17 @@ function UptimeResponseChart({
                     <stop offset="100%" stopColor="#46d17f" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid stroke="rgba(255,255,255,0.04)" vertical={false} />
-                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} minTickGap={24} />
+                <CartesianGrid stroke="var(--divider)" vertical={false} />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={AXIS_TICK} minTickGap={24} />
                 <YAxis
                   yAxisId="uptime"
-                  domain={uptimeDomain}
+                  domain={uptimeAxis.domain}
+                  ticks={uptimeAxis.ticks}
+                  interval={0}
                   width={58}
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#64748b', fontSize: 11 }}
+                  tick={AXIS_TICK}
                   tickFormatter={(v) => `${Number(v).toFixed(1).replace(/\.0$/, '')}%`}
                 />
                 <YAxis
@@ -558,10 +536,10 @@ function UptimeResponseChart({
                   width={48}
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#64748b', fontSize: 11 }}
+                  tick={AXIS_TICK}
                   tickFormatter={(v) => `${Math.round(Number(v))}ms`}
                 />
-                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(174,182,194,0.25)', strokeDasharray: '3 3' }} />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--glass-edge-strong)', strokeDasharray: '3 3' }} />
                 <Area
                   yAxisId="uptime"
                   type="monotone"
@@ -586,12 +564,12 @@ function UptimeResponseChart({
             </ResponsiveContainer>
           </div>
         ) : (
-          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-white/[0.06] bg-slate-950/25 px-4 text-center">
+          <div className="glass-well flex h-64 items-center justify-center px-4 text-center">
             <div>
               <p className="text-sm font-medium text-slate-300">
                 {noMatchingMonitors ? 'No monitors match these tags' : 'Not enough trend data yet'}
               </p>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-[13px] text-slate-500">
                 {noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Trend lines will appear after at least two populated buckets.'}
               </p>
             </div>
@@ -611,40 +589,44 @@ function NeedsAttentionPanel({
   loading: boolean;
   noMatchingMonitors: boolean;
 }) {
+  // Side by side with the chart (xl), the chart sets the row height and this
+  // list scrolls inside it, so the two cards always end on the same line.
   return (
-    <SectionCard
-      className="min-w-0"
-      title="Needs attention"
-      action={monitors.length > 0 ? <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-rose-300">{monitors.length}</span> : undefined}
-    >
-      {loading ? (
-        <SectionLoadingState message="Loading monitors needing attention..." />
-      ) : monitors.length > 0 ? (
-        <div className="dashboard-scroll -my-1 max-h-72 divide-y divide-white/[0.04] overflow-y-auto pr-1">
-          {monitors.map((monitor) => (
-            <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
-          ))}
-        </div>
-      ) : (
-        <EmptyState
-          message={noMatchingMonitors ? 'No monitors match these tags' : 'No monitors need immediate action'}
-          sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Resolved history appears in What changed.'}
-        />
-      )}
-    </SectionCard>
+    <div className="relative min-w-0">
+      <SectionCard
+        className="xl:absolute xl:inset-0"
+        title="Needs attention"
+        action={monitors.length > 0 ? <Pill tone="danger" size="xs" className="tabular-nums">{monitors.length}</Pill> : undefined}
+      >
+        {loading ? (
+          <SectionLoadingState message="Loading monitors needing attention…" />
+        ) : monitors.length > 0 ? (
+          <div className={`${SCROLL_LIST} max-h-80 min-h-0 flex-1 xl:max-h-none`}>
+            {monitors.map((monitor) => (
+              <ProblemMonitorItem key={monitor.monitor_id} monitor={monitor} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            message={noMatchingMonitors ? 'No monitors match these tags' : 'No monitors need immediate action'}
+            sub={noMatchingMonitors ? 'Choose fewer tags to widen the dashboard scope.' : 'Resolved history appears in What changed.'}
+          />
+        )}
+      </SectionCard>
+    </div>
   );
 }
 
 
 function timelineIcon(item: ActivityTimelineItem) {
-  const classes =
+  const color =
     item.tone === 'danger'
-      ? 'border-rose-500/40 bg-rose-950 text-rose-300'
+      ? 'text-rose-400'
       : item.tone === 'warning'
-        ? 'border-amber-500/40 bg-amber-950 text-amber-300'
+        ? 'text-amber-400'
         : item.tone === 'success'
-          ? 'border-emerald-500/40 bg-emerald-950 text-emerald-300'
-          : 'border-sky-500/40 bg-sky-950 text-sky-300';
+          ? 'text-emerald-400'
+          : 'text-sky-400';
 
   const Icon =
     item.tone === 'danger'
@@ -656,9 +638,7 @@ function timelineIcon(item: ActivityTimelineItem) {
           : Clock3;
 
   return (
-    <span className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${classes}`}>
-      <Icon className="h-3.5 w-3.5" strokeWidth={2} />
-    </span>
+    <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${color}`} strokeWidth={1.75} />
   );
 }
 
@@ -673,45 +653,42 @@ function WhatChangedTimeline({
     <SectionCard
       title="What changed"
       action={
-        <Link href="/alerts" className="inline-flex items-center gap-1.5 text-cyan-400 transition-colors hover:text-cyan-300">
-          View all <ArrowRight className="h-3.5 w-3.5" />
+        <Link href="/alerts" className="inline-flex items-center gap-1.5 text-cyan-300 transition-colors hover:text-cyan-200">
+          View all <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
         </Link>
       }
     >
       {loading ? (
-        <SectionLoadingState message="Loading recent activity..." />
+        <SectionLoadingState message="Loading recent activity…" />
       ) : items.length > 0 ? (
-        <div className="dashboard-scroll -my-1 max-h-80 overflow-y-auto pr-1">
-          <div className="relative space-y-4">
-            <div className="absolute bottom-3 left-3.5 top-3 w-px bg-white/[0.08]" />
-            {items.map((item) => (
-              <div key={item.id} className="relative flex gap-3">
-                {timelineIcon(item)}
-                <div className="min-w-0 flex-1 border-b border-white/[0.04] pb-4">
-                  <div className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-start gap-2">
-                        <p className="text-sm font-medium text-white">{item.label}</p>
-                        {item.reason && (
-                          <InfoTip
-                            title={item.title}
-                            entries={[
-                              { label: 'Detail', value: item.detail || '—' },
-                              { label: 'Reason', value: <span className="break-words">{item.reason}</span> },
-                            ]}
-                          />
-                        )}
-                      </div>
-                      <p className="mt-0.5 break-words text-sm text-slate-300">{item.title}</p>
-                      {item.detail && <p className="mt-0.5 text-xs text-slate-500">{item.detail}</p>}
-                      <FailureReasonLine message={item.reason} />
-                    </div>
-                    <span className="shrink-0 text-xs text-slate-500">{item.relativeTime}</span>
+        <div className={`${SCROLL_LIST} max-h-80`}>
+          {items.map((item) => (
+            <div key={item.id} className="flex gap-3 px-5 py-3.5">
+              {timelineIcon(item)}
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <p className="text-sm font-medium text-white">{item.label}</p>
+                    {item.reason && (
+                      <InfoTip
+                        title={item.title}
+                        entries={[
+                          { label: 'Detail', value: item.detail || '—' },
+                          { label: 'Reason', value: <span className="break-words">{item.reason}</span> },
+                        ]}
+                      />
+                    )}
                   </div>
+                  <span className="shrink-0 text-xs text-slate-500">{item.relativeTime}</span>
                 </div>
+                <p className="mt-0.5 break-words text-[13px] text-slate-300">
+                  {item.title}
+                  {item.detail && <span className="text-slate-500"> · {item.detail}</span>}
+                </p>
+                <FailureReasonLine message={item.reason} />
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
       ) : (
         <EmptyState message="No recent activity" sub="Failures and alerts will appear here when checks change state." />
@@ -892,76 +869,68 @@ export default function DashboardPage() {
   if (loading) return <LoadingSkeleton />;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <NotificationNudge unroutedMonitors={opsSummary?.unrouted_monitors ?? 0} />
 
-      {/* Error Banner */}
       {error && (
-        <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-          <p className="text-sm text-rose-400">{error}</p>
-          <Button variant="danger" size="sm" onClick={loadData}>Retry</Button>
-        </div>
+        <Callout
+          tone="danger"
+          action={<Button variant="danger" size="xs" onClick={loadData}>Retry</Button>}
+        >
+          {error}
+        </Callout>
       )}
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight text-white">Dashboard</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <TagFilterPicker
-            availableTags={availableTags}
-            selectedTags={selectedTags}
-            onToggleTag={toggleTag}
-            onClear={clearTags}
-          />
-          <Button variant="accent" icon={<Plus strokeWidth={1.75} />} asChild>
-            <Link href="/monitors/new">Add monitor</Link>
-          </Button>
-          <button
-            type="button"
-            onClick={loadData}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-[12px] border border-white/10 bg-white/[0.04] text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
-            aria-label="Refresh dashboard"
-          >
-            <RefreshCw className="h-4 w-4" strokeWidth={1.75} />
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        action={
+          <>
+            <TagFilterPicker
+              availableTags={availableTags}
+              selectedTags={selectedTags}
+              onToggleTag={toggleTag}
+              onClear={clearTags}
+            />
+            <IconButton icon={<RefreshCw strokeWidth={1.75} />} label="Refresh dashboard" onClick={loadData} />
+            <Button variant="accent" icon={<Plus className="h-4 w-4" strokeWidth={1.75} />} asChild>
+              <Link href="/monitors/new">Add monitor</Link>
+            </Button>
+          </>
+        }
+      />
 
       {hasTagFilter && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
-          <span className="text-xs font-medium uppercase tracking-wider text-cyan-300">Scoped to</span>
+        <div className="flex flex-wrap items-center gap-2 text-[13px]">
+          <span className="text-slate-400">Scoped to</span>
           {selectedTags.map((tag) => (
-            <span key={tag} className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-xs text-cyan-200">
+            <Pill key={tag} tone="neutral">
               {tag}
-            </span>
+            </Pill>
           ))}
-          <button onClick={clearTags} className="ml-auto inline-flex items-center gap-1 text-xs text-slate-400 transition-colors hover:text-white">
-            <X className="h-3.5 w-3.5" strokeWidth={1.8} />
+          <Button variant="subtle" size="xs" icon={<X className="h-3.5 w-3.5" strokeWidth={1.75} />} onClick={clearTags}>
             Clear
-          </button>
+          </Button>
         </div>
       )}
 
       {showRetentionWarning && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-          <p className="text-sm text-amber-300">
-            Data retention is set to {tenantRetentionDays} day{tenantRetentionDays === 1 ? '' : 's'}.
-            Older history is deleted, so this {timeRange} view may be partial.
-          </p>
-        </div>
+        <Callout tone="warning">
+          Data retention is set to {tenantRetentionDays} day{tenantRetentionDays === 1 ? '' : 's'}.
+          Older history is deleted, so this {timeRange} view may be partial.
+        </Callout>
       )}
 
       {noMatchingMonitors && (
-        <div className="rounded-lg border border-white/[0.08] bg-slate-900/60 px-4 py-3">
-          <p className="text-sm text-slate-300">No monitors match the selected tag combination.</p>
-          <p className="mt-1 text-xs text-slate-500">Adjust the tag filter to broaden the dashboard scope.</p>
-        </div>
+        <Callout tone="info" title="No monitors match the selected tag combination.">
+          Adjust the tag filter to broaden the dashboard scope.
+        </Callout>
       )}
 
       <div className="dash-enter">
         <OperationalSummaryCard summary={operationalSummary} />
       </div>
 
-      <div className="dash-enter grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]" style={{ animationDelay: '80ms' }}>
+      <div className="dash-enter grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
         <UptimeResponseChart
           trendData={trendData}
           hasEnoughTrendData={hasEnoughTrendData}
@@ -976,7 +945,7 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div className="dash-enter grid items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]" style={{ animationDelay: '160ms' }}>
+      <div className="dash-enter grid items-start gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
         <ServiceGroupsPanel
           groupTags={dashboard?.group_tags ?? []}
           groups={dashboard?.groups ?? []}

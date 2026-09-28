@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/Button';
 import BrandMark from '@/components/ui/BrandMark';
+import Callout from '@/components/ui/Callout';
 import { setApiKey } from '@/lib/auth';
 
 export default function ConnectPage() {
@@ -53,75 +54,59 @@ export default function ConnectPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      {/* Background gradient */}
-      <div className="pointer-events-none fixed inset-0 bg-gradient-to-br from-cyan-500/5 via-transparent to-violet-500/5" />
-      
-      <div className="relative w-full max-w-md p-8">
-        {/* Card */}
-        <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-8 backdrop-blur-xl">
-          {/* Logo */}
-          <div className="mb-8 flex justify-center">
-            <BrandMark size={56} className="drop-shadow-[0_8px_16px_rgba(255,90,36,0.25)]" />
-          </div>
-
-          {/* Header */}
-          <div className="mb-8 text-center">
-            <h1 className="text-2xl font-semibold tracking-tight text-white">
-              Welcome Back
-            </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Enter your API key to access the dashboard
-            </p>
-          </div>
-
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div>
-              <label htmlFor="api-key" className="mb-2 block text-sm font-medium text-slate-400">
-                API Key
-              </label>
-              <input
-                id="api-key"
-                name="api-key"
-                type="password"
-                required
-                className="input"
-                placeholder="Enter your API key"
-                value={apiKey}
-                onChange={(e) => setApiKeyValue(e.target.value)}
-                disabled={loading}
-              />
-            </div>
-
-            {error && (
-              <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-                <p className="text-sm text-rose-400">{error}</p>
-              </div>
-            )}
-
-            <Button
-              type="submit"
-              variant="accent"
-              size="sm"
-              loading={loading}
-              disabled={loading}
-              className="w-full justify-center"
-            >
-              {loading ? 'Connecting…' : 'Continue to dashboard'}
-            </Button>
-          </form>
-
-          {/* Footer */}
-          <div className="mt-8 text-center">
-            <p className="text-xs text-slate-600">
-              Need an API key? Check the{' '}
-              <a href="#" className="text-cyan-500 hover:text-cyan-400">
-                documentation
-              </a>
-            </p>
-          </div>
+    <div className="flex min-h-screen items-center justify-center px-4 py-10">
+      <div className="glass-overlay w-full max-w-md p-8">
+        <div className="mb-6 flex justify-center">
+          <BrandMark size={48} />
         </div>
+
+        <div className="mb-8 text-center">
+          <h1 className="text-2xl font-semibold tracking-tight text-white">
+            Welcome back
+          </h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Enter your API key to access the dashboard
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label htmlFor="api-key" className="mb-1.5 block text-[13px] font-medium text-slate-300">
+              API key
+            </label>
+            <input
+              id="api-key"
+              name="api-key"
+              type="password"
+              required
+              className="input"
+              placeholder="Enter your API key"
+              value={apiKey}
+              onChange={(e) => setApiKeyValue(e.target.value)}
+              disabled={loading}
+            />
+          </div>
+
+          {error && <Callout tone="danger">{error}</Callout>}
+
+          <Button
+            type="submit"
+            variant="accent"
+            size="sm"
+            loading={loading}
+            disabled={loading}
+            className="!h-10 w-full justify-center !text-sm"
+          >
+            {loading ? 'Connecting…' : 'Continue to dashboard'}
+          </Button>
+        </form>
+
+        <p className="mt-8 text-center text-xs text-slate-500">
+          Need an API key? Check the{' '}
+          <a href="#" className="text-cyan-300 hover:text-cyan-200">
+            documentation
+          </a>
+        </p>
       </div>
     </div>
   );

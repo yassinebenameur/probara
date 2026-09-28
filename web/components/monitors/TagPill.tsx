@@ -2,22 +2,19 @@
 
 import Pill from '@/components/ui/Pill';
 
-// Tag color palette - vibrant colors that work on dark backgrounds
+// Categorical tag hues. Status hues (rose, amber, emerald), pink (reads as
+// rose) and the orange accent are left out so a tag never reads as a state or
+// an action. Keep the length at 9 so existing tags keep their colour.
 const TAG_COLORS = [
-  { bg: 'bg-rose-500/20', text: 'text-rose-400', border: 'border-rose-500/30' },
-  { bg: 'bg-amber-500/20', text: 'text-amber-400', border: 'border-amber-500/30' },
-  { bg: 'bg-lime-500/20', text: 'text-lime-400', border: 'border-lime-500/30' },
-  { bg: 'bg-emerald-500/20', text: 'text-emerald-400', border: 'border-emerald-500/30' },
-  { bg: 'bg-teal-500/20', text: 'text-teal-400', border: 'border-teal-500/30' },
-  { bg: 'bg-cyan-500/20', text: 'text-cyan-400', border: 'border-cyan-500/30' },
-  { bg: 'bg-sky-500/20', text: 'text-sky-400', border: 'border-sky-500/30' },
-  { bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30' },
-  { bg: 'bg-indigo-500/20', text: 'text-indigo-400', border: 'border-indigo-500/30' },
-  { bg: 'bg-violet-500/20', text: 'text-violet-400', border: 'border-violet-500/30' },
-  { bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30' },
-  { bg: 'bg-fuchsia-500/20', text: 'text-fuchsia-400', border: 'border-fuchsia-500/30' },
-  { bg: 'bg-pink-500/20', text: 'text-pink-400', border: 'border-pink-500/30' },
-  { bg: 'bg-orange-500/20', text: 'text-orange-400', border: 'border-orange-500/30' },
+  { bg: 'bg-lime-500/[0.13]', text: 'text-lime-300', border: 'border-transparent' },
+  { bg: 'bg-teal-500/[0.13]', text: 'text-teal-300', border: 'border-transparent' },
+  { bg: 'bg-sky-500/[0.13]', text: 'text-sky-300', border: 'border-transparent' },
+  { bg: 'bg-blue-500/[0.13]', text: 'text-blue-300', border: 'border-transparent' },
+  { bg: 'bg-indigo-500/[0.13]', text: 'text-indigo-300', border: 'border-transparent' },
+  { bg: 'bg-violet-500/[0.13]', text: 'text-violet-300', border: 'border-transparent' },
+  { bg: 'bg-purple-500/[0.13]', text: 'text-purple-300', border: 'border-transparent' },
+  { bg: 'bg-fuchsia-500/[0.13]', text: 'text-fuchsia-300', border: 'border-transparent' },
+  { bg: 'bg-slate-500/[0.13]', text: 'text-slate-300', border: 'border-transparent' },
 ];
 
 // Hash function to get consistent color for a tag
@@ -54,8 +51,8 @@ export default function TagPill({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={`inline-flex rounded-full transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 ${
-        selected ? 'ring-1 ring-offset-1 ring-offset-slate-900 ring-white/20' : 'hover:brightness-125'
+      className={`inline-flex rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+        selected ? 'ring-1 ring-cyan-500/60' : 'hover:opacity-80'
       }`}
     >
       {pill}

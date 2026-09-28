@@ -37,7 +37,7 @@ export function LocationsSection({
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-slate-500">
+      <p className="text-[13px] text-slate-400">
         Run this check from your private locations. None selected = the default platform fleet.
       </p>
 
@@ -51,7 +51,7 @@ export function LocationsSection({
       {locations.length === 0 && (
         <p className="text-xs text-slate-500">
           Create one under{' '}
-          <Link href="/locations" className="text-cyan-400 hover:text-cyan-300">
+          <Link href="/locations" className="font-medium text-cyan-300 hover:text-cyan-200">
             Locations
           </Link>{' '}
           and deploy a worker there first.
@@ -60,7 +60,7 @@ export function LocationsSection({
 
       {selectedIds.length >= 2 && (
         <div>
-          <label className="mb-1.5 block text-xs font-medium text-slate-400">
+          <label className="mb-1.5 block text-[13px] font-medium text-slate-300">
             Locations required down
           </label>
           <input

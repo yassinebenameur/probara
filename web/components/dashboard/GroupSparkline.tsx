@@ -14,7 +14,7 @@ export default function GroupSparkline({ buckets }: Props) {
 
   const values = buckets.filter((v): v is number => v !== null);
   if (values.length === 0) {
-    return <span className="text-xs text-slate-600">no sparkline data</span>;
+    return <span className="text-xs text-slate-500">No sparkline data</span>;
   }
 
   // Consecutive non-null runs become separate polylines so no-data buckets
@@ -36,7 +36,7 @@ export default function GroupSparkline({ buckets }: Props) {
   if (current.length > 0) segments.push(current);
 
   const worst = Math.min(...values);
-  const stroke = worst >= 99 ? '#46d17f' : worst >= 95 ? '#e6b23f' : '#f87171';
+  const stroke = worst >= 99 ? 'var(--success)' : worst >= 95 ? 'var(--warning)' : 'var(--danger)';
 
   return (
     <svg width={width} height={height} aria-label="Uptime sparkline" role="img">

@@ -37,15 +37,15 @@ export default function FormField({
   return (
     <div>
       <div className="mb-1.5 flex items-center gap-1.5">
-        <label className="block text-xs font-medium text-slate-400">
+        <label className="block text-[13px] font-medium text-slate-300">
           {label}
-          {required && <span className="ml-1 text-rose-400">*</span>}
+          {required && <span className="ml-1 text-rose-300">*</span>}
         </label>
         {renderInfoTip(infoTip)}
       </div>
       {description && <p className="mb-2 text-xs text-slate-500">{description}</p>}
       {children}
-      {error && <p className="mt-1 text-xs text-rose-400">{error}</p>}
+      {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
     </div>
   );
 }

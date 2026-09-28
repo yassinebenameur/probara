@@ -34,19 +34,19 @@ export default function SelectCheckbox({
         event.stopPropagation();
         if (!disabled) onChange();
       }}
-      className={`flex ${box} flex-shrink-0 items-center justify-center rounded border transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 ${
+      className={`flex ${box} flex-shrink-0 items-center justify-center rounded-[5px] border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
         active
           ? 'border-cyan-500 bg-cyan-500'
-          : 'border-white/20 bg-slate-900/60 hover:border-white/40'
+          : 'border-[var(--control-edge-strong)] bg-control hover:border-slate-500'
       } ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'} ${className}`}
     >
       {indeterminate ? (
-        <svg className={`${icon} text-white`} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <svg className={`${icon} text-onaccent`} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <rect x="5" y="11" width="14" height="2.5" rx="1" />
         </svg>
       ) : checked ? (
         <svg
-          className={`${icon} text-white`}
+          className={`${icon} text-onaccent`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"

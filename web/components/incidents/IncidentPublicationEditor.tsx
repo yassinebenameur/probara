@@ -7,7 +7,10 @@ import { getStatusPages } from '@/lib/api';
 import type { IncidentDetail, StatusPage } from '@/lib/types';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
+import Select from '@/components/ui/Select';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
 interface IncidentPublicationEditorProps {
   incident: IncidentDetail;
@@ -101,85 +104,84 @@ export default function IncidentPublicationEditor({
 
   return (
     <Panel
-      title="Status Page Publication"
+      title="Status page publication"
       subtitle="Publish or remove the incident from a public status page."
     >
       <div className="space-y-4">
         {loading ? (
-          <div className="text-sm text-slate-500">Loading status pages...</div>
+          <div className="text-sm text-slate-500">Loading status pages…</div>
         ) : statusPages.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-white/[0.08] px-4 py-6 text-sm text-slate-500">
+          <div className="text-sm text-slate-400">
             No status pages are available for publication yet.
           </div>
         ) : (
           <>
             {incident.publications.length > 0 ? (
-              <div className="space-y-2">
+              <div className="glass-well divide-y divide-divider">
                 {incident.publications.map((publication) => (
                   <div
                     key={publication.status_page_id}
-                    className="rounded-lg border border-white/[0.06] bg-slate-950/40 px-4 py-3"
+                    className="flex items-center justify-between gap-3 px-4 py-3"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-white">
-                          {publication.status_page_title}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          /{publication.status_page_slug} · {publicationComponentNames(publication.monitor_ids)}
-                        </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-white">
+                        {publication.status_page_title}
                       </div>
-                      <IconButton
-                        icon={<EyeOff strokeWidth={1.75} />}
-                        label="Unpublish from this status page"
-                        onClick={() => onUnpublish(publication.status_page_id)}
-                        disabled={saving}
-                      />
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        <span className="font-mono">/{publication.status_page_slug}</span>
+                        {' · '}
+                        {publicationComponentNames(publication.monitor_ids)}
+                      </div>
                     </div>
+                    <IconButton
+                      icon={<EyeOff strokeWidth={1.75} />}
+                      label="Unpublish from this status page"
+                      onClick={() => onUnpublish(publication.status_page_id)}
+                      disabled={saving}
+                    />
                   </div>
                 ))}
               </div>
             ) : null}
 
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">
-                Status page
-              </label>
-              <select
-                className="input"
+            <div className="max-w-md">
+              <Select
+                label="Status page"
                 value={selectedStatusPageId}
                 onChange={(event) => setSelectedStatusPageId(event.target.value)}
                 disabled={saving}
+                className="h-9 py-0 text-[13px]"
               >
                 {statusPages.map((statusPage) => (
                   <option key={statusPage.id} value={statusPage.id}>
                     {statusPage.title} ({statusPage.slug})
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/40 px-4 py-4">
-              <div className="text-sm font-medium text-white">Affected components</div>
-              <div className="mt-1 text-xs text-slate-500">
+            <div>
+              <div className="text-[13px] font-medium text-slate-300">Affected components</div>
+              <div className="mt-0.5 text-xs text-slate-500">
                 Leave all unchecked to publish the incident platform-wide.
               </div>
               {availableComponentOptions.length === 0 ? (
-                <div className="mt-3 text-sm text-slate-500">
+                <div className="mt-3 text-sm text-slate-400">
                   No linked incident monitors are present on the selected status page.
                 </div>
               ) : (
                 <div className="mt-3 space-y-2">
                   {availableComponentOptions.map((monitor) => (
-                    <label key={monitor.id} className="flex items-center gap-3 text-sm text-slate-300">
+                    <label key={monitor.id} className="flex items-center gap-2.5 text-sm text-slate-300">
                       <input
                         type="checkbox"
+                        className="h-4 w-4 accent-cyan-500"
                         checked={selectedMonitorIds.includes(monitor.id)}
                         onChange={() => toggleMonitorSelection(monitor.id)}
                         disabled={saving}
                       />
                       <span>{monitor.name}</span>
-                      <span className="text-xs uppercase tracking-wide text-slate-500">{monitor.type}</span>
+                      <span className="text-xs text-slate-500">{monitorTypeLabel(monitor.type)}</span>
                     </label>
                   ))}
                 </div>
@@ -189,7 +191,7 @@ export default function IncidentPublicationEditor({
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                variant="accent"
+                variant="ghost"
                 size="sm"
                 onClick={handlePublish}
                 disabled={saving || !selectedStatusPageId}
@@ -199,7 +201,7 @@ export default function IncidentPublicationEditor({
               </Button>
               <Button
                 type="button"
-                variant="ghost"
+                variant="subtle"
                 size="sm"
                 onClick={handleUnpublish}
                 disabled={saving || !selectedStatusPageId}
@@ -210,11 +212,7 @@ export default function IncidentPublicationEditor({
           </>
         )}
 
-        {error ? (
-          <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-            {error}
-          </div>
-        ) : null}
+        {error ? <Callout tone="danger">{error}</Callout> : null}
       </div>
     </Panel>
   );

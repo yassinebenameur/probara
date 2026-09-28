@@ -46,10 +46,10 @@ export default function MonitorDetailOverview({
     );
   }
 
-  if (loading) {
+  if (loading && !analytics) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="text-slate-500">Loading monitor data...</div>
+        <div className="text-sm text-slate-500">Loading monitor data...</div>
       </div>
     );
   }

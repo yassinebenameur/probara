@@ -18,16 +18,21 @@ import {
 } from '@/lib/api';
 import type { Alert, IncidentDetail, IncidentState, Monitor } from '@/lib/types';
 import AIRootCausePanel from '@/components/incidents/AIRootCausePanel';
+import { incidentStateTone } from '@/components/incidents/IncidentList';
 import IncidentPublicationEditor from '@/components/incidents/IncidentPublicationEditor';
 import IncidentTimeline from '@/components/incidents/IncidentTimeline';
 import Panel from '@/components/ui/Panel';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import { Unlink } from 'lucide-react';
 import Pill from '@/components/ui/Pill';
 import { formatDateTime } from '@/lib/format';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+
+const ATTACH_SELECT = 'input h-9 min-w-0 flex-1 py-0 text-[13px]';
 
 export default function IncidentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -188,7 +193,7 @@ export default function IncidentDetailPage() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6 text-sm text-slate-500">
+      <div className="glass p-8 text-center text-sm text-slate-500">
         Loading incident…
       </div>
     );
@@ -196,12 +201,12 @@ export default function IncidentDetailPage() {
 
   if (error || !incident) {
     return (
-      <div className="space-y-4">
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          {error || 'Incident not found'}
-        </div>
-        <Button variant="ghost" size="sm" onClick={loadIncident}>Retry</Button>
-      </div>
+      <Callout
+        tone="danger"
+        action={<Button variant="subtle" size="xs" onClick={loadIncident}>Retry</Button>}
+      >
+        {error || 'Incident not found'}
+      </Callout>
     );
   }
 
@@ -217,17 +222,19 @@ export default function IncidentDetailPage() {
     <div className="space-y-6">
       <PageHeader
         breadcrumb={[{ label: 'Incidents', href: '/incidents' }, { label: incident.title }]}
-        title={incident.title}
+        title={
+          <span className="flex items-center gap-3">
+            <span className="min-w-0 truncate">{incident.title}</span>
+            <Pill tone={incidentStateTone(incident.state)} dot className="capitalize">
+              {incident.state}
+            </Pill>
+          </span>
+        }
         subtitle={incident.is_auto_created ? 'Auto-created incident' : 'Manual incident'}
-      />
-
-      <Panel
-        title="Status"
-        actions={(
-          <div className="flex items-center gap-1.5">
+        action={(
+          <>
             <Button
               variant="ghost"
-              size="xs"
               onClick={() => handleStateTransition('identified')}
               disabled={incident.state === 'identified' || incident.state === 'resolved'}
             >
@@ -235,7 +242,6 @@ export default function IncidentDetailPage() {
             </Button>
             <Button
               variant="ghost"
-              size="xs"
               onClick={() => handleStateTransition('monitoring')}
               disabled={incident.state === 'monitoring' || incident.state === 'resolved'}
             >
@@ -243,51 +249,69 @@ export default function IncidentDetailPage() {
             </Button>
             <Button
               variant="accent"
-              size="xs"
               onClick={() => handleStateTransition('resolved')}
               disabled={incident.state === 'resolved'}
             >
               Resolve
             </Button>
-          </div>
+          </>
         )}
-      >
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,1fr)]">
-          <div className="space-y-3">
-            <p className="text-sm text-slate-300">{incident.summary || 'No summary provided.'}</p>
-            <div className="flex flex-wrap gap-1.5">
-              <Pill tone="danger" size="xs" dot>{incident.state}</Pill>
-              <Pill tone={incident.is_auto_created ? 'warning' : 'neutral'} size="xs">
-                {incident.is_auto_created ? 'Auto' : 'Manual'}
-              </Pill>
-            </div>
-          </div>
+      />
 
-          <div className="grid gap-3 rounded-xl border border-white/[0.06] bg-slate-950/40 p-4 text-sm">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Created</div>
-              <div className="mt-1 text-slate-300">{formatDateTime(incident.created_at)}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Last updated</div>
-              <div className="mt-1 text-slate-300">{formatDateTime(incident.updated_at)}</div>
-            </div>
-            <div>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Resolved</div>
-              <div className="mt-1 text-slate-300">{formatDateTime(incident.resolved_at, 'Not resolved')}</div>
-            </div>
-          </div>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
+        <div className="min-w-0 space-y-6">
+          <Panel title="Summary">
+            <p className="text-sm leading-relaxed text-slate-200">{incident.summary || 'No summary provided.'}</p>
+          </Panel>
+
+          <AIRootCausePanel incidentId={incident.id} initial={incident.ai_analysis ?? null} />
+
+          <IncidentTimeline
+            entries={incident.timeline || []}
+            onAddInternalNote={handleAddInternalNote}
+            onAddPublicUpdate={handleAddPublicUpdate}
+          />
         </div>
-      </Panel>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Panel
-          title="Linked alerts"
-          subtitle={`${incidentAlerts.length} linked alert${incidentAlerts.length === 1 ? '' : 's'}`}
-          actions={(
-            <div className="flex items-center gap-2">
+        <div className="grid min-w-0 content-start gap-4 md:grid-cols-2 xl:grid-cols-1">
+          <Panel title="Details">
+            <dl className="space-y-2.5 text-sm">
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">Created</dt>
+                <dd className="text-right text-slate-200">{formatDateTime(incident.created_at)}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">Last updated</dt>
+                <dd className="text-right text-slate-200">{formatDateTime(incident.updated_at)}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-slate-400">Resolved</dt>
+                <dd className="text-right text-slate-200">{formatDateTime(incident.resolved_at, 'Not resolved')}</dd>
+              </div>
+            </dl>
+          </Panel>
+
+          <Panel title="Linked alerts">
+            {incidentAlerts.length === 0 ? (
+              <p className="text-sm text-slate-500">No alerts linked yet.</p>
+            ) : (
+              <div className="-mt-2 divide-y divide-divider">
+                {incidentAlerts.map((alert) => (
+                  <div key={alert.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-white">{alert.monitor_name || alert.id}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        {alert.status} · {alert.failure_count} failures
+                      </div>
+                    </div>
+                    <IconButton size="sm" icon={<Unlink strokeWidth={1.75} />} label="Detach from incident" onClick={() => handleDetachAlert(alert.id)} />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 flex items-center gap-2">
               <select
-                className="input h-8 min-w-[220px] py-0 text-xs"
+                className={ATTACH_SELECT}
                 value={selectedAlertId}
                 onChange={(event) => setSelectedAlertId(event.target.value)}
               >
@@ -300,94 +324,60 @@ export default function IncidentDetailPage() {
               </select>
               <Button
                 variant="ghost"
-                size="xs"
                 onClick={handleAttachAlert}
                 disabled={!selectedAlertId}
               >
                 Attach
               </Button>
             </div>
-          )}
-        >
-          <div className="space-y-3">
-            {incidentAlerts.length === 0 ? (
-              <div className="text-sm text-slate-500">No alerts linked yet.</div>
-            ) : (
-              incidentAlerts.map((alert) => (
-                <div key={alert.id} className="flex items-start justify-between gap-4 rounded-xl border border-white/[0.06] bg-slate-950/40 px-4 py-3">
-                  <div>
-                    <div className="text-sm font-medium text-white">{alert.monitor_name || alert.id}</div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {alert.status} · {alert.failure_count} failures
-                    </div>
-                  </div>
-                  <IconButton icon={<Unlink strokeWidth={1.75} />} label="Detach from incident" onClick={() => handleDetachAlert(alert.id)} />
-                </div>
-              ))
-            )}
-          </div>
-        </Panel>
+          </Panel>
 
-        <Panel
-          title="Linked monitors"
-          subtitle={`${incidentMonitors.length} linked monitor${incidentMonitors.length === 1 ? '' : 's'}`}
-          actions={(
-            <div className="flex items-center gap-2">
+          <Panel title="Linked monitors">
+            {incidentMonitors.length === 0 ? (
+              <p className="text-sm text-slate-500">No monitors linked yet.</p>
+            ) : (
+              <div className="-mt-2 divide-y divide-divider">
+                {incidentMonitors.map((monitor) => (
+                  <div key={monitor.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-white">{monitor.name}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">{monitorTypeLabel(monitor.type)}</div>
+                    </div>
+                    <IconButton size="sm" icon={<Unlink strokeWidth={1.75} />} label="Detach from incident" onClick={() => handleDetachMonitor(monitor.id)} />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 flex items-center gap-2">
               <select
-                className="input h-8 min-w-[220px] py-0 text-xs"
+                className={ATTACH_SELECT}
                 value={selectedMonitorId}
                 onChange={(event) => setSelectedMonitorId(event.target.value)}
               >
                 <option value="">Select monitor</option>
                 {availableMonitors.map((monitor) => (
                   <option key={monitor.id} value={monitor.id}>
-                    {monitor.name} · {monitor.type}
+                    {monitor.name} · {monitorTypeLabel(monitor.type)}
                   </option>
                 ))}
               </select>
               <Button
                 variant="ghost"
-                size="xs"
                 onClick={handleAttachMonitor}
                 disabled={!selectedMonitorId}
               >
                 Attach
               </Button>
             </div>
-          )}
-        >
-          <div className="space-y-3">
-            {incidentMonitors.length === 0 ? (
-              <div className="text-sm text-slate-500">No monitors linked yet.</div>
-            ) : (
-              incidentMonitors.map((monitor) => (
-                <div key={monitor.id} className="flex items-start justify-between gap-4 rounded-xl border border-white/[0.06] bg-slate-950/40 px-4 py-3">
-                  <div>
-                    <div className="text-sm font-medium text-white">{monitor.name}</div>
-                    <div className="mt-1 text-xs uppercase tracking-wide text-slate-500">{monitor.type}</div>
-                  </div>
-                  <IconButton icon={<Unlink strokeWidth={1.75} />} label="Detach from incident" onClick={() => handleDetachMonitor(monitor.id)} />
-                </div>
-              ))
-            )}
-          </div>
-        </Panel>
+          </Panel>
+
+          <IncidentPublicationEditor
+            incident={{ ...incident, alerts: incidentAlerts, monitors: incidentMonitors, publications: incidentPublications }}
+            onPublish={handlePublish}
+            onUnpublish={handleUnpublish}
+          />
+        </div>
       </div>
-
-      <AIRootCausePanel incidentId={incident.id} initial={incident.ai_analysis ?? null} />
-
-      <IncidentTimeline
-        entries={incident.timeline || []}
-        onAddInternalNote={handleAddInternalNote}
-        onAddPublicUpdate={handleAddPublicUpdate}
-      />
-
-      <IncidentPublicationEditor
-        incident={{ ...incident, alerts: incidentAlerts, monitors: incidentMonitors, publications: incidentPublications }}
-        onPublish={handlePublish}
-        onUnpublish={handleUnpublish}
-      />
-
     </div>
   );
 }

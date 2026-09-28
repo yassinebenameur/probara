@@ -22,11 +22,11 @@ interface FormActionsProps {
 
 export default function FormActions({ cancel, submit, sticky = false, middle }: FormActionsProps) {
   const container = sticky
-    ? 'sticky bottom-0 z-10 -mx-6 -mb-6 mt-6 border-t border-white/[0.06] bg-slate-900/95 px-6 py-4 backdrop-blur'
+    ? 'glass-overlay sticky bottom-4 z-10 mt-6 !rounded-2xl px-4 py-3'
     : 'mt-6';
   return (
-    <div className={`${container} flex items-center justify-end gap-3`}>
-      {middle && <div className="mr-auto text-xs text-slate-500">{middle}</div>}
+    <div className={`${container} flex flex-wrap items-center justify-end gap-3`}>
+      {middle && <div className="w-full text-xs text-slate-500 sm:mr-auto sm:w-auto">{middle}</div>}
       {cancel && (
         <Button
           variant="ghost"

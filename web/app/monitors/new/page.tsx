@@ -7,7 +7,6 @@ import { createMonitor, getMonitor } from '@/lib/api';
 import { buildClonedMonitorInitialData } from '@/lib/monitor-clone';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import PageHeader from '@/components/ui/PageHeader';
-import FormCard from '@/components/ui/FormCard';
 import { useToast } from '@/components/ui/ToastProvider';
 
 export default function NewMonitorPage() {
@@ -53,7 +52,7 @@ export default function NewMonitorPage() {
     return () => {
       cancelled = true;
     };
-  }, [cloneMonitorId]);
+  }, [cloneMonitorId, showToast]);
 
   const handleSubmit = async (data: CreateMonitorRequest | UpdateMonitorRequest) => {
     try {
@@ -86,21 +85,18 @@ export default function NewMonitorPage() {
         }
       />
 
-      <FormCard>
-        {isCloneMode && cloneLoading ? (
-          <div className="flex h-40 items-center justify-center text-sm text-slate-500">
-            Loading clone form…
-          </div>
-        ) : (
-          <MonitorForm
-            initialData={initialData || undefined}
-            onSubmit={handleSubmit}
-            onCancel={() => router.push('/monitors')}
-            loading={loading}
-          />
-        )}
-      </FormCard>
-
+      {isCloneMode && cloneLoading ? (
+        <div className="glass flex h-40 items-center justify-center text-sm text-slate-500">
+          Loading clone form…
+        </div>
+      ) : (
+        <MonitorForm
+          initialData={initialData || undefined}
+          onSubmit={handleSubmit}
+          onCancel={() => router.push('/monitors')}
+          loading={loading}
+        />
+      )}
     </div>
   );
 }

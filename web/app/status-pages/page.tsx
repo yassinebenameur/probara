@@ -11,6 +11,7 @@ import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
+import Callout from '@/components/ui/Callout';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
@@ -74,7 +75,12 @@ export default function StatusPagesPage() {
     return (
       <div className="space-y-6">
         {header}
-        <div className="text-sm text-slate-500">Loading status pages…</div>
+        <div className="grid animate-pulse gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="glass h-[146px]" />
+          ))}
+        </div>
+        <span className="sr-only">Loading status pages…</span>
       </div>
     );
   }
@@ -83,12 +89,16 @@ export default function StatusPagesPage() {
     return (
       <div className="space-y-6">
         {header}
-        <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+        <Callout
+          tone="danger"
+          action={
+            <Button variant="ghost" size="xs" onClick={loadStatusPages}>
+              Retry
+            </Button>
+          }
+        >
           {error}
-          <Button variant="ghost" size="xs" className="ml-3" onClick={loadStatusPages}>
-            Retry
-          </Button>
-        </div>
+        </Callout>
       </div>
     );
   }
@@ -113,15 +123,12 @@ export default function StatusPagesPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {statusPages.map((page) => (
-            <div
-              key={page.id}
-              className="group rounded-xl border border-white/[0.06] bg-slate-900/50 p-5 transition-colors hover:border-white/[0.1]"
-            >
+            <div key={page.id} className="glass glass-hover relative p-5">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <Link
                     href={`/status-pages/${page.id}`}
-                    className="block truncate text-sm font-medium text-white hover:text-cyan-400"
+                    className="block truncate text-[15px] font-semibold text-white after:absolute after:inset-0 after:rounded-2xl hover:text-cyan-300"
                   >
                     {page.title}
                   </Link>
@@ -129,7 +136,7 @@ export default function StatusPagesPage() {
                     href={resolveStatusPagePublicUrl(page)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="mt-0.5 inline-flex items-center gap-1 font-mono text-xs text-slate-500 hover:text-slate-300"
+                    className="relative mt-0.5 inline-flex items-center gap-1 font-mono text-xs text-slate-500 hover:text-slate-300"
                   >
                     /{page.slug}
                     <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
@@ -140,11 +147,12 @@ export default function StatusPagesPage() {
                   label="Delete"
                   onClick={() => setPendingDelete(page)}
                   danger
+                  className="relative"
                 />
               </div>
 
               {page.description && (
-                <p className="mt-3 text-xs text-slate-400 line-clamp-2">{page.description}</p>
+                <p className="mt-3 line-clamp-2 text-[13px] text-slate-400">{page.description}</p>
               )}
 
               <p className="mt-3 text-xs text-slate-500">

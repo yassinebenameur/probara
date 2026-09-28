@@ -4,13 +4,12 @@ import { useCallback, useEffect, useState } from 'react';
 
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
-import Pill from '@/components/ui/Pill';
+import Callout from '@/components/ui/Callout';
+import Input from '@/components/ui/Input';
+import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
 import { getAISettings, updateAISettings, testAISettings } from '@/lib/api';
 import type { AISettings, AITestResult } from '@/lib/types';
-
-const SELECT_CLASS =
-  'rounded border border-white/[0.08] bg-slate-800 px-3 py-2 text-xs text-slate-300 focus:border-cyan-500/50 focus:outline-none cursor-pointer';
 
 // Provider options — extend as shared/ai gains vendors. The value must match a
 // provider the backend's newProvider() understands.
@@ -122,14 +121,10 @@ export function AISettingsPanel() {
       subtitle="Configure the LLM used to analyze incidents. Works with any OpenAI-compatible endpoint."
     >
       {loading ? (
-        <div className="text-sm text-slate-500">Loading…</div>
+        <p className="text-sm text-slate-500">Loading…</p>
       ) : (
         <div className="space-y-4">
-          {error && (
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-              {error}
-            </div>
-          )}
+          {error && <Callout tone="danger">{error}</Callout>}
 
           <div className="flex items-start gap-3">
             <input
@@ -137,110 +132,85 @@ export function AISettingsPanel() {
               id="ai-enabled"
               checked={enabled}
               onChange={(e) => setEnabled(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
+              className="mt-0.5 h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500"
             />
-            <label htmlFor="ai-enabled" className="text-sm text-slate-300 cursor-pointer">
+            <label htmlFor="ai-enabled" className="cursor-pointer text-sm text-slate-200">
               Enable AI analysis for this workspace
             </label>
           </div>
 
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Provider</label>
-            <select className={SELECT_CLASS} value={provider} onChange={(e) => setProvider(e.target.value)}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Select label="Provider" className="h-10" value={provider} onChange={(e) => setProvider(e.target.value)}>
               {PROVIDERS.map((p) => (
                 <option key={p.value} value={p.value}>{p.label}</option>
               ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Base URL</label>
-            <input
-              className="input"
+            </Select>
+            <Input
+              label="Base URL"
               placeholder="http://localhost:30000/v1"
               value={baseURL}
               onChange={(e) => setBaseURL(e.target.value)}
             />
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Model</label>
-            <input
-              className="input"
+            <Input
+              label="Model"
               placeholder="gpt-4o-mini"
               value={model}
               onChange={(e) => setModel(e.target.value)}
             />
+            <div>
+              <label className="mb-1.5 block text-[13px] font-medium text-slate-300">
+                API key {hasAPIKey && <span className="font-normal text-slate-500">(set)</span>}
+              </label>
+              <input
+                className="input"
+                type="password"
+                placeholder={hasAPIKey ? API_KEY_PLACEHOLDER : 'Optional — leave blank for keyless local servers'}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">
-              API key {hasAPIKey && <span className="text-slate-500">(set)</span>}
-            </label>
-            <input
-              className="input"
-              type="password"
-              placeholder={hasAPIKey ? API_KEY_PLACEHOLDER : 'Optional — leave blank for keyless local servers'}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </div>
-
-          <details className="text-sm">
-            <summary className="cursor-pointer text-xs font-medium text-slate-400">Advanced</summary>
-            <div className="mt-3 grid grid-cols-2 gap-4">
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Structured output</label>
-                <select className={SELECT_CLASS} value={jsonMode} onChange={(e) => setJSONMode(e.target.value)}>
+          <details>
+            <summary className="cursor-pointer text-[13px] font-medium text-slate-400 transition-colors hover:text-white">
+              Advanced
+            </summary>
+            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="sm:col-span-2">
+                <Select label="Structured output" className="h-10" value={jsonMode} onChange={(e) => setJSONMode(e.target.value)}>
                   {JSON_MODES.map((m) => (
                     <option key={m.value} value={m.value}>{m.label}</option>
                   ))}
-                </select>
+                </Select>
               </div>
-              <div />
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Max tokens</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={maxTokens}
-                  onChange={(e) => setMaxTokens(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-slate-400">Timeout (seconds)</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={timeoutSeconds}
-                  onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
-                />
-              </div>
+              <Input
+                label="Max tokens"
+                type="number"
+                min={1}
+                value={maxTokens}
+                onChange={(e) => setMaxTokens(Number(e.target.value))}
+              />
+              <Input
+                label="Timeout (seconds)"
+                type="number"
+                min={1}
+                value={timeoutSeconds}
+                onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
+              />
             </div>
           </details>
 
           {testResult && (
-            <div
-              className={`rounded-lg border px-3 py-2 text-xs ${
-                testResult.ok
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                  : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-              }`}
-            >
+            <Callout tone={testResult.ok ? 'success' : 'danger'}>
               {testResult.ok ? (
                 <>Connected{testResult.model ? ` — model: ${testResult.model}` : ''}.</>
               ) : (
                 <>Test failed: {testResult.message}</>
               )}
-            </div>
+            </Callout>
           )}
 
           <div className="flex items-center justify-end gap-2">
-            <Pill tone={enabled ? 'success' : 'neutral'} size="xs">
-              {enabled ? 'Enabled' : 'Disabled'}
-            </Pill>
             <Button variant="ghost" size="sm" loading={testing} disabled={testing || !baseURL || !model} onClick={handleTest}>
               Test connection
             </Button>

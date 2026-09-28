@@ -19,6 +19,7 @@ import {
 } from '@/lib/types';
 import { getMonitorMetricsSnapshots } from '@/lib/api';
 import { formatBytes } from '@/lib/metrics';
+import Callout from '@/components/ui/Callout';
 import InfoTip from '@/components/ui/InfoTip';
 import {
   MetricChart,
@@ -268,7 +269,7 @@ export default function MongoClusterPanels({
         series: [
           { key: 'reads', name: 'Reads', color: SERIES_COLORS[2] },
           { key: 'writes', name: 'Writes', color: SERIES_COLORS[1] },
-          { key: 'commands', name: 'Commands', color: SERIES_COLORS[5] },
+          { key: 'commands', name: 'Commands', color: SERIES_COLORS[4] },
         ],
         yTickFormatter: opsValue,
         valueFormatter: opsValue,
@@ -332,9 +333,9 @@ export default function MongoClusterPanels({
   if (panels.length === 0 && !unauthorized) return null;
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-slate-900/40 p-4">
+    <div className="glass p-5">
       <div className="mb-4 flex items-center gap-1.5">
-        <h3 className="text-sm font-medium text-white">Cluster metrics</h3>
+        <h3 className="text-[15px] font-semibold text-white">Cluster metrics</h3>
         <InfoTip inLabel ariaLabel="About cluster metrics">
           One snapshot per check from the enabled cluster checks (serverStatus / replSetGetStatus, read with the
           clusterMonitor role). Operation and network counters are cumulative on the server and shown here as
@@ -342,40 +343,38 @@ export default function MongoClusterPanels({
           samples while rates stay averaged across the skipped checks.
         </InfoTip>
         {data?.is_partial && (
-          <span className="ml-auto text-[11px] text-slate-500">Last 30 days — raw check retention</span>
+          <span className="ml-auto text-xs text-slate-400">Last 30 days — raw check retention</span>
         )}
       </div>
       {unauthorized && (
-        <p className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-xs text-amber-300">
+        <Callout tone="warning" className={panels.length > 0 ? 'mb-4' : undefined}>
           Cluster checks are enabled but skipped — grant the monitoring user the clusterMonitor role.
-        </p>
+        </Callout>
       )}
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         {panels.map((panel) => (
-          <div key={panel.title}>
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs text-slate-500">{panel.title}</span>
-              <span className="font-mono text-xs text-slate-400">{panel.headline}</span>
+          <div key={panel.title} className="glass-well p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <span className="text-[13px] font-medium text-slate-200">{panel.title}</span>
+              <span className="text-xs tabular-nums text-slate-400">{panel.headline}</span>
             </div>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
-              <MetricChart
-                data={panel.rows}
-                series={panel.series}
-                range={chartRange(timeRange)}
-                yDomain={panel.yDomain}
-                yTickFormatter={panel.yTickFormatter}
-                valueFormatter={panel.valueFormatter}
-                height={150}
-                referenceLines={panel.referenceLines}
-                syncId=""
-                yAxisWidth={panel.yAxisWidth}
-              />
-            </div>
+            <MetricChart
+              data={panel.rows}
+              series={panel.series}
+              range={chartRange(timeRange)}
+              yDomain={panel.yDomain}
+              yTickFormatter={panel.yTickFormatter}
+              valueFormatter={panel.valueFormatter}
+              height={150}
+              referenceLines={panel.referenceLines}
+              syncId=""
+              yAxisWidth={panel.yAxisWidth}
+            />
             {panel.series.length > 1 && (
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                 {panel.series.map((s) => (
                   <span key={s.key} className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.color }} />
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
                     {s.name}
                   </span>
                 ))}

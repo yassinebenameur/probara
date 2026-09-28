@@ -10,12 +10,14 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import { AlertingSection } from './AlertingSection';
 import MetricRuleBuilder, {
   MetricRuleDraft,
   draftsFromRules,
   rulesFromDrafts,
 } from './MetricRuleBuilder';
+import Switch from '@/components/ui/Switch';
 
 type ServerType =
   | 'linux-amd64'
@@ -331,20 +333,20 @@ export default function AgentForm({
       <div className="space-y-5">
         <FormSection title="Collector installation">
           {loadingInstallCmd ? (
-            <div className="text-sm text-slate-500">Loading installation details…</div>
+            <p className="text-sm text-slate-500">Loading installation details…</p>
           ) : installCommand ? (
             <>
-              <p className="text-xs text-slate-500">
-                The install script sets up <span className="font-mono text-slate-400">probara-collector</span>
+              <p className="text-[13px] text-slate-400">
+                The install script sets up <span className="font-mono text-slate-300">probara-collector</span>
                 {' '}(an OpenTelemetry Collector distribution
                 {installCommand.collector_version ? `, v${installCommand.collector_version}` : ''})
                 as a system service that pushes OTLP host metrics to this monitor.
               </p>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <FormField label="Agent ID">
                   <div className="flex gap-2">
-                    <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
+                    <code className="glass-well flex-1 overflow-x-auto px-3 py-2 font-mono text-xs text-slate-200">
                       {installCommand.agent_id}
                     </code>
                     <Button
@@ -365,7 +367,7 @@ export default function AgentForm({
                       <select
                         value={selectedApiKeyId}
                         onChange={(e) => setSelectedApiKeyId(e.target.value)}
-                        className="input input-xs"
+                        className="input"
                       >
                         {apiKeyOptions.map((option) => (
                           <option key={option.id} value={option.id}>{option.label}</option>
@@ -373,7 +375,7 @@ export default function AgentForm({
                       </select>
                     ) : null}
                     <div className="flex gap-2">
-                      <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
+                      <code className="glass-well flex-1 overflow-x-auto px-3 py-2 font-mono text-xs text-slate-200">
                         {activeApiKey || 'YOUR_API_KEY'}
                       </code>
                       <Button
@@ -394,21 +396,22 @@ export default function AgentForm({
                 </FormField>
               </div>
 
-              <FormField label="Server type" description="Where the collector will run">
+              <FormField label="Server type">
                 <select
                   value={serverType}
                   onChange={(e) => setServerType(e.target.value as ServerType)}
-                  className="input input-xs"
+                  className="input"
                 >
                   {SERVER_TYPE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-slate-500">Where the collector will run</p>
               </FormField>
 
               <FormField label={isWindows ? 'Install service (Windows)' : 'Install service (Linux/macOS)'}>
                 <div className="flex gap-2">
-                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickInstallCommand}</pre>
+                  <pre className="glass-well flex-1 overflow-x-auto whitespace-pre-wrap px-3 py-2 font-mono text-xs text-slate-300">{quickInstallCommand}</pre>
                   <Button
                     variant="ghost"
                     size="xs"
@@ -423,7 +426,7 @@ export default function AgentForm({
 
               <FormField label={isWindows ? 'Uninstall service (Windows)' : 'Uninstall service (Linux/macOS)'}>
                 <div className="flex gap-2">
-                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{quickUninstallCommand}</pre>
+                  <pre className="glass-well flex-1 overflow-x-auto whitespace-pre-wrap px-3 py-2 font-mono text-xs text-slate-300">{quickUninstallCommand}</pre>
                   <Button
                     variant="ghost"
                     size="xs"
@@ -436,12 +439,9 @@ export default function AgentForm({
                 </div>
               </FormField>
 
-              <FormField
-                label="Collector config"
-                description="Generated OpenTelemetry Collector configuration (Linux variant) — the install script writes it for you"
-              >
+              <FormField label="Collector config">
                 <div className="flex gap-2">
-                  <pre className="max-h-64 flex-1 overflow-auto whitespace-pre rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">{installCommand.collector_config}</pre>
+                  <pre className="glass-well max-h-64 flex-1 overflow-auto whitespace-pre px-3 py-2 font-mono text-xs text-slate-300">{installCommand.collector_config}</pre>
                   <Button
                     variant="ghost"
                     size="xs"
@@ -452,6 +452,7 @@ export default function AgentForm({
                     {copiedField === 'collector_config' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
+                <p className="mt-1 text-xs text-slate-500">Generated OpenTelemetry Collector configuration (Linux variant) — the install script writes it for you</p>
                 <p className="mt-2 text-xs text-slate-500">
                   Managing hosts with Ansible/Chef/Puppet? Fetch the raw per-platform YAML from{' '}
                   <button
@@ -467,9 +468,9 @@ export default function AgentForm({
                 </p>
               </FormField>
 
-              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                <p className="text-xs font-medium text-white">Collected metrics</p>
-                <p className="mt-0.5 text-xs text-slate-400">
+              <div className="glass-well p-4">
+                <p className="text-[13px] font-medium text-white">Collected metrics</p>
+                <p className="mt-1 text-xs text-slate-400">
                   OpenTelemetry hostmetrics: CPU and memory utilization, swap, per-mount filesystem
                   usage, disk and network I/O, load averages, process count, and uptime — stored as
                   queryable metric series.
@@ -477,16 +478,16 @@ export default function AgentForm({
               </div>
             </>
           ) : (
-            <p className="text-sm text-rose-400">Failed to load installation details</p>
+            <Callout tone="danger">Failed to load installation details</Callout>
           )}
         </FormSection>
 
         <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" type="button" onClick={() => setShowInstallInstructions(false)}>
+          <Button variant="ghost" type="button" onClick={() => setShowInstallInstructions(false)}>
             Back to settings
           </Button>
           {onCancel && (
-            <Button variant="accent" size="sm" type="button" onClick={onCancel}>
+            <Button variant="accent" type="button" onClick={onCancel}>
               Done
             </Button>
           )}
@@ -502,7 +503,6 @@ export default function AgentForm({
           label="Agent name"
           required
           error={errors.name}
-          description="Identifier for this monitored server"
         >
           <input
             type="text"
@@ -511,6 +511,7 @@ export default function AgentForm({
             placeholder="Production server"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Identifier for this monitored server</p>
         </FormField>
 
         <FormField
@@ -529,7 +530,7 @@ export default function AgentForm({
           />
         </FormField>
 
-        <FormField label="Tags" description="Comma-separated, e.g. production, us-east-1">
+        <FormField label="Tags">
           <input
             type="text"
             value={formData.tags}
@@ -537,7 +538,29 @@ export default function AgentForm({
             placeholder="production, us-east-1"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
         </FormField>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">Agent enabled</p>
+            <p className="text-xs text-slate-500">Accept metrics from this agent</p>
+          </div>
+          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle agent enabled" />
+        </div>
+
+        {isEditMode && monitor && (
+          <div>
+            <Button
+              variant="ghost"
+              type="button"
+              icon={<Download strokeWidth={1.75} />}
+              onClick={() => setShowInstallInstructions(true)}
+            >
+              View installation instructions
+            </Button>
+          </div>
+        )}
       </FormSection>
 
       <FormSection title="Alerting">
@@ -557,7 +580,7 @@ export default function AgentForm({
       </FormSection>
 
       <FormSection title="Metric alert rules">
-        <p className="text-xs text-slate-500">
+        <p className="text-[13px] text-slate-400">
           Open an alert when a reported metric breaches its threshold, optionally only after it is
           sustained for a duration. Utilization thresholds are entered as percentages. Evaluated
           independently of up/down status.
@@ -570,28 +593,6 @@ export default function AgentForm({
         />
       </FormSection>
 
-      <FormSection title="Status">
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Agent enabled</p>
-            <p className="text-xs text-slate-500">Accept metrics from this agent</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle agent enabled"
-          >
-            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              formData.enabled ? 'translate-x-4' : ''
-            }`} />
-          </button>
-        </div>
-      </FormSection>
-
       <FormActions
         middle={`Expect an agent report every ${formData.expected_interval_seconds}s`}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
@@ -602,21 +603,6 @@ export default function AgentForm({
           type: 'submit',
         }}
       />
-
-      {isEditMode && monitor && (
-        <div className="border-t border-white/[0.06] pt-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            type="button"
-            icon={<Download strokeWidth={1.75} />}
-            className="w-full justify-center"
-            onClick={() => setShowInstallInstructions(true)}
-          >
-            View installation instructions
-          </Button>
-        </div>
-      )}
     </form>
   );
 }

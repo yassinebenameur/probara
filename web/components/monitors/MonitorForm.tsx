@@ -31,11 +31,16 @@ import {
   SyntheticBrowserStepConfig,
   Location,
 } from '@/lib/types';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, type LucideIcon } from 'lucide-react';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, ChevronUp, ChevronDown, Trash2, X, Plus, Eye, EyeOff, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
 import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
 import FormActions from '@/components/ui/FormActions';
+import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
+import Callout, { type CalloutTone } from '@/components/ui/Callout';
+import FilterChip from '@/components/ui/FilterChip';
+import Tabs from '@/components/ui/Tabs';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
 import GroupForm from './GroupForm';
@@ -50,8 +55,21 @@ import WebsocketForm from './WebsocketForm';
 import DatabaseForm, { type DatabaseMonitorType } from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
 import CurlPreview from './CurlPreview';
+import Switch from '@/components/ui/Switch';
 
-const BTN_GHOST_SM = 'inline-flex items-center justify-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:opacity-40 disabled:cursor-not-allowed';
+const FIELD_LABEL = 'block text-[13px] font-medium text-slate-300';
+
+const EDITOR_MODE_TABS = [
+  { id: 'basic', label: 'Basic' },
+  { id: 'advanced', label: 'Advanced' },
+] as const;
+
+const BROWSER_SETUP_TABS = [
+  { id: 'guided', label: 'Guided' },
+  { id: 'expert', label: 'Expert' },
+] as const;
+
+const TILE_SELECTED = 'bg-cyan-500/[0.08] ring-1 ring-inset ring-cyan-500/45';
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -83,7 +101,7 @@ function FormInput({
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1.5">{label}</label>
+      <label className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
       <input
         type={type}
         value={value}
@@ -92,7 +110,7 @@ function FormInput({
         className="input"
         {...props}
       />
-      {error && <p className="mt-1 text-xs text-rose-400">{error}</p>}
+      {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
       {hint && !error && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
@@ -119,7 +137,7 @@ function FormTextarea({
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1.5">{label}</label>
+      <label className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
       <textarea
         rows={rows}
         value={value}
@@ -128,7 +146,7 @@ function FormTextarea({
         className="input min-h-[96px]"
         {...props}
       />
-      {error && <p className="mt-1 text-xs text-rose-400">{error}</p>}
+      {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
       {hint && !error && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
@@ -152,7 +170,7 @@ function FormSelect({
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1.5">{label}</label>
+      <label className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -181,34 +199,12 @@ function FormToggle({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-slate-800/30 px-4 py-3">
-      <div>
-        <p className="text-sm font-medium text-white">{label}</p>
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-slate-200">{label}</p>
         {description && <p className="text-xs text-slate-500">{description}</p>}
       </div>
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 rounded-full transition-colors ${
-          checked ? 'bg-cyan-500' : 'bg-slate-700'
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-4' : ''
-          }`}
-        />
-      </button>
-    </div>
-  );
-}
-
-// Section header
-function SectionHeader({ title, description }: { title: string; description?: string }) {
-  return (
-    <div className="mb-4">
-      <h3 className="text-sm font-medium text-white">{title}</h3>
-      {description && <p className="text-xs text-slate-500 mt-0.5">{description}</p>}
+      <Switch checked={checked} onChange={onChange} />
     </div>
   );
 }
@@ -277,11 +273,9 @@ function MonitorTypePicker({
 
   if (locked || !open) {
     return (
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-slate-900/40 px-4 py-3">
+      <div className="glass flex flex-wrap items-center justify-between gap-3 px-6 py-4">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="shrink-0 rounded-lg bg-cyan-500/15 p-2 text-cyan-400">
-            <SelectedIcon className="h-4 w-4" strokeWidth={1.75} />
-          </div>
+          <SelectedIcon className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
           <div className="min-w-0">
             <p className="text-sm font-medium text-white">{selected.label} monitor</p>
             <p className="truncate text-xs text-slate-500">{selected.description}</p>
@@ -293,20 +287,20 @@ function MonitorTypePicker({
             Type is fixed after creation
           </span>
         ) : (
-          <button type="button" onClick={() => onOpenChange(true)} className={BTN_GHOST_SM}>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(true)}>
             Change type
-          </button>
+          </Button>
         )}
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-slate-900/40 p-4">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div className="glass p-6">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-white">Monitor type</p>
-          <p className="text-xs text-slate-500">Pick what you want to watch. The type can&apos;t be changed later.</p>
+          <h3 className="text-[15px] font-semibold text-white">Monitor type</h3>
+          <p className="mt-0.5 text-[13px] text-slate-400">Pick what you want to watch. The type can&apos;t be changed later.</p>
         </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
@@ -316,17 +310,17 @@ function MonitorTypePicker({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search types…"
             aria-label="Search monitor types"
-            className="h-8 w-48 rounded-lg border border-white/[0.08] bg-slate-950/60 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
+            className="input input-sm !w-52 !pl-8"
           />
         </div>
       </div>
-      <div className="space-y-4" role="radiogroup" aria-label="Monitor type">
+      <div className="space-y-5" role="radiogroup" aria-label="Monitor type">
         {MONITOR_TYPE_CATEGORIES.map((category) => {
           const items = visible.filter((m) => m.category === category);
           if (items.length === 0) return null;
           return (
             <div key={category}>
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-600">{category}</p>
+              <p className="mb-2 text-xs font-medium text-slate-500">{category}</p>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {items.map((m) => {
                   const Icon = m.icon;
@@ -338,18 +332,17 @@ function MonitorTypePicker({
                       role="radio"
                       aria-checked={isSelected}
                       onClick={() => onSelect(m.type)}
-                      className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all ${
-                        isSelected
-                          ? 'border-cyan-500/50 bg-cyan-500/10'
-                          : 'border-white/[0.06] bg-slate-800/30 hover:border-white/[0.12] hover:bg-slate-800/60'
+                      className={`glass-well flex items-start gap-3 p-3 text-left transition-colors ${
+                        isSelected ? TILE_SELECTED : 'hover:bg-well-hover'
                       }`}
                     >
-                      <div className={`shrink-0 rounded-lg p-1.5 ${isSelected ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400'}`}>
-                        <Icon className="h-4 w-4" strokeWidth={1.75} />
-                      </div>
+                      <Icon
+                        className={`mt-0.5 h-4 w-4 shrink-0 ${isSelected ? 'text-cyan-400' : 'text-slate-400'}`}
+                        strokeWidth={1.75}
+                      />
                       <div className="min-w-0">
-                        <p className={`text-xs font-medium ${isSelected ? 'text-white' : 'text-slate-300'}`}>{m.label}</p>
-                        <p className="mt-0.5 text-[11px] leading-snug text-slate-500">{m.description}</p>
+                        <p className={`text-[13px] font-medium ${isSelected ? 'text-white' : 'text-slate-200'}`}>{m.label}</p>
+                        <p className="mt-0.5 text-xs leading-snug text-slate-500">{m.description}</p>
                       </div>
                     </button>
                   );
@@ -359,7 +352,7 @@ function MonitorTypePicker({
           );
         })}
         {visible.length === 0 && (
-          <p className="py-2 text-center text-xs text-slate-500">No monitor types match &ldquo;{query}&rdquo;.</p>
+          <p className="py-2 text-center text-[13px] text-slate-500">No monitor types match &ldquo;{query}&rdquo;.</p>
         )}
       </div>
     </div>
@@ -1085,20 +1078,17 @@ export default function MonitorForm({
     }
   };
 
-  const getSyntheticResultBadgeClasses = (phase: SyntheticTestPhase) => {
+  const getSyntheticResultTone = (phase: SyntheticTestPhase): CalloutTone => {
     switch (phase) {
       case 'success':
-        return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+        return 'success';
       case 'failure':
-        return 'border-rose-500/30 bg-rose-500/10 text-rose-300';
+        return 'danger';
       case 'error':
       case 'timeout':
-        return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
-      case 'queueing':
-      case 'polling':
-        return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300';
+        return 'warning';
       default:
-        return 'border-white/[0.12] bg-slate-900/50 text-slate-300';
+        return 'info';
     }
   };
 
@@ -2029,7 +2019,7 @@ export default function MonitorForm({
   // Delegate to specialized forms
   if (monitorType === 'group') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <GroupForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
@@ -2038,7 +2028,7 @@ export default function MonitorForm({
 
   if (monitorType === 'agent') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <AgentForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
@@ -2047,7 +2037,7 @@ export default function MonitorForm({
 
   if (monitorType === 'push') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <PushForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
@@ -2056,7 +2046,7 @@ export default function MonitorForm({
 
   if (monitorType === 'sip') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <SipForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
@@ -2065,7 +2055,7 @@ export default function MonitorForm({
 
   if (monitorType === 'grpc') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
@@ -2073,12 +2063,12 @@ export default function MonitorForm({
   }
 
   if (monitorType === 'prometheus') {
-    return <div className="space-y-4">{typePicker}<PrometheusForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} /></div>;
+    return <div className="space-y-5">{typePicker}<PrometheusForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} /></div>;
   }
 
   if (monitorType === 'tcp') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <TcpForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
@@ -2087,7 +2077,7 @@ export default function MonitorForm({
 
   if (monitorType === 'websocket') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <WebsocketForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
@@ -2096,7 +2086,7 @@ export default function MonitorForm({
 
   if (monitorType === 'redis' || monitorType === 'postgres' || monitorType === 'mongodb' || monitorType === 'rabbitmq' || monitorType === 'mysql') {
     return (
-      <div className="space-y-4">
+      <div className="space-y-5">
         {typePicker}
         <DatabaseForm
           key={monitorType}
@@ -2177,12 +2167,11 @@ export default function MonitorForm({
       <div id="monitor-name-field">
         <FormSection title="Basics">
           <FormInput
-            label="Monitor Name"
+            label="Monitor name"
             value={formData.name}
             onChange={(v) => setFormData({ ...formData, name: v })}
             placeholder={getTypeMeta(monitorType).namePlaceholder}
             error={errors.name}
-            hint="A descriptive name for this monitor"
           />
 
           {/* HTTP URL + Method hero row */}
@@ -2226,7 +2215,6 @@ export default function MonitorForm({
             onChange={(v) => setFormData({ ...formData, host: v })}
             placeholder="example.com or 8.8.8.8"
             error={errors.host}
-            hint="Hostname or IP address to ping"
           />
         </FormSection>
       )}
@@ -2242,7 +2230,7 @@ export default function MonitorForm({
           />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormSelect
-              label="Record Type"
+              label="Record type"
               value={formData.dns_record_type}
               onChange={(v) => setFormData({ ...formData, dns_record_type: v })}
               options={[
@@ -2256,7 +2244,7 @@ export default function MonitorForm({
               hint="Defaults to A if not set."
             />
             <FormInput
-              label="Expected Answers (optional)"
+              label="Expected answers (optional)"
               value={formData.dns_expected_answers}
               onChange={(v) => setFormData({ ...formData, dns_expected_answers: v })}
               placeholder="1.2.3.4, 5.6.7.8"
@@ -2274,172 +2262,141 @@ export default function MonitorForm({
       )}
 
       {monitorType === 'synthetic_api' && (
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
-          <SectionHeader title="Synthetic API configuration" description="Build a multi-step API workflow with request, assertions, and extracts." />
-          <div className="space-y-4">
-            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-white">Quick start templates</p>
-                  <p className="text-xs text-slate-400">Load a starter workflow, then customize fields for your environment.</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className={BTN_GHOST_SM}
-                    onClick={() => applySyntheticAPITemplate('single_health')}
-                  >
-                    Health Check
-                  </button>
-                  <button
-                    type="button"
-                    className={BTN_GHOST_SM}
-                    onClick={() => applySyntheticAPITemplate('health_auth')}
-                  >
-                    Health + Auth Flow
-                  </button>
-                </div>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full border border-white/[0.1] bg-slate-900/50 px-2 py-1 text-slate-300">
-                  {formData.synthetic_api_steps.length} steps
-                </span>
-                <span className="rounded-full border border-white/[0.1] bg-slate-900/50 px-2 py-1 text-slate-300">
-                  {(formData.synthetic_api_variables || []).filter((v) => v.key.trim()).length} variables
-                </span>
-                <span className="rounded-full border border-white/[0.1] bg-slate-900/50 px-2 py-1 text-slate-300">
-                  {formData.synthetic_api_steps.reduce((sum, step) => sum + step.extracts.length, 0)} extracts
-                </span>
-              </div>
-              <div className="mt-3">
-                <div className="inline-flex rounded-lg border border-white/[0.1] bg-slate-900/50 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setSyntheticAPIMode('basic')}
-                    className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                      syntheticAPIMode === 'basic' ? 'bg-white/[0.12] text-white' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Basic
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSyntheticAPIMode('advanced')}
-                    className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                      syntheticAPIMode === 'advanced' ? 'bg-white/[0.12] text-white' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Advanced
-                  </button>
-                </div>
-                <p className="mt-2 text-xs text-slate-500">
-                  Basic keeps the journey builder focused. Advanced unlocks headers, extracts, and assertion tuning.
-                </p>
-              </div>
+        <FormSection title="Synthetic API configuration">
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Tabs tabs={EDITOR_MODE_TABS} active={syntheticAPIMode} onChange={setSyntheticAPIMode} />
+              <p className="text-xs tabular-nums text-slate-500">
+                {formData.synthetic_api_steps.length} steps
+                {' · '}
+                {(formData.synthetic_api_variables || []).filter((v) => v.key.trim()).length} variables
+                {' · '}
+                {formData.synthetic_api_steps.reduce((sum, step) => sum + step.extracts.length, 0)} extracts
+              </p>
             </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Basic keeps the journey builder focused. Advanced unlocks headers, extracts, and assertion tuning.
+            </p>
+          </div>
 
-            <div className="rounded-lg border border-white/[0.08] bg-slate-900/40 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-white">Realtime Test</p>
-                  <p className="text-xs text-slate-500">Runs the saved monitor immediately and streams the latest result state here.</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {formData.location_ids.length > 0 && (
-                    <select
-                      aria-label="Run test from location"
-                      value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
-                      onChange={(e) => setTestLocationId(e.target.value)}
-                      className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
-                    >
-                      <option value="">Run from: all locations</option>
-                      {availableLocations
-                        .filter((loc) => formData.location_ids.includes(loc.id))
-                        .map((loc) => (
-                          <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
-                        ))}
-                    </select>
-                  )}
-                  <button
-                    type="button"
-                    className={BTN_GHOST_SM}
-                    onClick={startSyntheticLiveTest}
-                    disabled={!isSavedMonitor || isTestRunning}
-                  >
-                    {isTestRunning ? 'Testing...' : 'Test now'}
-                  </button>
-                </div>
-              </div>
-              {!isSavedMonitor && (
-                <p className="mt-2 text-xs text-amber-400">Save this monitor first to enable realtime tests.</p>
-              )}
-              {isSavedMonitor && (
-                <p className="mt-2 text-xs text-slate-500">Test runs use the currently saved monitor config.</p>
-              )}
-              {syntheticTestState.phase !== 'idle' && (
-                <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${getSyntheticResultBadgeClasses(syntheticTestState.phase)}`}>
-                  <p>{syntheticTestState.message || 'Running...'}</p>
-                  {syntheticTestState.result && (
-                    <p className="mt-1">
-                      Status: <span className="font-medium uppercase">{syntheticTestState.result.status}</span>
-                      {typeof syntheticTestState.result.latency_ms === 'number' ? ` · ${syntheticTestState.result.latency_ms}ms` : ''}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormInput
-                label="Base URL (optional)"
-                value={formData.synthetic_api_base_url}
-                onChange={(v) => setFormData({ ...formData, synthetic_api_base_url: v })}
-                placeholder="https://api.example.com"
-                error={errors.synthetic_api_base_url}
-                hint="Relative step URLs resolve against this base URL."
-              />
-              <FormSelect
-                label="Failure Mode"
-                value={formData.synthetic_api_failure_mode}
-                onChange={(v) => setFormData({ ...formData, synthetic_api_failure_mode: v as 'fail_fast' | 'continue' })}
-                options={[
-                  { value: 'fail_fast', label: 'Fail fast' },
-                  { value: 'continue', label: 'Continue after failures' },
-                ]}
-                hint="Fail fast is recommended for linear user journeys."
-              />
-            </div>
-
-            {syntheticAPIMode === 'advanced' && (
+          <div className="glass-well flex flex-wrap items-center justify-between gap-3 p-4">
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">Variables (optional)</label>
-              {errors.synthetic_api_variables && <p className="mt-1 text-xs text-rose-400">{errors.synthetic_api_variables}</p>}
-              <div className="space-y-2">
-                {formData.synthetic_api_variables.map((row: SyntheticVarKV, idx: number) => (
-                  <div key={`synthetic-api-var-${idx}`} className="grid grid-cols-12 gap-2">
-                    <input
-                      className="input col-span-5"
-                      placeholder="Variable name"
-                      value={row.key}
-                      onChange={(e) => {
-                        const next = [...formData.synthetic_api_variables];
-                        next[idx] = { ...next[idx], key: e.target.value };
-                        setFormData({ ...formData, synthetic_api_variables: next });
-                      }}
-                    />
-                    <input
-                      className="input col-span-6"
-                      placeholder="Variable value"
-                      value={row.value}
-                      onChange={(e) => {
-                        const next = [...formData.synthetic_api_variables];
-                        next[idx] = { ...next[idx], value: e.target.value };
-                        setFormData({ ...formData, synthetic_api_variables: next });
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className={`${BTN_GHOST_SM} col-span-1`}
+              <p className="text-sm font-medium text-white">Quick start templates</p>
+              <p className="text-[13px] text-slate-400">Load a starter workflow, then customize fields for your environment.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="ghost" size="xs" onClick={() => applySyntheticAPITemplate('single_health')}>
+                Health check
+              </Button>
+              <Button type="button" variant="ghost" size="xs" onClick={() => applySyntheticAPITemplate('health_auth')}>
+                Health + auth flow
+              </Button>
+            </div>
+          </div>
+
+          <div className="glass-well p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-white">Realtime test</p>
+                <p className="text-[13px] text-slate-400">Runs the saved monitor immediately and streams the latest result state here.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {formData.location_ids.length > 0 && (
+                  <select
+                    aria-label="Run test from location"
+                    value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+                    onChange={(e) => setTestLocationId(e.target.value)}
+                    className="input input-sm !w-auto"
+                  >
+                    <option value="">Run from: all locations</option>
+                    {availableLocations
+                      .filter((loc) => formData.location_ids.includes(loc.id))
+                      .map((loc) => (
+                        <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
+                      ))}
+                  </select>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={startSyntheticLiveTest}
+                  disabled={!isSavedMonitor || isTestRunning}
+                >
+                  {isTestRunning ? 'Testing...' : 'Test now'}
+                </Button>
+              </div>
+            </div>
+            {!isSavedMonitor && (
+              <p className="mt-2 text-xs text-amber-300">Save this monitor first to enable realtime tests.</p>
+            )}
+            {isSavedMonitor && (
+              <p className="mt-2 text-xs text-slate-500">Test runs use the currently saved monitor config.</p>
+            )}
+            {syntheticTestState.phase !== 'idle' && (
+              <Callout tone={getSyntheticResultTone(syntheticTestState.phase)} className="mt-3">
+                <p>{syntheticTestState.message || 'Running...'}</p>
+                {syntheticTestState.result && (
+                  <p className="mt-1 text-[13px]">
+                    Status: <span className="font-medium text-white">{syntheticTestState.result.status}</span>
+                    {typeof syntheticTestState.result.latency_ms === 'number' ? ` · ${syntheticTestState.result.latency_ms}ms` : ''}
+                  </p>
+                )}
+              </Callout>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <FormInput
+              label="Base URL (optional)"
+              value={formData.synthetic_api_base_url}
+              onChange={(v) => setFormData({ ...formData, synthetic_api_base_url: v })}
+              placeholder="https://api.example.com"
+              error={errors.synthetic_api_base_url}
+              hint="Relative step URLs resolve against this base URL."
+            />
+            <FormSelect
+              label="Failure mode"
+              value={formData.synthetic_api_failure_mode}
+              onChange={(v) => setFormData({ ...formData, synthetic_api_failure_mode: v as 'fail_fast' | 'continue' })}
+              options={[
+                { value: 'fail_fast', label: 'Fail fast' },
+                { value: 'continue', label: 'Continue after failures' },
+              ]}
+              hint="Fail fast is recommended for linear user journeys."
+            />
+          </div>
+
+          {syntheticAPIMode === 'advanced' && (
+          <div>
+            <label className={`${FIELD_LABEL} mb-1.5`}>Variables (optional)</label>
+            {errors.synthetic_api_variables && <p className="mb-2 text-xs text-rose-300">{errors.synthetic_api_variables}</p>}
+            <div className="space-y-2">
+              {formData.synthetic_api_variables.map((row: SyntheticVarKV, idx: number) => (
+                <div key={`synthetic-api-var-${idx}`} className="grid grid-cols-12 gap-2">
+                  <input
+                    className="input col-span-5"
+                    placeholder="Variable name"
+                    value={row.key}
+                    onChange={(e) => {
+                      const next = [...formData.synthetic_api_variables];
+                      next[idx] = { ...next[idx], key: e.target.value };
+                      setFormData({ ...formData, synthetic_api_variables: next });
+                    }}
+                  />
+                  <input
+                    className="input col-span-6"
+                    placeholder="Variable value"
+                    value={row.value}
+                    onChange={(e) => {
+                      const next = [...formData.synthetic_api_variables];
+                      next[idx] = { ...next[idx], value: e.target.value };
+                      setFormData({ ...formData, synthetic_api_variables: next });
+                    }}
+                  />
+                  <div className="col-span-1 flex items-center justify-center">
+                    <IconButton
+                      icon={<X strokeWidth={1.75} />}
+                      label="Remove variable"
                       onClick={() => {
                         const next = [...formData.synthetic_api_variables];
                         if (next.length === 1) {
@@ -2449,187 +2406,187 @@ export default function MonitorForm({
                         }
                         setFormData({ ...formData, synthetic_api_variables: next });
                       }}
-                    >
-                      ×
-                    </button>
+                    />
                   </div>
-                ))}
-              </div>
-              <div className="mt-2">
-                <button
-                  type="button"
-                  className={BTN_GHOST_SM}
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      synthetic_api_variables: [...formData.synthetic_api_variables, { key: '', value: '' }],
-                    })
-                  }
-                >
-                  + Add variable
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">Use <code>{'{{variable_name}}'}</code> in URLs, headers, and request bodies.</p>
+                </div>
+              ))}
             </div>
-            )}
+            <div className="mt-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                onClick={() =>
+                  setFormData({
+                    ...formData,
+                    synthetic_api_variables: [...formData.synthetic_api_variables, { key: '', value: '' }],
+                  })
+                }
+              >
+                Add variable
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">Use <code>{'{{variable_name}}'}</code> in URLs, headers, and request bodies.</p>
+          </div>
+          )}
 
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-medium text-slate-400">Steps</label>
-                <button
-                  type="button"
-                  className={BTN_GHOST_SM}
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      synthetic_api_steps: [...formData.synthetic_api_steps, defaultSyntheticAPIStep(formData.synthetic_api_steps.length + 1)],
-                    })
-                  }
-                >
-                  + Add step
-                </button>
-              </div>
-              {errors.synthetic_api_steps && <p className="text-xs text-rose-400">{errors.synthetic_api_steps}</p>}
-              {formData.synthetic_api_steps.map((step: SyntheticAPIStepDraft, stepIdx: number) => (
-                <div key={`synthetic-api-step-${stepIdx}`} className="rounded-lg border border-white/[0.08] bg-slate-800/20 p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-medium text-slate-300">Step {stepIdx + 1}</p>
-                      <p className="text-[11px] text-slate-500">{step.method || 'GET'} {step.url || '(missing URL)'}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        className={BTN_GHOST_SM}
-                        disabled={stepIdx === 0}
-                        onClick={() => {
-                          if (stepIdx === 0) return;
-                          const next = [...formData.synthetic_api_steps];
-                          [next[stepIdx - 1], next[stepIdx]] = [next[stepIdx], next[stepIdx - 1]];
-                          setFormData({ ...formData, synthetic_api_steps: next });
-                        }}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        className={BTN_GHOST_SM}
-                        disabled={stepIdx === formData.synthetic_api_steps.length - 1}
-                        onClick={() => {
-                          if (stepIdx === formData.synthetic_api_steps.length - 1) return;
-                          const next = [...formData.synthetic_api_steps];
-                          [next[stepIdx + 1], next[stepIdx]] = [next[stepIdx], next[stepIdx + 1]];
-                          setFormData({ ...formData, synthetic_api_steps: next });
-                        }}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        className={BTN_GHOST_SM}
-                        onClick={() => {
-                          const next = [...formData.synthetic_api_steps];
-                          if (next.length === 1) {
-                            next[0] = defaultSyntheticAPIStep(1);
-                          } else {
-                            next.splice(stepIdx, 1);
-                          }
-                          setFormData({ ...formData, synthetic_api_steps: next });
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className={FIELD_LABEL}>Steps</label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                onClick={() =>
+                  setFormData({
+                    ...formData,
+                    synthetic_api_steps: [...formData.synthetic_api_steps, defaultSyntheticAPIStep(formData.synthetic_api_steps.length + 1)],
+                  })
+                }
+              >
+                Add step
+              </Button>
+            </div>
+            {errors.synthetic_api_steps && <p className="text-xs text-rose-300">{errors.synthetic_api_steps}</p>}
+            {formData.synthetic_api_steps.map((step: SyntheticAPIStepDraft, stepIdx: number) => (
+              <div key={`synthetic-api-step-${stepIdx}`} className="glass-well space-y-4 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white">Step {stepIdx + 1}</p>
+                    <p className="font-mono text-xs text-slate-500">{step.method || 'GET'} {step.url || '(missing URL)'}</p>
                   </div>
-
-                  <div className="grid grid-cols-3 gap-3">
-                    <FormInput
-                      label="Step ID"
-                      value={step.id}
-                      onChange={(v) => {
+                  <div className="flex gap-1">
+                    <IconButton
+                      icon={<ChevronUp strokeWidth={1.75} />}
+                      label="Move step up"
+                      disabled={stepIdx === 0}
+                      onClick={() => {
+                        if (stepIdx === 0) return;
                         const next = [...formData.synthetic_api_steps];
-                        next[stepIdx] = { ...next[stepIdx], id: v };
+                        [next[stepIdx - 1], next[stepIdx]] = [next[stepIdx], next[stepIdx - 1]];
                         setFormData({ ...formData, synthetic_api_steps: next });
                       }}
-                      placeholder="health"
                     />
-                    <FormInput
-                      label="Name (optional)"
-                      value={step.name}
-                      onChange={(v) => {
+                    <IconButton
+                      icon={<ChevronDown strokeWidth={1.75} />}
+                      label="Move step down"
+                      disabled={stepIdx === formData.synthetic_api_steps.length - 1}
+                      onClick={() => {
+                        if (stepIdx === formData.synthetic_api_steps.length - 1) return;
                         const next = [...formData.synthetic_api_steps];
-                        next[stepIdx] = { ...next[stepIdx], name: v };
+                        [next[stepIdx + 1], next[stepIdx]] = [next[stepIdx], next[stepIdx + 1]];
                         setFormData({ ...formData, synthetic_api_steps: next });
                       }}
-                      placeholder="Health check"
                     />
-                    <FormSelect
-                      label="Method"
-                      value={step.method}
-                      onChange={(v) => {
+                    <IconButton
+                      icon={<Trash2 strokeWidth={1.75} />}
+                      label="Remove step"
+                      danger
+                      onClick={() => {
                         const next = [...formData.synthetic_api_steps];
-                        next[stepIdx] = { ...next[stepIdx], method: v };
+                        if (next.length === 1) {
+                          next[0] = defaultSyntheticAPIStep(1);
+                        } else {
+                          next.splice(stepIdx, 1);
+                        }
                         setFormData({ ...formData, synthetic_api_steps: next });
                       }}
-                      options={[
-                        { value: 'GET', label: 'GET' },
-                        { value: 'HEAD', label: 'HEAD' },
-                        { value: 'POST', label: 'POST' },
-                        { value: 'PUT', label: 'PUT' },
-                        { value: 'DELETE', label: 'DELETE' },
-                        { value: 'PATCH', label: 'PATCH' },
-                        { value: 'OPTIONS', label: 'OPTIONS' },
-                      ]}
                     />
                   </div>
+                </div>
 
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <FormInput
-                    label="URL"
-                    value={step.url}
+                    label="Step ID"
+                    value={step.id}
                     onChange={(v) => {
                       const next = [...formData.synthetic_api_steps];
-                      next[stepIdx] = { ...next[stepIdx], url: v };
+                      next[stepIdx] = { ...next[stepIdx], id: v };
                       setFormData({ ...formData, synthetic_api_steps: next });
                     }}
-                    placeholder="/health or https://service.example.com/health"
+                    placeholder="health"
                   />
+                  <FormInput
+                    label="Name (optional)"
+                    value={step.name}
+                    onChange={(v) => {
+                      const next = [...formData.synthetic_api_steps];
+                      next[stepIdx] = { ...next[stepIdx], name: v };
+                      setFormData({ ...formData, synthetic_api_steps: next });
+                    }}
+                    placeholder="Health check"
+                  />
+                  <FormSelect
+                    label="Method"
+                    value={step.method}
+                    onChange={(v) => {
+                      const next = [...formData.synthetic_api_steps];
+                      next[stepIdx] = { ...next[stepIdx], method: v };
+                      setFormData({ ...formData, synthetic_api_steps: next });
+                    }}
+                    options={[
+                      { value: 'GET', label: 'GET' },
+                      { value: 'HEAD', label: 'HEAD' },
+                      { value: 'POST', label: 'POST' },
+                      { value: 'PUT', label: 'PUT' },
+                      { value: 'DELETE', label: 'DELETE' },
+                      { value: 'PATCH', label: 'PATCH' },
+                      { value: 'OPTIONS', label: 'OPTIONS' },
+                    ]}
+                  />
+                </div>
 
-                  {syntheticAPIMode === 'advanced' && (
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">Request Headers (optional)</label>
-                    <div className="space-y-2">
-                      {step.headers.map((h: HeaderKV, headerIdx: number) => {
-                        const sensitive = isSensitiveHeaderName(h.key);
-                        const showToggle = sensitive && h.value.trim().length > 0;
-                        return (
-                          <div key={`synthetic-api-step-${stepIdx}-header-${headerIdx}`} className="grid grid-cols-12 gap-2">
-                            <input
-                              className="input col-span-4"
-                              placeholder="Header name"
-                              value={h.key}
-                              onChange={(e) => {
-                                const next = [...formData.synthetic_api_steps];
-                                const headers = [...next[stepIdx].headers];
-                                headers[headerIdx] = { ...headers[headerIdx], key: e.target.value };
-                                next[stepIdx] = { ...next[stepIdx], headers };
-                                setFormData({ ...formData, synthetic_api_steps: next });
-                              }}
-                            />
-                            <input
-                              className="input col-span-6"
-                              placeholder="Header value"
-                              type={sensitive && !h.reveal ? 'password' : 'text'}
-                              value={h.value}
-                              onChange={(e) => {
-                                const next = [...formData.synthetic_api_steps];
-                                const headers = [...next[stepIdx].headers];
-                                headers[headerIdx] = { ...headers[headerIdx], value: e.target.value };
-                                next[stepIdx] = { ...next[stepIdx], headers };
-                                setFormData({ ...formData, synthetic_api_steps: next });
-                              }}
-                            />
-                            <button
-                              type="button"
+                <FormInput
+                  label="URL"
+                  value={step.url}
+                  onChange={(v) => {
+                    const next = [...formData.synthetic_api_steps];
+                    next[stepIdx] = { ...next[stepIdx], url: v };
+                    setFormData({ ...formData, synthetic_api_steps: next });
+                  }}
+                  placeholder="/health or https://service.example.com/health"
+                />
+
+                {syntheticAPIMode === 'advanced' && (
+                <div>
+                  <label className={`${FIELD_LABEL} mb-1.5`}>Request headers (optional)</label>
+                  <div className="space-y-2">
+                    {step.headers.map((h: HeaderKV, headerIdx: number) => {
+                      const sensitive = isSensitiveHeaderName(h.key);
+                      const showToggle = sensitive && h.value.trim().length > 0;
+                      return (
+                        <div key={`synthetic-api-step-${stepIdx}-header-${headerIdx}`} className="grid grid-cols-12 gap-2">
+                          <input
+                            className="input col-span-4"
+                            placeholder="Header name"
+                            value={h.key}
+                            onChange={(e) => {
+                              const next = [...formData.synthetic_api_steps];
+                              const headers = [...next[stepIdx].headers];
+                              headers[headerIdx] = { ...headers[headerIdx], key: e.target.value };
+                              next[stepIdx] = { ...next[stepIdx], headers };
+                              setFormData({ ...formData, synthetic_api_steps: next });
+                            }}
+                          />
+                          <input
+                            className="input col-span-6"
+                            placeholder="Header value"
+                            type={sensitive && !h.reveal ? 'password' : 'text'}
+                            value={h.value}
+                            onChange={(e) => {
+                              const next = [...formData.synthetic_api_steps];
+                              const headers = [...next[stepIdx].headers];
+                              headers[headerIdx] = { ...headers[headerIdx], value: e.target.value };
+                              next[stepIdx] = { ...next[stepIdx], headers };
+                              setFormData({ ...formData, synthetic_api_steps: next });
+                            }}
+                          />
+                          <div className="col-span-1 flex items-center justify-center">
+                            <IconButton
+                              icon={h.reveal ? <EyeOff strokeWidth={1.75} /> : <Eye strokeWidth={1.75} />}
+                              label={showToggle ? (h.reveal ? 'Hide value' : 'Show value') : 'Add a value to show/hide'}
                               disabled={!showToggle}
                               onClick={() => {
                                 const next = [...formData.synthetic_api_steps];
@@ -2638,14 +2595,12 @@ export default function MonitorForm({
                                 next[stepIdx] = { ...next[stepIdx], headers };
                                 setFormData({ ...formData, synthetic_api_steps: next });
                               }}
-                              className={`${BTN_GHOST_SM} col-span-1`}
-                              title={showToggle ? (h.reveal ? 'Hide value' : 'Show value') : 'Add a value to show/hide'}
-                            >
-                              {h.reveal ? 'Hide' : 'Show'}
-                            </button>
-                            <button
-                              type="button"
-                              className={`${BTN_GHOST_SM} col-span-1`}
+                            />
+                          </div>
+                          <div className="col-span-1 flex items-center justify-center">
+                            <IconButton
+                              icon={<X strokeWidth={1.75} />}
+                              label="Remove header"
                               onClick={() => {
                                 const next = [...formData.synthetic_api_steps];
                                 const headers = [...next[stepIdx].headers];
@@ -2657,176 +2612,184 @@ export default function MonitorForm({
                                 next[stepIdx] = { ...next[stepIdx], headers };
                                 setFormData({ ...formData, synthetic_api_steps: next });
                               }}
-                            >
-                              ×
-                            </button>
+                            />
                           </div>
-                        );
-                      })}
-                    </div>
-                    <div className="mt-2">
-                      <button
-                        type="button"
-                        className={BTN_GHOST_SM}
-                        onClick={() => {
-                          const next = [...formData.synthetic_api_steps];
-                          next[stepIdx] = { ...next[stepIdx], headers: [...next[stepIdx].headers, { key: '', value: '', reveal: false }] };
-                          setFormData({ ...formData, synthetic_api_steps: next });
-                        }}
-                      >
-                        + Add header
-                      </button>
-                    </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  )}
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                      onClick={() => {
+                        const next = [...formData.synthetic_api_steps];
+                        next[stepIdx] = { ...next[stepIdx], headers: [...next[stepIdx].headers, { key: '', value: '', reveal: false }] };
+                        setFormData({ ...formData, synthetic_api_steps: next });
+                      }}
+                    >
+                      Add header
+                    </Button>
+                  </div>
+                </div>
+                )}
 
-                  <FormTextarea
-                    label="Request Body (optional)"
-                    value={step.body}
+                <FormTextarea
+                  label="Request body (optional)"
+                  value={step.body}
+                  onChange={(v) => {
+                    const next = [...formData.synthetic_api_steps];
+                    next[stepIdx] = { ...next[stepIdx], body: v };
+                    setFormData({ ...formData, synthetic_api_steps: next });
+                  }}
+                  placeholder='{"email":"{{email}}","password":"{{password}}"}'
+                  rows={4}
+                />
+
+                {syntheticAPIMode === 'advanced' && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <FormInput
+                    label="Step timeout (seconds, optional)"
+                    type="number"
+                    value={step.timeout_seconds}
                     onChange={(v) => {
                       const next = [...formData.synthetic_api_steps];
-                      next[stepIdx] = { ...next[stepIdx], body: v };
+                      next[stepIdx] = { ...next[stepIdx], timeout_seconds: v };
                       setFormData({ ...formData, synthetic_api_steps: next });
                     }}
-                    placeholder='{"email":"{{email}}","password":"{{password}}"}'
-                    rows={4}
+                    placeholder="20"
+                    min={1}
                   />
-
-                  {syntheticAPIMode === 'advanced' && (
-                  <div className="grid grid-cols-3 gap-3">
-                    <FormInput
-                      label="Step Timeout (seconds, optional)"
-                      type="number"
-                      value={step.timeout_seconds}
-                      onChange={(v) => {
-                        const next = [...formData.synthetic_api_steps];
-                        next[stepIdx] = { ...next[stepIdx], timeout_seconds: v };
-                        setFormData({ ...formData, synthetic_api_steps: next });
-                      }}
-                      placeholder="20"
-                      min={1}
-                    />
-                    <FormInput
-                      label="Max Redirects (optional)"
-                      type="number"
-                      value={step.max_redirects}
-                      onChange={(v) => {
-                        const next = [...formData.synthetic_api_steps];
-                        next[stepIdx] = { ...next[stepIdx], max_redirects: v };
-                        setFormData({ ...formData, synthetic_api_steps: next });
-                      }}
-                      placeholder="5"
-                      min={0}
-                    />
-                    <FormToggle
-                      label="Follow Redirects"
-                      checked={step.follow_redirects}
-                      onChange={(v) => {
-                        const next = [...formData.synthetic_api_steps];
-                        next[stepIdx] = { ...next[stepIdx], follow_redirects: v };
-                        setFormData({ ...formData, synthetic_api_steps: next });
-                      }}
-                    />
-                  </div>
-                  )}
-
-                  {syntheticAPIMode === 'advanced' && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-medium text-slate-400">Assertions (optional)</label>
-                      <button
-                        type="button"
-                        className={BTN_GHOST_SM}
-                        onClick={() => {
+                  <FormInput
+                    label="Max redirects (optional)"
+                    type="number"
+                    value={step.max_redirects}
+                    onChange={(v) => {
+                      const next = [...formData.synthetic_api_steps];
+                      next[stepIdx] = { ...next[stepIdx], max_redirects: v };
+                      setFormData({ ...formData, synthetic_api_steps: next });
+                    }}
+                    placeholder="5"
+                    min={0}
+                  />
+                  <div className="sm:flex sm:flex-col sm:justify-end">
+                    <div className="sm:flex sm:h-10 sm:flex-col sm:justify-center">
+                      <FormToggle
+                        label="Follow redirects"
+                        checked={step.follow_redirects}
+                        onChange={(v) => {
                           const next = [...formData.synthetic_api_steps];
-                          next[stepIdx] = { ...next[stepIdx], assertions: [...next[stepIdx].assertions, defaultSyntheticAPIAssertion()] };
+                          next[stepIdx] = { ...next[stepIdx], follow_redirects: v };
                           setFormData({ ...formData, synthetic_api_steps: next });
                         }}
-                      >
-                        + Add assertion
-                      </button>
+                      />
                     </div>
+                  </div>
+                </div>
+                )}
 
-                    <div className="space-y-2">
-                      {step.assertions.map((assertion: SyntheticAPIAssertionDraft, assertionIdx: number) => {
-                        const target = normalizeAssertionTarget(assertion.target);
-                        const allowedOps = syntheticAssertionOpsByTarget[target];
-                        const op = allowedOps.includes(assertion.op) ? assertion.op : allowedOps[0];
-                        const needsPath = assertionPathRequired(target);
-                        const needsValue = assertionValueRequired(target, op);
+                {syntheticAPIMode === 'advanced' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className={FIELD_LABEL}>Assertions (optional)</label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                      onClick={() => {
+                        const next = [...formData.synthetic_api_steps];
+                        next[stepIdx] = { ...next[stepIdx], assertions: [...next[stepIdx].assertions, defaultSyntheticAPIAssertion()] };
+                        setFormData({ ...formData, synthetic_api_steps: next });
+                      }}
+                    >
+                      Add assertion
+                    </Button>
+                  </div>
 
-                        return (
-                          <div key={`synthetic-api-step-${stepIdx}-assertion-${assertionIdx}`} className="grid grid-cols-12 gap-2">
-                            <select
-                              className="input col-span-2"
-                              value={target}
-                              onChange={(e) => {
-                                const nextTarget = normalizeAssertionTarget(e.target.value);
-                                const nextAssertion = defaultSyntheticAssertionForTarget(nextTarget);
-                                const next = [...formData.synthetic_api_steps];
-                                const assertions = [...next[stepIdx].assertions];
-                                const prev = assertions[assertionIdx];
-                                assertions[assertionIdx] = {
-                                  ...nextAssertion,
-                                  value_input: prev.value_input,
-                                };
-                                next[stepIdx] = { ...next[stepIdx], assertions };
-                                setFormData({ ...formData, synthetic_api_steps: next });
-                              }}
-                            >
-                              <option value="status">status</option>
-                              <option value="header">header</option>
-                              <option value="body">body</option>
-                              <option value="json">json</option>
-                            </select>
+                  <div className="space-y-2">
+                    {step.assertions.map((assertion: SyntheticAPIAssertionDraft, assertionIdx: number) => {
+                      const target = normalizeAssertionTarget(assertion.target);
+                      const allowedOps = syntheticAssertionOpsByTarget[target];
+                      const op = allowedOps.includes(assertion.op) ? assertion.op : allowedOps[0];
+                      const needsPath = assertionPathRequired(target);
+                      const needsValue = assertionValueRequired(target, op);
 
-                            <select
-                              className="input col-span-2"
-                              value={op}
-                              onChange={(e) => {
-                                const next = [...formData.synthetic_api_steps];
-                                const assertions = [...next[stepIdx].assertions];
-                                assertions[assertionIdx] = { ...assertions[assertionIdx], op: e.target.value };
-                                next[stepIdx] = { ...next[stepIdx], assertions };
-                                setFormData({ ...formData, synthetic_api_steps: next });
-                              }}
-                            >
-                              {allowedOps.map((option) => (
-                                <option key={option} value={option}>{option}</option>
-                              ))}
-                            </select>
+                      return (
+                        <div key={`synthetic-api-step-${stepIdx}-assertion-${assertionIdx}`} className="grid grid-cols-12 gap-2">
+                          <select
+                            className="input col-span-2"
+                            value={target}
+                            onChange={(e) => {
+                              const nextTarget = normalizeAssertionTarget(e.target.value);
+                              const nextAssertion = defaultSyntheticAssertionForTarget(nextTarget);
+                              const next = [...formData.synthetic_api_steps];
+                              const assertions = [...next[stepIdx].assertions];
+                              const prev = assertions[assertionIdx];
+                              assertions[assertionIdx] = {
+                                ...nextAssertion,
+                                value_input: prev.value_input,
+                              };
+                              next[stepIdx] = { ...next[stepIdx], assertions };
+                              setFormData({ ...formData, synthetic_api_steps: next });
+                            }}
+                          >
+                            <option value="status">status</option>
+                            <option value="header">header</option>
+                            <option value="body">body</option>
+                            <option value="json">json</option>
+                          </select>
 
-                            <input
-                              className="input col-span-3"
-                              placeholder={target === 'header' ? 'Header name' : target === 'json' ? 'JSON path' : 'Path (unused)'}
-                              value={assertion.path}
-                              disabled={!needsPath}
-                              onChange={(e) => {
-                                const next = [...formData.synthetic_api_steps];
-                                const assertions = [...next[stepIdx].assertions];
-                                assertions[assertionIdx] = { ...assertions[assertionIdx], path: e.target.value };
-                                next[stepIdx] = { ...next[stepIdx], assertions };
-                                setFormData({ ...formData, synthetic_api_steps: next });
-                              }}
-                            />
+                          <select
+                            className="input col-span-2"
+                            value={op}
+                            onChange={(e) => {
+                              const next = [...formData.synthetic_api_steps];
+                              const assertions = [...next[stepIdx].assertions];
+                              assertions[assertionIdx] = { ...assertions[assertionIdx], op: e.target.value };
+                              next[stepIdx] = { ...next[stepIdx], assertions };
+                              setFormData({ ...formData, synthetic_api_steps: next });
+                            }}
+                          >
+                            {allowedOps.map((option) => (
+                              <option key={option} value={option}>{option}</option>
+                            ))}
+                          </select>
 
-                            <input
-                              className="input col-span-4"
-                              placeholder={assertionValuePlaceholder(target, op)}
-                              value={assertion.value_input}
-                              disabled={!needsValue}
-                              onChange={(e) => {
-                                const next = [...formData.synthetic_api_steps];
-                                const assertions = [...next[stepIdx].assertions];
-                                assertions[assertionIdx] = { ...assertions[assertionIdx], value_input: e.target.value };
-                                next[stepIdx] = { ...next[stepIdx], assertions };
-                                setFormData({ ...formData, synthetic_api_steps: next });
-                              }}
-                            />
+                          <input
+                            className="input col-span-3"
+                            placeholder={target === 'header' ? 'Header name' : target === 'json' ? 'JSON path' : 'Path (unused)'}
+                            value={assertion.path}
+                            disabled={!needsPath}
+                            onChange={(e) => {
+                              const next = [...formData.synthetic_api_steps];
+                              const assertions = [...next[stepIdx].assertions];
+                              assertions[assertionIdx] = { ...assertions[assertionIdx], path: e.target.value };
+                              next[stepIdx] = { ...next[stepIdx], assertions };
+                              setFormData({ ...formData, synthetic_api_steps: next });
+                            }}
+                          />
 
-                            <button
-                              type="button"
-                              className={`${BTN_GHOST_SM} col-span-1`}
+                          <input
+                            className="input col-span-4"
+                            placeholder={assertionValuePlaceholder(target, op)}
+                            value={assertion.value_input}
+                            disabled={!needsValue}
+                            onChange={(e) => {
+                              const next = [...formData.synthetic_api_steps];
+                              const assertions = [...next[stepIdx].assertions];
+                              assertions[assertionIdx] = { ...assertions[assertionIdx], value_input: e.target.value };
+                              next[stepIdx] = { ...next[stepIdx], assertions };
+                              setFormData({ ...formData, synthetic_api_steps: next });
+                            }}
+                          />
+
+                          <div className="col-span-1 flex items-center justify-center">
+                            <IconButton
+                              icon={<X strokeWidth={1.75} />}
+                              label="Remove assertion"
                               onClick={() => {
                                 const next = [...formData.synthetic_api_steps];
                                 const assertions = [...next[stepIdx].assertions];
@@ -2834,92 +2797,95 @@ export default function MonitorForm({
                                 next[stepIdx] = { ...next[stepIdx], assertions };
                                 setFormData({ ...formData, synthetic_api_steps: next });
                               }}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <p className="text-xs text-slate-500">Value accepts plain text or JSON literals (e.g. <code>200</code>, <code>true</code>, <code>[200,201]</code>).</p>
-                  </div>
-                  )}
-
-                  {syntheticAPIMode === 'advanced' && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-medium text-slate-400">Extracts (optional)</label>
-                      <button
-                        type="button"
-                        className={BTN_GHOST_SM}
-                        onClick={() => {
-                          const next = [...formData.synthetic_api_steps];
-                          next[stepIdx] = { ...next[stepIdx], extracts: [...next[stepIdx].extracts, defaultSyntheticAPIExtract()] };
-                          setFormData({ ...formData, synthetic_api_steps: next });
-                        }}
-                      >
-                        + Add extract
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      {step.extracts.map((extract: SyntheticAPIExtractDraft, extractIdx: number) => (
-                        <div key={`synthetic-api-step-${stepIdx}-extract-${extractIdx}`} className="grid grid-cols-12 gap-2">
-                          <input
-                            className="input col-span-3"
-                            placeholder="Variable name"
-                            value={extract.name}
-                            onChange={(e) => {
-                              const next = [...formData.synthetic_api_steps];
-                              const extracts = [...next[stepIdx].extracts];
-                              extracts[extractIdx] = { ...extracts[extractIdx], name: e.target.value };
-                              next[stepIdx] = { ...next[stepIdx], extracts };
-                              setFormData({ ...formData, synthetic_api_steps: next });
-                            }}
-                          />
-                          <select
-                            className="input col-span-2"
-                            value={extract.from}
-                            onChange={(e) => {
-                              const next = [...formData.synthetic_api_steps];
-                              const extracts = [...next[stepIdx].extracts];
-                              extracts[extractIdx] = { ...extracts[extractIdx], from: e.target.value as SyntheticAPIExtractConfig['from'] };
-                              next[stepIdx] = { ...next[stepIdx], extracts };
-                              setFormData({ ...formData, synthetic_api_steps: next });
-                            }}
-                          >
-                            <option value="json">json</option>
-                            <option value="header">header</option>
-                          </select>
-                          <input
-                            className="input col-span-5"
-                            placeholder={extract.from === 'header' ? 'Header name' : 'JSON path'}
-                            value={extract.path}
-                            onChange={(e) => {
-                              const next = [...formData.synthetic_api_steps];
-                              const extracts = [...next[stepIdx].extracts];
-                              extracts[extractIdx] = { ...extracts[extractIdx], path: e.target.value };
-                              next[stepIdx] = { ...next[stepIdx], extracts };
-                              setFormData({ ...formData, synthetic_api_steps: next });
-                            }}
-                          />
-                          <label className="col-span-1 flex items-center justify-center gap-1 text-xs text-slate-400">
-                            <input
-                              type="checkbox"
-                              checked={extract.sensitive}
-                              onChange={(e) => {
-                                const next = [...formData.synthetic_api_steps];
-                                const extracts = [...next[stepIdx].extracts];
-                                extracts[extractIdx] = { ...extracts[extractIdx], sensitive: e.target.checked };
-                                next[stepIdx] = { ...next[stepIdx], extracts };
-                                setFormData({ ...formData, synthetic_api_steps: next });
-                              }}
                             />
-                            Secret
-                          </label>
-                          <button
-                            type="button"
-                            className={`${BTN_GHOST_SM} col-span-1`}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-500">Value accepts plain text or JSON literals (e.g. <code>200</code>, <code>true</code>, <code>[200,201]</code>).</p>
+                </div>
+                )}
+
+                {syntheticAPIMode === 'advanced' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className={FIELD_LABEL}>Extracts (optional)</label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                      onClick={() => {
+                        const next = [...formData.synthetic_api_steps];
+                        next[stepIdx] = { ...next[stepIdx], extracts: [...next[stepIdx].extracts, defaultSyntheticAPIExtract()] };
+                        setFormData({ ...formData, synthetic_api_steps: next });
+                      }}
+                    >
+                      Add extract
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {step.extracts.map((extract: SyntheticAPIExtractDraft, extractIdx: number) => (
+                      <div key={`synthetic-api-step-${stepIdx}-extract-${extractIdx}`} className="grid grid-cols-12 gap-2">
+                        <input
+                          className="input col-span-3"
+                          placeholder="Variable name"
+                          value={extract.name}
+                          onChange={(e) => {
+                            const next = [...formData.synthetic_api_steps];
+                            const extracts = [...next[stepIdx].extracts];
+                            extracts[extractIdx] = { ...extracts[extractIdx], name: e.target.value };
+                            next[stepIdx] = { ...next[stepIdx], extracts };
+                            setFormData({ ...formData, synthetic_api_steps: next });
+                          }}
+                        />
+                        <select
+                          className="input col-span-2"
+                          value={extract.from}
+                          onChange={(e) => {
+                            const next = [...formData.synthetic_api_steps];
+                            const extracts = [...next[stepIdx].extracts];
+                            extracts[extractIdx] = { ...extracts[extractIdx], from: e.target.value as SyntheticAPIExtractConfig['from'] };
+                            next[stepIdx] = { ...next[stepIdx], extracts };
+                            setFormData({ ...formData, synthetic_api_steps: next });
+                          }}
+                        >
+                          <option value="json">json</option>
+                          <option value="header">header</option>
+                        </select>
+                        <input
+                          className="input col-span-5"
+                          placeholder={extract.from === 'header' ? 'Header name' : 'JSON path'}
+                          value={extract.path}
+                          onChange={(e) => {
+                            const next = [...formData.synthetic_api_steps];
+                            const extracts = [...next[stepIdx].extracts];
+                            extracts[extractIdx] = { ...extracts[extractIdx], path: e.target.value };
+                            next[stepIdx] = { ...next[stepIdx], extracts };
+                            setFormData({ ...formData, synthetic_api_steps: next });
+                          }}
+                        />
+                        <label className="col-span-1 flex items-center justify-center gap-1 text-xs text-slate-400">
+                          <input
+                            type="checkbox"
+                            className="accent-cyan-500"
+                            checked={extract.sensitive}
+                            onChange={(e) => {
+                              const next = [...formData.synthetic_api_steps];
+                              const extracts = [...next[stepIdx].extracts];
+                              extracts[extractIdx] = { ...extracts[extractIdx], sensitive: e.target.checked };
+                              next[stepIdx] = { ...next[stepIdx], extracts };
+                              setFormData({ ...formData, synthetic_api_steps: next });
+                            }}
+                          />
+                          Secret
+                        </label>
+                        <div className="col-span-1 flex items-center justify-center">
+                          <IconButton
+                            icon={<X strokeWidth={1.75} />}
+                            label="Remove extract"
                             onClick={() => {
                               const next = [...formData.synthetic_api_steps];
                               const extracts = [...next[stepIdx].extracts];
@@ -2927,692 +2893,631 @@ export default function MonitorForm({
                               next[stepIdx] = { ...next[stepIdx], extracts };
                               setFormData({ ...formData, synthetic_api_steps: next });
                             }}
-                          >
-                            ×
-                          </button>
+                          />
                         </div>
-                      ))}
-                    </div>
-                    <p className="text-xs text-slate-500">Extracted values become variables for subsequent steps.</p>
+                      </div>
+                    ))}
                   </div>
-                  )}
+                  <p className="text-xs text-slate-500">Extracted values become variables for subsequent steps.</p>
                 </div>
-              ))}
-            </div>
+                )}
+              </div>
+            ))}
           </div>
-        </div>
+        </FormSection>
       )}
 
       {monitorType === 'synthetic_browser' && (
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
-          <SectionHeader title="Synthetic Browser configuration" description="Guided setup for normal users, expert editor for full control." />
-          <div className="space-y-4">
-            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-white">Setup Mode</p>
-                  <p className="text-xs text-slate-400">
-                    Guided mode hides step-level complexity and applies safe defaults.
-                  </p>
-                </div>
-                <div className="inline-flex rounded-lg border border-white/[0.1] bg-slate-900/50 p-1">
-                  <button
-                    type="button"
-                    onClick={() => switchSyntheticBrowserSetupMode('guided')}
-                    className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                      syntheticBrowserSetupMode === 'guided' ? 'bg-white/[0.12] text-white' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Guided
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchSyntheticBrowserSetupMode('expert')}
-                    className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                      syntheticBrowserSetupMode === 'expert' ? 'bg-white/[0.12] text-white' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Expert
-                  </button>
-                </div>
+        <FormSection title="Synthetic browser configuration">
+          <div>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-white">Setup mode</p>
+                <p className="text-[13px] text-slate-400">
+                  Guided mode hides step-level complexity and applies safe defaults.
+                </p>
               </div>
-              {syntheticBrowserSetupMode === 'guided' ? (
-                <p className="mt-2 text-xs text-slate-500">
-                  Guided enforces: fail-fast, Desktop Chrome, screenshot-on-failure only.
-                </p>
-              ) : (
-                <p className="mt-2 text-xs text-slate-500">
-                  Expert mode exposes full step/action configuration.
-                </p>
-              )}
+              <Tabs tabs={BROWSER_SETUP_TABS} active={syntheticBrowserSetupMode} onChange={switchSyntheticBrowserSetupMode} />
             </div>
+            <p className="mt-2 text-xs text-slate-500">
+              {syntheticBrowserSetupMode === 'guided'
+                ? 'Guided enforces: fail-fast, Desktop Chrome, screenshot-on-failure only.'
+                : 'Expert mode exposes full step/action configuration.'}
+            </p>
+          </div>
 
-            {syntheticBrowserSetupMode === 'guided' && (
-              <div className="space-y-4">
-                <div className="rounded-lg border border-white/[0.08] bg-slate-900/40 p-4">
-                  <div className="mb-4 flex items-center gap-2">
-                    {[1, 2, 3].map((step) => (
-                      <button
-                        key={`guided-step-${step}`}
-                        type="button"
-                        onClick={() => setSyntheticBrowserGuidedStep(step as SyntheticBrowserGuidedStep)}
-                        className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
-                          syntheticBrowserGuidedStep === step
-                            ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40'
-                            : 'bg-slate-800/60 text-slate-400 border border-white/[0.08]'
-                        }`}
-                      >
-                        {step === 1 ? '1. Journey' : step === 2 ? '2. Inputs' : '3. Review'}
-                      </button>
-                    ))}
+          {syntheticBrowserSetupMode === 'guided' && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                {[1, 2, 3].map((step) => (
+                  <FilterChip
+                    key={`guided-step-${step}`}
+                    selected={syntheticBrowserGuidedStep === step}
+                    onClick={() => setSyntheticBrowserGuidedStep(step as SyntheticBrowserGuidedStep)}
+                  >
+                    {step === 1 ? '1. Journey' : step === 2 ? '2. Inputs' : '3. Review'}
+                  </FilterChip>
+                ))}
+              </div>
+
+              {syntheticBrowserGuidedStep === 1 && (
+                <div className="space-y-3">
+                  <p className="text-[13px] text-slate-400">Pick the journey type you want to monitor.</p>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <button
+                      type="button"
+                      className={`glass-well px-4 py-3 text-left transition-colors ${
+                        formData.synthetic_browser_guided_template === 'homepage_smoke'
+                          ? TILE_SELECTED
+                          : 'hover:bg-well-hover'
+                      }`}
+                      onClick={() => applySyntheticBrowserGuidedTemplate('homepage_smoke')}
+                    >
+                      <p className="text-sm font-medium text-white">Homepage smoke</p>
+                      <p className="mt-1 text-xs text-slate-500">Open page and assert key element is visible.</p>
+                    </button>
+                    <button
+                      type="button"
+                      className={`glass-well px-4 py-3 text-left transition-colors ${
+                        formData.synthetic_browser_guided_template === 'login_flow'
+                          ? TILE_SELECTED
+                          : 'hover:bg-well-hover'
+                      }`}
+                      onClick={() => applySyntheticBrowserGuidedTemplate('login_flow')}
+                    >
+                      <p className="text-sm font-medium text-white">Login flow</p>
+                      <p className="mt-1 text-xs text-slate-500">Open login page, submit form, and validate destination.</p>
+                    </button>
+                    <button
+                      type="button"
+                      className="glass-well px-4 py-3 text-left transition-colors hover:bg-well-hover"
+                      onClick={() => switchSyntheticBrowserSetupMode('expert')}
+                    >
+                      <p className="text-sm font-medium text-white">Custom</p>
+                      <p className="mt-1 text-xs text-slate-500">Switch to Expert for full step control.</p>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {syntheticBrowserGuidedStep === 2 && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <FormInput
+                      label={formData.synthetic_browser_guided_template === 'login_flow' ? 'Login URL' : 'Start URL'}
+                      value={formData.synthetic_browser_start_url}
+                      onChange={(v) => setFormData({ ...formData, synthetic_browser_start_url: v })}
+                      placeholder={formData.synthetic_browser_guided_template === 'login_flow' ? 'https://app.example.com/login' : 'https://app.example.com'}
+                      error={errors.synthetic_browser_start_url}
+                    />
+                    {formData.synthetic_browser_guided_template === 'homepage_smoke' ? (
+                      <FormInput
+                        label="Must-see selector"
+                        value={formData.synthetic_browser_guided_must_see_selector}
+                        onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_must_see_selector: v })}
+                        placeholder="main"
+                        hint="CSS selector that must be visible."
+                      />
+                    ) : (
+                      <FormInput
+                        label="Expected URL contains"
+                        value={formData.synthetic_browser_guided_expected_url}
+                        onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_expected_url: v })}
+                        placeholder="/dashboard"
+                      />
+                    )}
                   </div>
 
-                  {syntheticBrowserGuidedStep === 1 && (
-                    <div className="space-y-3">
-                      <p className="text-xs text-slate-400">Pick the journey type you want to monitor.</p>
-                      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                        <button
-                          type="button"
-                          className={`rounded-lg border px-3 py-3 text-left transition-colors ${
-                            formData.synthetic_browser_guided_template === 'homepage_smoke'
-                              ? 'border-cyan-400/50 bg-cyan-500/10'
-                              : 'border-white/[0.08] bg-slate-800/40 hover:border-white/[0.16]'
-                          }`}
-                          onClick={() => applySyntheticBrowserGuidedTemplate('homepage_smoke')}
-                        >
-                          <p className="text-sm font-medium text-white">Homepage Smoke</p>
-                          <p className="mt-1 text-xs text-slate-500">Open page and assert key element is visible.</p>
-                        </button>
-                        <button
-                          type="button"
-                          className={`rounded-lg border px-3 py-3 text-left transition-colors ${
-                            formData.synthetic_browser_guided_template === 'login_flow'
-                              ? 'border-cyan-400/50 bg-cyan-500/10'
-                              : 'border-white/[0.08] bg-slate-800/40 hover:border-white/[0.16]'
-                          }`}
-                          onClick={() => applySyntheticBrowserGuidedTemplate('login_flow')}
-                        >
-                          <p className="text-sm font-medium text-white">Login Flow</p>
-                          <p className="mt-1 text-xs text-slate-500">Open login page, submit form, and validate destination.</p>
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-lg border border-white/[0.08] bg-slate-800/40 px-3 py-3 text-left transition-colors hover:border-white/[0.16]"
-                          onClick={() => switchSyntheticBrowserSetupMode('expert')}
-                        >
-                          <p className="text-sm font-medium text-white">Custom</p>
-                          <p className="mt-1 text-xs text-slate-500">Switch to Expert for full step control.</p>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {syntheticBrowserGuidedStep === 2 && (
-                    <div className="space-y-4">
+                  {formData.synthetic_browser_guided_template === 'login_flow' && (
+                    <>
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <FormInput
-                          label={formData.synthetic_browser_guided_template === 'login_flow' ? 'Login URL' : 'Start URL'}
-                          value={formData.synthetic_browser_start_url}
-                          onChange={(v) => setFormData({ ...formData, synthetic_browser_start_url: v })}
-                          placeholder={formData.synthetic_browser_guided_template === 'login_flow' ? 'https://app.example.com/login' : 'https://app.example.com'}
-                          error={errors.synthetic_browser_start_url}
+                          label="Email selector"
+                          value={formData.synthetic_browser_guided_email_selector}
+                          onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_email_selector: v })}
+                          placeholder="[name=email]"
                         />
-                        {formData.synthetic_browser_guided_template === 'homepage_smoke' ? (
-                          <FormInput
-                            label="Must-see selector"
-                            value={formData.synthetic_browser_guided_must_see_selector}
-                            onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_must_see_selector: v })}
-                            placeholder="main"
-                            hint="CSS selector that must be visible."
-                          />
-                        ) : (
-                          <FormInput
-                            label="Expected URL contains"
-                            value={formData.synthetic_browser_guided_expected_url}
-                            onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_expected_url: v })}
-                            placeholder="/dashboard"
-                          />
-                        )}
+                        <FormInput
+                          label="Password selector"
+                          value={formData.synthetic_browser_guided_password_selector}
+                          onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_password_selector: v })}
+                          placeholder="[name=password]"
+                        />
                       </div>
-
-                      {formData.synthetic_browser_guided_template === 'login_flow' && (
-                        <>
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <FormInput
-                              label="Email selector"
-                              value={formData.synthetic_browser_guided_email_selector}
-                              onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_email_selector: v })}
-                              placeholder="[name=email]"
-                            />
-                            <FormInput
-                              label="Password selector"
-                              value={formData.synthetic_browser_guided_password_selector}
-                              onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_password_selector: v })}
-                              placeholder="[name=password]"
-                            />
-                          </div>
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <FormInput
-                              label="Submit selector"
-                              value={formData.synthetic_browser_guided_submit_selector}
-                              onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_submit_selector: v })}
-                              placeholder="button[type=submit]"
-                            />
-                            <FormInput
-                              label="Post-login selector"
-                              value={formData.synthetic_browser_guided_post_login_selector}
-                              onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_post_login_selector: v })}
-                              placeholder="[data-test=dashboard]"
-                            />
-                          </div>
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <FormInput
-                              label="Username (optional)"
-                              value={formData.synthetic_browser_guided_username}
-                              onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_username: v })}
-                              placeholder="user@example.com"
-                              hint="If empty, fill step for username is skipped."
-                            />
-                            <FormInput
-                              label="Password (optional)"
-                              type="password"
-                              value={formData.synthetic_browser_guided_password}
-                              onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_password: v })}
-                              placeholder="********"
-                              hint="If empty, fill step for password is skipped."
-                            />
-                          </div>
-                        </>
-                      )}
-
-                      {errors.synthetic_browser_steps && (
-                        <p className="text-xs text-rose-400">{errors.synthetic_browser_steps}</p>
-                      )}
-                    </div>
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <FormInput
+                          label="Submit selector"
+                          value={formData.synthetic_browser_guided_submit_selector}
+                          onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_submit_selector: v })}
+                          placeholder="button[type=submit]"
+                        />
+                        <FormInput
+                          label="Post-login selector"
+                          value={formData.synthetic_browser_guided_post_login_selector}
+                          onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_post_login_selector: v })}
+                          placeholder="[data-test=dashboard]"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <FormInput
+                          label="Username (optional)"
+                          value={formData.synthetic_browser_guided_username}
+                          onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_username: v })}
+                          placeholder="user@example.com"
+                          hint="If empty, fill step for username is skipped."
+                        />
+                        <FormInput
+                          label="Password (optional)"
+                          type="password"
+                          value={formData.synthetic_browser_guided_password}
+                          onChange={(v) => setFormData({ ...formData, synthetic_browser_guided_password: v })}
+                          placeholder="********"
+                          hint="If empty, fill step for password is skipped."
+                        />
+                      </div>
+                    </>
                   )}
 
-                  {syntheticBrowserGuidedStep === 3 && (
-                    <div className="space-y-3">
-                      <p className="text-xs text-slate-400">Review generated journey before creating the monitor.</p>
-                      <div className="flex flex-wrap gap-2 text-xs">
-                        <span className="rounded-full border border-white/[0.1] bg-slate-900/60 px-2 py-1 text-slate-300">
-                          {syntheticBrowserGuidedPreview.steps.length} steps
-                        </span>
-                        <span className="rounded-full border border-white/[0.1] bg-slate-900/60 px-2 py-1 text-slate-300">
-                          {Object.keys(syntheticBrowserGuidedPreview.variables).length} variables
-                        </span>
-                        <span className="rounded-full border border-white/[0.1] bg-slate-900/60 px-2 py-1 text-slate-300">
-                          Screenshot on failure
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        {syntheticBrowserGuidedPreview.steps.map((step, idx) => (
-                          <div
-                            key={`guided-preview-step-${idx}`}
-                            className="rounded-lg border border-white/[0.08] bg-slate-800/40 px-3 py-2"
-                          >
-                            <p className="text-xs font-medium text-slate-300">
-                              Step {idx + 1}: {syntheticBrowserActionMeta[step.action].label}
-                            </p>
-                            <p className="text-[11px] text-slate-500">
-                              {step.action === 'goto'
-                                ? step.url
-                                : step.action === 'assert_url'
-                                ? step.value
-                                : step.selector}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-xs text-slate-500">Click Create Monitor at the bottom to save this guided setup.</p>
-                    </div>
+                  {errors.synthetic_browser_steps && (
+                    <p className="text-xs text-rose-300">{errors.synthetic_browser_steps}</p>
                   )}
+                </div>
+              )}
 
-                  <div className="mt-4 flex items-center justify-between border-t border-white/[0.08] pt-3">
-                    <button
-                      type="button"
-                      className={BTN_GHOST_SM}
-                      onClick={() => setSyntheticBrowserGuidedStep((prev) => (prev > 1 ? ((prev - 1) as SyntheticBrowserGuidedStep) : prev))}
-                      disabled={syntheticBrowserGuidedStep === 1}
-                    >
-                      Back
-                    </button>
-                    <button
-                      type="button"
-                      className={BTN_GHOST_SM}
-                      onClick={() =>
-                        setSyntheticBrowserGuidedStep((prev) => (prev < 3 ? ((prev + 1) as SyntheticBrowserGuidedStep) : prev))
-                      }
-                      disabled={syntheticBrowserGuidedStep === 3}
-                    >
-                      Next
-                    </button>
+              {syntheticBrowserGuidedStep === 3 && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="text-[13px] text-slate-400">Review generated journey before creating the monitor.</p>
+                    <p className="text-xs tabular-nums text-slate-500">
+                      {syntheticBrowserGuidedPreview.steps.length} steps
+                      {' · '}
+                      {Object.keys(syntheticBrowserGuidedPreview.variables).length} variables
+                      {' · '}
+                      Screenshot on failure
+                    </p>
                   </div>
+                  <div className="glass-well divide-y divide-divider">
+                    {syntheticBrowserGuidedPreview.steps.map((step, idx) => (
+                      <div key={`guided-preview-step-${idx}`} className="px-4 py-2.5">
+                        <p className="text-[13px] font-medium text-slate-200">
+                          Step {idx + 1}: {syntheticBrowserActionMeta[step.action].label}
+                        </p>
+                        <p className="break-all font-mono text-xs text-slate-500">
+                          {step.action === 'goto'
+                            ? step.url
+                            : step.action === 'assert_url'
+                            ? step.value
+                            : step.selector}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-slate-500">Click Create monitor at the bottom to save this guided setup.</p>
                 </div>
-              </div>
-            )}
+              )}
 
-            {syntheticBrowserSetupMode === 'expert' && (
-              <>
-            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-white">Quick start templates</p>
-                  <p className="text-xs text-slate-400">Start from a realistic browser flow and adjust selectors/URLs.</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className={BTN_GHOST_SM}
-                    onClick={() => applySyntheticBrowserTemplate('homepage_smoke')}
-                  >
-                    Homepage Smoke
-                  </button>
-                  <button
-                    type="button"
-                    className={BTN_GHOST_SM}
-                    onClick={() => applySyntheticBrowserTemplate('login_flow')}
-                  >
-                    Login Flow
-                  </button>
-                </div>
+              <div className="flex items-center justify-between">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setSyntheticBrowserGuidedStep((prev) => (prev > 1 ? ((prev - 1) as SyntheticBrowserGuidedStep) : prev))}
+                  disabled={syntheticBrowserGuidedStep === 1}
+                >
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    setSyntheticBrowserGuidedStep((prev) => (prev < 3 ? ((prev + 1) as SyntheticBrowserGuidedStep) : prev))
+                  }
+                  disabled={syntheticBrowserGuidedStep === 3}
+                >
+                  Next
+                </Button>
               </div>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full border border-white/[0.1] bg-slate-900/50 px-2 py-1 text-slate-300">
-                  {formData.synthetic_browser_steps.length} steps
-                </span>
-                <span className="rounded-full border border-white/[0.1] bg-slate-900/50 px-2 py-1 text-slate-300">
-                  {(formData.synthetic_browser_variables || []).filter((v) => v.key.trim()).length} variables
-                </span>
-                <span className="rounded-full border border-white/[0.1] bg-slate-900/50 px-2 py-1 text-slate-300">
-                  Artifacts: {formData.synthetic_browser_screenshot_on_failure ? 'Screenshot' : 'No screenshot'}
-                </span>
-              </div>
-              <div className="mt-3">
-                <div className="inline-flex rounded-lg border border-white/[0.1] bg-slate-900/50 p-1">
-                  <button
-                    type="button"
-                    onClick={() => setSyntheticBrowserMode('basic')}
-                    className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                      syntheticBrowserMode === 'basic' ? 'bg-white/[0.12] text-white' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Basic
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSyntheticBrowserMode('advanced')}
-                    className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                      syntheticBrowserMode === 'advanced' ? 'bg-white/[0.12] text-white' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Advanced
-                  </button>
+            </div>
+          )}
+
+          {syntheticBrowserSetupMode === 'expert' && (
+            <>
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <Tabs tabs={EDITOR_MODE_TABS} active={syntheticBrowserMode} onChange={setSyntheticBrowserMode} />
+                  <p className="text-xs tabular-nums text-slate-500">
+                    {formData.synthetic_browser_steps.length} steps
+                    {' · '}
+                    {(formData.synthetic_browser_variables || []).filter((v) => v.key.trim()).length} variables
+                    {' · '}
+                    Artifacts: {formData.synthetic_browser_screenshot_on_failure ? 'Screenshot' : 'No screenshot'}
+                  </p>
                 </div>
                 <p className="mt-2 text-xs text-slate-500">
                   Basic is optimized for common user journeys. Advanced unlocks device/variables/step timeout tuning.
                 </p>
               </div>
-            </div>
 
-            <div className="rounded-lg border border-white/[0.08] bg-slate-900/40 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="glass-well flex flex-wrap items-center justify-between gap-3 p-4">
                 <div>
-                  <p className="text-sm font-medium text-white">Realtime Test</p>
-                  <p className="text-xs text-slate-500">Runs the saved monitor immediately and streams the latest result state here.</p>
+                  <p className="text-sm font-medium text-white">Quick start templates</p>
+                  <p className="text-[13px] text-slate-400">Start from a realistic browser flow and adjust selectors/URLs.</p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {formData.location_ids.length > 0 && (
-                    <select
-                      aria-label="Run test from location"
-                      value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
-                      onChange={(e) => setTestLocationId(e.target.value)}
-                      className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
-                    >
-                      <option value="">Run from: all locations</option>
-                      {availableLocations
-                        .filter((loc) => formData.location_ids.includes(loc.id))
-                        .map((loc) => (
-                          <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
-                        ))}
-                    </select>
-                  )}
-                  <button
+                <div className="flex flex-wrap gap-2">
+                  <Button
                     type="button"
-                    className={BTN_GHOST_SM}
-                    onClick={startSyntheticLiveTest}
-                    disabled={!isSavedMonitor || isTestRunning}
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => applySyntheticBrowserTemplate('homepage_smoke')}
                   >
-                    {isTestRunning ? 'Testing...' : 'Test now'}
-                  </button>
+                    Homepage smoke
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => applySyntheticBrowserTemplate('login_flow')}
+                  >
+                    Login flow
+                  </Button>
                 </div>
               </div>
-              {!isSavedMonitor && (
-                <p className="mt-2 text-xs text-amber-400">Save this monitor first to enable realtime tests.</p>
-              )}
-              {isSavedMonitor && (
-                <p className="mt-2 text-xs text-slate-500">Test runs use the currently saved monitor config.</p>
-              )}
-              {syntheticTestState.phase !== 'idle' && (
-                <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${getSyntheticResultBadgeClasses(syntheticTestState.phase)}`}>
-                  <p>{syntheticTestState.message || 'Running...'}</p>
-                  {syntheticTestState.result && (
-                    <p className="mt-1">
-                      Status: <span className="font-medium uppercase">{syntheticTestState.result.status}</span>
-                      {typeof syntheticTestState.result.latency_ms === 'number' ? ` · ${syntheticTestState.result.latency_ms}ms` : ''}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <FormInput
-                label="Start URL"
-                value={formData.synthetic_browser_start_url}
-                onChange={(v) => setFormData({ ...formData, synthetic_browser_start_url: v })}
-                placeholder="https://app.example.com/login"
-                error={errors.synthetic_browser_start_url}
-              />
-              {syntheticBrowserMode === 'advanced' ? (
-                <FormInput
-                  label="Device (optional)"
-                  value={formData.synthetic_browser_device}
-                  onChange={(v) => setFormData({ ...formData, synthetic_browser_device: v })}
-                  placeholder="Desktop Chrome"
-                />
-              ) : (
-                <div className="rounded-lg border border-white/[0.08] bg-slate-900/40 px-3 py-3">
-                  <p className="text-xs font-medium text-slate-300">Device profile</p>
-                  <p className="mt-1 text-xs text-slate-500">Using saved/default device. Switch to Advanced to customize it.</p>
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormSelect
-                label="Failure Mode"
-                value={formData.synthetic_browser_failure_mode}
-                onChange={(v) => setFormData({ ...formData, synthetic_browser_failure_mode: v as 'fail_fast' | 'continue' })}
-                options={[
-                  { value: 'fail_fast', label: 'Fail fast' },
-                  { value: 'continue', label: 'Continue after failures' },
-                ]}
-                hint="Fail fast is recommended for user journey checks."
-              />
-              <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">Artifacts on Failure</label>
-                <div className="grid grid-cols-1 gap-2">
-                  <FormToggle
-                    label="Screenshot"
-                    description="Best default for quick triage in UI."
-                    checked={formData.synthetic_browser_screenshot_on_failure}
-                    onChange={(v) => setFormData({ ...formData, synthetic_browser_screenshot_on_failure: v })}
-                  />
-                  <FormToggle
-                    label="Trace"
-                    description="Deep Playwright timeline for debugging."
-                    checked={formData.synthetic_browser_trace_on_failure}
-                    onChange={(v) => setFormData({ ...formData, synthetic_browser_trace_on_failure: v })}
-                  />
-                  <FormToggle
-                    label="HAR"
-                    description="Capture network waterfall and payload metadata."
-                    checked={formData.synthetic_browser_har_on_failure}
-                    onChange={(v) => setFormData({ ...formData, synthetic_browser_har_on_failure: v })}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {syntheticBrowserMode === 'advanced' && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">Variables (optional)</label>
-              {errors.synthetic_browser_variables && <p className="mt-1 text-xs text-rose-400">{errors.synthetic_browser_variables}</p>}
-              <div className="space-y-2">
-                {formData.synthetic_browser_variables.map((row: SyntheticVarKV, idx: number) => (
-                  <div key={`synthetic-browser-var-${idx}`} className="grid grid-cols-12 gap-2">
-                    <input
-                      className="input col-span-5"
-                      placeholder="Variable name"
-                      value={row.key}
-                      onChange={(e) => {
-                        const next = [...formData.synthetic_browser_variables];
-                        next[idx] = { ...next[idx], key: e.target.value };
-                        setFormData({ ...formData, synthetic_browser_variables: next });
-                      }}
-                    />
-                    <input
-                      className="input col-span-6"
-                      placeholder="Variable value"
-                      value={row.value}
-                      onChange={(e) => {
-                        const next = [...formData.synthetic_browser_variables];
-                        next[idx] = { ...next[idx], value: e.target.value };
-                        setFormData({ ...formData, synthetic_browser_variables: next });
-                      }}
-                    />
-                    <button
+              <div className="glass-well p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-white">Realtime test</p>
+                    <p className="text-[13px] text-slate-400">Runs the saved monitor immediately and streams the latest result state here.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {formData.location_ids.length > 0 && (
+                      <select
+                        aria-label="Run test from location"
+                        value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+                        onChange={(e) => setTestLocationId(e.target.value)}
+                        className="input input-sm !w-auto"
+                      >
+                        <option value="">Run from: all locations</option>
+                        {availableLocations
+                          .filter((loc) => formData.location_ids.includes(loc.id))
+                          .map((loc) => (
+                            <option key={loc.id} value={loc.id}>Run from: {loc.name}</option>
+                          ))}
+                      </select>
+                    )}
+                    <Button
                       type="button"
-                      className={`${BTN_GHOST_SM} col-span-1`}
-                      onClick={() => {
-                        const next = [...formData.synthetic_browser_variables];
-                        if (next.length === 1) {
-                          next[0] = { key: '', value: '' };
-                        } else {
-                          next.splice(idx, 1);
-                        }
-                        setFormData({ ...formData, synthetic_browser_variables: next });
-                      }}
+                      variant="ghost"
+                      onClick={startSyntheticLiveTest}
+                      disabled={!isSavedMonitor || isTestRunning}
                     >
-                      ×
-                    </button>
+                      {isTestRunning ? 'Testing...' : 'Test now'}
+                    </Button>
                   </div>
-                ))}
+                </div>
+                {!isSavedMonitor && (
+                  <p className="mt-2 text-xs text-amber-300">Save this monitor first to enable realtime tests.</p>
+                )}
+                {isSavedMonitor && (
+                  <p className="mt-2 text-xs text-slate-500">Test runs use the currently saved monitor config.</p>
+                )}
+                {syntheticTestState.phase !== 'idle' && (
+                  <Callout tone={getSyntheticResultTone(syntheticTestState.phase)} className="mt-3">
+                    <p>{syntheticTestState.message || 'Running...'}</p>
+                    {syntheticTestState.result && (
+                      <p className="mt-1 text-[13px]">
+                        Status: <span className="font-medium text-white">{syntheticTestState.result.status}</span>
+                        {typeof syntheticTestState.result.latency_ms === 'number' ? ` · ${syntheticTestState.result.latency_ms}ms` : ''}
+                      </p>
+                    )}
+                  </Callout>
+                )}
               </div>
-              <div className="mt-2">
-                <button
-                  type="button"
-                  className={BTN_GHOST_SM}
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      synthetic_browser_variables: [...formData.synthetic_browser_variables, { key: '', value: '' }],
-                    })
-                  }
-                >
-                  + Add variable
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">Use <code>{'{{variable_name}}'}</code> inside selectors and values.</p>
-            </div>
-            )}
 
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-medium text-slate-400">Steps</label>
-                <button
-                  type="button"
-                  className={BTN_GHOST_SM}
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      synthetic_browser_steps: [...formData.synthetic_browser_steps, defaultSyntheticBrowserStep(formData.synthetic_browser_steps.length + 1)],
-                    })
-                  }
-                >
-                  + Add step
-                </button>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormInput
+                  label="Start URL"
+                  value={formData.synthetic_browser_start_url}
+                  onChange={(v) => setFormData({ ...formData, synthetic_browser_start_url: v })}
+                  placeholder="https://app.example.com/login"
+                  error={errors.synthetic_browser_start_url}
+                />
+                {syntheticBrowserMode === 'advanced' ? (
+                  <FormInput
+                    label="Device (optional)"
+                    value={formData.synthetic_browser_device}
+                    onChange={(v) => setFormData({ ...formData, synthetic_browser_device: v })}
+                    placeholder="Desktop Chrome"
+                  />
+                ) : (
+                  <div>
+                    <p className={`${FIELD_LABEL} mb-1.5`}>Device profile</p>
+                    <p className="text-xs text-slate-500">Using saved/default device. Switch to Advanced to customize it.</p>
+                  </div>
+                )}
               </div>
-              {errors.synthetic_browser_steps && <p className="text-xs text-rose-400">{errors.synthetic_browser_steps}</p>}
-              {formData.synthetic_browser_steps.map((step: SyntheticBrowserStepDraft, stepIdx: number) => {
-                const needsURL = step.action === 'goto';
-                const needsSelector =
-                  step.action === 'click' ||
-                  step.action === 'fill' ||
-                  step.action === 'wait_for' ||
-                  step.action === 'assert_visible' ||
-                  step.action === 'assert_text';
-                const needsValue = step.action === 'fill' || step.action === 'assert_text' || step.action === 'assert_url';
-                const actionMeta = syntheticBrowserActionMeta[step.action];
-                const stepSummary =
-                  step.action === 'goto'
-                    ? step.url || '(missing URL)'
-                    : step.action === 'assert_url'
-                    ? step.value || '(missing expected URL)'
-                    : step.selector || '(missing selector)';
 
-                return (
-                  <div key={`synthetic-browser-step-${stepIdx}`} className="rounded-lg border border-white/[0.08] bg-slate-800/20 p-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs font-medium text-slate-300">Step {stepIdx + 1}</p>
-                        <p className="text-[11px] text-slate-500">{actionMeta.label} · {stepSummary}</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          className={BTN_GHOST_SM}
-                          disabled={stepIdx === 0}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormSelect
+                  label="Failure mode"
+                  value={formData.synthetic_browser_failure_mode}
+                  onChange={(v) => setFormData({ ...formData, synthetic_browser_failure_mode: v as 'fail_fast' | 'continue' })}
+                  options={[
+                    { value: 'fail_fast', label: 'Fail fast' },
+                    { value: 'continue', label: 'Continue after failures' },
+                  ]}
+                  hint="Fail fast is recommended for user journey checks."
+                />
+                <div>
+                  <label className={`${FIELD_LABEL} mb-1.5`}>Artifacts on failure</label>
+                  <div className="glass-well space-y-3 p-4">
+                    <FormToggle
+                      label="Screenshot"
+                      description="Best default for quick triage in UI."
+                      checked={formData.synthetic_browser_screenshot_on_failure}
+                      onChange={(v) => setFormData({ ...formData, synthetic_browser_screenshot_on_failure: v })}
+                    />
+                    <FormToggle
+                      label="Trace"
+                      description="Deep Playwright timeline for debugging."
+                      checked={formData.synthetic_browser_trace_on_failure}
+                      onChange={(v) => setFormData({ ...formData, synthetic_browser_trace_on_failure: v })}
+                    />
+                    <FormToggle
+                      label="HAR"
+                      description="Capture network waterfall and payload metadata."
+                      checked={formData.synthetic_browser_har_on_failure}
+                      onChange={(v) => setFormData({ ...formData, synthetic_browser_har_on_failure: v })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {syntheticBrowserMode === 'advanced' && (
+              <div>
+                <label className={`${FIELD_LABEL} mb-1.5`}>Variables (optional)</label>
+                {errors.synthetic_browser_variables && <p className="mb-2 text-xs text-rose-300">{errors.synthetic_browser_variables}</p>}
+                <div className="space-y-2">
+                  {formData.synthetic_browser_variables.map((row: SyntheticVarKV, idx: number) => (
+                    <div key={`synthetic-browser-var-${idx}`} className="grid grid-cols-12 gap-2">
+                      <input
+                        className="input col-span-5"
+                        placeholder="Variable name"
+                        value={row.key}
+                        onChange={(e) => {
+                          const next = [...formData.synthetic_browser_variables];
+                          next[idx] = { ...next[idx], key: e.target.value };
+                          setFormData({ ...formData, synthetic_browser_variables: next });
+                        }}
+                      />
+                      <input
+                        className="input col-span-6"
+                        placeholder="Variable value"
+                        value={row.value}
+                        onChange={(e) => {
+                          const next = [...formData.synthetic_browser_variables];
+                          next[idx] = { ...next[idx], value: e.target.value };
+                          setFormData({ ...formData, synthetic_browser_variables: next });
+                        }}
+                      />
+                      <div className="col-span-1 flex items-center justify-center">
+                        <IconButton
+                          icon={<X strokeWidth={1.75} />}
+                          label="Remove variable"
                           onClick={() => {
-                            if (stepIdx === 0) return;
-                            const next = [...formData.synthetic_browser_steps];
-                            [next[stepIdx - 1], next[stepIdx]] = [next[stepIdx], next[stepIdx - 1]];
-                            setFormData({ ...formData, synthetic_browser_steps: next });
-                          }}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className={BTN_GHOST_SM}
-                          disabled={stepIdx === formData.synthetic_browser_steps.length - 1}
-                          onClick={() => {
-                            if (stepIdx === formData.synthetic_browser_steps.length - 1) return;
-                            const next = [...formData.synthetic_browser_steps];
-                            [next[stepIdx + 1], next[stepIdx]] = [next[stepIdx], next[stepIdx + 1]];
-                            setFormData({ ...formData, synthetic_browser_steps: next });
-                          }}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          className={BTN_GHOST_SM}
-                          onClick={() => {
-                            const next = [...formData.synthetic_browser_steps];
+                            const next = [...formData.synthetic_browser_variables];
                             if (next.length === 1) {
-                              next[0] = defaultSyntheticBrowserStep(1);
+                              next[0] = { key: '', value: '' };
                             } else {
-                              next.splice(stepIdx, 1);
+                              next.splice(idx, 1);
                             }
-                            setFormData({ ...formData, synthetic_browser_steps: next });
+                            setFormData({ ...formData, synthetic_browser_variables: next });
                           }}
-                        >
-                          Remove
-                        </button>
+                        />
                       </div>
                     </div>
+                  ))}
+                </div>
+                <div className="mt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                    onClick={() =>
+                      setFormData({
+                        ...formData,
+                        synthetic_browser_variables: [...formData.synthetic_browser_variables, { key: '', value: '' }],
+                      })
+                    }
+                  >
+                    Add variable
+                  </Button>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Use <code>{'{{variable_name}}'}</code> inside selectors and values.</p>
+              </div>
+              )}
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <FormInput
-                        label="Step ID"
-                        value={step.id}
-                        onChange={(v) => {
-                          const next = [...formData.synthetic_browser_steps];
-                          next[stepIdx] = { ...next[stepIdx], id: v };
-                          setFormData({ ...formData, synthetic_browser_steps: next });
-                        }}
-                        placeholder="open_login"
-                      />
-                      <FormSelect
-                        label="Action"
-                        value={step.action}
-                        onChange={(v) => {
-                          const next = [...formData.synthetic_browser_steps];
-                          next[stepIdx] = { ...next[stepIdx], action: v as SyntheticBrowserAction };
-                          setFormData({ ...formData, synthetic_browser_steps: next });
-                        }}
-                        options={[
-                          { value: 'goto', label: syntheticBrowserActionMeta.goto.label },
-                          { value: 'click', label: syntheticBrowserActionMeta.click.label },
-                          { value: 'fill', label: syntheticBrowserActionMeta.fill.label },
-                          { value: 'wait_for', label: syntheticBrowserActionMeta.wait_for.label },
-                          { value: 'assert_visible', label: syntheticBrowserActionMeta.assert_visible.label },
-                          { value: 'assert_text', label: syntheticBrowserActionMeta.assert_text.label },
-                          { value: 'assert_url', label: syntheticBrowserActionMeta.assert_url.label },
-                        ]}
-                        hint={actionMeta.hint}
-                      />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className={FIELD_LABEL}>Steps</label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                    onClick={() =>
+                      setFormData({
+                        ...formData,
+                        synthetic_browser_steps: [...formData.synthetic_browser_steps, defaultSyntheticBrowserStep(formData.synthetic_browser_steps.length + 1)],
+                      })
+                    }
+                  >
+                    Add step
+                  </Button>
+                </div>
+                {errors.synthetic_browser_steps && <p className="text-xs text-rose-300">{errors.synthetic_browser_steps}</p>}
+                {formData.synthetic_browser_steps.map((step: SyntheticBrowserStepDraft, stepIdx: number) => {
+                  const needsURL = step.action === 'goto';
+                  const needsSelector =
+                    step.action === 'click' ||
+                    step.action === 'fill' ||
+                    step.action === 'wait_for' ||
+                    step.action === 'assert_visible' ||
+                    step.action === 'assert_text';
+                  const needsValue = step.action === 'fill' || step.action === 'assert_text' || step.action === 'assert_url';
+                  const actionMeta = syntheticBrowserActionMeta[step.action];
+                  const stepSummary =
+                    step.action === 'goto'
+                      ? step.url || '(missing URL)'
+                      : step.action === 'assert_url'
+                      ? step.value || '(missing expected URL)'
+                      : step.selector || '(missing selector)';
+
+                  return (
+                    <div key={`synthetic-browser-step-${stepIdx}`} className="glass-well space-y-4 p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-white">Step {stepIdx + 1}</p>
+                          <p className="text-xs text-slate-500">{actionMeta.label} · {stepSummary}</p>
+                        </div>
+                        <div className="flex gap-1">
+                          <IconButton
+                            icon={<ChevronUp strokeWidth={1.75} />}
+                            label="Move step up"
+                            disabled={stepIdx === 0}
+                            onClick={() => {
+                              if (stepIdx === 0) return;
+                              const next = [...formData.synthetic_browser_steps];
+                              [next[stepIdx - 1], next[stepIdx]] = [next[stepIdx], next[stepIdx - 1]];
+                              setFormData({ ...formData, synthetic_browser_steps: next });
+                            }}
+                          />
+                          <IconButton
+                            icon={<ChevronDown strokeWidth={1.75} />}
+                            label="Move step down"
+                            disabled={stepIdx === formData.synthetic_browser_steps.length - 1}
+                            onClick={() => {
+                              if (stepIdx === formData.synthetic_browser_steps.length - 1) return;
+                              const next = [...formData.synthetic_browser_steps];
+                              [next[stepIdx + 1], next[stepIdx]] = [next[stepIdx], next[stepIdx + 1]];
+                              setFormData({ ...formData, synthetic_browser_steps: next });
+                            }}
+                          />
+                          <IconButton
+                            icon={<Trash2 strokeWidth={1.75} />}
+                            label="Remove step"
+                            danger
+                            onClick={() => {
+                              const next = [...formData.synthetic_browser_steps];
+                              if (next.length === 1) {
+                                next[0] = defaultSyntheticBrowserStep(1);
+                              } else {
+                                next.splice(stepIdx, 1);
+                              }
+                              setFormData({ ...formData, synthetic_browser_steps: next });
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <FormInput
+                          label="Step ID"
+                          value={step.id}
+                          onChange={(v) => {
+                            const next = [...formData.synthetic_browser_steps];
+                            next[stepIdx] = { ...next[stepIdx], id: v };
+                            setFormData({ ...formData, synthetic_browser_steps: next });
+                          }}
+                          placeholder="open_login"
+                        />
+                        <FormSelect
+                          label="Action"
+                          value={step.action}
+                          onChange={(v) => {
+                            const next = [...formData.synthetic_browser_steps];
+                            next[stepIdx] = { ...next[stepIdx], action: v as SyntheticBrowserAction };
+                            setFormData({ ...formData, synthetic_browser_steps: next });
+                          }}
+                          options={[
+                            { value: 'goto', label: syntheticBrowserActionMeta.goto.label },
+                            { value: 'click', label: syntheticBrowserActionMeta.click.label },
+                            { value: 'fill', label: syntheticBrowserActionMeta.fill.label },
+                            { value: 'wait_for', label: syntheticBrowserActionMeta.wait_for.label },
+                            { value: 'assert_visible', label: syntheticBrowserActionMeta.assert_visible.label },
+                            { value: 'assert_text', label: syntheticBrowserActionMeta.assert_text.label },
+                            { value: 'assert_url', label: syntheticBrowserActionMeta.assert_url.label },
+                          ]}
+                          hint={actionMeta.hint}
+                        />
+                      </div>
+
+                      {needsURL && (
+                        <FormInput
+                          label="URL"
+                          value={step.url}
+                          onChange={(v) => {
+                            const next = [...formData.synthetic_browser_steps];
+                            next[stepIdx] = { ...next[stepIdx], url: v };
+                            setFormData({ ...formData, synthetic_browser_steps: next });
+                          }}
+                          placeholder="https://app.example.com/login"
+                        />
+                      )}
+
+                      {needsSelector && (
+                        <FormInput
+                          label="Selector"
+                          value={step.selector}
+                          onChange={(v) => {
+                            const next = [...formData.synthetic_browser_steps];
+                            next[stepIdx] = { ...next[stepIdx], selector: v };
+                            setFormData({ ...formData, synthetic_browser_steps: next });
+                          }}
+                          placeholder={actionMeta.selectorPlaceholder || '[data-test=target]'}
+                          hint="Supports any valid CSS selector."
+                        />
+                      )}
+
+                      {needsValue && (
+                        <FormInput
+                          label={step.action === 'assert_url' ? 'Expected URL / pattern' : 'Value'}
+                          value={step.value}
+                          onChange={(v) => {
+                            const next = [...formData.synthetic_browser_steps];
+                            next[stepIdx] = { ...next[stepIdx], value: v };
+                            setFormData({ ...formData, synthetic_browser_steps: next });
+                          }}
+                          placeholder={step.action === 'assert_url' ? '/dashboard' : actionMeta.valuePlaceholder || 'Text or value'}
+                        />
+                      )}
+
+                      {syntheticBrowserMode === 'advanced' && (
+                        <FormInput
+                          label="Step timeout (seconds, optional)"
+                          type="number"
+                          value={step.timeout_seconds}
+                          onChange={(v) => {
+                            const next = [...formData.synthetic_browser_steps];
+                            next[stepIdx] = { ...next[stepIdx], timeout_seconds: v };
+                            setFormData({ ...formData, synthetic_browser_steps: next });
+                          }}
+                          placeholder="20"
+                          min={1}
+                        />
+                      )}
                     </div>
-
-                    {needsURL && (
-                      <FormInput
-                        label="URL"
-                        value={step.url}
-                        onChange={(v) => {
-                          const next = [...formData.synthetic_browser_steps];
-                          next[stepIdx] = { ...next[stepIdx], url: v };
-                          setFormData({ ...formData, synthetic_browser_steps: next });
-                        }}
-                        placeholder="https://app.example.com/login"
-                      />
-                    )}
-
-                    {needsSelector && (
-                      <FormInput
-                        label="Selector"
-                        value={step.selector}
-                        onChange={(v) => {
-                          const next = [...formData.synthetic_browser_steps];
-                          next[stepIdx] = { ...next[stepIdx], selector: v };
-                          setFormData({ ...formData, synthetic_browser_steps: next });
-                        }}
-                        placeholder={actionMeta.selectorPlaceholder || '[data-test=target]'}
-                        hint="Supports any valid CSS selector."
-                      />
-                    )}
-
-                    {needsValue && (
-                      <FormInput
-                        label={step.action === 'assert_url' ? 'Expected URL / pattern' : 'Value'}
-                        value={step.value}
-                        onChange={(v) => {
-                          const next = [...formData.synthetic_browser_steps];
-                          next[stepIdx] = { ...next[stepIdx], value: v };
-                          setFormData({ ...formData, synthetic_browser_steps: next });
-                        }}
-                        placeholder={step.action === 'assert_url' ? '/dashboard' : actionMeta.valuePlaceholder || 'Text or value'}
-                      />
-                    )}
-
-                    {syntheticBrowserMode === 'advanced' && (
-                      <FormInput
-                        label="Step Timeout (seconds, optional)"
-                        type="number"
-                        value={step.timeout_seconds}
-                        onChange={(v) => {
-                          const next = [...formData.synthetic_browser_steps];
-                          next[stepIdx] = { ...next[stepIdx], timeout_seconds: v };
-                          setFormData({ ...formData, synthetic_browser_steps: next });
-                        }}
-                        placeholder="20"
-                        min={1}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-              </>
-            )}
-          </div>
-        </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </FormSection>
       )}
 
       {/* Schedule */}
       <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormInput
             label="Interval (seconds)"
             type="number"
@@ -3620,7 +3525,6 @@ export default function MonitorForm({
             onChange={(v) => setFormData({ ...formData, interval_seconds: parseInt(v) || 60 })}
             min={10}
             step={5}
-            hint="How often to check"
           />
           <FormInput
             label="Timeout (seconds)"
@@ -3692,7 +3596,7 @@ export default function MonitorForm({
           ],
         }}
       >
-        <p className="text-xs text-slate-400">
+        <p className="text-[13px] text-slate-400">
           Upstream monitors this one depends on (e.g. the database behind this API).
         </p>
         <MonitorMultiSelect
@@ -3701,7 +3605,7 @@ export default function MonitorForm({
           onChange={(ids) => setFormData({ ...formData, depends_on_ids: ids })}
           excludeIds={monitor ? [monitor.id] : []}
         />
-        {errors.depends_on_ids && <p className="text-xs text-rose-400">{errors.depends_on_ids}</p>}
+        {errors.depends_on_ids && <p className="text-xs text-rose-300">{errors.depends_on_ids}</p>}
       </FormSection>
 
       {/* Meta */}

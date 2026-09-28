@@ -3,7 +3,8 @@
 // Curated host overview for agent monitors, fed by the generic metric store
 // (POST /monitors/{id}/metrics/query) instead of per-check metrics_data.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { ChartColumn } from 'lucide-react';
 import {
   MetricQueryRefResult,
   MetricQueryResponse,
@@ -13,8 +14,12 @@ import {
 } from '@/lib/types';
 import { getMonitorMetricSeries, queryMonitorMetrics } from '@/lib/api';
 import { displayAttr, formatBytes, formatDurationSeconds, ratioToPercent } from '@/lib/metrics';
+import Callout from '@/components/ui/Callout';
+import EmptyState from '@/components/ui/EmptyState';
+import FilterChip from '@/components/ui/FilterChip';
 import {
   ChartRow,
+  ChartSeries,
   ChartSeriesInput,
   MetricChart,
   RANGE_MS,
@@ -37,6 +42,9 @@ interface AgentMetricsViewProps {
 
 const MAX_MOUNTS = 6;
 const POLL_INTERVAL_MS = 10000;
+// Wide enough for rate ticks ("1.5 MB/s"); shared by every synced chart so
+// their plot areas, and the hover cursor, line up.
+const AXIS_WIDTH = 72;
 
 // Curated dashboard panels — one batch POST per range change.
 // system.filesystem.utilization carries NO `state` attribute (hostmetrics
@@ -110,16 +118,16 @@ function CircularProgress({
 
   return (
     <div className="flex flex-col items-center">
-      <div className="relative w-24 h-24">
-        <svg className="w-full h-full -rotate-90">
-          <circle cx="48" cy="48" r={radius} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="8" />
+      <div className="relative h-24 w-24">
+        <svg className="h-full w-full -rotate-90">
+          <circle cx="48" cy="48" r={radius} fill="none" strokeWidth="6" className="stroke-white/[0.07]" />
           <circle
             cx="48"
             cy="48"
             r={radius}
             fill="none"
             stroke={color}
-            strokeWidth="8"
+            strokeWidth="6"
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={strokeDashoffset}
@@ -127,19 +135,53 @@ function CircularProgress({
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-lg font-semibold text-white">{displayValue ?? `${normalizedValue.toFixed(0)}%`}</span>
+          <span className="text-lg font-semibold tabular-nums text-white">
+            {displayValue ?? `${normalizedValue.toFixed(0)}%`}
+          </span>
         </div>
       </div>
-      <span className="mt-2 text-xs text-slate-500">{label}</span>
+      <span className="mt-2 text-center text-xs text-slate-400">{label}</span>
     </div>
   );
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 text-sm font-medium text-white">{value}</p>
+    <div className="glass-well flex items-baseline justify-between gap-3 px-4 py-3 sm:block sm:p-4">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className="text-sm font-semibold tabular-nums text-white sm:mt-1 sm:text-lg">{value}</p>
+    </div>
+  );
+}
+
+function ChartTile({
+  title,
+  headline,
+  legend,
+  children,
+}: {
+  title: string;
+  headline: ReactNode;
+  legend?: ChartSeries[];
+  children: ReactNode;
+}) {
+  return (
+    <div className="glass-well p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <span className="text-[13px] font-medium text-slate-200">{title}</span>
+        <span className="text-xs tabular-nums text-slate-400">{headline}</span>
+      </div>
+      {children}
+      {legend && legend.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+          {legend.map((entry) => (
+            <span key={entry.key} className="flex items-center gap-1.5">
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
+              {entry.name}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -342,29 +384,18 @@ export default function AgentMetricsView({
   if (loading && !chartResponse) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="text-slate-500">Loading metrics...</div>
+        <div className="text-sm text-slate-500">Loading metrics...</div>
       </div>
     );
   }
 
   if (lastSeenMs === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-800/50 mb-4">
-          <svg className="w-8 h-8 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-            />
-          </svg>
-        </div>
-        <p className="text-sm font-medium text-white">No metrics available</p>
-        <p className="text-xs text-slate-500 mt-1">
-          {loadError || 'Waiting for the collector to push metrics'}
-        </p>
-      </div>
+      <EmptyState
+        icon={<ChartColumn strokeWidth={1.75} />}
+        title="No metrics available"
+        description={loadError || 'Waiting for the collector to push metrics'}
+      />
     );
   }
 
@@ -374,6 +405,7 @@ export default function AgentMetricsView({
 
   const cpuAvailable = cpuRatio !== null;
   const cpuPercent = cpuRatio !== null ? cpuRatio * 100 : 0;
+  const memoryAvailable = memRatio !== null;
   const memoryPercent = memRatio !== null ? memRatio * 100 : 0;
   const swapAvailable = swapRatio !== null && swapRatio > 0;
   const swapPercent = swapRatio !== null ? swapRatio * 100 : 0;
@@ -381,8 +413,10 @@ export default function AgentMetricsView({
   // Filesystem aggregate gauge: the fullest mount in range.
   let worstMountPercent = 0;
   let worstMountLabel = '';
+  let diskAvailable = false;
   for (const mount of mountSeries) {
     const value = lastValue(mount.series);
+    if (value !== null) diskAvailable = true;
     if (value !== null && value * 100 > worstMountPercent) {
       worstMountPercent = value * 100;
       worstMountLabel = mount.label;
@@ -457,102 +491,98 @@ export default function AgentMetricsView({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/50 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className={`h-2 w-2 rounded-full ${isStale ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-          <span className="text-sm text-slate-300">{isStale ? 'Agent stale' : 'Agent healthy'}</span>
-        </div>
-        <span className="text-xs text-slate-500">Last report: {formatTimeAgo(timeSinceReportSec)}</span>
-      </div>
-
       {isStale && (
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
+        <Callout tone="warning">
           No metrics received in the last {formatDurationSeconds(staleAfterSec)} — the collector may be
           stopped or unable to reach the platform.
-        </div>
+        </Callout>
       )}
 
-      {chartRows.length === 0 && (
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
-          No points in the selected range. Charts remain empty for this range.
+      <div className="glass p-5">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${isStale ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+            <h3 className="text-[15px] font-semibold text-white">{isStale ? 'Agent stale' : 'Agent healthy'}</h3>
+          </div>
+          <span className="text-xs text-slate-500">Last report: {formatTimeAgo(timeSinceReportSec)}</span>
         </div>
-      )}
 
-      <div className="grid grid-cols-3 gap-6 rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
-        <CircularProgress
-          value={cpuPercent}
-          label={coreCount !== null && coreCount > 0 ? `CPU · ${Math.round(coreCount)} cores` : 'CPU'}
-          color={cpuAvailable ? getStatusColor(cpuPercent) : '#64748b'}
-          displayValue={cpuAvailable ? `${cpuPercent.toFixed(0)}%` : 'N/A'}
-        />
-        <CircularProgress value={memoryPercent} label="Memory" color={getStatusColor(memoryPercent)} />
-        <CircularProgress
-          value={worstMountPercent}
-          label={worstMountLabel ? `Disk · ${worstMountLabel}` : 'Disk'}
-          color={getStatusColor(worstMountPercent)}
-        />
+        <div className="grid grid-cols-3 gap-6">
+          <CircularProgress
+            value={cpuPercent}
+            label={coreCount !== null && coreCount > 0 ? `CPU · ${Math.round(coreCount)} cores` : 'CPU'}
+            color={cpuAvailable ? getStatusColor(cpuPercent) : '#64748b'}
+            displayValue={cpuAvailable ? `${cpuPercent.toFixed(0)}%` : 'N/A'}
+          />
+          <CircularProgress
+            value={memoryPercent}
+            label="Memory"
+            color={getStatusColor(memoryPercent)}
+            displayValue={memoryAvailable ? undefined : 'N/A'}
+          />
+          <CircularProgress
+            value={worstMountPercent}
+            label={worstMountLabel ? `Disk · ${worstMountLabel}` : 'Disk'}
+            color={getStatusColor(worstMountPercent)}
+            displayValue={diskAvailable ? undefined : 'N/A'}
+          />
+        </div>
+
+        <div className="mt-6 grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
+          <StatCard
+            label="Memory"
+            value={
+              memUsedBytes !== null
+                ? `${formatBytes(memUsedBytes)}${memTotalBytes !== null ? ` / ${formatBytes(memTotalBytes)}` : ''}`
+                : 'N/A'
+            }
+          />
+          <StatCard
+            label="Swap"
+            value={
+              swapAvailable && swapUsedBytes !== null
+                ? `${formatBytes(swapUsedBytes)}${swapTotalBytes !== null ? ` / ${formatBytes(swapTotalBytes)}` : ''}`
+                : 'None'
+            }
+          />
+          <StatCard
+            label="Load average"
+            value={
+              load1 !== null && load5 !== null && load15 !== null
+                ? `${load1.toFixed(2)} · ${load5.toFixed(2)} · ${load15.toFixed(2)}`
+                : 'N/A'
+            }
+          />
+          <StatCard label="Processes" value={hasProcessData ? `${Math.round(processCount)}` : 'N/A'} />
+          <StatCard label="Uptime" value={uptimeSeconds !== null ? formatDurationSeconds(uptimeSeconds) : 'N/A'} />
+          <StatCard label="CPU cores" value={coreCount !== null && coreCount > 0 ? `${Math.round(coreCount)}` : 'N/A'} />
+        </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Memory"
-          value={
-            memUsedBytes !== null
-              ? `${formatBytes(memUsedBytes)}${memTotalBytes !== null ? ` / ${formatBytes(memTotalBytes)}` : ''}`
-              : 'N/A'
-          }
-        />
-        <StatCard
-          label="Swap"
-          value={
-            swapAvailable && swapUsedBytes !== null
-              ? `${formatBytes(swapUsedBytes)}${swapTotalBytes !== null ? ` / ${formatBytes(swapTotalBytes)}` : ''}`
-              : 'None'
-          }
-        />
-        <StatCard
-          label="Load Average"
-          value={
-            load1 !== null && load5 !== null && load15 !== null
-              ? `${load1.toFixed(2)} · ${load5.toFixed(2)} · ${load15.toFixed(2)}`
-              : 'N/A'
-          }
-        />
-        <StatCard label="Processes" value={hasProcessData ? `${Math.round(processCount)}` : 'N/A'} />
-        <StatCard label="Uptime" value={uptimeSeconds !== null ? formatDurationSeconds(uptimeSeconds) : 'N/A'} />
-        <StatCard label="CPU Cores" value={coreCount !== null && coreCount > 0 ? `${Math.round(coreCount)}` : 'N/A'} />
-      </div>
-
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-        <div className="flex items-center justify-between mb-6">
+      <div className="glass p-5">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-sm font-medium text-white">Metrics Over Time</h3>
-            <p className="text-xs text-slate-500 mt-1">
+            <h3 className="text-[15px] font-semibold text-white">Metrics over time</h3>
+            <p className="mt-0.5 text-xs text-slate-500">
               {bucketCount} buckets at {formatDurationSeconds(stepSeconds)} resolution
             </p>
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1.5">
             {(['1h', '6h', '24h', '7d'] as const).map((range) => (
-              <button
-                key={range}
-                onClick={() => handleTimeRangeChange(range)}
-                className={`rounded-lg px-3 py-1 text-xs transition-colors ${
-                  timeRange === range ? 'bg-cyan-500 text-white' : 'text-slate-400 hover:text-white bg-slate-800/50'
-                }`}
-              >
+              <FilterChip key={range} selected={timeRange === range} onClick={() => handleTimeRangeChange(range)}>
                 {range}
-              </button>
+              </FilterChip>
             ))}
           </div>
         </div>
 
-        <div className="space-y-6">
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-slate-500">CPU Usage</span>
-              <span className="text-xs font-mono text-slate-400">{cpuAvailable ? `${cpuPercent.toFixed(1)}%` : 'N/A'}</span>
-            </div>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
+        {chartRows.length === 0 ? (
+          <div className="glass-well px-4 py-6 text-center text-sm text-slate-500">
+            No points in the selected range.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <ChartTile title="CPU usage" headline={cpuAvailable ? `${cpuPercent.toFixed(1)}%` : 'N/A'}>
               <MetricChart
                 data={chartRows}
                 series={[{ key: 'cpu', name: 'CPU', color: '#ff8a5c' }]}
@@ -561,18 +591,18 @@ export default function AgentMetricsView({
                 yTickFormatter={percentTick}
                 valueFormatter={percentValue}
                 referenceLines={cpuRefLines}
+                yAxisWidth={AXIS_WIDTH}
               />
-            </div>
-          </div>
+            </ChartTile>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-slate-500">Memory & Swap</span>
-              <span className="text-xs font-mono text-slate-400">
-                {memoryPercent.toFixed(1)}%{swapAvailable ? ` · swap ${swapPercent.toFixed(1)}%` : ''}
-              </span>
-            </div>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
+            <ChartTile
+              title="Memory & swap"
+              headline={
+                memoryAvailable
+                  ? `${memoryPercent.toFixed(1)}%${swapAvailable ? ` · swap ${swapPercent.toFixed(1)}%` : ''}`
+                  : 'N/A'
+              }
+            >
               <MetricChart
                 data={chartRows}
                 series={[
@@ -584,18 +614,15 @@ export default function AgentMetricsView({
                 yTickFormatter={percentTick}
                 valueFormatter={percentValue}
                 referenceLines={memSwapRefLines}
+                yAxisWidth={AXIS_WIDTH}
               />
-            </div>
-          </div>
+            </ChartTile>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-slate-500">Disk Usage</span>
-              <span className="text-xs font-mono text-slate-400">
-                {worstMountPercent > 0 ? `${worstMountPercent.toFixed(1)}%` : 'N/A'}
-              </span>
-            </div>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
+            <ChartTile
+              title="Disk usage"
+              headline={worstMountPercent > 0 ? `${worstMountPercent.toFixed(1)}%` : 'N/A'}
+              legend={mountSeries.map((mount) => ({ key: mount.key, name: mount.label, color: mount.color }))}
+            >
               <MetricChart
                 data={chartRows}
                 series={mountSeries.map((mount) => ({ key: mount.key, name: mount.label, color: mount.color }))}
@@ -605,29 +632,19 @@ export default function AgentMetricsView({
                 valueFormatter={percentValue}
                 showBrush
                 referenceLines={diskRefLines}
+                yAxisWidth={AXIS_WIDTH}
               />
-            </div>
-            {mountSeries.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
-                {mountSeries.map((mount) => (
-                  <span key={mount.key} className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: mount.color }} />
-                    {mount.label}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+            </ChartTile>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-slate-500">Disk I/O</span>
-              <div className="flex gap-4 text-xs text-slate-400">
-                <span>R {formatRate(latestRow?.diskRead ?? 0)}</span>
-                <span>W {formatRate(latestRow?.diskWrite ?? 0)}</span>
-              </div>
-            </div>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
+            <ChartTile
+              title="Disk I/O"
+              headline={
+                <span className="flex gap-4">
+                  <span>R {formatRate(latestRow?.diskRead ?? 0)}</span>
+                  <span>W {formatRate(latestRow?.diskWrite ?? 0)}</span>
+                </span>
+              }
+            >
               <MetricChart
                 data={chartRows}
                 series={[
@@ -639,19 +656,19 @@ export default function AgentMetricsView({
                 yTickFormatter={formatRateTick}
                 valueFormatter={formatRate}
                 referenceLines={diskIORefLines}
+                yAxisWidth={AXIS_WIDTH}
               />
-            </div>
-          </div>
+            </ChartTile>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-slate-500">Network Throughput</span>
-              <div className="flex gap-4 text-xs text-slate-400">
-                <span>↓ {formatRate(latestInRate)}</span>
-                <span>↑ {formatRate(latestOutRate)}</span>
-              </div>
-            </div>
-            <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
+            <ChartTile
+              title="Network throughput"
+              headline={
+                <span className="flex gap-4">
+                  <span>↓ {formatRate(latestInRate)}</span>
+                  <span>↑ {formatRate(latestOutRate)}</span>
+                </span>
+              }
+            >
               <MetricChart
                 data={chartRows}
                 series={[
@@ -663,10 +680,11 @@ export default function AgentMetricsView({
                 yTickFormatter={formatRateTick}
                 valueFormatter={formatRate}
                 referenceLines={netRefLines}
+                yAxisWidth={AXIS_WIDTH}
               />
-            </div>
+            </ChartTile>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

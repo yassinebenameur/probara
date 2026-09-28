@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw, ScrollText } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
@@ -125,175 +126,174 @@ export default function AuditLogPage() {
     <div className="space-y-6">
       {header}
 
-      <Panel>
-        <div className="mb-4 flex flex-wrap items-end gap-3">
-          <div className="w-full sm:w-56">
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Action</label>
-            <Select value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}>
-              <option value="">All actions</option>
-              {actions.map((action) => (
-                <option key={action} value={action}>
-                  {action}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="w-full sm:w-44">
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Outcome</label>
-            <Select value={outcomeFilter} onChange={(e) => setOutcomeFilter(e.target.value)}>
-              <option value="">All outcomes</option>
-              <option value="success">Success</option>
-              <option value="denied">Denied</option>
-              <option value="failure">Failure</option>
-            </Select>
-          </div>
-          <div className="w-full sm:w-44">
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">Time range</label>
-            <Select value={String(rangeHours)} onChange={(e) => setRangeHours(Number(e.target.value))}>
-              {RANGE_PRESETS.map((preset) => (
-                <option key={preset.label} value={String(preset.hours)}>
-                  {preset.label}
-                </option>
-              ))}
-            </Select>
-          </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-full sm:w-56">
+          <Select label="Action" value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}>
+            <option value="">All actions</option>
+            {actions.map((action) => (
+              <option key={action} value={action}>
+                {action}
+              </option>
+            ))}
+          </Select>
         </div>
+        <div className="w-full sm:w-44">
+          <Select label="Outcome" value={outcomeFilter} onChange={(e) => setOutcomeFilter(e.target.value)}>
+            <option value="">All outcomes</option>
+            <option value="success">Success</option>
+            <option value="denied">Denied</option>
+            <option value="failure">Failure</option>
+          </Select>
+        </div>
+        <div className="w-full sm:w-44">
+          <Select label="Time range" value={String(rangeHours)} onChange={(e) => setRangeHours(Number(e.target.value))}>
+            {RANGE_PRESETS.map((preset) => (
+              <option key={preset.label} value={String(preset.hours)}>
+                {preset.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
 
-        {loading ? (
-          <p className="text-sm text-slate-500">Loading audit events…</p>
-        ) : error ? (
-          <div className="space-y-3">
-            <p className="text-sm text-rose-400">{error}</p>
-            <Button variant="ghost" size="sm" onClick={() => loadEvents(page)}>
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading audit events…</p>
+      ) : error ? (
+        <Callout
+          tone="danger"
+          action={
+            <Button variant="ghost" size="xs" onClick={() => loadEvents(page)}>
               Retry
             </Button>
-          </div>
-        ) : events.length === 0 ? (
-          <EmptyState
-            icon={<ScrollText strokeWidth={1.5} />}
-            title="No audit events"
-            description="Events appear here as users and API keys make changes."
-          />
-        ) : (
-          <div className="space-y-3">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-white/[0.06]">
-                <thead>
-                  <tr className="text-left text-xs text-slate-500">
-                    <th className="w-8 px-2 py-2" />
-                    <th className="px-3 py-2">Time</th>
-                    <th className="px-3 py-2">Actor</th>
-                    <th className="px-3 py-2">Action</th>
-                    <th className="px-3 py-2">Resource</th>
-                    <th className="px-3 py-2">Outcome</th>
-                    <th className="px-3 py-2">IP</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04] text-sm text-slate-200">
-                  {events.map((event) => {
-                    const expanded = expandedId === event.id;
-                    const hasDetails =
-                      (event.details && Object.keys(event.details).length > 0) ||
-                      event.user_agent;
-                    return (
-                      <Fragment key={event.id}>
-                        <tr
-                          className={hasDetails ? 'cursor-pointer hover:bg-white/[0.02]' : undefined}
-                          onClick={() => hasDetails && setExpandedId(expanded ? null : event.id)}
-                        >
-                          <td className="px-2 py-3 text-slate-500">
-                            {hasDetails &&
-                              (expanded ? (
-                                <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} />
-                              ) : (
-                                <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
-                              ))}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-400">
-                            {formatDateTime(event.occurred_at)}
-                          </td>
-                          <td className="px-3 py-3">
-                            <div className="flex items-center gap-2">
-                              <span>{actorLabel(event)}</span>
-                              {/* Users are the common case; only mark keys and anonymous calls. */}
-                              {event.actor_type !== 'admin_user' && (
-                                <Pill tone="info" size="xs">
-                                  {event.actor_type === 'api_key' ? 'key' : 'anon'}
-                                </Pill>
+          }
+        >
+          {error}
+        </Callout>
+      ) : events.length === 0 ? (
+        <EmptyState
+          icon={<ScrollText strokeWidth={1.5} />}
+          title="No audit events"
+          description="Events appear here as users and API keys make changes."
+        />
+      ) : (
+        <div className="glass overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="data-table text-sm">
+              <thead>
+                <tr>
+                  <th className="w-8 !pr-0" />
+                  <th>Time</th>
+                  <th>Actor</th>
+                  <th>Action</th>
+                  <th>Resource</th>
+                  <th>Outcome</th>
+                  <th>IP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((event) => {
+                  const expanded = expandedId === event.id;
+                  const hasDetails =
+                    (event.details && Object.keys(event.details).length > 0) ||
+                    event.user_agent;
+                  return (
+                    <Fragment key={event.id}>
+                      <tr
+                        className={`${hasDetails ? 'cursor-pointer' : ''} ${expanded ? '[&>td]:!border-b-0' : ''}`}
+                        onClick={() => hasDetails && setExpandedId(expanded ? null : event.id)}
+                      >
+                        <td className="!pr-0 text-slate-500">
+                          {hasDetails &&
+                            (expanded ? (
+                              <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+                            ))}
+                        </td>
+                        <td className="whitespace-nowrap font-mono text-xs text-slate-400">
+                          {formatDateTime(event.occurred_at)}
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-200">{actorLabel(event)}</span>
+                            {/* Users are the common case; only mark keys and anonymous calls. */}
+                            {event.actor_type !== 'admin_user' && (
+                              <Pill tone="neutral" size="xs">
+                                {event.actor_type === 'api_key' ? 'key' : 'anon'}
+                              </Pill>
+                            )}
+                          </div>
+                        </td>
+                        <td className="font-mono text-xs text-slate-200">{event.action}</td>
+                        <td className="text-[13px] text-slate-400">
+                          {event.resource_type}
+                          {event.resource_id && (
+                            <span className="font-mono text-xs"> {event.resource_id.slice(0, 8)}</span>
+                          )}
+                        </td>
+                        <td>
+                          {event.outcome === 'success' ? (
+                            <span className="text-[13px] text-slate-500">success</span>
+                          ) : (
+                            <Pill tone={OUTCOME_TONE[event.outcome] || 'neutral'} size="xs" dot>
+                              {event.outcome}
+                            </Pill>
+                          )}
+                        </td>
+                        <td className="font-mono text-xs text-slate-400">{event.ip || '—'}</td>
+                      </tr>
+                      {expanded && (
+                        <tr>
+                          <td className="!pr-0" />
+                          <td colSpan={6} className="!pt-0">
+                            <div className="glass-well px-3 py-2">
+                              {event.user_agent && (
+                                <p className="text-xs text-slate-400">
+                                  <span className="text-slate-500">User agent:</span>{' '}
+                                  {event.user_agent}
+                                </p>
+                              )}
+                              {event.details && Object.keys(event.details).length > 0 && (
+                                <pre className="mt-1 overflow-x-auto font-mono text-xs text-slate-300">
+                                  {JSON.stringify(event.details, null, 2)}
+                                </pre>
                               )}
                             </div>
                           </td>
-                          <td className="px-3 py-3 font-mono text-xs">{event.action}</td>
-                          <td className="px-3 py-3 text-xs text-slate-400">
-                            {event.resource_type}
-                            {event.resource_id && (
-                              <span className="font-mono"> {event.resource_id.slice(0, 8)}</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-3">
-                            {event.outcome === 'success' ? (
-                              <span className="text-xs text-slate-500">success</span>
-                            ) : (
-                              <Pill tone={OUTCOME_TONE[event.outcome] || 'neutral'} size="xs" dot>
-                                {event.outcome}
-                              </Pill>
-                            )}
-                          </td>
-                          <td className="px-3 py-3 font-mono text-xs text-slate-400">{event.ip || '—'}</td>
                         </tr>
-                        {expanded && (
-                          <tr>
-                            <td />
-                            <td colSpan={6} className="px-3 pb-3">
-                              <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-3 py-2">
-                                {event.user_agent && (
-                                  <p className="text-xs text-slate-400">
-                                    <span className="text-slate-500">User agent:</span>{' '}
-                                    {event.user_agent}
-                                  </p>
-                                )}
-                                {event.details && Object.keys(event.details).length > 0 && (
-                                  <pre className="mt-1 overflow-x-auto text-xs text-slate-300">
-                                    {JSON.stringify(event.details, null, 2)}
-                                  </pre>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>
-                Page {page} of {totalPages} ({total} events)
-              </span>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={page <= 1}
-                  onClick={() => loadEvents(page - 1)}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={page >= totalPages}
-                  onClick={() => loadEvents(page + 1)}
-                >
-                  Next
-                </Button>
-              </div>
+          <div className="flex items-center justify-between gap-3 border-t border-divider px-4 py-3 text-xs text-slate-500">
+            <span className="tabular-nums">
+              Page {page} of {totalPages} ({total} events)
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={page <= 1}
+                onClick={() => loadEvents(page - 1)}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={page >= totalPages}
+                onClick={() => loadEvents(page + 1)}
+              >
+                Next
+              </Button>
             </div>
           </div>
-        )}
-      </Panel>
+        </div>
+      )}
     </div>
   );
 }

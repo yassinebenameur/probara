@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Check, Copy } from 'lucide-react';
 import type { Monitor } from '@/lib/types';
+import IconButton from '@/components/ui/IconButton';
 import { DEFAULT_PRIMARY, DEFAULT_SECONDARY, type Basics, type EditableSection } from './useStatusPageFormState';
 
 interface PagePreviewProps {
@@ -18,6 +19,18 @@ const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 function safeHex(value: string, fallback: string): string {
   return HEX_RE.test(value.trim()) ? value.trim() : fallback;
 }
+
+// The mock shows the public page's default dark theme in either console theme.
+// The Tailwind palette inverts in light mode, so pin the scales used inside
+// the mock to their dark values.
+const DARK_PAGE_PALETTE = {
+  '--tw-white': '255 255 255',
+  '--tw-slate-300': '174 182 194',
+  '--tw-slate-500': '121 130 143',
+  '--tw-emerald-300': '125 227 167',
+  '--tw-emerald-400': '70 209 127',
+  '--tw-emerald-500': '47 189 106',
+} as CSSProperties;
 
 /**
  * Stylized live mock of the public status page. Reflects branding, title,
@@ -59,34 +72,28 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
 
   return (
     <div className="self-start">
-      <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-slate-950/60">
+      <div className="glass-well overflow-hidden">
         {/* Browser chrome */}
-        <div className="flex items-center gap-2 border-b border-white/[0.06] bg-slate-950/80 px-3 py-2">
-          <span className="flex gap-1.5" aria-hidden="true">
-            <span className="h-2 w-2 rounded-full bg-rose-400/40" />
-            <span className="h-2 w-2 rounded-full bg-amber-400/40" />
-            <span className="h-2 w-2 rounded-full bg-emerald-400/40" />
-          </span>
-          <span className="min-w-0 flex-1 truncate rounded-md bg-white/[0.04] px-2 py-0.5 text-center font-mono text-[10px] text-slate-500">
+        <div className="flex items-center gap-1.5 py-1 pl-2 pr-1">
+          <span className="min-w-0 flex-1 truncate rounded-md bg-well-hover px-2 py-1 text-center font-mono text-[11px] text-slate-400">
             {displayUrl}
           </span>
-          <button
-            type="button"
+          <IconButton
+            size="sm"
+            label="Copy public URL"
             onClick={handleCopy}
-            title="Copy public URL"
-            aria-label="Copy public URL"
-            className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
-          >
-            {copied ? (
-              <Check className="h-3 w-3 text-emerald-400" strokeWidth={2} />
-            ) : (
-              <Copy className="h-3 w-3" strokeWidth={1.75} />
-            )}
-          </button>
+            icon={
+              copied ? (
+                <Check className="text-emerald-400" strokeWidth={2} />
+              ) : (
+                <Copy strokeWidth={1.75} />
+              )
+            }
+          />
         </div>
 
         {/* Page body */}
-        <div className="bg-[#0a0a0f]">
+        <div className="bg-[#0a0a0f]" style={DARK_PAGE_PALETTE}>
           <div
             aria-hidden="true"
             className="h-0.5 w-full"
@@ -95,6 +102,7 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
           <div className="space-y-3.5 p-4">
             <div className="flex items-center gap-3">
               {showLogo ? (
+                // eslint-disable-next-line @next/next/no-img-element -- arbitrary user-supplied logo URL
                 <img
                   src={basics.logo_url.trim()}
                   alt="Logo"
@@ -132,7 +140,7 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
             </div>
 
             <div className="space-y-2">
-              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-600">
+              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">
                 {previewSection?.title.trim() || 'Services'}
               </p>
               {previewRows.length === 0 ? (
@@ -159,7 +167,7 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
                     </div>
                   ))}
                   {overflow > 0 && (
-                    <p className="px-1 text-[10px] text-slate-600">
+                    <p className="px-1 text-[11px] text-slate-500">
                       + {overflow} more in this section
                     </p>
                   )}
@@ -169,9 +177,7 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
           </div>
         </div>
       </div>
-      <p className="mt-1.5 text-center text-[10px] uppercase tracking-[0.14em] text-slate-600">
-        Live preview · updates as you edit
-      </p>
+      <p className="mt-2 text-center text-xs text-slate-500">Live preview · updates as you edit</p>
     </div>
   );
 }

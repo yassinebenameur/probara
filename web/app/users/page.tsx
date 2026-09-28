@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, RefreshCw, Trash2, Users as UsersIcon } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
@@ -142,106 +143,108 @@ export default function UsersPage() {
     <div className="space-y-6">
       {header}
 
-      <Panel>
-        {loading ? (
-          <p className="text-sm text-slate-500">Loading users…</p>
-        ) : error ? (
-          <div className="space-y-3">
-            <p className="text-sm text-rose-400">{error}</p>
-            <Button variant="ghost" size="sm" onClick={() => loadUsers(page)}>Retry</Button>
-          </div>
-        ) : users.length === 0 ? (
-          <EmptyState
-            icon={<UsersIcon strokeWidth={1.5} />}
-            title="No users yet"
-            description="Add admin accounts to allow more team members to log in."
-            action={
-              <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-                <Link href="/users/new">Add user</Link>
-              </Button>
-            }
-          />
-        ) : (
-          <div className="space-y-3">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-white/[0.06]">
-                <thead>
-                  <tr className="text-left text-xs text-slate-500">
-                    <th className="px-3 py-2">Username</th>
-                    <th className="px-3 py-2">Email</th>
-                    <th className="px-3 py-2">Role</th>
-                    <th className="px-3 py-2">Sign-in</th>
-                    <th className="px-3 py-2">Tenants</th>
-                    <th className="px-3 py-2">Last login</th>
-                    <th className="px-3 py-2"><span className="sr-only">Actions</span></th>
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading users…</p>
+      ) : error ? (
+        <Callout
+          tone="danger"
+          action={<Button variant="ghost" size="xs" onClick={() => loadUsers(page)}>Retry</Button>}
+        >
+          {error}
+        </Callout>
+      ) : users.length === 0 ? (
+        <EmptyState
+          icon={<UsersIcon strokeWidth={1.5} />}
+          title="No users yet"
+          description="Add admin accounts to allow more team members to log in."
+          action={
+            <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+              <Link href="/users/new">Add user</Link>
+            </Button>
+          }
+        />
+      ) : (
+        <div className="glass overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="data-table text-sm">
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Sign-in</th>
+                  <th>Tenants</th>
+                  <th>Last login</th>
+                  <th><span className="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id}>
+                    <td className="font-medium text-white">{user.username}</td>
+                    <td className="text-[13px] text-slate-400">{user.email || '—'}</td>
+                    <td>
+                      {user.platform_role === 'superadmin' ? (
+                        <Pill tone="info" size="xs">Superadmin</Pill>
+                      ) : (
+                        <span className="text-[13px] text-slate-400">Member</span>
+                      )}
+                    </td>
+                    <td className="text-[13px] text-slate-400">
+                      {user.auth_method === 'oidc' ? 'SSO' : 'Password'}
+                    </td>
+                    <td className="text-[13px] text-slate-400">
+                      {user.platform_role === 'superadmin'
+                        ? 'All'
+                        : (user.memberships || [])
+                            .map((m) => `${m.tenant_name || m.tenant_id} (${m.role})`)
+                            .join(', ') || '—'}
+                    </td>
+                    <td className="whitespace-nowrap text-[13px] text-slate-400">
+                      {formatDateTime(user.last_login_at)}
+                    </td>
+                    <td>
+                      <div className="flex items-center justify-end gap-0.5">
+                        <IconButton icon={<Pencil strokeWidth={1.75} />} label="Edit" href={`/users/${user.id}`} />
+                        <IconButton
+                          icon={<Trash2 strokeWidth={1.75} />}
+                          label="Delete"
+                          onClick={() => setPendingDelete(user)}
+                          danger
+                        />
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04] text-sm text-slate-200">
-                  {users.map((user) => (
-                    <tr key={user.id}>
-                      <td className="px-3 py-3">{user.username}</td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{user.email || '—'}</td>
-                      <td className="px-3 py-3">
-                        <Pill tone={user.platform_role === 'superadmin' ? 'info' : 'neutral'}>
-                          {user.platform_role === 'superadmin' ? 'Superadmin' : 'Member'}
-                        </Pill>
-                      </td>
-                      <td className="px-3 py-3">
-                        <Pill tone={user.auth_method === 'oidc' ? 'info' : 'neutral'}>
-                          {user.auth_method === 'oidc' ? 'SSO' : 'Password'}
-                        </Pill>
-                      </td>
-                      <td className="px-3 py-3 text-xs text-slate-400">
-                        {user.platform_role === 'superadmin'
-                          ? 'All'
-                          : (user.memberships || [])
-                              .map((m) => `${m.tenant_name || m.tenant_id} (${m.role})`)
-                              .join(', ') || '—'}
-                      </td>
-                      <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.last_login_at)}</td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center justify-end gap-0.5">
-                          <IconButton icon={<Pencil strokeWidth={1.75} />} label="Edit" href={`/users/${user.id}`} />
-                          <IconButton
-                            icon={<Trash2 strokeWidth={1.75} />}
-                            label="Delete"
-                            onClick={() => setPendingDelete(user)}
-                            danger
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>
-                Page {page} of {totalPages} ({total} users)
-              </span>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={page <= 1}
-                  onClick={() => loadUsers(page - 1)}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={page >= totalPages}
-                  onClick={() => loadUsers(page + 1)}
-                >
-                  Next
-                </Button>
-              </div>
+          <div className="flex items-center justify-between gap-3 border-t border-divider px-4 py-3 text-xs text-slate-500">
+            <span className="tabular-nums">
+              Page {page} of {totalPages} ({total} users)
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={page <= 1}
+                onClick={() => loadUsers(page - 1)}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={page >= totalPages}
+                onClick={() => loadUsers(page + 1)}
+              >
+                Next
+              </Button>
             </div>
           </div>
-        )}
-      </Panel>
+        </div>
+      )}
 
       <ConfirmDialog
         open={pendingDelete !== null}

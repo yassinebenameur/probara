@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import type { DashboardGroup, DashboardRange } from '@/lib/types';
+import Button from '@/components/ui/Button';
 import GroupRow from './GroupRow';
 
 interface Props {
@@ -15,17 +16,19 @@ interface Props {
 export default function ServiceGroupsPanel({ groupTags, groups, range, filterTags }: Props) {
   if (groupTags.length === 0) {
     return (
-      <section className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-8 text-center">
-        <h3 className="text-sm font-medium text-white">Service groups</h3>
-        <p className="mx-auto mt-3 max-w-sm text-sm text-slate-400">
+      <section className="glass min-w-0 p-5">
+        <h3 className="text-[15px] font-semibold text-white">Service groups</h3>
+        <p className="mt-1 max-w-sm text-sm text-slate-400">
           Group monitors by tag to see health by team or service.
         </p>
-        <Link
-          href="/settings"
-          className="mt-4 inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3.5 py-2 text-sm font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20"
+        <Button
+          variant="ghost"
+          asChild
+          className="mt-4"
+          iconTrailing={<ArrowRight className="h-4 w-4" strokeWidth={1.75} />}
         >
-          Choose group tags <ArrowRight className="h-4 w-4" />
-        </Link>
+          <Link href="/settings">Choose group tags</Link>
+        </Button>
       </section>
     );
   }
@@ -36,22 +39,25 @@ export default function ServiceGroupsPanel({ groupTags, groups, range, filterTag
 
   if (visibleGroups.length === 0) {
     return (
-      <section className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
-        <h3 className="text-sm font-medium text-white">Service groups</h3>
-        <p className="mt-3 text-sm text-slate-500">No monitors carry the dashboard group tags yet.</p>
+      <section className="glass min-w-0 p-5">
+        <h3 className="text-[15px] font-semibold text-white">Service groups</h3>
+        <p className="mt-1 text-sm text-slate-400">No monitors carry the dashboard group tags yet.</p>
       </section>
     );
   }
 
   return (
-    <section className="min-w-0 rounded-xl border border-white/[0.06] bg-slate-900/50">
-      <div className="flex items-center justify-between border-b border-white/[0.04] px-5 py-3.5">
-        <h3 className="text-sm font-medium text-white">Service groups</h3>
-        <Link href="/monitors" className="inline-flex items-center gap-1.5 text-xs text-cyan-400 transition-colors hover:text-cyan-300">
-          View all monitors <ArrowRight className="h-3.5 w-3.5" />
+    <section className="glass min-w-0 overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-5 py-4">
+        <h3 className="text-[15px] font-semibold text-white">Service groups</h3>
+        <Link
+          href="/monitors"
+          className="inline-flex items-center gap-1.5 text-[13px] text-cyan-300 transition-colors hover:text-cyan-200"
+        >
+          View all monitors <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
         </Link>
       </div>
-      <div className="divide-y divide-white/[0.04]">
+      <div className="divide-y divide-divider">
         {visibleGroups.map((g) => (
           <GroupRow key={g.tag ?? '__ungrouped'} group={g} range={range} filterTags={filterTags} />
         ))}

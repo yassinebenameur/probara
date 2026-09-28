@@ -2,9 +2,13 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { AlertTriangle, ArrowRight, Check, Loader2, UploadCloud, X } from 'lucide-react';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import Pill from '@/components/ui/Pill';
 import { previewImport, executeImport } from '@/lib/api';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 import type {
   ImportPreviewResponse,
   ImportRow,
@@ -60,24 +64,24 @@ type WizardStep = 'upload' | 'mapping' | 'review' | 'importing' | 'results';
 
 // Supported monitor types for mapping
 const SUPPORTED_TYPES = [
-  { value: 'http', label: 'HTTP', description: 'HTTP/HTTPS endpoint monitoring' },
-  { value: 'ping', label: 'Ping', description: 'ICMP ping checks' },
-  { value: 'dns', label: 'DNS', description: 'DNS record checks' },
-  { value: 'grpc', label: 'gRPC', description: 'gRPC health checks' },
-  { value: 'tcp', label: 'TCP', description: 'TCP connect (host:port) checks' },
-  { value: 'group', label: 'Group', description: 'Group of monitors' },
-  { value: 'agent', label: 'Agent', description: 'Heartbeat checks from installed agents' },
-  { value: 'push', label: 'Push', description: 'Token-based push heartbeat checks' },
-  { value: 'sip', label: 'SIP', description: 'SIP endpoint checks' },
-  { value: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API workflow checks' },
-  { value: 'synthetic_browser', label: 'Synthetic Browser', description: 'Browser workflow checks' },
-  { value: 'redis', label: 'Redis', description: 'Redis connect + PING checks' },
-  { value: 'postgres', label: 'PostgreSQL', description: 'PostgreSQL connect + query checks' },
-  { value: 'mysql', label: 'MySQL', description: 'MySQL connect + query checks' },
-  { value: 'mongodb', label: 'MongoDB', description: 'MongoDB connect + ping checks' },
-  { value: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect + auth checks' },
-  { value: 'websocket', label: 'WebSocket', description: 'WebSocket connect + message checks' },
-  { value: 'prometheus', label: 'Prometheus', description: 'PromQL query + numeric threshold checks' },
+  { value: 'http', description: 'HTTP/HTTPS endpoint monitoring' },
+  { value: 'ping', description: 'ICMP ping checks' },
+  { value: 'dns', description: 'DNS record checks' },
+  { value: 'grpc', description: 'gRPC health checks' },
+  { value: 'tcp', description: 'TCP connect (host:port) checks' },
+  { value: 'group', description: 'Group of monitors' },
+  { value: 'agent', description: 'Heartbeat checks from installed agents' },
+  { value: 'push', description: 'Token-based push heartbeat checks' },
+  { value: 'sip', description: 'SIP endpoint checks' },
+  { value: 'synthetic_api', description: 'Multi-step API workflow checks' },
+  { value: 'synthetic_browser', description: 'Browser workflow checks' },
+  { value: 'redis', description: 'Redis connect + PING checks' },
+  { value: 'postgres', description: 'PostgreSQL connect + query checks' },
+  { value: 'mysql', description: 'MySQL connect + query checks' },
+  { value: 'mongodb', description: 'MongoDB connect + ping checks' },
+  { value: 'rabbitmq', description: 'AMQP connect + auth checks' },
+  { value: 'websocket', description: 'WebSocket connect + message checks' },
+  { value: 'prometheus', description: 'PromQL query + numeric threshold checks' },
 ];
 
 // Step indicator component
@@ -97,33 +101,29 @@ function StepIndicator({ currentStep }: { currentStep: WizardStep }) {
   const currentIndex = getStepIndex(currentStep);
 
   return (
-    <div className="flex items-center justify-center gap-2 mb-8">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:gap-x-0">
       {steps.map((step, index) => (
         <div key={step.key} className="flex items-center">
-          <div className={`flex items-center justify-center w-8 h-8 rounded-full text-xs font-medium transition-all ${
+          <div className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold tabular-nums transition-colors ${
             index < currentIndex
-              ? 'bg-emerald-500 text-white'
+              ? 'bg-emerald-500/[0.14] text-emerald-300'
               : index === currentIndex
-              ? 'bg-cyan-500 text-white'
-              : 'bg-slate-700 text-slate-400'
+              ? 'bg-cyan-500 text-onaccent'
+              : 'bg-well-hover text-slate-500'
           }`}>
             {index < currentIndex ? (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
+              <Check className="h-3.5 w-3.5" strokeWidth={2.25} />
             ) : (
               index + 1
             )}
           </div>
-          <span className={`ml-2 text-xs font-medium ${
+          <span className={`ml-2 text-[13px] font-medium ${
             index <= currentIndex ? 'text-white' : 'text-slate-500'
           }`}>
             {step.label}
           </span>
           {index < steps.length - 1 && (
-            <div className={`w-12 h-0.5 mx-3 ${
-              index < currentIndex ? 'bg-emerald-500' : 'bg-slate-700'
-            }`} />
+            <div className="mx-3 hidden h-px w-12 bg-edge-strong sm:block" />
           )}
         </div>
       ))}
@@ -169,10 +169,10 @@ function FileUpload({ onFileSelect, loading }: { onFileSelect: (file: File) => v
       onDragOver={handleDrag}
       onDrop={handleDrop}
       onClick={() => inputRef.current?.click()}
-      className={`relative flex flex-col items-center justify-center w-full h-64 rounded-xl border-2 border-dashed transition-all cursor-pointer ${
+      className={`relative flex h-64 w-full cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed transition-colors ${
         dragActive
-          ? 'border-cyan-500 bg-cyan-500/10'
-          : 'border-white/[0.1] bg-slate-800/30 hover:border-white/[0.2] hover:bg-slate-800/50'
+          ? 'border-cyan-500 bg-cyan-500/[0.08]'
+          : 'border-[var(--control-edge-strong)] bg-well hover:bg-well-hover'
       } ${loading ? 'pointer-events-none opacity-50' : ''}`}
     >
       <input
@@ -185,17 +185,15 @@ function FileUpload({ onFileSelect, loading }: { onFileSelect: (file: File) => v
       
       {loading ? (
         <div className="flex flex-col items-center">
-          <div className="w-12 h-12 border-4 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin" />
+          <Loader2 className="h-8 w-8 animate-spin text-cyan-500" strokeWidth={1.75} />
           <p className="mt-4 text-sm text-slate-400">Parsing file...</p>
         </div>
       ) : (
         <>
-          <div className="flex items-center justify-center w-16 h-16 rounded-xl bg-slate-700/50 mb-4">
-            <svg className="w-8 h-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
+          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-well-hover">
+            <UploadCloud className="h-5 w-5 text-slate-400" strokeWidth={1.75} />
           </div>
-          <p className="text-sm font-medium text-white mb-1">
+          <p className="mb-1 text-sm font-medium text-white">
             Drop your file here or click to browse
           </p>
           <p className="text-xs text-slate-500">
@@ -222,7 +220,7 @@ function MappingRow({
   sampleValue?: unknown;
 }) {
   return (
-    <div className="flex items-center gap-4 py-3 border-b border-white/[0.05] last:border-0">
+    <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:gap-4">
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-white truncate">{sourceField}</p>
         {sampleValue !== undefined && sampleValue !== null && sampleValue !== '' && (
@@ -231,10 +229,8 @@ function MappingRow({
           </p>
         )}
       </div>
-      <svg className="w-4 h-4 text-slate-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-      </svg>
-      <div className="w-48 flex-shrink-0">
+      <ArrowRight className="hidden h-4 w-4 flex-shrink-0 text-slate-500 sm:block" strokeWidth={1.75} />
+      <div className="w-full flex-shrink-0 sm:w-48">
         <select
           value={targetField}
           onChange={(e) => onTargetChange(e.target.value)}
@@ -358,77 +354,61 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
   };
 
   return (
-    <div className="rounded-xl border border-white/[0.06] overflow-hidden">
+    <div className="glass-well overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full">
+        <table className="data-table">
           <thead>
-            <tr className="bg-slate-800/50">
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">#</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Name</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Type</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Target</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Status</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Notes</th>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Target</th>
+              <th>Status</th>
+              <th>Notes</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody>
             {rows.slice(0, 50).map((row) => {
               const type = getMonitorType(row);
               const supported = isSupported(row);
+              const target = getTarget(row, type);
               return (
                 <tr key={row.index} className={`${supported ? '' : 'opacity-50'}`}>
-                  <td className="px-4 py-3 text-sm text-slate-400">{row.index + 1}</td>
-                  <td className="px-4 py-3 text-sm text-white font-medium truncate max-w-[200px]">
+                  <td className="text-sm tabular-nums text-slate-400">{row.index + 1}</td>
+                  <td className="max-w-[200px] truncate text-sm font-medium text-white">
                     {getFieldValue(row, 'name') || `Monitor ${row.index + 1}`}
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                      type === 'http' ? 'bg-cyan-500/20 text-cyan-400' :
-                      type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
-                      type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
-                      type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
-                      type === 'tcp' ? 'bg-lime-500/20 text-lime-400' :
-                      type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
-                      type === 'agent' ? 'bg-amber-500/20 text-amber-400' :
-                      'bg-slate-500/20 text-slate-400'
-                    }`}>
-                      {type.toUpperCase() || 'HTTP'}
-                    </span>
+                  <td className="text-[13px] text-slate-300">{monitorTypeLabel(type) || 'HTTP'}</td>
+                  <td className="max-w-[200px] truncate text-sm text-slate-400">
+                    {target === '-' ? <span className="text-slate-500">—</span> : target}
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-400 truncate max-w-[200px]">
-                    {getTarget(row, type)}
-                  </td>
-                  <td className="px-4 py-3">
+                  <td>
                     {supported ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
+                      <span className="inline-flex items-center gap-1 text-xs text-emerald-300">
+                        <Check className="h-3.5 w-3.5 text-emerald-400" strokeWidth={2} />
                         Ready
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-xs text-amber-400">
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
+                      <span className="inline-flex items-center gap-1 text-xs text-amber-300">
+                        <AlertTriangle className="h-3.5 w-3.5 text-amber-400" strokeWidth={1.75} />
                         Skip
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 align-top">
+                  <td className="align-top">
                     {row.warnings && row.warnings.length > 0 ? (
                       <details className="group/notes max-w-[380px]">
-                        <summary className="cursor-pointer text-xs text-amber-400 hover:text-amber-300 list-none">
+                        <summary className="cursor-pointer list-none text-xs text-amber-300 hover:text-amber-200">
                           {row.warnings.length} note{row.warnings.length === 1 ? '' : 's'}
                         </summary>
-                        <ul className="mt-2 space-y-1 text-xs text-amber-300/80">
+                        <ul className="mt-2 space-y-1 text-xs text-slate-400">
                           {row.warnings.map((warning, i) => (
                             <li key={i}>{warning}</li>
                           ))}
                         </ul>
                       </details>
                     ) : (
-                      <span className="text-xs text-slate-600">-</span>
+                      <span className="text-xs text-slate-500">—</span>
                     )}
                   </td>
                 </tr>
@@ -438,7 +418,7 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
         </table>
       </div>
       {rows.length > 50 && (
-        <div className="px-4 py-3 bg-slate-800/30 text-xs text-slate-500 text-center">
+        <div className="border-t border-divider px-4 py-3 text-center text-xs text-slate-500">
           Showing 50 of {rows.length} rows
         </div>
       )}
@@ -450,34 +430,33 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
 // preview rows so "34 of my 41 monitors" has a visible answer.
 function SkippedTable({ rows }: { rows: ImportSkippedRow[] }) {
   return (
-    <div className="rounded-xl border border-amber-500/20 overflow-hidden">
-      <div className="px-4 py-3 bg-amber-500/10">
-        <h4 className="text-sm font-medium text-amber-300">
-          Not imported ({rows.length})
-        </h4>
-        <p className="text-xs text-amber-300/70 mt-0.5">
-          These monitors have no faithful equivalent and were left out rather than approximated.
-        </p>
+    <div className="glass-well overflow-hidden">
+      <div className="flex items-start gap-3 px-4 pb-2 pt-4">
+        <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" strokeWidth={1.75} />
+        <div>
+          <h4 className="text-sm font-medium text-white">
+            Not imported ({rows.length})
+          </h4>
+          <p className="mt-0.5 text-[13px] text-slate-400">
+            These monitors have no faithful equivalent and were left out rather than approximated.
+          </p>
+        </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full">
+        <table className="data-table">
           <thead>
-            <tr className="bg-slate-800/50">
-              <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Name</th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Source type</th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Reason</th>
+            <tr>
+              <th>Name</th>
+              <th>Source type</th>
+              <th>Reason</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody>
             {rows.map((row, i) => (
               <tr key={`${row.name}-${i}`}>
-                <td className="px-4 py-2 text-sm text-white truncate max-w-[200px]">{row.name}</td>
-                <td className="px-4 py-2">
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-500/20 text-slate-400">
-                    {row.source_type || 'unknown'}
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-sm text-slate-400">{row.reason}</td>
+                <td className="max-w-[200px] truncate text-sm text-white">{row.name}</td>
+                <td className="font-mono text-xs text-slate-400">{row.source_type || 'unknown'}</td>
+                <td className="text-sm text-slate-400">{row.reason}</td>
               </tr>
             ))}
           </tbody>
@@ -490,63 +469,45 @@ function SkippedTable({ rows }: { rows: ImportSkippedRow[] }) {
 // Results table
 function ResultsTable({ results }: { results: ImportRowResult[] }) {
   return (
-    <div className="rounded-xl border border-white/[0.06] overflow-hidden">
-      <div className="overflow-x-auto max-h-96">
-        <table className="w-full">
-          <thead className="sticky top-0 bg-slate-900">
-            <tr className="bg-slate-800/50">
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">#</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Name</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Type</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Status</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">Details</th>
+    <div className="glass-well overflow-hidden">
+      <div className="max-h-96 overflow-x-auto">
+        <table className="data-table">
+          <thead className="sticky top-0 z-10 [background:linear-gradient(var(--well),var(--well)),var(--glass-fill-strong)]">
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Details</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
+          <tbody>
             {results.map((result) => (
               <tr key={result.index}>
-                <td className="px-4 py-3 text-sm text-slate-400">{result.index + 1}</td>
-                <td className="px-4 py-3 text-sm text-white font-medium truncate max-w-[200px]">
+                <td className="text-sm tabular-nums text-slate-400">{result.index + 1}</td>
+                <td className="max-w-[200px] truncate text-sm font-medium text-white">
                   {result.name}
                 </td>
-                <td className="px-4 py-3">
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                    result.type === 'http' ? 'bg-cyan-500/20 text-cyan-400' :
-                    result.type === 'ping' ? 'bg-violet-500/20 text-violet-400' :
-                    result.type === 'dns' ? 'bg-sky-500/20 text-sky-400' :
-                    result.type === 'grpc' ? 'bg-teal-500/20 text-teal-400' :
-                    result.type === 'tcp' ? 'bg-lime-500/20 text-lime-400' :
-                    result.type === 'group' ? 'bg-indigo-500/20 text-indigo-400' :
-                    'bg-slate-500/20 text-slate-400'
-                  }`}>
-                    {result.type.toUpperCase()}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
+                <td className="text-[13px] text-slate-300">{monitorTypeLabel(result.type)}</td>
+                <td>
                   <span className={`inline-flex items-center gap-1 text-xs ${
-                    result.status === 'success' ? 'text-emerald-400' :
-                    result.status === 'skipped' ? 'text-amber-400' :
-                    'text-rose-400'
+                    result.status === 'success' ? 'text-emerald-300' :
+                    result.status === 'skipped' ? 'text-amber-300' :
+                    'text-rose-300'
                   }`}>
                     {result.status === 'success' && (
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
+                      <Check className="h-3.5 w-3.5 text-emerald-400" strokeWidth={2} />
                     )}
                     {result.status === 'skipped' && (
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01" />
-                      </svg>
+                      <AlertTriangle className="h-3.5 w-3.5 text-amber-400" strokeWidth={1.75} />
                     )}
                     {result.status === 'failed' && (
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
+                      <X className="h-3.5 w-3.5 text-rose-400" strokeWidth={2} />
                     )}
                     {result.status.charAt(0).toUpperCase() + result.status.slice(1)}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-xs text-slate-400 truncate max-w-[300px]">
+                <td className="max-w-[300px] truncate text-xs text-slate-400">
                   {result.error || result.skip_reason || (result.monitor_id ? `ID: ${result.monitor_id}` : '-')}
                 </td>
               </tr>
@@ -674,52 +635,39 @@ export default function ImportPage() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="max-w-4xl space-y-6">
       <PageHeader
         breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: 'Import' }]}
         title="Import monitors"
         subtitle="Batch import monitors from JSON, YAML, or CSV files."
       />
 
-      {/* Step Indicator */}
       <StepIndicator currentStep={step} />
 
-      {/* Error Display */}
-      {error && (
-        <div className="mb-6 rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-rose-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-sm text-rose-400">{error}</p>
-          </div>
-        </div>
-      )}
+      {error && <Callout tone="danger">{error}</Callout>}
 
-      {/* Step Content */}
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/40 p-6">
-        {/* Upload Step */}
+      <div className="glass p-6">
         {step === 'upload' && (
           <div>
-            <h2 className="text-lg font-medium text-white mb-2">Upload File</h2>
-            <p className="text-sm text-slate-400 mb-6">
+            <h2 className="text-[15px] font-semibold text-white">Upload file</h2>
+            <p className="mb-5 mt-1 text-sm text-slate-400">
               Upload a file containing your monitor definitions. We&apos;ll automatically detect the format.
             </p>
             <FileUpload onFileSelect={handleFileSelect} loading={loading} />
-            
-            <div className="mt-6 p-4 rounded-lg bg-slate-800/30 border border-white/[0.04]">
-              <h3 className="text-sm font-medium text-white mb-2">Supported Formats</h3>
-              <ul className="text-xs text-slate-400 space-y-1">
-                <li className="flex items-center gap-2">
-                  <span className="w-12 text-cyan-400 font-mono">JSON</span>
+
+            <div className="glass-well mt-5 p-4">
+              <h3 className="mb-2 text-[13px] font-medium text-white">Supported formats</h3>
+              <ul className="space-y-1 text-xs text-slate-400">
+                <li className="flex items-start gap-2">
+                  <span className="w-12 flex-shrink-0 font-medium text-slate-200">JSON</span>
                   <span>Array of objects or object with &quot;items&quot;/&quot;monitors&quot; array</span>
                 </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-12 text-violet-400 font-mono">YAML</span>
+                <li className="flex items-start gap-2">
+                  <span className="w-12 flex-shrink-0 font-medium text-slate-200">YAML</span>
                   <span>List of monitors or document with monitors list</span>
                 </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-12 text-emerald-400 font-mono">CSV</span>
+                <li className="flex items-start gap-2">
+                  <span className="w-12 flex-shrink-0 font-medium text-slate-200">CSV</span>
                   <span>Header row followed by data rows</span>
                 </li>
               </ul>
@@ -727,99 +675,82 @@ export default function ImportPage() {
           </div>
         )}
 
-        {/* Mapping Step */}
         {step === 'mapping' && previewData && (
-          <div>
-            <div className="flex items-center justify-between mb-6">
+          <div className="space-y-6">
+            <div className="flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-lg font-medium text-white">Map Fields</h2>
-                <p className="text-sm text-slate-400 mt-0.5">
+                <h2 className="text-[15px] font-semibold text-white">Map fields</h2>
+                <p className="mt-1 text-sm text-slate-400">
                   Detected {describeSource(previewData)}
                 </p>
               </div>
-              <span className="inline-flex items-center px-2 py-1 rounded bg-slate-700/50 text-xs text-slate-300">
+              <Pill tone="neutral">
                 {previewData.detected_fields.length} fields detected
-              </span>
+              </Pill>
             </div>
 
-            {/* Warnings */}
             {previewData.warnings && previewData.warnings.length > 0 && (
-              <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3">
-                <h4 className="text-xs font-medium text-amber-400 uppercase tracking-wider mb-2">Warnings</h4>
-                <ul className="text-xs text-amber-300/80 space-y-1">
+              <Callout tone="warning" title="Warnings">
+                <ul className="space-y-1 text-[13px]">
                   {previewData.warnings.map((warning, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <svg className="w-3 h-3 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01" />
-                      </svg>
-                      {warning}
-                    </li>
+                    <li key={i}>{warning}</li>
                   ))}
                 </ul>
-              </div>
+              </Callout>
             )}
 
             {previewData.schema === IMPORT_SCHEMA_PORTABLE && (
-              <div className="mb-6 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
-                <p className="text-sm text-cyan-300">
-                  Portable export detected. The suggested mappings preserve raw monitor config, alert policy names,
-                  and group membership by monitor name so this file can be reimported into another instance.
-                </p>
-              </div>
+              <Callout tone="info">
+                Portable export detected. The suggested mappings preserve raw monitor config, alert policy names,
+                and group membership by monitor name so this file can be reimported into another instance.
+              </Callout>
             )}
 
             {previewData.schema === IMPORT_SCHEMA_UPTIME_KUMA && (
-              <div className="mb-6 rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3">
-                <p className="text-sm text-cyan-300">
+              <Callout tone="info">
+                <p>
                   Uptime Kuma export detected. Monitor types, assertions and group nesting were translated
                   automatically, so the mappings below are already complete.
                 </p>
-                <p className="text-xs text-cyan-300/70 mt-2">
+                <p className="mt-2 text-[13px] text-slate-400">
                   Uptime Kuma notifications are never migrated and no credential is imported. Check the per-monitor
                   notes on the review step, then attach Probara alert channels once the monitors exist.
                 </p>
-              </div>
+              </Callout>
             )}
 
             {previewData.skipped_rows && previewData.skipped_rows.length > 0 && (
-              <div className="mb-6">
-                <SkippedTable rows={previewData.skipped_rows} />
-              </div>
+              <SkippedTable rows={previewData.skipped_rows} />
             )}
 
-            {/* Type Mapping (for unknown types) */}
             {getUnmappedTypes().length > 0 && (
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 mb-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <h4 className="text-sm font-medium text-amber-400">Map Unknown Types</h4>
+              <div className="glass-well p-4">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-400" strokeWidth={1.75} />
+                  <h4 className="text-sm font-medium text-white">Map unknown types</h4>
                 </div>
-                <p className="text-xs text-amber-300/70 mb-4">
+                <p className="mb-4 mt-1 text-[13px] text-slate-400">
                   The following monitor types are not directly supported. Map them to a supported type:
                 </p>
                 <div className="space-y-3">
                   {getUnmappedTypes().map((sourceType) => (
-                    <div key={sourceType} className="flex items-center gap-4">
-                      <div className="flex-1 min-w-0">
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-700/50 text-sm font-medium text-white">
+                    <div key={sourceType} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                      <div className="min-w-0 flex-1">
+                        <span className="inline-flex items-center rounded-md bg-well-hover px-2 py-0.5 font-mono text-[13px] text-slate-200">
                           {sourceType}
                         </span>
                       </div>
-                      <svg className="w-4 h-4 text-slate-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                      </svg>
-                      <div className="w-48 flex-shrink-0">
+                      <ArrowRight className="hidden h-4 w-4 flex-shrink-0 text-slate-500 sm:block" strokeWidth={1.75} />
+                      <div className="w-full flex-shrink-0 sm:w-80">
                         <select
                           value={typeMapping[sourceType] || ''}
                           onChange={(e) => updateTypeMapping(sourceType, e.target.value)}
-                          className="input border-amber-500/40 focus:border-amber-500/60"
+                          className="input"
                         >
                           <option value="">-- Skip these monitors --</option>
                           {SUPPORTED_TYPES.map((type) => (
                             <option key={type.value} value={type.value}>
-                              {type.label} - {type.description}
+                              {monitorTypeLabel(type.value)} - {type.description}
                             </option>
                           ))}
                         </select>
@@ -830,26 +761,26 @@ export default function ImportPage() {
               </div>
             )}
 
-            {/* Field Mapping Table */}
-            <div className="rounded-lg border border-white/[0.06] bg-slate-800/30 p-4 mb-6">
-              <h4 className="text-sm font-medium text-white mb-4">Field Mapping</h4>
-              <div className="flex items-center justify-between text-xs text-slate-500 uppercase tracking-wider mb-4 px-1">
-                <span>Source Field</span>
-                <span>Target Field</span>
+            <div>
+              <h4 className="text-sm font-medium text-white">Field mapping</h4>
+              <div className="mt-3 hidden items-center justify-between border-b border-divider px-1 pb-2 text-xs text-slate-500 sm:flex">
+                <span>Source field</span>
+                <span className="w-48">Target field</span>
               </div>
-              {previewData.detected_fields.map((field) => (
-                <MappingRow
-                  key={field}
-                  sourceField={field}
-                  targetField={getTargetForSource(field)}
-                  onTargetChange={(target) => updateMapping(field, target)}
-                  availableTargets={TARGET_FIELDS}
-                  sampleValue={getSampleValue(field)}
-                />
-              ))}
+              <div className="divide-y divide-divider">
+                {previewData.detected_fields.map((field) => (
+                  <MappingRow
+                    key={field}
+                    sourceField={field}
+                    targetField={getTargetForSource(field)}
+                    onTargetChange={(target) => updateMapping(field, target)}
+                    availableTargets={TARGET_FIELDS}
+                    sampleValue={getSampleValue(field)}
+                  />
+                ))}
+              </div>
             </div>
 
-            {/* Actions */}
             <div className="flex items-center justify-between">
               <Button
                 variant="ghost"
@@ -870,30 +801,24 @@ export default function ImportPage() {
           </div>
         )}
 
-        {/* Review Step */}
         {step === 'review' && previewData && (
-          <div>
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h2 className="text-lg font-medium text-white">Review Import</h2>
-                <p className="text-sm text-slate-400 mt-0.5">
-                  {isPreMapped(previewData.schema)
-                    ? `${previewData.total_rows} monitors will be recreated`
-                    : `${previewData.total_rows} monitors will be processed`}
-                </p>
-              </div>
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-[15px] font-semibold text-white">Review import</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                {isPreMapped(previewData.schema)
+                  ? `${previewData.total_rows} monitors will be recreated`
+                  : `${previewData.total_rows} monitors will be processed`}
+              </p>
             </div>
 
             <PreviewTable rows={previewData.rows} mapping={mapping} typeMapping={typeMapping} />
 
             {previewData.skipped_rows && previewData.skipped_rows.length > 0 && (
-              <div className="mt-6">
-                <SkippedTable rows={previewData.skipped_rows} />
-              </div>
+              <SkippedTable rows={previewData.skipped_rows} />
             )}
 
-            {/* Actions */}
-            <div className="flex items-center justify-between mt-6">
+            <div className="flex items-center justify-between">
               <Button variant="ghost" size="sm" onClick={() => setStep('mapping')}>
                 Back to mapping
               </Button>
@@ -904,40 +829,37 @@ export default function ImportPage() {
           </div>
         )}
 
-        {/* Importing Step */}
         {step === 'importing' && (
           <div className="flex flex-col items-center justify-center py-12">
-            <div className="w-16 h-16 border-4 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin" />
-            <p className="mt-6 text-lg font-medium text-white">Importing monitors...</p>
-            <p className="mt-2 text-sm text-slate-400">This may take a moment</p>
+            <Loader2 className="h-10 w-10 animate-spin text-cyan-500" strokeWidth={1.75} />
+            <p className="mt-5 text-[15px] font-semibold text-white">Importing monitors...</p>
+            <p className="mt-1 text-sm text-slate-400">This may take a moment</p>
           </div>
         )}
 
-        {/* Results Step */}
         {step === 'results' && importResults && (
-          <div>
-            <h2 className="text-lg font-medium text-white mb-2">Import Complete</h2>
-            
-            {/* Summary Cards */}
-            <div className="grid grid-cols-3 gap-4 mb-6">
-              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-4 text-center">
-                <p className="text-2xl font-bold text-emerald-400">{importResults.success_count}</p>
-                <p className="text-xs text-emerald-400/80 mt-1">Imported</p>
-              </div>
-              <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-4 text-center">
-                <p className="text-2xl font-bold text-amber-400">{importResults.skipped_count}</p>
-                <p className="text-xs text-amber-400/80 mt-1">Skipped</p>
-              </div>
-              <div className="rounded-lg bg-rose-500/10 border border-rose-500/20 p-4 text-center">
-                <p className="text-2xl font-bold text-rose-400">{importResults.failed_count}</p>
-                <p className="text-xs text-rose-400/80 mt-1">Failed</p>
-              </div>
+          <div className="space-y-6">
+            <h2 className="text-[15px] font-semibold text-white">Import complete</h2>
+
+            <div className="grid grid-cols-3 gap-4">
+              {[
+                { label: 'Imported', value: importResults.success_count, dot: 'bg-emerald-500' },
+                { label: 'Skipped', value: importResults.skipped_count, dot: 'bg-amber-500' },
+                { label: 'Failed', value: importResults.failed_count, dot: 'bg-rose-500' },
+              ].map((stat) => (
+                <div key={stat.label} className="glass-well p-4">
+                  <p className="flex items-center gap-2 text-xs text-slate-400">
+                    <span className={`h-2 w-2 rounded-full ${stat.dot}`} aria-hidden="true" />
+                    {stat.label}
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold tabular-nums text-white">{stat.value}</p>
+                </div>
+              ))}
             </div>
 
             <ResultsTable results={importResults.results} />
 
-            {/* Actions */}
-            <div className="flex items-center justify-between mt-6">
+            <div className="flex items-center justify-between">
               <Button
                 variant="ghost"
                 size="sm"

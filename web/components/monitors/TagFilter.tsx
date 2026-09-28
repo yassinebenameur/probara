@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Search, Tag as TagIcon } from 'lucide-react';
+import Button from '@/components/ui/Button';
 import TagPill from './TagPill';
 
 export interface TagOption {
@@ -49,13 +50,13 @@ export default function TagFilter({
   const selectedTags = ordered.filter((t) => selected.has(t.tag));
 
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-slate-900/40">
-      <div className="flex items-center gap-2 px-2.5 py-2">
+    <div className="glass-well">
+      <div className="flex items-center gap-2 px-3 py-2">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="flex flex-shrink-0 items-center gap-1.5 text-[11px] font-medium text-slate-400 transition-colors hover:text-slate-200"
+          className="flex flex-shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-white"
         >
           {open ? (
             <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
@@ -64,7 +65,7 @@ export default function TagFilter({
           )}
           <TagIcon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
           Tags
-          <span className="text-slate-600">
+          <span className="font-normal text-slate-500">
             {selected.size > 0 ? `· ${selected.size} active` : `· ${tags.length}`}
           </span>
         </button>
@@ -76,33 +77,33 @@ export default function TagFilter({
               <TagPill key={tag} tag={tag} size="xs" selected onClick={() => onToggle(tag)} />
             ))}
             {selectedTags.length > 6 && (
-              <span className="text-[10px] text-slate-500">+{selectedTags.length - 6}</span>
+              <span className="text-[11px] text-slate-500">+{selectedTags.length - 6}</span>
             )}
           </div>
         )}
 
         {selected.size > 0 && (
-          <button
-            type="button"
-            onClick={onClear}
-            className="ml-auto flex-shrink-0 text-[10px] text-slate-400 transition-colors hover:text-white"
-          >
+          <Button type="button" variant="subtle" size="xs" onClick={onClear} className="ml-auto flex-shrink-0">
             Clear tags
-          </button>
+          </Button>
         )}
       </div>
 
       {open && (
-        <div className="border-t border-white/[0.06] p-2">
-          <div className="mb-1.5 flex items-center gap-2 rounded-md border border-white/[0.06] bg-slate-950/40 px-2 py-1.5">
-            <Search className="h-3.5 w-3.5 flex-shrink-0 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
+        <div className="px-2 pb-2">
+          <div className="relative mb-1.5">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
             <input
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Find a tag…"
               aria-label="Find a tag"
-              className="w-full bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
+              className="input input-sm !pl-8"
             />
           </div>
 
@@ -113,7 +114,7 @@ export default function TagFilter({
             aria-label="Filter by tags"
           >
             {visible.length === 0 ? (
-              <p className="px-2 py-4 text-center text-[11px] text-slate-500">No tags match.</p>
+              <p className="px-2 py-4 text-center text-xs text-slate-500">No tags match.</p>
             ) : (
               visible.map(({ tag, count }) => {
                 const isSelected = selected.has(tag);
@@ -124,19 +125,19 @@ export default function TagFilter({
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => onToggle(tag)}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                      isSelected ? 'bg-cyan-500/[0.08]' : 'hover:bg-white/[0.04]'
+                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                      isSelected ? 'bg-cyan-500/[0.08]' : 'hover:bg-well-hover'
                     }`}
                   >
                     <span
                       aria-hidden="true"
-                      className={`flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded border transition-colors ${
-                        isSelected ? 'border-cyan-500 bg-cyan-500' : 'border-white/20 bg-slate-950/50'
+                      className={`flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
+                        isSelected ? 'border-cyan-500 bg-cyan-500' : 'border-edge-control bg-control'
                       }`}
                     >
                       {isSelected && (
                         <svg
-                          className="h-2 w-2 text-white"
+                          className="h-2 w-2 text-onaccent"
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
@@ -149,7 +150,7 @@ export default function TagFilter({
                     <span className="min-w-0 flex-1">
                       <TagPill tag={tag} size="xs" />
                     </span>
-                    <span className="flex-shrink-0 text-[10px] tabular-nums text-slate-500">
+                    <span className="flex-shrink-0 text-[11px] tabular-nums text-slate-500">
                       {count}
                     </span>
                   </button>
@@ -157,7 +158,7 @@ export default function TagFilter({
               })
             )}
             {hidden > 0 && (
-              <p className="px-2 py-1.5 text-center text-[10px] text-slate-600">
+              <p className="px-2 py-1.5 text-center text-[11px] text-slate-500">
                 {hidden} more — search to narrow the list
               </p>
             )}

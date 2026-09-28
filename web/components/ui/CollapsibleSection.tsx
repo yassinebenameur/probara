@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useId } from 'react';
+import { ChevronDown } from 'lucide-react';
 
 interface CollapsibleSectionProps {
   title: string;
@@ -40,29 +41,25 @@ export default function CollapsibleSection({
   const id = useId();
 
   return (
-    <div id={sectionId} className="rounded-xl border border-white/[0.07] bg-slate-900/40 overflow-hidden transition-colors hover:border-white/[0.1]">
+    <div id={sectionId} className="glass overflow-hidden">
       <button
         type="button"
         onClick={handleToggle}
         aria-expanded={open}
         aria-controls={id}
-        className="flex w-full items-center justify-between px-4 py-3.5 text-left"
+        className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left transition-colors hover:bg-well"
       >
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-sm font-medium text-white">{title}</span>
+          <span className="text-[15px] font-semibold text-white">{title}</span>
           {!open && summary && (
             <span className="truncate text-xs text-slate-500 hidden sm:block">{summary}</span>
           )}
         </div>
-        <svg
+        <ChevronDown
           className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
       </button>
 
       <div
@@ -71,7 +68,7 @@ export default function CollapsibleSection({
         style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
-          <div className="px-4 pb-4 pt-1 space-y-4">
+          <div className="space-y-4 px-6 pb-6 pt-1">
             {children}
           </div>
         </div>

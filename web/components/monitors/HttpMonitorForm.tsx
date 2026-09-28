@@ -1,8 +1,11 @@
 'use client';
 
+import { ReactNode } from 'react';
 import { Plus, X } from 'lucide-react';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Button from '@/components/ui/Button';
+import FormField from '@/components/ui/FormField';
+import IconButton from '@/components/ui/IconButton';
 import {
   HTTPBodyAssertion,
   HTTPBodyAssertionOp,
@@ -11,6 +14,7 @@ import {
   HTTPJSONAssertion,
   HTTPJSONAssertionOp,
 } from '@/lib/types';
+import Switch from '@/components/ui/Switch';
 
 type HeaderKV = { key: string; value: string; reveal?: boolean };
 
@@ -74,28 +78,22 @@ function MethodUrlRow({
   onUrlChange: (v: string) => void;
   error?: string;
 }) {
-  const methodColors: Record<string, string> = {
-    GET: 'text-cyan-400',
-    HEAD: 'text-cyan-400',
-    POST: 'text-emerald-400',
-    PUT: 'text-amber-400',
-    PATCH: 'text-violet-400',
-    DELETE: 'text-rose-400',
-    OPTIONS: 'text-slate-400',
-  };
-  const color = methodColors[method] || 'text-slate-400';
-
   return (
-    <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1.5">URL</label>
-      <div className={`flex rounded-xl border transition-all ${error ? 'border-rose-500/60' : 'border-white/[0.1] focus-within:border-cyan-500 focus-within:shadow-[0_0_0_3px_rgba(255,90,36,0.15)]'} bg-slate-900/80`}>
+    <FormField label="URL" error={error}>
+      <div
+        className={`flex rounded-[10px] border bg-control transition-colors ${
+          error
+            ? 'border-rose-500/60'
+            : 'border-edge-control focus-within:border-cyan-500 focus-within:shadow-[0_0_0_3px_rgba(var(--accent-rgb),0.16)]'
+        }`}
+      >
         <select
           value={method}
           onChange={(e) => onMethodChange(e.target.value)}
-          className={`shrink-0 bg-transparent border-r border-white/[0.08] px-3 py-2.5 text-sm font-semibold focus:outline-none rounded-l-xl ${color}`}
+          className="shrink-0 rounded-l-[10px] border-r border-edge-control bg-transparent px-3 py-[9px] text-sm font-semibold text-white focus:outline-none"
         >
           {['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].map((m) => (
-            <option key={m} value={m} className="bg-slate-900 text-white">
+            <option key={m} value={m}>
               {m}
             </option>
           ))}
@@ -105,11 +103,52 @@ function MethodUrlRow({
           value={url}
           onChange={(e) => onUrlChange(e.target.value)}
           placeholder="https://api.example.com/health"
-          className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-sm text-white placeholder:text-slate-600 focus:outline-none rounded-r-xl"
+          className="min-w-0 flex-1 rounded-r-[10px] bg-transparent px-3 py-[9px] text-sm text-white placeholder:text-slate-500 focus:outline-none"
         />
       </div>
-      {error && <p className="mt-1.5 text-xs text-rose-400">{error}</p>}
+    </FormField>
+  );
+}
+
+function SwitchRow({
+  title,
+  description,
+  checked,
+  onToggle,
+  onClass = 'bg-cyan-500',
+}: {
+  title: string;
+  description: string;
+  checked: boolean;
+  onToggle: () => void;
+  onClass?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-slate-200">{title}</p>
+        <p className="text-xs text-slate-500">{description}</p>
+      </div>
+      <Switch checked={checked} onChange={onToggle} tone={onClass === 'bg-amber-500' ? 'warning' : 'accent'} />
     </div>
+  );
+}
+
+function Hint({ children }: { children: ReactNode }) {
+  return <p className="mt-1 text-xs text-slate-500">{children}</p>;
+}
+
+function CaseToggle({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="flex items-center gap-1 whitespace-nowrap text-xs text-slate-400">
+      <input
+        type="checkbox"
+        className="accent-cyan-500"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      CI
+    </label>
   );
 }
 
@@ -123,9 +162,7 @@ function HeadersEditor({
   error?: string;
 }) {
   return (
-    <div>
-      <label className="block text-xs font-medium text-slate-400 mb-2">Request Headers</label>
-      {error && <p className="mb-2 text-xs text-rose-400">{error}</p>}
+    <FormField label="Request headers" error={error}>
       <div className="space-y-2">
         {headers.map((h, idx) => {
           const sensitive = isSensitiveHeaderName(h.key);
@@ -137,7 +174,7 @@ function HeadersEditor({
               style={{ gridTemplateColumns: showToggle ? '1fr 2fr auto auto' : '1fr 2fr auto' }}
             >
               <input
-                className="input text-sm"
+                className="input"
                 placeholder="Header name"
                 value={h.key}
                 onChange={(e) => {
@@ -147,7 +184,7 @@ function HeadersEditor({
                 }}
               />
               <input
-                className="input text-sm"
+                className="input"
                 placeholder="Value"
                 type={sensitive && !h.reveal ? 'password' : 'text'}
                 value={h.value}
@@ -160,7 +197,7 @@ function HeadersEditor({
               {showToggle && (
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="subtle"
                   size="sm"
                   onClick={() => {
                     const next = [...headers];
@@ -171,11 +208,8 @@ function HeadersEditor({
                   {h.reveal ? 'Hide' : 'Show'}
                 </Button>
               )}
-              <Button
-                type="button"
-                variant="subtle"
-                size="sm"
-                aria-label="Remove header"
+              <IconButton
+                label="Remove header"
                 icon={<X strokeWidth={1.75} />}
                 onClick={() => {
                   const next = [...headers];
@@ -186,26 +220,24 @@ function HeadersEditor({
                   }
                   onChange(next);
                 }}
-              >
-                <span className="sr-only">Remove</span>
-              </Button>
+              />
             </div>
           );
         })}
       </div>
-      <div className="mt-2">
+      <div className="mt-2 flex flex-wrap items-center gap-3">
         <Button
           type="button"
           variant="ghost"
           size="xs"
-          icon={<Plus strokeWidth={1.75} />}
+          icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
           onClick={() => onChange([...headers, { key: '', value: '', reveal: false }])}
         >
           Add header
         </Button>
+        <p className="text-xs text-slate-500">Authorization / API key headers are masked by default.</p>
       </div>
-      <p className="mt-1.5 text-xs text-slate-600">Authorization / API key headers are masked by default.</p>
-    </div>
+    </FormField>
   );
 }
 
@@ -238,8 +270,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
     .join(', ');
 
   return (
-    <div className="space-y-3">
-      {/* Request Settings */}
+    <div className="space-y-5">
       <CollapsibleSection
         title="Request"
         summary={requestSummary}
@@ -253,52 +284,41 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
           error={errors.request_headers}
         />
 
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">
-            Request Body <span className="text-slate-600">(optional)</span>
-          </label>
+        <FormField label="Request body (optional)">
           <textarea
             rows={4}
             value={data.body}
             onChange={(e) => onChange({ body: e.target.value })}
             placeholder={'{"status":"ok"}'}
-            className="input min-h-[80px] text-sm font-mono"
+            className="input min-h-[80px] font-mono"
           />
-          <p className="mt-1.5 text-xs text-slate-600">
-            Sent as-is for POST/PUT/PATCH. Set <code className="text-slate-400">Content-Type</code> in headers if needed.
-          </p>
-        </div>
+          <Hint>
+            Sent as-is for POST/PUT/PATCH. Set <code className="text-slate-300">Content-Type</code> in headers if needed.
+          </Hint>
+        </FormField>
       </CollapsibleSection>
 
-      {/* Response Validation */}
       <CollapsibleSection
-        title="Response Validation"
+        title="Response validation"
         summary={validationSummary}
         sectionId={SECTION_IDS.validation}
         isOpen={openSections?.[SECTION_IDS.validation]}
         onToggle={(open) => onToggleSection?.(SECTION_IDS.validation, open)}
       >
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">
-            Expected Status Rules <span className="text-slate-600">(optional)</span>
-          </label>
+        <FormField label="Expected status rules (optional)" error={errors.status_rules}>
           <input
             type="text"
             value={data.status_rules}
             onChange={(e) => onChange({ status_rules: e.target.value })}
             placeholder="2xx, 304, 200-299"
-            className="input text-sm"
+            className="input"
           />
-          {errors.status_rules ? (
-            <p className="mt-1.5 text-xs text-rose-400">{errors.status_rules}</p>
-          ) : (
-            <p className="mt-1.5 text-xs text-slate-600">Leave empty to accept any 2xx response. Supports codes, ranges, and classes.</p>
+          {!errors.status_rules && (
+            <Hint>Leave empty to accept any 2xx response. Supports codes, ranges, and classes.</Hint>
           )}
-        </div>
+        </FormField>
 
-        {/* Body Assertions */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-2">Body Assertions</label>
+        <FormField label="Body assertions">
           <div className="space-y-2">
             {(data.body_assertions || []).map((a, idx) => (
               <div
@@ -307,7 +327,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                 style={{ gridTemplateColumns: '140px 1fr auto auto' }}
               >
                 <select
-                  className="input text-sm"
+                  className="input"
                   value={a.op}
                   onChange={(e) => {
                     const next = [...data.body_assertions];
@@ -321,7 +341,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                   <option value="not_regex">not regex</option>
                 </select>
                 <input
-                  className="input text-sm"
+                  className="input"
                   placeholder="Value / pattern"
                   value={a.value}
                   onChange={(e) => {
@@ -330,32 +350,23 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     onChange({ body_assertions: next });
                   }}
                 />
-                <label className="flex items-center gap-1 text-xs text-slate-500 whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    checked={!!a.case_insensitive}
-                    onChange={(e) => {
-                      const next = [...data.body_assertions];
-                      next[idx] = { ...next[idx], case_insensitive: e.target.checked };
-                      onChange({ body_assertions: next });
-                    }}
-                  />
-                  CI
-                </label>
-                <Button
-                  type="button"
-                  variant="subtle"
-                  size="sm"
-                  aria-label="Remove body assertion"
+                <CaseToggle
+                  checked={!!a.case_insensitive}
+                  onChange={(checked) => {
+                    const next = [...data.body_assertions];
+                    next[idx] = { ...next[idx], case_insensitive: checked };
+                    onChange({ body_assertions: next });
+                  }}
+                />
+                <IconButton
+                  label="Remove body assertion"
                   icon={<X strokeWidth={1.75} />}
                   onClick={() => {
                     const next = [...data.body_assertions];
                     next.splice(idx, 1);
                     onChange({ body_assertions: next });
                   }}
-                >
-                  <span className="sr-only">Remove</span>
-                </Button>
+                />
               </div>
             ))}
           </div>
@@ -364,7 +375,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
               type="button"
               variant="ghost"
               size="xs"
-              icon={<Plus strokeWidth={1.75} />}
+              icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
               onClick={() =>
                 onChange({
                   body_assertions: [
@@ -377,11 +388,9 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
               Add body assertion
             </Button>
           </div>
-        </div>
+        </FormField>
 
-        {/* Response Header Assertions */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-2">Response Header Assertions</label>
+        <FormField label="Response header assertions">
           <div className="space-y-2">
             {(data.response_header_assertions || []).map((a, idx) => {
               const needsValue = a.op !== 'exists';
@@ -392,7 +401,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                   style={{ gridTemplateColumns: '1fr 140px 1fr auto auto' }}
                 >
                   <input
-                    className="input text-sm"
+                    className="input"
                     placeholder="Header name"
                     value={a.name}
                     onChange={(e) => {
@@ -402,7 +411,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     }}
                   />
                   <select
-                    className="input text-sm"
+                    className="input"
                     value={a.op}
                     onChange={(e) => {
                       const next = [...data.response_header_assertions];
@@ -419,7 +428,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     <option value="not_regex">not regex</option>
                   </select>
                   <input
-                    className="input text-sm"
+                    className="input"
                     placeholder={needsValue ? 'Value / pattern' : '—'}
                     disabled={!needsValue}
                     value={a.value || ''}
@@ -429,32 +438,23 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       onChange({ response_header_assertions: next });
                     }}
                   />
-                  <label className="flex items-center gap-1 text-xs text-slate-500 whitespace-nowrap">
-                    <input
-                      type="checkbox"
-                      checked={!!a.case_insensitive}
-                      onChange={(e) => {
-                        const next = [...data.response_header_assertions];
-                        next[idx] = { ...next[idx], case_insensitive: e.target.checked };
-                        onChange({ response_header_assertions: next });
-                      }}
-                    />
-                    CI
-                  </label>
-                  <Button
-                    type="button"
-                    variant="subtle"
-                    size="sm"
-                    aria-label="Remove header assertion"
+                  <CaseToggle
+                    checked={!!a.case_insensitive}
+                    onChange={(checked) => {
+                      const next = [...data.response_header_assertions];
+                      next[idx] = { ...next[idx], case_insensitive: checked };
+                      onChange({ response_header_assertions: next });
+                    }}
+                  />
+                  <IconButton
+                    label="Remove header assertion"
                     icon={<X strokeWidth={1.75} />}
                     onClick={() => {
                       const next = [...data.response_header_assertions];
                       next.splice(idx, 1);
                       onChange({ response_header_assertions: next });
                     }}
-                  >
-                    <span className="sr-only">Remove</span>
-                  </Button>
+                  />
                 </div>
               );
             })}
@@ -464,7 +464,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
               type="button"
               variant="ghost"
               size="xs"
-              icon={<Plus strokeWidth={1.75} />}
+              icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
               onClick={() =>
                 onChange({
                   response_header_assertions: [
@@ -477,11 +477,9 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
               Add header assertion
             </Button>
           </div>
-        </div>
+        </FormField>
 
-        {/* JSON Assertions */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-2">JSON Assertions <span className="text-slate-600">(gjson path)</span></label>
+        <FormField label="JSON assertions (gjson path)">
           <div className="space-y-2">
             {(data.json_assertions || []).map((a, idx) => {
               const needsValue = a.op !== 'exists';
@@ -492,7 +490,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                   style={{ gridTemplateColumns: '1fr 140px 1fr auto auto' }}
                 >
                   <input
-                    className="input text-sm font-mono"
+                    className="input font-mono"
                     placeholder="Path (e.g. data.status)"
                     value={a.path}
                     onChange={(e) => {
@@ -502,7 +500,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     }}
                   />
                   <select
-                    className="input text-sm"
+                    className="input"
                     value={a.op}
                     onChange={(e) => {
                       const next = [...data.json_assertions];
@@ -523,7 +521,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                     <option value="bool_is">bool is</option>
                   </select>
                   <input
-                    className="input text-sm"
+                    className="input"
                     placeholder={needsValue ? 'Value / pattern' : '—'}
                     disabled={!needsValue}
                     value={a.value || ''}
@@ -533,42 +531,33 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       onChange({ json_assertions: next });
                     }}
                   />
-                  <label className="flex items-center gap-1 text-xs text-slate-500 whitespace-nowrap">
-                    <input
-                      type="checkbox"
-                      checked={!!a.case_insensitive}
-                      onChange={(e) => {
-                        const next = [...data.json_assertions];
-                        next[idx] = { ...next[idx], case_insensitive: e.target.checked };
-                        onChange({ json_assertions: next });
-                      }}
-                    />
-                    CI
-                  </label>
-                  <Button
-                    type="button"
-                    variant="subtle"
-                    size="sm"
-                    aria-label="Remove JSON assertion"
+                  <CaseToggle
+                    checked={!!a.case_insensitive}
+                    onChange={(checked) => {
+                      const next = [...data.json_assertions];
+                      next[idx] = { ...next[idx], case_insensitive: checked };
+                      onChange({ json_assertions: next });
+                    }}
+                  />
+                  <IconButton
+                    label="Remove JSON assertion"
                     icon={<X strokeWidth={1.75} />}
                     onClick={() => {
                       const next = [...data.json_assertions];
                       next.splice(idx, 1);
                       onChange({ json_assertions: next });
                     }}
-                  >
-                    <span className="sr-only">Remove</span>
-                  </Button>
+                  />
                 </div>
               );
             })}
           </div>
-          <div className="mt-2">
+          <div className="mt-2 flex flex-wrap items-center gap-3">
             <Button
               type="button"
               variant="ghost"
               size="xs"
-              icon={<Plus strokeWidth={1.75} />}
+              icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.75} />}
               onClick={() =>
                 onChange({
                   json_assertions: [
@@ -580,137 +569,100 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
             >
               Add JSON assertion
             </Button>
+            <p className="text-xs text-slate-500">
+              Uses gjson syntax — e.g. <code className="text-slate-300">data.items.#.id</code>
+            </p>
           </div>
-          <p className="mt-1.5 text-xs text-slate-600">
-            Uses gjson syntax — e.g. <code className="text-slate-400">data.items.#.id</code>
-          </p>
-        </div>
+        </FormField>
 
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">Max Latency (ms) <span className="text-slate-600">(optional)</span></label>
+        <FormField label="Max latency (ms, optional)" error={errors.max_latency_ms}>
           <input
             type="number"
             value={data.max_latency_ms}
             onChange={(e) => onChange({ max_latency_ms: e.target.value })}
             placeholder="500"
             min={1}
-            className="input text-sm w-40"
+            className="input !w-40"
           />
-          {errors.max_latency_ms ? (
-            <p className="mt-1.5 text-xs text-rose-400">{errors.max_latency_ms}</p>
-          ) : (
-            <p className="mt-1.5 text-xs text-slate-600">Fail the check if total latency exceeds this threshold.</p>
-          )}
-        </div>
+          {!errors.max_latency_ms && <Hint>Fail the check if total latency exceeds this threshold.</Hint>}
+        </FormField>
       </CollapsibleSection>
 
-      {/* TLS & Redirects */}
       <CollapsibleSection
-        title="TLS & Redirects"
+        title="TLS & redirects"
         summary={tlsSummary}
         sectionId={SECTION_IDS.tls}
         isOpen={openSections?.[SECTION_IDS.tls]}
         onToggle={(open) => onToggleSection?.(SECTION_IDS.tls, open)}
       >
-        <div className="space-y-3">
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.07] bg-slate-800/30 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-white">Follow redirects</p>
-              <p className="text-xs text-slate-500">Disable to validate 3xx responses directly</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ follow_redirects: !data.follow_redirects })}
-              className={`relative h-5 w-9 rounded-full transition-colors ${data.follow_redirects ? 'bg-cyan-500' : 'bg-slate-700'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${data.follow_redirects ? 'translate-x-4' : ''}`} />
-            </button>
-          </div>
+        <SwitchRow
+          title="Follow redirects"
+          description="Disable to validate 3xx responses directly"
+          checked={data.follow_redirects}
+          onToggle={() => onChange({ follow_redirects: !data.follow_redirects })}
+        />
 
-          {data.follow_redirects && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">Max Redirects</label>
-              <input
-                type="number"
-                value={data.max_redirects}
-                onChange={(e) => onChange({ max_redirects: parseInt(e.target.value) || 0 })}
-                min={0}
-                className="input text-sm w-28"
-              />
-              {errors.max_redirects && <p className="mt-1.5 text-xs text-rose-400">{errors.max_redirects}</p>}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.07] bg-slate-800/30 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-white">Skip TLS verification</p>
-              <p className="text-xs text-slate-500">For self-signed certs — not recommended for public endpoints</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ tls_skip_verify: !data.tls_skip_verify })}
-              className={`relative h-5 w-9 rounded-full transition-colors ${data.tls_skip_verify ? 'bg-amber-500' : 'bg-slate-700'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${data.tls_skip_verify ? 'translate-x-4' : ''}`} />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">TLS Min Days Valid</label>
-              <input
-                type="number"
-                value={data.tls_min_days_valid}
-                onChange={(e) => onChange({ tls_min_days_valid: e.target.value })}
-                placeholder="14"
-                min={0}
-                className="input text-sm"
-              />
-              {errors.tls_min_days_valid ? (
-                <p className="mt-1.5 text-xs text-rose-400">{errors.tls_min_days_valid}</p>
-              ) : (
-                <p className="mt-1.5 text-xs text-slate-600">Alert before cert expires</p>
-              )}
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">TLS Server Name (SNI)</label>
-              <input
-                type="text"
-                value={data.tls_server_name}
-                onChange={(e) => onChange({ tls_server_name: e.target.value })}
-                placeholder="api.example.com"
-                className="input text-sm"
-              />
-              <p className="mt-1.5 text-xs text-slate-600">Override hostname verification</p>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">Custom CA Bundle (PEM)</label>
-            <textarea
-              rows={4}
-              value={data.tls_ca_pem}
-              onChange={(e) => onChange({ tls_ca_pem: e.target.value })}
-              placeholder={'-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----'}
-              className="input text-xs font-mono min-h-[80px]"
+        {data.follow_redirects && (
+          <FormField label="Max redirects" error={errors.max_redirects}>
+            <input
+              type="number"
+              value={data.max_redirects}
+              onChange={(e) => onChange({ max_redirects: parseInt(e.target.value) || 0 })}
+              min={0}
+              className="input !w-28"
             />
-            <p className="mt-1.5 text-xs text-slate-600">Add trusted root CAs for this monitor</p>
-          </div>
+          </FormField>
+        )}
 
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.07] bg-slate-800/30 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-white">Collect timing breakdown</p>
-              <p className="text-xs text-slate-500">Store DNS / connect / TLS / TTFB in check results</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ collect_timing: !data.collect_timing })}
-              className={`relative h-5 w-9 rounded-full transition-colors ${data.collect_timing ? 'bg-cyan-500' : 'bg-slate-700'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${data.collect_timing ? 'translate-x-4' : ''}`} />
-            </button>
-          </div>
+        <SwitchRow
+          title="Skip TLS verification"
+          description="For self-signed certs — not recommended for public endpoints"
+          checked={data.tls_skip_verify}
+          onToggle={() => onChange({ tls_skip_verify: !data.tls_skip_verify })}
+          onClass="bg-amber-500"
+        />
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="TLS min days valid" error={errors.tls_min_days_valid}>
+            <input
+              type="number"
+              value={data.tls_min_days_valid}
+              onChange={(e) => onChange({ tls_min_days_valid: e.target.value })}
+              placeholder="14"
+              min={0}
+              className="input"
+            />
+            {!errors.tls_min_days_valid && <Hint>Alert before cert expires</Hint>}
+          </FormField>
+          <FormField label="TLS server name (SNI)">
+            <input
+              type="text"
+              value={data.tls_server_name}
+              onChange={(e) => onChange({ tls_server_name: e.target.value })}
+              placeholder="api.example.com"
+              className="input"
+            />
+            <Hint>Override hostname verification</Hint>
+          </FormField>
         </div>
+
+        <FormField label="Custom CA bundle (PEM)">
+          <textarea
+            rows={4}
+            value={data.tls_ca_pem}
+            onChange={(e) => onChange({ tls_ca_pem: e.target.value })}
+            placeholder={'-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----'}
+            className="input min-h-[80px] font-mono"
+          />
+          <Hint>Add trusted root CAs for this monitor</Hint>
+        </FormField>
+
+        <SwitchRow
+          title="Collect timing breakdown"
+          description="Store DNS / connect / TLS / TTFB in check results"
+          checked={data.collect_timing}
+          onToggle={() => onChange({ collect_timing: !data.collect_timing })}
+        />
       </CollapsibleSection>
     </div>
   );

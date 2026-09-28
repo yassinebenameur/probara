@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import { Monitor, CheckResult } from '@/lib/types';
 import { getMonitorResults, getGroupMembers } from '@/lib/api';
+import { Activity, ChevronRight } from 'lucide-react';
 import Pill, { PillTone } from '@/components/ui/Pill';
+import EmptyState from '@/components/ui/EmptyState';
 
 type StatusKey = 'up' | 'down' | 'degraded' | 'unknown' | 'paused' | 'maintenance';
 
@@ -17,6 +19,7 @@ const STATUS_TONE: Record<StatusKey, PillTone> = {
 };
 import { calculateUptime, countOperationalResults, getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
 import { getAllMonitors, sortMonitorsByName } from '@/lib/monitor-list';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
 export default function GroupedChecksView() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -111,94 +114,100 @@ export default function GroupedChecksView() {
   };
 
   if (loading) {
-    return <div className="text-center py-8 text-muted">Loading...</div>;
+    return <div className="py-8 text-center text-sm text-slate-500">Loading...</div>;
   }
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Grouped Checks</h2>
+    <div className="space-y-6">
+      <h2 className="text-[15px] font-semibold text-white">Grouped checks</h2>
 
       {/* Groups Section */}
       {groups.length > 0 && (
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-muted">Monitor Groups</h3>
-          {groups.map((group) => {
-            const isExpanded = expandedGroups.has(group.id);
-            const members = groupMembers[group.id] || [];
-            const status = getGroupStatus(group);
-            const results = checkResults[group.id] || [];
-            const uptime = calculateUptime(results);
-            const operationalCount = countOperationalResults(results);
+          <h3 className="text-[13px] font-medium text-slate-400">Monitor groups</h3>
+          <div className="glass divide-y divide-divider overflow-hidden">
+            {groups.map((group) => {
+              const isExpanded = expandedGroups.has(group.id);
+              const members = groupMembers[group.id] || [];
+              const status = getGroupStatus(group);
+              const results = checkResults[group.id] || [];
+              const uptime = calculateUptime(results);
+              const operationalCount = countOperationalResults(results);
 
-            return (
-              <div key={group.id} className="rounded-lg border border-white/[0.06] bg-slate-900/[0.92] overflow-hidden">
-                {/* Group Header */}
-                <div
-                  onClick={() => toggleGroup(group.id)}
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-slate-900/[0.95]"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">{isExpanded ? '▼' : '▶'}</span>
-                    <div>
-                      <div className="font-medium">{group.name}</div>
-                      <div className="text-xs text-muted">
-                        GROUP • {group.member_ids?.length || 0} monitors
+              return (
+                <div key={group.id}>
+                  {/* Group Header */}
+                  <div
+                    onClick={() => toggleGroup(group.id)}
+                    className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3.5 transition-colors hover:bg-well"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <ChevronRight
+                        className={`h-4 w-4 flex-shrink-0 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                        strokeWidth={1.75}
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-white">{group.name}</div>
+                        <div className="text-xs text-slate-500">
+                          Group · {group.member_ids?.length || 0} monitors
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-sm text-muted">
-                      {operationalCount > 0 ? `${uptime.toFixed(2)}% uptime` : 'No data'}
+                    <div className="flex items-center gap-4">
+                      <div className="text-[13px] tabular-nums text-slate-400">
+                        {operationalCount > 0 ? `${uptime.toFixed(2)}% uptime` : 'No data'}
+                      </div>
+                      <Pill tone={STATUS_TONE[status as StatusKey]} size="sm" dot>
+                        {status === 'up' ? 'All up' : status === 'down' ? 'All down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'}
+                      </Pill>
                     </div>
-                    <Pill tone={STATUS_TONE[status as StatusKey]} size="sm" dot>
-                      {status === 'up' ? 'All up' : status === 'down' ? 'All down' : status === 'paused' ? 'Paused' : status === 'unknown' ? 'Unknown' : 'Degraded'}
-                    </Pill>
                   </div>
-                </div>
 
-                {/* Group Members */}
-                {isExpanded && members.length > 0 && (
-                  <div className="border-t border-white/[0.06] bg-slate-900/[0.98]">
-                    {members.map((member) => {
-                      const memberResults = checkResults[member.id] || [];
-                      const memberStatus = getEffectiveMonitorStatus(member, memberResults);
-                      const memberUptime = calculateUptime(memberResults);
-                      const memberOperationalCount = countOperationalResults(memberResults);
+                  {/* Group Members */}
+                  {isExpanded && members.length > 0 && (
+                    <div className="divide-y divide-divider border-t border-divider bg-well">
+                      {members.map((member) => {
+                        const memberResults = checkResults[member.id] || [];
+                        const memberStatus = getEffectiveMonitorStatus(member, memberResults);
+                        const memberUptime = calculateUptime(memberResults);
+                        const memberOperationalCount = countOperationalResults(memberResults);
 
-                      return (
-                        <div
-                          key={member.id}
-                          className="flex items-center justify-between p-3 pl-12 border-b border-white/[0.03] last:border-b-0"
-                        >
-                          <div>
-                            <div className="text-sm font-medium">{member.name}</div>
-                            <div className="text-xs text-muted">{member.type.toUpperCase()}</div>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-xs text-muted">
-                              {memberOperationalCount > 0 ? `${memberUptime.toFixed(2)}%` : 'N/A'}
+                        return (
+                          <div
+                            key={member.id}
+                            className="flex items-center justify-between gap-4 py-3 pl-12 pr-5"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-slate-200">{member.name}</div>
+                              <div className="text-[11px] font-medium text-slate-500">{monitorTypeLabel(member.type)}</div>
                             </div>
-                            <Pill tone={STATUS_TONE[memberStatus as StatusKey]} size="sm" dot>
-                              {memberStatus === 'up' ? 'Up' : memberStatus === 'down' ? 'Down' : memberStatus === 'paused' ? 'Paused' : memberStatus === 'unknown' ? 'Unknown' : 'Degraded'}
-                            </Pill>
+                            <div className="flex items-center gap-4">
+                              <div className="text-xs tabular-nums text-slate-400">
+                                {memberOperationalCount > 0 ? `${memberUptime.toFixed(2)}%` : 'N/A'}
+                              </div>
+                              <Pill tone={STATUS_TONE[memberStatus as StatusKey]} size="sm" dot>
+                                {memberStatus === 'up' ? 'Up' : memberStatus === 'down' ? 'Down' : memberStatus === 'paused' ? 'Paused' : memberStatus === 'unknown' ? 'Unknown' : 'Degraded'}
+                              </Pill>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
       {/* Ungrouped Monitors Section */}
       {monitors.length > 0 && (
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-muted">Individual Monitors</h3>
-          <div className="rounded-lg border border-white/[0.06] bg-slate-900/[0.92]">
-            {monitors.map((monitor, idx) => {
+          <h3 className="text-[13px] font-medium text-slate-400">Individual monitors</h3>
+          <div className="glass divide-y divide-divider overflow-hidden">
+            {monitors.map((monitor) => {
               const results = checkResults[monitor.id] || [];
               const status = getEffectiveMonitorStatus(monitor, results);
               const uptime = calculateUptime(results);
@@ -207,18 +216,14 @@ export default function GroupedChecksView() {
               return (
                 <div
                   key={monitor.id}
-                  className={`flex items-center justify-between p-3 ${
-                    idx !== monitors.length - 1
-                      ? 'border-b border-white/[0.03]'
-                      : ''
-                  }`}
+                  className="flex items-center justify-between gap-4 px-5 py-3 transition-colors hover:bg-well"
                 >
-                  <div>
-                    <div className="text-sm font-medium">{monitor.name}</div>
-                    <div className="text-xs text-muted">{monitor.type.toUpperCase()}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-white">{monitor.name}</div>
+                    <div className="text-[11px] font-medium text-slate-500">{monitorTypeLabel(monitor.type)}</div>
                   </div>
                   <div className="flex items-center gap-4">
-                    <div className="text-xs text-muted">
+                    <div className="text-xs tabular-nums text-slate-400">
                       {operationalCount > 0 ? `${uptime.toFixed(2)}%` : 'N/A'}
                     </div>
                     <Pill tone={STATUS_TONE[status as StatusKey]} size="sm" dot>
@@ -233,10 +238,7 @@ export default function GroupedChecksView() {
       )}
 
       {groups.length === 0 && monitors.length === 0 && (
-        <div className="text-center py-12 text-muted">
-          <div className="text-4xl mb-3">📊</div>
-          <div className="text-lg">No monitors or groups found</div>
-        </div>
+        <EmptyState icon={<Activity strokeWidth={1.5} />} title="No monitors or groups found" />
       )}
     </div>
   );

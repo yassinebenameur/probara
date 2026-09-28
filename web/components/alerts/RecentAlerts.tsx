@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getRecentAlerts, acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 
 interface RecentAlertsProps {
@@ -27,16 +29,16 @@ function getStatusColor(status: AlertStatus): string {
   }
 }
 
-function getStatusBgColor(status: AlertStatus): string {
+function getStatusTextColor(status: AlertStatus): string {
   switch (status) {
     case 'active':
-      return 'bg-rose-500/10 text-rose-400 border-rose-500/20';
+      return 'text-rose-300';
     case 'acknowledged':
-      return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
+      return 'text-amber-300';
     case 'resolved':
-      return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+      return 'text-emerald-300';
     default:
-      return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+      return 'text-slate-400';
   }
 }
 
@@ -145,14 +147,14 @@ export default function RecentAlerts({
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
+      <div className="glass p-5">
         <div className="mb-4">
-          <h3 className="font-medium text-white">Recent Alerts</h3>
+          <h3 className="text-[15px] font-semibold text-white">Recent alerts</h3>
           <p className="text-xs text-slate-500">Loading...</p>
         </div>
         <div className="space-y-3">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-12 animate-pulse rounded-lg bg-slate-800/50" />
+            <div key={i} className="h-12 animate-pulse rounded-lg bg-well-hover" />
           ))}
         </div>
       </div>
@@ -163,11 +165,11 @@ export default function RecentAlerts({
   const activeCount = activeAlerts.length;
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
-      <div className="mb-4 flex items-center justify-between">
+    <div className="glass overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-5 py-4">
         <div>
           <div className="flex items-center gap-2">
-            <h3 className="font-medium text-white">Recent Alerts</h3>
+            <h3 className="text-[15px] font-semibold text-white">Recent alerts</h3>
             {activeCount > 0 && (
               <Pill tone="danger" size="xs">{activeCount}</Pill>
             )}
@@ -176,50 +178,50 @@ export default function RecentAlerts({
             {alerts.length === 0 ? 'No alerts' : `${alerts.length} recent alert${alerts.length !== 1 ? 's' : ''}`}
           </p>
         </div>
-        <Link href="/alerts" className="text-xs text-cyan-400 hover:text-cyan-300">
-          View all -&gt;
+        <Link href="/alerts" className="inline-flex items-center gap-1.5 text-[13px] text-cyan-300 transition-colors hover:text-cyan-200">
+          View all <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
         </Link>
       </div>
 
       {error && (
-        <div className="mb-4 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-400">
+        <Callout
+          tone="danger"
+          className="mx-5 mb-4"
+          action={<Button variant="subtle" size="xs" onClick={loadAlerts}>Retry</Button>}
+        >
           {error}
-          <button onClick={loadAlerts} className="ml-2 underline hover:no-underline">
-            Retry
-          </button>
-        </div>
+        </Callout>
       )}
 
       {alerts.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-8 text-center">
-          <div className="mb-2 text-xl font-semibold text-slate-500">Alert</div>
-          <p className="text-sm text-slate-500">No alerts yet</p>
-          <p className="mt-1 text-xs text-slate-600">
+        <div className="flex flex-col items-center justify-center px-5 pb-10 pt-6 text-center">
+          <p className="text-sm text-slate-400">No alerts yet</p>
+          <p className="mt-1 text-xs text-slate-500">
             Alerts will appear when monitors fail
           </p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="divide-y divide-divider pb-1.5">
           {alerts.map((alert) => (
             <div
               key={alert.id}
-              className={`rounded-lg border p-3 transition-all ${getStatusBgColor(alert.status)}`}
+              className="px-5 py-3.5 transition-colors hover:bg-well"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className={`h-2 w-2 rounded-full ${getStatusColor(alert.status)}`} />
+                    <div className={`h-2 w-2 shrink-0 rounded-full ${getStatusColor(alert.status)}`} />
                     <span className="truncate text-sm font-medium text-white">
                       {alert.kind === 'mesh_edge'
                         ? `mesh: ${alert.source_location_name || 'unknown'} → ${alert.target_location_name || 'unknown'}`
                         : alert.monitor_name || 'Unknown Monitor'}
                     </span>
                   </div>
-                  <div className="mt-1 flex items-center gap-2 text-xs">
-                    <span className="capitalize">{alert.status}</span>
-                    <span className="text-slate-600">|</span>
+                  <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
+                    <span className={`capitalize ${getStatusTextColor(alert.status)}`}>{alert.status}</span>
+                    <span className="text-slate-500">·</span>
                     <span>{formatTimeAgo(alert.triggered_at)}</span>
-                    <span className="text-slate-600">|</span>
+                    <span className="text-slate-500">·</span>
                     <span>{alert.failure_count} failure{alert.failure_count !== 1 ? 's' : ''}</span>
                   </div>
                   {alert.last_error && (
@@ -230,10 +232,10 @@ export default function RecentAlerts({
                   {alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id && (
                     <Link
                       href={`/monitors/${alert.root_cause_monitor_id}`}
-                      className={`mt-1 inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                      className={`mt-1.5 inline-flex max-w-full items-center gap-1 truncate rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors ${
                         alert.suppression_reason === 'dependency'
-                          ? 'border-slate-500/30 bg-slate-500/10 text-slate-400 hover:border-slate-400/50'
-                          : 'border-amber-500/20 bg-amber-500/10 text-amber-400 hover:border-amber-500/40'
+                          ? 'bg-well-hover text-slate-400 hover:text-slate-200'
+                          : 'bg-amber-500/[0.15] text-amber-300 hover:text-amber-200'
                       }`}
                       title={
                         alert.suppression_reason === 'dependency'
@@ -246,7 +248,7 @@ export default function RecentAlerts({
                   )}
                   {(alert.impacted_count ?? 0) > 0 && (
                     <span
-                      className="mt-1 ml-1 inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"
+                      className="mt-1.5 ml-1 inline-flex items-center rounded-full bg-amber-500/[0.15] px-2 py-0.5 text-[11px] font-medium text-amber-300"
                       title="Downstream monitors whose notifications this alert stands in for"
                     >
                       affects {alert.impacted_count} monitor{alert.impacted_count === 1 ? '' : 's'}
@@ -257,7 +259,7 @@ export default function RecentAlerts({
                   <div className="flex gap-1">
                     {alert.status === 'active' && (
                       <Button
-                        variant="ghost"
+                        variant="subtle"
                         size="xs"
                         onClick={() => handleAcknowledge(alert.id)}
                         disabled={processingId === alert.id}
@@ -267,7 +269,7 @@ export default function RecentAlerts({
                       </Button>
                     )}
                     <Button
-                      variant="accent"
+                      variant="ghost"
                       size="xs"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}

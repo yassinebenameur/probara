@@ -27,19 +27,19 @@ export default function PrometheusDetails({ monitor, result, size = 'default' }:
   const config = monitor.config as PrometheusMonitorConfig;
   const metrics = (result?.metrics_data as { prometheus?: PrometheusMetrics } | undefined)?.prometheus;
   const rowClass = 'flex justify-between gap-3';
-  const labelClass = 'shrink-0 text-slate-500';
-  const valueClass = 'min-w-0 text-right text-slate-300';
+  const labelClass = 'shrink-0 text-slate-400';
+  const valueClass = 'min-w-0 text-right text-slate-200';
   const truncated = metrics ? metrics.sample_count > metrics.values.length : false;
 
   return (
-    <div className={`space-y-2 ${size === 'compact' ? 'text-xs' : 'text-sm'}`}>
+    <div className={size === 'compact' ? 'space-y-2 text-xs' : 'space-y-2.5 text-sm'}>
       <div className={rowClass}>
         <span className={labelClass}>Endpoint</span>
-        <CopyableTarget value={config.url} label="Prometheus URL" size={size === 'compact' ? 'xs' : 'sm'} className="min-w-0 justify-end" />
+        <CopyableTarget value={config.url} label="Prometheus URL" size="sm" className="min-w-0 justify-end" />
       </div>
       <div>
         <span className={labelClass}>Query</span>
-        <pre className="mt-1 whitespace-pre-wrap break-all rounded-lg border border-white/[0.06] bg-slate-900/60 p-2.5 font-mono text-xs text-slate-200">
+        <pre className="glass-well mt-1.5 whitespace-pre-wrap break-words p-3 font-mono text-xs text-slate-200">
           {config.query}
         </pre>
       </div>
@@ -64,7 +64,7 @@ export default function PrometheusDetails({ monitor, result, size = 'default' }:
             <span className={valueClass}>
               {metrics.sample_count} {metrics.sample_count === 1 ? 'sample' : 'samples'}
               {' · '}
-              <span className={metrics.failed_count > 0 ? 'text-red-400' : 'text-emerald-400'}>
+              <span className={metrics.failed_count > 0 ? 'text-rose-300' : 'text-emerald-300'}>
                 {metrics.failed_count} outside threshold
               </span>
             </span>
@@ -72,7 +72,7 @@ export default function PrometheusDetails({ monitor, result, size = 'default' }:
           {metrics.values.length > 0 && (
             <div>
               <span className={labelClass}>Values{truncated ? ` (first ${metrics.values.length} of ${metrics.sample_count})` : ''}</span>
-              <p className="mt-1 break-all font-mono text-xs text-slate-300">{metrics.values.join(', ')}</p>
+              <p className="mt-1.5 break-words font-mono text-xs text-slate-300">{metrics.values.join(', ')}</p>
             </div>
           )}
         </>

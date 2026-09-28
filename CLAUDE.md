@@ -41,7 +41,8 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   Uptime Kuma over its socket.io API and writes Kuma's own backup shape (Kuma
   2.0 removed the export button). Transport only — all translation lives in
   `api/internal/services/import/kuma.go`
-- `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry)
+- `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry;
+  "instrument glass" design, surface contract at the top of `app/globals.css`)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
 - `docs/` — `architecture.md` (see below), `state-semantics.md`,
   `auth-and-rbac.md`, `location-worker-auth.md`, `correctness-notes.md`
@@ -187,7 +188,7 @@ or imported groups come back empty. Any other path that creates groups through
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
    in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
    `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
-   `web/app/monitors/page.tsx`, and the type count + `monitorGroups` on the
+   `web/lib/monitor-type-labels.ts` (every operator-UI type label), and the type count + `monitorGroups` on the
    landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
 
 ## Cross-service contracts
@@ -334,7 +335,7 @@ or imported groups come back empty. Any other path that creates groups through
   keys the page subtree on the tenant, so every page's mount-time fetch
   re-runs on a switch. Pages must not add their own `tenant-changed`
   listeners — only components *outside* that subtree (Sidebar,
-  CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
+  `useFleetHealth`, CurrentUserProvider, AlertStreamProvider) need one. `…/[id]` detail routes
   redirect to their list page on a switch (`/users/[id]` excepted: users are
   platform-scoped).
 - **Folded routes stay as redirects**: Mesh is a tab of Locations and
@@ -347,11 +348,25 @@ or imported groups come back empty. Any other path that creates groups through
   (icon only, named by its tooltip, `danger` last) for up to three
   actions, and `components/ui/RowMenu.tsx` (⋮, position:fixed, flips up)
   beyond that. Don't put text buttons in rows.
+- **Shell**: the sidebar (`components/layout/Sidebar.tsx`) is the only chrome
+  — no desktop top bar; below `md` it is a drawer opened from `TopBar`. It is
+  ONE instance on every breakpoint, so `TenantSwitcher`'s tenant bootstrap
+  (load, settle, `emitTenantChange`) runs once; never render a second copy.
+  `useFleetHealth` (called once, in `Layout`'s `Shell`) owns
+  `html[data-health]`, which drives the ambient alarm bloom.
+- **Glass surfaces**: panels use `.glass` (or `Panel`/`FormCard`/
+  `FormSection`), overlays `.glass-overlay`, groups inside a panel
+  `.glass-well`, banners `components/ui/Callout.tsx`; never nest a blurred
+  surface in another. Orange (`cyan-*`) is for actions only; text on it is
+  `text-onaccent`. The rules and token list sit in the comment at the top of
+  `app/globals.css` and in `tailwind.config.ts`.
 - **Overlays must portal**: pages wrap content in `space-y-*`, which puts a
   `margin-top` on a `fixed inset-0` sibling, so the backdrop stops covering the
-  viewport (and `main`'s `overflow-x-clip` can clip it). Wrap modal roots in
-  `components/ui/ModalPortal.tsx`. Modals still rendered inline elsewhere carry
-  this bug.
+  viewport (and `main`'s `overflow-x-clip` can clip it), and every `.glass`
+  ancestor's `backdrop-filter` becomes the containing block of a `fixed`
+  child, offsetting and clipping it. Wrap modal roots in
+  `components/ui/ModalPortal.tsx` (menus/popovers: `createPortal`, as
+  `RowMenu` and `InfoTip` do).
 
 ## Build, test, verify
 

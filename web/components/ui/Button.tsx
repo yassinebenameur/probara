@@ -18,18 +18,19 @@ interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'chi
 
 const VARIANT: Record<ButtonVariant, string> = {
   ghost:
-    'border border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08] hover:text-white',
+    'border border-edge-control bg-control text-slate-200 hover:bg-control-hover hover:text-white',
   accent:
-    'bg-cyan-500 text-white hover:bg-cyan-400 shadow-[0_4px_20px_rgba(255,90,36,0.18)]',
+    'bg-cyan-500 font-semibold text-onaccent shadow-accent hover:bg-[#ff6d3c] ' +
+    'disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none disabled:opacity-100',
   danger:
-    'border border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20 hover:text-rose-100',
+    'border border-rose-500/25 bg-rose-500/10 text-rose-300 hover:bg-rose-500/[0.16] hover:text-rose-200',
   subtle:
-    'text-slate-400 hover:bg-white/[0.05] hover:text-white',
+    'text-slate-400 hover:bg-well-hover hover:text-white',
 };
 
 const SIZE: Record<ButtonSize, string> = {
-  sm: 'px-3 py-2 text-xs gap-2 rounded-[12px]',
-  xs: 'px-2.5 py-1.5 text-[0.7rem] gap-1.5 rounded-[10px]',
+  sm: 'h-9 px-3.5 text-[13px] gap-2 rounded-lg',
+  xs: 'h-7 px-2.5 text-xs gap-1.5 rounded-lg',
 };
 
 const ICON_SIZE: Record<ButtonSize, string> = {
@@ -38,9 +39,9 @@ const ICON_SIZE: Record<ButtonSize, string> = {
 };
 
 const BASE =
-  'inline-flex items-center justify-center font-medium transition-colors duration-150 ' +
-  'focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 focus-visible:ring-offset-0 ' +
-  'disabled:opacity-40 disabled:cursor-not-allowed';
+  'inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors duration-150 ' +
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 focus-visible:ring-offset-0 ' +
+  'disabled:opacity-50 disabled:cursor-not-allowed';
 
 export default function Button({
   variant = 'ghost',
@@ -58,10 +59,10 @@ export default function Button({
   const renderedIcon = loading ? (
     <Loader2 className={`${iconClass} animate-spin`} aria-hidden="true" />
   ) : icon ? (
-    <span className={`${iconClass} inline-flex items-center`}>{icon}</span>
+    <span className={`${iconClass} inline-flex items-center [&_svg]:h-full [&_svg]:w-full`}>{icon}</span>
   ) : null;
   const renderedTrailing = !loading && iconTrailing ? (
-    <span className={`${iconClass} inline-flex items-center`}>{iconTrailing}</span>
+    <span className={`${iconClass} inline-flex items-center [&_svg]:h-full [&_svg]:w-full`}>{iconTrailing}</span>
   ) : null;
 
   const classes = `${BASE} ${VARIANT[variant]} ${SIZE[size]} ${className}`.trim();

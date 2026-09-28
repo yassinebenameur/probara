@@ -4,10 +4,13 @@ import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Plus, Download, Upload, Search, Tag, ChevronDown, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers, X, Pencil, Copy, Pause, Play } from 'lucide-react';
+import { Plus, Download, Upload, Search, Tag, ChevronDown, ChevronRight, Activity, CheckSquare, FolderPlus, Move, Trash2, Bell, BellOff, Layers, X, Pencil, Copy, Pause, Play } from 'lucide-react';
 import RowMenu, { RowMenuItem, RowMenuSeparator, useCloseRowMenu } from '@/components/ui/RowMenu';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
+import Callout from '@/components/ui/Callout';
+import IconButton from '@/components/ui/IconButton';
+import SharedSelectCheckbox from '@/components/ui/SelectCheckbox';
 import FilterChip from '@/components/ui/FilterChip';
 import PageHeader from '@/components/ui/PageHeader';
 import SharedEmptyState from '@/components/ui/EmptyState';
@@ -45,6 +48,7 @@ import {
   MonitorDisplayStatus,
   calculateLatencyStats,
 } from '@/lib/monitor-utils';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
 const DEBUG_INGEST_URL = process.env.NEXT_PUBLIC_DEBUG_INGEST_URL;
 const NO_GROUP_VALUE = '__no_group__';
@@ -99,35 +103,10 @@ function StatusDot({ status }: { status: MonitorDisplayStatus }) {
 
 // Display names for monitor types. Types missing here (new features) still
 // render via the fallback — they show up in the filter automatically.
-const TYPE_LABELS: Record<string, { label: string; short: string }> = {
-  http: { label: 'HTTP', short: 'HTTP' },
-  ping: { label: 'Ping', short: 'PING' },
-  dns: { label: 'DNS', short: 'DNS' },
-  grpc: { label: 'gRPC', short: 'GRPC' },
-  tcp: { label: 'TCP', short: 'TCP' },
-  agent: { label: 'Agent', short: 'AGENT' },
-  group: { label: 'Group', short: 'GROUP' },
-  push: { label: 'Push', short: 'PUSH' },
-  sip: { label: 'SIP', short: 'SIP' },
-  synthetic_api: { label: 'Synthetic API', short: 'SYN API' },
-  synthetic_browser: { label: 'Synthetic Browser', short: 'SYN BROWSER' },
-  redis: { label: 'Redis', short: 'REDIS' },
-  postgres: { label: 'PostgreSQL', short: 'POSTGRES' },
-  mongodb: { label: 'MongoDB', short: 'MONGO' },
-  rabbitmq: { label: 'RabbitMQ', short: 'RABBITMQ' },
-  mysql: { label: 'MySQL', short: 'MYSQL' },
-  websocket: { label: 'WebSocket', short: 'WS' },
-  prometheus: { label: 'Prometheus', short: 'PROMQL' },
-};
-
-function monitorTypeLabel(type: string, variant: 'label' | 'short' = 'label') {
-  return TYPE_LABELS[type]?.[variant] ?? type.replace(/_/g, ' ');
-}
-
 // Type badge: one muted colour — status colours are reserved for state.
 function TypeBadge({ type }: { type: string }) {
   return (
-    <span className="text-[10px] font-medium uppercase text-slate-500">
+    <span className="text-[11px] font-medium text-slate-500">
       {monitorTypeLabel(type, 'short')}
     </span>
   );
@@ -151,7 +130,7 @@ function MiniUptimeBars({ results }: { results: CheckResult[] }) {
         />
       ))}
       {[...Array(Math.max(0, 20 - bars.length))].map((_, i) => (
-        <div key={`e-${i}`} className="h-3 w-0.5 rounded-sm bg-slate-700/50" />
+        <div key={`e-${i}`} className="h-3 w-0.5 rounded-sm bg-slate-500/25" />
       ))}
     </div>
   );
@@ -169,28 +148,22 @@ function formatBytes(bytes: number): string {
 // Agent metrics mini display
 function AgentMetricsMini({ metrics }: { metrics: AgentMetrics }) {
   return (
-    <div className="flex items-center gap-3 text-[10px]">
-      <div className="flex items-center gap-1">
-        <svg className="h-3 w-3 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z" />
-        </svg>
-        <span className="text-slate-400">CPU</span>
-        <span className="text-white font-medium">{metrics.cpu_percent.toFixed(0)}%</span>
-      </div>
-      <div className="flex items-center gap-1">
-        <svg className="h-3 w-3 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-        </svg>
-        <span className="text-slate-400">MEM</span>
-        <span className="text-white font-medium">{((metrics.memory_used / metrics.memory_total) * 100).toFixed(0)}%</span>
-      </div>
-      <div className="flex items-center gap-1">
-        <svg className="h-3 w-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-        </svg>
-        <span className="text-slate-400">DISK</span>
-        <span className="text-white font-medium">{((metrics.disk_used / metrics.disk_total) * 100).toFixed(0)}%</span>
-      </div>
+    <div className="flex items-center gap-3 text-[11px] text-slate-500">
+      <span>
+        CPU <span className="font-medium tabular-nums text-slate-300">{metrics.cpu_percent.toFixed(0)}%</span>
+      </span>
+      <span>
+        Mem{' '}
+        <span className="font-medium tabular-nums text-slate-300">
+          {((metrics.memory_used / metrics.memory_total) * 100).toFixed(0)}%
+        </span>
+      </span>
+      <span>
+        Disk{' '}
+        <span className="font-medium tabular-nums text-slate-300">
+          {((metrics.disk_used / metrics.disk_total) * 100).toFixed(0)}%
+        </span>
+      </span>
     </div>
   );
 }
@@ -217,7 +190,7 @@ function DisplayValueChips({ values }: { values: HTTPDisplayValue[] }) {
       {values.map((v) => (
         <span
           key={v.path}
-          className="inline-flex max-w-[180px] items-center gap-1 rounded border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 font-mono text-[10px] leading-none text-slate-300"
+          className="inline-flex max-w-[180px] items-center gap-1 rounded-md bg-well-hover px-1.5 py-0.5 font-mono text-[11px] leading-none text-slate-300"
           title={`${v.path} = ${v.value}`}
         >
           {displayValueLabel(v) && <span className="shrink-0 text-slate-500">{displayValueLabel(v)}</span>}
@@ -228,61 +201,45 @@ function DisplayValueChips({ values }: { values: HTTPDisplayValue[] }) {
   );
 }
 
-// Custom checkbox component matching the dark theme
-function SelectCheckbox({ 
-  checked, 
-  onChange, 
+function SelectCheckbox({
+  checked,
+  onChange,
   visible = true,
-  label 
-}: { 
-  checked: boolean; 
-  onChange: () => void; 
+  label,
+}: {
+  checked: boolean;
+  onChange: () => void;
   visible?: boolean;
   label?: string;
 }) {
   if (!visible) return null;
-  
-  return (
-    <button
-      onClick={(e) => { e.stopPropagation(); onChange(); }}
-      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-all ${
-        checked
-          ? 'border-cyan-500 bg-cyan-500'
-          : 'border-white/20 bg-slate-900/80 hover:border-white/40'
-      }`}
-      aria-label={label}
-    >
-      {checked && (
-        <svg className="h-2.5 w-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-        </svg>
-      )}
-    </button>
-  );
+  return <SharedSelectCheckbox checked={checked} onChange={onChange} label={label} />;
 }
 
 function SnoozeOptions({ onSnooze }: { onSnooze: (minutes: number) => void }) {
   const close = useCloseRowMenu();
   return (
     <>
-      <div className="px-2.5 pt-0.5 text-[10px] text-slate-500">Snooze alerts</div>
-      <div className="flex gap-1 px-2.5 pb-1 pt-1">
+      <div className="px-2.5 pt-1 text-xs text-slate-500">Snooze alerts</div>
+      <div className="flex gap-1 px-1.5 pb-1 pt-1.5">
         {[
           { label: '1h', minutes: 60 },
           { label: '4h', minutes: 240 },
           { label: '24h', minutes: 1440 },
         ].map(({ label, minutes }) => (
-          <button
+          <Button
             key={label}
             type="button"
+            variant="ghost"
+            size="xs"
+            className="flex-1 !px-0"
             onClick={() => {
               close();
               onSnooze(minutes);
             }}
-            className="flex-1 rounded border border-white/[0.08] px-1.5 py-1 text-[10px] text-slate-300 transition-colors hover:border-sky-500/40 hover:bg-sky-500/10 hover:text-sky-300"
           >
             {label}
-          </button>
+          </Button>
         ))}
       </div>
     </>
@@ -318,6 +275,14 @@ function MonitorActionsMenu({
       <RowMenuItem onSelect={onDelete} icon={<Trash2 strokeWidth={1.75} />} danger>Delete</RowMenuItem>
     </RowMenu>
   );
+}
+
+// Row background: the previewed row carries an accent edge, checked rows a
+// light accent tint.
+function rowStateClass(isSelected: boolean, isChecked: boolean) {
+  if (isSelected) return 'bg-well-hover shadow-[inset_2px_0_0_0_var(--accent)]';
+  if (isChecked) return 'bg-cyan-500/[0.06]';
+  return 'hover:bg-well';
 }
 
 // Compact monitor row component
@@ -377,13 +342,9 @@ function MonitorRow({
   return (
     <div
       onClick={onClick}
-      className={`group flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all cursor-pointer ${
-        isSelected
-          ? 'border-cyan-500/40 bg-cyan-500/5'
-          : isChecked
-          ? 'border-cyan-500/20 bg-cyan-500/5'
-          : 'border-transparent hover:border-white/[0.06] hover:bg-slate-800/30'
-      } ${isChild ? 'bg-slate-800/20' : ''}`}
+      className={`group flex cursor-pointer items-center gap-3 px-4 transition-colors ${
+        isChild ? 'py-2.5' : 'py-3'
+      } ${rowStateClass(isSelected, isChecked)}`}
     >
       <SelectCheckbox
         checked={isChecked}
@@ -401,14 +362,14 @@ function MonitorRow({
           <TypeBadge type={monitor.type} />
           {status === 'maintenance' && (
             <span
-              className="rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-sky-300"
+              className="inline-flex"
               title={
                 monitor.maintenance_until
                   ? `Alerts suppressed until ${new Date(monitor.maintenance_until).toLocaleString()}`
                   : 'Alerts suppressed during maintenance'
               }
             >
-              Maintenance
+              <Pill tone="info" size="xs">Maintenance</Pill>
             </span>
           )}
           <DisplayValueChips values={displayValues} />
@@ -419,17 +380,17 @@ function MonitorRow({
                 <TagPill key={tag} tag={tag} size="xs" />
               ))}
               {monitor.tags.length > 3 && (
-                <span className="text-[9px] text-slate-500">+{monitor.tags.length - 3}</span>
+                <span className="text-[11px] text-slate-500">+{monitor.tags.length - 3}</span>
               )}
             </div>
           )}
         </div>
         {getUrl() && (
-          <div className="mt-0.5">
+          <div className="mt-0.5 flex">
             <CopyableTarget
               value={getUrl() as string}
               label={monitorTargetLabel(monitor.type)}
-              size="xs"
+              size="sm"
               revealOnHover
               textClassName="text-slate-500"
             />
@@ -449,11 +410,15 @@ function MonitorRow({
       </div>
 
       {/* Stats */}
-      <div className="hidden md:flex items-center gap-4 text-xs">
+      <div className="hidden items-center gap-4 text-xs tabular-nums md:flex">
         <div className="w-14 text-right">
-          <span className={`font-medium ${uptime >= 99 ? 'text-emerald-400' : uptime >= 95 ? 'text-amber-400' : 'text-rose-400'}`}>
-            {operationalCount > 0 ? `${uptime.toFixed(1)}%` : '—'}
-          </span>
+          {operationalCount > 0 ? (
+            <span className={`font-medium ${uptime >= 99 ? 'text-emerald-300' : uptime >= 95 ? 'text-amber-300' : 'text-rose-300'}`}>
+              {uptime.toFixed(1)}%
+            </span>
+          ) : (
+            <span className="text-slate-500">—</span>
+          )}
         </div>
         <div className="w-16 text-right text-slate-400">
           {latencyStats.median > 0 ? `${latencyStats.median}ms` : '—'}
@@ -555,9 +520,9 @@ function GroupCard({
   const healthyCount = memberStats.filter(s => s.status === 'up').length;
   const downCount = memberStats.filter(s => s.status === 'down' || s.status === 'degraded').length;
   const healthTone = downCount > 0
-    ? 'text-rose-400'
+    ? 'text-rose-300'
     : healthyCount === members.length && members.length > 0
-      ? 'text-emerald-400/90'
+      ? 'text-emerald-300'
       : 'text-slate-500';
 
   // While filtering, only show the members that match (fall back to all if
@@ -573,16 +538,14 @@ function GroupCard({
   const hiddenMemberCount = members.length - visibleMembers.length;
 
   return (
-    <div className={`rounded-xl border transition-all ${
-      isSelected ? 'border-indigo-500/40 bg-indigo-500/5' : isChecked ? 'border-cyan-500/20 bg-cyan-500/5' : 'border-white/[0.06] bg-slate-900/30'
-    }`}>
+    <div>
       {/* Group Header */}
       <div
         onClick={onClick}
-        className="flex items-center gap-3 px-3 py-2.5 cursor-pointer group"
+        className={`group flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors ${rowStateClass(isSelected, isChecked)}`}
       >
-        <SelectCheckbox 
-          checked={isChecked} 
+        <SelectCheckbox
+          checked={isChecked}
           onChange={onToggleSelect}
           visible={selectionMode}
           label={`Select ${monitor.name}`}
@@ -590,22 +553,15 @@ function GroupCard({
         {/* Expand Button */}
         <button
           onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-          className="rounded p-1 hover:bg-slate-700 transition-colors"
+          className="-mx-1 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-well-hover hover:text-white"
         >
-          <svg 
-            className={`h-4 w-4 text-indigo-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
+          <ChevronRight
+            className={`h-4 w-4 transition-transform ${expanded ? 'rotate-90' : ''}`}
+            strokeWidth={1.75}
+          />
         </button>
 
-        {/* Group Icon */}
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-indigo-500/20">
-          <svg className="h-4 w-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-          </svg>
-        </div>
+        <StatusDot status={status} />
 
         {/* Name */}
         <div className="flex-1 min-w-0">
@@ -619,12 +575,12 @@ function GroupCard({
                   <TagPill key={tag} tag={tag} size="xs" />
                 ))}
                 {monitor.tags.length > 2 && (
-                  <span className="text-[9px] text-slate-500">+{monitor.tags.length - 2}</span>
+                  <span className="text-[11px] text-slate-500">+{monitor.tags.length - 2}</span>
                 )}
               </div>
             )}
           </div>
-          <p className="text-[10px] text-slate-500 mt-0.5">
+          <p className="mt-0.5 text-xs text-slate-500">
             <span className={healthTone}>{healthyCount}/{members.length} healthy</span>
             {' · '}{operationalCount > 0 ? `${uptime.toFixed(1)}%` : 'N/A'} uptime
           </p>
@@ -645,12 +601,11 @@ function GroupCard({
             return <div key={m.id} className={`h-2 w-2 rounded-full ${dotColor}`} title={m.name} />;
           })}
           {members.length > 8 && (
-            <span className="text-[10px] text-slate-500">+{members.length - 8}</span>
+            <span className="text-[11px] text-slate-500">+{members.length - 8}</span>
           )}
         </div>
-
-        {/* Status */}
-        <StatusDot status={status} />
+        {/* Keeps the member dots over the check-bars column, clear of the stat columns. */}
+        <div className="hidden w-[216px] flex-shrink-0 md:block" />
 
         {/* Actions */}
         <div className="flex items-center gap-1 opacity-100 transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
@@ -666,19 +621,19 @@ function GroupCard({
 
       {/* Expanded Children */}
       {expanded && visibleMembers.length > 0 && (
-        <div className="dashboard-scroll max-h-[60vh] overflow-y-auto overscroll-contain border-t border-white/[0.04] px-3 py-3">
+        <div className="dashboard-scroll max-h-[60vh] overflow-y-auto overscroll-contain border-t border-divider bg-well pl-7 ![scrollbar-gutter:auto]">
           {hiddenMemberCount > 0 && (
-            <p className="mb-2 ml-5 pl-2.5 text-[10px] text-slate-500">
+            <p className="px-4 pb-1 pt-2.5 text-xs text-slate-500">
               Showing {visibleMembers.length} matching of {members.length} members
             </p>
           )}
-          <div className="ml-5 space-y-1.5 border-l border-white/[0.08] pl-2.5">
+          <div className="divide-y divide-divider">
           {visibleMembers.map((member) => {
             const memberKey = `${monitor.id}:${member.id}`;
             if (member.type === 'group') {
               const cycleDetected = nextVisitedGroupIDs.has(member.id);
               return (
-                <div key={memberKey} className="space-y-1">
+                <div key={memberKey}>
                   {cycleDetected ? (
                     <>
                       <MonitorRow
@@ -694,7 +649,7 @@ function GroupCard({
                         selectionMode={selectionMode}
                         isChild
                       />
-                      <p className="ml-6 text-[10px] text-rose-400">
+                      <p className="px-4 pb-2.5 text-xs text-rose-300">
                         Cycle detected in group nesting. Expansion stopped.
                       </p>
                     </>
@@ -850,7 +805,7 @@ function DetailPanel({
 
   if (!monitor) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-xl border border-white/[0.06] bg-slate-900/40 p-6">
+      <div className="glass flex h-64 items-center justify-center p-6">
         <p className="text-sm text-slate-500">Select a monitor</p>
       </div>
     );
@@ -882,286 +837,280 @@ function DetailPanel({
     return null;
   };
 
+  const sectionTitle = 'mb-2 text-xs font-medium text-slate-400';
+  const meterTrack = 'mt-2 h-1 overflow-hidden rounded-full bg-well-hover';
+
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-slate-900/40 overflow-hidden">
+    <div className="glass">
       {/* Header */}
-      <div className="border-b border-white/[0.06] p-4">
-        <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3 px-5 pt-5">
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold text-white">{monitor.name}</h3>
+          {getUrl() ? (
+            <div className="mt-0.5 flex max-w-full">
+              <CopyableTarget
+                value={getUrl() as string}
+                label={monitorTargetLabel(monitor.type)}
+                size="sm"
+                textClassName="text-slate-500"
+              />
+            </div>
+          ) : (
+            <p className="mt-0.5 text-xs text-slate-500">{monitorTypeLabel(monitor.type)}</p>
+          )}
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <StatusDot status={status} />
+          {onClose && (
+            <IconButton icon={<X strokeWidth={1.75} />} label="Close preview" onClick={onClose} />
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-5 p-5">
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-2">
+          <div className="glass-well px-3 py-2.5">
+            <p className="text-xs text-slate-400">Uptime</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-white">{operationalCount > 0 ? `${uptime.toFixed(1)}%` : '—'}</p>
+          </div>
+          <div className="glass-well px-3 py-2.5">
+            <p className="text-xs text-slate-400">Median</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-white">{latencyStats.median ? `${latencyStats.median}ms` : '—'}</p>
+          </div>
+          <div className="glass-well px-3 py-2.5">
+            <p className="text-xs text-slate-400">P95</p>
+            <p className="mt-1 text-lg font-semibold tabular-nums text-white">{latencyStats.p95 ? `${latencyStats.p95}ms` : '—'}</p>
+          </div>
+        </div>
+
+        {/* Response values (HTTP display_fields), shown in full here */}
+        {displayValues.length > 0 && (
           <div>
-            <h3 className="font-medium text-white">{monitor.name}</h3>
-            {getUrl() ? (
-              <div className="mt-0.5 max-w-full">
-                <CopyableTarget
-                  value={getUrl() as string}
-                  label={monitorTargetLabel(monitor.type)}
-                  size="sm"
-                  textClassName="text-slate-500"
-                />
+            <h4 className={sectionTitle}>Response values</h4>
+            <dl className="space-y-1.5 text-xs">
+              {displayValues.map((v) => (
+                <div key={v.path} className="flex items-baseline gap-2">
+                  <dt className="shrink-0 text-slate-500" title={v.path}>{displayValueLabel(v) || v.path}</dt>
+                  <dd className="min-w-0 break-all font-mono text-slate-300">{v.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
+
+        {/* Group Members */}
+        {monitor.type === 'group' && (
+          <div>
+            <h4 className={sectionTitle}>Members ({members.length})</h4>
+            {members.length > 0 && (
+              <>
+                <div className="mb-1.5 flex h-1.5 overflow-hidden rounded-full bg-well-hover">
+                  {memberUp > 0 && (
+                    <div className="bg-emerald-500" style={{ width: `${(memberUp / members.length) * 100}%` }} />
+                  )}
+                  {memberDown > 0 && (
+                    <div className="bg-rose-500" style={{ width: `${(memberDown / members.length) * 100}%` }} />
+                  )}
+                  {memberPaused > 0 && (
+                    <div className="bg-slate-500" style={{ width: `${(memberPaused / members.length) * 100}%` }} />
+                  )}
+                  {memberMaintenance > 0 && (
+                    <div className="bg-sky-500" style={{ width: `${(memberMaintenance / members.length) * 100}%` }} />
+                  )}
+                  {memberOther > 0 && (
+                    <div className="bg-slate-500/50" style={{ width: `${(memberOther / members.length) * 100}%` }} />
+                  )}
+                </div>
+                <p className="mb-2 text-xs text-slate-500">
+                  {[
+                    `${memberUp} up`,
+                    memberDown ? `${memberDown} down` : null,
+                    memberPaused ? `${memberPaused} paused` : null,
+                    memberMaintenance ? `${memberMaintenance} maintenance` : null,
+                    memberOther ? `${memberOther} unknown` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+              </>
+            )}
+            {members.length > 0 ? (
+              <div className="dashboard-scroll -mx-2 max-h-56 space-y-0.5 overflow-y-auto overscroll-contain ![scrollbar-gutter:auto]">
+                {members.map((member) => {
+                  const memberStatus = getEffectiveMonitorStatus(member, memberResults[member.id] || []);
+                  const memberOperational = countOperationalResults(memberResults[member.id] || []);
+                  const memberUptime = calculateUptime(memberResults[member.id] || []);
+                  return (
+                    <button
+                      key={member.id}
+                      onClick={() => onSelectMember?.(member.id)}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well"
+                    >
+                      <StatusDot status={memberStatus} />
+                      <span className="min-w-0 flex-1 truncate text-xs text-slate-300">{member.name}</span>
+                      <span className="text-[11px] tabular-nums text-slate-500">
+                        {memberOperational > 0 ? `${memberUptime.toFixed(1)}%` : '—'}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             ) : (
-              <p className="text-xs text-slate-500 mt-0.5">{monitor.type}</p>
+              <p className="text-xs text-slate-500">No members yet</p>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <StatusDot status={status} />
-            {onClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded p-0.5 text-slate-500 hover:text-white"
-                aria-label="Close preview"
-              >
-                <X className="h-4 w-4" strokeWidth={1.75} />
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-3 divide-x divide-white/[0.06] border-b border-white/[0.06]">
-        <div className="p-3 text-center">
-          <p className="text-lg font-semibold text-white">{operationalCount > 0 ? `${uptime.toFixed(1)}%` : '—'}</p>
-          <p className="text-[10px] text-slate-500">Uptime</p>
-        </div>
-        <div className="p-3 text-center">
-          <p className="text-lg font-semibold text-white">{latencyStats.median || 0}ms</p>
-          <p className="text-[10px] text-slate-500">Median</p>
-        </div>
-        <div className="p-3 text-center">
-          <p className="text-lg font-semibold text-white">{latencyStats.p95 || 0}ms</p>
-          <p className="text-[10px] text-slate-500">P95</p>
-        </div>
-      </div>
-
-      {/* Response values (HTTP display_fields), shown in full here */}
-      {displayValues.length > 0 && (
-        <div className="border-b border-white/[0.06] p-4">
-          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Response values</h4>
-          <dl className="space-y-1">
-            {displayValues.map((v) => (
-              <div key={v.path} className="flex items-baseline gap-2 text-xs">
-                <dt className="shrink-0 text-slate-500" title={v.path}>{displayValueLabel(v) || v.path}</dt>
-                <dd className="min-w-0 break-all font-mono text-slate-300">{v.value}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
-
-      {/* Group Members */}
-      {monitor.type === 'group' && (
-        <div className="border-b border-white/[0.06] p-4">
-          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">
-            Members ({members.length})
-          </h4>
-          {members.length > 0 && (
-            <>
-              <div className="mb-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-800">
-                {memberUp > 0 && (
-                  <div className="bg-emerald-500" style={{ width: `${(memberUp / members.length) * 100}%` }} />
-                )}
-                {memberDown > 0 && (
-                  <div className="bg-rose-500" style={{ width: `${(memberDown / members.length) * 100}%` }} />
-                )}
-                {memberPaused > 0 && (
-                  <div className="bg-slate-500" style={{ width: `${(memberPaused / members.length) * 100}%` }} />
-                )}
-                {memberMaintenance > 0 && (
-                  <div className="bg-sky-500" style={{ width: `${(memberMaintenance / members.length) * 100}%` }} />
-                )}
-                {memberOther > 0 && (
-                  <div className="bg-slate-600" style={{ width: `${(memberOther / members.length) * 100}%` }} />
-                )}
-              </div>
-              <p className="mb-2 text-[10px] text-slate-500">
-                {[
-                  `${memberUp} up`,
-                  memberDown ? `${memberDown} down` : null,
-                  memberPaused ? `${memberPaused} paused` : null,
-                  memberMaintenance ? `${memberMaintenance} maintenance` : null,
-                  memberOther ? `${memberOther} unknown` : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </p>
-            </>
-          )}
-          {members.length > 0 ? (
-            <div className="dashboard-scroll max-h-56 space-y-0.5 overflow-y-auto overscroll-contain">
-              {members.map((member) => {
-                const memberStatus = getEffectiveMonitorStatus(member, memberResults[member.id] || []);
-                const memberOperational = countOperationalResults(memberResults[member.id] || []);
-                const memberUptime = calculateUptime(memberResults[member.id] || []);
-                return (
-                  <button
-                    key={member.id}
-                    onClick={() => onSelectMember?.(member.id)}
-                    className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-white/[0.04]"
-                  >
-                    <StatusDot status={memberStatus} />
-                    <span className="min-w-0 flex-1 truncate text-xs text-slate-300">{member.name}</span>
-                    <span className="text-[10px] text-slate-500">
-                      {memberOperational > 0 ? `${memberUptime.toFixed(1)}%` : '—'}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="text-xs text-slate-500">No members yet</p>
-          )}
-        </div>
-      )}
-
-      {/* Agent Metrics Section */}
-      {monitor.type === 'agent' && agentMetrics && (
-        <div className="border-b border-white/[0.06] p-4">
-          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-3">System Metrics</h4>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg bg-slate-800/50 p-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-slate-500">CPU</span>
-                <span className="text-xs font-medium text-cyan-400">{agentMetrics.cpu_percent.toFixed(1)}%</span>
-              </div>
-              <div className="mt-1.5 h-1 rounded-full bg-slate-700 overflow-hidden">
-                <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${agentMetrics.cpu_percent}%` }} />
-              </div>
-            </div>
-            <div className="rounded-lg bg-slate-800/50 p-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-slate-500">Memory</span>
-                <span className="text-xs font-medium text-violet-400">
-                  {((agentMetrics.memory_used / agentMetrics.memory_total) * 100).toFixed(1)}%
-                </span>
-              </div>
-              <div className="mt-1.5 h-1 rounded-full bg-slate-700 overflow-hidden">
-                <div className="h-full bg-violet-500 rounded-full" style={{ width: `${(agentMetrics.memory_used / agentMetrics.memory_total) * 100}%` }} />
-              </div>
-            </div>
-            <div className="rounded-lg bg-slate-800/50 p-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-slate-500">Disk</span>
-                <span className="text-xs font-medium text-emerald-400">
-                  {((agentMetrics.disk_used / agentMetrics.disk_total) * 100).toFixed(1)}%
-                </span>
-              </div>
-              <div className="mt-1.5 h-1 rounded-full bg-slate-700 overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${(agentMetrics.disk_used / agentMetrics.disk_total) * 100}%` }} />
-              </div>
-            </div>
-            <div className="rounded-lg bg-slate-800/50 p-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-slate-500">Load Avg</span>
-                <span className="text-xs font-medium text-amber-400">{agentMetrics.load_avg_1.toFixed(2)}</span>
-              </div>
-              <p className="text-[10px] text-slate-600 mt-1">{agentMetrics.process_count} processes</p>
-            </div>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-            <div className="flex justify-between text-slate-500">
-              <span>Network In</span>
-              <span className="text-slate-400">{formatBytes(agentMetrics.network_bytes_in)}</span>
-            </div>
-            <div className="flex justify-between text-slate-500">
-              <span>Network Out</span>
-              <span className="text-slate-400">{formatBytes(agentMetrics.network_bytes_out)}</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tags */}
-      {monitor.tags && monitor.tags.length > 0 && (
-        <div className="p-4 border-b border-white/[0.06]">
-          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Tags</h4>
-          <div className="flex flex-wrap gap-1.5">
-            {monitor.tags.map((tag) => (
-              <TagPill key={tag} tag={tag} size="sm" />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Config */}
-      <div className="p-4 border-b border-white/[0.06]">
-        <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Config</h4>
-        <div className="space-y-1.5 text-xs">
-          <div className="flex justify-between">
-            <span className="text-slate-500">Interval</span>
-            <span className="text-slate-300">{formatInterval(monitor.interval_seconds)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-slate-500">Timeout</span>
-            <span className="text-slate-300">{monitor.timeout_seconds}s</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-slate-500">Status</span>
-            <span className={monitor.enabled ? 'text-emerald-400' : 'text-slate-500'}>
-              {monitor.enabled ? 'Active' : 'Paused'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {monitor.type === 'prometheus' && (
-        <div className="p-4 border-b border-white/[0.06]">
-          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Prometheus query</h4>
-          <PrometheusDetails monitor={monitor} result={results[0]} size="compact" />
-        </div>
-      )}
-
-      {/* Synthetic Browser Screenshot */}
-      {monitor.type === 'synthetic_browser' && (
-        <div className="p-4 border-b border-white/[0.06]">
-          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Latest failure screenshot</h4>
-          {screenshotLoading ? (
-            <p className="text-xs text-slate-500">Loading screenshot...</p>
-          ) : screenshotBlobURL ? (
-            <div className="overflow-hidden rounded-lg border border-white/[0.08] bg-slate-800/40 p-2">
-              <img
-                src={screenshotBlobURL}
-                alt="Latest synthetic browser failure screenshot"
-                className="h-auto max-h-[220px] w-full rounded-md object-contain"
-                loading="lazy"
-                decoding="async"
-              />
-              <div className="mt-2 text-[10px] text-slate-500">
-                {latestSyntheticBrowserResult ? formatTimeAgo(latestSyntheticBrowserResult.created_at) : 'Latest run'}
-              </div>
-            </div>
-          ) : (
-            <p className="text-xs text-slate-500">No screenshot available yet.</p>
-          )}
-        </div>
-      )}
-
-      {/* Recent Results */}
-      <div className="p-4">
-        <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Recent</h4>
-        {results.length > 0 ? (
-          <div className="space-y-1">
-            {results.slice(0, 5).map((r, i) => (
-              <div key={i} className="flex items-center justify-between text-xs py-1">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      isPlatformResult(r) ? 'bg-slate-500' : r.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
-                    }`}
-                  />
-                  <span className="text-slate-500">{formatTimeAgo(r.created_at)}</span>
-                </div>
-                <span className="text-slate-400">{r.latency_ms || 0}ms</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500 text-center py-2">No results</p>
         )}
-      </div>
 
-      {/* View Details */}
-      <div className="p-3 border-t border-white/[0.06]">
+        {/* Agent Metrics Section */}
+        {monitor.type === 'agent' && agentMetrics && (
+          <div>
+            <h4 className={sectionTitle}>System metrics</h4>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="glass-well p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400">CPU</span>
+                  <span className="text-xs font-medium tabular-nums text-white">{agentMetrics.cpu_percent.toFixed(1)}%</span>
+                </div>
+                <div className={meterTrack}>
+                  <div className="h-full rounded-full bg-sky-500" style={{ width: `${agentMetrics.cpu_percent}%` }} />
+                </div>
+              </div>
+              <div className="glass-well p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400">Memory</span>
+                  <span className="text-xs font-medium tabular-nums text-white">
+                    {((agentMetrics.memory_used / agentMetrics.memory_total) * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <div className={meterTrack}>
+                  <div className="h-full rounded-full bg-sky-500" style={{ width: `${(agentMetrics.memory_used / agentMetrics.memory_total) * 100}%` }} />
+                </div>
+              </div>
+              <div className="glass-well p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400">Disk</span>
+                  <span className="text-xs font-medium tabular-nums text-white">
+                    {((agentMetrics.disk_used / agentMetrics.disk_total) * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <div className={meterTrack}>
+                  <div className="h-full rounded-full bg-sky-500" style={{ width: `${(agentMetrics.disk_used / agentMetrics.disk_total) * 100}%` }} />
+                </div>
+              </div>
+              <div className="glass-well p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400">Load avg</span>
+                  <span className="text-xs font-medium tabular-nums text-white">{agentMetrics.load_avg_1.toFixed(2)}</span>
+                </div>
+                <p className="mt-1.5 text-[11px] text-slate-500">{agentMetrics.process_count} processes</p>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+              <div className="flex justify-between text-slate-500">
+                <span>Network in</span>
+                <span className="tabular-nums text-slate-300">{formatBytes(agentMetrics.network_bytes_in)}</span>
+              </div>
+              <div className="flex justify-between text-slate-500">
+                <span>Network out</span>
+                <span className="tabular-nums text-slate-300">{formatBytes(agentMetrics.network_bytes_out)}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tags */}
+        {monitor.tags && monitor.tags.length > 0 && (
+          <div>
+            <h4 className={sectionTitle}>Tags</h4>
+            <div className="flex flex-wrap gap-1.5">
+              {monitor.tags.map((tag) => (
+                <TagPill key={tag} tag={tag} size="sm" />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Config */}
+        <div>
+          <h4 className={sectionTitle}>Config</h4>
+          <div className="space-y-1.5 text-xs">
+            <div className="flex justify-between">
+              <span className="text-slate-500">Interval</span>
+              <span className="text-slate-300">{formatInterval(monitor.interval_seconds)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Timeout</span>
+              <span className="tabular-nums text-slate-300">{monitor.timeout_seconds}s</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Status</span>
+              <span className={monitor.enabled ? 'text-emerald-300' : 'text-slate-500'}>
+                {monitor.enabled ? 'Active' : 'Paused'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {monitor.type === 'prometheus' && (
+          <div>
+            <h4 className={sectionTitle}>Prometheus query</h4>
+            <PrometheusDetails monitor={monitor} result={results[0]} size="compact" />
+          </div>
+        )}
+
+        {/* Synthetic Browser Screenshot */}
+        {monitor.type === 'synthetic_browser' && (
+          <div>
+            <h4 className={sectionTitle}>Latest failure screenshot</h4>
+            {screenshotLoading ? (
+              <p className="text-xs text-slate-500">Loading screenshot...</p>
+            ) : screenshotBlobURL ? (
+              <div className="glass-well overflow-hidden p-2">
+                {/* A blob: URL from an authenticated fetch, which next/image cannot load. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={screenshotBlobURL}
+                  alt="Latest synthetic browser failure screenshot"
+                  className="h-auto max-h-[220px] w-full rounded-lg object-contain"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <div className="mt-2 text-[11px] text-slate-500">
+                  {latestSyntheticBrowserResult ? formatTimeAgo(latestSyntheticBrowserResult.created_at) : 'Latest run'}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">No screenshot available yet.</p>
+            )}
+          </div>
+        )}
+
+        {/* Recent Results */}
+        <div>
+          <h4 className={sectionTitle}>Recent</h4>
+          {results.length > 0 ? (
+            <div className="space-y-1">
+              {results.slice(0, 5).map((r, i) => (
+                <div key={i} className="flex items-center justify-between py-1 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        isPlatformResult(r) ? 'bg-slate-500' : r.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
+                      }`}
+                    />
+                    <span className="text-slate-500">{formatTimeAgo(r.created_at)}</span>
+                  </div>
+                  <span className="tabular-nums text-slate-400">{r.latency_ms || 0}ms</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="py-2 text-center text-xs text-slate-500">No results</p>
+          )}
+        </div>
+
+        {/* View Details */}
         <Button variant="ghost" size="sm" className="w-full" asChild>
           <Link href={`/monitors/${monitor.id}`}>View details</Link>
         </Button>
@@ -1170,12 +1119,34 @@ function DetailPanel({
   );
 }
 
+// Column labels, laid out on the same flex track as MonitorRow so they sit
+// over its stat columns. Only shown where those columns are.
+function ListHeader({ selectionMode }: { selectionMode: boolean }) {
+  return (
+    <div className="hidden items-center gap-3 border-b border-divider px-4 py-2.5 text-xs font-medium text-slate-500 md:flex">
+      {selectionMode && <span className="w-4 flex-shrink-0" />}
+      <span className="w-2 flex-shrink-0" />
+      <span className="min-w-0 flex-1">Name</span>
+      <span className="w-[59px]" />
+      <div className="flex items-center gap-4">
+        <span className="w-14 text-right">Uptime</span>
+        <span className="w-16 text-right">Median</span>
+        <span className="w-16 text-right">Last check</span>
+      </div>
+      <span className="w-8 flex-shrink-0" />
+    </div>
+  );
+}
+
 // Loading skeleton
 function LoadingSkeleton() {
   return (
-    <div className="space-y-2">
+    <div className="glass divide-y divide-divider overflow-hidden">
       {[...Array(5)].map((_, i) => (
-        <div key={i} className="h-14 animate-pulse rounded-lg bg-slate-800/50" />
+        <div key={i} className="flex items-center gap-3 px-4 py-4">
+          <span className="h-2 w-2 rounded-full bg-well-hover" />
+          <div className="h-3.5 w-1/3 animate-pulse rounded bg-well-hover" />
+        </div>
       ))}
     </div>
   );
@@ -1792,7 +1763,7 @@ export default function MonitorsPage() {
   ).length;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Header */}
       <PageHeader
         title="Monitors"
@@ -1833,7 +1804,7 @@ export default function MonitorsPage() {
               placeholder="Search…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="input input-sm !pl-8"
+              className="input input-sm h-7 py-0 !pl-8"
             />
           </div>
 
@@ -1918,18 +1889,13 @@ export default function MonitorsPage() {
 
         {/* Type Filter Dropdown */}
         {showTypeFilter && typeCounts.length > 0 && (
-          <div className="rounded-xl border border-white/[0.06] bg-slate-900/60 p-3 backdrop-blur-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
-                Filter by type
-              </span>
+          <div className="glass p-4">
+            <div className="mb-3 flex h-7 items-center justify-between">
+              <span className="text-[13px] font-medium text-slate-300">Filter by type</span>
               {selectedTypes.size > 0 && (
-                <button
-                  onClick={() => setSelectedTypes(new Set())}
-                  className="text-[10px] text-slate-400 hover:text-white transition-colors"
-                >
+                <Button variant="subtle" size="xs" onClick={() => setSelectedTypes(new Set())}>
                   Clear all
-                </button>
+                </Button>
               )}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -1949,18 +1915,13 @@ export default function MonitorsPage() {
 
         {/* Tag Filter Dropdown */}
         {showTagFilter && allTags.length > 0 && (
-          <div className="rounded-xl border border-white/[0.06] bg-slate-900/60 p-3 backdrop-blur-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
-                Filter by tags
-              </span>
+          <div className="glass p-4">
+            <div className="mb-3 flex h-7 items-center justify-between">
+              <span className="text-[13px] font-medium text-slate-300">Filter by tags</span>
               {selectedTags.size > 0 && (
-                <button
-                  onClick={clearTagFilters}
-                  className="text-[10px] text-slate-400 hover:text-white transition-colors"
-                >
+                <Button variant="subtle" size="xs" onClick={clearTagFilters}>
                   Clear all
-                </button>
+                </Button>
               )}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -1980,10 +1941,12 @@ export default function MonitorsPage() {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center justify-between rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2">
-          <p className="text-xs text-rose-400">{error}</p>
-          <Button variant="danger" size="xs" onClick={loadMonitors}>Retry</Button>
-        </div>
+        <Callout
+          tone="danger"
+          action={<Button variant="danger" size="xs" onClick={loadMonitors}>Retry</Button>}
+        >
+          {error}
+        </Callout>
       )}
 
       {/* Content */}
@@ -1992,17 +1955,17 @@ export default function MonitorsPage() {
       ) : monitors.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className={`grid gap-5 ${selectedMonitor ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : ''}`}>
+        <div className={`grid gap-6 ${selectedMonitor ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : ''}`}>
           {/* Monitor List */}
-          <div className="min-w-0 space-y-2">
+          <div className="glass min-w-0 self-start overflow-hidden">
             {/* Bulk actions bar (selection mode is entered from the filter row) */}
             {selectionMode && filteredMonitors.length > 0 && (
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+              <div className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-3">
                 {/* Selection mode toggle */}
                 <Button
-                  variant={selectionMode ? 'accent' : 'ghost'}
+                  variant="ghost"
                   size="xs"
-                  icon={<CheckSquare strokeWidth={1.75} />}
+                  icon={<X strokeWidth={1.75} />}
                   onClick={() => {
                     if (selectionMode) {
                       clearSelection();
@@ -2017,17 +1980,17 @@ export default function MonitorsPage() {
                 {/* Selection actions - only show when in selection mode */}
                 {selectionMode && (
                   <>
-                    <div className="h-4 w-px bg-white/[0.08]" />
-
                     <Button variant="ghost" size="xs" onClick={toggleSelectAllFiltered}>
                       {allFilteredSelected ? 'Deselect all' : 'Select all'}
                     </Button>
 
                     {selectedMonitorIds.size > 0 && (
                       <>
-                        <Pill tone="info" size="xs">{selectedMonitorIds.size} selected</Pill>
+                        <span className="px-1 text-xs font-medium tabular-nums text-slate-300">
+                          {selectedMonitorIds.size} selected
+                        </span>
 
-                        <div className="h-4 w-px bg-white/[0.08]" />
+                        <div className="h-4 w-px bg-divider" />
 
                         {/* Group creation */}
                         <div className="flex items-center gap-1.5">
@@ -2036,7 +1999,7 @@ export default function MonitorsPage() {
                             placeholder="New group name..."
                             value={groupNameInput}
                             onChange={(e) => setGroupNameInput(e.target.value)}
-                            className="input input-xs h-7 w-32 text-[10px]"
+                            className="input input-xs h-7 !w-32"
                           />
                           <Button
                             variant="ghost"
@@ -2054,7 +2017,7 @@ export default function MonitorsPage() {
                           <select
                             value={targetGroupId}
                             onChange={(e) => setTargetGroupId(e.target.value)}
-                            className="input input-xs h-7 w-36 text-[10px]"
+                            className="input input-xs h-7 !w-36"
                           >
                             <option value="">Move to group...</option>
                             <option value={NO_GROUP_VALUE}>No group</option>
@@ -2075,7 +2038,7 @@ export default function MonitorsPage() {
                           </Button>
                         </div>
 
-                        <div className="h-4 w-px bg-white/[0.08]" />
+                        <div className="h-4 w-px bg-divider" />
 
                         <Button
                           variant="ghost"
@@ -2101,59 +2064,61 @@ export default function MonitorsPage() {
               </div>
             )}
             
+            {filteredMonitors.length > 0 && <ListHeader selectionMode={selectionMode} />}
+
             {filteredMonitors.length === 0 ? (
-              <div className="rounded-lg border border-white/[0.06] p-6 text-center">
-                <p className="text-xs text-slate-500">No monitors match filters</p>
-              </div>
+              <p className="px-5 py-10 text-center text-sm text-slate-500">No monitors match filters</p>
             ) : (
-              filteredMonitors.map((monitor) => (
-                monitor.type === 'group' ? (
-                  <GroupCard
-                    key={monitor.id}
-                    monitor={monitor}
-                    results={checkResultsMap[monitor.id] || []}
-                    members={groupMembersMap[monitor.id] || []}
-                    groupMembersMap={groupMembersMap}
-                    memberResults={checkResultsMap}
-                    isSelected={monitor.id === selectedMonitorId}
-                    isChecked={selectedMonitorIds.has(monitor.id)}
-                    onToggleSelect={() => toggleMonitorSelection(monitor.id)}
-                    onToggleMonitorSelection={toggleMonitorSelection}
-                    onDeleteMonitor={requestDeleteById}
-                    onToggleEnabled={handleToggleEnabled}
-                    onSnooze={handleSnooze}
-                    selectionMode={selectionMode}
-                    onClick={() => setSelectedMonitorId(monitor.id)}
-                    onDelete={() => requestDeleteById(monitor.id)}
-                    onSelectMonitor={selectMonitor}
-                    selectedMonitorId={selectedMonitorId}
-                    selectedMonitorIds={selectedMonitorIds}
-                    autoExpand={hasActiveFilters && groupHasMatchingMember(monitor.id)}
-                    memberMatcher={hasActiveFilters ? monitorMatchesFilters : undefined}
-                    groupHasMatch={(groupId) => groupHasMatchingMember(groupId)}
-                  />
-                ) : (
-                  <MonitorRow
-                    key={monitor.id}
-                    monitor={monitor}
-                    results={checkResultsMap[monitor.id] || []}
-                    isSelected={monitor.id === selectedMonitorId}
-                    isChecked={selectedMonitorIds.has(monitor.id)}
-                    onToggleSelect={() => toggleMonitorSelection(monitor.id)}
-                    selectionMode={selectionMode}
-                    onClick={() => selectMonitor(monitor.id)}
-                    onDelete={() => requestDeleteById(monitor.id)}
-                    onToggleEnabled={handleToggleEnabled}
-                    onSnooze={handleSnooze}
-                  />
-                )
-              ))
+              <div className="divide-y divide-divider">
+                {filteredMonitors.map((monitor) => (
+                  monitor.type === 'group' ? (
+                    <GroupCard
+                      key={monitor.id}
+                      monitor={monitor}
+                      results={checkResultsMap[monitor.id] || []}
+                      members={groupMembersMap[monitor.id] || []}
+                      groupMembersMap={groupMembersMap}
+                      memberResults={checkResultsMap}
+                      isSelected={monitor.id === selectedMonitorId}
+                      isChecked={selectedMonitorIds.has(monitor.id)}
+                      onToggleSelect={() => toggleMonitorSelection(monitor.id)}
+                      onToggleMonitorSelection={toggleMonitorSelection}
+                      onDeleteMonitor={requestDeleteById}
+                      onToggleEnabled={handleToggleEnabled}
+                      onSnooze={handleSnooze}
+                      selectionMode={selectionMode}
+                      onClick={() => setSelectedMonitorId(monitor.id)}
+                      onDelete={() => requestDeleteById(monitor.id)}
+                      onSelectMonitor={selectMonitor}
+                      selectedMonitorId={selectedMonitorId}
+                      selectedMonitorIds={selectedMonitorIds}
+                      autoExpand={hasActiveFilters && groupHasMatchingMember(monitor.id)}
+                      memberMatcher={hasActiveFilters ? monitorMatchesFilters : undefined}
+                      groupHasMatch={(groupId) => groupHasMatchingMember(groupId)}
+                    />
+                  ) : (
+                    <MonitorRow
+                      key={monitor.id}
+                      monitor={monitor}
+                      results={checkResultsMap[monitor.id] || []}
+                      isSelected={monitor.id === selectedMonitorId}
+                      isChecked={selectedMonitorIds.has(monitor.id)}
+                      onToggleSelect={() => toggleMonitorSelection(monitor.id)}
+                      selectionMode={selectionMode}
+                      onClick={() => selectMonitor(monitor.id)}
+                      onDelete={() => requestDeleteById(monitor.id)}
+                      onToggleEnabled={handleToggleEnabled}
+                      onSnooze={handleSnooze}
+                    />
+                  )
+                ))}
+              </div>
             )}
           </div>
 
           {/* Detail Panel */}
           {selectedMonitor && <div className="hidden lg:block">
-            <div className="dashboard-scroll sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto overscroll-contain rounded-xl">
+            <div className="dashboard-scroll sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto overscroll-contain rounded-2xl ![scrollbar-gutter:auto]">
               <DetailPanel
                 monitor={selectedMonitor}
                 results={selectedMonitor ? checkResultsMap[selectedMonitor.id] || [] : []}

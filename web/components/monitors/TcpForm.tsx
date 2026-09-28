@@ -15,6 +15,7 @@ import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
+import Switch from '@/components/ui/Switch';
 
 interface TcpFormProps {
   monitor?: Monitor;
@@ -121,9 +122,9 @@ export default function TcpForm({
           />
         </FormField>
 
-        <div className="grid grid-cols-3 gap-4">
-          <div className="col-span-2">
-            <FormField label="Host" required error={errors.host} description="Hostname or IP address to connect to">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="sm:col-span-2">
+            <FormField label="Host" required error={errors.host}>
               <input
                 type="text"
                 value={formData.host}
@@ -131,10 +132,11 @@ export default function TcpForm({
                 placeholder="db.internal.example.com"
                 className="input"
               />
+              <p className="mt-1 text-xs text-slate-500">Hostname or IP address to connect to</p>
             </FormField>
           </div>
 
-          <FormField label="Port" required error={errors.port} description="TCP port, e.g. 5432">
+          <FormField label="Port" required error={errors.port}>
             <input
               type="number"
               value={formData.port || ''}
@@ -144,61 +146,32 @@ export default function TcpForm({
               placeholder="5432"
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">TCP port, e.g. 5432</p>
           </FormField>
         </div>
 
-        <FormField label="TLS handshake" description="Also complete a TLS handshake after connecting">
-          <div className="flex h-10 items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-3">
-            <span className={`text-sm ${formData.use_tls ? 'text-cyan-300' : 'text-slate-400'}`}>
-              {formData.use_tls ? 'Enabled' : 'Disabled'}
-            </span>
-            <button
-              type="button"
-              onClick={() => setFormData({ ...formData, use_tls: !formData.use_tls })}
-              className={`relative h-5 w-9 rounded-full transition-colors ${
-                formData.use_tls ? 'bg-cyan-500' : 'bg-slate-700'
-              }`}
-              aria-pressed={formData.use_tls}
-              aria-label="Toggle TLS handshake"
-            >
-              <span
-                className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                  formData.use_tls ? 'translate-x-4' : ''
-                }`}
-              />
-            </button>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">TLS handshake</p>
+            <p className="text-xs text-slate-500">Also complete a TLS handshake after connecting</p>
           </div>
-        </FormField>
+          <Switch checked={formData.use_tls} onChange={() => setFormData({ ...formData, use_tls: !formData.use_tls })} label="Toggle TLS handshake" />
+        </div>
 
         {formData.use_tls && (
-          <FormField label="Skip certificate verification" description="Accept self-signed or mismatched certificates">
-            <div className="flex h-10 items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-3">
-              <span className={`text-sm ${formData.tls_skip_verify ? 'text-amber-300' : 'text-slate-400'}`}>
-                {formData.tls_skip_verify ? 'Verification off' : 'Verification on'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })}
-                className={`relative h-5 w-9 rounded-full transition-colors ${
-                  formData.tls_skip_verify ? 'bg-amber-500' : 'bg-slate-700'
-                }`}
-                aria-pressed={formData.tls_skip_verify}
-                aria-label="Toggle certificate verification"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                    formData.tls_skip_verify ? 'translate-x-4' : ''
-                  }`}
-                />
-              </button>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-200">Skip certificate verification</p>
+              <p className="text-xs text-slate-500">Accept self-signed or mismatched certificates</p>
             </div>
-          </FormField>
+            <Switch checked={formData.tls_skip_verify} onChange={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })} label="Toggle certificate verification" tone="warning" />
+          </div>
         )}
       </FormSection>
 
       <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Interval (seconds)" description="How often to check">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Interval (seconds)">
             <input
               type="number"
               value={formData.interval_seconds}
@@ -212,7 +185,6 @@ export default function TcpForm({
           <FormField
             label="Timeout (seconds)"
             error={errors.timeout_seconds}
-            description="Must be less than interval"
           >
             <input
               type="number"
@@ -221,6 +193,7 @@ export default function TcpForm({
               min={1}
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
           </FormField>
         </div>
       </FormSection>
@@ -256,7 +229,7 @@ export default function TcpForm({
       </FormSection>
 
       <FormSection title="Meta">
-        <FormField label="Tags" description="Comma-separated, e.g. production, network, critical">
+        <FormField label="Tags">
           <input
             type="text"
             value={formData.tags}
@@ -264,28 +237,15 @@ export default function TcpForm({
             placeholder="production, network, critical"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
         </FormField>
 
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Monitor enabled</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
             <p className="text-xs text-slate-500">Run TCP connect checks on schedule</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle monitor enabled"
-          >
-            <span
-              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                formData.enabled ? 'translate-x-4' : ''
-              }`}
-            />
-          </button>
+          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
         </div>
       </FormSection>
 
@@ -297,7 +257,7 @@ export default function TcpForm({
         }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Update monitor' : 'Create monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',

@@ -1,14 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { CalendarClock, Pencil, Plus, Square, Trash2, Wrench } from 'lucide-react';
+import { CalendarClock, CircleStop, Pencil, Plus, Trash2, Wrench } from 'lucide-react';
 import type { MaintenanceWindow, MaintenanceWindowStatus } from '@/lib/types';
 import { deleteMaintenanceWindow, getMaintenanceWindows, updateMaintenanceWindow } from '@/lib/api';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
-import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
+import Callout from '@/components/ui/Callout';
+import Tabs from '@/components/ui/Tabs';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { MaintenanceWindowModal } from '@/components/maintenance/MaintenanceWindowModal';
@@ -98,7 +99,7 @@ export default function MaintenancePage() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <PageHeader
         title="Maintenance"
         subtitle="Planned windows during which alerts are suppressed. Checks keep running and status pages show maintenance."
@@ -109,29 +110,12 @@ export default function MaintenancePage() {
         }
       />
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-slate-900/50 p-1 w-fit">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`rounded-md px-4 py-1.5 text-xs font-medium transition-colors ${
-              tab === t.id ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
-      {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          {error}
-        </div>
-      )}
+      {error && <Callout tone="danger">{error}</Callout>}
 
       {loading ? (
-        <div className="py-12 text-center text-sm text-slate-500">Loading…</div>
+        <div className="glass p-5 text-sm text-slate-500">Loading…</div>
       ) : windows.length === 0 ? (
         <EmptyState
           icon={<Wrench strokeWidth={1.5} />}
@@ -152,15 +136,15 @@ export default function MaintenancePage() {
           }
         />
       ) : (
-        <div className="space-y-2">
+        <div className="glass divide-y divide-divider overflow-hidden">
           {windows.map((window) => (
             <div
               key={window.id}
-              className="group flex items-center gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3"
+              className="group flex items-center gap-3 px-5 py-3.5 transition-colors hover:bg-well"
             >
               <div
-                className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md ${
-                  window.status === 'active' ? 'bg-sky-500/20' : 'bg-slate-700/40'
+                className={`hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg sm:flex ${
+                  window.status === 'active' ? 'bg-sky-500/[0.14]' : 'bg-well-hover'
                 }`}
               >
                 <CalendarClock
@@ -170,13 +154,8 @@ export default function MaintenancePage() {
               </div>
 
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="truncate text-sm font-medium text-white">{window.title}</span>
-                  <Pill tone={window.status === 'active' ? 'info' : 'neutral'} size="xs">
-                    {window.status === 'active' ? 'In progress' : window.status === 'upcoming' ? 'Scheduled' : 'Ended'}
-                  </Pill>
-                </div>
-                <p className="mt-0.5 text-xs text-slate-500">
+                <p className="break-words text-sm font-medium text-white">{window.title}</p>
+                <p className="mt-0.5 text-[13px] text-slate-400">
                   {formatRange(window.starts_at, window.ends_at)}
                   {window.monitors && window.monitors.length > 0 && (
                     <>
@@ -193,10 +172,10 @@ export default function MaintenancePage() {
                 </p>
               </div>
 
-              <div className="flex flex-shrink-0 items-center gap-1">
+              <div className="flex flex-shrink-0 items-center gap-0.5">
                 {window.status === 'active' && (
                   <IconButton
-                    icon={<Square strokeWidth={1.75} />}
+                    icon={<CircleStop strokeWidth={1.75} />}
                     label="End now"
                     onClick={() => handleEndNow(window)}
                   />

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { BellOff } from 'lucide-react';
 import type { AlertRouting } from '@/lib/types';
+import Callout from '@/components/ui/Callout';
 
 /**
  * Explains an unrouted monitor: what is wrong and where to fix it. Returns
@@ -77,17 +78,11 @@ export function AlertRoutingNotice({ routing, enabled = true }: { routing?: Aler
   if (!described || !enabled) return null;
 
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2.5">
-      <BellOff className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" strokeWidth={1.75} />
-      <div className="min-w-0 text-xs">
-        <p className="font-medium text-amber-200">{described.title}</p>
-        <p className="mt-0.5 text-amber-200/70">
-          {described.detail}{' '}
-          <Link href={described.fixHref} className="text-cyan-400 hover:text-cyan-300">
-            Fix routing
-          </Link>
-        </p>
-      </div>
-    </div>
+    <Callout tone="warning" icon={<BellOff strokeWidth={1.75} />} title={described.title}>
+      {described.detail}{' '}
+      <Link href={described.fixHref} className="font-medium text-cyan-300 hover:text-cyan-200">
+        Fix routing
+      </Link>
+    </Callout>
   );
 }

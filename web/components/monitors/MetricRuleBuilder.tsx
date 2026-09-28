@@ -12,6 +12,7 @@ import {
   ratioToPercent,
 } from '@/lib/metrics';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 
 // Client-side mirror of the server's metric_rules validation.
 const MAX_RULES = 50;
@@ -295,7 +296,7 @@ export default function MetricRuleBuilder({
       </datalist>
 
       {drafts.length === 0 && (
-        <p className="rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3 text-xs text-slate-500">
+        <p className="glass-well px-4 py-3 text-[13px] text-slate-400">
           No metric rules. Alerts open only for missed heartbeats until you add one.
         </p>
       )}
@@ -318,13 +319,11 @@ export default function MetricRuleBuilder({
         return (
           <div
             key={index}
-            className={`space-y-3 rounded-lg border px-4 py-3 ${
-              error ? 'border-rose-500/40 bg-rose-500/5' : 'border-white/[0.06] bg-slate-900/40'
-            }`}
+            className={`glass-well space-y-3 p-4 ${error ? 'ring-1 ring-inset ring-rose-500/40' : ''}`}
           >
             <div className="flex flex-wrap items-end gap-2">
               <div className="min-w-[220px] flex-1">
-                <label className="mb-1 block text-[11px] text-slate-500">
+                <label className="mb-1.5 block text-xs text-slate-400">
                   Metric{curatedLabel ? ` — ${curatedLabel}` : ''}
                 </label>
                 <input
@@ -333,22 +332,22 @@ export default function MetricRuleBuilder({
                   value={draft.metric_name}
                   onChange={(e) => updateDraft(index, { metric_name: e.target.value })}
                   placeholder="system.cpu.utilization"
-                  className="input input-xs w-full font-mono"
+                  className="input input-sm h-9 font-mono"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] text-slate-500">Operator</label>
+                <label className="mb-1.5 block text-xs text-slate-400">Operator</label>
                 <select
                   value={draft.operator}
                   onChange={(e) => updateDraft(index, { operator: e.target.value as MetricRuleDraft['operator'] })}
-                  className="input input-xs"
+                  className="input input-sm h-9"
                 >
                   <option value=">=">≥</option>
                   <option value="<=">≤</option>
                 </select>
               </div>
               <div className="w-28">
-                <label className="mb-1 block text-[11px] text-slate-500">
+                <label className="mb-1.5 block text-xs text-slate-400">
                   Threshold{unitSuffix ? ` (${unitSuffix})` : ''}
                 </label>
                 <input
@@ -357,43 +356,40 @@ export default function MetricRuleBuilder({
                   onChange={(e) => updateDraft(index, { threshold: e.target.value })}
                   placeholder={isUtilization ? 'e.g. 90' : 'value'}
                   step="any"
-                  className="input input-xs w-full"
+                  className="input input-sm h-9"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] text-slate-500">Duration</label>
+                <label className="mb-1.5 block text-xs text-slate-400">Duration</label>
                 <select
                   value={draft.for_duration_seconds}
                   onChange={(e) => updateDraft(index, { for_duration_seconds: Number(e.target.value) })}
-                  className="input input-xs"
+                  className="input input-sm h-9"
                 >
                   {DURATION_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </div>
-              <Button
-                variant="ghost"
-                size="xs"
-                type="button"
-                aria-label="Remove rule"
+              <IconButton
+                icon={<X strokeWidth={1.75} />}
+                label="Remove rule"
+                danger
                 onClick={() => removeDraft(index)}
-              >
-                <X className="h-3.5 w-3.5" strokeWidth={1.75} />
-              </Button>
+              />
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
               {draft.filters.map((filter, filterIndex) => (
                 <span
                   key={`${filter.key}-${filterIndex}`}
-                  className="inline-flex items-center gap-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 font-mono text-[10px] text-cyan-300"
+                  className="inline-flex items-center gap-1 rounded-full bg-well-hover py-0.5 pl-2 pr-1 font-mono text-[11px] text-slate-200"
                 >
                   {filter.key}={filter.value}
                   <button
                     type="button"
                     aria-label={`Remove filter ${filter.key}`}
-                    className="text-cyan-400/70 hover:text-white"
+                    className="rounded-full p-0.5 text-slate-500 transition-colors hover:text-white"
                     onClick={() => removeFilter(index, filterIndex)}
                   >
                     <X className="h-3 w-3" strokeWidth={1.75} />
@@ -405,7 +401,7 @@ export default function MetricRuleBuilder({
                 value={pending.key}
                 onChange={(e) => setPendingFilter(index, { key: e.target.value })}
                 placeholder="key"
-                className="input input-xs w-24 font-mono"
+                className="input input-sm h-7 !w-28 font-mono"
               />
               <input
                 type="text"
@@ -418,7 +414,7 @@ export default function MetricRuleBuilder({
                   }
                 }}
                 placeholder="value"
-                className="input input-xs w-24 font-mono"
+                className="input input-sm h-7 !w-28 font-mono"
               />
               <Button
                 variant="ghost"
@@ -429,17 +425,17 @@ export default function MetricRuleBuilder({
               >
                 Add filter
               </Button>
-              <span className="text-[10px] text-slate-600">
+              <span className="text-xs text-slate-500">
                 No filters = rule applies to every matching series
               </span>
             </div>
 
-            {error && <p className="text-xs text-rose-400">{error}</p>}
+            {error && <p className="text-xs text-rose-300">{error}</p>}
           </div>
         );
       })}
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="ghost"
           size="xs"
@@ -453,7 +449,7 @@ export default function MetricRuleBuilder({
         <Button variant="ghost" size="xs" type="button" onClick={addCommonRules}>
           Add common rules
         </Button>
-        <span className="text-[10px] text-slate-600">
+        <span className="text-xs text-slate-500">
           CPU / Memory / Filesystem ≥ 90%, Swap ≥ 80%
         </span>
       </div>

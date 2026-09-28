@@ -14,6 +14,9 @@ import {
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
+import FormField from '@/components/ui/FormField';
+import Callout from '@/components/ui/Callout';
+import EmptyState from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/ToastProvider';
 
 function formatBytes(bytes: number): string {
@@ -137,22 +140,19 @@ export default function StatusPageTemplateLibraryPage() {
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-500">Loading template library…</div>
+      <div className="animate-pulse space-y-6">
+        <div className="space-y-2">
+          <div className="h-4 w-44 rounded-md bg-well-hover" />
+          <div className="h-8 w-56 rounded-lg bg-well-hover" />
+        </div>
+        <div className="glass h-[72px]" />
+        <span className="sr-only">Loading template library…</span>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".html,.gohtml,.tmpl,.txt"
-        className="hidden"
-        onChange={handleUpload}
-      />
-
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: 'Template library' }]}
         title="Template library"
@@ -169,41 +169,35 @@ export default function StatusPageTemplateLibraryPage() {
         }
       />
 
-      {error && <p className="text-rose-400">{error}</p>}
+      {error && <Callout tone="danger">{error}</Callout>}
 
       {showCreate && (
-        <div className="space-y-4 rounded-xl border border-white/[0.06] bg-slate-900/40 p-4">
+        <div className="glass space-y-4 p-6">
           <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Name
-              </label>
+            <FormField label="Name">
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Aurora light"
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
+                className="input"
               />
-            </div>
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Description (optional)
-              </label>
+            </FormField>
+            <FormField label="Description (optional)">
               <input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Light-first brand template, product-triad hairline"
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
+                className="input"
               />
-            </div>
+            </FormField>
           </div>
           <div>
-            <div className="mb-2 flex items-center justify-between">
-              <label className="block text-xs font-medium uppercase tracking-wider text-slate-500">
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="block text-[13px] font-medium text-slate-300">
                 Template source
               </label>
               <Button
-                variant="ghost"
+                variant="subtle"
                 size="xs"
                 icon={<Upload strokeWidth={1.75} />}
                 onClick={() => fileInputRef.current?.click()}
@@ -216,8 +210,9 @@ export default function StatusPageTemplateLibraryPage() {
               onChange={(e) => setSource(e.target.value)}
               rows={10}
               spellCheck={false}
+              wrap="off"
               placeholder="Paste a Go html/template here, or upload a file"
-              className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
+              className="glass-well block w-full p-3 font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-500/50"
             />
           </div>
           <div className="flex justify-end gap-2">
@@ -237,30 +232,32 @@ export default function StatusPageTemplateLibraryPage() {
         </div>
       )}
 
-      {items.length === 0 && !showCreate ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-white/[0.06] bg-slate-900/40 py-16 text-center">
-          <FileCode className="h-8 w-8 text-slate-600" strokeWidth={1.5} />
-          <p className="text-sm text-slate-400">No templates in the library yet.</p>
-          <p className="max-w-md text-xs text-slate-500">
-            Add one here, or open a status page&apos;s template editor and use “Save to library”
-            to store its current template for reuse.
-          </p>
-        </div>
+      {items.length === 0 ? (
+        !showCreate && (
+          <EmptyState
+            icon={<FileCode strokeWidth={1.5} />}
+            title="No templates in the library yet"
+            description="Add one here, or open a status page's template editor and use “Save to library” to store its current template for reuse."
+          />
+        )
       ) : (
-        <div className="divide-y divide-white/[0.06] rounded-xl border border-white/[0.06] bg-slate-900/40 px-4">
+        <div className="glass divide-y divide-divider overflow-hidden">
           {items.map((item) => (
-            <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
-              <div className="min-w-0">
+            <div
+              key={item.id}
+              className="flex items-center justify-between gap-3 px-5 py-4 transition-colors hover:bg-well"
+            >
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <FileCode className="h-4 w-4 shrink-0 text-cyan-400" strokeWidth={1.75} />
-                  <span className="truncate text-sm font-medium text-slate-200">{item.name}</span>
-                  <span className="text-xs text-slate-500">{formatBytes(item.size_bytes)}</span>
+                  <FileCode className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
+                  <span className="min-w-0 truncate text-sm font-medium text-white">{item.name}</span>
+                  <span className="shrink-0 text-xs text-slate-500">{formatBytes(item.size_bytes)}</span>
                 </div>
                 <div className="mt-0.5 truncate pl-6 text-xs text-slate-500">
                   {item.description || '—'} · updated {new Date(item.updated_at).toLocaleString()}
                 </div>
               </div>
-              <div className="flex items-center gap-0.5">
+              <div className="flex shrink-0 items-center gap-0.5">
                 <IconButton
                   icon={<Pencil strokeWidth={1.75} />}
                   label="Rename"
@@ -289,6 +286,14 @@ export default function StatusPageTemplateLibraryPage() {
         Applying a library template copies its source into a page&apos;s draft — later edits to
         the library entry never change a live page.
       </p>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".html,.gohtml,.tmpl,.txt"
+        className="hidden"
+        onChange={handleUpload}
+      />
     </div>
   );
 }

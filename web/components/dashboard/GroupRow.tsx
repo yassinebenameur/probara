@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, AlertTriangle, CheckCircle2, MinusCircle } from 'lucide-react';
+import { ArrowRight, ChevronDown, AlertTriangle, CheckCircle2, MinusCircle } from 'lucide-react';
 import type { DashboardGroup, DashboardRange } from '@/lib/types';
 import { getDashboardGroupSparkline } from '@/lib/api';
 import GroupSparkline from './GroupSparkline';
@@ -15,12 +15,12 @@ interface Props {
 
 function statusIcon(group: DashboardGroup) {
   if (group.monitor_count === 0) {
-    return <MinusCircle className="h-4 w-4 text-slate-500" strokeWidth={1.8} />;
+    return <MinusCircle className="h-4 w-4 text-slate-500" strokeWidth={1.75} />;
   }
   if (group.attention_count > 0) {
-    return <AlertTriangle className="h-4 w-4 text-amber-300" strokeWidth={1.8} />;
+    return <AlertTriangle className="h-4 w-4 text-amber-400" strokeWidth={1.75} />;
   }
-  return <CheckCircle2 className="h-4 w-4 text-emerald-300" strokeWidth={1.8} />;
+  return <CheckCircle2 className="h-4 w-4 text-emerald-400" strokeWidth={1.75} />;
 }
 
 function statusColor(status: string | null | undefined): string {
@@ -64,37 +64,37 @@ export default function GroupRow({ group, range, filterTags }: Props) {
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="group grid w-full grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-left transition-colors hover:bg-white/[0.03]"
+        className="group grid w-full grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-left transition-colors hover:bg-well"
       >
         {statusIcon(group)}
         <span className="min-w-0 truncate text-sm font-medium text-white">{label}</span>
-        <span className="text-xs tabular-nums text-slate-400">
+        <span className="text-xs tabular-nums text-slate-500">
           {group.monitor_count} monitor{group.monitor_count === 1 ? '' : 's'}
         </span>
-        <span className={`text-sm font-medium tabular-nums ${group.monitor_count === 0 || group.uptime == null ? 'text-slate-500' : group.attention_count > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+        <span className={`text-sm font-medium tabular-nums ${group.monitor_count === 0 || group.uptime == null ? 'text-slate-500' : group.attention_count > 0 ? 'text-amber-300' : 'text-slate-200'}`}>
           {group.monitor_count === 0 || group.uptime == null ? '—' : `${group.uptime.toFixed(2)}%`}
         </span>
-        <ChevronDown className={`h-4 w-4 text-slate-500 transition-all group-hover:text-slate-300 ${open ? 'rotate-180' : ''}`} strokeWidth={2} />
+        <ChevronDown className={`h-4 w-4 text-slate-500 transition-all group-hover:text-slate-300 ${open ? 'rotate-180' : ''}`} strokeWidth={1.75} />
       </button>
 
       {open && (
-        <div className="bg-slate-950/35 px-5 pb-4">
+        <div className="bg-well px-5 pb-4 pt-1">
           {group.members.length === 0 ? (
             <p className="py-2 text-sm text-slate-500">No monitors in this group.</p>
           ) : (
             <ul className="space-y-1.5 py-2">
               {group.members.map((m) => (
-                <li key={m.monitor_id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 text-sm">
+                <li key={m.monitor_id} className="grid grid-cols-[minmax(0,1fr)_4.5rem_3.5rem] items-center gap-3 text-sm">
                   <Link
                     href={`/monitors/${m.monitor_id}`}
                     className="truncate text-slate-200 transition-colors hover:text-cyan-300"
                   >
                     {m.monitor_name}
                   </Link>
-                  <span className={`tabular-nums ${m.uptime == null ? 'text-slate-500' : 'text-slate-400'}`}>
+                  <span className={`text-right tabular-nums ${m.uptime == null ? 'text-slate-500' : 'text-slate-400'}`}>
                     {m.uptime == null ? '—' : `${m.uptime.toFixed(2)}%`}
                   </span>
-                  <span className={`text-xs ${statusColor(m.current_status)}`}>{m.current_status ?? 'paused'}</span>
+                  <span className={`text-right text-xs ${statusColor(m.current_status)}`}>{m.current_status ?? 'paused'}</span>
                 </li>
               ))}
             </ul>
@@ -106,10 +106,10 @@ export default function GroupRow({ group, range, filterTags }: Props) {
             ) : sparkline && sparkline.length > 0 ? (
               <GroupSparkline buckets={sparkline} />
             ) : (
-              <span className="text-xs text-slate-600">No sparkline data</span>
+              <span className="text-xs text-slate-500">No sparkline data</span>
             )}
-            <Link href={linkHref} className="text-xs text-cyan-400 transition-colors hover:text-cyan-300">
-              View all {group.monitor_count} →
+            <Link href={linkHref} className="inline-flex items-center gap-1.5 text-xs text-cyan-300 transition-colors hover:text-cyan-200">
+              View all {group.monitor_count} <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.75} />
             </Link>
           </div>
         </div>

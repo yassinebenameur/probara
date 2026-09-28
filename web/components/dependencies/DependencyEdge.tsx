@@ -50,7 +50,7 @@ function DependencyEdgeImpl({
               e.stopPropagation();
               deleteElements({ edges: [{ id }] });
             }}
-            className="nodrag nopan absolute z-10 flex h-6 w-6 items-center justify-center rounded-full border border-rose-500/50 bg-slate-900 text-rose-400 shadow-lg transition-colors hover:bg-rose-500/20"
+            className="nodrag nopan absolute z-10 flex h-6 w-6 items-center justify-center rounded-full border border-rose-500/40 bg-slate-900 text-rose-300 shadow-glass transition-colors hover:border-rose-500/70 hover:text-rose-200"
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               pointerEvents: 'all',

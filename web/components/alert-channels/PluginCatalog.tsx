@@ -18,12 +18,12 @@ export default function PluginCatalog({
 }: PluginCatalogProps) {
   if (manifests.length === 0) {
     return (
-      <p className="text-sm text-slate-400">No alert channel plugins available.</p>
+      <p className="text-sm text-slate-500">No alert channel plugins available.</p>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
       {manifests.map((manifest) => {
         const Icon = iconFor(manifest.icon_key);
         const selected = manifest.type === selectedType;
@@ -33,28 +33,23 @@ export default function PluginCatalog({
             key={manifest.type}
             disabled={disabled}
             onClick={() => onSelect(manifest)}
-            className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-all ${
-              selected
-                ? 'border-cyan-500/50 bg-cyan-500/10'
-                : 'border-white/[0.06] bg-slate-900/40 hover:border-white/[0.1] hover:bg-slate-900/60'
-            } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            className={`glass-well flex items-start gap-3 p-3 text-left transition-colors ${
+              selected ? 'bg-cyan-500/[0.08] ring-1 ring-inset ring-cyan-500/45' : ''
+            } ${
+              disabled
+                ? `cursor-not-allowed ${selected ? '' : 'opacity-40'}`
+                : `cursor-pointer ${selected ? '' : 'hover:bg-well-hover'}`
+            }`}
           >
-            <div
-              className={`rounded-lg p-2 ${
-                selected ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-800/60 text-slate-400'
-              }`}
-            >
-              <Icon className="h-4 w-4" strokeWidth={1.75} />
-            </div>
+            <Icon
+              className={`mt-0.5 h-4 w-4 shrink-0 ${selected ? 'text-cyan-400' : 'text-slate-400'}`}
+              strokeWidth={1.75}
+            />
             <div className="min-w-0">
-              <p
-                className={`text-sm font-medium ${
-                  selected ? 'text-white' : 'text-slate-300'
-                }`}
-              >
+              <p className={`text-[13px] font-medium ${selected ? 'text-white' : 'text-slate-200'}`}>
                 {manifest.display_name}
               </p>
-              <p className="mt-0.5 text-xs text-slate-500">{manifest.description}</p>
+              <p className="mt-0.5 text-xs leading-snug text-slate-500">{manifest.description}</p>
             </div>
           </button>
         );

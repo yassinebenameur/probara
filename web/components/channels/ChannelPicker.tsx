@@ -10,6 +10,9 @@ import {
 } from '@/lib/types';
 import { createAlertChannel, getAlertChannels } from '@/lib/api';
 import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
+import Callout from '@/components/ui/Callout';
+import IconButton from '@/components/ui/IconButton';
+import Pill from '@/components/ui/Pill';
 
 const DELAY_PRESETS = [
   { label: 'Immediately', value: 0 },
@@ -132,18 +135,17 @@ export default function ChannelPicker({
 
   return (
     <div className="space-y-2">
-      {/* Channel list */}
-      <div className="rounded-lg border border-white/[0.06] bg-slate-900/40 overflow-hidden">
+      <div className="glass-well overflow-hidden">
         {loadingChannels ? (
-          <div className="px-4 py-3 text-xs text-slate-500">Loading channels…</div>
+          <div className="px-4 py-3 text-[13px] text-slate-500">Loading channels…</div>
         ) : loadError ? (
-          <div className="px-4 py-3 text-xs text-rose-400">{loadError}</div>
+          <div className="px-4 py-3 text-[13px] text-rose-300">{loadError}</div>
         ) : channels.length === 0 ? (
-          <div className="px-4 py-3 text-xs text-slate-500">
+          <div className="px-4 py-3 text-[13px] text-slate-500">
             No channels configured yet. Create one below.
           </div>
         ) : (
-          <ul className="divide-y divide-white/[0.04]">
+          <ul className="divide-y divide-divider">
             {channels.map((channel) => {
               const isSelected = selectedIds.has(channel.id);
               const assignment = value.find((a) => a.channel_id === channel.id);
@@ -152,49 +154,42 @@ export default function ChannelPicker({
               return (
                 <li
                   key={channel.id}
-                  className={`flex items-center gap-3 px-4 py-2.5 transition-colors ${
-                    isSelected ? 'bg-cyan-500/5' : 'hover:bg-slate-800/40'
-                  }`}
+                  className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-well-hover"
                 >
-                  {/* Checkbox */}
                   <input
                     type="checkbox"
                     id={`channel-${channel.id}`}
                     checked={isSelected}
                     onChange={() => handleToggle(channel)}
-                    className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-800 text-cyan-500 accent-cyan-500 cursor-pointer flex-shrink-0"
+                    className="h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500"
                   />
 
-                  {/* Name + type */}
                   <label
                     htmlFor={`channel-${channel.id}`}
-                    className="flex flex-1 items-center gap-2 cursor-pointer min-w-0"
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
                   >
-                    <span className="text-sm text-slate-200 truncate">{channel.name}</span>
-                    <span className="text-xs text-slate-500 uppercase tracking-wide flex-shrink-0">
-                      {channel.type}
-                    </span>
+                    <span className="truncate text-sm text-slate-200">{channel.name}</span>
+                    <span className="flex-shrink-0 text-xs text-slate-500">{channel.type}</span>
                     {isDefault && (
-                      <span className="text-xs text-cyan-400/70 flex-shrink-0">(default)</span>
+                      <span className="flex-shrink-0 text-xs text-slate-400">(default)</span>
                     )}
                     {channel.is_active === false && (
                       <span
-                        className="flex-shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1 text-[10px] uppercase tracking-wide text-amber-300"
+                        className="flex-shrink-0"
                         title="This channel is disabled — selecting it delivers nothing"
                       >
-                        Disabled
+                        <Pill tone="warning" size="xs">Disabled</Pill>
                       </span>
                     )}
                   </label>
 
-                  {/* Delay dropdown */}
                   {showDelays && isSelected && assignment && (
                     <select
                       value={assignment.delay_seconds}
                       onChange={(e) =>
                         handleDelayChange(channel.id, Number(e.target.value))
                       }
-                      className="ml-auto flex-shrink-0 rounded border border-white/[0.08] bg-slate-800 px-2 py-1 text-xs text-slate-300 focus:border-cyan-500/50 focus:outline-none cursor-pointer"
+                      className="input input-sm ml-auto !w-auto flex-shrink-0 cursor-pointer"
                       aria-label={`Delay for ${channel.name}`}
                     >
                       {DELAY_PRESETS.map((preset) => (
@@ -211,27 +206,21 @@ export default function ChannelPicker({
         )}
       </div>
 
-      {/* Inline create panel */}
       {showCreate ? (
-        <div className="rounded-lg border border-white/[0.08] bg-slate-900/60 p-4 space-y-4">
+        <div className="glass-well space-y-4 p-4">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-300">New channel</span>
-            <button
-              type="button"
+            <span className="text-[15px] font-semibold text-white">New channel</span>
+            <IconButton
+              icon={<X strokeWidth={1.75} />}
+              label="Close new channel panel"
               onClick={() => {
                 setShowCreate(false);
                 setCreateError(null);
               }}
-              className="text-slate-500 hover:text-slate-300 transition-colors"
-              aria-label="Close new channel panel"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            />
           </div>
 
-          {createError && (
-            <p className="text-xs text-rose-400">{createError}</p>
-          )}
+          {createError && <Callout tone="danger">{createError}</Callout>}
 
           <AlertChannelForm
             onSubmit={handleCreateSubmit}
@@ -246,9 +235,9 @@ export default function ChannelPicker({
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+          className="inline-flex items-center gap-1.5 text-[13px] font-medium text-cyan-300 transition-colors hover:text-cyan-200"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-4 w-4" strokeWidth={1.75} />
           New channel
         </button>
       )}

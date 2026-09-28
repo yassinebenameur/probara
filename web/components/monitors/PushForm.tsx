@@ -8,9 +8,11 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import FilterChip from '@/components/ui/FilterChip';
 import { AlertingSection } from './AlertingSection';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
+import Switch from '@/components/ui/Switch';
 
 interface PushFormProps {
   monitor?: Monitor;
@@ -138,8 +140,8 @@ export default function PushForm({
           ) : pushInfo ? (
             <>
               <FormField label="Webhook URL">
-                <div className="flex gap-2">
-                  <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
+                <div className="flex items-center gap-2">
+                  <code className="glass-well flex-1 overflow-x-auto px-3 py-2 font-mono text-xs text-slate-200">
                     {pushInfo.webhook_url}
                   </code>
                   <Button
@@ -154,8 +156,8 @@ export default function PushForm({
               </FormField>
 
               <FormField label="Push token">
-                <div className="flex gap-2">
-                  <code className="flex-1 overflow-x-auto rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-cyan-300">
+                <div className="flex items-center gap-2">
+                  <code className="glass-well flex-1 overflow-x-auto px-3 py-2 font-mono text-xs text-slate-200">
                     {pushInfo.push_token}
                   </code>
                   <Button
@@ -170,7 +172,7 @@ export default function PushForm({
               </FormField>
 
               <FormField label="Example usage">
-                <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-white/[0.06] bg-slate-900/60 px-3 py-2 font-mono text-xs text-slate-300">
+                <pre className="glass-well overflow-x-auto whitespace-pre-wrap px-3 py-2 font-mono text-xs text-slate-300">
                   {pushInfo.example_curl}
                 </pre>
                 <div className="mt-2">
@@ -185,25 +187,25 @@ export default function PushForm({
                 </div>
               </FormField>
 
-              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                <p className="text-xs font-medium text-white">Auto-detected metrics</p>
-                <p className="mt-0.5 text-xs text-slate-400">
+              <div>
+                <p className="text-sm font-medium text-slate-200">Auto-detected metrics</p>
+                <p className="mt-0.5 text-xs text-slate-500">
                   Any additional parameters you send (besides &quot;status&quot; and &quot;error&quot;) will be
                   captured and displayed as metrics. Send latency, CPU, memory, or any custom metrics.
                 </p>
               </div>
 
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-                <p className="text-xs font-medium text-white">Expected timing</p>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  Push every <strong>{pushInfo.interval_seconds}s</strong>. Grace period:{' '}
-                  <strong>{pushInfo.grace_period_seconds}s</strong>. Monitor goes down if no push within{' '}
+              <div>
+                <p className="text-sm font-medium text-slate-200">Expected timing</p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Push every <strong className="font-medium text-slate-300">{pushInfo.interval_seconds}s</strong>. Grace period:{' '}
+                  <strong className="font-medium text-slate-300">{pushInfo.grace_period_seconds}s</strong>. Monitor goes down if no push within{' '}
                   {pushInfo.interval_seconds + pushInfo.grace_period_seconds}s.
                 </p>
               </div>
             </>
           ) : (
-            <p className="text-sm text-rose-400">Failed to load webhook details</p>
+            <Callout tone="danger">Failed to load webhook details</Callout>
           )}
         </FormSection>
 
@@ -233,6 +235,18 @@ export default function PushForm({
             className="input"
           />
         </FormField>
+        {canViewCredentials && isEditMode && monitor && (
+          <div>
+            <Button
+              variant="ghost"
+              type="button"
+              icon={<Link2 strokeWidth={1.75} />}
+              onClick={() => setShowWebhookInfo(true)}
+            >
+              View webhook URL &amp; instructions
+            </Button>
+          </div>
+        )}
       </FormSection>
 
       <FormSection title="Timing">
@@ -240,7 +254,6 @@ export default function PushForm({
           label="Expected interval (seconds)"
           required
           error={errors.expected_interval_seconds}
-          description="How often your service sends a push"
         >
           <div className="mb-2 flex flex-wrap gap-1.5">
             {INTERVAL_PRESETS.map((preset) => (
@@ -261,12 +274,12 @@ export default function PushForm({
             step={5}
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">How often your service sends a push</p>
         </FormField>
 
         <FormField
           label="Grace period (seconds)"
           error={errors.grace_period_seconds}
-          description={`Buffer before marking down. Total window: ${formData.expected_interval_seconds + formData.grace_period_seconds}s`}
         >
           <input
             type="number"
@@ -276,6 +289,7 @@ export default function PushForm({
             step={5}
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Buffer before marking down. Total window: {formData.expected_interval_seconds + formData.grace_period_seconds}s</p>
         </FormField>
       </FormSection>
 
@@ -296,7 +310,7 @@ export default function PushForm({
       </FormSection>
 
       <FormSection title="Meta">
-        <FormField label="Tags" description="Comma-separated, e.g. production, backend, critical">
+        <FormField label="Tags">
           <input
             type="text"
             value={formData.tags}
@@ -304,26 +318,15 @@ export default function PushForm({
             placeholder="production, backend, critical"
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
         </FormField>
 
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Monitor enabled</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
             <p className="text-xs text-slate-500">Accept pushes and track uptime</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle monitor enabled"
-          >
-            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              formData.enabled ? 'translate-x-4' : ''
-            }`} />
-          </button>
+          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
         </div>
       </FormSection>
 
@@ -337,21 +340,6 @@ export default function PushForm({
           type: 'submit',
         }}
       />
-
-      {canViewCredentials && isEditMode && monitor && (
-        <div className="border-t border-white/[0.06] pt-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            type="button"
-            icon={<Link2 strokeWidth={1.75} />}
-            className="w-full justify-center"
-            onClick={() => setShowWebhookInfo(true)}
-          >
-            View webhook URL &amp; instructions
-          </Button>
-        </div>
-      )}
     </form>
   );
 }

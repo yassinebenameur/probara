@@ -10,14 +10,18 @@ interface TabsProps<T extends string> {
 
 export default function Tabs<T extends string>({ tabs, active, onChange }: TabsProps<T>) {
   return (
-    <div className="flex w-fit items-center gap-1 rounded-lg border border-white/[0.06] bg-slate-900/50 p-1">
+    <div role="tablist" className="flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
+          role="tab"
+          aria-selected={active === tab.id}
           onClick={() => onChange(tab.id)}
-          className={`rounded-md px-4 py-1.5 text-xs font-medium transition-colors ${
-            active === tab.id ? 'bg-white/[0.08] text-white' : 'text-slate-400 hover:text-white'
+          className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
+            active === tab.id
+              ? 'bg-glass-strong text-white shadow-glass'
+              : 'text-slate-400 hover:text-slate-100'
           }`}
         >
           {tab.label}

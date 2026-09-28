@@ -37,7 +37,6 @@ export function UptimeHeroGauge({ uptime, hasData, target = DEFAULT_SLA_TARGET }
   const rotationDeg = 90 + GAP_DEG / 2;
 
   const accentColor = isCompliant ? '#ff5a24' : '#f04a5a';
-  const glowClass = isCompliant ? 'uptime-gauge-outer' : 'uptime-gauge-outer--breach';
 
   // Split uptime value into integer and decimal parts for differential sizing
   const uptimeStr = hasData ? uptime.toFixed(3) : '—';
@@ -54,40 +53,18 @@ export function UptimeHeroGauge({ uptime, hasData, target = DEFAULT_SLA_TARGET }
           viewBox={`0 0 ${SIZE} ${SIZE}`}
           className="overflow-visible"
         >
-          <defs>
-            <filter id="gauge-glow" x="-30%" y="-30%" width="160%" height="160%">
-              <feGaussianBlur stdDeviation="8" result="blur" />
-              <feComposite in="SourceGraphic" in2="blur" operator="over" />
-            </filter>
-            <linearGradient id="gauge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor={accentColor} stopOpacity="0.6" />
-              <stop offset="100%" stopColor={accentColor} stopOpacity="1" />
-            </linearGradient>
-          </defs>
-
           {/* Track ring */}
           <circle
             cx={cx} cy={cy} r={R}
             fill="none"
-            stroke="rgba(255,255,255,0.06)"
-            strokeWidth="14"
+            className="stroke-white/[0.07]"
+            strokeWidth="10"
             strokeLinecap="round"
             strokeDasharray={`${arcLength} ${gapLength}`}
             transform={`rotate(${rotationDeg} ${cx} ${cy})`}
           />
 
-          {/* Inner dark track depth */}
-          <circle
-            cx={cx} cy={cy} r={R}
-            fill="none"
-            stroke="rgba(0,0,0,0.3)"
-            strokeWidth="18"
-            strokeLinecap="butt"
-            strokeDasharray={`${arcLength} ${gapLength}`}
-            transform={`rotate(${rotationDeg} ${cx} ${cy})`}
-          />
-
-          {/* Glow duplicate (blurred, behind main arc) */}
+          {/* Main filled arc */}
           <circle
             cx={cx} cy={cy} r={R}
             fill="none"
@@ -96,22 +73,7 @@ export function UptimeHeroGauge({ uptime, hasData, target = DEFAULT_SLA_TARGET }
             strokeLinecap="round"
             strokeDashoffset="0"
             transform={`rotate(${rotationDeg} ${cx} ${cy})`}
-            filter="url(#gauge-glow)"
-            opacity="0.5"
-            className="animate-gauge-glow-pulse transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
-            style={{ strokeDasharray: `${mounted ? fillLength : 0} ${circumference}` }}
-          />
-
-          {/* Main filled arc */}
-          <circle
-            cx={cx} cy={cy} r={R}
-            fill="none"
-            stroke="url(#gauge-gradient)"
-            strokeWidth="10"
-            strokeLinecap="round"
-            strokeDashoffset="0"
-            transform={`rotate(${rotationDeg} ${cx} ${cy})`}
-            className={`${glowClass} transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)]`}
+            className={`transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)]`}
             style={{ strokeDasharray: `${mounted ? fillLength : 0} ${circumference}` }}
           />
 
@@ -121,18 +83,11 @@ export function UptimeHeroGauge({ uptime, hasData, target = DEFAULT_SLA_TARGET }
             const tipX = cx + R * Math.cos(tipAngle);
             const tipY = cy + R * Math.sin(tipAngle);
             return (
-              <>
-                <circle
-                  cx={tipX} cy={tipY} r="10"
-                  fill={accentColor} opacity="0.3"
-                  className={`transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${mounted ? '' : 'opacity-0'}`}
-                />
-                <circle
-                  cx={tipX} cy={tipY} r="5"
-                  fill={accentColor}
-                  className={`transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${mounted ? '' : 'opacity-0'}`}
-                />
-              </>
+              <circle
+                cx={tipX} cy={tipY} r="5"
+                fill={accentColor}
+                className={`transition-all duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${mounted ? '' : 'opacity-0'}`}
+              />
             );
           })()}
         </svg>

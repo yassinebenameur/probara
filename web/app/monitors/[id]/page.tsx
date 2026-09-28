@@ -2,9 +2,9 @@
 
 import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useRouter, useParams } from 'next/navigation';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import Image from 'next/image';
-import { Trash2 } from 'lucide-react';
+import { AlertTriangle, Trash2 } from 'lucide-react';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
@@ -17,14 +17,20 @@ import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
 import PageHeader from '@/components/ui/PageHeader';
-import FormCard from '@/components/ui/FormCard';
+import Panel from '@/components/ui/Panel';
+import Pill, { PillTone } from '@/components/ui/Pill';
+import Tabs from '@/components/ui/Tabs';
+import Callout from '@/components/ui/Callout';
+import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import ModalPortal from '@/components/ui/ModalPortal';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { getEffectiveMonitorStatus, monitorTargetLabel, MonitorDisplayStatus } from '@/lib/monitor-utils';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
 type TabType = 'overview' | 'history' | 'settings' | 'json';
 
@@ -60,23 +66,47 @@ function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckRe
   );
 }
 
-// Status badge component
-function StatusBadge({ status }: { status: MonitorDisplayStatus }) {
-  const config = {
-    up: { label: 'Operational', bg: 'bg-emerald-500/10', text: 'text-emerald-400', dot: 'bg-emerald-500' },
-    down: { label: 'Down', bg: 'bg-rose-500/10', text: 'text-rose-400', dot: 'bg-rose-500' },
-    degraded: { label: 'Degraded', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
-    paused: { label: 'Paused', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
-    maintenance: { label: 'Maintenance', bg: 'bg-sky-500/10', text: 'text-sky-300', dot: 'bg-sky-500' },
-    unknown: { label: 'Unknown', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
-  };
-  const { label, bg, text, dot } = config[status];
+const STATUS_PILL: Record<MonitorDisplayStatus, { label: string; tone: PillTone }> = {
+  up: { label: 'Operational', tone: 'success' },
+  down: { label: 'Down', tone: 'danger' },
+  degraded: { label: 'Degraded', tone: 'warning' },
+  paused: { label: 'Paused', tone: 'neutral' },
+  maintenance: { label: 'Maintenance', tone: 'info' },
+  unknown: { label: 'Unknown', tone: 'neutral' },
+};
 
+function StatusBadge({ status }: { status: MonitorDisplayStatus }) {
+  const { label, tone } = STATUS_PILL[status];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full ${bg} px-2.5 py-1 text-xs font-medium ${text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+    <Pill tone={tone} dot>
       {label}
-    </span>
+    </Pill>
+  );
+}
+
+// Label/value line in the overview sidebar. Warnings and notes wrap instead
+// of truncating so the whole message stays readable.
+function DetailRow({
+  label,
+  tone = 'default',
+  children,
+}: {
+  label: string;
+  tone?: 'default' | 'warning' | 'note';
+  children: ReactNode;
+}) {
+  const labelClass = tone === 'warning' ? 'text-amber-300' : 'text-slate-400';
+  const valueClass =
+    tone === 'warning'
+      ? 'text-right text-amber-300'
+      : tone === 'note'
+        ? 'text-right text-slate-400'
+        : 'min-w-0 truncate text-right text-slate-200';
+  return (
+    <div className="flex justify-between gap-3">
+      <span className={`shrink-0 ${labelClass}`}>{label}</span>
+      <span className={valueClass}>{children}</span>
+    </div>
   );
 }
 
@@ -101,74 +131,50 @@ function ConfirmHistoryResetModal({
   const canConfirm = confirmationText.trim().toUpperCase() === expectedText && !loading;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-rose-500/20 bg-slate-950 shadow-2xl">
-        <div className="border-b border-white/[0.06] px-6 py-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-rose-400">Danger Zone</p>
-              <h2 className="mt-2 text-lg font-semibold text-white">Clear monitor history</h2>
-              <p className="mt-2 text-sm text-slate-400">
+    <ModalPortal>
+      <div className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="glass-overlay w-full max-w-lg">
+          <div className="flex items-start gap-4 px-6 pt-5">
+            <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/[0.13] text-rose-400">
+              <AlertTriangle className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-white">Clear monitor history</h2>
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-400">
                 {isGroup
                   ? `This will permanently remove checks, alerts, and SLA history for ${monitorName} and every monitor inside that group.`
                   : `This will permanently remove checks, alerts, and SLA history for ${monitorName}, but keep the monitor itself.`}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/[0.16] hover:text-white"
-              disabled={loading}
-            >
-              Close
-            </button>
           </div>
-        </div>
 
-        <div className="space-y-4 px-6 py-5">
-          <div className="rounded-xl border border-rose-500/15 bg-rose-500/5 px-4 py-3 text-sm text-slate-300">
-            <p className="font-medium text-rose-300">This cannot be undone.</p>
-            <p className="mt-1 text-slate-400">
+          <div className="space-y-4 px-6 py-4">
+            <Callout tone="danger" title="This cannot be undone.">
               Dashboard failures, monitor analytics, and public status page history will rebuild only from future checks.
-            </p>
-          </div>
+            </Callout>
 
-          <div>
-            <label className="block text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-              Type {expectedText} to confirm
-            </label>
-            <input
+            <Input
+              label={`Type ${expectedText} to confirm`}
               type="text"
               value={confirmationText}
               onChange={(event) => onConfirmationTextChange(event.target.value)}
-              className="mt-2 w-full rounded-xl border border-white/[0.08] bg-slate-900 px-4 py-3 text-sm text-white outline-none transition-colors focus:border-rose-400/60"
               placeholder={expectedText}
               autoFocus
               disabled={loading}
             />
           </div>
-        </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-white/[0.06] px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-white/[0.08] px-4 py-2 text-sm text-slate-300 transition-colors hover:border-white/[0.16] hover:text-white"
-            disabled={loading}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={!canConfirm}
-            className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-300 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/[0.08] disabled:bg-slate-900 disabled:text-slate-500"
-          >
-            {loading ? 'Clearing…' : isGroup ? 'Clear Group History' : 'Clear History'}
-          </button>
+          <div className="flex items-center justify-end gap-2 px-6 pb-5">
+            <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
+              Cancel
+            </Button>
+            <Button type="button" variant="danger" onClick={onConfirm} disabled={!canConfirm} loading={loading}>
+              {loading ? 'Clearing…' : isGroup ? 'Clear group history' : 'Clear history'}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 }
 
@@ -546,16 +552,16 @@ export default function EditMonitorPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-500">Loading monitor...</div>
+      <div className="flex h-64 items-center justify-center text-sm text-slate-500">
+        Loading monitor...
       </div>
     );
   }
 
   if (error || !monitor) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
-        <p className="text-rose-400">{error || 'Monitor not found'}</p>
+      <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
+        <p className="text-sm text-rose-300">{error || 'Monitor not found'}</p>
         <Button variant="ghost" size="sm" onClick={() => router.push('/monitors')}>
           ← Back to monitors
         </Button>
@@ -598,7 +604,7 @@ export default function EditMonitorPage() {
         }
         subtitle={
           <span className="inline-flex max-w-full flex-wrap items-center gap-x-2">
-            <span className="uppercase">{monitor.type}</span>
+            <span>{monitorTypeLabel(monitor.type)}</span>
             {getUrl() && (
               <>
                 <span aria-hidden="true">·</span>
@@ -620,7 +626,7 @@ export default function EditMonitorPage() {
             <Button
               variant="danger"
               size="sm"
-              icon={<Trash2 strokeWidth={1.75} />}
+              icon={<Trash2 className="h-4 w-4" strokeWidth={1.75} />}
               onClick={() => setConfirmDelete(true)}
             >
               Delete
@@ -631,22 +637,7 @@ export default function EditMonitorPage() {
 
       <AlertRoutingNotice routing={monitor.alert_routing} enabled={monitor.enabled} />
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-slate-900/50 p-1 w-fit">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`rounded-md px-4 py-1.5 text-xs font-medium transition-colors ${
-              activeTab === tab.id
-                ? 'bg-white/[0.08] text-white'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
       {monitor.locations && monitor.locations.length > 0 && (
         <MonitorLocationStrip
@@ -656,36 +647,36 @@ export default function EditMonitorPage() {
       )}
 
       {showRetentionWarning && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-          <p className="text-sm text-amber-300">
-            Data retention is set to {boundedRetentionDays} day{boundedRetentionDays === 1 ? '' : 's'}.
-            Older history is deleted, so this view may be partial.
-          </p>
-        </div>
+        <Callout tone="warning">
+          Data retention is set to {boundedRetentionDays} day{boundedRetentionDays === 1 ? '' : 's'}.
+          Older history is deleted, so this view may be partial.
+        </Callout>
       )}
 
       {monitor.in_maintenance && (
-        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3">
-          <p className="text-sm text-sky-300">
-            Under maintenance
-            {monitor.maintenance_until
-              ? ` until ${new Date(monitor.maintenance_until).toLocaleString()}`
-              : ''}{' '}
-            — alerts are suppressed; checks keep running.
-          </p>
-        </div>
+        <Callout tone="info">
+          Under maintenance
+          {monitor.maintenance_until
+            ? ` until ${new Date(monitor.maintenance_until).toLocaleString()}`
+            : ''}{' '}
+          — alerts are suppressed; checks keep running.
+        </Callout>
       )}
 
-      {/* Content */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
-        {/* Main Content */}
-        <div>
+      <div
+        className={
+          activeTab === 'overview'
+            ? 'grid grid-cols-1 gap-6 min-[1360px]:grid-cols-[minmax(0,1fr)_360px]'
+            : undefined
+        }
+      >
+        <div className="min-w-0">
           {activeTab === 'overview' && (
-              <MonitorDetailOverview
-                monitor={monitor}
-                results={results?.results || []}
-                analytics={analytics}
-                loading={resultsLoading || analyticsLoading}
+            <MonitorDetailOverview
+              monitor={monitor}
+              results={results?.results || []}
+              analytics={analytics}
+              loading={resultsLoading || analyticsLoading}
               agentTimeRange={agentTimeRange}
               onAgentTimeRangeChange={setAgentTimeRange}
               timeRange={overviewRange}
@@ -702,40 +693,31 @@ export default function EditMonitorPage() {
             />
           )}
           {activeTab === 'settings' && (
-            <FormCard>
-              <MonitorForm
-                monitor={monitor}
-                onSubmit={handleSubmit}
-                onCancel={() => router.push('/monitors')}
-                loading={saving}
-              />
-            </FormCard>
+            <MonitorForm
+              monitor={monitor}
+              onSubmit={handleSubmit}
+              onCancel={() => router.push('/monitors')}
+              loading={saving}
+            />
           )}
           {activeTab === 'json' && (
             <MonitorDetailJson monitor={monitor} />
           )}
         </div>
 
-        {/* Sidebar - Quick Stats (visible on overview) */}
+        {/* Sidebar (overview only) */}
         {activeTab === 'overview' && (
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 content-start items-start gap-4 md:grid-cols-2 min-[1360px]:grid-cols-1">
             {monitor.type === 'group' && <GroupMembersCard groupId={monitor.id} />}
 
-            <FormCard className="p-4">
-              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Configuration</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Interval</span>
-                  <span className="text-slate-300">{monitor.interval_seconds}s</span>
-                </div>
-                {monitor.type !== 'group' && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Timeout</span>
-                    <span className="text-slate-300">{monitor.timeout_seconds}s</span>
-                  </div>
+            <Panel title="Configuration">
+              <div className="space-y-2.5 text-sm">
+                <DetailRow label="Interval">{monitor.interval_seconds}s</DetailRow>
+                {monitor.type !== 'group' && monitor.timeout_seconds > 0 && (
+                  <DetailRow label="Timeout">{monitor.timeout_seconds}s</DetailRow>
                 )}
                 {monitor.type === 'prometheus' && (
-                  <div className="border-t border-dashed border-white/[0.06] pt-2">
+                  <div className="border-t border-divider pt-3">
                     <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
                   </div>
                 )}
@@ -789,7 +771,7 @@ export default function EditMonitorPage() {
                           ? {
                               label: 'Replication',
                               value: `${repl.members_healthy}/${repl.members_total} healthy${
-                                repl.max_lag_seconds != null ? ` · lag ${repl.max_lag_seconds}s` : ''
+                                repl.max_lag_seconds != null ? ` · lag ${repl.max_lag_seconds.toFixed(1)}s` : ''
                               }${repl.primary ? ` · primary ${repl.primary}` : ''}`,
                             }
                           : null,
@@ -813,37 +795,26 @@ export default function EditMonitorPage() {
                   );
                   return (
                     <>
-                      {server && (
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Server</span>
-                          <span className="truncate text-right text-slate-300">{server}</span>
-                        </div>
-                      )}
+                      {server && <DetailRow label="Server">{server}</DetailRow>}
                       {mongoRows.map((row) => (
-                        <div key={row.label} className="flex justify-between">
-                          <span className="text-slate-500">{row.label}</span>
-                          <span className="truncate text-right text-slate-300">{row.value}</span>
-                        </div>
+                        <DetailRow key={row.label} label={row.label}>
+                          {row.value}
+                        </DetailRow>
                       ))}
                       {dbMetrics.latency_warn_ms ? (
-                        <div className="flex justify-between">
-                          <span className="text-amber-400">Warning</span>
-                          <span className="text-right text-amber-300">
-                            latency over {dbMetrics.latency_warn_ms}ms threshold
-                          </span>
-                        </div>
+                        <DetailRow label="Warning" tone="warning">
+                          latency over {dbMetrics.latency_warn_ms}ms threshold
+                        </DetailRow>
                       ) : null}
                       {mongoWarnings.map((warning) => (
-                        <div key={warning} className="flex justify-between">
-                          <span className="text-amber-400">Warning</span>
-                          <span className="text-right text-amber-300">{warning}</span>
-                        </div>
+                        <DetailRow key={warning} label="Warning" tone="warning">
+                          {warning}
+                        </DetailRow>
                       ))}
                       {mongoHints.map((hint) => (
-                        <div key={hint} className="flex justify-between gap-2">
-                          <span className="shrink-0 text-slate-500">Note</span>
-                          <span className="text-right text-slate-400">{hint}</span>
-                        </div>
+                        <DetailRow key={hint} label="Note" tone="note">
+                          {hint}
+                        </DetailRow>
                       ))}
                     </>
                   );
@@ -858,56 +829,47 @@ export default function EditMonitorPage() {
                   const target = cfg?.host ? (cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host) : null;
                   return (
                     <>
-                      {target && (
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Target</span>
-                          <span className="truncate text-right text-slate-300">{target}</span>
-                        </div>
-                      )}
+                      {target && <DetailRow label="Target">{target}</DetailRow>}
                       {cfg?.use_tls && (
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">TLS</span>
-                          <span className="text-right text-slate-300">
-                            {tcpMetrics?.tls_version || 'Enabled'}
-                          </span>
-                        </div>
+                        <DetailRow label="TLS">{tcpMetrics?.tls_version || 'Enabled'}</DetailRow>
                       )}
                     </>
                   );
                 })()}
               </div>
-            </FormCard>
+            </Panel>
 
             <MonitorDependenciesCard monitorId={monitor.id} monitorType={monitor.type} />
 
             {monitor.type === 'synthetic_browser' && (
-              <FormCard className="p-4">
-                <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Latest failure screenshot</h3>
+              <Panel title="Latest failure screenshot">
                 {screenshotLoading ? (
-                  <p className="text-xs text-slate-500">Loading screenshot...</p>
+                  <p className="text-[13px] text-slate-400">Loading screenshot...</p>
                 ) : screenshotBlobURL ? (
-                  <div className="overflow-hidden rounded-lg border border-white/[0.08] bg-slate-800/40 p-2">
-                    <Image
-                      src={screenshotBlobURL}
-                      alt="Latest synthetic browser failure screenshot"
-                      width={1200}
-                      height={675}
-                      className="h-auto max-h-[220px] w-full rounded-md object-contain"
-                      unoptimized
-                      loading="lazy"
-                    />
-                    <p className="mt-2 text-[11px] text-slate-500">
+                  <>
+                    <div className="glass-well overflow-hidden p-2">
+                      <Image
+                        src={screenshotBlobURL}
+                        alt="Latest synthetic browser failure screenshot"
+                        width={1200}
+                        height={675}
+                        className="h-auto max-h-[220px] w-full rounded-lg object-contain"
+                        unoptimized
+                        loading="lazy"
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">
                       {latestSyntheticBrowserResult
                         ? `Captured ${new Date(latestSyntheticBrowserResult.created_at).toLocaleString()}`
                         : 'Latest run'}
                     </p>
-                  </div>
+                  </>
                 ) : (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-[13px] text-slate-400">
                     No screenshot available yet. A failed run with screenshot capture enabled is required.
                   </p>
                 )}
-              </FormCard>
+              </Panel>
             )}
           </div>
         )}

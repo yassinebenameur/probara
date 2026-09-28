@@ -6,6 +6,9 @@ import { PanelLeft, Workflow } from 'lucide-react';
 import { DependencyGraph, DependencyMonitor } from '@/lib/types';
 import { getDependencyGraph } from '@/lib/api';
 import { useToast } from '@/components/ui/ToastProvider';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import { ICON_BUTTON_CLASS } from '@/components/ui/IconButton';
 import { apiErrorMessage } from './graphTheme';
 import {
   buildAdjacency,
@@ -166,7 +169,7 @@ export default function DependencyGraphView({ refreshToken = 0 }: { refreshToken
 
   if (loading && !graph) {
     return (
-      <div className="flex h-[calc(100vh-220px)] items-center justify-center rounded-xl border border-white/[0.06] bg-slate-900/50">
+      <div className="glass flex h-[calc(100vh-220px)] items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-slate-500">
           <Workflow className="h-4 w-4 animate-pulse" strokeWidth={1.5} />
           Mapping dependencies…
@@ -177,12 +180,16 @@ export default function DependencyGraphView({ refreshToken = 0 }: { refreshToken
 
   if (error) {
     return (
-      <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+      <Callout
+        tone="danger"
+        action={
+          <Button variant="ghost" size="xs" onClick={loadGraph}>
+            Retry
+          </Button>
+        }
+      >
         {error}
-        <button onClick={loadGraph} className="ml-2 underline hover:no-underline">
-          Retry
-        </button>
-      </div>
+      </Callout>
     );
   }
 
@@ -197,16 +204,18 @@ export default function DependencyGraphView({ refreshToken = 0 }: { refreshToken
 
   return (
     <GraphActionsContext.Provider value={actions}>
-      <div className="relative flex h-[calc(100vh-220px)] overflow-hidden rounded-xl border border-white/[0.06] bg-slate-950/60">
+      <div className="glass relative flex h-[calc(100vh-220px)] overflow-hidden">
         <button
           type="button"
           onClick={() => setRailOpen((v) => !v)}
           title={railOpen ? 'Hide service list' : 'Show service list'}
-          className="absolute left-2 top-2 z-20 flex h-7 w-7 items-center justify-center rounded-lg border border-white/[0.08] bg-slate-900/90 text-slate-400 transition-colors hover:text-slate-200 md:hidden"
+          className={`${ICON_BUTTON_CLASS} absolute left-2 top-2 z-20 border border-edge-control bg-glass-strong md:hidden`}
         >
-          <PanelLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+          <PanelLeft strokeWidth={1.75} />
         </button>
-        <div className={`${railOpen ? 'flex' : 'hidden'} md:flex`}>
+        <div
+          className={`${railOpen ? 'flex' : 'hidden'} absolute inset-y-0 left-0 z-10 bg-slate-900 shadow-overlay md:static md:flex md:bg-transparent md:shadow-none`}
+        >
           <ServiceRail
             entries={railEntries}
             focusId={effectiveFocusId}

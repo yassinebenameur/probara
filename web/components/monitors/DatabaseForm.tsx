@@ -38,8 +38,11 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import InfoTip from '@/components/ui/InfoTip';
 import FormActions from '@/components/ui/FormActions';
+import Button from '@/components/ui/Button';
+import Pill from '@/components/ui/Pill';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
+import Switch from '@/components/ui/Switch';
 
 export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb' | 'rabbitmq' | 'mysql';
 
@@ -176,22 +179,22 @@ function SecretInput({
           onChange={(e) => onChange(e.target.value)}
           placeholder={hasStored ? storedPlaceholder : placeholder}
           autoComplete="new-password"
-          className={`input pr-20 ${mono ? 'font-mono text-xs' : ''}`}
+          className={`input ${hasStored && !value ? '!pr-28' : '!pr-10'} ${mono ? 'font-mono' : ''}`}
         />
-        <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
+        <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1">
           {hasStored && !value && (
-            <span className="flex items-center gap-1 rounded-md bg-cyan-500/10 py-0.5 pl-1.5 pr-1 text-[10px] font-medium text-cyan-400" title="A value is stored. Leave blank to keep it.">
+            <span className={`flex items-center gap-1 rounded-full bg-well-hover py-0.5 pl-2 text-[11px] font-medium text-slate-300 ${onClear ? 'pr-1' : 'pr-2'}`} title="A value is stored. Leave blank to keep it.">
               <KeyRound className="h-3 w-3" strokeWidth={1.75} />
               set
               {onClear && (
                 <button
                   type="button"
                   onClick={onClear}
-                  className="rounded p-0.5 text-cyan-400/70 transition-colors hover:bg-cyan-500/20 hover:text-cyan-300"
+                  className="rounded-full p-0.5 text-slate-400 transition-colors hover:bg-control-hover hover:text-white"
                   aria-label="Clear stored value"
                   title="Clear the stored value"
                 >
-                  <X className="h-3 w-3" strokeWidth={2} />
+                  <X className="h-3 w-3" strokeWidth={1.75} />
                 </button>
               )}
             </span>
@@ -199,30 +202,22 @@ function SecretInput({
           <button
             type="button"
             onClick={() => setReveal(!reveal)}
-            className="rounded p-1 text-slate-500 transition-colors hover:text-slate-300"
+            className="rounded-lg p-1 text-slate-400 transition-colors hover:text-white"
             aria-label={reveal ? 'Hide value' : 'Show value'}
             tabIndex={-1}
           >
-            {reveal ? <EyeOff className="h-3.5 w-3.5" strokeWidth={1.75} /> : <Eye className="h-3.5 w-3.5" strokeWidth={1.75} />}
+            {reveal ? <EyeOff className="h-4 w-4" strokeWidth={1.75} /> : <Eye className="h-4 w-4" strokeWidth={1.75} />}
           </button>
         </div>
       </div>
-      {error && <p className="mt-1 text-xs text-rose-400">{error}</p>}
+      {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
     </div>
   );
 }
 
 function MiniToggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
-    <button
-      type="button"
-      onClick={() => onChange(!checked)}
-      className={`relative h-5 w-9 rounded-full transition-colors ${checked ? 'bg-cyan-500' : 'bg-slate-700'}`}
-      aria-pressed={checked}
-      aria-label={label}
-    >
-      <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : ''}`} />
-    </button>
+    <Switch checked={checked} onChange={onChange} label={label} />
   );
 }
 
@@ -238,9 +233,9 @@ function ToggleRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-      <div>
-        <p className="text-sm font-medium text-white">{title}</p>
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-slate-200">{title}</p>
         <p className="text-xs text-slate-500">{description}</p>
       </div>
       <MiniToggle checked={checked} onChange={onChange} label={title} />
@@ -630,7 +625,7 @@ export default function DatabaseForm({
         </FormField>
 
         <div>
-          <div className="mb-2 flex rounded-lg border border-white/[0.08] bg-slate-900/60 p-0.5" role="radiogroup" aria-label="Connection mode">
+          <div className="mb-2 flex w-fit max-w-full gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]" role="radiogroup" aria-label="Connection mode">
             {(
               [
                 { mode: 'fields' as ConnectionMode, label: 'Form fields' },
@@ -643,10 +638,10 @@ export default function DatabaseForm({
                 role="radio"
                 aria-checked={formData.connection_mode === mode}
                 onClick={() => setFormData({ ...formData, connection_mode: mode })}
-                className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
                   formData.connection_mode === mode
-                    ? 'bg-cyan-500/15 text-cyan-300'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-glass-strong text-white shadow-glass'
+                    : 'text-slate-400 hover:text-slate-100'
                 }`}
               >
                 {label}
@@ -662,7 +657,7 @@ export default function DatabaseForm({
 
         {usingConnString ? (
           <>
-            <FormField label="Connection string" required={!hasStoredConnString} error={errors.connection_string} description={meta.csHint}>
+            <FormField label="Connection string" required={!hasStoredConnString} error={errors.connection_string}>
               <SecretInput
                 value={formData.connection_string}
                 onChange={(v) => setFormData({ ...formData, connection_string: v })}
@@ -671,6 +666,7 @@ export default function DatabaseForm({
                 storedPlaceholder="Unchanged — paste a new connection string to replace"
                 mono
               />
+              <p className="mt-1 text-xs text-slate-500">{meta.csHint}</p>
             </FormField>
             {meta.supportsTLSToggle && (
               <ToggleRow
@@ -684,7 +680,7 @@ export default function DatabaseForm({
         ) : (
           <>
             <div className="grid grid-cols-[1fr_120px] gap-4">
-              <FormField label="Host" required error={errors.host} description={`${meta.label} hostname or IP`}>
+              <FormField label="Host" required error={errors.host}>
                 <input
                   type="text"
                   value={formData.host}
@@ -692,8 +688,9 @@ export default function DatabaseForm({
                   placeholder={meta.hostPlaceholder}
                   className="input"
                 />
+                <p className="mt-1 text-xs text-slate-500">{meta.label} hostname or IP</p>
               </FormField>
-              <FormField label="Port" error={errors.port} description={`Default: ${meta.defaultPort}`}>
+              <FormField label="Port" error={errors.port}>
                 <input
                   type="number"
                   value={formData.port}
@@ -702,11 +699,10 @@ export default function DatabaseForm({
                   max={65535}
                   className="input"
                 />
+                <p className="mt-1 text-xs text-slate-500">Default: {meta.defaultPort}</p>
               </FormField>
             </div>
 
-            {/* Hints go below the inputs here (not via FormField's description,
-                which sits above) so the two inputs stay vertically aligned. */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField
                 label={meta.usernameRequired ? 'Username' : 'Username (optional)'}
@@ -743,7 +739,7 @@ export default function DatabaseForm({
             </div>
 
             {type === 'redis' && (
-              <FormField label="Database index" description="0–15, default 0">
+              <FormField label="Database index">
                 <input
                   type="number"
                   value={formData.db_index}
@@ -752,12 +748,13 @@ export default function DatabaseForm({
                   max={15}
                   className="input"
                 />
+                <p className="mt-1 text-xs text-slate-500">0–15, default 0</p>
               </FormField>
             )}
 
             {type === 'postgres' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <FormField label="Database" description="Default: postgres">
+                <FormField label="Database">
                   <input
                     type="text"
                     value={formData.database}
@@ -765,8 +762,9 @@ export default function DatabaseForm({
                     placeholder="postgres"
                     className="input"
                   />
+                  <p className="mt-1 text-xs text-slate-500">Default: postgres</p>
                 </FormField>
-                <FormField label="TLS (sslmode)" description="How to negotiate TLS">
+                <FormField label="TLS (sslmode)">
                   <select
                     value={formData.ssl_mode}
                     onChange={(e) => setFormData({ ...formData, ssl_mode: e.target.value as typeof formData.ssl_mode })}
@@ -777,13 +775,14 @@ export default function DatabaseForm({
                     <option value="require">Require</option>
                     <option value="verify-full">Require + verify certificate</option>
                   </select>
+                  <p className="mt-1 text-xs text-slate-500">How to negotiate TLS</p>
                 </FormField>
               </div>
             )}
 
             {type === 'mongodb' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <FormField label="Auth source" description="Database to authenticate against. Default: admin">
+                <FormField label="Auth source">
                   <input
                     type="text"
                     value={formData.auth_source}
@@ -791,8 +790,9 @@ export default function DatabaseForm({
                     placeholder="admin"
                     className="input"
                   />
+                  <p className="mt-1 text-xs text-slate-500">Database to authenticate against. Default: admin</p>
                 </FormField>
-                <FormField label="Replica set (optional)" description="Discover the topology and assert a reachable primary">
+                <FormField label="Replica set (optional)">
                   <input
                     type="text"
                     value={formData.replica_set}
@@ -800,12 +800,13 @@ export default function DatabaseForm({
                     placeholder="rs0"
                     className="input"
                   />
+                  <p className="mt-1 text-xs text-slate-500">Discover the topology and assert a reachable primary</p>
                 </FormField>
               </div>
             )}
 
             {type === 'rabbitmq' && (
-              <FormField label="Virtual host" description="Default: /">
+              <FormField label="Virtual host">
                 <input
                   type="text"
                   value={formData.vhost}
@@ -813,11 +814,12 @@ export default function DatabaseForm({
                   placeholder="/"
                   className="input"
                 />
+                <p className="mt-1 text-xs text-slate-500">Default: /</p>
               </FormField>
             )}
 
             {type === 'mysql' && (
-              <FormField label="Database (optional)" description="Default schema to select after connecting">
+              <FormField label="Database (optional)">
                 <input
                   type="text"
                   value={formData.database}
@@ -825,6 +827,7 @@ export default function DatabaseForm({
                   placeholder="app"
                   className="input"
                 />
+                <p className="mt-1 text-xs text-slate-500">Default schema to select after connecting</p>
               </FormField>
             )}
 
@@ -850,70 +853,63 @@ export default function DatabaseForm({
         )}
 
         {tlsMaterialRelevant && (
-          <div className="rounded-lg border border-white/[0.06] bg-slate-900/40">
+          <div className="glass-well">
             <button
               type="button"
               onClick={() => setCertsOpen(!certsOpen)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left"
+              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
               aria-expanded={certsOpen}
             >
-              <span className="flex items-center gap-2 text-sm font-medium text-white">
+              <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-slate-200">
                 <ShieldCheck className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
                 Custom certificates
                 <span className="text-xs font-normal text-slate-500">private CA / mutual TLS</span>
                 {hasTLSMaterial && (
-                  <span className="rounded-md bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-400">configured</span>
+                  <Pill tone="neutral" size="xs">
+                    configured
+                  </Pill>
                 )}
               </span>
               {certsOpen ? (
-                <ChevronDown className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
               ) : (
-                <ChevronRight className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
               )}
             </button>
             {certsOpen && (
-              <div className="space-y-4 border-t border-white/[0.06] px-4 py-4">
-                <FormField
-                  label="CA certificate (PEM, optional)"
-                  description="Verify a server certificate signed by a private or internal CA"
-                >
+              <div className="space-y-4 px-4 pb-4 pt-1">
+                <FormField label="CA certificate (PEM, optional)">
                   <textarea
                     rows={4}
                     value={formData.tls_ca_pem}
                     onChange={(e) => setFormData({ ...formData, tls_ca_pem: e.target.value })}
                     placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
                     spellCheck={false}
-                    className="input min-h-[88px] font-mono text-xs"
+                    className="input min-h-[88px] font-mono"
                   />
+                  <p className="mt-1 text-xs text-slate-500">Verify a server certificate signed by a private or internal CA</p>
                 </FormField>
-                <FormField
-                  label="Client certificate (PEM, optional)"
-                  description="Only for mutual TLS / X.509 authentication"
-                >
+                <FormField label="Client certificate (PEM, optional)">
                   <textarea
                     rows={4}
                     value={formData.tls_client_cert_pem}
                     onChange={(e) => setFormData({ ...formData, tls_client_cert_pem: e.target.value })}
                     placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
                     spellCheck={false}
-                    className="input min-h-[88px] font-mono text-xs"
+                    className="input min-h-[88px] font-mono"
                   />
+                  <p className="mt-1 text-xs text-slate-500">Only for mutual TLS / X.509 authentication</p>
                 </FormField>
                 {(formData.tls_client_cert_pem.trim() !== '' || formData.tls_client_key_pem !== '' || hasStoredClientKey) && (
                   <FormField
                     label="Client key (PEM)"
                     error={errors.tls_client_key_pem}
-                    description={
-                      hasStoredClientKey
-                        ? 'Stored encrypted — leave blank to keep the current key'
-                        : 'Stored encrypted, never displayed again'
-                    }
                   >
                     {hasStoredClientKey && !formData.tls_client_key_pem && (
                       <button
                         type="button"
                         onClick={() => setCleared({ ...cleared, clientKey: true })}
-                        className="mb-1.5 text-[11px] text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
+                        className="mb-1.5 text-xs text-slate-400 underline-offset-2 hover:text-white hover:underline"
                       >
                         Clear the stored key
                       </button>
@@ -924,8 +920,13 @@ export default function DatabaseForm({
                       onChange={(e) => setFormData({ ...formData, tls_client_key_pem: e.target.value })}
                       placeholder={hasStoredClientKey ? 'Unchanged — paste a new key to replace' : '-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----'}
                       spellCheck={false}
-                      className="input min-h-[88px] font-mono text-xs"
+                      className="input min-h-[88px] font-mono"
                     />
+                    <p className="mt-1 text-xs text-slate-500">
+                      {hasStoredClientKey
+                        ? 'Stored encrypted — leave blank to keep the current key'
+                        : 'Stored encrypted, never displayed again'}
+                    </p>
                   </FormField>
                 )}
               </div>
@@ -933,27 +934,28 @@ export default function DatabaseForm({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <button
+        <div className="glass-well flex flex-wrap items-center gap-3 px-4 py-3">
+          <Button
             type="button"
             onClick={handleTestConnection}
             disabled={!canTestConnection || test.phase === 'running' || loading}
             title={!canTestConnection ? 'Write access is required to test saved connections' : undefined}
-            className="inline-flex items-center gap-2 rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+            icon={
+              test.phase === 'running' ? (
+                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+              ) : (
+                <PlugZap className="h-4 w-4" strokeWidth={1.75} />
+              )
+            }
           >
-            {test.phase === 'running' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
-            ) : (
-              <PlugZap className="h-3.5 w-3.5" strokeWidth={1.75} />
-            )}
             {test.phase === 'running' ? 'Testing…' : 'Test connection'}
-          </button>
+          </Button>
           {formData.location_ids.length > 0 && (
             <select
               aria-label="Test from location"
               value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
               onChange={(e) => setTestLocationId(e.target.value)}
-              className="rounded-md border border-white/[0.08] bg-slate-900 px-2 py-1.5 text-xs text-slate-200"
+              className="input input-sm !w-auto"
             >
               <option value="">Test from: default fleet</option>
               {availableLocations
@@ -967,7 +969,7 @@ export default function DatabaseForm({
             <p className="text-xs text-slate-500">Runs one check from a worker without saving anything.</p>
           )}
           {test.phase === 'done' && test.result.status === 'success' && (
-            <p className="flex items-center gap-1.5 text-xs text-emerald-400">
+            <p className="flex items-center gap-1.5 text-xs text-emerald-300">
               <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} />
               Connected{typeof test.result.latency_ms === 'number' ? ` in ${test.result.latency_ms}ms` : ''}
             </p>
@@ -975,12 +977,12 @@ export default function DatabaseForm({
           {test.phase === 'done' &&
             test.result.status === 'success' &&
             test.result.metrics_data?.mongodb?.unavailable?.some((u) => u.reason === 'unauthorized') && (
-              <p className="text-xs text-amber-400">
+              <p className="text-xs text-amber-300">
                 Cluster checks skipped — grant the monitoring user the clusterMonitor role
               </p>
             )}
           {test.phase === 'done' && test.result.status !== 'success' && (
-            <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-400">
+            <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-300">
               <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
               <span className="truncate" title={test.result.error_message}>
                 {test.result.error_message || 'Check failed'}
@@ -988,7 +990,7 @@ export default function DatabaseForm({
             </p>
           )}
           {test.phase === 'request_failed' && (
-            <p className="flex min-w-0 items-center gap-1.5 text-xs text-amber-400">
+            <p className="flex min-w-0 items-center gap-1.5 text-xs text-amber-300">
               <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
               <span className="truncate" title={test.message}>{test.message}</span>
             </p>
@@ -1002,19 +1004,19 @@ export default function DatabaseForm({
             <FormField
               label="Assertion query (optional)"
               error={errors.query}
-              description="Runs after connecting; the check fails if it errors or returns 0 rows. Example: SELECT 1"
             >
               <input
                 type="text"
                 value={formData.query}
                 onChange={(e) => setFormData({ ...formData, query: e.target.value })}
                 placeholder="SELECT 1"
-                className="input font-mono text-xs"
+                className="input font-mono"
               />
+              <p className="mt-1 text-xs text-slate-500">Runs after connecting; the check fails if it errors or returns 0 rows. Example: SELECT 1</p>
             </FormField>
             {formData.query.trim() !== '' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <FormField label="Value assertion (optional)" description="Compare the first column of the first row">
+                <FormField label="Value assertion (optional)">
                   <select
                     value={formData.query_value_op}
                     onChange={(e) => setFormData({ ...formData, query_value_op: e.target.value as typeof formData.query_value_op })}
@@ -1027,6 +1029,7 @@ export default function DatabaseForm({
                       </option>
                     ))}
                   </select>
+                  <p className="mt-1 text-xs text-slate-500">Compare the first column of the first row</p>
                 </FormField>
                 {formData.query_value_op && (
                   <FormField label="Expected value" error={errors.query_value}>
@@ -1035,7 +1038,7 @@ export default function DatabaseForm({
                       value={formData.query_value}
                       onChange={(e) => setFormData({ ...formData, query_value: e.target.value })}
                       placeholder={formData.query_value_op.startsWith('number_') ? '100' : 'ok'}
-                      className="input font-mono text-xs"
+                      className="input font-mono"
                     />
                   </FormField>
                 )}
@@ -1044,7 +1047,7 @@ export default function DatabaseForm({
           </>
         )}
         {type === 'redis' && (
-          <FormField label="Expected role (optional)" description="Fail if this node's replication role changes — catches monitoring the wrong node after a failover">
+          <FormField label="Expected role (optional)">
             <select
               value={formData.expected_role}
               onChange={(e) => setFormData({ ...formData, expected_role: e.target.value as typeof formData.expected_role })}
@@ -1054,38 +1057,39 @@ export default function DatabaseForm({
               <option value="master">Master</option>
               <option value="replica">Replica</option>
             </select>
+            <p className="mt-1 text-xs text-slate-500">Fail if this node&apos;s replication role changes — catches monitoring the wrong node after a failover</p>
           </FormField>
         )}
         {type === 'mongodb' && (
-          <div className="rounded-lg border border-white/[0.06] bg-slate-900/40">
+          <div className="glass-well">
             <button
               type="button"
               onClick={() => setClusterChecksOpen(!clusterChecksOpen)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left"
+              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
               aria-expanded={clusterChecksOpen}
             >
-              <span className="flex items-center gap-2 text-sm font-medium text-white">
+              <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-slate-200">
                 <Activity className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
                 Cluster checks
                 <span className="text-xs font-normal text-slate-500">serverStatus / replSetGetStatus</span>
-                <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+                <Pill tone="warning" size="xs">
                   requires clusterMonitor
-                </span>
+                </Pill>
                 {clusterChecksEnabled > 0 && (
-                  <span className="rounded-md bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-400">
+                  <Pill tone="neutral" size="xs">
                     {clusterChecksEnabled} enabled
-                  </span>
+                  </Pill>
                 )}
               </span>
               {clusterChecksOpen ? (
-                <ChevronDown className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
               ) : (
-                <ChevronRight className="h-4 w-4 text-slate-500" strokeWidth={1.75} />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
               )}
             </button>
             {clusterChecksOpen && (
-              <div className="space-y-2 border-t border-white/[0.06] px-4 py-4">
-                <div className="flex items-center gap-1.5 pb-1 text-xs text-slate-500">
+              <div className="space-y-3 px-4 pb-4 pt-1">
+                <div className="flex items-center gap-1.5 text-xs text-slate-500">
                   Read-only admin commands — skipped and flagged when the role is missing, never failing the check.
                   <InfoTip inLabel ariaLabel="About cluster checks and permissions">
                     Both commands are covered by MongoDB&apos;s built-in <code>clusterMonitor</code> role — no write or
@@ -1139,7 +1143,7 @@ export default function DatabaseForm({
                   onChange={(v) => setFormData({ ...formData, collect_cpu: v })}
                 />
                 {formData.collect_replication && (
-                  <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-4 pt-1 sm:grid-cols-2">
                     <FormField
                       label="Warn replication lag (s)"
                       error={errors.warn_replication_lag_seconds}
@@ -1207,8 +1211,8 @@ export default function DatabaseForm({
       </FormSection>
 
       <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Interval (seconds)" description="How often to check">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Interval (seconds)">
             <input
               type="number"
               value={formData.interval_seconds}
@@ -1218,7 +1222,7 @@ export default function DatabaseForm({
               className="input"
             />
           </FormField>
-          <FormField label="Timeout (seconds)" error={errors.timeout_seconds} description="Must be less than interval">
+          <FormField label="Timeout (seconds)" error={errors.timeout_seconds}>
             <input
               type="number"
               value={formData.timeout_seconds}
@@ -1226,6 +1230,7 @@ export default function DatabaseForm({
               min={1}
               className="input"
             />
+            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
           </FormField>
         </div>
       </FormSection>
@@ -1262,7 +1267,7 @@ export default function DatabaseForm({
       </FormSection>
 
       <FormSection title="Meta">
-        <FormField label="Tags" description={`Comma-separated, e.g. production, ${type}, critical`}>
+        <FormField label="Tags">
           <input
             type="text"
             value={formData.tags}
@@ -1270,6 +1275,7 @@ export default function DatabaseForm({
             placeholder={`production, ${type}, critical`}
             className="input"
           />
+          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
         </FormField>
 
         <ToggleRow
@@ -1284,7 +1290,7 @@ export default function DatabaseForm({
         middle={summary}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Update monitor' : 'Create monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',
