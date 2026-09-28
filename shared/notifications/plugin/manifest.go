@@ -1,9 +1,3 @@
-// Package plugin defines the alert channel plugin contract and registry.
-//
-// Each alert channel integration (Teams, Slack, email, …) ships as a Plugin
-// implementation that self-registers in its init() function. The API, alerter,
-// and worker import this package to discover and dispatch through plugins
-// without knowing about specific channel types.
 package plugin
 
 // FieldType is the manifest-declared input type for a config field. The
