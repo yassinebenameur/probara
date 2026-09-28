@@ -405,33 +405,25 @@ function SectionCard({
 }
 
 function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
-  const toneStyles: Record<OperationalSummary['tone'], { ring: string; icon: string; text: string; iconBg: string; glow: string }> = {
+  const toneStyles: Record<OperationalSummary['tone'], { ring: string; text: string; glow: string }> = {
     critical: {
       ring: 'border-rose-500/20',
-      icon: 'text-rose-300',
       text: 'text-rose-300',
-      iconBg: 'bg-rose-500/10',
       glow: 'rgba(240,74,90, 0.08)',
     },
     attention: {
       ring: 'border-amber-500/20',
-      icon: 'text-amber-300',
       text: 'text-amber-300',
-      iconBg: 'bg-amber-500/10',
       glow: 'rgba(230,178,63, 0.07)',
     },
     stable: {
       ring: 'border-emerald-500/20',
-      icon: 'text-emerald-300',
       text: 'text-emerald-300',
-      iconBg: 'bg-emerald-500/10',
       glow: 'rgba(70,209,127, 0.07)',
     },
     clean: {
       ring: 'border-emerald-500/20',
-      icon: 'text-emerald-300',
       text: 'text-emerald-300',
-      iconBg: 'bg-emerald-500/10',
       glow: 'rgba(70,209,127, 0.07)',
     },
   };
@@ -444,13 +436,6 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
     >
       <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
-          <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-current/25 ${tone.iconBg} ${tone.icon}`}>
-            {summary.tone === 'critical' ? (
-              <AlertTriangle className="h-8 w-8" strokeWidth={1.8} />
-            ) : (
-              <Check className="h-8 w-8" strokeWidth={2.3} />
-            )}
-          </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2.5 w-2.5">
@@ -462,11 +447,6 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
               <h2 className={`text-lg font-semibold tracking-tight ${tone.text}`}>{summary.label}</h2>
             </div>
             <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{summary.description}</p>
-            <p className={`mt-2 text-sm font-medium ${summary.attentionCount > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
-              {summary.attentionCount > 0
-                ? `${summary.attentionCount} monitor${summary.attentionCount === 1 ? '' : 's'} need attention.`
-                : 'No monitors need attention.'}
-            </p>
             <Link
               href={summary.primaryActionHref}
               className="mt-4 inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-white/[0.08]"
