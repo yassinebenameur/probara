@@ -121,8 +121,12 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 		argIndex++
 	}
 
+	// Since keeps every alert that was open at some point after it: triggered
+	// since, resolved since, or still unresolved. Filtering on triggered_at
+	// alone hid long-running outages from any recent window.
 	if params.Since != nil {
-		whereParts = append(whereParts, fmt.Sprintf("a.triggered_at >= $%d", argIndex))
+		whereParts = append(whereParts, fmt.Sprintf(
+			"(a.triggered_at >= $%d OR a.resolved_at IS NULL OR a.resolved_at >= $%d)", argIndex, argIndex))
 		args = append(args, *params.Since)
 		argIndex++
 	}
