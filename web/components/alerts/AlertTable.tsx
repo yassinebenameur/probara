@@ -141,7 +141,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td>
                 {alert.kind === 'mesh_edge' ? (
                   <Link
-                    href="/mesh"
+                    href="/locations?tab=mesh"
                     className="inline-flex items-center gap-1.5 font-medium text-white hover:text-cyan-400"
                     title="Inter-location mesh path down — view the connectivity matrix"
                   >

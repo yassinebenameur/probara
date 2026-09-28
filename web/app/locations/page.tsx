@@ -11,6 +11,8 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { LocationDeployModal } from '@/components/locations/LocationDeployModal';
+import MeshMatrix from '@/components/locations/MeshMatrix';
+import Tabs, { useUrlTab } from '@/components/ui/Tabs';
 import { Location } from '@/lib/types';
 import { createLocation, deleteLocation, getLocations, updateLocation } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/monitor-utils';
@@ -57,6 +59,7 @@ export default function LocationsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deployLocation, setDeployLocation] = useState<Location | null>(null);
   const initialLoadDone = useRef(false);
+  const [tab, setTab] = useUrlTab(['locations', 'mesh'] as const);
 
   const loadLocations = async (showSpinner = true) => {
     try {
@@ -177,8 +180,12 @@ export default function LocationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Private locations"
-        subtitle="Run checks from your own networks via remote workers"
-        action={(
+        subtitle={
+          tab === 'mesh'
+            ? 'Connectivity between your locations, measured from each side'
+            : 'Run checks from your own networks via remote workers'
+        }
+        action={tab === 'locations' ? (
           <>
             <Button
               variant="ghost"
@@ -190,10 +197,21 @@ export default function LocationsPage() {
             </Button>
             {addAction}
           </>
-        )}
+        ) : undefined}
       />
 
-      {canManageLocations && showCreate && (
+      <Tabs
+        tabs={[
+          { id: 'locations', label: 'Locations' },
+          { id: 'mesh', label: 'Mesh' },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+
+      {tab === 'mesh' && <MeshMatrix />}
+
+      {tab === 'locations' && canManageLocations && showCreate && (
         <Panel title="New location" subtitle="Name the network or site this location represents.">
           <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <div className="flex-1">
@@ -249,7 +267,7 @@ export default function LocationsPage() {
         </Panel>
       )}
 
-      <Panel>
+      {tab === 'locations' && <Panel>
         {loading ? (
           <div className="text-sm text-slate-500">Loading locations…</div>
         ) : error ? (
@@ -370,9 +388,9 @@ export default function LocationsPage() {
                           size="xs"
                           icon={<Pencil strokeWidth={1.75} />}
                           onClick={() => startRename(location)}
-                          title="Rename"
+                          title="Edit name and mesh endpoint"
                         >
-                          <span className="sr-only">Rename</span>
+                          <span className="sr-only">Edit</span>
                         </Button>
                         <Button
                           variant="subtle"
@@ -391,7 +409,7 @@ export default function LocationsPage() {
             </table>
           </div>
         )}
-      </Panel>
+      </Panel>}
 
       <ConfirmDialog
         open={canManageLocations && pendingDelete !== null}
