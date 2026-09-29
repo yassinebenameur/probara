@@ -140,3 +140,26 @@ func TestService_GetMonitorAnalytics_GroupUsesLeafMembers(t *testing.T) {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+
+func TestMetricsSnapshotWindow(t *testing.T) {
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		rangeValue models.MonitorAnalyticsRange
+		span       time.Duration
+		bucket     time.Duration
+		partial    bool
+	}{
+		{models.MonitorAnalyticsRange1h, time.Hour, 5 * time.Second, false},
+		{models.MonitorAnalyticsRange24h, 24 * time.Hour, 2 * time.Minute, false},
+		{models.MonitorAnalyticsRange7d, 7 * 24 * time.Hour, 14 * time.Minute, false},
+		{models.MonitorAnalyticsRange30d, 30 * 24 * time.Hour, time.Hour, false},
+		// Raw check_results are pruned at 30 days; longer ranges clamp.
+		{models.MonitorAnalyticsRange365d, 30 * 24 * time.Hour, time.Hour, true},
+	}
+	for _, tc := range cases {
+		start, bucket, partial := metricsSnapshotWindow(tc.rangeValue, now)
+		if got := now.Sub(start); got != tc.span || bucket != tc.bucket || partial != tc.partial {
+			t.Errorf("%s: span=%s bucket=%s partial=%v, want %s %s %v", tc.rangeValue, got, bucket, partial, tc.span, tc.bucket, tc.partial)
+		}
+	}
+}

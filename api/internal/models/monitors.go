@@ -149,6 +149,25 @@ type MonitorResultsResponse struct {
 	Results   []CheckResult `json:"results"`
 }
 
+// MetricsSnapshot is one check result's metrics_data payload.
+type MetricsSnapshot struct {
+	CreatedAt   time.Time       `json:"created_at"`
+	MetricsData json.RawMessage `json:"metrics_data"`
+}
+
+// MonitorMetricsSnapshotsResponse is a range of per-check metrics_data
+// snapshots, downsampled to the newest snapshot per BucketSeconds bucket.
+// Snapshots come from raw check_results, so CoverageStart/IsPartial report a
+// window clamped to raw retention.
+type MonitorMetricsSnapshotsResponse struct {
+	MonitorID     uuid.UUID             `json:"monitor_id"`
+	Range         MonitorAnalyticsRange `json:"range"`
+	BucketSeconds int                   `json:"bucket_seconds"`
+	CoverageStart time.Time             `json:"coverage_start"`
+	IsPartial     bool                  `json:"is_partial"`
+	Snapshots     []MetricsSnapshot     `json:"snapshots"`
+}
+
 type MonitorAnalyticsRange string
 
 const (

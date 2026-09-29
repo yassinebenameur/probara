@@ -14,6 +14,7 @@ import (
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
 
 // Service handles results business logic
@@ -128,6 +129,95 @@ func (s *Service) GetMonitorAnalytics(ctx context.Context, tenantID, monitorID u
 		})
 	}
 	return response, nil
+}
+
+// maxMetricsSnapshots bounds a metrics-snapshots response: the window is cut
+// into at most this many buckets and only the newest snapshot of each is
+// returned. Cumulative counters stay exact under this sampling — the delta
+// between two kept snapshots is the average rate across everything skipped.
+const maxMetricsSnapshots = 720
+
+var metricsSnapshotRangeDurations = map[models.MonitorAnalyticsRange]time.Duration{
+	models.MonitorAnalyticsRange1h:   time.Hour,
+	models.MonitorAnalyticsRange6h:   6 * time.Hour,
+	models.MonitorAnalyticsRange24h:  24 * time.Hour,
+	models.MonitorAnalyticsRange7d:   7 * 24 * time.Hour,
+	models.MonitorAnalyticsRange30d:  30 * 24 * time.Hour,
+	models.MonitorAnalyticsRange90d:  90 * 24 * time.Hour,
+	models.MonitorAnalyticsRange365d: 365 * 24 * time.Hour,
+}
+
+// metricsSnapshotWindow resolves a range to its start and bucket width. The
+// start is clamped to raw check_results retention (metrics_data has no
+// rollup), reported as partial.
+func metricsSnapshotWindow(rangeValue models.MonitorAnalyticsRange, now time.Time) (start time.Time, bucket time.Duration, partial bool) {
+	duration, ok := metricsSnapshotRangeDurations[rangeValue]
+	if !ok {
+		duration = 24 * time.Hour
+	}
+	if retention := monitorstate.CheckResultsRawRetentionDays * 24 * time.Hour; duration > retention {
+		duration = retention
+		partial = true
+	}
+	bucket = (duration + maxMetricsSnapshots - 1) / maxMetricsSnapshots
+	bucket = bucket.Truncate(time.Second)
+	if bucket < time.Second {
+		bucket = time.Second
+	}
+	return now.Add(-duration), bucket, partial
+}
+
+// GetMonitorMetricsSnapshots returns the monitor's metrics_data snapshots over
+// a range, oldest first, keeping the newest snapshot per bucket.
+func (s *Service) GetMonitorMetricsSnapshots(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorMetricsSnapshotsResponse, error) {
+	if _, err := s.getMonitor(ctx, tenantID, monitorID); err != nil {
+		return nil, err
+	}
+
+	start, bucket, partial := metricsSnapshotWindow(rangeValue, time.Now().UTC())
+
+	// Pick the rows by (id, created_at) first so metrics_data is detoasted
+	// only for the kept snapshots, not for every row in the window.
+	rows, err := s.db.QueryContext(ctx, `
+		WITH picked AS (
+			SELECT DISTINCT ON (date_bin($4::interval, created_at, $3::timestamptz)) id, created_at
+			FROM check_results
+			WHERE monitor_id = $1 AND tenant_id = $2 AND created_at >= $3
+				AND metrics_data IS NOT NULL
+			ORDER BY date_bin($4::interval, created_at, $3::timestamptz), created_at DESC, id DESC
+		)
+		SELECT p.created_at, cr.metrics_data::text
+		FROM picked p
+		JOIN check_results cr ON cr.id = p.id
+		ORDER BY p.created_at ASC
+	`, monitorID, tenantID, start, fmt.Sprintf("%d seconds", int(bucket.Seconds())))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query metrics snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	snapshots := make([]models.MetricsSnapshot, 0)
+	for rows.Next() {
+		var snapshot models.MetricsSnapshot
+		var metricsData string
+		if err := rows.Scan(&snapshot.CreatedAt, &metricsData); err != nil {
+			return nil, fmt.Errorf("failed to scan metrics snapshot: %w", err)
+		}
+		snapshot.MetricsData = json.RawMessage(metricsData)
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating metrics snapshots: %w", err)
+	}
+
+	return &models.MonitorMetricsSnapshotsResponse{
+		MonitorID:     monitorID,
+		Range:         rangeValue,
+		BucketSeconds: int(bucket.Seconds()),
+		CoverageStart: start,
+		IsPartial:     partial,
+		Snapshots:     snapshots,
+	}, nil
 }
 
 // getGroupResults retrieves aggregated results for a group monitor

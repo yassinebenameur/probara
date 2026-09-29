@@ -353,6 +353,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
+				r.Get("/{id}/metrics-snapshots", monitorHandlers.GetMonitorMetricsSnapshots)
 				r.Delete("/{id}/history", monitorHandlers.DeleteMonitorHistory)
 				r.Post("/{id}/run", monitorHandlers.RunMonitorNow)
 				r.Get("/{id}/artifacts/screenshot", monitorHandlers.GetSyntheticBrowserScreenshot)

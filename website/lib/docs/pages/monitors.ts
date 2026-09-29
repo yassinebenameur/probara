@@ -454,7 +454,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The monitor detail page charts the collected cluster metrics over recent checks — replication lag (with the warn/max thresholds drawn as reference lines), connections, WiredTiger cache, memory, and, for the cumulative operation, network, and process-CPU counters, per-second rates derived between consecutive checks.",
+            "The monitor detail page charts the collected cluster metrics over the overview's selected range — replication lag (with the warn/max thresholds drawn as reference lines), connections, WiredTiger cache, memory, and, for the cumulative operation, network, and process-CPU counters, per-second rates derived between consecutive snapshots. Longer ranges are downsampled to at most 720 snapshots (the newest check per time bucket), so gauges become point samples while rates stay averaged across the skipped checks. The snapshots come from raw check results, so ranges beyond the 30-day raw retention show the last 30 days.",
         },
         {
           type: "callout",

@@ -27,6 +27,8 @@ import type {
   StatusPageLibraryTemplateListResponse,
   MonitorResultsResponse,
   MonitorAnalyticsResponse,
+  MonitorMetricsSnapshotsResponse,
+  MonitorAnalyticsRange,
   DependencyGraph,
   DependencyMonitor,
   DependencySuggestionResult,
@@ -907,6 +909,18 @@ export async function getMonitorAnalytics(
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${id}/analytics${queryString ? `?${queryString}` : ''}`;
   return apiRequest<MonitorAnalyticsResponse>('GET', path);
+}
+
+export async function getMonitorMetricsSnapshots(
+  id: string,
+  params?: { range?: MonitorAnalyticsRange }
+): Promise<MonitorMetricsSnapshotsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+
+  const queryString = queryParams.toString();
+  const path = `/v1/monitors/${id}/metrics-snapshots${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<MonitorMetricsSnapshotsResponse>('GET', path);
 }
 
 export async function getDashboardOverview(params?: {

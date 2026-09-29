@@ -1869,6 +1869,23 @@ export interface MonitorAnalyticsResponse {
   downtime_periods: MonitorAnalyticsDowntimePeriod[];
 }
 
+// Per-check metrics_data snapshots over a range, downsampled server-side to
+// the newest snapshot per bucket_seconds bucket (raw retention clamps long
+// ranges: is_partial).
+export interface MetricsSnapshot {
+  created_at: string;
+  metrics_data: unknown;
+}
+
+export interface MonitorMetricsSnapshotsResponse {
+  monitor_id: string;
+  range: MonitorAnalyticsRange;
+  bucket_seconds: number;
+  coverage_start: string;
+  is_partial: boolean;
+  snapshots: MetricsSnapshot[];
+}
+
 export interface RunMonitorNowResponse {
   job_id: string;
   monitor_id: string;

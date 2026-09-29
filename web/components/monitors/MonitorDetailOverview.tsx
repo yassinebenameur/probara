@@ -64,7 +64,9 @@ export default function MonitorDetailOverview({
         timeRange={timeRange}
         onTimeRangeChange={onTimeRangeChange || (() => undefined)}
       />
-      {monitor.type === 'mongodb' && <MongoClusterPanels monitor={monitor} results={results} />}
+      {monitor.type === 'mongodb' && (
+        <MongoClusterPanels monitor={monitor} timeRange={timeRange} latestResultAt={results[0]?.created_at} />
+      )}
     </div>
   );
 }

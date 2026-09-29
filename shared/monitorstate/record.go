@@ -13,8 +13,10 @@ import (
 // CheckResultsRawRetentionDays caps raw check_results for every tenant,
 // whatever its data_retention_days (the schema allows only 0 or 30–3650, so
 // no tenant is tighter). Nothing reads raw rows beyond 24h except per-check
-// history: ranges of 7d and longer, status-page bars and anomaly baselines
-// come from the hourly/daily rollups, which outlive this cap.
+// history and the API's metrics-snapshots (metrics_data has no rollup; it
+// downsamples and clamps its window to this cap): ranges of 7d and longer,
+// status-page bars and anomaly baselines come from the hourly/daily rollups,
+// which outlive this cap.
 const CheckResultsRawRetentionDays = 30
 
 // Rollup rebuilds REPLACE a whole (monitor, hour) bucket from its raw rows, so

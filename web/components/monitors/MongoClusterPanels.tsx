@@ -3,11 +3,21 @@
 // Charts for the MongoDB cluster checks (clusterMonitor role). Each check
 // result carries one snapshot in metrics_data.mongodb; gauges chart directly,
 // cumulative counters (opcounters, network bytes) chart as per-second rates
-// between consecutive checks. Reuses the metric-store chart internals so the
-// panels match the agent dashboard.
+// between consecutive snapshots. Snapshots come from the metrics-snapshots
+// endpoint for the overview's selected range — downsampled server-side to the
+// newest per bucket, which keeps counter rates exact (a delta across skipped
+// checks is their average rate) while gauges become point samples. Reuses
+// the metric-store chart internals so the panels match the agent dashboard.
 
-import { useMemo } from 'react';
-import { CheckResult, Monitor, MongoDBMetrics, MongoDBMonitorConfig } from '@/lib/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Monitor,
+  MonitorAnalyticsRange,
+  MonitorMetricsSnapshotsResponse,
+  MongoDBMetrics,
+  MongoDBMonitorConfig,
+} from '@/lib/types';
+import { getMonitorMetricsSnapshots } from '@/lib/api';
 import { formatBytes } from '@/lib/metrics';
 import InfoTip from '@/components/ui/InfoTip';
 import {
@@ -17,6 +27,7 @@ import {
   type ChartRow,
   type ChartSeries,
   type ReferenceThreshold,
+  type TimeRange as ChartTimeRange,
 } from './metric-chart';
 
 interface Snapshot {
@@ -75,17 +86,50 @@ function gaugePoints(snapshots: Snapshot[], read: (m: MongoDBMetrics) => number 
 
 const last = (points: Point[]): number | undefined => points[points.length - 1]?.[1];
 
-export default function MongoClusterPanels({ monitor, results }: { monitor: Monitor; results: CheckResult[] }) {
+// The chart only distinguishes time-of-day from date axis labels.
+const chartRange = (range: MonitorAnalyticsRange): ChartTimeRange =>
+  range === '1h' || range === '6h' || range === '24h' ? range : '7d';
+
+export default function MongoClusterPanels({
+  monitor,
+  timeRange,
+  latestResultAt,
+}: {
+  monitor: Monitor;
+  timeRange: MonitorAnalyticsRange;
+  // created_at of the newest known check; a change triggers a refetch.
+  latestResultAt?: string;
+}) {
   const config = (monitor.config || {}) as MongoDBMonitorConfig;
+  const [data, setData] = useState<MonitorMetricsSnapshotsResponse | null>(null);
+  const lastFetch = useRef<{ key: string; at: number; bucketMs: number } | null>(null);
+  const fetchSeq = useRef(0);
+
+  useEffect(() => {
+    const key = `${monitor.id}:${timeRange}`;
+    const prev = lastFetch.current;
+    // New checks refetch at most once per bucket: a newer snapshot inside
+    // the current bucket would only replace the last point. Superseded
+    // responses are dropped by sequence, not effect cleanup, so a throttled
+    // re-run never discards the fetch still in flight.
+    if (prev && prev.key === key && Date.now() - prev.at < prev.bucketMs) return;
+    lastFetch.current = { key, at: Date.now(), bucketMs: prev?.key === key ? prev.bucketMs : 0 };
+    const seq = ++fetchSeq.current;
+    getMonitorMetricsSnapshots(monitor.id, { range: timeRange })
+      .then((resp) => {
+        if (seq !== fetchSeq.current) return;
+        lastFetch.current = { key, at: Date.now(), bucketMs: resp.bucket_seconds * 1000 };
+        setData(resp);
+      })
+      .catch((err) => console.error('Failed to load cluster metrics:', err));
+  }, [monitor.id, timeRange, latestResultAt]);
 
   const { panels, unauthorized } = useMemo(() => {
-    // Results arrive newest-first; charts want time ascending.
     const snapshots: Snapshot[] = [];
-    for (let i = results.length - 1; i >= 0; i--) {
-      const r = results[i];
-      const m = (r.metrics_data as { mongodb?: MongoDBMetrics } | undefined)?.mongodb;
+    for (const s of data?.snapshots ?? []) {
+      const m = (s.metrics_data as { mongodb?: MongoDBMetrics } | null)?.mongodb;
       if (!m) continue;
-      const ts = Date.parse(r.created_at);
+      const ts = Date.parse(s.created_at);
       if (Number.isFinite(ts)) snapshots.push({ ts, m });
     }
 
@@ -105,7 +149,17 @@ export default function MongoClusterPanels({ monitor, results }: { monitor: Moni
     // The 1.25 pad absorbs fractional drift (35s points on a 35s grid would
     // still skip a bucket now and then); two checks in one bucket just
     // overwrite, which is invisible, while a missed check still leaves a hole.
-    const stepMs = Math.max(monitor.interval_seconds * 1000, Math.ceil(medianDelta * 1.25), 1000);
+    // Downsampled, the newest-per-bucket picks sit up to one bucket plus one
+    // check interval apart, so the grid must be that coarse or it breaks the
+    // line between adjacent buckets.
+    const intervalMs = monitor.interval_seconds * 1000;
+    const bucketMs = (data?.bucket_seconds ?? 0) * 1000;
+    const stepMs = Math.max(
+      intervalMs,
+      Math.ceil(medianDelta * 1.25),
+      bucketMs > intervalMs ? bucketMs + intervalMs : 0,
+      1000
+    );
     const specs: PanelSpec[] = [];
 
     const lag = gaugePoints(snapshots, (m) => m.replication?.max_lag_seconds);
@@ -273,7 +327,7 @@ export default function MongoClusterPanels({ monitor, results }: { monitor: Moni
     }
 
     return { panels: specs, unauthorized: isUnauthorized };
-  }, [results, monitor.interval_seconds, config.warn_replication_lag_seconds, config.max_replication_lag_seconds]);
+  }, [data, monitor.interval_seconds, config.warn_replication_lag_seconds, config.max_replication_lag_seconds]);
 
   if (panels.length === 0 && !unauthorized) return null;
 
@@ -284,8 +338,12 @@ export default function MongoClusterPanels({ monitor, results }: { monitor: Moni
         <InfoTip inLabel ariaLabel="About cluster metrics">
           One snapshot per check from the enabled cluster checks (serverStatus / replSetGetStatus, read with the
           clusterMonitor role). Operation and network counters are cumulative on the server and shown here as
-          per-second rates between checks.
+          per-second rates between checks. Longer ranges keep one snapshot per time bucket, so gauges show point
+          samples while rates stay averaged across the skipped checks.
         </InfoTip>
+        {data?.is_partial && (
+          <span className="ml-auto text-[11px] text-slate-500">Last 30 days — raw check retention</span>
+        )}
       </div>
       {unauthorized && (
         <p className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-xs text-amber-300">
@@ -303,7 +361,7 @@ export default function MongoClusterPanels({ monitor, results }: { monitor: Moni
               <MetricChart
                 data={panel.rows}
                 series={panel.series}
-                range="6h"
+                range={chartRange(timeRange)}
                 yDomain={panel.yDomain}
                 yTickFormatter={panel.yTickFormatter}
                 valueFormatter={panel.valueFormatter}

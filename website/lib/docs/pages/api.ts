@@ -250,6 +250,10 @@ export const API_PAGE: DocPage = {
               "List raw check results",
             ],
             [
+              "`GET /api/v1/monitors/{id}/metrics-snapshots?range=24h`",
+              "Per-check `metrics_data` over a range, newest snapshot per bucket (≤720), clamped to 30-day raw retention",
+            ],
+            [
               "`GET /api/v1/monitors/{id}/analytics`",
               "Get summary, series, latency, downtime, and coverage",
             ],

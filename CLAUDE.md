@@ -422,7 +422,9 @@ or imported groups come back empty. Any other path that creates groups through
 - **Raw `check_results` live 30 days for every tenant**
   (`monitorstate.CheckResultsRawRetentionDays`, `shared/monitorstate/record.go`),
   whatever `data_retention_days` says; rollups are kept 400 days. Any read
-  over a window longer than ~24h must use the rollups, never raw rows.
+  over a window longer than ~24h must use the rollups, never raw rows — the
+  one exception is `metrics_data` (no rollup), read only through the API's
+  downsampled `GET /monitors/{id}/metrics-snapshots`, clamped to the cap.
   Rollup rebuilds REPLACE a bucket from its raw rows, so a bucket must never
   be marked once any of its rows can be pruned: `Record` marks only from
   `RollupMarkHorizonSQL`, cleanup prunes whole hours below
