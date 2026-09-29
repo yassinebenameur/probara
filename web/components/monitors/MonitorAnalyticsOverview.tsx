@@ -14,7 +14,10 @@ import { Info } from 'lucide-react';
 
 import { CheckResult, Monitor, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
 import { collapseResultRuns } from '@/lib/result-runs';
-import { SLA_TARGET, UptimeHeroGauge } from './UptimeHeroGauge';
+import Link from 'next/link';
+import { getSlas } from '@/lib/api';
+import { strictestTarget, formatTarget, type Sla } from '@/lib/sla';
+import { UptimeHeroGauge } from './UptimeHeroGauge';
 
 const OVERVIEW_RANGES: MonitorAnalyticsRange[] = ['1h', '6h', '24h', '7d', '30d', '90d', '365d'];
 
@@ -215,6 +218,25 @@ export default function MonitorAnalyticsOverview({
   timeRange: MonitorAnalyticsRange;
   onTimeRangeChange: (range: MonitorAnalyticsRange) => void;
 }) {
+  // The gauge's target is the strictest SLA covering this monitor; with none,
+  // the 99.9% default stands in.
+  const [coveringSlas, setCoveringSlas] = useState<Sla[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getSlas({ monitor_id: monitor.id })
+      .then((slas) => {
+        if (!cancelled) setCoveringSlas(slas);
+      })
+      .catch(() => {
+        if (!cancelled) setCoveringSlas([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [monitor.id]);
+  const slaTarget = strictestTarget(coveringSlas);
+  const targetSla = coveringSlas.find((s) => s.target_pct === slaTarget);
+
   const chartData = useMemo(() => {
     return (analytics?.uptime_series || []).map((point, index) => ({
       id: `${point.bucket_start}-${index}`,
@@ -242,7 +264,7 @@ export default function MonitorAnalyticsOverview({
   const hasLatencyData = Boolean(chartData.some((point) => typeof point.latency === 'number'));
   const summaryHasData = summary?.has_data ?? false;
   const headlinePct = summary?.availability_pct ?? summary?.sla_pct ?? 0;
-  const isSlaCompliant = summaryHasData && headlinePct >= SLA_TARGET;
+  const isSlaCompliant = summaryHasData && headlinePct >= slaTarget;
   // Groups aggregate member state and never record a latency of their own.
   const showLatencyChart = monitor.type !== 'group';
 
@@ -272,7 +294,7 @@ export default function MonitorAnalyticsOverview({
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,90,36,0.08),transparent_42%)]" />
         <div className="relative grid gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] lg:items-center">
           <div className="flex justify-center lg:justify-start">
-            <UptimeHeroGauge uptime={headlinePct} hasData={summaryHasData} />
+            <UptimeHeroGauge uptime={headlinePct} hasData={summaryHasData} target={slaTarget} />
           </div>
 
           <div className="space-y-4">
@@ -287,7 +309,15 @@ export default function MonitorAnalyticsOverview({
                 />
               </div>
               <p className="text-sm text-slate-400">
-                target {SLA_TARGET.toFixed(1)}%
+                target {formatTarget(slaTarget)}
+                {targetSla && (
+                  <>
+                    {' '}
+                    <Link href={`/slas/${targetSla.id}`} className="text-slate-500 hover:text-cyan-300">
+                      ({targetSla.name})
+                    </Link>
+                  </>
+                )}
                 {summaryHasData && !isSlaCompliant && <span className="text-rose-300"> · below target</span>}
                 {summary?.method === 'interval' && summary.coverage_pct !== undefined && (
                   <span> · {summary.coverage_pct.toFixed(1)}% of window observed</span>

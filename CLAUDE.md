@@ -132,6 +132,13 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   table in the same commit; tests cite rule IDs
   (`shared/monitorstate/spec_test.go`). New aggregation surfaces delegate to
   `shared/monitorstate`, never invent parallel state rules.
+- **Interval availability**: `IntegrateTimeline` (`shared/analytics/timeline.go`)
+  is the one integration of `monitor_state_intervals` (+ maintenance union,
+  paused/unknown/untracked split, serial composite). The monitor headline
+  (`computeIntervalAvailability`) and SLA reports (`api/internal/services/slas`)
+  both reduce it; never write another interval query. Calendar periods live
+  next to it in `period.go`. Issued SLA reports (`sla_reports.data`) are a
+  frozen `models.SLAReport` document: add fields, never repurpose them.
 
 ## Monitor import
 
@@ -436,6 +443,10 @@ or imported groups come back empty. Any other path that creates groups through
   loopback targets to `host.docker.internal` (compose worker only).
 - `alert_policies` are retired (API returns 410); workspace alert config
   lives on tenants via `/notification-settings`.
+- **`monitor_state_intervals` is SLA history.** Nothing prunes it by time,
+  and live SLA reports read it back as far as a period reaches (issued
+  reports are frozen copies). Any future retention for it must keep what
+  reports need, and state it in `website/lib/docs/pages/slas.ts`.
 
 ## Commits and PRs
 

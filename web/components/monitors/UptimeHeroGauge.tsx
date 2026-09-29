@@ -1,23 +1,23 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-
-// TODO: make SLA_TARGET configurable per-monitor from settings
-export const SLA_TARGET = 99.9;
+import { DEFAULT_SLA_TARGET } from '@/lib/sla';
 
 interface UptimeHeroGaugeProps {
   uptime: number;
   hasData: boolean;
+  /** The strictest SLA covering the monitor (lib/sla strictestTarget). */
+  target?: number;
 }
 
-export function UptimeHeroGauge({ uptime, hasData }: UptimeHeroGaugeProps) {
+export function UptimeHeroGauge({ uptime, hasData, target = DEFAULT_SLA_TARGET }: UptimeHeroGaugeProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     const id = requestAnimationFrame(() => setMounted(true));
     return () => cancelAnimationFrame(id);
   }, []);
 
-  const isCompliant = uptime >= SLA_TARGET;
+  const isCompliant = uptime >= target;
 
   // Compact gauge geometry tuned for a denser hero layout.
   const SIZE = 300;

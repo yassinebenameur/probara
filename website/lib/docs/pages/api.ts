@@ -418,6 +418,44 @@ export const API_PAGE: DocPage = {
       ],
     },
     {
+      id: "slas",
+      title: "SLA endpoints",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Endpoint", "Purpose"],
+          rows: [
+            ["`GET /api/v1/slas`", "List SLAs with the running period's status; `monitor_id` keeps SLAs covering that monitor"],
+            ["`POST /api/v1/slas`", "Create an SLA"],
+            ["`GET /api/v1/slas/{id}`", "Get an SLA"],
+            ["`PATCH /api/v1/slas/{id}`", "Partially update an SLA; `monitor_ids` replaces the explicit monitor set"],
+            ["`DELETE /api/v1/slas/{id}`", "Delete an SLA and its issued reports"],
+            [
+              "`GET /api/v1/slas/{id}/report`",
+              "Live report for `period` (`2026-09`, `2026-Q3`, `2026-W39`), `from`/`to` local dates, or the running period; `format=json|csv|pdf` returns a download",
+            ],
+            ["`GET /api/v1/slas/{id}/reports`", "List issued (frozen) reports"],
+            [
+              "`POST /api/v1/slas/{id}/reports`",
+              "Issue a closed period's report (`{\"period\": \"2026-09\"}`, default the last closed period); `409` when already issued",
+            ],
+            ["`GET /api/v1/sla-reports/{id}`", "An issued report as frozen; `format=json|csv|pdf` returns a download"],
+          ],
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Create an SLA",
+          code:
+            '{\n  "name": "Checkout platform",\n  "target_pct": 99.9,\n  "aggregation": "serial",\n  "period": "monthly",\n  "timezone": "Europe/Paris",\n  "degraded_counts_as_down": false,\n  "tags": ["checkout"],\n  "monitor_ids": ["<monitor-id>"]\n}',
+        },
+        {
+          type: "paragraph",
+          text: "Report semantics, composite rules and limits are covered in [SLA reporting](/docs/slas/).",
+        },
+      ],
+    },
+    {
       id: "dashboard",
       title: "Dashboard endpoints",
       blocks: [

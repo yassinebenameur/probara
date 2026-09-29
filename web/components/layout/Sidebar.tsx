@@ -16,6 +16,7 @@ import {
   Wrench,
   MapPin,
   ScrollText,
+  Target,
 } from 'lucide-react';
 import { getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
@@ -54,6 +55,7 @@ const navGroups: NavGroup[] = [
       { name: 'Dependencies', href: '/dependencies', icon: Workflow },
       { name: 'Maintenance', href: '/maintenance', icon: Wrench },
       { name: 'Status Pages', href: '/status-pages', icon: FileText },
+      { name: 'SLAs', href: '/slas', icon: Target },
     ],
   },
   {
