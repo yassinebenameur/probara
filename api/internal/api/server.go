@@ -32,6 +32,7 @@ import (
 	oidcmappinghandlers "github.com/yassinebenameur/probara/api/internal/handlers/oidcmappings"
 	otlphandlers "github.com/yassinebenameur/probara/api/internal/handlers/otlp"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
+	slahandlers "github.com/yassinebenameur/probara/api/internal/handlers/slas"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
 	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
@@ -62,6 +63,7 @@ import (
 	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
+	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	"github.com/yassinebenameur/probara/shared/ai"
@@ -325,6 +327,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/probe", meshHdlrs.ProbeNow)
 			})
 
+			// SLAs and their reports (live, issued, exported)
+			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo), Log: log}
+			r.Route("/slas", slaHandlers.Routes)
+			r.Route("/sla-reports", slaHandlers.ReportRoutes)
+
 			// Maintenance windows
 			maintenanceService := maintenancewindowservice.NewService(dbClient)
 			maintenanceHandlers := maintenancewindowhandlers.NewHandlers(maintenanceService, log)
@@ -353,6 +360,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
+				r.Get("/{id}/metrics-snapshots", monitorHandlers.GetMonitorMetricsSnapshots)
 				r.Delete("/{id}/history", monitorHandlers.DeleteMonitorHistory)
 				r.Post("/{id}/run", monitorHandlers.RunMonitorNow)
 				r.Get("/{id}/artifacts/screenshot", monitorHandlers.GetSyntheticBrowserScreenshot)

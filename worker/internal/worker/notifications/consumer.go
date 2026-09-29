@@ -30,6 +30,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -127,9 +128,7 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	defer cancel()
 	defer func() {
 		if err != nil {
-			attempt := deliveryAttempt(msg)
-			index := min(attempt-1, len(DefaultBackOff)-1)
-			err = queue.RetryAfter(err, DefaultBackOff[index])
+			err = queue.RetryAfter(err, retryDelay(err, deliveryAttempt(msg)))
 		}
 	}()
 	var envelope notifications.DispatchEnvelope
@@ -184,6 +183,35 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		return nil
 	}
 
+	// Hold a share lock on the alert row from the status check through the
+	// send. Resolution is an UPDATE of that row, so it waits until this send
+	// has finished, and the resolve it then publishes is delivered after it.
+	// Without the lock a trigger that passed the check could still reach the
+	// provider after a concurrent worker delivered the resolve. Resolves need
+	// no lock: they are only published once the resolution committed.
+	var tx *sql.Tx
+	if envelope.EventType != "resolved" {
+		tx, err = c.db.BeginTx(ctx, nil)
+		if err != nil {
+			entry.WithError(err).Error("Failed to begin alert lock")
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+	}
+	superseded, alertStatus, err := eventSuperseded(ctx, tx, envelope)
+	if err != nil {
+		entry.WithError(err).Error("Failed to load alert status")
+		return err
+	}
+	if superseded {
+		// A retried trigger/reminder/ack must never land after the resolve:
+		// PagerDuty and Opsgenie accept a resolve for an alert they do not
+		// have yet as a no-op, so a late trigger would open an incident that
+		// nothing ever closes.
+		entry.Info("Alert resolved since publish; dropping superseded event")
+		return nil
+	}
+
 	configMap := map[string]any{}
 	if len(channel.Config) > 0 {
 		if err := json.Unmarshal(channel.Config, &configMap); err != nil {
@@ -198,23 +226,86 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 
 	attempt := deliveryAttempt(msg)
-	err = p.Send(ctx, plugin.DispatchRequest{
-		Channel: plugin.ChannelRef{
-			ID:     envelope.ChannelID,
-			Name:   channel.Name,
-			Config: configMap,
-		},
-		Event:     envelope.Event,
-		EventType: envelope.EventType,
-		Attempt:   attempt,
-	})
+	send := func(eventType string, event notifications.AlertEvent) error {
+		return p.Send(ctx, plugin.DispatchRequest{
+			Channel: plugin.ChannelRef{
+				ID:     envelope.ChannelID,
+				Name:   channel.Name,
+				Config: configMap,
+			},
+			Event:     event,
+			EventType: eventType,
+			Attempt:   attempt,
+		})
+	}
+	err = send(envelope.EventType, envelope.Event)
+	if err == nil && ackOvertaken(p.Manifest(), envelope.EventType, alertStatus) {
+		// The operator acknowledged while this trigger sat on a retry
+		// backoff, so the "acknowledged" envelope has already been delivered
+		// and the provider dropped it as a no-op for an incident it did not
+		// have yet. It is never re-sent (acknowledged_sent_at is set), so the
+		// incident just opened would escalate forever. Acknowledge it now,
+		// still under the share lock, so nothing else can reorder the pair.
+		ack := envelope.Event
+		ack.Type = present.EventAcknowledged
+		ack.Alert.Status = alertStatus
+		err = send(present.EventAcknowledged, ack)
+	}
 	if err != nil {
-		entry.WithError(err).WithField("attempt", attempt).Warn("Plugin Send failed; will retry per BackOff schedule")
+		if plugin.IsPermanent(err) {
+			// Retrying cannot fix a rejected credential or a deleted
+			// webhook; ack so the failure is logged once, not five times.
+			entry.WithError(err).WithField("attempt", attempt).Error("Plugin Send failed permanently; dropping message")
+			return nil
+		}
+		// A failed follow-up acknowledge also retries the trigger. Paging
+		// providers dedupe triggers on the alert's key, so the redelivery
+		// re-opens nothing and gets the acknowledge a second chance.
+		entry.WithError(err).WithField("attempt", attempt).Warn("Plugin Send failed; will retry")
 		return err
 	}
 
 	entry.WithField("attempt", attempt).Debug("Notification delivered")
 	return nil
+}
+
+// ackOvertaken reports whether a just-delivered trigger landed after the
+// alert was acknowledged, on a channel that tracks acknowledgement state.
+// That happens when a trigger fails and waits on the JetStream backoff while
+// the operator acknowledges: the alerter publishes "acknowledged" as soon as
+// the created slot is claimed, not when it is delivered, so the ack can
+// overtake it. It also covers a later escalation tier paging a channel after
+// the ack.
+func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
+	return eventType == present.EventCreated &&
+		alertStatus == "acknowledged" &&
+		m.HasCapability(plugin.CapabilityAcknowledge)
+}
+
+// eventSuperseded reports whether envelope describes an alert state the
+// alert has since left: any non-resolve event for an alert that is now
+// resolved (or deleted). JetStream redelivers failed messages on a backoff,
+// so a created/reminder/acknowledged message can outlive the resolve the
+// alerter published after it; delivering it then would reopen the alert on
+// the provider side. Resolves always go through (tx is nil for them). For
+// every other event it reads the status FOR SHARE inside tx, and the caller
+// keeps tx open until the send returns.
+func eventSuperseded(ctx context.Context, tx *sql.Tx, envelope notifications.DispatchEnvelope) (superseded bool, status string, err error) {
+	if envelope.EventType == "resolved" {
+		return false, "", nil
+	}
+	alertID, err := uuid.Parse(envelope.AlertID)
+	if err != nil {
+		return false, "", fmt.Errorf("invalid alert id %q: %w", envelope.AlertID, err)
+	}
+	err = tx.QueryRowContext(ctx, `SELECT status FROM alerts WHERE id = $1 FOR SHARE`, alertID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	return status == "resolved", status, nil
 }
 
 type loadedChannel struct {
@@ -243,6 +334,15 @@ func (c *Consumer) loadChannel(ctx context.Context, channelIDStr string) (*loade
 	}
 	channel.Config = json.RawMessage(cfgBytes)
 	return &channel, nil
+}
+
+// retryDelay is the delayed-NAK interval after a failed attempt: the
+// provider's Retry-After when it sent one, else the BackOff schedule.
+func retryDelay(err error, attempt int) time.Duration {
+	if d, ok := plugin.RetryAfterDelay(err); ok {
+		return d
+	}
+	return DefaultBackOff[min(attempt-1, len(DefaultBackOff)-1)]
 }
 
 // deliveryAttempt uses JetStream metadata, defaulting to 1. Used to populate

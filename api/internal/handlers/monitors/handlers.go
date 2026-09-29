@@ -860,17 +860,7 @@ func (h *Handlers) GetMonitorAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeValue := models.MonitorAnalyticsRange24h
-	switch models.MonitorAnalyticsRange(r.URL.Query().Get("range")) {
-	case models.MonitorAnalyticsRange1h,
-		models.MonitorAnalyticsRange6h,
-		models.MonitorAnalyticsRange24h,
-		models.MonitorAnalyticsRange7d,
-		models.MonitorAnalyticsRange30d,
-		models.MonitorAnalyticsRange90d,
-		models.MonitorAnalyticsRange365d:
-		rangeValue = models.MonitorAnalyticsRange(r.URL.Query().Get("range"))
-	}
+	rangeValue := parseAnalyticsRange(r)
 
 	response, err := h.resultService.GetMonitorAnalytics(r.Context(), tenantUUID, monitorID, rangeValue)
 	if err != nil {
@@ -885,6 +875,62 @@ func (h *Handlers) GetMonitorAnalytics(w http.ResponseWriter, r *http.Request) {
 			"range":      rangeValue,
 		}).Error("Failed to get monitor analytics")
 		errors.WriteInternalError(w, "failed to get monitor analytics")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// parseAnalyticsRange reads ?range=, defaulting unknown values to 24h.
+func parseAnalyticsRange(r *http.Request) models.MonitorAnalyticsRange {
+	switch value := models.MonitorAnalyticsRange(r.URL.Query().Get("range")); value {
+	case models.MonitorAnalyticsRange1h,
+		models.MonitorAnalyticsRange6h,
+		models.MonitorAnalyticsRange24h,
+		models.MonitorAnalyticsRange7d,
+		models.MonitorAnalyticsRange30d,
+		models.MonitorAnalyticsRange90d,
+		models.MonitorAnalyticsRange365d:
+		return value
+	}
+	return models.MonitorAnalyticsRange24h
+}
+
+// GetMonitorMetricsSnapshots handles GET /api/v1/monitors/{id}/metrics-snapshots
+func (h *Handlers) GetMonitorMetricsSnapshots(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+
+	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		errors.WriteValidationError(w, "invalid monitor ID")
+		return
+	}
+
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	rangeValue := parseAnalyticsRange(r)
+	response, err := h.resultService.GetMonitorMetricsSnapshots(r.Context(), tenantUUID, monitorID, rangeValue)
+	if err != nil {
+		if err.Error() == "monitor not found" {
+			errors.WriteNotFoundError(w, "monitor not found")
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":      err.Error(),
+			"tenant_id":  tenantID,
+			"monitor_id": monitorID,
+			"range":      rangeValue,
+		}).Error("Failed to get monitor metrics snapshots")
+		errors.WriteInternalError(w, "failed to get monitor metrics snapshots")
 		return
 	}
 

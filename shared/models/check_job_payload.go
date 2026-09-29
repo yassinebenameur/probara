@@ -27,6 +27,14 @@ type HTTPJSONAssertion struct {
 	CaseInsensitive *bool   `json:"case_insensitive,omitempty"`
 }
 
+// HTTPDisplayField names a value the worker pulls out of a JSON response body
+// and records with the check result, for display on the monitors list. It is
+// never an assertion: a missing path or a non-JSON body leaves the check alone.
+type HTTPDisplayField struct {
+	Label string `json:"label,omitempty"`
+	Path  string `json:"path"` // gjson path
+}
+
 // HTTPMonitorConfig represents configuration for HTTP monitors
 type HTTPMonitorConfig struct {
 	URL                      string                `json:"url"`
@@ -42,6 +50,7 @@ type HTTPMonitorConfig struct {
 	BodyAssertions           []HTTPBodyAssertion   `json:"body_assertions,omitempty"`
 	ResponseHeaderAssertions []HTTPHeaderAssertion `json:"response_header_assertions,omitempty"`
 	JSONAssertions           []HTTPJSONAssertion   `json:"json_assertions,omitempty"`
+	DisplayFields            []HTTPDisplayField    `json:"display_fields,omitempty"`
 	MaxLatencyMs             *int64                `json:"max_latency_ms,omitempty"`
 	FollowRedirects          *bool                 `json:"follow_redirects,omitempty"`
 	MaxRedirects             *int                  `json:"max_redirects,omitempty"`

@@ -274,7 +274,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Tenant telemetry retention is `0` for unlimited retention or a value from 30 through 3,650 days. Cleanup covers check results, mesh history, and rollup data according to the scheduler's [retention tasks](/docs/operations/#retention).",
+            "Tenant telemetry retention is `0` for unlimited retention or a value from 30 through 3,650 days, and governs mesh history. Raw check results are kept 30 days for every tenant; longer ranges are answered from hourly and daily rollups, kept 400 days. See the scheduler's [retention tasks](/docs/operations/#retention).",
         },
         {
           type: "callout",

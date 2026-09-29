@@ -3,8 +3,11 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,29 +21,68 @@ import (
 func SetupPostgresDB(ctx context.Context, t testing.TB) (*shareddb.Client, func()) {
 	t.Helper()
 
-	container, dsn := startPostgresContainer(ctx, t)
+	dsn, teardown := startPostgres(ctx, t)
 	dbClient, err := newTestDBClient(ctx, dsn, 20*time.Second)
 	if err != nil {
-		_ = container.Terminate(ctx)
+		teardown()
 		t.Fatalf("newTestDBClient() error = %v", err)
 	}
 
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
-		_ = container.Terminate(ctx)
 		dbClient.Close()
+		teardown()
 		t.Fatalf("runtime.Caller() failed")
 	}
 	migrationsPath := filepath.Join(filepath.Dir(filename), "..", "db", "migrations")
 	if err := shareddb.Migrate(dbClient.DB, migrationsPath); err != nil {
-		_ = container.Terminate(ctx)
 		dbClient.Close()
+		teardown()
 		t.Fatalf("Migrate() error = %v", err)
 	}
 
 	return dbClient, func() {
 		dbClient.Close()
-		_ = container.Terminate(ctx)
+		teardown()
+	}
+}
+
+// testPostgresDSNEnv points integration tests at an already-running Postgres
+// instead of a testcontainers one, for environments without a Docker daemon.
+// Each test gets a fresh database on that server, dropped afterwards; the DSN's
+// role needs CREATEDB.
+const testPostgresDSNEnv = "PROBARA_TEST_POSTGRES_DSN"
+
+// startPostgres returns a DSN for an empty database and a teardown func.
+func startPostgres(ctx context.Context, t testing.TB) (string, func()) {
+	t.Helper()
+	if base := os.Getenv(testPostgresDSNEnv); base != "" {
+		return createScratchDatabase(ctx, t, base)
+	}
+	container, dsn := startPostgresContainer(ctx, t)
+	return dsn, func() { _ = container.Terminate(ctx) }
+}
+
+func createScratchDatabase(ctx context.Context, t testing.TB, base string) (string, func()) {
+	t.Helper()
+	admin, err := shareddb.NewClient(base)
+	if err != nil {
+		t.Fatalf("connect %s: %v", testPostgresDSNEnv, err)
+	}
+	name := "probara_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
+		admin.Close()
+		t.Fatalf("create scratch database: %v", err)
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		admin.Close()
+		t.Fatalf("parse %s: %v", testPostgresDSNEnv, err)
+	}
+	u.Path = "/" + name
+	return u.String(), func() {
+		_, _ = admin.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+		admin.Close()
 	}
 }
 

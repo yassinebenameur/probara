@@ -1,3 +1,55 @@
+# [1.0.0-alpha.76](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.75...v1.0.0-alpha.76) (2026-09-29)
+
+
+### Bug Fixes
+
+* **web:** chart Mongo cluster metrics over the selected range ([6d19f00](https://github.com/yassinebenameur/probara/commit/6d19f0050a7ab6ab4ec9ca90025dbdfb9a39451b))
+
+
+### Features
+
+* **monitors:** show JSON response values on the monitors list ([f2e299d](https://github.com/yassinebenameur/probara/commit/f2e299d07ba96417847371f63c2018a2c70c5188))
+* **sla:** SLA definitions, calendar reports, error budgets and exports ([8ed3bda](https://github.com/yassinebenameur/probara/commit/8ed3bdae3e71a2cf41fa2f2f1f2d9067f1122ae9))
+
+# [1.0.0-alpha.75](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.74...v1.0.0-alpha.75) (2026-09-29)
+
+
+### Bug Fixes
+
+* **scheduler:** keep raw check_results 30 days, serve longer ranges from rollups ([663b275](https://github.com/yassinebenameur/probara/commit/663b27521fe4fa9dbbea842d04460095180ba619))
+
+# [1.0.0-alpha.74](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.73...v1.0.0-alpha.74) (2026-09-28)
+
+
+### Bug Fixes
+
+* **api:** alert list time window keeps alerts that are still open ([2c34e01](https://github.com/yassinebenameur/probara/commit/2c34e01a5ea675a17f0d9478192f6490e603958d))
+* **notifications:** close four delivery bugs found in review ([e9a6e8b](https://github.com/yassinebenameur/probara/commit/e9a6e8ba2a55d7fe1bfb6eb3b113ba11e379fa0a))
+* **notifications:** order acks after late triggers, unblock alerter claims ([e46b7c1](https://github.com/yassinebenameur/probara/commit/e46b7c15f1001321de0e64bdc36d70f114e00e86))
+* **notifications:** serialize paging delivery with resolution; keep SMS Retry-After ([96605e9](https://github.com/yassinebenameur/probara/commit/96605e97efea50afb8d6decebd33416181583105))
+* **web:** align the top bar with the sidebar header ([a24d8a5](https://github.com/yassinebenameur/probara/commit/a24d8a5a26108cc06b7de7f8f67ad7cf1ca46c6e))
+* **web:** centre row-action icons; stop search icons covering text ([6226a32](https://github.com/yassinebenameur/probara/commit/6226a32d87d9ef034229e2650746a485c6ef5734))
+* **web:** correct dashboard attention, open-incident badge, expired keys ([c6d1047](https://github.com/yassinebenameur/probara/commit/c6d1047bee4725626ef75f2fdd9babc5197aae51))
+
+
+### Features
+
+* **notifications:** harden the channel plugin system and add paging, Telegram and SMS channels ([309f20a](https://github.com/yassinebenameur/probara/commit/309f20ae6ddafc131d60cac856beb3aad582d72e))
+* **web:** fold Mesh into Locations, trim sidebar chrome ([4e5b447](https://github.com/yassinebenameur/probara/commit/4e5b447073237c6a775d5ce0746ecbe2240b43ae))
+* **web:** settings tabs; alert channels move into Settings ([b59a0b8](https://github.com/yassinebenameur/probara/commit/b59a0b8b565a5f4581b328dd9359a01e693fbde7)), closes [settings#dashboard-groups](https://github.com/settings/issues/dashboard-groups)
+
+# [1.0.0-alpha.73](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.72...v1.0.0-alpha.73) (2026-09-06)
+
+
+### Bug Fixes
+
+* **monitorstate:** keep the state timeline monotonic when a writer loses the lock race ([195c2dc](https://github.com/yassinebenameur/probara/commit/195c2dcf496feb69228b98fe13c812673f746996))
+
+
+### Features
+
+* **monitors:** add Prometheus instant-query monitor type ([c817eb1](https://github.com/yassinebenameur/probara/commit/c817eb1f2eab34d655a7307f824d281bf5ad5fcd))
+
 # [1.0.0-alpha.72](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.71...v1.0.0-alpha.72) (2026-09-04)
 
 

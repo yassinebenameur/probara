@@ -73,9 +73,9 @@ export function AddMonitorPicker({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1.5 text-xs font-medium text-cyan-400 transition-colors hover:border-cyan-500/50 hover:bg-cyan-500/20"
+        className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-slate-900/80 px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/[0.15] hover:text-slate-200"
       >
-        <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+        <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
         Add monitor
       </button>
       {open && (

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +15,20 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
+func TestMain(m *testing.M) {
+	// httptest servers listen on loopback, which the default egress policy
+	// refuses; the policy itself is covered in package plugin.
+	plugin.Configure(plugin.Runtime{})
+	os.Exit(m.Run())
+}
+
 func TestManifest(t *testing.T) {
 	m := New().Manifest()
 	if m.Type != "discord" {
 		t.Errorf("Type = %q", m.Type)
 	}
-	if !m.HasCapability(plugin.CapabilityRenderedAlert) {
-		t.Error("expected CapabilityRenderedAlert")
+	if !m.HasCapability(plugin.CapabilityTestable) {
+		t.Error("expected CapabilityTestable")
 	}
 	if !m.Fields[0].Secret {
 		t.Error("webhook_url should be marked Secret")
@@ -38,6 +46,7 @@ func TestValidate(t *testing.T) {
 		{"missing", `{}`, true},
 		{"http", `{"webhook_url":"http://discord.com/api/webhooks/123/abc"}`, true},
 		{"wrong host", `{"webhook_url":"https://example.com/api/webhooks/123/abc"}`, true},
+		{"lookalike suffix", `{"webhook_url":"https://notdiscord.com/api/webhooks/123/abc"}`, true},
 	}
 	p := New()
 	for _, tc := range cases {
@@ -94,8 +103,10 @@ func TestSend_FailsOnNon2xx(t *testing.T) {
 }
 
 func TestColorFor_DistinguishesEventTypes(t *testing.T) {
-	if colorFor("created") == colorFor("resolved") || colorFor("resolved") == colorFor("reminder") {
-		t.Error("color should differ per event type")
+	down := plugin.DispatchRequest{Event: sampleEvent()}
+	resolved := plugin.DispatchRequest{Event: sampleEvent(), EventType: "resolved"}
+	if colorFor(down.View().Tone) == colorFor(resolved.View().Tone) {
+		t.Error("color should differ between a firing and a resolved alert")
 	}
 }
 
@@ -120,8 +131,8 @@ func sampleEvent() notifications.AlertEvent {
 
 func TestBuildEmbed_RootCauseAnnotation(t *testing.T) {
 	event := sampleEvent()
-	payload := buildEmbed(plugin.DispatchRequest{Event: event})
-	if embedHasField(payload, "Likely Caused By") {
+	payload := buildEmbed(plugin.DispatchRequest{Event: event}.View())
+	if embedHasField(payload, "Likely caused by") {
 		t.Fatal("root-cause field rendered without a root cause set")
 	}
 
@@ -129,8 +140,8 @@ func TestBuildEmbed_RootCauseAnnotation(t *testing.T) {
 	downSince := event.Timestamp.Add(-10 * time.Minute)
 	event.Alert.RootCauseMonitorName = &name
 	event.Alert.RootCauseDownSince = &downSince
-	payload = buildEmbed(plugin.DispatchRequest{Event: event})
-	if !embedHasField(payload, "Likely Caused By") {
+	payload = buildEmbed(plugin.DispatchRequest{Event: event}.View())
+	if !embedHasField(payload, "Likely caused by") {
 		t.Fatalf("root-cause field missing: %+v", payload.Embeds)
 	}
 }

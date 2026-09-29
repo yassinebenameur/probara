@@ -225,7 +225,7 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search metrics"
-                className="input input-xs w-full pl-8"
+                className="input input-xs w-full !pl-8"
               />
             </div>
             <p className="text-[10px] text-slate-600">

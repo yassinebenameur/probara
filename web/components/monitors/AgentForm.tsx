@@ -263,7 +263,7 @@ export default function AgentForm({
       });
 
       if (options.length === 0 && apiKeys.length > 0) {
-        setApiKeyError('No stored API key secrets found. Create a key in Settings to use here.');
+        setApiKeyError('No stored API key secrets found. Create a key in Settings → Access to use here.');
       }
     } finally {
       setLoadingApiKeys(false);
@@ -388,7 +388,7 @@ export default function AgentForm({
                     </div>
                     {apiKeyError && <p className="text-xs text-amber-300">{apiKeyError}</p>}
                     {!apiKeyError && apiKeyOptions.length === 0 && (
-                      <p className="text-xs text-slate-500">No stored API keys. Create one in Settings to auto-fill.</p>
+                      <p className="text-xs text-slate-500">No stored API keys. Create one in Settings → Access to auto-fill.</p>
                     )}
                   </div>
                 </FormField>
@@ -549,6 +549,7 @@ export default function AgentForm({
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}
+          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
           onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}

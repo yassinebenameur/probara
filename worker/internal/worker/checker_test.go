@@ -571,6 +571,85 @@ func TestHTTPChecker_JSONAssertions(t *testing.T) {
 	}
 }
 
+func TestHTTPChecker_DisplayFields(t *testing.T) {
+	long := strings.Repeat("é", 100)
+	body := `{"version":"1.2.3","build":42,"checks":{"db":"ok"},"regions":["eu","us"],"notes":"` + long + `"}`
+	status := http.StatusOK
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	checker := NewHTTPChecker(1024*1024, false, nil)
+	configJSON, _ := json.Marshal(map[string]interface{}{
+		"url":    server.URL,
+		"method": "GET",
+		"display_fields": []map[string]interface{}{
+			{"label": "ver", "path": "version"},
+			{"path": "build"},
+			{"label": "db", "path": "checks.db"},
+			{"label": "missing", "path": "nope.nothing"},
+			{"label": "checks", "path": "checks"},
+			{"label": "regions", "path": "regions"},
+			{"label": "notes", "path": "notes"},
+		},
+	})
+
+	decode := func(r CheckResult) []httpDisplayValue {
+		t.Helper()
+		var env httpMetricsEnvelope
+		if err := json.Unmarshal(r.MetricsData, &env); err != nil || env.HTTP == nil {
+			t.Fatalf("metrics_data = %s, err %v", r.MetricsData, err)
+		}
+		return env.HTTP.DisplayValues
+	}
+
+	result := checker.Check(context.Background(), configJSON, 10)
+	if result.Status != "success" {
+		t.Fatalf("Check() status = %v, want success", result.Status)
+	}
+	got := decode(result)
+	want := []httpDisplayValue{
+		{Label: "ver", Path: "version", Value: "1.2.3"},
+		{Path: "build", Value: "42"},
+		{Label: "db", Path: "checks.db", Value: "ok"},
+		{Label: "checks", Path: "checks", Value: `{"db":"ok"}`},
+		{Label: "regions", Path: "regions", Value: `["eu","us"]`},
+		{Label: "notes", Path: "notes", Value: strings.Repeat("é", maxDisplayValueRunes-1) + "…"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("display values = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("display value %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// A failing check still reports what the body said.
+	status = http.StatusServiceUnavailable
+	failed := checker.Check(context.Background(), configJSON, 10)
+	if failed.Status != "failure" {
+		t.Fatalf("Check() status = %v, want failure", failed.Status)
+	}
+	if vals := decode(failed); len(vals) == 0 || vals[0].Value != "1.2.3" {
+		t.Errorf("failure display values = %+v, want version 1.2.3 first", vals)
+	}
+
+	// A non-JSON body yields no values and does not fail the check.
+	status = http.StatusOK
+	body = "not json"
+	plain := checker.Check(context.Background(), configJSON, 10)
+	if plain.Status != "success" {
+		t.Fatalf("Check() status = %v, want success (display fields are not assertions)", plain.Status)
+	}
+	if vals := decode(plain); len(vals) != 0 {
+		t.Errorf("non-JSON display values = %+v, want none", vals)
+	}
+}
+
 func TestHTTPChecker_MaxLatencyThreshold(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)

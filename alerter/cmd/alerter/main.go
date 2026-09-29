@@ -14,6 +14,8 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
+	"github.com/yassinebenameur/probara/shared/netguard"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin/builtin/email"
 	"github.com/yassinebenameur/probara/shared/queue"
@@ -51,6 +53,16 @@ func main() {
 			natsClient = client
 		}
 	}
+
+	// Process-level plugin runtime: deep-link origin and the egress (SSRF)
+	// policy every notification channel dials through.
+	plugin.Configure(plugin.Runtime{
+		AppBaseURL: cfg.AppBaseURL,
+		Egress: netguard.Policy{
+			BlockPrivate: cfg.NotificationBlockPrivateIPs,
+			AllowedCIDRs: cfg.NotificationAllowedCIDRs,
+		},
+	})
 
 	// Wire SMTP backend into the email alert plugin.
 	if cfg.SMTPHost != "" && cfg.SMTPFrom != "" {

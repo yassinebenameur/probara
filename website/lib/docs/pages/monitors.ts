@@ -211,6 +211,10 @@ export const MONITORS_PAGE: DocPage = {
               "GJSON path plus existence, equality, text, regex, numeric, or boolean operation",
             ],
             [
+              "`display_fields`",
+              "Up to 5 `{label, path}` pairs (GJSON path) whose values from the latest response are shown on the monitors list; never assertions",
+            ],
+            [
               "`case_insensitive`",
               "Optional case-insensitive text comparison where supported",
             ],
@@ -249,14 +253,19 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "JSON assertions support `exists`, `equals`, `not_equals`, `contains`, `not_contains`, `regex`, `number_gt`, `number_gte`, `number_lt`, `number_lte`, and `bool_is`. Result metrics can include the final URL, redirect count, phase timings, TLS version and cipher, certificate validity, issuer, subject names, expiry, and assertion detail.",
+            "JSON assertions support `exists`, `equals`, `not_equals`, `contains`, `not_contains`, `regex`, `number_gt`, `number_gte`, `number_lt`, `number_lte`, and `bool_is`. Result metrics can include the final URL, redirect count, phase timings, TLS version and cipher, certificate validity, issuer, subject names, expiry, assertion detail, and resolved display values.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Display fields put facts from a JSON response on the monitors list, such as a deployed `version` or `checks.db`. Configure them under List display values in the form's Meta section. They are resolved on every check, including failed ones, and shown as chips from the latest result (a chip without a label shows only the value), with the full value in the preview panel. A path that is missing or a body that is not JSON shows nothing and never fails the check. Scalars are shown as text and objects or arrays as raw JSON, cut to 64 characters. Each value is stored with its check result for the raw result retention window and is visible to anyone who can read the monitor, so do not point a display field at sensitive data.",
         },
         {
           type: "code",
           language: "json",
           title: "HTTP monitor config",
           code:
-            '{\n  "url": "https://api.example.com/health",\n  "method": "GET",\n  "headers": {"Accept": "application/json"},\n  "expected_status_classes": ["2xx"],\n  "json_assertions": [\n    {"path": "status", "op": "equals", "value": "ok"},\n    {"path": "queue_depth", "op": "number_lt", "value": 100}\n  ],\n  "max_latency_ms": 1500,\n  "follow_redirects": true,\n  "max_redirects": 5,\n  "tls_min_days_valid": 14,\n  "collect_timing": true\n}',
+            '{\n  "url": "https://api.example.com/health",\n  "method": "GET",\n  "headers": {"Accept": "application/json"},\n  "expected_status_classes": ["2xx"],\n  "json_assertions": [\n    {"path": "status", "op": "equals", "value": "ok"},\n    {"path": "queue_depth", "op": "number_lt", "value": 100}\n  ],\n  "display_fields": [\n    {"label": "ver", "path": "version"}\n  ],\n  "max_latency_ms": 1500,\n  "follow_redirects": true,\n  "max_redirects": 5,\n  "tls_min_days_valid": 14,\n  "collect_timing": true\n}',
         },
       ],
     },
@@ -454,7 +463,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "The monitor detail page charts the collected cluster metrics over recent checks — replication lag (with the warn/max thresholds drawn as reference lines), connections, WiredTiger cache, memory, and, for the cumulative operation, network, and process-CPU counters, per-second rates derived between consecutive checks.",
+            "The monitor detail page charts the collected cluster metrics over the overview's selected range — replication lag (with the warn/max thresholds drawn as reference lines), connections, WiredTiger cache, memory, and, for the cumulative operation, network, and process-CPU counters, per-second rates derived between consecutive snapshots. Longer ranges are downsampled to at most 720 snapshots (the newest check per time bucket), so gauges become point samples while rates stay averaged across the skipped checks. The snapshots come from raw check results, so ranges beyond the 30-day raw retention show the last 30 days.",
         },
         {
           type: "callout",

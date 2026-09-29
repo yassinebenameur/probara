@@ -272,6 +272,15 @@ export interface HTTPJSONAssertion {
   case_insensitive?: boolean;
 }
 
+/** A value pulled from the JSON response and shown on the monitors list. */
+export interface HTTPDisplayField {
+  label?: string;
+  /** gjson path */
+  path: string;
+}
+
+export const MAX_HTTP_DISPLAY_FIELDS = 5;
+
 export interface HTTPMonitorConfig {
   url: string;
   method: string;
@@ -286,6 +295,7 @@ export interface HTTPMonitorConfig {
   body_assertions?: HTTPBodyAssertion[];
   response_header_assertions?: HTTPHeaderAssertion[];
   json_assertions?: HTTPJSONAssertion[];
+  display_fields?: HTTPDisplayField[];
   max_latency_ms?: number;
   follow_redirects?: boolean;
   max_redirects?: number;
@@ -1332,6 +1342,8 @@ export interface IncidentListResponse {
   page: number;
   page_size: number;
   total: number;
+  /** Unresolved incidents for the tenant, independent of pagination. */
+  open_total: number;
 }
 
 export interface CreateIncidentRequest {
@@ -1414,9 +1426,15 @@ export type PluginFieldType =
   | 'email_list'
   | 'textarea'
   | 'secret'
-  | 'bool';
+  | 'bool'
+  | 'select';
 
-export type PluginCapability = 'rendered_alert' | 'raw_event' | 'testable';
+export type PluginCapability = 'testable' | 'acknowledge';
+
+export interface PluginFieldOption {
+  value: string;
+  label: string;
+}
 
 export interface PluginField {
   key: string;
@@ -1427,6 +1445,7 @@ export interface PluginField {
   required?: boolean;
   secret?: boolean;
   default?: unknown;
+  options?: PluginFieldOption[];
 }
 
 export interface PluginManifest {
@@ -1714,6 +1733,13 @@ export interface HTTPMetrics {
   timing?: HTTPTimingInfo;
   tls?: HTTPTLSInfo;
   assertions_failed?: string[];
+  display_values?: HTTPDisplayValue[];
+}
+
+export interface HTTPDisplayValue {
+  label?: string;
+  path: string;
+  value: string;
 }
 
 export interface GRPCMetricsEnvelope {
@@ -1858,6 +1884,23 @@ export interface MonitorAnalyticsResponse {
   uptime_series: MonitorAnalyticsSeriesPoint[];
   latency_series: MonitorAnalyticsSeriesPoint[];
   downtime_periods: MonitorAnalyticsDowntimePeriod[];
+}
+
+// Per-check metrics_data snapshots over a range, downsampled server-side to
+// the newest snapshot per bucket_seconds bucket (raw retention clamps long
+// ranges: is_partial).
+export interface MetricsSnapshot {
+  created_at: string;
+  metrics_data: unknown;
+}
+
+export interface MonitorMetricsSnapshotsResponse {
+  monitor_id: string;
+  range: MonitorAnalyticsRange;
+  bucket_seconds: number;
+  coverage_start: string;
+  is_partial: boolean;
+  snapshots: MetricsSnapshot[];
 }
 
 export interface RunMonitorNowResponse {

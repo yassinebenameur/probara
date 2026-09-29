@@ -1,9 +1,3 @@
-// Package plugin defines the alert channel plugin contract and registry.
-//
-// Each alert channel integration (Teams, Slack, email, …) ships as a Plugin
-// implementation that self-registers in its init() function. The API, alerter,
-// and worker import this package to discover and dispatch through plugins
-// without knowing about specific channel types.
 package plugin
 
 // FieldType is the manifest-declared input type for a config field. The
@@ -17,6 +11,9 @@ const (
 	FieldTypeTextarea  FieldType = "textarea"
 	FieldTypeSecret    FieldType = "secret"
 	FieldTypeBool      FieldType = "bool"
+	// FieldTypeSelect renders a dropdown over Field.Options; the stored value
+	// is the chosen Option.Value.
+	FieldTypeSelect FieldType = "select"
 )
 
 // Capability is an opt-in feature flag a plugin advertises in its manifest.
@@ -25,19 +22,22 @@ const (
 type Capability string
 
 const (
-	// CapabilityRenderedAlert means the plugin accepts the shared RenderedAlert
-	// payload. Most plugins should set this so they get free formatting.
-	CapabilityRenderedAlert Capability = "rendered_alert"
-
-	// CapabilityRawEvent means the plugin wants the raw AlertEvent in addition
-	// to (or instead of) the rendered form — e.g. Slack blocks or Teams cards
-	// that need full event detail.
-	CapabilityRawEvent Capability = "raw_event"
-
 	// CapabilityTestable means the plugin's Send is safe to invoke with a
 	// synthetic event for the "test channel" API.
 	CapabilityTestable Capability = "testable"
+
+	// CapabilityAcknowledge means the plugin also wants the "acknowledged"
+	// event when an operator acknowledges an alert it was paged for — paging
+	// tools (PagerDuty, Opsgenie) use it to stop their own escalation. Chat
+	// and email channels leave it off so an ack does not post a new message.
+	CapabilityAcknowledge Capability = "acknowledge"
 )
+
+// Option is one choice of a FieldTypeSelect field.
+type Option struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
 
 // Field describes a single config input for a plugin. The frontend renders
 // from this; the backend uses Secret to drive encryption at rest.
@@ -50,6 +50,7 @@ type Field struct {
 	Required    bool      `json:"required,omitempty"`
 	Secret      bool      `json:"secret,omitempty"`
 	Default     any       `json:"default,omitempty"`
+	Options     []Option  `json:"options,omitempty"`
 }
 
 // Manifest is the self-description a plugin returns from Manifest(). It drives

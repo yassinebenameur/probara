@@ -289,8 +289,6 @@ body::before {
   padding: 12px 16px;
   font-size: 0.75rem;
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-subtle);
 }

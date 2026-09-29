@@ -159,6 +159,9 @@ type IncidentListResponse struct {
 	Page     int                `json:"page"`
 	PageSize int                `json:"page_size"`
 	Total    int                `json:"total"`
+	// OpenTotal counts the tenant's incidents that are not resolved,
+	// independent of pagination.
+	OpenTotal int `json:"open_total"`
 }
 
 // IncidentListItem represents the incident list summary row.

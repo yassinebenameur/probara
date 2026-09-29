@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS sla_reports;
+DROP TABLE IF EXISTS sla_monitors;
+DROP TABLE IF EXISTS slas;

@@ -250,6 +250,10 @@ export const API_PAGE: DocPage = {
               "List raw check results",
             ],
             [
+              "`GET /api/v1/monitors/{id}/metrics-snapshots?range=24h`",
+              "Per-check `metrics_data` over a range, newest snapshot per bucket (≤720), clamped to 30-day raw retention",
+            ],
+            [
               "`GET /api/v1/monitors/{id}/analytics`",
               "Get summary, series, latency, downtime, and coverage",
             ],
@@ -414,6 +418,44 @@ export const API_PAGE: DocPage = {
       ],
     },
     {
+      id: "slas",
+      title: "SLA endpoints",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Endpoint", "Purpose"],
+          rows: [
+            ["`GET /api/v1/slas`", "List SLAs with the running period's status; `monitor_id` keeps SLAs covering that monitor"],
+            ["`POST /api/v1/slas`", "Create an SLA"],
+            ["`GET /api/v1/slas/{id}`", "Get an SLA"],
+            ["`PATCH /api/v1/slas/{id}`", "Partially update an SLA; `monitor_ids` replaces the explicit monitor set"],
+            ["`DELETE /api/v1/slas/{id}`", "Delete an SLA and its issued reports"],
+            [
+              "`GET /api/v1/slas/{id}/report`",
+              "Live report for `period` (`2026-09`, `2026-Q3`, `2026-W39`), `from`/`to` local dates, or the running period; `format=json|csv|pdf` returns a download",
+            ],
+            ["`GET /api/v1/slas/{id}/reports`", "List issued (frozen) reports"],
+            [
+              "`POST /api/v1/slas/{id}/reports`",
+              "Issue a closed period's report (`{\"period\": \"2026-09\"}`, default the last closed period); `409` when already issued",
+            ],
+            ["`GET /api/v1/sla-reports/{id}`", "An issued report as frozen; `format=json|csv|pdf` returns a download"],
+          ],
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Create an SLA",
+          code:
+            '{\n  "name": "Checkout platform",\n  "target_pct": 99.9,\n  "aggregation": "serial",\n  "period": "monthly",\n  "timezone": "Europe/Paris",\n  "degraded_counts_as_down": false,\n  "tags": ["checkout"],\n  "monitor_ids": ["<monitor-id>"]\n}',
+        },
+        {
+          type: "paragraph",
+          text: "Report semantics, composite rules and limits are covered in [SLA reporting](/docs/slas/).",
+        },
+      ],
+    },
+    {
       id: "dashboard",
       title: "Dashboard endpoints",
       blocks: [
@@ -464,7 +506,7 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since`, `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
@@ -539,7 +581,7 @@ export const API_PAGE: DocPage = {
           type: "table",
           columns: ["Method and path", "Purpose"],
           rows: [
-            ["`GET /api/v1/incidents`", "List incidents"],
+            ["`GET /api/v1/incidents`", "List incidents (paginated; `total` counts all, `open_total` counts unresolved)"],
             ["`POST /api/v1/incidents`", "Create an incident"],
             ["`GET /api/v1/incidents/{id}`", "Get full incident context"],
             ["`PATCH /api/v1/incidents/{id}`", "Update metadata"],
@@ -870,7 +912,7 @@ export const API_PAGE: DocPage = {
             "Retry GET requests with bounded exponential backoff; do not blindly retry create, run-now, import execution, notification tests, or incident timeline writes.",
             "Use import preview before import execution and monitor test before saving complex check configuration.",
             "Respect `401`, `403`, `404`, `409`, `410`, `422`, and rate/transport failures as distinct conditions.",
-            "Send `***`, or leave the field out, to keep a masked designated secret field; send an empty string when you deliberately want to clear it.",
+            "Send `***`, or leave the field out, to keep a masked designated secret field on a monitor; send an empty string when you deliberately want to clear it. Notification channel configs differ: an empty string also keeps the stored secret, and `null` clears an optional one (a required one is then rejected by validation).",
             "Page collections and retain returned coverage metadata for analytics.",
             "Store full API keys only in a secret manager; the API returns them once.",
             "Log resource IDs and status codes without logging bearer keys, push tokens, installer output, WebSocket headers, connection strings, or webhook secrets.",

@@ -29,14 +29,16 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
   image — it bundles Chromium for browser checks.
 - **Alerting with context** — consecutive-failure thresholds and latency
   anomaly detection, alert grouping, reminders, and maintenance windows.
-  Delivery over email, Slack, Discord, Teams, and webhooks. Incidents, a
+  Delivery over email, Slack, Discord, Teams, PagerDuty, Opsgenie / Jira
+  Service Management (acknowledgements synced), Telegram, SMS via Twilio, and
+  signed webhooks. Incidents, a
   service dependency graph, and optional LLM root-cause analysis through any
   OpenAI-compatible endpoint (configuration only — no hardcoded vendor; local
   vLLM/Ollama work).
 - **Access control** — multi-tenancy, OIDC SSO with group-to-role mapping,
   admin/editor/viewer roles, an audit log, read/write-scoped API keys, monitor
   and channel secrets encrypted at rest, and an SSRF guard applied to every
-  checker that dials out.
+  checker and notification channel that dials out.
 - **Status pages** — theme the built-in page, or replace the entire Go
   template with draft preview and versioned publish/revert. Pages update live
   over NATS and server-sent events.
@@ -324,6 +326,9 @@ Retention setting semantics:
 | `ALERT_GROUP_MAX_CHILDREN` | no | `5` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_USE_TLS` | optional | varies |
 | `ALERT_EMAIL_TO` | optional | empty |
+| `APP_BASE_URL` (deep links in every channel; also api + worker) | optional | empty |
+| `NOTIFICATION_BLOCK_PRIVATE_IPS` (channel egress guard; also api + worker) | no | `true` |
+| `NOTIFICATION_ALLOWED_CIDRS` (internal channel receivers; also api + worker) | no | empty |
 
 ### Status Page
 

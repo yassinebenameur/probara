@@ -18,7 +18,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         title: 'Alerts reach nobody',
         detail:
           'This monitor uses custom routing but has no channel assigned. Assign one, or switch it to the workspace default routing.',
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'custom_channels_disabled':
       return {
@@ -26,7 +26,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         detail: `All ${routing.assigned_channels} channel${routing.assigned_channels === 1 ? '' : 's'} assigned to this monitor ${
           routing.assigned_channels === 1 ? 'is' : 'are'
         } disabled, so nothing is delivered. Re-enable one or assign another.`,
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'no_tenant_default_channels':
       return {
@@ -40,7 +40,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         title: 'Alerts reach nobody',
         detail:
           'Every channel in the workspace default routing is disabled, so nothing is delivered. Re-enable one in settings.',
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'group_rollup_unrouted':
       return {
@@ -48,7 +48,7 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
         detail: `${
           routing.rollup_group_name ? `Group "${routing.rollup_group_name}"` : 'A group'
         } rolls this monitor's alerts into its own, and that group has no active channel — so this monitor's own channels never fire.`,
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
     case 'group_rollup_paused':
       return {
@@ -62,37 +62,15 @@ export function describeAlertRouting(routing?: AlertRouting): { title: string; d
       return {
         title: 'Alerts reach nobody',
         detail: 'No active notification channel resolves for this monitor.',
-        fixHref: '/alert-channels',
+        fixHref: '/settings?tab=channels',
       };
   }
 }
 
 /**
- * Icon-only marker for list rows, where a text pill would crowd the name, type,
- * and tags. The reason lives in the tooltip and the accessible label; the
- * detail page carries the full sentence. Renders nothing when alerts are
- * routed, or when the monitor is paused — a paused monitor never alerts, so its
- * routing is moot until it resumes (the same rule the dashboard count applies).
- */
-export function AlertRoutingBadge({ routing, enabled = true }: { routing?: AlertRouting; enabled?: boolean }) {
-  const described = describeAlertRouting(routing);
-  if (!described || !enabled) return null;
-
-  return (
-    <span
-      className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-300"
-      title={`No alert route — ${described.detail}`}
-      aria-label={`No alert route — ${described.detail}`}
-      role="img"
-    >
-      <BellOff className="h-2.5 w-2.5" strokeWidth={2} />
-    </span>
-  );
-}
-
-/**
  * Full-width callout for the monitor detail view, with a link to the fix.
- * Silent for paused monitors (see AlertRoutingBadge).
+ * Silent for paused monitors: a paused monitor never alerts, so its routing
+ * is moot until it resumes (the same rule the dashboard count applies).
  */
 export function AlertRoutingNotice({ routing, enabled = true }: { routing?: AlertRouting; enabled?: boolean }) {
   const described = describeAlertRouting(routing);

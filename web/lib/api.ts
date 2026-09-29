@@ -1,4 +1,5 @@
 import { getApiKey, clearApiKey } from './auth';
+import { slaReportQueryString } from './sla';
 import {
   clearSelectedTenantId,
   emitTenantChange,
@@ -27,6 +28,8 @@ import type {
   StatusPageLibraryTemplateListResponse,
   MonitorResultsResponse,
   MonitorAnalyticsResponse,
+  MonitorMetricsSnapshotsResponse,
+  MonitorAnalyticsRange,
   DependencyGraph,
   DependencyMonitor,
   DependencySuggestionResult,
@@ -909,6 +912,18 @@ export async function getMonitorAnalytics(
   return apiRequest<MonitorAnalyticsResponse>('GET', path);
 }
 
+export async function getMonitorMetricsSnapshots(
+  id: string,
+  params?: { range?: MonitorAnalyticsRange }
+): Promise<MonitorMetricsSnapshotsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.range) queryParams.append('range', params.range);
+
+  const queryString = queryParams.toString();
+  const path = `/v1/monitors/${id}/metrics-snapshots${queryString ? `?${queryString}` : ''}`;
+  return apiRequest<MonitorMetricsSnapshotsResponse>('GET', path);
+}
+
 export async function getDashboardOverview(params?: {
   range?: '1h' | '24h' | '7d' | '30d' | '90d' | '365d';
   failures_limit?: number;
@@ -1228,6 +1243,12 @@ export async function bulkUpdateAlerting(data: {
 }
 
 export async function exportMonitors(): Promise<{ blob: Blob; filename: string }> {
+  return apiDownload('/v1/monitors/export', 'monitors-export.yaml');
+}
+
+// GETs a file attachment with the same auth, tenant and refresh handling as
+// apiRequest, and returns it with the server's Content-Disposition filename.
+async function apiDownload(path: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
   const apiKey = getApiKey();
   if (!apiKey) {
     await ensureTenantSelected();
@@ -1245,7 +1266,7 @@ export async function exportMonitors(): Promise<{ blob: Blob; filename: string }
       }
     }
 
-    return fetch(getApiUrl('/v1/monitors/export'), {
+    return fetch(getApiUrl(path), {
       method: 'GET',
       headers,
       credentials: 'include',
@@ -1282,7 +1303,7 @@ export async function exportMonitors(): Promise<{ blob: Blob; filename: string }
       throw error;
     }
 
-    throw new Error(`Export failed with status ${response.status}`);
+    throw new Error(`Download failed with status ${response.status}`);
   }
 
   const contentDisposition = response.headers.get('content-disposition') || '';
@@ -1290,6 +1311,50 @@ export async function exportMonitors(): Promise<{ blob: Blob; filename: string }
 
   return {
     blob: await response.blob(),
-    filename: filenameMatch?.[1] || 'monitors-export.yaml',
+    filename: filenameMatch?.[1] || fallbackFilename,
   };
+}
+
+// SLAs and their reports (lib/sla.ts holds the types)
+export async function getSlas(params?: { monitor_id?: string }): Promise<import('./sla').Sla[]> {
+  const query = params?.monitor_id ? `?monitor_id=${encodeURIComponent(params.monitor_id)}` : '';
+  const res = await apiRequest<{ items: import('./sla').Sla[] }>('GET', `/v1/slas${query}`);
+  return res?.items ?? [];
+}
+
+export function getSla(id: string) {
+  return apiRequest<import('./sla').Sla>('GET', `/v1/slas/${id}`);
+}
+
+export function createSla(data: import('./sla').SlaInput) {
+  return apiRequest<import('./sla').Sla>('POST', '/v1/slas', data);
+}
+
+export function updateSla(id: string, data: Partial<import('./sla').SlaInput>) {
+  return apiRequest<import('./sla').Sla>('PATCH', `/v1/slas/${id}`, data);
+}
+
+export function deleteSla(id: string) {
+  return apiRequest<void>('DELETE', `/v1/slas/${id}`);
+}
+
+export function getSlaReport(id: string, query: import('./sla').SlaReportQuery = {}) {
+  return apiRequest<import('./sla').SlaReport>('GET', `/v1/slas/${id}/report${slaReportQueryString(query)}`);
+}
+
+export function downloadSlaReport(id: string, query: import('./sla').SlaReportQuery, format: import('./sla').SlaExportFormat) {
+  return apiDownload(`/v1/slas/${id}/report${slaReportQueryString(query, format)}`, `sla-report.${format}`);
+}
+
+export async function getIssuedSlaReports(id: string): Promise<import('./sla').SlaReportRef[]> {
+  const res = await apiRequest<{ items: import('./sla').SlaReportRef[] }>('GET', `/v1/slas/${id}/reports`);
+  return res?.items ?? [];
+}
+
+export function issueSlaReport(id: string, period?: string) {
+  return apiRequest<import('./sla').SlaReport>('POST', `/v1/slas/${id}/reports`, period ? { period } : {});
+}
+
+export function downloadIssuedSlaReport(reportId: string, format: import('./sla').SlaExportFormat) {
+  return apiDownload(`/v1/sla-reports/${reportId}?format=${format}`, `sla-report.${format}`);
 }

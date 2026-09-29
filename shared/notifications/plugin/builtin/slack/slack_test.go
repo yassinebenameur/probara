@@ -6,21 +6,33 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
+
+func TestMain(m *testing.M) {
+	// httptest servers listen on loopback, which the default egress policy
+	// refuses; the policy itself is covered in package plugin.
+	plugin.Configure(plugin.Runtime{})
+	os.Exit(m.Run())
+}
 
 func TestManifest(t *testing.T) {
 	m := New().Manifest()
 	if m.Type != "slack" {
 		t.Errorf("Type = %q, want slack", m.Type)
 	}
-	if !m.HasCapability(plugin.CapabilityRawEvent) {
-		t.Error("expected CapabilityRawEvent")
+	if !m.HasCapability(plugin.CapabilityTestable) {
+		t.Error("expected CapabilityTestable")
+	}
+	if m.HasCapability(plugin.CapabilityAcknowledge) {
+		t.Error("chat channels must not opt into acknowledged events")
 	}
 	if len(m.Fields) != 1 {
 		t.Errorf("expected 1 field, got %d", len(m.Fields))
@@ -40,6 +52,9 @@ func TestValidate(t *testing.T) {
 		{"missing url", `{}`, true},
 		{"http (not https)", `{"webhook_url":"http://hooks.slack.com/services/T/B/X"}`, true},
 		{"wrong host", `{"webhook_url":"https://example.com/webhook"}`, true},
+		{"lookalike suffix", `{"webhook_url":"https://notslack.com/services/T/B/X"}`, true},
+		{"slack.com as a subdomain label", `{"webhook_url":"https://hooks.slack.com.evil.io/services/T/B/X"}`, true},
+		{"embedded credentials", `{"webhook_url":"https://u:p@hooks.slack.com/services/T/B/X"}`, true},
 		{"empty body", ``, true},
 	}
 	p := New()
@@ -114,8 +129,8 @@ func TestSend_MissingWebhookFails(t *testing.T) {
 
 func TestBuildBlockKit_RootCauseAnnotation(t *testing.T) {
 	event := sampleEvent()
-	payload := buildBlockKit(plugin.DispatchRequest{Event: event})
-	if blocksContain(payload, "Likely Caused By") {
+	payload := buildBlockKit(plugin.DispatchRequest{Event: event}.View())
+	if blocksContain(payload, "Likely caused by") {
 		t.Fatal("root-cause field rendered without a root cause set")
 	}
 
@@ -123,14 +138,43 @@ func TestBuildBlockKit_RootCauseAnnotation(t *testing.T) {
 	downSince := time.Date(2026, 5, 24, 11, 50, 0, 0, time.UTC)
 	event.Alert.RootCauseMonitorName = &name
 	event.Alert.RootCauseDownSince = &downSince
-	payload = buildBlockKit(plugin.DispatchRequest{Event: event})
-	if !blocksContain(payload, "Likely Caused By") || !blocksContain(payload, "Postgres prod") {
+	payload = buildBlockKit(plugin.DispatchRequest{Event: event}.View())
+	if !blocksContain(payload, "Likely caused by") || !blocksContain(payload, "Postgres prod") {
 		t.Fatalf("root-cause field missing from payload: %+v", payload.Blocks)
+	}
+}
+
+func TestBuildBlockKit_EscapesMrkdwnControlSequences(t *testing.T) {
+	event := sampleEvent()
+	msg := "upstream said <!channel> & <@U123>"
+	event.Alert.LastError = &msg
+	raw, _ := json.Marshal(buildBlockKit(plugin.DispatchRequest{Event: event}.View()))
+	if strings.Contains(string(raw), "<!channel>") || strings.Contains(string(raw), "<@U123>") {
+		t.Fatalf("probe error reached Slack unescaped: %s", raw)
+	}
+}
+
+func TestSend_ClassifiesPermanentFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("no_service"))
+	}))
+	defer srv.Close()
+
+	err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: map[string]any{"webhook_url": srv.URL}},
+		Event:   sampleEvent(),
+	})
+	if !plugin.IsPermanent(err) || !strings.Contains(err.Error(), "no_service") {
+		t.Fatalf("err = %v, want permanent error carrying the provider reason", err)
 	}
 }
 
 func blocksContain(payload slackPayload, substr string) bool {
 	for _, block := range payload.Blocks {
+		if block.Text != nil && strings.Contains(block.Text.Text, substr) {
+			return true
+		}
 		for _, field := range block.Fields {
 			if strings.Contains(field.Text, substr) {
 				return true
@@ -156,5 +200,25 @@ func sampleEvent() notifications.AlertEvent {
 			FailureCount: 3,
 			LastError:    &lastErr,
 		},
+	}
+}
+
+// An HTML error page is mostly '<' and '>', which escaping triples; the
+// limit must hold after escaping or Slack rejects the whole message.
+func TestEscapeTruncate_LimitAppliesAfterEscaping(t *testing.T) {
+	in := strings.Repeat("<b>x</b>", 1000)
+	out := escapeTruncate(in, maxLastError)
+	if n := utf8.RuneCountInString(out); n > maxLastError {
+		t.Fatalf("escaped length = %d, want <= %d", n, maxLastError)
+	}
+	if strings.Contains(strings.TrimSuffix(out, "…"), "<") {
+		t.Fatal("unescaped '<' in output")
+	}
+	body := strings.TrimSuffix(out, "…")
+	if i := strings.LastIndex(body, "&"); i >= 0 && !strings.HasSuffix(body[i:], ";") && !strings.Contains(body[i:], ";") {
+		t.Fatalf("cut splits an entity: %q", body[i:])
+	}
+	if got := escapeTruncate("a<b", 10); got != "a&lt;b" {
+		t.Fatalf("short input = %q, want untouched escape", got)
 	}
 }

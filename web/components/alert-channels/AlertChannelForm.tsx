@@ -12,7 +12,7 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import PluginCatalog from './PluginCatalog';
-import SchemaForm from './SchemaForm';
+import SchemaForm, { CLEARED_SECRET } from './SchemaForm';
 
 interface AlertChannelFormProps {
   channel?: AlertChannel;
@@ -245,7 +245,9 @@ function stripEmptySecrets(
   if (!isEdit) return config;
   const out: Record<string, unknown> = { ...config };
   for (const f of manifest.fields) {
-    if (f.secret && isEmpty(out[f.key])) {
+    // null is the explicit "remove the stored value" (SchemaForm's
+    // CLEARED_SECRET) and must reach the API; blank means keep.
+    if (f.secret && out[f.key] !== CLEARED_SECRET && isEmpty(out[f.key])) {
       delete out[f.key];
     }
   }

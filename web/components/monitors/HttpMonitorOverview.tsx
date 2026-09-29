@@ -3,7 +3,8 @@
 import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { CheckResult, Monitor, HTTPMetricsEnvelope, HTTPTimingInfo, HTTPTLSInfo } from '@/lib/types';
 import { calculateUptime, calculateLatencyStats, getOperationalResults } from '@/lib/monitor-utils';
-import { UptimeHeroGauge, SLA_TARGET } from './UptimeHeroGauge';
+import { UptimeHeroGauge } from './UptimeHeroGauge';
+import { DEFAULT_SLA_TARGET } from '@/lib/sla';
 import Pill from '@/components/ui/Pill';
 
 export type TimeRange = '1h' | '6h' | '24h' | '7d';
@@ -841,7 +842,7 @@ export default function HttpMonitorOverview({
         <div
           className="pointer-events-none absolute inset-0 rounded-2xl"
           style={{
-            background: uptime >= SLA_TARGET
+            background: uptime >= DEFAULT_SLA_TARGET
               ? 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(255,90,36,0.08), transparent)'
               : 'radial-gradient(ellipse 60% 60% at 50% 40%, rgba(240,74,90,0.08), transparent)',
           }}

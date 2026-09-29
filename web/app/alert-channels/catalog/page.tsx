@@ -12,9 +12,8 @@ import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 
 const CAPABILITY_LABELS: Record<string, string> = {
-  rendered_alert: 'Rendered',
-  raw_event: 'Native format',
   testable: 'Test from UI',
+  acknowledge: 'Syncs acknowledgements',
 };
 
 export default function AlertChannelCatalogPage() {
@@ -39,10 +38,9 @@ export default function AlertChannelCatalogPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Alert channel catalog"
-        subtitle="Browse the integrations bundled with this Probara installation."
         action={
           <Button variant="ghost" size="sm" icon={<ArrowLeft strokeWidth={1.75} />} asChild>
-            <Link href="/alert-channels">Back to channels</Link>
+            <Link href="/settings?tab=channels">Back to channels</Link>
           </Button>
         }
       />

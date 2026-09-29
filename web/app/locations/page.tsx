@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MapPin, Plus, RefreshCw, Rocket, Pencil, Trash2 } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
@@ -11,6 +12,8 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { LocationDeployModal } from '@/components/locations/LocationDeployModal';
+import MeshMatrix from '@/components/locations/MeshMatrix';
+import Tabs, { useUrlTab } from '@/components/ui/Tabs';
 import { Location } from '@/lib/types';
 import { createLocation, deleteLocation, getLocations, updateLocation } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/monitor-utils';
@@ -57,6 +60,7 @@ export default function LocationsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deployLocation, setDeployLocation] = useState<Location | null>(null);
   const initialLoadDone = useRef(false);
+  const [tab, setTab] = useUrlTab(['locations', 'mesh'] as const);
 
   const loadLocations = async (showSpinner = true) => {
     try {
@@ -177,11 +181,34 @@ export default function LocationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Private locations"
-        subtitle="Run checks from your own networks via remote workers"
-        action={addAction}
+        subtitle={tab === 'locations' ? 'Run checks from your own networks via remote workers' : undefined}
+        action={tab === 'locations' ? (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RefreshCw strokeWidth={1.75} />}
+              onClick={() => loadLocations()}
+            >
+              Refresh
+            </Button>
+            {addAction}
+          </>
+        ) : undefined}
       />
 
-      {canManageLocations && showCreate && (
+      <Tabs
+        tabs={[
+          { id: 'locations', label: 'Locations' },
+          { id: 'mesh', label: 'Mesh' },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+
+      {tab === 'mesh' && <MeshMatrix />}
+
+      {tab === 'locations' && canManageLocations && showCreate && (
         <Panel title="New location" subtitle="Name the network or site this location represents.">
           <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <div className="flex-1">
@@ -237,20 +264,7 @@ export default function LocationsPage() {
         </Panel>
       )}
 
-      <Panel
-        title="Locations"
-        subtitle="Each location groups the workers deployed in one of your networks."
-        actions={(
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={<RefreshCw strokeWidth={1.75} />}
-            onClick={() => loadLocations()}
-          >
-            Refresh
-          </Button>
-        )}
-      >
+      {tab === 'locations' && <Panel>
         {loading ? (
           <div className="text-sm text-slate-500">Loading locations…</div>
         ) : error ? (
@@ -269,14 +283,14 @@ export default function LocationsPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-white/[0.06]">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                <tr className="text-left text-xs text-slate-500">
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Slug</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Mesh</th>
                   <th className="px-3 py-2">Monitors</th>
                   <th className="px-3 py-2">Last seen</th>
-                  <th className="px-3 py-2">Actions</th>
+                  <th className="px-3 py-2"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.04] text-sm text-slate-200">
@@ -344,10 +358,7 @@ export default function LocationsPage() {
                     <td className="px-3 py-3">{connectionPill(location)}</td>
                     <td className="px-3 py-3">
                       {location.mesh_endpoint ? (
-                        <div className="flex items-center gap-1.5">
-                          <Pill tone="info" size="xs">Mesh</Pill>
-                          <span className="font-mono text-xs text-slate-400">{location.mesh_endpoint}</span>
-                        </div>
+                        <span className="font-mono text-xs text-slate-400">{location.mesh_endpoint}</span>
                       ) : (
                         <span className="text-xs text-slate-500">—</span>
                       )}
@@ -359,31 +370,23 @@ export default function LocationsPage() {
                       {location.last_seen_at ? formatTimeAgo(location.last_seen_at) : '—'}
                     </td>
                     <td className="px-3 py-3">
-                      {canManageLocations && <div className="flex items-center gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="xs"
+                      {canManageLocations && <div className="flex items-center justify-end gap-0.5">
+                        <IconButton
                           icon={<Rocket strokeWidth={1.75} />}
+                          label="Deploy a worker"
                           onClick={() => setDeployLocation(location)}
-                        >
-                          Deploy
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="xs"
+                        />
+                        <IconButton
                           icon={<Pencil strokeWidth={1.75} />}
+                          label="Edit name and mesh endpoint"
                           onClick={() => startRename(location)}
-                        >
-                          Rename
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="xs"
+                        />
+                        <IconButton
                           icon={<Trash2 strokeWidth={1.75} />}
+                          label="Delete"
                           onClick={() => setPendingDelete(location)}
-                        >
-                          Delete
-                        </Button>
+                          danger
+                        />
                       </div>}
                     </td>
                   </tr>
@@ -392,7 +395,7 @@ export default function LocationsPage() {
             </table>
           </div>
         )}
-      </Panel>
+      </Panel>}
 
       <ConfirmDialog
         open={canManageLocations && pendingDelete !== null}

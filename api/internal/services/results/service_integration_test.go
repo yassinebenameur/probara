@@ -155,3 +155,59 @@ func assertClose(t *testing.T, got, want float64) {
 		t.Fatalf("value = %.6f, want %.6f", got, want)
 	}
 }
+
+func TestService_GetMonitorMetricsSnapshots_KeepsNewestPerBucket(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	svc := NewService(dbClient, groupservice.NewService(dbClient), sharedanalytics.NewRepository(dbClient))
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "metrics-snapshots")
+	monitorID := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "mongo-a")
+	now := time.Now().UTC()
+
+	insert := func(at time.Time, metrics string) {
+		id := testutil.InsertCheckResult(ctx, t, dbClient, tenantID, monitorID, at, "success", "monitor", testutil.IntPtr(5))
+		if metrics == "" {
+			return
+		}
+		if _, err := dbClient.ExecContext(ctx, `UPDATE check_results SET metrics_data = $1::jsonb WHERE id = $2`, metrics, id); err != nil {
+			t.Fatalf("set metrics_data: %v", err)
+		}
+	}
+	insert(now.Add(-2*time.Hour), `{"n":0}`)                  // outside 1h
+	insert(now.Add(-50*time.Minute), `{"n":1}`)               // own bucket
+	insert(now.Add(-30*time.Minute+time.Second), `{"n":2}`)   // same 5s bucket as n=3,
+	insert(now.Add(-30*time.Minute+3*time.Second), `{"n":3}`) // which is newer and wins
+	insert(now.Add(-10*time.Minute), "")                      // no metrics_data
+
+	resp, err := svc.GetMonitorMetricsSnapshots(ctx, tenantID, monitorID, models.MonitorAnalyticsRange1h)
+	if err != nil {
+		t.Fatalf("GetMonitorMetricsSnapshots(1h) error = %v", err)
+	}
+	if resp.BucketSeconds != 5 || resp.IsPartial {
+		t.Fatalf("1h bucket = %ds partial = %v, want 5s, not partial", resp.BucketSeconds, resp.IsPartial)
+	}
+	var got []string
+	for _, s := range resp.Snapshots {
+		got = append(got, string(s.MetricsData))
+	}
+	if len(got) != 2 || got[0] != `{"n": 1}` || got[1] != `{"n": 3}` {
+		t.Fatalf("1h snapshots = %v, want [{\"n\": 1} {\"n\": 3}]", got)
+	}
+
+	resp, err = svc.GetMonitorMetricsSnapshots(ctx, tenantID, monitorID, models.MonitorAnalyticsRange24h)
+	if err != nil {
+		t.Fatalf("GetMonitorMetricsSnapshots(24h) error = %v", err)
+	}
+	if len(resp.Snapshots) != 3 {
+		t.Fatalf("24h snapshots = %d, want 3 (2-minute buckets keep n=0, n=1, n=3)", len(resp.Snapshots))
+	}
+
+	otherTenant := testutil.InsertTenant(ctx, t, dbClient, "metrics-snapshots-other")
+	if _, err := svc.GetMonitorMetricsSnapshots(ctx, otherTenant, monitorID, models.MonitorAnalyticsRange24h); err == nil {
+		t.Fatalf("GetMonitorMetricsSnapshots from another tenant succeeded, want monitor not found")
+	}
+}

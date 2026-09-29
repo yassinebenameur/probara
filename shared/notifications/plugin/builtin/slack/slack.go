@@ -1,20 +1,20 @@
-// Package slack implements the Slack incoming-webhook alert plugin. The
-// plugin uses Slack's Block Kit format (CapabilityRawEvent) for rich
-// rendering rather than the deprecated "attachments" array.
+// Package slack implements the Slack incoming-webhook alert plugin. It posts
+// Block Kit messages (not the deprecated "attachments" array) built from the
+// shared presentation in package present.
 package slack
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 const pluginType = "slack"
@@ -29,9 +29,9 @@ type Plugin struct {
 	httpClient *http.Client
 }
 
-// New constructs a plugin with the default HTTP client (10s timeout).
+// New constructs a plugin with the guarded notification HTTP client.
 func New() *Plugin {
-	return &Plugin{httpClient: &http.Client{Timeout: 10 * time.Second}}
+	return &Plugin{httpClient: plugin.NewHTTPClient(10 * time.Second)}
 }
 
 // Manifest returns the Slack plugin self-description.
@@ -42,9 +42,8 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		Description: "Post alerts to a Slack channel using an Incoming Webhook URL.",
 		IconKey:     "slack",
 		DocsURL:     "https://api.slack.com/messaging/webhooks",
-		Version:     "1.0.0",
+		Version:     "1.1.0",
 		Capabilities: []plugin.Capability{
-			plugin.CapabilityRawEvent,
 			plugin.CapabilityTestable,
 		},
 		Fields: []plugin.Field{
@@ -67,17 +66,11 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if cfg.WebhookURL == "" {
-		return errors.New("webhook_url is required")
-	}
-	u, err := url.Parse(cfg.WebhookURL)
+	u, err := plugin.ParseHTTPSURL(cfg.WebhookURL, "webhook_url")
 	if err != nil {
-		return fmt.Errorf("webhook_url is not a valid URL: %w", err)
+		return err
 	}
-	if u.Scheme != "https" {
-		return errors.New("webhook_url must use https")
-	}
-	if !strings.Contains(u.Host, "slack.com") {
+	if !plugin.HostMatches(u.Host, "slack.com") {
 		return errors.New("webhook_url must point at a slack.com host")
 	}
 	return nil
@@ -85,32 +78,11 @@ func (p *Plugin) Validate(raw json.RawMessage) error {
 
 // Send posts a Block Kit payload to the channel's webhook URL.
 func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
-	webhook, ok := stringFromMap(req.Channel.Config, "webhook_url")
-	if !ok || webhook == "" {
-		return errors.New("slack channel missing webhook_url")
+	webhook := req.Channel.String("webhook_url")
+	if webhook == "" {
+		return plugin.Permanent(errors.New("slack channel missing webhook_url"))
 	}
-
-	payload, err := json.Marshal(buildBlockKit(req))
-	if err != nil {
-		return fmt.Errorf("marshal slack payload: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("build slack request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("post slack webhook: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("slack webhook returned status %d", resp.StatusCode)
-	}
-	return nil
+	return plugin.PostJSON(ctx, p.httpClient, webhook, buildBlockKit(req.View()), nil, "slack webhook")
 }
 
 // Block Kit JSON: https://api.slack.com/reference/block-kit/blocks
@@ -120,10 +92,10 @@ type slackPayload struct {
 }
 
 type slackBlock struct {
-	Type      string      `json:"type"`
-	Text      *slackText  `json:"text,omitempty"`
-	Fields    []slackText `json:"fields,omitempty"`
-	Accessory any         `json:"accessory,omitempty"`
+	Type     string      `json:"type"`
+	Text     *slackText  `json:"text,omitempty"`
+	Fields   []slackText `json:"fields,omitempty"`
+	Elements []any       `json:"elements,omitempty"`
 }
 
 type slackText struct {
@@ -131,112 +103,114 @@ type slackText struct {
 	Text string `json:"text"`
 }
 
-func buildBlockKit(req plugin.DispatchRequest) slackPayload {
-	event := req.Event
-	eventType := eventTypeOf(req)
-	emoji := emojiFor(eventType)
-	label := headerLabel(eventType)
-	if event.Alert.IsLatencyAnomaly() {
-		label = latencyLabel(eventType)
-	} else if event.Alert.IsHostMetric() {
-		label = event.Alert.HostMetricLabel(eventType)
-	} else if event.Alert.IsTLSExpiry() {
-		label = event.Alert.TLSExpiryLabel(eventType)
-	}
-	header := fmt.Sprintf("%s %s: %s", emoji, label, event.Alert.MonitorName)
+type slackButton struct {
+	Type string    `json:"type"`
+	Text slackText `json:"text"`
+	URL  string    `json:"url"`
+}
 
-	fields := []slackText{
-		{Type: "mrkdwn", Text: fmt.Sprintf("*Monitor*\n%s", event.Alert.MonitorName)},
-		{Type: "mrkdwn", Text: fmt.Sprintf("*Policy*\n%s", event.Alert.PolicyName)},
-		{Type: "mrkdwn", Text: fmt.Sprintf("*Status*\n%s", event.Alert.Status)},
-		{Type: "mrkdwn", Text: fmt.Sprintf("*Failure Count*\n%d", event.Alert.FailureCount)},
+// Slack caps a section at 10 fields, a header at 150 characters and a
+// section's text at 3000. An over-long block fails the whole message with 400
+// invalid_blocks, which is permanent, so the notification is lost — budget
+// the variable part and leave room for the fixed markup around it.
+const (
+	maxFields     = 10
+	maxHeaderLen  = 150
+	maxSectionLen = 3000
+	maxLastError  = maxSectionLen - 100
+)
+
+func buildBlockKit(m present.Message) slackPayload {
+	header := fmt.Sprintf("%s %s", emojiFor(m.Tone), m.Title)
+
+	blocks := []slackBlock{
+		{Type: "header", Text: &slackText{Type: "plain_text", Text: truncate(header, maxHeaderLen)}},
+		{Type: "section", Text: &slackText{Type: "mrkdwn", Text: escapeTruncate(m.Summary, maxSectionLen)}},
 	}
-	if event.Alert.LastError != nil && *event.Alert.LastError != "" {
-		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*Last Error*\n%s", *event.Alert.LastError)})
-	}
-	if summary := event.Alert.MetricSummary(); summary != "" {
-		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n%s", event.Alert.MetricLabel(), summary)})
-	}
-	if names := event.Alert.FailingLocationNames(); names != "" {
-		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*Failing Locations*\n%s", names)})
-	}
-	if event.Alert.RootCauseMonitorName != nil && *event.Alert.RootCauseMonitorName != "" {
-		text := *event.Alert.RootCauseMonitorName
-		if event.Alert.RootCauseDownSince != nil {
-			text = fmt.Sprintf("%s (down since %s)", text, event.Alert.RootCauseDownSince.Format(time.RFC1123))
+
+	var fields []slackText
+	for _, f := range m.Facts() {
+		if len(fields) == maxFields {
+			break
 		}
-		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*Likely Caused By*\n%s", text)})
+		fields = append(fields, slackText{Type: "mrkdwn", Text: fmt.Sprintf("*%s*\n%s", escape(f.Label), escape(f.Value))})
 	}
-
-	ts := event.Timestamp
-	if ts.IsZero() {
-		ts = time.Now()
+	if len(fields) > 0 {
+		blocks = append(blocks, slackBlock{Type: "section", Fields: fields})
 	}
+	if m.LastError != "" {
+		blocks = append(blocks, slackBlock{
+			Type: "section",
+			Text: &slackText{Type: "mrkdwn", Text: "*Last error*\n```" + escapeTruncate(m.LastError, maxLastError) + "```"},
+		})
+	}
+	if m.ActionURL != "" {
+		blocks = append(blocks, slackBlock{
+			Type: "actions",
+			Elements: []any{slackButton{
+				Type: "button",
+				Text: slackText{Type: "plain_text", Text: m.ActionLabel},
+				URL:  m.ActionURL,
+			}},
+		})
+	}
+	blocks = append(blocks, slackBlock{
+		Type:     "context",
+		Elements: []any{slackText{Type: "mrkdwn", Text: fmt.Sprintf("%s · %s", m.StatusWord, m.SentAt)}},
+	})
 
 	return slackPayload{
-		Text: header, // notification fallback for clients that don't render blocks
-		Blocks: []slackBlock{
-			{
-				Type: "header",
-				Text: &slackText{Type: "plain_text", Text: header},
-			},
-			{
-				Type:   "section",
-				Fields: fields,
-			},
-			{
-				Type: "context",
-				Fields: []slackText{
-					{Type: "mrkdwn", Text: fmt.Sprintf("_Event: `%s` at %s_", eventType, ts.Format(time.RFC1123))},
-				},
-			},
-		},
+		Text:   header, // notification fallback for clients that don't render blocks
+		Blocks: blocks,
 	}
 }
 
-func headerLabel(eventType string) string {
-	switch eventType {
-	case "created":
-		return "Alert Triggered"
-	case "resolved":
-		return "Alert Resolved"
-	case "reminder":
-		return "Alert Still Active"
-	default:
-		return "Alert"
-	}
-}
-
-// latencyLabel is the header label for latency_anomaly alerts.
-func latencyLabel(eventType string) string {
-	switch eventType {
-	case "created":
-		return "Latency Degraded"
-	case "resolved":
-		return "Latency Recovered"
-	case "reminder":
-		return "Latency Still Degraded"
-	default:
-		return "Latency Anomaly"
-	}
-}
-
-func emojiFor(eventType string) string {
-	switch eventType {
-	case "resolved":
+func emojiFor(t present.Tone) string {
+	switch t {
+	case present.ToneUp:
 		return ":white_check_mark:"
-	case "reminder":
-		return ":hourglass_flowing_sand:"
+	case present.ToneWarn:
+		return ":warning:"
+	case present.ToneInfo:
+		return ":eyes:"
 	default:
 		return ":rotating_light:"
 	}
 }
 
-func eventTypeOf(req plugin.DispatchRequest) string {
-	if req.EventType != "" {
-		return req.EventType
+// escape neutralises the three characters Slack mrkdwn treats as control
+// sequences, so a probe error containing "<!channel>" cannot ping a channel.
+func escape(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+}
+
+// escapeTruncate escapes s and cuts the result to at most n runes. The limit
+// applies after escaping — Slack counts "&lt;" as four characters — and a cut
+// never splits an entity.
+func escapeTruncate(s string, n int) string {
+	if e := escape(s); utf8.RuneCountInString(e) <= n {
+		return e
 	}
-	return req.Event.Type
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		piece := escape(string(r))
+		w := utf8.RuneCountInString(piece)
+		if used+w > n-1 {
+			break
+		}
+		b.WriteString(piece)
+		used += w
+	}
+	return b.String() + "…"
+}
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 func parseConfig(raw json.RawMessage) (Config, error) {
@@ -249,18 +223,6 @@ func parseConfig(raw json.RawMessage) (Config, error) {
 	}
 	cfg.WebhookURL = strings.TrimSpace(cfg.WebhookURL)
 	return cfg, nil
-}
-
-func stringFromMap(m map[string]any, key string) (string, bool) {
-	if m == nil {
-		return "", false
-	}
-	v, ok := m[key]
-	if !ok {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
 }
 
 func init() {

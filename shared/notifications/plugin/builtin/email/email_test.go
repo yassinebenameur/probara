@@ -31,8 +31,8 @@ func TestPlugin_Manifest(t *testing.T) {
 	if m.Type != "email" {
 		t.Errorf("Type = %q, want email", m.Type)
 	}
-	if !m.HasCapability(plugin.CapabilityRenderedAlert) {
-		t.Error("expected CapabilityRenderedAlert")
+	if !m.HasCapability(plugin.CapabilityTestable) {
+		t.Error("expected CapabilityTestable")
 	}
 	if len(m.Fields) != 4 {
 		t.Errorf("expected 4 fields, got %d", len(m.Fields))

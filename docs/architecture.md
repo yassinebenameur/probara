@@ -10,7 +10,7 @@ website (`website/`) are separate applications.
 
 | Component | Responsibilities | Data access |
 |---|---|---|
-| `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, notification configuration, templates, locations, push and OTLP ingestion | PostgreSQL and NATS |
+| `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV), notification configuration, templates, locations, push and OTLP ingestion | PostgreSQL and NATS |
 | `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers also use PostgreSQL |
@@ -106,6 +106,14 @@ window coverage and the existing state semantics. Raw analytics stream
 results into accumulators; exact median/P95 calculations retain latency
 samples, so their memory still scales with the number of successful checks.
 See [correctness notes](correctness-notes.md) for sampled/interval differences.
+
+Interval availability has one implementation, `IntegrateTimeline` in
+`shared/analytics/timeline.go`: the monitor headline and SLA reports both
+reduce its per-state seconds, so a one-monitor SLA and that monitor's
+headline agree. SLA reports are computed on request by the API from
+`monitor_state_intervals`, `maintenance_windows` and `alerts`; issuing one
+freezes the report document in `sla_reports` (see
+[state semantics](state-semantics.md) S-U6/S-U7).
 
 ## Shared code and security boundaries
 

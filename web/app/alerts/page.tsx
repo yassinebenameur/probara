@@ -6,10 +6,8 @@ import { Alert, AlertStatus } from '@/lib/types';
 import { getAlerts } from '@/lib/api';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import AlertTable from '@/components/alerts/AlertTable';
-import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import FilterChip from '@/components/ui/FilterChip';
-import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 
 type TimeFilter = '1h' | '24h' | '7d' | '30d' | 'all';
@@ -131,13 +129,9 @@ export default function AlertsPage() {
             : 'No active alerts'
         }
         action={
-          <div className="flex items-center gap-2">
-            {activeCount > 0 && <Pill tone="danger" size="sm" dot>{activeCount} active</Pill>}
-            {acknowledgedCount > 0 && <Pill tone="warning" size="sm" dot>{acknowledgedCount} acknowledged</Pill>}
-            <Button variant="ghost" size="sm" icon={<RefreshCw strokeWidth={1.75} />} onClick={loadAlerts}>
-              Refresh
-            </Button>
-          </div>
+          <Button variant="ghost" size="sm" icon={<RefreshCw strokeWidth={1.75} />} onClick={loadAlerts}>
+            Refresh
+          </Button>
         }
       />
 
@@ -185,16 +179,11 @@ export default function AlertsPage() {
       )}
 
       {/* Alerts Table */}
-      <Panel
-        title="Alerts"
-        subtitle={`${alerts.length} alert${alerts.length !== 1 ? 's' : ''}`}
-      >
-        <AlertTable 
-          alerts={alerts} 
-          onAlertUpdate={handleAlertTableUpdate}
-          loading={loading}
-        />
-      </Panel>
+      <AlertTable
+        alerts={alerts}
+        onAlertUpdate={handleAlertTableUpdate}
+        loading={loading}
+      />
 
       {/* Pagination */}
       {totalPages > 1 && (

@@ -78,9 +78,8 @@ export default function EditAlertChannelPage() {
   return (
     <div className="max-w-5xl space-y-6">
       <PageHeader
-        breadcrumb={[{ label: 'Alert channels', href: '/alert-channels' }, { label: channel.name }]}
+        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Channels', href: '/settings?tab=channels' }, { label: channel.name }]}
         title="Edit alert channel"
-        subtitle="Update delivery settings and recipients."
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -89,7 +88,7 @@ export default function EditAlertChannelPage() {
             <AlertChannelForm
               channel={channel}
               onSubmit={handleSubmit}
-              onCancel={() => router.push('/alert-channels')}
+              onCancel={() => router.push('/settings?tab=channels')}
               loading={saving}
             />
           </FormCard>

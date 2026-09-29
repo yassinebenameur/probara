@@ -61,7 +61,6 @@ export default function IncidentsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Incidents"
-        subtitle="Coordinate customer-impacting issues."
         action={
           <IncidentQuickCreateButton
             users={users}

@@ -11,8 +11,9 @@ const (
 // classifyPushTransition is the notify rule, as a pure function.
 //
 // This is the Go twin of the CASE/WHERE in reconcileNotifications' SQL; the
-// two must agree, and TestReconcileSQLMatchesClassify pins the pair the same
-// way alertrouting pins UnreachablePredicate against Classify.
+// two must agree, and TestReconcileNotifications_NotifyRuleMatchesClassify
+// pins the pair the same way alertrouting pins UnreachablePredicate against
+// Classify.
 //
 // previous is the last state the visitor was actually told about -- the most
 // recent 'down' or 'up' interval, skipping 'suspect', 'degraded' and

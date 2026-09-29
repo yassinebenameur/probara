@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getEffectiveMonitorStatus } from './monitor-utils';
+import { displayValueLabel, getEffectiveMonitorStatus, getHTTPDisplayValues } from './monitor-utils';
 import type { CheckResult } from './types';
 
 function successResult(): CheckResult {
@@ -56,4 +56,33 @@ test('without maintenance flag the latest result decides', () => {
     getEffectiveMonitorStatus({ enabled: true }, failureResults()),
     'down'
   );
+});
+
+test('display values come from the latest non-platform result', () => {
+  const results = [
+    { id: 'p', status: 'error', result_source: 'platform', created_at: '' },
+    {
+      id: 'm',
+      status: 'success',
+      result_source: 'monitor',
+      metrics_data: {
+        http: {
+          display_values: [
+            { label: 'ver', path: 'version', value: '1.2.3' },
+            { path: 'checks.db', value: 'ok' },
+            { path: 'broken' },
+          ],
+        },
+      },
+      created_at: '',
+    },
+  ] as unknown as CheckResult[];
+  const values = getHTTPDisplayValues(results);
+  assert.deepEqual(values.map(displayValueLabel), ['ver', '']);
+  assert.deepEqual(values.map((v) => v.value), ['1.2.3', 'ok']);
+});
+
+test('no display values without http metrics', () => {
+  assert.deepEqual(getHTTPDisplayValues([successResult()]), []);
+  assert.deepEqual(getHTTPDisplayValues([]), []);
 });

@@ -21,7 +21,7 @@ export default function ServiceGroupsPanel({ groupTags, groups, range, filterTag
           Group monitors by tag to see health by team or service.
         </p>
         <Link
-          href="/settings#dashboard-groups"
+          href="/settings"
           className="mt-4 inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3.5 py-2 text-sm font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20"
         >
           Choose group tags <ArrowRight className="h-4 w-4" />
@@ -30,15 +30,15 @@ export default function ServiceGroupsPanel({ groupTags, groups, range, filterTag
     );
   }
 
-  // Named groups always render (count 0 = stale tag, visible by design).
-  // Ungrouped (tag === null) is suppressed when monitor_count === 0.
-  const visibleGroups = groups.filter((g) => g.tag !== null || g.monitor_count > 0);
+  // Groups with no monitors (stale tags, empty Ungrouped) carry no health to
+  // show; the tag itself stays visible and removable in Settings → General.
+  const visibleGroups = groups.filter((g) => g.monitor_count > 0);
 
   if (visibleGroups.length === 0) {
     return (
       <section className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
         <h3 className="text-sm font-medium text-white">Service groups</h3>
-        <p className="mt-3 text-sm text-slate-500">No groups match the current tag filter.</p>
+        <p className="mt-3 text-sm text-slate-500">No monitors carry the dashboard group tags yet.</p>
       </section>
     );
   }

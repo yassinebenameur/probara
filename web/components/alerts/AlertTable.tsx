@@ -2,12 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Bell, Network } from 'lucide-react';
+import { Bell, CircleCheck, Eye, Network } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { formatAlertValue, formatSeriesLabel } from '@/lib/metrics';
-import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import EmptyState from '@/components/ui/EmptyState';
 
 interface AlertTableProps {
@@ -93,7 +93,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
       <EmptyState
         icon={<Bell className="h-9 w-9" strokeWidth={1.5} />}
         title="No alerts found"
-        description="Alerts will appear here when monitors fail and trigger alert policies."
+        description="Alerts appear here when a monitor goes down."
       />
     );
   }
@@ -110,9 +110,6 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               Monitor
             </th>
             <th>
-              Policy
-            </th>
-            <th>
               Triggered
             </th>
             <th>
@@ -121,8 +118,8 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
             <th>
               Failures
             </th>
-            <th className="text-right">
-              Actions
+            <th>
+              <span className="sr-only">Actions</span>
             </th>
           </tr>
         </thead>
@@ -141,7 +138,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td>
                 {alert.kind === 'mesh_edge' ? (
                   <Link
-                    href="/mesh"
+                    href="/locations?tab=mesh"
                     className="inline-flex items-center gap-1.5 font-medium text-white hover:text-cyan-400"
                     title="Inter-location mesh path down — view the connectivity matrix"
                   >
@@ -246,11 +243,6 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                   </span>
                 )}
               </td>
-              <td>
-                <span className="text-slate-400">
-                  {alert.policy_name || 'Unknown'}
-                </span>
-              </td>
               <td className="text-slate-400">
                 <div>{formatDateTime(alert.triggered_at)}</div>
               </td>
@@ -265,26 +257,21 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td className="text-right">
                 <div className="flex items-center justify-end gap-1">
                   {alert.status === 'active' && (
-                    <Button
-                      variant="ghost"
-                      size="xs"
+                    <IconButton
+                      icon={<Eye strokeWidth={1.75} />}
+                      label="Acknowledge"
                       onClick={() => handleAcknowledge(alert.id)}
                       disabled={processingId === alert.id}
-                      loading={processingId === alert.id}
-                    >
-                      {processingId === alert.id ? '…' : 'Acknowledge'}
-                    </Button>
+                    />
                   )}
                   {(alert.status === 'active' || alert.status === 'acknowledged') && (
-                    <Button
-                      variant="accent"
-                      size="xs"
+                    <IconButton
+                      icon={<CircleCheck strokeWidth={1.75} />}
+                      label="Resolve"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}
                       loading={processingId === alert.id}
-                    >
-                      {processingId === alert.id ? '…' : 'Resolve'}
-                    </Button>
+                    />
                   )}
                   {alert.status === 'resolved' && (
                     <span className="text-[10px] text-slate-500">

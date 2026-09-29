@@ -13,8 +13,11 @@ import {
 import { Info } from 'lucide-react';
 
 import { CheckResult, Monitor, MonitorAnalyticsResponse, MonitorAnalyticsRange } from '@/lib/types';
-import { getEffectiveMonitorStatus, MonitorDisplayStatus } from '@/lib/monitor-utils';
-import { SLA_TARGET, UptimeHeroGauge } from './UptimeHeroGauge';
+import { collapseResultRuns } from '@/lib/result-runs';
+import Link from 'next/link';
+import { getSlas } from '@/lib/api';
+import { strictestTarget, formatTarget, type Sla } from '@/lib/sla';
+import { UptimeHeroGauge } from './UptimeHeroGauge';
 
 const OVERVIEW_RANGES: MonitorAnalyticsRange[] = ['1h', '6h', '24h', '7d', '30d', '90d', '365d'];
 
@@ -37,54 +40,10 @@ function formatBucketLabel(value: number, range: MonitorAnalyticsRange): string 
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-function formatRangeWindowLabel(range: MonitorAnalyticsRange): string {
-  switch (range) {
-    case '1h':
-      return '1 Hour Window';
-    case '6h':
-      return '6 Hour Window';
-    case '24h':
-      return '24 Hour Window';
-    case '7d':
-      return '7 Day Window';
-    case '30d':
-      return '30 Day Window';
-    case '90d':
-      return '90 Day Window';
-    case '365d':
-      return '365 Day Window';
-    default:
-      return range;
-  }
-}
-
 function formatTooltipValue(value: unknown, kind: 'uptime' | 'latency'): string {
   if (typeof value !== 'number') return 'N/A';
   if (kind === 'uptime') return `${value.toFixed(2)}%`;
   return formatLatency(value);
-}
-
-function StatusPill({ status }: { status: string }) {
-  const className =
-    status === 'success' || status === 'up'
-      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-      : status === 'error' || status === 'degraded'
-        ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-        : status === 'failure' || status === 'down'
-          ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-          : status === 'paused'
-            ? 'bg-slate-500/10 text-slate-300 border-slate-500/20'
-          : status === 'maintenance'
-            ? 'bg-sky-500/10 text-sky-300 border-sky-500/20'
-          : 'bg-slate-500/10 text-slate-300 border-slate-500/20';
-
-  const label = status === 'paused' ? 'paused' : status;
-
-  return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium uppercase ${className}`}>
-      {label}
-    </span>
-  );
 }
 
 function MetadataPopover({
@@ -170,14 +129,18 @@ function ChartTooltip({
 
 function EmptyChart({ message }: { message: string }) {
   return (
-    <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-white/[0.08] bg-slate-900/30">
+    <div className="flex h-16 items-center justify-center rounded-lg border border-dashed border-white/[0.08] bg-slate-900/30">
       <p className="text-sm text-slate-500">{message}</p>
     </div>
   );
 }
 
+function formatResultTime(value: string): string {
+  return new Date(value).toISOString().replace('T', ' ').slice(0, 19);
+}
+
 function RecentResultsTable({ results }: { results: CheckResult[] }) {
-  const rows = results.slice(0, 10);
+  const runs = collapseResultRuns(results).slice(0, 10);
 
   return (
     <div className="overflow-hidden rounded-xl border border-white/[0.06] bg-slate-900/50">
@@ -196,26 +159,37 @@ function RecentResultsTable({ results }: { results: CheckResult[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((result, idx) => (
-              <tr key={result.id} className={`border-b border-white/[0.03] ${idx % 2 === 1 ? 'bg-slate-800/20' : ''}`}>
+            {runs.map(({ latest, earliest, count }, idx) => (
+              <tr key={latest.id} className={`border-b border-white/[0.03] ${idx % 2 === 1 ? 'bg-slate-800/20' : ''}`}>
                 <td className="px-5 py-3 text-sm font-mono text-slate-400">
-                  {new Date(result.created_at).toISOString().replace('T', ' ').slice(0, 19)}
+                  {count > 1 ? (
+                    <>
+                      {formatResultTime(earliest.created_at)}
+                      <span className="text-slate-600"> – </span>
+                      {formatResultTime(latest.created_at).slice(11)}
+                    </>
+                  ) : (
+                    formatResultTime(latest.created_at)
+                  )}
                 </td>
-                <td className="px-5 py-3 text-sm text-slate-300">{result.status}</td>
-                <td className="px-5 py-3 text-sm text-slate-400">{formatLatency(result.latency_ms)}</td>
+                <td className="px-5 py-3 text-sm text-slate-300">
+                  {latest.status}
+                  {count > 1 && <span className="text-slate-500"> ×{count}</span>}
+                </td>
+                <td className="px-5 py-3 text-sm text-slate-400">{formatLatency(latest.latency_ms)}</td>
                 <td className="px-5 py-3 text-sm">
-                  {result.location_name ? (
+                  {latest.location_name ? (
                     <span className="inline-flex items-center rounded-full border border-cyan-500/35 bg-cyan-500/12 px-2 py-0.5 text-[0.7rem] font-medium text-cyan-200">
-                      {result.location_name}
+                      {latest.location_name}
                     </span>
                   ) : (
                     <span className="text-slate-500">Default</span>
                   )}
                 </td>
-                <td className="px-5 py-3 text-sm text-slate-500">{result.result_source}</td>
+                <td className="px-5 py-3 text-sm text-slate-500">{latest.result_source}</td>
               </tr>
             ))}
-            {rows.length === 0 && (
+            {runs.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate-500">
                   No raw results available yet
@@ -244,6 +218,25 @@ export default function MonitorAnalyticsOverview({
   timeRange: MonitorAnalyticsRange;
   onTimeRangeChange: (range: MonitorAnalyticsRange) => void;
 }) {
+  // The gauge's target is the strictest SLA covering this monitor; with none,
+  // the 99.9% default stands in.
+  const [coveringSlas, setCoveringSlas] = useState<Sla[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getSlas({ monitor_id: monitor.id })
+      .then((slas) => {
+        if (!cancelled) setCoveringSlas(slas);
+      })
+      .catch(() => {
+        if (!cancelled) setCoveringSlas([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [monitor.id]);
+  const slaTarget = strictestTarget(coveringSlas);
+  const targetSla = coveringSlas.find((s) => s.target_pct === slaTarget);
+
   const chartData = useMemo(() => {
     return (analytics?.uptime_series || []).map((point, index) => ({
       id: `${point.bucket_start}-${index}`,
@@ -271,8 +264,9 @@ export default function MonitorAnalyticsOverview({
   const hasLatencyData = Boolean(chartData.some((point) => typeof point.latency === 'number'));
   const summaryHasData = summary?.has_data ?? false;
   const headlinePct = summary?.availability_pct ?? summary?.sla_pct ?? 0;
-  const isSlaCompliant = summaryHasData && headlinePct >= SLA_TARGET;
-  const effectiveStatus = getEffectiveMonitorStatus(monitor, results);
+  const isSlaCompliant = summaryHasData && headlinePct >= slaTarget;
+  // Groups aggregate member state and never record a latency of their own.
+  const showLatencyChart = monitor.type !== 'group';
 
   if (loading) {
     return <div className="py-12 text-center text-slate-500">Loading monitor analytics...</div>;
@@ -300,26 +294,10 @@ export default function MonitorAnalyticsOverview({
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,90,36,0.08),transparent_42%)]" />
         <div className="relative grid gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] lg:items-center">
           <div className="flex justify-center lg:justify-start">
-            <UptimeHeroGauge
-              uptime={headlinePct}
-              hasData={summaryHasData}
-              rangeLabel={formatRangeWindowLabel(timeRange)}
-            />
+            <UptimeHeroGauge uptime={headlinePct} hasData={summaryHasData} target={slaTarget} />
           </div>
 
           <div className="space-y-4">
-            <span
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${!summaryHasData
-                  ? 'border-slate-500/30 bg-slate-500/10 text-slate-400'
-                  : isSlaCompliant
-                    ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300'
-                    : 'border-rose-400/30 bg-rose-400/10 text-rose-300'
-                }`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${!summaryHasData ? 'bg-slate-400' : isSlaCompliant ? 'bg-cyan-400' : 'bg-rose-400'}`} />
-              {!summaryHasData ? 'No Data Yet' : isSlaCompliant ? 'SLA Compliant' : 'SLA Breach'}
-            </span>
-
             <div className="space-y-1">
               <div className="flex items-center gap-1.5">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">SLA / Uptime</p>
@@ -331,16 +309,20 @@ export default function MonitorAnalyticsOverview({
                 />
               </div>
               <p className="text-sm text-slate-400">
-                target {SLA_TARGET.toFixed(1)}%
+                target {formatTarget(slaTarget)}
+                {targetSla && (
+                  <>
+                    {' '}
+                    <Link href={`/slas/${targetSla.id}`} className="text-slate-500 hover:text-cyan-300">
+                      ({targetSla.name})
+                    </Link>
+                  </>
+                )}
+                {summaryHasData && !isSlaCompliant && <span className="text-rose-300"> · below target</span>}
                 {summary?.method === 'interval' && summary.coverage_pct !== undefined && (
                   <span> · {summary.coverage_pct.toFixed(1)}% of window observed</span>
                 )}
               </p>
-              {summaryHasData && summary?.downtime_pct !== undefined && summary.downtime_pct > 0 && (
-                <p className="text-sm font-medium text-slate-300">
-                  {summary.downtime_pct.toFixed(2)}% total downtime
-                </p>
-              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-white/[0.06] pt-4">
@@ -348,19 +330,12 @@ export default function MonitorAnalyticsOverview({
                 <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">{latencyHeadlineLabel}</p>
                 <p className="mt-0.5 text-sm font-semibold text-white">{formatLatency(latencyHeadlineValue)}</p>
               </div>
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500">Latest Status</p>
-                <div className="mt-0.5 flex items-center gap-2">
-                  <StatusPill status={monitor.enabled ? (summary?.latest_status || 'unknown') : effectiveStatus} />
-                  <span className="text-xs text-slate-500">{formatTime(summary?.latest_check_at)}</span>
-                </div>
-              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className={`grid gap-4 ${showLatencyChart ? 'lg:grid-cols-2' : ''}`}>
         <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-white">Uptime Trend</h3>
@@ -414,7 +389,7 @@ export default function MonitorAnalyticsOverview({
           )}
         </div>
 
-        <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
+        {showLatencyChart && <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-white">Latency & Downtime</h3>
             <span className="flex items-center gap-1.5 text-[11px] text-cyan-400">
@@ -467,7 +442,7 @@ export default function MonitorAnalyticsOverview({
           ) : (
             <EmptyChart message="No latency data yet" />
           )}
-        </div>
+        </div>}
       </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-4">

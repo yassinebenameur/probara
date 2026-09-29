@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Globe, Plus, Trash2 } from 'lucide-react';
 import { StatusPage } from '@/lib/types';
 import { getStatusPages, deleteStatusPage } from '@/lib/api';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { pluralize } from '@/lib/format';
 import Button from '@/components/ui/Button';
-import Pill from '@/components/ui/Pill';
+import IconButton from '@/components/ui/IconButton';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -59,10 +60,9 @@ export default function StatusPagesPage() {
   const header = (
     <PageHeader
       title="Status pages"
-      subtitle="Public pages to display your service status."
       action={
         canWrite ? (
-          <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+          <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
             <Link href="/status-pages/new">Create status page</Link>
           </Button>
         ) : undefined
@@ -117,54 +117,39 @@ export default function StatusPagesPage() {
               key={page.id}
               className="group rounded-xl border border-white/[0.06] bg-slate-900/50 p-5 transition-colors hover:border-white/[0.1]"
             >
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-medium text-white truncate">{page.title}</h3>
-                  <p className="text-xs text-slate-500 mt-0.5 font-mono">/{page.slug}</p>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <Link
+                    href={`/status-pages/${page.id}`}
+                    className="block truncate text-sm font-medium text-white hover:text-cyan-400"
+                  >
+                    {page.title}
+                  </Link>
+                  <a
+                    href={resolveStatusPagePublicUrl(page)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-0.5 inline-flex items-center gap-1 font-mono text-xs text-slate-500 hover:text-slate-300"
+                  >
+                    /{page.slug}
+                    <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden="true" />
+                  </a>
                 </div>
-                <Pill tone="success" size="xs" dot>Active</Pill>
+                <IconButton
+                  icon={<Trash2 strokeWidth={1.75} />}
+                  label="Delete"
+                  onClick={() => setPendingDelete(page)}
+                  danger
+                />
               </div>
 
               {page.description && (
-                <p className="text-xs text-slate-400 mb-4 line-clamp-2">{page.description}</p>
+                <p className="mt-3 text-xs text-slate-400 line-clamp-2">{page.description}</p>
               )}
 
-              <div className="flex items-center gap-4 mb-4 text-xs text-slate-500">
-                <span>{page.monitor_ids?.length || 0} monitors</span>
-              </div>
-
-              <div className="flex items-center gap-2 mb-4">
-                <div
-                  className="h-5 w-5 rounded border border-white/[0.1]"
-                  style={{ backgroundColor: page.primary_color || '#3b82f6' }}
-                  title="Primary color"
-                />
-                <div
-                  className="h-5 w-5 rounded border border-white/[0.1]"
-                  style={{ backgroundColor: page.secondary_color || '#64748b' }}
-                  title="Secondary color"
-                />
-              </div>
-
-              <div className="flex items-center gap-1.5 pt-4 border-t border-white/[0.06]">
-                <Button variant="ghost" size="xs" icon={<ArrowUpRight strokeWidth={1.75} />} className="flex-1" asChild>
-                  <a href={resolveStatusPagePublicUrl(page)} target="_blank" rel="noopener noreferrer">
-                    View
-                  </a>
-                </Button>
-                <Button variant="ghost" size="xs" icon={<Pencil strokeWidth={1.75} />} className="flex-1" asChild>
-                  <Link href={`/status-pages/${page.id}`}>Edit</Link>
-                </Button>
-                <Button
-                  variant="danger"
-                  size="xs"
-                  icon={<Trash2 strokeWidth={1.75} />}
-                  onClick={() => setPendingDelete(page)}
-                  aria-label="Delete"
-                >
-                  <span className="sr-only">Delete</span>
-                </Button>
-              </div>
+              <p className="mt-3 text-xs text-slate-500">
+                {pluralize(page.monitor_ids?.length || 0, 'monitor')}
+              </p>
             </div>
           ))}
         </div>

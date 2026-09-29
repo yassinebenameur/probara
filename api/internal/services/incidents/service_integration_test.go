@@ -280,6 +280,23 @@ func TestServiceListIncidentsReturnsSummaryFields(t *testing.T) {
 	if list.Items[1].LinkedAlertCount != 0 || list.Items[1].LinkedMonitorCount != 0 || list.Items[1].PublicationCount != 0 {
 		t.Fatalf("list.Items[1] counts = (%d,%d,%d), want (0,0,0)", list.Items[1].LinkedAlertCount, list.Items[1].LinkedMonitorCount, list.Items[1].PublicationCount)
 	}
+	if list.Total != 2 || list.OpenTotal != 2 {
+		t.Fatalf("total/open_total = %d/%d, want 2/2", list.Total, list.OpenTotal)
+	}
+
+	if _, err := dbClient.ExecContext(ctx, `
+		UPDATE incidents SET state = 'resolved', resolved_at = NOW()
+		WHERE id = $1 AND tenant_id = $2
+	`, autoIncidentID, tenantID); err != nil {
+		t.Fatalf("resolve auto incident: %v", err)
+	}
+	list, err = svc.ListIncidents(ctx, tenantID, 1, 1)
+	if err != nil {
+		t.Fatalf("ListIncidents() after resolve error = %v", err)
+	}
+	if list.Total != 2 || list.OpenTotal != 1 {
+		t.Fatalf("after resolve total/open_total = %d/%d, want 2/1 (independent of page size)", list.Total, list.OpenTotal)
+	}
 }
 
 func TestServiceTransitionIncidentStateRejectsConcurrentResolvedReopen(t *testing.T) {

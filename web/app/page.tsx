@@ -181,24 +181,6 @@ function SectionLoadingState({ message }: { message: string }) {
   );
 }
 
-// ─── Status Pill ───────────────────────────────────────────────────────────────
-
-const STATUS_TONE: Record<string, PillTone> = {
-  success: 'success',
-  error: 'warning',
-  failure: 'danger',
-};
-
-function StatusPill({ status }: { status: string | null | undefined }) {
-  const normalized = status || 'paused';
-  const tone = STATUS_TONE[normalized] ?? 'neutral';
-  return (
-    <Pill tone={tone} size="xs" className="uppercase tracking-wider">
-      {normalized}
-    </Pill>
-  );
-}
-
 // ─── Failure Reason Line ───────────────────────────────────────────────────────
 
 const REASON_CATEGORY_META: Record<FailureReasonCategory, { label: string; tone: PillTone }> = {
@@ -219,7 +201,7 @@ function FailureReasonLine({ message }: { message: string | null | undefined }) 
   return (
     <div className="mt-1 flex min-w-0 items-center gap-1.5">
       {meta && (
-        <Pill tone={meta.tone} size="xs" className="shrink-0 uppercase tracking-wider">
+        <Pill tone={meta.tone} size="xs" className="shrink-0">
           {meta.label}
         </Pill>
       )}
@@ -299,7 +281,6 @@ function ProblemMonitorItem({ monitor }: { monitor: DashboardProblemMonitor }) {
           </p>
           <FailureReasonLine message={monitor.latest_error_message} />
         </div>
-        <StatusPill status={monitor.current_status} />
       </div>
     </div>
   );
@@ -405,33 +386,25 @@ function SectionCard({
 }
 
 function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
-  const toneStyles: Record<OperationalSummary['tone'], { ring: string; icon: string; text: string; iconBg: string; glow: string }> = {
+  const toneStyles: Record<OperationalSummary['tone'], { ring: string; text: string; glow: string }> = {
     critical: {
       ring: 'border-rose-500/20',
-      icon: 'text-rose-300',
       text: 'text-rose-300',
-      iconBg: 'bg-rose-500/10',
       glow: 'rgba(240,74,90, 0.08)',
     },
     attention: {
       ring: 'border-amber-500/20',
-      icon: 'text-amber-300',
       text: 'text-amber-300',
-      iconBg: 'bg-amber-500/10',
       glow: 'rgba(230,178,63, 0.07)',
     },
     stable: {
       ring: 'border-emerald-500/20',
-      icon: 'text-emerald-300',
       text: 'text-emerald-300',
-      iconBg: 'bg-emerald-500/10',
       glow: 'rgba(70,209,127, 0.07)',
     },
     clean: {
       ring: 'border-emerald-500/20',
-      icon: 'text-emerald-300',
       text: 'text-emerald-300',
-      iconBg: 'bg-emerald-500/10',
       glow: 'rgba(70,209,127, 0.07)',
     },
   };
@@ -444,13 +417,6 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
     >
       <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.9fr)]">
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
-          <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-current/25 ${tone.iconBg} ${tone.icon}`}>
-            {summary.tone === 'critical' ? (
-              <AlertTriangle className="h-8 w-8" strokeWidth={1.8} />
-            ) : (
-              <Check className="h-8 w-8" strokeWidth={2.3} />
-            )}
-          </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2.5 w-2.5">
@@ -462,11 +428,6 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
               <h2 className={`text-lg font-semibold tracking-tight ${tone.text}`}>{summary.label}</h2>
             </div>
             <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{summary.description}</p>
-            <p className={`mt-2 text-sm font-medium ${summary.attentionCount > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
-              {summary.attentionCount > 0
-                ? `${summary.attentionCount} monitor${summary.attentionCount === 1 ? '' : 's'} need attention.`
-                : 'No monitors need attention.'}
-            </p>
             <Link
               href={summary.primaryActionHref}
               className="mt-4 inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-white transition-colors hover:bg-white/[0.08]"
@@ -489,7 +450,7 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
                     : 'text-white';
             return (
               <div key={metric.label} className="min-h-24 rounded-lg border border-white/[0.06] bg-slate-950/35 p-4 transition-colors hover:border-white/[0.12]">
-                <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{metric.label}</p>
+                <p className="text-xs font-medium text-slate-500">{metric.label}</p>
                 <p className={`mt-2 text-2xl font-semibold tabular-nums ${metricTone}`}>{metric.value}</p>
                 {metric.detail && <p className="mt-1 text-xs text-slate-500">{metric.detail}</p>}
               </div>
@@ -942,11 +903,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 border-b border-white/[0.06] pb-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white">Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-500">Real-time overview of your monitoring environment</p>
-        </div>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight text-white">Dashboard</h1>
         <div className="flex flex-wrap items-center gap-2">
           <TagFilterPicker
             availableTags={availableTags}
@@ -954,7 +912,7 @@ export default function DashboardPage() {
             onToggleTag={toggleTag}
             onClear={clearTags}
           />
-          <Button variant="ghost" icon={<Plus strokeWidth={1.75} />} asChild>
+          <Button variant="accent" icon={<Plus strokeWidth={1.75} />} asChild>
             <Link href="/monitors/new">Add monitor</Link>
           </Button>
           <button

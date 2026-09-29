@@ -91,10 +91,48 @@ func loadSMTPConfig() (SMTPConfig, error) {
 	return cfg, nil
 }
 
+// NotificationEgressConfig is the outbound-connection policy for notification
+// plugins (generic webhook, chat, paging and SMS channels). Every service that
+// can invoke a plugin's Send needs it — the same three workloads as
+// SMTPConfig. Channel URLs are tenant-supplied, so private and reserved
+// addresses (including cloud metadata) are refused unless the operator opts
+// out or allow-lists a range for an internal receiver.
+type NotificationEgressConfig struct {
+	NotificationBlockPrivateIPs bool
+	NotificationAllowedCIDRs    []*net.IPNet
+}
+
+// loadNotificationEgressConfig reads NOTIFICATION_BLOCK_PRIVATE_IPS (default
+// true) and NOTIFICATION_ALLOWED_CIDRS (comma-separated). Sole parser for
+// these, like loadSMTPConfig.
+func loadNotificationEgressConfig() (NotificationEgressConfig, error) {
+	cfg := NotificationEgressConfig{NotificationBlockPrivateIPs: true}
+	if v := strings.TrimSpace(os.Getenv("NOTIFICATION_BLOCK_PRIVATE_IPS")); v != "" {
+		block, err := strconv.ParseBool(v)
+		if err != nil {
+			return NotificationEgressConfig{}, fmt.Errorf("invalid NOTIFICATION_BLOCK_PRIVATE_IPS: %w", err)
+		}
+		cfg.NotificationBlockPrivateIPs = block
+	}
+	for _, p := range strings.Split(os.Getenv("NOTIFICATION_ALLOWED_CIDRS"), ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(p)
+		if err != nil {
+			return NotificationEgressConfig{}, fmt.Errorf("invalid NOTIFICATION_ALLOWED_CIDRS entry %q: %w", p, err)
+		}
+		cfg.NotificationAllowedCIDRs = append(cfg.NotificationAllowedCIDRs, cidr)
+	}
+	return cfg, nil
+}
+
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
 	SMTPConfig
+	NotificationEgressConfig
 	AlertStream        string
 	AlertSubject       string
 	AlertConsumerName  string
@@ -198,6 +236,7 @@ type WorkerConfig struct {
 	// SMTP backend wired into the builtin email plugin (worker side, used by
 	// the notifications consumer).
 	SMTPConfig
+	NotificationEgressConfig
 	WorkerConcurrency  int
 	NATSConsumerName   string
 	CheckJobStream     string
@@ -241,6 +280,7 @@ type WorkerConfig struct {
 type AlerterConfig struct {
 	BaseConfig
 	SMTPConfig
+	NotificationEgressConfig
 	AlertStream                  string
 	AlertSubject                 string
 	AlertEvalIntervalSeconds     int
@@ -547,6 +587,11 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	cfg.SMTPConfig = smtpCfg
+	egressCfg, err := loadNotificationEgressConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.NotificationEgressConfig = egressCfg
 
 	return cfg, nil
 }
@@ -1031,6 +1076,11 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		return nil, err
 	}
 	cfg.SMTPConfig = smtpCfg
+	egressCfg, err := loadNotificationEgressConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.NotificationEgressConfig = egressCfg
 
 	return cfg, nil
 }
@@ -1132,6 +1182,11 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 		return nil, err
 	}
 	cfg.SMTPConfig = smtpCfg
+	egressCfg, err := loadNotificationEgressConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.NotificationEgressConfig = egressCfg
 
 	// ALERT_EMAIL_TO
 	cfg.AlertEmailTo = os.Getenv("ALERT_EMAIL_TO")

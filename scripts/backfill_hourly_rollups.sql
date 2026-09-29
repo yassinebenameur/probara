@@ -33,8 +33,10 @@
 --   the rollup advisory lock for a long time (stalling the incremental job),
 --   and risks statement timeouts. Loop over consecutive [start, end) days.
 --
---   WARNING — RETENTION: never run this over ranges at or older than any
---   tenant's raw retention horizon (tenants.data_retention_days). Raw rows
+--   WARNING — RETENTION: never run this over ranges at or older than the raw
+--   check_results horizon: the hour 30 days ago for every tenant
+--   (RollupMarkHorizonSQL in shared/monitorstate/record.go).
+--   Raw rows
 --   there have been pruned, so the replace-semantics rebuild would UNDERCOUNT
 --   any bucket that straddles the horizon (rebuilt from only the surviving
 --   raws). Rollups for fully-pruned history must be left untouched.
