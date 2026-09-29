@@ -63,6 +63,7 @@ const navGroups: { key: string; items: NavItem[] }[] = [
       { name: 'Monitors', href: '/monitors', icon: Activity },
       { name: 'Locations', href: '/locations', icon: MapPin, also: ['/mesh'] },
       { name: 'Dependencies', href: '/dependencies', icon: Workflow },
+      { name: 'Discovery', href: '/discovery', icon: Workflow },
       { name: 'Maintenance', href: '/maintenance', icon: Wrench },
       { name: 'Status pages', href: '/status-pages', icon: FileText },
       { name: 'SLAs', href: '/slas', icon: Target },

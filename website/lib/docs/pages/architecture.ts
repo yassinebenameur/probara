@@ -81,6 +81,11 @@ export const ARCHITECTURE_PAGE: DocPage = {
               "Public Go-rendered status pages",
             ],
             [
+              "`cmd/discovery-collector`",
+              "In-cluster [Kubernetes discovery](/docs/discovery/): namespaced list-only reads of Services and Ingresses, complete snapshot uploads over HTTPS with an integration-scoped token",
+              "Check execution, monitor creation, or database/NATS access",
+            ],
+            [
               "`collector/`",
               "OpenTelemetry Collector Builder manifest for the `probara-collector` host-metrics distribution",
               "Remote active checks or private-location worker behavior",

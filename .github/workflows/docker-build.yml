@@ -87,6 +87,9 @@ jobs:
           - image_suffix: scheduler
             dockerfile: ./scheduler/Dockerfile
             context: .
+          - image_suffix: discovery-collector
+            dockerfile: ./cmd/discovery-collector/Dockerfile
+            context: .
           - image_suffix: worker
             dockerfile: ./worker/Dockerfile
             context: .

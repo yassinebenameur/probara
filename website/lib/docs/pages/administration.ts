@@ -369,6 +369,11 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
+            "Kubernetes discovery writes record named events: `discovery-integration.create`, `.delete` and `.rotate-token` (resource `discovery-integration/{id}`), `discovery-link.create` and `.delete` (resource `discovery-service/{id}`, `details.monitor_id`), and `discovery.approve`, filed under the monitor the approval created (resource `monitor/{id}`, with `details.discovered_service_id` and `details.suggestion_key`). As with bulk triage, these replace the request-level event on success, and a refused or failed discovery write records one request-level event.",
+        },
+        {
+          type: "paragraph",
+          text:
             "Audit writes are best-effort asynchronous operational records, not a transactional ledger. The platform `AUDIT_RETENTION_DAYS` setting defaults to 365 days; `0` keeps records indefinitely.",
         },
         {

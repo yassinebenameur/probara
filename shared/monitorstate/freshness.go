@@ -3,6 +3,7 @@ package monitorstate
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -24,6 +25,28 @@ func FreshnessHorizonSeconds(intervalSeconds int) int {
 		return MinFreshnessSeconds
 	}
 	return h
+}
+
+// EvidenceWindowSeconds is the full S-F1 window for one monitor: the default
+// horizon, except push monitors, which are fresh for interval +
+// grace_period_seconds from their config. The absence watchdog and every
+// read-side "is this evidence recent?" report share it, measured from
+// monitors.last_result_at (platform receipt), never a worker timestamp.
+func EvidenceWindowSeconds(monitorType string, intervalSeconds int, config []byte) int {
+	if monitorType != "push" {
+		return FreshnessHorizonSeconds(intervalSeconds)
+	}
+	// A pointer distinguishes an explicit grace of 0 (stale right after the
+	// interval) from an absent/malformed one (fall back to a full extra
+	// interval).
+	var cfg struct {
+		GracePeriodSeconds *int `json:"grace_period_seconds"`
+	}
+	grace := intervalSeconds
+	if err := json.Unmarshal(config, &cfg); err == nil && cfg.GracePeriodSeconds != nil && *cfg.GracePeriodSeconds >= 0 {
+		grace = *cfg.GracePeriodSeconds
+	}
+	return intervalSeconds + grace
 }
 
 // queryer is satisfied by *sql.DB and *sql.Tx.

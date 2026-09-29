@@ -50,6 +50,11 @@ export const DOC_NAVIGATION: DocNavGroup[] = [
         description: 'Service graph, correlations, dashboard, and rollups.',
       },
       {
+        slug: 'discovery',
+        title: 'Discovery and coverage',
+        description: 'Kubernetes Services and Ingresses, monitor suggestions, and coverage gaps.',
+      },
+      {
         slug: 'agents',
         title: 'Host agents & push',
         description: 'Host telemetry, installers, heartbeats, and custom metrics.',

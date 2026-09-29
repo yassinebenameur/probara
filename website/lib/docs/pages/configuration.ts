@@ -901,6 +901,26 @@ export const CONFIGURATION_PAGE: DocPage = {
       ],
     },
     {
+      id: 'discovery-collector',
+      title: 'Discovery collector settings',
+      blocks: [
+        {
+          type: 'paragraph',
+          text:
+            'The [Kubernetes discovery](/docs/discovery/) collector (`probara-discovery-collector`) runs in the cluster from the manifest the setup form generates, which sets `PROBARA_URL` and `PROBARA_DISCOVERY_ID` and mounts the token Secret at the default `PROBARA_DISCOVERY_TOKEN_FILE` path; you only need these when writing your own manifest. It reaches the Kubernetes API through the in-cluster `KUBERNETES_SERVICE_HOST`/`KUBERNETES_SERVICE_PORT` and the mounted service-account CA and token.',
+        },
+        {
+          type: 'table',
+          columns: ['Environment variable', 'Default', 'Description'],
+          rows: [
+            ['`PROBARA_URL`', 'None; required', 'HTTPS origin of the Probara API, with no path, query or credentials; anything else fails startup.'],
+            ['`PROBARA_DISCOVERY_ID`', 'None; required', 'The discovery integration UUID.'],
+            ['`PROBARA_DISCOVERY_TOKEN_FILE`', '`/var/run/probara/token`', 'File holding the integration-scoped collector token (the manifest mounts its Secret there).'],
+          ],
+        },
+      ],
+    },
+    {
       id: 'maintenance-and-tooling',
       title: 'Maintenance, build, and test variables',
       blocks: [

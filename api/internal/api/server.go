@@ -22,6 +22,7 @@ import (
 	authhandlers "github.com/yassinebenameur/probara/api/internal/handlers/auth"
 	dashboardhandlers "github.com/yassinebenameur/probara/api/internal/handlers/dashboard"
 	depsuggesthandlers "github.com/yassinebenameur/probara/api/internal/handlers/depsuggest"
+	discoveryhandlers "github.com/yassinebenameur/probara/api/internal/handlers/discovery"
 	importhandlers "github.com/yassinebenameur/probara/api/internal/handlers/import"
 	incidenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/incidents"
 	locationhandlers "github.com/yassinebenameur/probara/api/internal/handlers/locations"
@@ -52,6 +53,7 @@ import (
 	dashboardservice "github.com/yassinebenameur/probara/api/internal/services/dashboard"
 	depservice "github.com/yassinebenameur/probara/api/internal/services/dependencies"
 	depsuggestservice "github.com/yassinebenameur/probara/api/internal/services/depsuggest"
+	discoveryservice "github.com/yassinebenameur/probara/api/internal/services/discovery"
 	groupservice "github.com/yassinebenameur/probara/api/internal/services/groups"
 	importservice "github.com/yassinebenameur/probara/api/internal/services/import"
 	incidentservice "github.com/yassinebenameur/probara/api/internal/services/incidents"
@@ -217,6 +219,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Get("/.well-known/openid-configuration/*", oauthHandlers.AuthorizationServerMetadata)
 	})
 
+	// Kubernetes discovery collector config and snapshot upload: no session
+	// or API key, authenticated by the integration-scoped collector token.
+	discoveryHandlers := &discoveryhandlers.Handlers{Service: discoveryservice.New(dbClient), Log: log, Audit: auditRecorder}
+	r.Route("/api/v1/discovery-collectors", discoveryHandlers.CollectorRoutes)
+
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 		// MCP endpoint: bearer credentials only (API key or MCP OAuth
@@ -369,6 +376,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/history", meshHdlrs.GetEdgeHistory)
 				r.Post("/probe", meshHdlrs.ProbeNow)
 			})
+
+			// Kubernetes discovery, operator side: integrations, coverage,
+			// approval and links. The collector side is mounted outside auth
+			// above (discovery-collectors).
+			r.Route("/discovery", discoveryHandlers.Routes)
 
 			// SLAs and their reports (live, issued, exported)
 			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo, cfg.LocalAI.Disabled || !cfg.AITriageEnabled), Log: log}

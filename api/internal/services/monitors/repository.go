@@ -66,6 +66,16 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := r.CreateInTx(ctx, tx, monitor); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CreateInTx lets discovery atomically create a monitor, its initial state
+// interval, and the inventory link. The caller owns commit/rollback.
+func (r *PostgresRepository) CreateInTx(ctx context.Context, tx *sql.Tx, monitor *models.Monitor) error {
+
 	query := `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config,
@@ -81,7 +91,7 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 
 	var tags []string
 
-	err = tx.QueryRowContext(ctx, query,
+	err := tx.QueryRowContext(ctx, query,
 		monitor.ID, monitor.TenantID, monitor.Name, monitor.Type, monitor.Config,
 		monitor.IntervalSeconds, monitor.TimeoutSeconds, monitor.AlertPolicyID,
 		monitor.Enabled, pq.Array(monitor.Tags), monitor.AgentID, monitor.PushToken, monitor.NextRunAt,
@@ -107,10 +117,6 @@ func (r *PostgresRepository) Create(ctx context.Context, monitor *models.Monitor
 			monitorstate.State(monitor.CurrentState), monitorstate.IntervalReasonCreated); err != nil {
 			return err
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit create transaction: %w", err)
 	}
 
 	monitor.Tags = tags

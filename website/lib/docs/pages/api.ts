@@ -901,6 +901,46 @@ export const API_PAGE: DocPage = {
       ],
     },
     {
+      id: "discovery-api",
+      title: "Discovery endpoints",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Method and path", "Authorization and purpose"],
+          rows: [
+            [
+              "`GET/POST /api/v1/discovery/integrations`",
+              "Authenticated; list or create a [Kubernetes discovery](/docs/discovery/) integration. Create (write access) returns the collector token once",
+            ],
+            [
+              "`DELETE /api/v1/discovery/integrations/{id}`",
+              "Write access; removes inventory and links, keeps monitors",
+            ],
+            [
+              "`POST /api/v1/discovery/integrations/{id}/rotate-token`",
+              "Write access; returns a new collector token and invalidates the old one",
+            ],
+            [
+              "`GET /api/v1/discovery/integrations/{id}/coverage`",
+              "Authenticated; `page`, `q` (service or namespace), `gaps=true`, `sort=name|gaps` apply across all services; `summary` is unfiltered",
+            ],
+            [
+              "`POST /api/v1/discovery/services/{id}/approve`",
+              "Write access; create and link a monitor from a suggestion",
+            ],
+            [
+              "`POST /api/v1/discovery/services/{id}/links`, `DELETE …/links/{monitorID}`",
+              "Write access; explicitly link or unlink an existing monitor",
+            ],
+            [
+              "`GET /api/v1/discovery-collectors/{id}/config`, `POST …/snapshot`",
+              "Integration-scoped collector token only (Bearer); never valid on other routes",
+            ],
+          ],
+        },
+      ],
+    },
+    {
       id: "admin-api",
       title: "Administration endpoints",
       blocks: [

@@ -19,6 +19,7 @@ func catalog() []spec {
 		monitorTools(),
 		observabilityTools(),
 		locationTools(),
+		discoveryTools(),
 		alertTools(),
 		incidentTools(),
 		notificationTools(),
@@ -55,6 +56,9 @@ var notExposed = map[string]string{
 	"PATCH /api/v1/alert-policies/{id}":  "retired (410 Gone)",
 	"DELETE /api/v1/alert-policies/{id}": "retired (410 Gone)",
 	"* /api/v1/mcp":                      "the MCP endpoint itself",
+
+	"GET /api/v1/discovery-collectors/{id}/config":    "in-cluster Kubernetes discovery collector, authenticated by its integration token",
+	"POST /api/v1/discovery-collectors/{id}/snapshot": "inventory ingest from the in-cluster discovery collector, not an operator action",
 
 	"GET /api/v1/oauth/.well-known/oauth-authorization-server": "OAuth protocol endpoint for MCP clients",
 	"GET /api/v1/oauth/.well-known/openid-configuration":       "OAuth protocol endpoint for MCP clients",
