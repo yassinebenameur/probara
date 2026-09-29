@@ -5,10 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/yassinebenameur/probara/shared/metricstore"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 	sharetest "github.com/yassinebenameur/probara/shared/testutil"
 )
 
@@ -46,11 +48,17 @@ func TestRetentionCleanup_CatchesUpAllStoresWithinBudgets(t *testing.T) {
 		_, err := database.ExecContext(ctx, `INSERT INTO metric_samples (series_id, ts, value) VALUES ($1, $2, 1)`, seriesID, old)
 		require.NoError(t, err)
 	}
-	// Fresh and retention-disabled tenant rows must survive catch-up passes.
+	// Fresh rows survive catch-up passes. A retention-disabled tenant keeps its
+	// mesh history, but its raw check results are still capped at
+	// monitorstate.CheckResultsRawRetentionDays.
 	insertCheckResult(ctx, t, database, tenant, monitor, time.Now().UTC(), "success", "monitor", 12)
 	otherTenant := sharetest.InsertTenant(ctx, t, database, "retention-disabled")
 	otherMonitor := sharetest.InsertHTTPMonitor(ctx, t, database, otherTenant, "retention-disabled-check")
 	insertCheckResult(ctx, t, database, otherTenant, otherMonitor, old, "success", "monitor", 12)
+	insertCheckResult(ctx, t, database, otherTenant, otherMonitor, time.Now().UTC().AddDate(0, 0, -20), "success", "monitor", 12)
+	otherSource := insertMeshLocation(ctx, t, database, otherTenant, "source", "10.0.1.1:8080")
+	otherTarget := insertMeshLocation(ctx, t, database, otherTenant, "target", "10.0.1.2:8080")
+	insertMeshResult(ctx, t, database, otherTenant, otherSource, otherTarget, old)
 
 	now := time.Now().UTC().Truncate(24 * time.Hour).Add(3 * time.Hour)
 	for pass := 0; pass < 2; pass++ {
@@ -58,7 +66,13 @@ func TestRetentionCleanup_CatchesUpAllStoresWithinBudgets(t *testing.T) {
 		executed, deleted, pending, err := s.runRetentionCleanup()
 		require.NoError(t, err)
 		require.True(t, executed)
-		require.EqualValues(t, 6, deleted, "each pass deletes at most two rows per store")
+		// Two rows per store for the capped tenant, plus the retention-disabled
+		// tenant's one expired check result on the first pass.
+		wantDeleted := 6
+		if pass == 0 {
+			wantDeleted = 7
+		}
+		require.EqualValues(t, wantDeleted, deleted, "each pass deletes at most two rows per store and tenant")
 		require.Equal(t, pass == 0, pending, "an exactly-full final pass must detect that the backlog is gone")
 		s.finishRetentionCleanup(now.Format("2006-01-02"), !pending)
 		for _, store := range []string{"check_results", "mesh_probe_results", "metric_samples"} {
@@ -72,7 +86,7 @@ func TestRetentionCleanup_CatchesUpAllStoresWithinBudgets(t *testing.T) {
 	}
 	require.False(t, s.beginRetentionCleanup(now.Add(2*time.Minute)))
 	require.Equal(t, 2, countRows(ctx, t, database, `SELECT COUNT(*) FROM check_results`))
-	require.Zero(t, countRows(ctx, t, database, `SELECT COUNT(*) FROM mesh_probe_results`))
+	require.Equal(t, 1, countRows(ctx, t, database, `SELECT COUNT(*) FROM mesh_probe_results`))
 	require.Zero(t, countRows(ctx, t, database, `SELECT COUNT(*) FROM metric_samples`))
 }
 
@@ -127,4 +141,151 @@ func TestMaintenanceJobs_ReleaseLocksAfterWork(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// Regression: a raw row older than the retention horizon whose bucket still
+// has a rollup_dirty mark must survive cleanup until the rebuild consumes the
+// mark. Pruning first let the REPLACE rebuild delete the bucket's rollup.
+func TestRetentionCleanup_KeepsRawRowsOfPendingRollupBuckets(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := setupRollupTestDB(ctx, t)
+	t.Cleanup(cleanup)
+	s := newTestScheduler(database)
+	s.config.RetentionCleanupEnabled = true
+
+	// data_retention_days defaults to 0 (keep forever): only the raw cap applies.
+	tenant := insertTenant(ctx, t, database)
+	monitor := insertMonitor(ctx, t, database, tenant, "pending-rollup")
+	pendingHour := time.Now().UTC().AddDate(0, 0, -40).Truncate(time.Hour)
+	for i := 0; i < 3; i++ {
+		insertMarkedCheckResult(ctx, t, database, tenant, monitor, pendingHour.Add(time.Duration(i)*time.Minute), "success", 50)
+	}
+	// Same age, but its bucket was already rolled up (no mark): prunable now.
+	insertCheckResult(ctx, t, database, tenant, monitor, pendingHour.Add(-2*time.Hour), "success", "monitor", 50)
+
+	runCleanup := func() {
+		t.Helper()
+		executed, _, pending, err := s.runRetentionCleanup()
+		require.NoError(t, err)
+		require.True(t, executed)
+		require.False(t, pending, "rows held for a pending rollup are not a backlog")
+	}
+	hourlyTotal := func() int {
+		t.Helper()
+		return countRows(ctx, t, database, `SELECT COALESCE(SUM(total_checks), 0) FROM monitor_hourly_rollups WHERE monitor_id = $1 AND bucket_hour = $2`, monitor, pendingHour)
+	}
+
+	runCleanup()
+	require.Equal(t, 3, countRows(ctx, t, database, `SELECT COUNT(*) FROM check_results WHERE monitor_id = $1`, monitor),
+		"only the unmarked bucket's row is pruned")
+
+	_, _, err := s.runRollupMaintenance()
+	require.NoError(t, err)
+	require.Equal(t, 3, hourlyTotal(), "the rebuild saw every raw row of the pending bucket")
+	require.Zero(t, countDirtyMarks(ctx, t, database))
+
+	// Once the mark is consumed the rows go, and the rollup stays.
+	runCleanup()
+	require.Zero(t, countRows(ctx, t, database, `SELECT COUNT(*) FROM check_results WHERE monitor_id = $1`, monitor))
+	_, _, err = s.runRollupMaintenance()
+	require.NoError(t, err)
+	require.Equal(t, 3, hourlyTotal())
+}
+
+// A result arriving for a bucket past the raw horizon is stored but never
+// marked: its bucket's raw rows may already be pruned, and a REPLACE rebuild
+// from the survivors would shrink the finished rollup.
+func TestRecord_DoesNotMarkBucketsPastRawRetention(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := setupRollupTestDB(ctx, t)
+	t.Cleanup(cleanup)
+	tenant := insertTenant(ctx, t, database)
+	monitor := insertMonitor(ctx, t, database, tenant, "stale-result")
+
+	record := func(startedAt time.Time) {
+		t.Helper()
+		_, err := monitorstate.Record(ctx, database.DB, monitorstate.Result{
+			MonitorID: monitor, TenantID: tenant, JobID: uuid.New(),
+			Status: "success", ResultSource: "monitor",
+			StartedAt: startedAt, CompletedAt: startedAt,
+		})
+		require.NoError(t, err)
+	}
+	record(time.Now().UTC().AddDate(0, 0, -(monitorstate.CheckResultsRawRetentionDays + 1)))
+	require.Equal(t, 1, countRows(ctx, t, database, `SELECT COUNT(*) FROM check_results WHERE monitor_id = $1`, monitor))
+	require.Zero(t, countDirtyMarks(ctx, t, database), "a bucket past the raw horizon is not marked")
+
+	record(time.Now().UTC())
+	require.Equal(t, 1, countDirtyMarks(ctx, t, database), "fresh results still mark their bucket")
+}
+
+// Regression: cleanup used an instant cutoff (now - 30d) while Record checked
+// the row's own timestamp, so the hour straddling the cutoff could lose its
+// early rows to cleanup, then get re-marked by a late result in its surviving
+// minutes; the REPLACE rebuild then shrank that hour to the survivors. Pruning
+// is now whole hours, one hour below the mark horizon.
+func TestRetentionCleanup_LateResultNeverShrinksHorizonHour(t *testing.T) {
+	ctx := context.Background()
+	database, cleanup := setupRollupTestDB(ctx, t)
+	t.Cleanup(cleanup)
+	s := newTestScheduler(database)
+	s.config.RetentionCleanupEnabled = true
+
+	tenant := insertTenant(ctx, t, database)
+	monitor := insertMonitor(ctx, t, database, tenant, "horizon-hour")
+	var horizon time.Time
+	require.NoError(t, database.QueryRowContext(ctx, `SELECT `+monitorstate.RollupMarkHorizonSQL).Scan(&horizon))
+	horizon = horizon.UTC()
+	slack, expired := horizon.Add(-time.Hour), horizon.Add(-2*time.Hour)
+
+	// The horizon hour's first rows sit before the old instant cutoff.
+	for i := 0; i < 3; i++ {
+		insertMarkedCheckResult(ctx, t, database, tenant, monitor, horizon.Add(time.Duration(i)*time.Millisecond), "success", 50)
+	}
+	for i := 0; i < 2; i++ {
+		insertMarkedCheckResult(ctx, t, database, tenant, monitor, slack.Add(time.Duration(i)*time.Minute), "success", 50)
+	}
+	insertMarkedCheckResult(ctx, t, database, tenant, monitor, expired, "success", 50)
+	_, _, err := s.runRollupMaintenance()
+	require.NoError(t, err)
+	require.Zero(t, countDirtyMarks(ctx, t, database))
+
+	hourRows := func(hour time.Time) int {
+		t.Helper()
+		return countRows(ctx, t, database, `SELECT COUNT(*) FROM check_results WHERE monitor_id = $1 AND date_trunc('hour', created_at) = $2`, monitor, hour)
+	}
+	hourlyTotal := func(hour time.Time) int {
+		t.Helper()
+		return countRows(ctx, t, database, `SELECT COALESCE(SUM(total_checks), 0) FROM monitor_hourly_rollups WHERE monitor_id = $1 AND bucket_hour = $2`, monitor, hour)
+	}
+
+	_, _, _, err = s.runRetentionCleanup()
+	require.NoError(t, err)
+	require.Equal(t, 3, hourRows(horizon), "cleanup never prunes the hour the horizon falls in")
+	require.Equal(t, 2, hourRows(slack), "cleanup keeps one full hour of slack below the horizon")
+	require.Zero(t, hourRows(expired), "whole hours below the slack are pruned")
+
+	// Late results land in the horizon hour's surviving minutes and in the
+	// slack hour, through the real ingest path.
+	record := func(startedAt time.Time) {
+		t.Helper()
+		_, err := monitorstate.Record(ctx, database.DB, monitorstate.Result{
+			MonitorID: monitor, TenantID: tenant, JobID: uuid.New(),
+			Status: "success", ResultSource: "monitor",
+			StartedAt: startedAt, CompletedAt: startedAt,
+		})
+		require.NoError(t, err)
+	}
+	record(horizon.Add(59 * time.Minute))
+	record(slack.Add(30 * time.Minute))
+	// The horizon hour is marked unless the clock crossed an hour boundary
+	// since it was read; the slack hour is below the horizon and never is.
+	markedHorizon := countRows(ctx, t, database, `SELECT COUNT(*) FROM rollup_dirty WHERE monitor_id = $1 AND bucket_hour = $2`, monitor, horizon)
+	require.Zero(t, countRows(ctx, t, database, `SELECT COUNT(*) FROM rollup_dirty WHERE monitor_id = $1 AND bucket_hour = $2`, monitor, slack))
+
+	_, _, err = s.runRollupMaintenance()
+	require.NoError(t, err)
+	require.Equal(t, 3+markedHorizon, hourlyTotal(horizon), "the rebuild saw every earlier row of the horizon hour")
+	require.Equal(t, 2, hourlyTotal(slack), "an unmarked hour's rollup is left as built")
+	require.Equal(t, 1, hourlyTotal(expired), "pruned hours keep their rollup")
 }

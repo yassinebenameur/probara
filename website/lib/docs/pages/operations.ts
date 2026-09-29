@@ -378,7 +378,7 @@ make db-restore`,
             {
               term: 'Tenant telemetry retention',
               description:
-                'Each tenant’s `data_retention_days` controls raw check results and mesh results, and can tighten (never extend) raw agent metric-sample retention below `METRIC_RAW_RETENTION_DAYS`. A value of `0` preserves check/mesh results; the public validator otherwise accepts 30–3650 days. It is configured in [tenant settings](/docs/administration/#tenant-settings).',
+                'Raw check results are kept 30 days for every tenant, including tenants set to `0`; ranges of 7 days and longer, status-page history, and latency-anomaly baselines read the hourly and daily rollups, which are kept 400 days. Cleanup removes whole hours only, starting one hour below the 30-day horizon, and keeps any hour still waiting for its rollup rebuild until the rebuild runs; a result that arrives for an hour already past the horizon is stored but not folded into rollups. Each tenant’s `data_retention_days` controls mesh results and can tighten (never extend) raw agent metric-sample retention below `METRIC_RAW_RETENTION_DAYS`. A value of `0` preserves mesh results; the public validator otherwise accepts 30–3650 days. It is configured in [tenant settings](/docs/administration/#tenant-settings).',
             },
             {
               term: 'Audit retention',

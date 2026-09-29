@@ -292,7 +292,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           rows: [
             [
               "`data_retention_days`",
-              "`0` keeps telemetry indefinitely; otherwise 30–3,650 days",
+              "`0` keeps mesh history indefinitely; otherwise 30–3,650 days. Raw check results are always capped at 30 days",
             ],
             [
               "`dashboard_group_tags`",
@@ -303,7 +303,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "[Retention](/docs/operations/#retention) applies to monitoring telemetry such as check results, mesh history, and rollups. Audit retention is configured separately at platform level. Dashboard group tags change presentation only; they do not create monitor groups or notification rollup.",
+            "[Retention](/docs/operations/#retention) applies to mesh history and raw agent metric samples. Raw check results are kept 30 days regardless of this setting, and uptime/latency history beyond that comes from rollups kept 400 days. Audit retention is configured separately at platform level. Dashboard group tags change presentation only; they do not create monitor groups or notification rollup.",
         },
       ],
     },

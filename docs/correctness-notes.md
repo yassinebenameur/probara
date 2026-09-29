@@ -131,7 +131,7 @@ total − success − error`; see the `MonitorRolling24hTotals` doc comment in
 `api/internal/services/dashboard/hourly_rollup.go`). To make history exact,
 re-aggregate the affected range with `scripts/backfill_hourly_rollups.sql`
 (REPLACE semantics, idempotent) — provided the raw `check_results` rows are
-still within retention.
+still within their 30-day raw retention.
 
 ## Cached aggregates and staleness
 

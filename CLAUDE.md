@@ -419,6 +419,15 @@ or imported groups come back empty. Any other path that creates groups through
   and every client can block remote ones — a masthead that vanishes is worse
   than an approximation. Recolour it with the other four; do not give it an
   `<img>`.
+- **Raw `check_results` live 30 days for every tenant**
+  (`monitorstate.CheckResultsRawRetentionDays`, `shared/monitorstate/record.go`),
+  whatever `data_retention_days` says; rollups are kept 400 days. Any read
+  over a window longer than ~24h must use the rollups, never raw rows.
+  Rollup rebuilds REPLACE a bucket from its raw rows, so a bucket must never
+  be marked once any of its rows can be pruned: `Record` marks only from
+  `RollupMarkHorizonSQL`, cleanup prunes whole hours below
+  `RawPruneCutoffSQL` (one hour lower, same DB clock), and skips buckets with
+  a pending mark (`checkResultNotPendingRollup`). Change the pair together.
 - `expected_status` etc. reuse `HTTPStatus` fields for non-HTTP protocols
   (SIP status codes ride in `http_status`).
 - SIP dev against the host: `SIP_LOCALHOST_AS_HOST_GATEWAY=true` rewrites

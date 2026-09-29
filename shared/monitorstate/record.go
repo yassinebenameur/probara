@@ -10,6 +10,33 @@ import (
 	"github.com/google/uuid"
 )
 
+// CheckResultsRawRetentionDays caps raw check_results for every tenant,
+// whatever its data_retention_days (the schema allows only 0 or 30–3650, so
+// no tenant is tighter). Nothing reads raw rows beyond 24h except per-check
+// history: ranges of 7d and longer, status-page bars and anomaly baselines
+// come from the hourly/daily rollups, which outlive this cap.
+const CheckResultsRawRetentionDays = 30
+
+// Rollup rebuilds REPLACE a whole (monitor, hour) bucket from its raw rows, so
+// a bucket must never be marked dirty once any of its rows can have been
+// pruned. The two horizons below, both hour-aligned on the database clock,
+// keep that apart:
+//
+//   - Record marks a bucket only when it is at or after RollupMarkHorizonSQL.
+//   - Retention prunes only rows before RawPruneCutoffSQL, one full hour
+//     earlier, so it deletes whole hours and never touches the hour the
+//     horizon falls in.
+//
+// For a prune to reach a bucket Record just marked, its cutoff would have to
+// pass that bucket's end, which takes more than an hour between Record's
+// transaction start (its NOW()) and the DELETE. Once the mark commits, the
+// scheduler's pending-rollup guard holds the bucket's rows until the rebuild
+// consumes it.
+var (
+	RollupMarkHorizonSQL = fmt.Sprintf(`date_trunc('hour', NOW() - INTERVAL '%d days')`, CheckResultsRawRetentionDays)
+	RawPruneCutoffSQL    = RollupMarkHorizonSQL + ` - INTERVAL '1 hour'`
+)
+
 // Result holds the columns written for one check_results row by Record.
 //
 // It is shared by agent and push ingestion (plus their stale workers) and the
@@ -205,10 +232,15 @@ func insertResult(ctx context.Context, db execer, r Result) (bool, error) {
 	// bucket is rebuilt again next run with this row included. Without the
 	// refresh, the consumer's conditional delete would consume the mark
 	// while its rebuild snapshot predates this row, losing it permanently.
+	// A bucket before RollupMarkHorizonSQL is never marked: retention may
+	// already have pruned some of its rows, and a REPLACE rebuild from the
+	// survivors would shrink or delete the finished rollup. Such a row is kept
+	// out of rollups and lives only until the next retention pass.
 	if inserted && r.ResultSource == "monitor" {
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO rollup_dirty (monitor_id, bucket_hour)
-			VALUES ($1, date_trunc('hour', $2::timestamptz))
+			SELECT $1, date_trunc('hour', $2::timestamptz)
+			WHERE date_trunc('hour', $2::timestamptz) >= `+RollupMarkHorizonSQL+`
 			ON CONFLICT (monitor_id, bucket_hour) DO UPDATE SET marked_at = clock_timestamp()
 		`, r.MonitorID, r.StartedAt); err != nil {
 			return false, fmt.Errorf("mark rollup bucket dirty: %w", err)

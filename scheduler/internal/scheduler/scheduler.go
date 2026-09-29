@@ -416,10 +416,12 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 		}
 	}()
 
+	// Every tenant, including data_retention_days = 0: raw check results are
+	// capped at monitorstate.CheckResultsRawRetentionDays even when the tenant
+	// keeps telemetry forever.
 	query := `
 		SELECT id, data_retention_days
 		FROM tenants
-		WHERE data_retention_days > 0
 		ORDER BY id
 	`
 	rows, err := s.db.QueryContext(ctx, query)
@@ -449,13 +451,23 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 		return true, 0, false, fmt.Errorf("failed to close tenant retention rows: %w", err)
 	}
 
+	// Mesh results and metric samples follow data_retention_days (0 = keep
+	// forever); raw check results ignore it and use the fixed hour-aligned
+	// horizon (pruneTenantCheckResults).
 	stores := []struct {
 		name  string
-		prune func(context.Context, uuid.UUID, int) (int64, error)
+		prune func(ctx context.Context, tenantID uuid.UUID, tenantDays int) (int64, error)
+		// cutoff is the prune boundary; zero means the store keeps this
+		// tenant's rows forever.
+		cutoff func(ctx context.Context, tenantDays int) (time.Time, error)
 	}{
-		{"check_results", s.pruneTenantCheckResults},
-		{"mesh_probe_results", s.pruneTenantMeshResults},
-		{"metric_samples", s.pruneTenantMetricSamples},
+		{"check_results",
+			func(ctx context.Context, id uuid.UUID, _ int) (int64, error) {
+				return s.pruneTenantCheckResults(ctx, id)
+			},
+			func(ctx context.Context, _ int) (time.Time, error) { return s.checkResultsPruneCutoff(ctx) }},
+		{"mesh_probe_results", s.pruneTenantMeshResults, tenantDaysCutoff},
+		{"metric_samples", s.pruneTenantMetricSamples, tenantDaysCutoff},
 	}
 	var totalDeleted int64
 	backlogged := make(map[string]int)
@@ -463,6 +475,13 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 	pending := false
 	for _, tenant := range tenants {
 		for _, store := range stores {
+			cutoff, err := store.cutoff(ctx, tenant.days)
+			if err != nil {
+				return true, totalDeleted, pending, err
+			}
+			if cutoff.IsZero() {
+				continue
+			}
 			deleted, err := store.prune(ctx, tenant.id, tenant.days)
 			totalDeleted += deleted
 			if err != nil {
@@ -473,7 +492,6 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 			}
 			// Only a capped store needs another query. Read the oldest indexed
 			// candidate instead of counting every expired row in a large backlog.
-			cutoff := time.Now().UTC().AddDate(0, 0, -tenant.days)
 			ts, err := s.oldestExpiredRetentionRow(ctx, store.name, tenant.id, cutoff)
 			if err != nil {
 				return true, totalDeleted, pending, err
@@ -501,12 +519,13 @@ func (s *Scheduler) runRetentionCleanup() (bool, int64, bool, error) {
 	return true, totalDeleted, pending, nil
 }
 
-func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.UUID, retentionDays int) (int64, error) {
-	if retentionDays <= 0 {
-		return 0, nil
+// pruneTenantCheckResults prunes a tenant's raw check_results to the
+// hour-aligned monitorstate.RawPruneCutoffSQL, the same for every tenant.
+func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.UUID) (int64, error) {
+	cutoff, err := s.checkResultsPruneCutoff(ctx)
+	if err != nil {
+		return 0, err
 	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 	deleteQuery := `
 		DELETE FROM check_results
 		WHERE id IN (
@@ -514,6 +533,7 @@ func (s *Scheduler) pruneTenantCheckResults(ctx context.Context, tenantID uuid.U
 			FROM check_results
 			WHERE tenant_id = $1
 			  AND created_at < $2
+			  AND ` + checkResultNotPendingRollup + `
 			ORDER BY created_at ASC
 			LIMIT $3
 		)
