@@ -84,7 +84,20 @@ type httpMetrics struct {
 	Timing     *httpTimingInfo `json:"timing,omitempty"`
 	TLS        *httpTLSInfo    `json:"tls,omitempty"`
 	Assertions []string        `json:"assertions_failed,omitempty"`
+	// DisplayValues are the config's display_fields resolved against the
+	// response body; the monitors list shows them from the latest result.
+	DisplayValues []httpDisplayValue `json:"display_values,omitempty"`
 }
+
+type httpDisplayValue struct {
+	Label string `json:"label,omitempty"`
+	Path  string `json:"path"`
+	Value string `json:"value"`
+}
+
+// maxDisplayValueRunes bounds each display value: it is stored on every check
+// result and rendered as a list chip, not a body archive.
+const maxDisplayValueRunes = 64
 
 type httpMetricsEnvelope struct {
 	HTTP *httpMetrics `json:"http,omitempty"`
@@ -351,6 +364,10 @@ func (c *HTTPChecker) Check(ctx context.Context, configRaw json.RawMessage, time
 		for _, ip := range leaf.IPAddresses {
 			metrics.TLS.IPAddresses = append(metrics.TLS.IPAddresses, ip.String())
 		}
+	}
+
+	if len(config.DisplayFields) > 0 {
+		metrics.DisplayValues = extractDisplayValues(body, config.DisplayFields)
 	}
 
 	var assertionsFailed []string
@@ -678,6 +695,39 @@ func evaluateBodyAssertions(body string, assertions []models.HTTPBodyAssertion) 
 		}
 	}
 	return failed, nil
+}
+
+// extractDisplayValues resolves display fields against a JSON body. Fields are
+// informational only: a non-JSON body or a missing path yields no value and
+// never fails the check.
+func extractDisplayValues(body string, fields []models.HTTPDisplayField) []httpDisplayValue {
+	if !gjson.Valid(body) {
+		return nil
+	}
+	var values []httpDisplayValue
+	for _, f := range fields {
+		path := strings.TrimSpace(f.Path)
+		if path == "" {
+			continue
+		}
+		result := gjson.Get(body, path)
+		if !result.Exists() {
+			continue
+		}
+		value := result.String()
+		if result.IsObject() || result.IsArray() {
+			value = result.Raw
+		}
+		if runes := []rune(value); len(runes) > maxDisplayValueRunes {
+			value = string(runes[:maxDisplayValueRunes-1]) + "…"
+		}
+		values = append(values, httpDisplayValue{
+			Label: strings.TrimSpace(f.Label),
+			Path:  path,
+			Value: value,
+		})
+	}
+	return values
 }
 
 func evaluateJSONAssertions(body string, assertions []models.HTTPJSONAssertion) ([]string, error) {

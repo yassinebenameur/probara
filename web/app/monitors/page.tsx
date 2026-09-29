@@ -16,7 +16,7 @@ import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
 import { BulkAlertingModal } from '@/components/monitors/BulkAlertingModal';
 import TagPill from '@/components/monitors/TagPill';
-import { Monitor, CheckResult, AgentMetrics } from '@/lib/types';
+import { Monitor, CheckResult, AgentMetrics, HTTPDisplayValue } from '@/lib/types';
 import {
   deleteMonitor,
   getMonitorResults,
@@ -35,9 +35,11 @@ import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import {
   calculateUptime,
   countOperationalResults,
+  displayValueLabel,
   formatInterval,
   formatTimeAgo,
   getEffectiveMonitorStatus,
+  getHTTPDisplayValues,
   isPlatformResult,
   monitorTargetLabel,
   MonitorDisplayStatus,
@@ -206,6 +208,26 @@ function isAgentMetrics(metrics: unknown): metrics is AgentMetrics {
   );
 }
 
+// Values the worker read from the latest JSON response (HTTP display_fields).
+// Neutral and squared-off on purpose, so they never read as tags.
+function DisplayValueChips({ values }: { values: HTTPDisplayValue[] }) {
+  if (values.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {values.map((v) => (
+        <span
+          key={v.path}
+          className="inline-flex max-w-[180px] items-center gap-1 rounded border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 font-mono text-[10px] leading-none text-slate-300"
+          title={`${v.path} = ${v.value}`}
+        >
+          {displayValueLabel(v) && <span className="shrink-0 text-slate-500">{displayValueLabel(v)}</span>}
+          <span className="truncate">{v.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // Custom checkbox component matching the dark theme
 function SelectCheckbox({ 
   checked, 
@@ -330,6 +352,7 @@ function MonitorRow({
   const latencyStats = calculateLatencyStats(results);
   const latestResult = results[0];
   const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
+  const displayValues = getHTTPDisplayValues(results);
 
   const getUrl = () => {
     if (monitor.config && 'url' in monitor.config) return monitor.config.url;
@@ -388,6 +411,7 @@ function MonitorRow({
               Maintenance
             </span>
           )}
+          <DisplayValueChips values={displayValues} />
           {/* Tags */}
           {monitor.tags && monitor.tags.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
@@ -838,6 +862,7 @@ function DetailPanel({
   const latencyStats = calculateLatencyStats(results);
   const latestResult = results[0];
   const agentMetrics = isAgentMetrics(latestResult?.metrics_data) ? latestResult.metrics_data : null;
+  const displayValues = getHTTPDisplayValues(results);
 
   const memberStatuses = monitor.type === 'group'
     ? members.map((m) => getEffectiveMonitorStatus(m, memberResults[m.id] || []))
@@ -908,6 +933,21 @@ function DetailPanel({
           <p className="text-[10px] text-slate-500">P95</p>
         </div>
       </div>
+
+      {/* Response values (HTTP display_fields), shown in full here */}
+      {displayValues.length > 0 && (
+        <div className="border-b border-white/[0.06] p-4">
+          <h4 className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-2">Response values</h4>
+          <dl className="space-y-1">
+            {displayValues.map((v) => (
+              <div key={v.path} className="flex items-baseline gap-2 text-xs">
+                <dt className="shrink-0 text-slate-500" title={v.path}>{displayValueLabel(v) || v.path}</dt>
+                <dd className="min-w-0 break-all font-mono text-slate-300">{v.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
 
       {/* Group Members */}
       {monitor.type === 'group' && (

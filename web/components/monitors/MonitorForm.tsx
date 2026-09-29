@@ -17,6 +17,7 @@ import {
   HTTPBodyAssertionOp,
   HTTPHeaderAssertion,
   HTTPHeaderAssertionOp,
+  HTTPDisplayField,
   HTTPJSONAssertion,
   HTTPJSONAssertionOp,
   HTTPStatusRange,
@@ -33,6 +34,7 @@ import {
 import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
+import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
@@ -940,6 +942,7 @@ export default function MonitorForm({
     })(),
     response_header_assertions: initialHTTPConfig?.response_header_assertions || ([] as HTTPHeaderAssertion[]),
     json_assertions: initialHTTPConfig?.json_assertions || ([] as HTTPJSONAssertion[]),
+    display_fields: initialHTTPConfig?.display_fields || ([] as HTTPDisplayField[]),
     max_latency_ms: initialHTTPConfig?.max_latency_ms?.toString() || '',
     follow_redirects: initialHTTPConfig?.follow_redirects ?? true,
     max_redirects: initialHTTPConfig?.max_redirects ?? 10,
@@ -1447,6 +1450,9 @@ export default function MonitorForm({
           break;
         }
       }
+      if ((formData.display_fields || []).some(f => f.label?.trim() && !f.path.trim())) {
+        newErrors.display_fields = 'Each display value needs a path';
+      }
     } else if (monitorType === 'ping') {
       if (!formData.host.trim()) newErrors.host = 'Host is required';
     } else if (monitorType === 'dns') {
@@ -1759,6 +1765,16 @@ export default function MonitorForm({
         .filter(a => a.path);
       if (jsonAssertions.length > 0) {
         httpConfig.json_assertions = jsonAssertions;
+      }
+
+      const displayFields = (formData.display_fields || [])
+        .map(f => ({
+          ...(f.label?.trim() ? { label: f.label.trim() } : {}),
+          path: f.path.trim(),
+        } as HTTPDisplayField))
+        .filter(f => f.path);
+      if (displayFields.length > 0) {
+        httpConfig.display_fields = displayFields;
       }
 
       if (formData.max_latency_ms.trim()) {
@@ -3697,6 +3713,13 @@ export default function MonitorForm({
           placeholder="production, api, critical"
           hint="Comma-separated tags for filtering"
         />
+        {monitorType === 'http' && (
+          <DisplayFieldsEditor
+            value={formData.display_fields}
+            onChange={(fields) => setFormData({ ...formData, display_fields: fields })}
+            error={errors.display_fields}
+          />
+        )}
         <FormToggle
           label="Monitor enabled"
           description="Run checks on the configured schedule"

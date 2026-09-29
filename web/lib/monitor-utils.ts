@@ -1,4 +1,4 @@
-import { CheckResult, Monitor, MonitorState, MonitorType } from './types';
+import { CheckResult, HTTPDisplayValue, Monitor, MonitorState, MonitorType } from './types';
 
 export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
 export type MonitorDisplayStatus = MonitorHealthStatus | 'paused' | 'maintenance';
@@ -16,6 +16,27 @@ export function isPlatformResult(result: CheckResult): boolean {
 export function getOperationalResults(results: CheckResult[]): CheckResult[] {
   if (!results || results.length === 0) return [];
   return results.filter((r) => !isPlatformResult(r));
+}
+
+/**
+ * Display values (HTTP `display_fields`) from the latest monitor-sourced
+ * result. Platform results (expired jobs) carry no body, so they are skipped
+ * rather than blanking the chips; a real failed check does blank them.
+ */
+export function getHTTPDisplayValues(results: CheckResult[]): HTTPDisplayValue[] {
+  const latest = getOperationalResults(results)[0];
+  const metrics = latest?.metrics_data as { http?: { display_values?: unknown } } | undefined;
+  const values = metrics?.http?.display_values;
+  if (!Array.isArray(values)) return [];
+  return values.filter(
+    (v): v is HTTPDisplayValue =>
+      !!v && typeof v === 'object' && typeof v.path === 'string' && typeof v.value === 'string'
+  );
+}
+
+/** Chip label for a display value; empty means the chip shows the value alone. */
+export function displayValueLabel(v: HTTPDisplayValue): string {
+  return v.label?.trim() || '';
 }
 
 export function countOperationalResults(results: CheckResult[]): number {

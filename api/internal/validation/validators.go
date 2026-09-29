@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/metricstore"
@@ -98,6 +99,10 @@ func (v *HTTPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	}
 
 	if err := validateHTTPJSONAssertions(config.JSONAssertions); err != nil {
+		return err
+	}
+
+	if err := validateHTTPDisplayFields(config.DisplayFields); err != nil {
 		return err
 	}
 
@@ -204,6 +209,31 @@ func validateHTTPHeaderAssertions(assertions []sharedmodels.HTTPHeaderAssertion)
 			}
 		default:
 			return fmt.Errorf("response_header_assertions[%d].op must be one of: exists, equals, contains, regex, not_equals, not_contains, not_regex", i)
+		}
+	}
+	return nil
+}
+
+const (
+	maxHTTPDisplayFields      = 5
+	maxHTTPDisplayPathLength  = 256
+	maxHTTPDisplayLabelLength = 32
+)
+
+func validateHTTPDisplayFields(fields []sharedmodels.HTTPDisplayField) error {
+	if len(fields) > maxHTTPDisplayFields {
+		return fmt.Errorf("display_fields allows at most %d entries", maxHTTPDisplayFields)
+	}
+	for i, f := range fields {
+		path := strings.TrimSpace(f.Path)
+		if path == "" {
+			return fmt.Errorf("display_fields[%d].path is required", i)
+		}
+		if len(path) > maxHTTPDisplayPathLength {
+			return fmt.Errorf("display_fields[%d].path must be at most %d characters", i, maxHTTPDisplayPathLength)
+		}
+		if utf8.RuneCountInString(strings.TrimSpace(f.Label)) > maxHTTPDisplayLabelLength {
+			return fmt.Errorf("display_fields[%d].label must be at most %d characters", i, maxHTTPDisplayLabelLength)
 		}
 	}
 	return nil

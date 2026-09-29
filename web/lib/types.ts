@@ -272,6 +272,15 @@ export interface HTTPJSONAssertion {
   case_insensitive?: boolean;
 }
 
+/** A value pulled from the JSON response and shown on the monitors list. */
+export interface HTTPDisplayField {
+  label?: string;
+  /** gjson path */
+  path: string;
+}
+
+export const MAX_HTTP_DISPLAY_FIELDS = 5;
+
 export interface HTTPMonitorConfig {
   url: string;
   method: string;
@@ -286,6 +295,7 @@ export interface HTTPMonitorConfig {
   body_assertions?: HTTPBodyAssertion[];
   response_header_assertions?: HTTPHeaderAssertion[];
   json_assertions?: HTTPJSONAssertion[];
+  display_fields?: HTTPDisplayField[];
   max_latency_ms?: number;
   follow_redirects?: boolean;
   max_redirects?: number;
@@ -1723,6 +1733,13 @@ export interface HTTPMetrics {
   timing?: HTTPTimingInfo;
   tls?: HTTPTLSInfo;
   assertions_failed?: string[];
+  display_values?: HTTPDisplayValue[];
+}
+
+export interface HTTPDisplayValue {
+  label?: string;
+  path: string;
+  value: string;
 }
 
 export interface GRPCMetricsEnvelope {
