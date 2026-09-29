@@ -1,3 +1,10 @@
+# [1.0.0-alpha.75](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.74...v1.0.0-alpha.75) (2026-09-29)
+
+
+### Bug Fixes
+
+* **scheduler:** keep raw check_results 30 days, serve longer ranges from rollups ([663b275](https://github.com/yassinebenameur/probara/commit/663b27521fe4fa9dbbea842d04460095180ba619))
+
 # [1.0.0-alpha.74](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.73...v1.0.0-alpha.74) (2026-09-28)
 
 
