@@ -1,3 +1,16 @@
+# [1.0.0-alpha.76](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.75...v1.0.0-alpha.76) (2026-09-29)
+
+
+### Bug Fixes
+
+* **web:** chart Mongo cluster metrics over the selected range ([6d19f00](https://github.com/yassinebenameur/probara/commit/6d19f0050a7ab6ab4ec9ca90025dbdfb9a39451b))
+
+
+### Features
+
+* **monitors:** show JSON response values on the monitors list ([f2e299d](https://github.com/yassinebenameur/probara/commit/f2e299d07ba96417847371f63c2018a2c70c5188))
+* **sla:** SLA definitions, calendar reports, error budgets and exports ([8ed3bda](https://github.com/yassinebenameur/probara/commit/8ed3bdae3e71a2cf41fa2f2f1f2d9067f1122ae9))
+
 # [1.0.0-alpha.75](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.74...v1.0.0-alpha.75) (2026-09-29)
 
 
