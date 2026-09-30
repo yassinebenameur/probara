@@ -16,7 +16,7 @@ export const TONE_BG: Record<SlaTone, string> = {
   good: 'bg-emerald-500/80',
   warn: 'bg-amber-500/80',
   bad: 'bg-rose-500/80',
-  none: 'bg-slate-700/60',
+  none: 'bg-slate-500/25',
 };
 
 export function SlaStatusPill({ met, running }: { met: boolean | null | undefined; running?: boolean }) {
@@ -29,18 +29,18 @@ export function SlaStatusPill({ met, running }: { met: boolean | null | undefine
 /** Remaining error budget as a bar; overspent budgets fill red past zero. */
 export function BudgetBar({ remainingPct }: { remainingPct: number | null | undefined }) {
   if (remainingPct === null || remainingPct === undefined) {
-    return <div className="h-1.5 w-full rounded-full bg-slate-800" aria-label="No error budget data" />;
+    return <div className="h-1.5 w-full rounded-full bg-well-hover" aria-label="No error budget data" />;
   }
   const clamped = Math.max(0, Math.min(100, remainingPct));
   const tone: SlaTone = remainingPct < 0 ? 'bad' : remainingPct < 25 ? 'warn' : 'good';
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800" role="meter" aria-valuemin={0}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-well-hover" role="meter" aria-valuemin={0}
         aria-valuemax={100} aria-valuenow={Math.round(remainingPct)} aria-label="Error budget remaining">
         <div className={`h-full rounded-full ${remainingPct < 0 ? 'w-full bg-rose-500/70' : TONE_BG[tone]}`}
           style={remainingPct < 0 ? undefined : { width: `${clamped}%` }} />
       </div>
-      <span className={`w-12 shrink-0 text-right font-mono text-[11px] ${TONE_TEXT[tone]}`}>
+      <span className={`w-12 shrink-0 text-right font-mono text-xs tabular-nums ${TONE_TEXT[tone]}`}>
         {remainingPct < 0 ? 'over' : `${Math.round(remainingPct)}%`}
       </span>
     </div>
