@@ -367,6 +367,9 @@ or imported groups come back empty. Any other path that creates groups through
   without a Docker daemon — then set
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
   (role needs CREATEDB) and each test gets a scratch database on that server.
+- CI's Go job logs the whole module with `-v`, far past any log tail; a
+  failure is repeated by its "Summarize test failures" step (end of the job
+  log, step summary, check-run annotations) — read that, not the log head.
 - Web/website: CI runs `npm run lint`, `npx tsc --noEmit` and `npm run build`
   in both (`website/` lint allows no warnings), plus `npm test` in `web/`.
   Run the same in whichever one you touched.

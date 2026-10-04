@@ -62,7 +62,33 @@ jobs:
 
       - name: Run tests
         working-directory: ${{ matrix.directory }}
-        run: go test -v -race -coverprofile="${{ github.workspace }}/${{ matrix.coverage-file }}" ./...
+        # Explicit bash adds -o pipefail, so tee cannot mask a test failure.
+        shell: bash
+        run: go test -v -race -coverprofile="${{ github.workspace }}/${{ matrix.coverage-file }}" ./... 2>&1 | tee "${{ runner.temp }}/go-test.log"
+
+      # The -v output of the whole module runs to hundreds of thousands of
+      # lines, so a failing test scrolls far out of any log tail and the run
+      # ends on a bare "FAIL". Repeat the failures at the end of the job, in
+      # the step summary, and as annotations on the check run.
+      - name: Summarize test failures
+        if: failure()
+        run: |
+          log="${{ runner.temp }}/go-test.log"
+          [ -f "$log" ] || exit 0
+          # A test's own output precedes its FAIL line; a panic or race
+          # report follows its header.
+          failed='^[[:space:]]*--- FAIL|^FAIL[[:space:]]'
+          crashed='^panic:|^WARNING: DATA RACE'
+          context=$({ grep -E -B40 "$failed" "$log"; grep -E -A40 "$crashed" "$log"; } | tail -n 600 || true)
+          echo "$context"
+          {
+            echo '## Go test failures'
+            echo '```'
+            echo "$context"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^[[:space:]]*--- FAIL|^FAIL[[:space:]]' "$log" | sed -E 's/^[[:space:]]+//' | head -n 50 |
+            while IFS= read -r line; do echo "::error title=Go test failure::$line"; done
 
       - name: Upload coverage
         uses: codecov/codecov-action@v7
