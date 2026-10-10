@@ -4,13 +4,16 @@ import { useEffect, useRef, useState } from 'react';
 import { Network, RefreshCw, Zap } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import Callout from '@/components/ui/Callout';
 import EmptyState from '@/components/ui/EmptyState';
+import TableSkeleton from '@/components/ui/TableSkeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import { MeshEdge, MeshLocation, MeshResponse } from '@/lib/types';
 import { getMesh, probeMeshEdge } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/monitor-utils';
+import { formatLatency } from '@/lib/format';
 
 function edgeKey(sourceId: string, targetId: string) {
   return `${sourceId}→${targetId}`;
@@ -41,7 +44,7 @@ function edgeTitle(source: MeshLocation, target: MeshLocation, edge?: MeshEdge):
     return lines.join('\n');
   }
   lines.push(`State: ${edge.stale ? 'stale' : edge.state}`);
-  if (edge.last_latency_ms != null) lines.push(`Latency: ${edge.last_latency_ms}ms`);
+  if (edge.last_latency_ms != null) lines.push(`Latency: ${formatLatency(edge.last_latency_ms)}`);
   if (edge.last_check_at) lines.push(`Last probe: ${formatTimeAgo(edge.last_check_at)}`);
   if (edge.last_error) lines.push(`Error: ${edge.last_error}`);
   if (edge.alert_open) lines.push('Alert open');
@@ -52,7 +55,7 @@ function cellLabel(edge?: MeshEdge): string {
   if (!edge) return '—';
   if (edge.stale) return 'stale';
   if (edge.state === 'up' || edge.state === 'suspect') {
-    return edge.last_latency_ms != null ? `${edge.last_latency_ms}ms` : edge.state;
+    return edge.last_latency_ms != null ? formatLatency(edge.last_latency_ms) : edge.state;
   }
   if (edge.state === 'down') return 'down';
   return '—';
@@ -64,6 +67,7 @@ export default function MeshMatrix() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [probing, setProbing] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const initialLoadDone = useRef(false);
 
   const loadMesh = async (showSpinner = true) => {
@@ -96,7 +100,7 @@ export default function MeshMatrix() {
       const result = await probeMeshEdge(source.id, target.id);
       if (result.status === 'success') {
         showToast(
-          `${source.name} → ${target.name}: ${result.latency_ms != null ? `${result.latency_ms}ms` : 'reachable'}`,
+          `${source.name} → ${target.name}: ${result.latency_ms != null ? formatLatency(result.latency_ms) : 'reachable'}`,
           'success'
         );
       } else {
@@ -113,6 +117,16 @@ export default function MeshMatrix() {
     }
   };
 
+  // Manual refresh without the 30s wait; the matrix stays on screen.
+  const refreshMesh = async () => {
+    setRefreshing(true);
+    try {
+      await loadMesh(false);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const locations = mesh?.locations ?? [];
   const edges = new Map((mesh?.edges ?? []).map((e) => [edgeKey(e.source_location_id, e.target_location_id), e]));
   const downCount = (mesh?.edges ?? []).filter((e) => !e.stale && e.state === 'down').length;
@@ -120,9 +134,9 @@ export default function MeshMatrix() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-[13px] text-slate-400">
+        <p className="text-ui text-slate-400">
           Each row probes every column&apos;s echo endpoint
-          {mesh ? ` every ${mesh.probe_interval_seconds}s` : ''}. Hover a cell to probe on demand.
+          {mesh ? ` every ${mesh.probe_interval_seconds}s` : ''}; this view refreshes every 30s. Hover a cell to probe on demand.
         </p>
         <div className="flex items-center gap-2">
           {downCount > 0 && (
@@ -130,19 +144,17 @@ export default function MeshMatrix() {
               {downCount} path{downCount === 1 ? '' : 's'} down
             </Pill>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
+          <IconButton
             icon={<RefreshCw strokeWidth={1.75} />}
-            onClick={() => loadMesh()}
-          >
-            Refresh
-          </Button>
+            label="Refresh mesh"
+            onClick={refreshMesh}
+            loading={refreshing}
+          />
         </div>
       </div>
 
       {loading ? (
-        <div className="glass p-5 text-sm text-slate-500">Loading mesh…</div>
+        <TableSkeleton rows={3} columns={3} label="Loading mesh" />
       ) : error ? (
         <Callout
           tone="danger"

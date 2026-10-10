@@ -62,8 +62,7 @@ export default function PrometheusDetails({ monitor, result, size = 'default' }:
           <div className={rowClass}>
             <span className={labelClass}>Latest check</span>
             <span className={valueClass}>
-              {metrics.sample_count} {metrics.sample_count === 1 ? 'sample' : 'samples'}
-              {' · '}
+              {metrics.sample_count} {metrics.sample_count === 1 ? 'sample' : 'samples'},{' '}
               <span className={metrics.failed_count > 0 ? 'text-rose-300' : 'text-emerald-300'}>
                 {metrics.failed_count} outside threshold
               </span>

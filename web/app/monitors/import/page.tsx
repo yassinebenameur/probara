@@ -7,6 +7,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
+import TypeBadge from '@/components/ui/TypeBadge';
 import { previewImport, executeImport } from '@/lib/api';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 import type {
@@ -117,7 +118,7 @@ function StepIndicator({ currentStep }: { currentStep: WizardStep }) {
               index + 1
             )}
           </div>
-          <span className={`ml-2 text-[13px] font-medium ${
+          <span className={`ml-2 text-ui font-medium ${
             index <= currentIndex ? 'text-white' : 'text-slate-500'
           }`}>
             {step.label}
@@ -378,8 +379,8 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                   <td className="max-w-[200px] truncate text-sm font-medium text-white">
                     {getFieldValue(row, 'name') || `Monitor ${row.index + 1}`}
                   </td>
-                  <td className="text-[13px] text-slate-300">{monitorTypeLabel(type) || 'HTTP'}</td>
-                  <td className="max-w-[200px] truncate text-sm text-slate-400">
+                  <td><TypeBadge type={type || 'http'} /></td>
+                  <td className="max-w-[200px] truncate font-mono text-xs text-slate-400" title={target === '-' ? undefined : target}>
                     {target === '-' ? <span className="text-slate-500">—</span> : target}
                   </td>
                   <td>
@@ -437,7 +438,7 @@ function SkippedTable({ rows }: { rows: ImportSkippedRow[] }) {
           <h4 className="text-sm font-medium text-white">
             Not imported ({rows.length})
           </h4>
-          <p className="mt-0.5 text-[13px] text-slate-400">
+          <p className="mt-0.5 text-ui text-slate-400">
             These monitors have no faithful equivalent and were left out rather than approximated.
           </p>
         </div>
@@ -488,7 +489,7 @@ function ResultsTable({ results }: { results: ImportRowResult[] }) {
                 <td className="max-w-[200px] truncate text-sm font-medium text-white">
                   {result.name}
                 </td>
-                <td className="text-[13px] text-slate-300">{monitorTypeLabel(result.type)}</td>
+                <td><TypeBadge type={result.type} /></td>
                 <td>
                   <span className={`inline-flex items-center gap-1 text-xs ${
                     result.status === 'success' ? 'text-emerald-300' :
@@ -649,14 +650,14 @@ export default function ImportPage() {
       <div className="glass p-6">
         {step === 'upload' && (
           <div>
-            <h2 className="text-[15px] font-semibold text-white">Upload file</h2>
+            <h2 className="text-title font-semibold text-white">Upload file</h2>
             <p className="mb-5 mt-1 text-sm text-slate-400">
               Upload a file containing your monitor definitions. We&apos;ll automatically detect the format.
             </p>
             <FileUpload onFileSelect={handleFileSelect} loading={loading} />
 
             <div className="glass-well mt-5 p-4">
-              <h3 className="mb-2 text-[13px] font-medium text-white">Supported formats</h3>
+              <h3 className="mb-2 text-ui font-medium text-white">Supported formats</h3>
               <ul className="space-y-1 text-xs text-slate-400">
                 <li className="flex items-start gap-2">
                   <span className="w-12 flex-shrink-0 font-medium text-slate-200">JSON</span>
@@ -679,7 +680,7 @@ export default function ImportPage() {
           <div className="space-y-6">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-[15px] font-semibold text-white">Map fields</h2>
+                <h2 className="text-title font-semibold text-white">Map fields</h2>
                 <p className="mt-1 text-sm text-slate-400">
                   Detected {describeSource(previewData)}
                 </p>
@@ -691,7 +692,7 @@ export default function ImportPage() {
 
             {previewData.warnings && previewData.warnings.length > 0 && (
               <Callout tone="warning" title="Warnings">
-                <ul className="space-y-1 text-[13px]">
+                <ul className="space-y-1 text-ui">
                   {previewData.warnings.map((warning, i) => (
                     <li key={i}>{warning}</li>
                   ))}
@@ -712,7 +713,7 @@ export default function ImportPage() {
                   Uptime Kuma export detected. Monitor types, assertions and group nesting were translated
                   automatically, so the mappings below are already complete.
                 </p>
-                <p className="mt-2 text-[13px] text-slate-400">
+                <p className="mt-2 text-ui text-slate-400">
                   Uptime Kuma notifications are never migrated and no credential is imported. Check the per-monitor
                   notes on the review step, then attach Probara alert channels once the monitors exist.
                 </p>
@@ -729,14 +730,14 @@ export default function ImportPage() {
                   <AlertTriangle className="h-4 w-4 text-amber-400" strokeWidth={1.75} />
                   <h4 className="text-sm font-medium text-white">Map unknown types</h4>
                 </div>
-                <p className="mb-4 mt-1 text-[13px] text-slate-400">
+                <p className="mb-4 mt-1 text-ui text-slate-400">
                   The following monitor types are not directly supported. Map them to a supported type:
                 </p>
                 <div className="space-y-3">
                   {getUnmappedTypes().map((sourceType) => (
                     <div key={sourceType} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
                       <div className="min-w-0 flex-1">
-                        <span className="inline-flex items-center rounded-md bg-well-hover px-2 py-0.5 font-mono text-[13px] text-slate-200">
+                        <span className="inline-flex items-center rounded-md bg-well-hover px-2 py-0.5 font-mono text-ui text-slate-200">
                           {sourceType}
                         </span>
                       </div>
@@ -804,7 +805,7 @@ export default function ImportPage() {
         {step === 'review' && previewData && (
           <div className="space-y-6">
             <div>
-              <h2 className="text-[15px] font-semibold text-white">Review import</h2>
+              <h2 className="text-title font-semibold text-white">Review import</h2>
               <p className="mt-1 text-sm text-slate-400">
                 {isPreMapped(previewData.schema)
                   ? `${previewData.total_rows} monitors will be recreated`
@@ -832,14 +833,14 @@ export default function ImportPage() {
         {step === 'importing' && (
           <div className="flex flex-col items-center justify-center py-12">
             <Loader2 className="h-10 w-10 animate-spin text-cyan-500" strokeWidth={1.75} />
-            <p className="mt-5 text-[15px] font-semibold text-white">Importing monitors...</p>
+            <p className="mt-5 text-title font-semibold text-white">Importing monitors...</p>
             <p className="mt-1 text-sm text-slate-400">This may take a moment</p>
           </div>
         )}
 
         {step === 'results' && importResults && (
           <div className="space-y-6">
-            <h2 className="text-[15px] font-semibold text-white">Import complete</h2>
+            <h2 className="text-title font-semibold text-white">Import complete</h2>
 
             <div className="grid grid-cols-3 gap-4">
               {[

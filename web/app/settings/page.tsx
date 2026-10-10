@@ -14,7 +14,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
 import { ApiKey, ApiKeyScope } from '@/lib/types';
 import Select from '@/components/ui/Select';
-import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite, useCurrentUser, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { SSOPanel } from '@/components/settings/SSOPanel';
 import { OidcGroupMappingsPanel } from '@/components/settings/OidcGroupMappingsPanel';
 import { createApiKey, getApiKeys, getTenantSettings, revokeApiKey, updateTenantSettings } from '@/lib/api';
@@ -26,6 +26,13 @@ import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
 import { AISettingsPanel } from '@/components/settings/AISettingsPanel';
 import AlertChannelList from '@/components/alert-channels/AlertChannelList';
 import Tabs, { useUrlTab } from '@/components/ui/Tabs';
+
+const RETENTION_PRESETS: Array<{ label: string; value: string }> = [
+  { label: 'Keep forever', value: '' },
+  { label: '30 days', value: '30' },
+  { label: '90 days', value: '90' },
+  { label: '365 days', value: '365' },
+];
 
 function formatFingerprint(prefix: string | undefined): string {
   if (!prefix) return '-';
@@ -54,9 +61,16 @@ function expiryLabel(expiresAt: string): string {
 
 export default function SettingsPage() {
   const { showToast } = useToast();
-  const { isSuperadmin, role, actorType } = useCurrentUser();
-  // Key create/revoke is tenant-admin gated server-side; mirror that here.
-  const canManageKeys = actorType !== 'api_key' && (isSuperadmin || role === 'admin');
+  // While identity loads, the permission hooks read false: hold the
+  // read-only callouts and the permission-gated panels until it resolves, or
+  // every admin sees a false "read-only" flash on each load.
+  const { isSuperadmin, loading: userLoading } = useCurrentUser();
+  // Key create/revoke and tenant settings (retention, dashboard groups) are
+  // tenant-admin gated server-side; notification routing, channels and AI
+  // only need write access. Mirror both here.
+  const isTenantAdmin = useIsTenantAdmin();
+  const canManageKeys = isTenantAdmin;
+  const canWrite = useCanWrite();
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -65,6 +79,7 @@ export default function SettingsPage() {
   const [savingRetention, setSavingRetention] = useState(false);
   const [retentionDays, setRetentionDays] = useState(0);
   const [retentionInput, setRetentionInput] = useState('');
+  const [customRetention, setCustomRetention] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyScope, setNewKeyScope] = useState<ApiKeyScope>('write');
@@ -76,7 +91,9 @@ export default function SettingsPage() {
   const [browserKeyPresent, setBrowserKeyPresent] = useState(false);
   const [groupTags, setGroupTags] = useState<string[]>([]);
   const [showInactiveKeys, setShowInactiveKeys] = useState(false);
-  const [tab, setTab] = useUrlTab(['general', 'channels', 'ai', 'access'] as const);
+  // Notifications (default routing above the channel list) leads; its id stays
+  // `channels` because /alert-channels and the routing badges link to it.
+  const [tab, setTab] = useUrlTab(['channels', 'general', 'ai', 'access'] as const);
 
   useEffect(() => {
     setBrowserKeyPresent(Boolean(getApiKey()));
@@ -104,6 +121,7 @@ export default function SettingsPage() {
       const value = settings.data_retention_days || 0;
       setRetentionDays(value);
       setRetentionInput(value === 0 ? '' : String(value));
+      setCustomRetention(!RETENTION_PRESETS.some((preset) => preset.value === (value === 0 ? '' : String(value))));
       setGroupTags(settings.dashboard_group_tags || []);
     } catch (err: any) {
       setRetentionError(err.message || 'Failed to load data retention settings');
@@ -119,6 +137,11 @@ export default function SettingsPage() {
 
   const handleSaveRetention = async () => {
     const trimmed = retentionInput.trim();
+    // Only the Keep forever chip produces 0; an empty Custom… field is invalid.
+    if (customRetention && trimmed === '') {
+      showToast('Enter a retention between 30 and 3650 days', 'error');
+      return;
+    }
     const nextValue = trimmed === '' ? 0 : Number(trimmed);
 
     if (!Number.isInteger(nextValue)) {
@@ -126,7 +149,7 @@ export default function SettingsPage() {
       return;
     }
     if (nextValue !== 0 && (nextValue < 30 || nextValue > 3650)) {
-      showToast('Retention must be 0 (Unlimited) or between 30 and 3650 days', 'error');
+      showToast('Retention must be empty (keep forever) or between 30 and 3650 days', 'error');
       return;
     }
 
@@ -136,7 +159,8 @@ export default function SettingsPage() {
       const saved = updated.data_retention_days || 0;
       setRetentionDays(saved);
       setRetentionInput(saved === 0 ? '' : String(saved));
-      showToast(saved === 0 ? 'Retention set to Unlimited' : `Retention set to ${saved} days`, 'success');
+      setCustomRetention(!RETENTION_PRESETS.some((preset) => preset.value === (saved === 0 ? '' : String(saved))));
+      showToast(saved === 0 ? 'Mesh and host-metric history kept forever' : `Retention set to ${saved} days`, 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to update retention', 'error');
     } finally {
@@ -215,21 +239,24 @@ export default function SettingsPage() {
   const inactiveCount = apiKeys.length - activeKeys.length;
   const hasKeyControls = browserKeyPresent || canManageKeys || Boolean(createdKey?.key);
 
-  const presets: Array<{ label: string; value: string }> = [
-    { label: 'Unlimited', value: '' },
-    { label: '30 days', value: '30' },
-    { label: '90 days', value: '90' },
-    { label: '365 days', value: '365' },
-  ];
+  const storedRetention = retentionDays === 0 ? '' : String(retentionDays);
+  const retentionDirty = retentionInput.trim() !== storedRetention;
+  const customRetentionDays = Number(retentionInput.trim());
+  const customRetentionInvalid =
+    customRetention &&
+    (!/^\d+$/.test(retentionInput.trim()) || customRetentionDays < 30 || customRetentionDays > 3650);
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" />
+      <PageHeader
+        title="Settings"
+        subtitle="Notifications, data retention, AI and access for this workspace."
+      />
 
       <Tabs
         tabs={[
+          { id: 'channels', label: 'Notifications' },
           { id: 'general', label: 'General' },
-          { id: 'channels', label: 'Channels' },
           { id: 'ai', label: 'AI' },
           { id: 'access', label: 'Access' },
         ]}
@@ -237,11 +264,18 @@ export default function SettingsPage() {
         onChange={setTab}
       />
 
-      {tab === 'general' && <NotificationsPanel />}
+      {(tab === 'channels' || tab === 'ai') && !userLoading && !canWrite && (
+        <Callout tone="info">You have read-only access to this workspace.</Callout>
+      )}
+      {tab === 'general' && !userLoading && !isTenantAdmin && (
+        <Callout tone="info">Only workspace admins can change data retention and dashboard groups.</Callout>
+      )}
+
+      {tab === 'channels' && !userLoading && <NotificationsPanel readOnly={!canWrite} />}
 
       {tab === 'channels' && <AlertChannelList />}
 
-      {tab === 'ai' && <AISettingsPanel />}
+      {tab === 'ai' && !userLoading && <AISettingsPanel readOnly={!canWrite} />}
 
       {tab === 'access' && isSuperadmin && <SSOPanel />}
 
@@ -249,7 +283,7 @@ export default function SettingsPage() {
 
       {tab === 'general' && <Panel
         title="Data retention"
-        subtitle="How long check result history is kept for this workspace."
+        subtitle="How long mesh history and raw host-metric samples are kept."
       >
         {retentionLoading ? (
           <p className="text-sm text-slate-500">Loading retention settings…</p>
@@ -261,46 +295,64 @@ export default function SettingsPage() {
             {retentionError}
           </Callout>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-5">
             <div>
-              <div className="sm:w-60">
-                <Input
-                  label="Retention days"
-                  type="number"
-                  min={0}
-                  max={3650}
-                  value={retentionInput}
-                  onChange={(event) => setRetentionInput(event.target.value)}
-                  placeholder="Leave empty for Unlimited"
-                />
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {presets.map((preset) => (
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Retention">
+                {RETENTION_PRESETS.map((preset) => (
                   <FilterChip
                     key={preset.label}
-                    selected={retentionInput === preset.value}
-                    onClick={() => setRetentionInput(preset.value)}
+                    selected={!customRetention && retentionInput === preset.value}
+                    disabled={!isTenantAdmin}
+                    onClick={() => {
+                      setCustomRetention(false);
+                      setRetentionInput(preset.value);
+                    }}
                   >
                     {preset.label}
                   </FilterChip>
                 ))}
+                <FilterChip
+                  selected={customRetention}
+                  disabled={!isTenantAdmin}
+                  onClick={() => setCustomRetention(true)}
+                >
+                  Custom…
+                </FilterChip>
               </div>
-              <p className="mt-2 max-w-2xl text-xs text-slate-500">
-                Currently {retentionDays === 0 ? 'unlimited' : `${retentionDays} days`}. Empty keeps
-                history forever; 30–3650 deletes older check data in the daily cleanup.
+              {customRetention && (
+                <div className="mt-3 sm:w-60">
+                  <Input
+                    label="Retention days"
+                    type="number"
+                    min={30}
+                    max={3650}
+                    value={retentionInput}
+                    disabled={!isTenantAdmin}
+                    onChange={(event) => setRetentionInput(event.target.value)}
+                    placeholder="30–3650"
+                    error={customRetentionInvalid && retentionDirty ? 'Enter 30–3650 days' : undefined}
+                  />
+                </div>
+              )}
+              <p className="mt-3 max-w-2xl text-xs text-slate-500">
+                Raw check results are always kept 30 days; uptime and latency history comes from hourly
+                rollups kept 400 days.
               </p>
             </div>
-            <div className="flex justify-end">
-              <Button
-                variant="accent"
-                size="sm"
-                onClick={handleSaveRetention}
-                disabled={savingRetention}
-                loading={savingRetention}
-              >
-                {savingRetention ? 'Saving…' : 'Save retention'}
-              </Button>
-            </div>
+            {isTenantAdmin && (
+              <div className="flex items-center justify-end gap-3">
+                {retentionDirty && <span className="text-xs text-slate-400">Unsaved changes</span>}
+                <Button
+                  variant={retentionDirty ? 'accent' : 'ghost'}
+                  size="sm"
+                  onClick={handleSaveRetention}
+                  disabled={savingRetention || !retentionDirty || customRetentionInvalid}
+                  loading={savingRetention}
+                >
+                  {savingRetention ? 'Saving…' : 'Save retention'}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </Panel>}
@@ -316,6 +368,7 @@ export default function SettingsPage() {
         <DashboardGroupsSection
           initialTags={groupTags}
           onSaved={(next) => setGroupTags(next)}
+          readOnly={!isTenantAdmin}
         />
       ))}
 
@@ -414,7 +467,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col items-center px-5 py-10 text-center">
                   <KeyRound className="h-5 w-5 text-slate-500" strokeWidth={1.5} aria-hidden="true" />
                   <p className="mt-3 text-sm font-medium text-white">No API keys yet</p>
-                  <p className="mt-1 text-[13px] text-slate-400">
+                  <p className="mt-1 text-ui text-slate-400">
                     Create your first key above to grant agents and integrations access.
                   </p>
                 </div>
@@ -428,11 +481,15 @@ export default function SettingsPage() {
                       >
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-white">{key.name}</p>
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            ID <span className="font-mono">{key.id.slice(0, 8)}</span> · Fingerprint{' '}
-                            <span className="font-mono">{formatFingerprint(key.key_prefix)}</span> · Created{' '}
-                            {formatDateTime(key.created_at, '-')}
-                            {key.last_used_at && <> · Last used {formatDateTime(key.last_used_at, '-')}</>}
+                          <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                            <span>
+                              ID <span className="font-mono">{key.id.slice(0, 8)}</span>
+                            </span>
+                            <span>
+                              Fingerprint <span className="font-mono">{formatFingerprint(key.key_prefix)}</span>
+                            </span>
+                            <span>Created {formatDateTime(key.created_at)}</span>
+                            {key.last_used_at && <span>Last used {formatDateTime(key.last_used_at)}</span>}
                           </p>
                           {key.revoked_at && (
                             <p className="mt-0.5 text-xs text-rose-300">

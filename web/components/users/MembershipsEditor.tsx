@@ -35,7 +35,7 @@ export default function MembershipsEditor({
   return (
     <div className="space-y-2">
       {memberships.length === 0 && (
-        <p className="text-[13px] text-slate-500">
+        <p className="text-ui text-slate-500">
           No tenant memberships. The user will not be able to access any workspace.
         </p>
       )}
@@ -95,8 +95,16 @@ export default function MembershipsEditor({
         >
           Add tenant
         </Button>
-        <p className="text-xs text-slate-500">
-          Admin: manage · Editor: modify · Viewer: read-only
+        <p className="flex flex-wrap gap-x-3 text-xs text-slate-500">
+          <span>
+            <span className="text-slate-400">Admin</span> manages
+          </span>
+          <span>
+            <span className="text-slate-400">Editor</span> modifies
+          </span>
+          <span>
+            <span className="text-slate-400">Viewer</span> reads only
+          </span>
         </p>
       </div>
     </div>

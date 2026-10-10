@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  dayTone, formatSlaDuration, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
+  dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
   DEFAULT_SLA_TARGET, type SlaInput,
 } from './sla';
 
@@ -52,4 +52,15 @@ test('input validation mirrors the API', () => {
   assert.match(slaInputError({ ...base, name: ' ' }) ?? '', /Name/);
   assert.match(slaInputError({ ...base, target_pct: 100 }) ?? '', /Target/);
   assert.match(slaInputError({ ...base, tags: [] }) ?? '', /monitor or tag/);
+});
+
+test('periods read as dates in the SLA timezone, end exclusive', () => {
+  const now = new Date('2026-10-09T12:00:00Z');
+  // ISO week 41 of 2026 in Paris: Monday 5 Oct 00:00 CEST to Monday 12 Oct.
+  assert.equal(formatSlaPeriodRange('2026-10-04T22:00:00Z', '2026-10-11T22:00:00Z', 'Europe/Paris', now), '5–11 Oct');
+  assert.equal(formatSlaPeriodRange('2026-09-28T00:00:00Z', '2026-10-05T00:00:00Z', 'UTC', now), '28 Sep – 4 Oct');
+  assert.equal(formatSlaPeriodRange('2026-10-01T00:00:00Z', '2027-01-01T00:00:00Z', 'UTC', now), '1 Oct – 31 Dec');
+  assert.equal(formatSlaPeriodRange('2025-09-01T00:00:00Z', '2025-10-01T00:00:00Z', 'UTC', now), '1–30 Sep 2025');
+  assert.equal(formatSlaPeriodRange('2025-12-29T00:00:00Z', '2026-01-05T00:00:00Z', 'UTC', now), '29 Dec 2025 – 4 Jan 2026');
+  assert.equal(formatSlaPeriodRange('bad', '2026-01-05T00:00:00Z', 'UTC', now), '—');
 });

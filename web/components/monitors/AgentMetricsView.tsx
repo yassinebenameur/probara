@@ -14,9 +14,18 @@ import {
 } from '@/lib/types';
 import { getMonitorMetricSeries, queryMonitorMetrics } from '@/lib/api';
 import { displayAttr, formatBytes, formatDurationSeconds, ratioToPercent } from '@/lib/metrics';
+import { formatDateTimeFull, formatRelativeTime } from '@/lib/format';
+import {
+  DEFAULT_UTILIZATION_ALERT,
+  matchingMetricRules,
+  UPTIME_TONE_VAR,
+  UTILIZATION_WARN_BAND,
+  utilizationTone,
+  type UptimeTone,
+} from '@/lib/status-tones';
 import Callout from '@/components/ui/Callout';
 import EmptyState from '@/components/ui/EmptyState';
-import FilterChip from '@/components/ui/FilterChip';
+import RangePicker from '@/components/ui/RangePicker';
 import {
   ChartRow,
   ChartSeries,
@@ -40,11 +49,12 @@ interface AgentMetricsViewProps {
   onTimeRangeChange?: (range: TimeRange) => void;
 }
 
+const AGENT_RANGES: readonly TimeRange[] = ['1h', '6h', '24h', '7d'];
 const MAX_MOUNTS = 6;
 const POLL_INTERVAL_MS = 10000;
-// Wide enough for rate ticks ("1.5 MB/s"); shared by every synced chart so
+// Wide enough for rate ticks ("95.4 MB/s" must not wrap); shared by every synced chart so
 // their plot areas, and the hover cursor, line up.
-const AXIS_WIDTH = 72;
+const AXIS_WIDTH = 80;
 
 // Curated dashboard panels — one batch POST per range change.
 // system.filesystem.utilization carries NO `state` attribute (hostmetrics
@@ -87,28 +97,37 @@ function formatRateTick(bytesPerSecond: number): string {
   return `${value.toFixed(precision)} ${sizes[i]}`;
 }
 
-function formatTimeAgo(seconds: number): string {
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
+const TONE_RANK: Record<UptimeTone, number> = { none: 0, good: 1, warn: 2, bad: 3 };
 
-function getStatusColor(percent: number): string {
-  if (percent < 60) return '#2fbd6a';
-  if (percent < 80) return '#dc9e26';
-  return '#f04a5a';
+const NO_RULE_TITLE = `No metric rule covers this series: amber from ${ratioToPercent(
+  DEFAULT_UTILIZATION_ALERT - UTILIZATION_WARN_BAND
+)}%, red from ${ratioToPercent(DEFAULT_UTILIZATION_ALERT)}%. Nothing alerts on it.`;
+
+/** `alert at 85%` from the rules covering a ring's series, else `no alert rule`. */
+function ruleCaption(
+  metricName: string,
+  attributes: Record<string, string> | undefined,
+  rules: MetricRule[]
+): string {
+  const matching = matchingMetricRules(metricName, attributes, rules);
+  if (matching.length === 0) return 'no alert rule';
+  return `alert ${matching
+    .map((rule) => `${rule.operator === '<=' ? 'at or below' : 'at'} ${ratioToPercent(rule.threshold)}%`)
+    .join(', ')}`;
 }
 
 function CircularProgress({
   value,
   label,
-  color,
+  tone,
+  caption,
   displayValue,
 }: {
   value: number;
   label: string;
-  color: string;
+  /** From utilizationTone: the monitor's own metric rule, else the default. */
+  tone: UptimeTone;
+  caption?: string;
   displayValue?: string;
 }) {
   const normalizedValue = Math.max(0, Math.min(100, value));
@@ -126,7 +145,7 @@ function CircularProgress({
             cy="48"
             r={radius}
             fill="none"
-            stroke={color}
+            stroke={UPTIME_TONE_VAR[tone]}
             strokeWidth="6"
             strokeLinecap="round"
             strokeDasharray={circumference}
@@ -141,6 +160,14 @@ function CircularProgress({
         </div>
       </div>
       <span className="mt-2 text-center text-xs text-slate-400">{label}</span>
+      {caption && (
+        <span
+          className="mt-0.5 text-center text-2xs tabular-nums text-slate-500"
+          title={caption === 'no alert rule' ? NO_RULE_TITLE : undefined}
+        >
+          {caption}
+        </span>
+      )}
     </div>
   );
 }
@@ -168,7 +195,7 @@ function ChartTile({
   return (
     <div className="glass-well p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <span className="text-[13px] font-medium text-slate-200">{title}</span>
+        <span className="text-ui font-medium text-slate-200">{title}</span>
         <span className="text-xs tabular-nums text-slate-400">{headline}</span>
       </div>
       {children}
@@ -410,18 +437,34 @@ export default function AgentMetricsView({
   const swapAvailable = swapRatio !== null && swapRatio > 0;
   const swapPercent = swapRatio !== null ? swapRatio * 100 : 0;
 
-  // Filesystem aggregate gauge: the fullest mount in range.
+  // Ring tones come from the monitor's own metric_rules (lib/status-tones
+  // utilizationTone), so a ring is red exactly when its alert would fire.
+  const rules = metricRules || [];
+  const cpuTone = utilizationTone(cpuRatio, 'system.cpu.utilization', cpuSeries?.attributes, rules);
+  const memoryTone = utilizationTone(memRatio, 'system.memory.utilization', memSeries?.attributes, rules);
+
+  // Filesystem gauge: the mount closest to its alert (worst tone), the
+  // fullest one among equals.
   let worstMountPercent = 0;
   let worstMountLabel = '';
-  let diskAvailable = false;
+  let worstMount: (typeof mountSeries)[number] | null = null;
+  let diskTone: UptimeTone = 'none';
   for (const mount of mountSeries) {
     const value = lastValue(mount.series);
-    if (value !== null) diskAvailable = true;
-    if (value !== null && value * 100 > worstMountPercent) {
+    if (value === null) continue;
+    const tone = utilizationTone(value, 'system.filesystem.utilization', mount.series.attributes, rules);
+    if (
+      worstMount === null ||
+      TONE_RANK[tone] > TONE_RANK[diskTone] ||
+      (TONE_RANK[tone] === TONE_RANK[diskTone] && value * 100 > worstMountPercent)
+    ) {
+      worstMount = mount;
+      diskTone = tone;
       worstMountPercent = value * 100;
       worstMountLabel = mount.label;
     }
   }
+  const diskAvailable = worstMount !== null;
 
   const memUsedBytes = statValue('mem_used');
   const memTotalBytes =
@@ -454,7 +497,6 @@ export default function AgentMetricsView({
 
   // Threshold ReferenceLines from the monitor's metric_rules: rules whose
   // metric matches the panel and whose filters fit the panel's series.
-  const rules = metricRules || [];
   const ratioRuleLines = (
     metricName: string,
     seriesList: MetricSeriesData[],
@@ -502,29 +544,38 @@ export default function AgentMetricsView({
         <div className="mb-5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <span className={`h-2 w-2 shrink-0 rounded-full ${isStale ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-            <h3 className="text-[15px] font-semibold text-white">{isStale ? 'Agent stale' : 'Agent healthy'}</h3>
+            <h3 className="text-title font-semibold text-white">{isStale ? 'Agent stale' : 'Agent healthy'}</h3>
           </div>
-          <span className="text-xs text-slate-500">Last report: {formatTimeAgo(timeSinceReportSec)}</span>
+          <span className="text-xs text-slate-500" title={formatDateTimeFull(lastSeenMs)}>
+            Last report {formatRelativeTime(lastSeenMs, new Date(Math.max(nowMs, lastSeenMs)))}
+          </span>
         </div>
 
         <div className="grid grid-cols-3 gap-6">
           <CircularProgress
             value={cpuPercent}
-            label={coreCount !== null && coreCount > 0 ? `CPU · ${Math.round(coreCount)} cores` : 'CPU'}
-            color={cpuAvailable ? getStatusColor(cpuPercent) : '#64748b'}
-            displayValue={cpuAvailable ? `${cpuPercent.toFixed(0)}%` : 'N/A'}
+            label={coreCount !== null && coreCount > 0 ? `CPU (${Math.round(coreCount)} cores)` : 'CPU'}
+            tone={cpuTone}
+            caption={ruleCaption('system.cpu.utilization', cpuSeries?.attributes, rules)}
+            displayValue={cpuAvailable ? `${cpuPercent.toFixed(0)}%` : '—'}
           />
           <CircularProgress
             value={memoryPercent}
             label="Memory"
-            color={getStatusColor(memoryPercent)}
-            displayValue={memoryAvailable ? undefined : 'N/A'}
+            tone={memoryTone}
+            caption={ruleCaption('system.memory.utilization', memSeries?.attributes, rules)}
+            displayValue={memoryAvailable ? undefined : '—'}
           />
           <CircularProgress
             value={worstMountPercent}
-            label={worstMountLabel ? `Disk · ${worstMountLabel}` : 'Disk'}
-            color={getStatusColor(worstMountPercent)}
-            displayValue={diskAvailable ? undefined : 'N/A'}
+            label={worstMountLabel ? `Disk ${worstMountLabel}` : 'Disk'}
+            tone={diskTone}
+            caption={
+              worstMount
+                ? ruleCaption('system.filesystem.utilization', worstMount.series.attributes, rules)
+                : undefined
+            }
+            displayValue={diskAvailable ? undefined : '—'}
           />
         </div>
 
@@ -534,7 +585,7 @@ export default function AgentMetricsView({
             value={
               memUsedBytes !== null
                 ? `${formatBytes(memUsedBytes)}${memTotalBytes !== null ? ` / ${formatBytes(memTotalBytes)}` : ''}`
-                : 'N/A'
+                : '—'
             }
           />
           <StatCard
@@ -549,31 +600,29 @@ export default function AgentMetricsView({
             label="Load average"
             value={
               load1 !== null && load5 !== null && load15 !== null
-                ? `${load1.toFixed(2)} · ${load5.toFixed(2)} · ${load15.toFixed(2)}`
-                : 'N/A'
+                ? `${load1.toFixed(2)} / ${load5.toFixed(2)} / ${load15.toFixed(2)}`
+                : '—'
             }
           />
-          <StatCard label="Processes" value={hasProcessData ? `${Math.round(processCount)}` : 'N/A'} />
-          <StatCard label="Uptime" value={uptimeSeconds !== null ? formatDurationSeconds(uptimeSeconds) : 'N/A'} />
-          <StatCard label="CPU cores" value={coreCount !== null && coreCount > 0 ? `${Math.round(coreCount)}` : 'N/A'} />
+          <StatCard label="Processes" value={hasProcessData ? `${Math.round(processCount)}` : '—'} />
+          <StatCard label="Uptime" value={uptimeSeconds !== null ? formatDurationSeconds(uptimeSeconds) : '—'} />
+          <StatCard label="CPU cores" value={coreCount !== null && coreCount > 0 ? `${Math.round(coreCount)}` : '—'} />
         </div>
       </div>
 
       <div className="glass p-5">
         <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-[15px] font-semibold text-white">Metrics over time</h3>
+            <h3 className="text-title font-semibold text-white">Metrics over time</h3>
             <p className="mt-0.5 text-xs text-slate-500">
               {bucketCount} buckets at {formatDurationSeconds(stepSeconds)} resolution
             </p>
           </div>
-          <div className="flex gap-1.5">
-            {(['1h', '6h', '24h', '7d'] as const).map((range) => (
-              <FilterChip key={range} selected={timeRange === range} onClick={() => handleTimeRangeChange(range)}>
-                {range}
-              </FilterChip>
-            ))}
-          </div>
+          {/* A controlled range is picked in the page's tabs row; only a
+              standalone view carries its own picker. */}
+          {controlledTimeRange === undefined && (
+            <RangePicker ranges={AGENT_RANGES} value={timeRange} onChange={handleTimeRangeChange} />
+          )}
         </div>
 
         {chartRows.length === 0 ? (
@@ -582,7 +631,7 @@ export default function AgentMetricsView({
           </div>
         ) : (
           <div className="space-y-4">
-            <ChartTile title="CPU usage" headline={cpuAvailable ? `${cpuPercent.toFixed(1)}%` : 'N/A'}>
+            <ChartTile title="CPU usage" headline={cpuAvailable ? `${cpuPercent.toFixed(1)}%` : '—'}>
               <MetricChart
                 data={chartRows}
                 series={[{ key: 'cpu', name: 'CPU', color: '#ff8a5c' }]}
@@ -599,8 +648,8 @@ export default function AgentMetricsView({
               title="Memory & swap"
               headline={
                 memoryAvailable
-                  ? `${memoryPercent.toFixed(1)}%${swapAvailable ? ` · swap ${swapPercent.toFixed(1)}%` : ''}`
-                  : 'N/A'
+                  ? `${memoryPercent.toFixed(1)}%${swapAvailable ? `, swap ${swapPercent.toFixed(1)}%` : ''}`
+                  : '—'
               }
             >
               <MetricChart
@@ -620,7 +669,7 @@ export default function AgentMetricsView({
 
             <ChartTile
               title="Disk usage"
-              headline={worstMountPercent > 0 ? `${worstMountPercent.toFixed(1)}%` : 'N/A'}
+              headline={worstMountPercent > 0 ? `${worstMountPercent.toFixed(1)}%` : '—'}
               legend={mountSeries.map((mount) => ({ key: mount.key, name: mount.label, color: mount.color }))}
             >
               <MetricChart

@@ -211,11 +211,11 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
       onToggle={setOpened}
     >
       {seriesLoading ? (
-        <p className="text-[13px] text-slate-500">Loading series…</p>
+        <p className="text-ui text-slate-500">Loading series…</p>
       ) : seriesError ? (
         <Callout tone="danger">{seriesError}</Callout>
       ) : seriesList.length === 0 ? (
-        <p className="text-[13px] text-slate-500">No metric series recorded yet.</p>
+        <p className="text-ui text-slate-500">No metric series recorded yet.</p>
       ) : (
         <div className="grid gap-6 2xl:grid-cols-[280px_1fr]">
           <div className="space-y-2">
@@ -230,7 +230,7 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
               />
             </div>
             <p className="text-xs text-slate-500">
-              Select up to {MAX_SELECTED_SERIES} series · {selectedKeys.length} selected
+              {selectedKeys.length} of up to {MAX_SELECTED_SERIES} series selected
             </p>
             <div className="max-h-80 space-y-0.5 overflow-y-auto pr-1">
               {grouped.map(([metricName, members]) => {
@@ -252,9 +252,9 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                       <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-200">
                         {metricName}
                       </span>
-                      {meta && <span className="shrink-0 text-[11px] text-slate-500">{meta.short}</span>}
+                      {meta && <span className="shrink-0 text-2xs text-slate-500">{meta.short}</span>}
                       {selectedInGroup > 0 && (
-                        <span className="shrink-0 rounded-full bg-well-hover px-1.5 text-[11px] tabular-nums text-slate-300">
+                        <span className="shrink-0 rounded-full bg-well-hover px-1.5 text-2xs tabular-nums text-slate-300">
                           {selectedInGroup}
                         </span>
                       )}
@@ -279,7 +279,7 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                                 className="h-3.5 w-3.5 accent-cyan-500"
                               />
                               <span className="min-w-0 flex-1 truncate font-mono">{seriesLabel(series)}</span>
-                              <span className="shrink-0 text-[11px] text-slate-500">{series.metric_type}</span>
+                              <span className="shrink-0 text-2xs text-slate-500">{series.metric_type}</span>
                             </label>
                           );
                         })}
@@ -289,7 +289,7 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                 );
               })}
               {grouped.length === 0 && (
-                <p className="px-2 py-3 text-[13px] text-slate-500">No metrics match the search.</p>
+                <p className="px-2 py-3 text-ui text-slate-500">No metrics match the search.</p>
               )}
             </div>
           </div>

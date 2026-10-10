@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Monitor,
   CreateMonitorRequest,
@@ -14,8 +14,9 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
-import { LocationsSection } from './LocationsSection';
-import Switch from '@/components/ui/Switch';
+import ScheduleSection from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
 
 interface GrpcFormProps {
   monitor?: Monitor;
@@ -60,12 +61,17 @@ export default function GrpcForm({
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
     location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
     location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors);
+  useFollowEnabled(monitor?.enabled, setFormData);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     setErrors({});
 
     const newErrors: Record<string, string> = {};
@@ -78,6 +84,7 @@ export default function GrpcForm({
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
+      revealFirstError(formRef.current);
       return;
     }
 
@@ -107,6 +114,7 @@ export default function GrpcForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
+    requestData.depends_on_ids = formData.depends_on_ids;
     requestData.location_ids = formData.location_ids;
     requestData.location_quorum =
       formData.location_ids.length >= 2
@@ -117,8 +125,8 @@ export default function GrpcForm({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <FormSection title="Endpoint">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <FormSection title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -132,100 +140,97 @@ export default function GrpcForm({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <FormField label="Host" required error={errors.host}>
-              <input
-                type="text"
-                value={formData.host}
-                onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                placeholder="grpc.example.com"
-                className="input"
-              />
-              <p className="mt-1 text-xs text-slate-500">gRPC server hostname or IP</p>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.host}
+                    onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                    placeholder="grpc.example.com"
+                    className="input font-mono"
+                  />
+                  <FieldHint>gRPC server hostname or IP</FieldHint>
+                </>
+              )}
             </FormField>
           </div>
 
           <FormField label="Port" required error={errors.port}>
-            <input
-              type="number"
-              value={formData.port}
-              onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value, 10) || (formData.use_tls ? 443 : 80) })}
-              min={1}
-              max={65535}
-              className="input"
-            />
-            <p className="mt-1 text-xs text-slate-500">Default: {formData.use_tls ? 443 : 80}</p>
+            {(control) => (
+              <>
+                <input
+                  {...control}
+                  type="number"
+                  value={formData.port}
+                  onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value, 10) || (formData.use_tls ? 443 : 80) })}
+                  min={1}
+                  max={65535}
+                  className="input tabular-nums"
+                />
+                <FieldHint>Default: {formData.use_tls ? 443 : 80}</FieldHint>
+              </>
+            )}
           </FormField>
         </div>
 
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-200">TLS</p>
-            <p className="text-xs text-slate-500">Use TLS for gRPC connection</p>
-          </div>
-          <Switch checked={formData.use_tls} onChange={() => {
-              const nextUseTLS = !formData.use_tls;
-              let nextPort = formData.port;
-              if (formData.port === 443 && !nextUseTLS) nextPort = 80;
-              if (formData.port === 80 && nextUseTLS) nextPort = 443;
-              setFormData({ ...formData, use_tls: nextUseTLS, port: nextPort });
-            }} label="Toggle TLS" />
-        </div>
+        <ToggleRow
+          title="TLS"
+          description="Use TLS for the gRPC connection"
+          checked={formData.use_tls}
+          onChange={(nextUseTLS) => {
+            let nextPort = formData.port;
+            if (formData.port === 443 && !nextUseTLS) nextPort = 80;
+            if (formData.port === 80 && nextUseTLS) nextPort = 443;
+            setFormData({ ...formData, use_tls: nextUseTLS, port: nextPort });
+          }}
+        />
 
         <FormField label="Service">
-          <input
-            type="text"
-            value={formData.service}
-            onChange={(e) => setFormData({ ...formData, service: e.target.value })}
-            placeholder="my.package.Service"
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Optional. Passed to grpc.health.v1.Health/Check</p>
+          {(control) => (
+            <>
+              <input
+                {...control}
+                type="text"
+                value={formData.service}
+                onChange={(e) => setFormData({ ...formData, service: e.target.value })}
+                placeholder="my.package.Service"
+                className="input font-mono"
+              />
+              <FieldHint>Optional. Passed to grpc.health.v1.Health/Check</FieldHint>
+            </>
+          )}
         </FormField>
       </FormSection>
 
-      <FormSection title="Schedule">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Interval (seconds)">
-            <input
-              type="number"
-              value={formData.interval_seconds}
-              onChange={(e) => setFormData({ ...formData, interval_seconds: parseInt(e.target.value, 10) || 60 })}
-              min={10}
-              step={5}
-              className="input"
-            />
-          </FormField>
+      <ScheduleSection
+        intervalSeconds={formData.interval_seconds}
+        onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
+        timeoutSeconds={formData.timeout_seconds}
+        onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
+        timeoutError={errors.timeout_seconds}
+        locations={{
+          selectedIds: formData.location_ids,
+          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+          quorum: formData.location_quorum,
+          onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
+        }}
+        enabled={formData.enabled}
+        onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+        enabledDescription="Run gRPC health checks on this schedule"
+      />
 
-          <FormField
-            label="Timeout (seconds)"
-            error={errors.timeout_seconds}
-          >
-            <input
-              type="number"
-              value={formData.timeout_seconds}
-              onChange={(e) => setFormData({ ...formData, timeout_seconds: parseInt(e.target.value, 10) || 10 })}
-              min={1}
-              className="input"
-            />
-            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
-          </FormField>
-        </div>
-      </FormSection>
-
-      <FormSection
-        title="Locations"
-        summary={formData.location_ids.length > 0 ? `${formData.location_ids.length} selected` : 'Default fleet'}
-        collapsible
-        defaultOpen={formData.location_ids.length > 0}
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
+        }
       >
-        <LocationsSection
-          selectedIds={formData.location_ids}
-          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
-          quorum={formData.location_quorum}
-          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
-        />
-      </FormSection>
-
-      <FormSection title="Alerting">
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
@@ -234,39 +239,36 @@ export default function GrpcForm({
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}
-          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
+          hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Meta">
-        <FormField label="Tags">
-          <input
-            type="text"
-            value={formData.tags}
-            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-            placeholder="production, grpc, critical"
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
-        </FormField>
-
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
-            <p className="text-xs text-slate-500">Run gRPC health checks on schedule</p>
-          </div>
-          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
-        </div>
-      </FormSection>
+      <LabelsSection
+        tags={formData.tags}
+        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+        placeholder="production, grpc, critical"
+      />
 
       <FormActions
         middle={
-          formData.host.trim()
-            ? `Every ${formData.interval_seconds}s · gRPC check ${formData.host.trim()}:${formData.port}${formData.use_tls ? ' (TLS)' : ''} · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`
-            : undefined
+          <PlanSummary
+            errors={errors}
+            parts={
+              formData.host.trim()
+                ? [
+                    everyLabel(formData.interval_seconds),
+                    <PlanTarget key="t">
+                      gRPC {formData.host.trim()}:{formData.port}
+                    </PlanTarget>,
+                    formData.use_tls && 'with TLS',
+                    downAfterLabel(formData.consecutive_failures_threshold),
+                  ]
+                : []
+            }
+          />
         }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{

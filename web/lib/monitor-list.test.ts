@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getAllMonitors, sortMonitorsByName } from './monitor-list';
+import { formatMonitorListParams, getAllMonitors, parseMonitorListParams, sortMonitorsByName } from './monitor-list';
 import type { Monitor, MonitorListResponse } from './types';
 
 function monitor(id: number): Monitor {
@@ -83,4 +83,26 @@ test('sortMonitorsByName orders equal names by id without mutating the input', (
     original.map((item) => item.id),
     ['monitor-2', 'monitor-1', 'monitor-3'],
   );
+});
+
+test('parseMonitorListParams reads deep links and falls back to defaults', () => {
+  assert.deepEqual(parseMonitorListParams(''), { status: 'all', tags: [], unroutedOnly: false, sort: 'status' });
+  assert.deepEqual(parseMonitorListParams('?status=down&tag=prod&tag=eu,db&routing=unrouted&sort=name'), {
+    status: 'down',
+    tags: ['prod', 'eu', 'db'],
+    unroutedOnly: true,
+    sort: 'name',
+  });
+  assert.equal(parseMonitorListParams('?status=degraded').status, 'down');
+  assert.equal(parseMonitorListParams('?status=bogus').status, 'all');
+  assert.deepEqual(parseMonitorListParams('?tag=a&tag=a,%20b').tags, ['a', 'b']);
+});
+
+test('formatMonitorListParams omits defaults, keeps other params and round-trips', () => {
+  const defaults = parseMonitorListParams('');
+  assert.equal(formatMonitorListParams(defaults, 'status=up&tag=x&keep=1'), 'keep=1');
+  const params = { status: 'paused' as const, tags: ['prod', 'eu'], unroutedOnly: true, sort: 'name' as const };
+  const search = formatMonitorListParams(params);
+  assert.equal(search, 'status=paused&tag=prod&tag=eu&routing=unrouted&sort=name');
+  assert.deepEqual(parseMonitorListParams(search), params);
 });

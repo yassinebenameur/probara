@@ -23,12 +23,23 @@
  * positioned and clipped by the panel. Overlays must portal to <body>
  * (components/ui/ModalPortal.tsx, or createPortal as RowMenu/InfoTip do).
  *
- * Radii by level: shell 22px (rounded-3xl), panel 16px (rounded-2xl),
- * overlay 18px, control 10px (rounded-lg), chip full.
+ * Radii by level (Tailwind's scale, tailwind.config.ts): shell 22px
+ * (rounded-3xl), panel 16px (rounded-2xl), overlay 18px, control 10px
+ * (rounded-lg), chip full.
  *
  * Orange (the `cyan` scale, see tailwind.config.ts) means "act": primary
- * buttons, the active nav item, focus. Status colours are only for status.
- * Text on orange uses --accent-ink (text-onaccent): white on #ff5a24 is 3:1.
+ * buttons, links, focus rings. "Selected" is never orange: chips, tabs and
+ * range buttons select to neutral raised glass (border-edge-strong
+ * bg-glass-strong text-white), and the active nav item gets a neutral fill
+ * plus a 2px accent rail. Status colours are only for status, and numbers
+ * stay neutral unless a lib/status-tones.ts rule colours them. Text on
+ * orange uses --accent-ink (text-onaccent): white on #ff5a24 is 3:1.
+ *
+ * Type: Archivo for every label; Plex Mono (font-mono) only for machine
+ * values (URLs, hosts, IDs, raw errors, table timestamps). Scale:
+ * text-2xs 11px, text-xs 12px, text-ui 13px, text-sm 14px, text-title 16px
+ * (panel titles), text-2xl 24px (page h1). Metrics take tabular-nums.
+ * Captions use slate-500 at the lightest: it is tuned for AA in both themes.
  *
  * Do NOT add new `.btn-*`, `.badge-*`, or `.status-pill` classes here.
  * Use the React primitives in components/ui/ (Button, Pill, FilterChip, ...).
@@ -38,7 +49,6 @@
   /* Base (dark values; the light theme overrides them further down) */
   --bg-base: #080b12;
   --bg-elevated: #131721;
-  --surface: #131721;
   --panel-rgb: 19 23 33;
   --ink-rgb: 255 255 255;
 
@@ -69,21 +79,10 @@
   --ambient-alarm: rgb(240 74 90 / 0.26);
   --ambient-grid: rgb(255 255 255 / 0.04);
 
-  /* Legacy border aliases (still read by a few inline styles) */
-  --border-subtle: var(--divider);
-  --border-default: var(--control-edge);
-  --border-strong: var(--control-edge-strong);
-
   /* Accents */
   --accent: #ff5a24;
   --accent-rgb: 255, 90, 36;
-  --accent-soft: #ff8a5c;
   --accent-ink: #1a0b04;
-  --accent-cyan: #ff5a24; /* legacy alias: the product accent is orange */
-  --accent-emerald: #46d17f;
-  --accent-rose: #f04a5a;
-  --accent-amber: #e6b23f;
-  --accent-violet: #6fb5dd;
 
   /* Text */
   --text-primary: #eef1f6;
@@ -94,14 +93,6 @@
   --success: #46d17f;
   --warning: #e6b23f;
   --danger: #f04a5a;
-  --info: #6fb5dd;
-
-  /* Layout */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 18px;
 
   /* Typography */
   --sans:
@@ -118,6 +109,20 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+/* A sticky FormActions bar (data-sticky-actions) covers the bottom of the
+   viewport; reserve its height so a control scrolled into view by keyboard
+   focus lands above it, not under it (WCAG 2.4.11). Taller below sm, where
+   the plan summary wraps onto its own line. */
+html:has([data-sticky-actions]) {
+  scroll-padding-bottom: 10rem;
+}
+
+@media (min-width: 640px) {
+  html:has([data-sticky-actions]) {
+    scroll-padding-bottom: 6.5rem;
+  }
 }
 
 /* Heading voice: slightly condensed Archivo with tight tracking */
@@ -145,7 +150,7 @@ body {
    Three soft light sources over a faint instrument grid. The grid is what
    makes the glass read as frosted: it stays crisp in the gutters and blurs
    out under every panel. The alarm layer fades in while the workspace has
-   open alerts (html[data-health='alert'], set by the sidebar's fleet-health
+   active alerts (html[data-health='alert'], set by the sidebar's fleet-health
    line) and is the only thing on screen that moves on its own. */
 .ambient {
   position: fixed;
@@ -332,19 +337,6 @@ html[data-health='alert'] .ambient-alarm {
   outline-offset: 2px;
 }
 
-/* Utility classes */
-.text-muted {
-  color: var(--text-muted);
-}
-
-.text-secondary {
-  color: var(--text-secondary);
-}
-
-.code-font {
-  font-family: var(--mono);
-}
-
 /* Animations */
 @keyframes fade-in {
   from {
@@ -416,7 +408,7 @@ html[data-health='alert'] .ambient-alarm {
   .animate-fade-in,
   .animate-slide-up,
   .animate-pulse-soft,
-  .animate-gauge-fill {
+  .animate-pulse {
     animation: none;
   }
 
@@ -434,8 +426,13 @@ html[data-health='alert'] .ambient-alarm {
     border-collapse: collapse;
   }
 
-  .data-table th {
+  /* :where() drops this to class specificity, so a text-right utility on a
+     numeric column's <th> wins (Tailwind 3 layers are source order only). */
+  .data-table :where(th) {
     text-align: left;
+  }
+
+  .data-table th {
     padding: 10px 16px;
     font-size: 0.75rem;
     font-weight: 500;
@@ -452,40 +449,15 @@ html[data-health='alert'] .ambient-alarm {
     border-bottom: 0;
   }
 
-  .data-table tbody tr:hover {
+  /* Only rows that go somewhere answer the pointer: a row with a stretched
+     link (a.row-link), a data-href, an onClick row marked cursor-pointer, or
+     every row of a .data-table-interactive. Static rows stay still so they
+     don't pretend to be clickable. */
+  .data-table tbody tr[data-href]:hover,
+  .data-table tbody tr.cursor-pointer:hover,
+  .data-table tbody tr:has(a.row-link):hover,
+  .data-table-interactive tbody tr:hover {
     background: var(--well);
-  }
-
-  /* Table container: a glass panel that clips its rows */
-  .table-card {
-    overflow: hidden;
-    background: var(--glass-fill);
-    border: 1px solid var(--glass-edge);
-    border-radius: 16px;
-    box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
-    backdrop-filter: blur(var(--glass-blur)) saturate(170%);
-  }
-
-  /* Legacy card: same as .glass */
-  .card {
-    background: var(--glass-fill);
-    border: 1px solid var(--glass-edge);
-    border-radius: 16px;
-    box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
-    backdrop-filter: blur(var(--glass-blur)) saturate(170%);
-  }
-
-  .card-hover {
-    transition:
-      border-color 0.15s ease,
-      background-color 0.15s ease;
-  }
-
-  .card-hover:hover {
-    border-color: var(--glass-edge-strong);
-    background-color: var(--glass-fill-strong);
   }
 
   /* Form inputs */
@@ -576,49 +548,6 @@ select option,
 select optgroup {
   background: rgb(var(--panel-rgb));
   color: var(--text-primary);
-}
-
-/* ── Uptime gauge animations ───────────────────────────────────────────────── */
-
-@keyframes gauge-spin-in {
-  from {
-    stroke-dashoffset: var(--gauge-circumference, 1000);
-    opacity: 0;
-  }
-
-  to {
-    stroke-dashoffset: var(--gauge-target-offset, 0);
-    opacity: 1;
-  }
-}
-
-.animate-gauge-fill {
-  animation: gauge-spin-in 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-}
-
-.uptime-number-int {
-  font-size: clamp(2.2rem, 4vw, 2.8rem);
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1;
-  color: var(--text-primary);
-}
-
-.uptime-number-dec {
-  font-size: clamp(1.4rem, 2.5vw, 1.8rem);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  color: var(--text-secondary);
-}
-
-.uptime-number-pct {
-  font-size: clamp(0.75rem, 1.1vw, 0.9rem);
-  font-weight: 600;
-  color: var(--text-muted);
-  line-height: 1;
-  align-self: flex-end;
-  padding-bottom: 0.3em;
 }
 
 /* ── Theme tokens (generated) ─────────────────────────────────────────────
@@ -834,7 +763,9 @@ html:not([data-theme]) {
   --tw-slate-200: 46 52 61;
   --tw-slate-300: 69 77 89;
   --tw-slate-400: 92 100 112;
-  --tw-slate-500: 121 130 143;
+  /* Darker than a straight inversion: slate-500 is the caption colour at
+     11-12px and needs AA (4.5:1) on white glass. Same value as --text-muted. */
+  --tw-slate-500: 104 113 128;
   --tw-slate-600: 168 176 186;
   --tw-slate-700: 213 218 226;
   --tw-slate-800: 230 233 239;
@@ -876,7 +807,7 @@ html:not([data-theme]) {
   --tw-amber-50: 62 32 12;
   --tw-amber-100: 107 63 27;
   --tw-amber-200: 126 76 27;
-  --tw-amber-300: 154 95 25;
+  --tw-amber-300: 145 88 22; /* AA (4.5:1) on the warning Pill fill */
   --tw-amber-400: 192 127 28;
   --tw-amber-500: 220 158 38;
   --tw-amber-600: 230 178 63;
@@ -1021,7 +952,7 @@ html:not([data-theme]) {
   --tw-gray-200: 46 52 61;
   --tw-gray-300: 69 77 89;
   --tw-gray-400: 92 100 112;
-  --tw-gray-500: 121 130 143;
+  --tw-gray-500: 104 113 128;
   --tw-gray-600: 168 176 186;
   --tw-gray-700: 213 218 226;
   --tw-gray-800: 230 233 239;
@@ -1031,13 +962,12 @@ html:not([data-theme]) {
 
   --bg-base: #edf0f5;
   --bg-elevated: #ffffff;
-  --surface: #ffffff;
   --panel-rgb: 255 255 255;
   --ink-rgb: 15 18 24;
   --scrim-rgb: 30 38 56;
   --scrim-alpha: 0.2;
 
-  --glass-fill: rgb(255 255 255 / 0.5);
+  --glass-fill: rgb(255 255 255 / 0.66);
   --glass-fill-strong: rgb(255 255 255 / 0.86);
   --glass-edge: rgb(20 28 48 / 0.08);
   --glass-edge-strong: rgb(20 28 48 / 0.15);
@@ -1054,7 +984,7 @@ html:not([data-theme]) {
   --control-edge-strong: rgb(20 28 48 / 0.22);
 
   --ambient-ember: rgb(255 90 36 / 0.16);
-  --ambient-calm: rgb(111 181 221 / 0.42);
+  --ambient-calm: rgb(111 181 221 / 0.26);
   --ambient-deep: rgb(157 152 232 / 0.3);
   --ambient-alarm: rgb(240 74 90 / 0.2);
   --ambient-grid: rgb(20 28 48 / 0.035);
@@ -1065,6 +995,5 @@ html:not([data-theme]) {
   --success: #219a55;
   --warning: #c07f1c;
   --danger: #d32e3f;
-  --info: #3f81ab;
 }
 

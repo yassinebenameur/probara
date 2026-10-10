@@ -6,7 +6,6 @@ import {
   ArrowUp,
   ChevronDown,
   GripVertical,
-  Layers,
   Pencil,
   Plus,
   Trash2,
@@ -15,10 +14,11 @@ import {
 import type { Monitor } from '@/lib/types';
 import Button from '@/components/ui/Button';
 import IconButton, { ICON_BUTTON_CLASS } from '@/components/ui/IconButton';
-import Pill from '@/components/ui/Pill';
+import TypeBadge from '@/components/ui/TypeBadge';
 import MonitorPicker from './MonitorPicker';
 import type { Action, DerivedState, EditableSection } from './useStatusPageFormState';
-import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import { MONITOR_STATUS_DOT } from '@/lib/status-tones';
+import { COMPONENT_STATUS_LABEL, type ComponentStatus } from '@/lib/status-page-status';
 
 export const MONITOR_DRAG_MIME = 'application/x-status-monitor';
 
@@ -26,6 +26,10 @@ interface SectionListProps {
   sections: EditableSection[];
   monitors: Monitor[];
   monitorsLoading: boolean;
+  /** What visitors see per monitor id now; null while a group's members load. */
+  statuses: ReadonlyMap<string, ComponentStatus | null>;
+  /** Direct members of the groups on the page, once loaded. */
+  groupMembers: ReadonlyMap<string, readonly string[]>;
   derived: DerivedState;
   errors: Record<string, string>;
   dispatch: React.Dispatch<Action>;
@@ -41,6 +45,8 @@ export default function SectionList({
   sections,
   monitors,
   monitorsLoading,
+  statuses,
+  groupMembers,
   derived,
   errors,
   dispatch,
@@ -98,7 +104,7 @@ export default function SectionList({
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 items-baseline gap-3">
-          <h3 className="text-[15px] font-semibold text-white">Page structure</h3>
+          <h3 className="text-title font-semibold text-white">Page structure</h3>
           <span className="hidden truncate text-xs text-slate-500 sm:inline">
             Sections group monitors on the public page
           </span>
@@ -123,7 +129,7 @@ export default function SectionList({
           <span className="mb-2 inline-flex h-11 w-11 items-center justify-center rounded-full bg-well-hover text-slate-400">
             <Plus className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
           </span>
-          <span className="text-[15px] font-semibold text-white">Create your first section</span>
+          <span className="text-title font-semibold text-white">Create your first section</span>
           <span className="text-sm text-slate-400">
             e.g. “API”, “Website”, “Voice platform”
           </span>
@@ -138,6 +144,8 @@ export default function SectionList({
             monitors={monitors}
             monitorsLoading={monitorsLoading}
             monitorIndex={monitorIndex.current}
+            statuses={statuses}
+            groupMembers={groupMembers}
             derived={derived}
             error={errors[`section-${section.id}`]}
             collapsed={collapsedIds.has(section.id)}
@@ -160,6 +168,8 @@ interface SectionCardProps {
   monitors: Monitor[];
   monitorsLoading: boolean;
   monitorIndex: Map<string, Monitor>;
+  statuses: ReadonlyMap<string, ComponentStatus | null>;
+  groupMembers: ReadonlyMap<string, readonly string[]>;
   derived: DerivedState;
   error?: string;
   collapsed: boolean;
@@ -177,6 +187,8 @@ function SectionCard({
   monitors,
   monitorsLoading,
   monitorIndex,
+  statuses,
+  groupMembers,
   derived,
   error,
   collapsed,
@@ -243,7 +255,7 @@ function SectionCard({
           onChange={(event) => dispatch({ type: 'rename_section', sectionId: section.id, title: event.target.value })}
           placeholder="Section title"
           aria-label="Section title"
-          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-[15px] font-semibold text-white placeholder:font-normal placeholder:text-slate-500 transition-colors hover:border-edge-control focus:border-cyan-500 focus:bg-control focus:outline-none"
+          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-title font-semibold text-white placeholder:font-normal placeholder:text-slate-500 transition-colors hover:border-edge-control focus:border-cyan-500 focus:bg-control focus:outline-none"
         />
         <div className="flex flex-shrink-0 items-center gap-0.5 transition-opacity lg:opacity-0 lg:focus-within:opacity-100 lg:group-hover/section:opacity-100">
           <IconButton
@@ -265,7 +277,7 @@ function SectionCard({
             onClick={() => dispatch({ type: 'remove_section', sectionId: section.id })}
           />
         </div>
-        <span className="flex-shrink-0 whitespace-nowrap pl-1 pr-2.5 text-xs tabular-nums text-slate-500">
+        <span className="hidden flex-shrink-0 whitespace-nowrap pl-1 pr-2.5 text-xs tabular-nums text-slate-500 sm:inline">
           {section.monitors.length === 0
             ? 'empty'
             : `${section.monitors.length} monitor${section.monitors.length === 1 ? '' : 's'}`}
@@ -294,6 +306,8 @@ function SectionCard({
                     <DropLine active={dropTarget?.index === entryIndex} />
                     <MonitorRow
                       monitor={monitor}
+                      status={statuses.get(entry.monitor_id) ?? null}
+                      memberCount={groupMembers.get(entry.monitor_id)?.length}
                       displayName={entry.display_name}
                       rowIndex={entryIndex}
                       onSetDisplayName={(value) =>
@@ -344,13 +358,25 @@ function DropLine({ active }: { active: boolean }) {
 
 interface MonitorRowProps {
   monitor: Monitor;
+  /** What visitors see; null while unknown (a group whose members are loading). */
+  status: ComponentStatus | null;
+  /** Direct members, for groups, once loaded. */
+  memberCount?: number;
   displayName: string;
   rowIndex: number;
   onSetDisplayName: (value: string) => void;
   onRemove: () => void;
 }
 
-function MonitorRow({ monitor, displayName, rowIndex, onSetDisplayName, onRemove }: MonitorRowProps) {
+function MonitorRow({
+  monitor,
+  status,
+  memberCount,
+  displayName,
+  rowIndex,
+  onSetDisplayName,
+  onRemove,
+}: MonitorRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(displayName);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -377,8 +403,15 @@ function MonitorRow({ monitor, displayName, rowIndex, onSetDisplayName, onRemove
   const subtitle = renamed
     ? monitor.name
     : isGroup
-      ? `${monitor.member_ids?.length ?? 0} member${(monitor.member_ids?.length ?? 0) === 1 ? '' : 's'}`
+      ? memberCount === undefined
+        ? ''
+        : `${memberCount} member${memberCount === 1 ? '' : 's'}`
       : monitor.url || '';
+
+  // The dot is what a visitor sees now; a paused monitor says so too.
+  const statusTitle = status
+    ? `${COMPONENT_STATUS_LABEL[status]} on the public page${monitor.enabled ? '' : ' (monitor paused)'}`
+    : 'Loading status';
 
   return (
     <div
@@ -399,12 +432,13 @@ function MonitorRow({ monitor, displayName, rowIndex, onSetDisplayName, onRemove
         aria-hidden="true"
       />
       <span
-        aria-hidden="true"
         className={`h-2 w-2 flex-shrink-0 rounded-full ${
-          monitor.enabled ? 'bg-emerald-500' : 'bg-slate-500'
+          status ? MONITOR_STATUS_DOT[status] : 'bg-well-hover'
         }`}
-        title={monitor.enabled ? 'Active' : 'Paused'}
-      />
+        title={statusTitle}
+      >
+        <span className="sr-only">{statusTitle}</span>
+      </span>
       {editing ? (
         <input
           ref={inputRef}
@@ -454,13 +488,7 @@ function MonitorRow({ monitor, displayName, rowIndex, onSetDisplayName, onRemove
               onClick={onRemove}
             />
           </div>
-          <Pill
-            size="xs"
-            icon={isGroup ? <Layers strokeWidth={1.75} /> : undefined}
-            className="hidden flex-shrink-0 sm:inline-flex"
-          >
-            {monitorTypeLabel(monitor.type)}
-          </Pill>
+          <TypeBadge type={monitor.type} className="hidden sm:inline-flex" />
         </>
       )}
     </div>

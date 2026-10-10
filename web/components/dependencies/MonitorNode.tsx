@@ -49,10 +49,10 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
           <Icon className="h-4 w-4" strokeWidth={1.75} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-medium leading-tight text-white" title={monitor.name}>
+          <p className="truncate text-ui font-medium leading-tight text-white" title={monitor.name}>
             {monitor.name}
           </p>
-          <p className="node-meta mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
+          <p className="node-meta mt-1 flex items-center gap-1.5 text-2xs text-slate-500">
             {monitorTypeLabel(monitor.type)}
             <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
             <span className={`capitalize ${s.text}`}>{monitor.current_state || 'unknown'}</span>
@@ -87,7 +87,7 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
             e.stopPropagation();
             expandFrontier(id);
           }}
-          className="nodrag nopan absolute -bottom-3 left-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-0.5 pr-1.5 text-[11px] font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
+          className="nodrag nopan absolute -bottom-3 left-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-0.5 pr-1.5 text-2xs font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
         >
           <ChevronLeft className="h-3 w-3" strokeWidth={2} />
           {data.hiddenIn}
@@ -101,7 +101,7 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
             e.stopPropagation();
             expandFrontier(id);
           }}
-          className="nodrag nopan absolute -bottom-3 right-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-1.5 pr-0.5 text-[11px] font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
+          className="nodrag nopan absolute -bottom-3 right-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-1.5 pr-0.5 text-2xs font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
         >
           {data.hiddenOut}
           <ChevronRight className="h-3 w-3" strokeWidth={2} />

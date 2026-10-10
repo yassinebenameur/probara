@@ -335,7 +335,7 @@ export default function MongoClusterPanels({
   return (
     <div className="glass p-5">
       <div className="mb-4 flex items-center gap-1.5">
-        <h3 className="text-[15px] font-semibold text-white">Cluster metrics</h3>
+        <h3 className="text-title font-semibold text-white">Cluster metrics</h3>
         <InfoTip inLabel ariaLabel="About cluster metrics">
           One snapshot per check from the enabled cluster checks (serverStatus / replSetGetStatus, read with the
           clusterMonitor role). Operation and network counters are cumulative on the server and shown here as
@@ -355,7 +355,7 @@ export default function MongoClusterPanels({
         {panels.map((panel) => (
           <div key={panel.title} className="glass-well p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <span className="text-[13px] font-medium text-slate-200">{panel.title}</span>
+              <span className="text-ui font-medium text-slate-200">{panel.title}</span>
               <span className="text-xs tabular-nums text-slate-400">{panel.headline}</span>
             </div>
             <MetricChart

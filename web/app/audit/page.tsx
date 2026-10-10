@@ -10,8 +10,10 @@ import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import Select from '@/components/ui/Select';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
-import { getAuditActions, getAuditLog } from '@/lib/api';
-import { formatDateTime } from '@/lib/format';
+import TableSkeleton from '@/components/ui/TableSkeleton';
+import { getAuditActions, getAuditLog, getUsers } from '@/lib/api';
+import { formatDateTimeFull, formatTimestamp, timezoneLabel } from '@/lib/format';
+import { auditActor, auditIp, knownActorLabels } from '@/lib/audit';
 import type { AuditEvent, AuditOutcome } from '@/lib/types';
 
 const PAGE_SIZE = 50;
@@ -29,15 +31,12 @@ const OUTCOME_TONE: Record<AuditOutcome, 'success' | 'warning' | 'danger'> = {
   failure: 'danger',
 };
 
-function actorLabel(event: AuditEvent): string {
-  if (event.actor_label) return event.actor_label;
-  if (event.actor_type === 'api_key') return 'API key';
-  if (event.actor_type === 'anonymous') return 'anonymous';
-  return event.actor_id ? event.actor_id.slice(0, 8) : '—';
-}
-
 export default function AuditLogPage() {
-  const { isSuperadmin, role, loading: userLoading } = useCurrentUser();
+  const { isSuperadmin, role, user, loading: userLoading } = useCurrentUser();
+  // Usernames by id, for events stored without an actor label: every user a
+  // superadmin can list, plus the signed-in user. Names seen on loaded events
+  // are added in actorNames below.
+  const [userNames, setUserNames] = useState<Map<string, string>>(() => new Map());
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [actions, setActions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +80,29 @@ export default function AuditLogPage() {
     },
     [actionFilter, outcomeFilter, rangeHours]
   );
+
+  useEffect(() => {
+    if (userLoading || !isSuperadmin) return;
+    let cancelled = false;
+    getUsers({ page: 1, page_size: 200 })
+      .then((response) => {
+        if (cancelled) return;
+        setUserNames(new Map((response.items || []).map((u) => [u.id, u.username])));
+      })
+      .catch(() => {
+        // Best effort: without the list, unlabeled actors read "User <id>".
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userLoading, isSuperadmin]);
+
+  const actorNames = useMemo(() => {
+    const names = new Map(userNames);
+    if (user?.id && user.username) names.set(user.id, user.username);
+    knownActorLabels(events).forEach((label, id) => names.set(id, label));
+    return names;
+  }, [userNames, user, events]);
 
   useEffect(() => {
     if (userLoading || !allowed) return;
@@ -156,8 +178,8 @@ export default function AuditLogPage() {
         </div>
       </div>
 
-      {loading ? (
-        <p className="text-sm text-slate-500">Loading audit events…</p>
+      {loading && events.length === 0 ? (
+        <TableSkeleton rows={8} columns={4} label="Loading audit events" />
       ) : error ? (
         <Callout
           tone="danger"
@@ -176,13 +198,16 @@ export default function AuditLogPage() {
           description="Events appear here as users and API keys make changes."
         />
       ) : (
-        <div className="glass overflow-hidden">
+        <div
+          className={`glass overflow-hidden transition-opacity ${loading ? 'opacity-60' : ''}`}
+          aria-busy={loading}
+        >
           <div className="overflow-x-auto">
             <table className="data-table text-sm">
               <thead>
                 <tr>
                   <th className="w-8 !pr-0" />
-                  <th>Time</th>
+                  <th>Time ({timezoneLabel()})</th>
                   <th>Actor</th>
                   <th>Action</th>
                   <th>Resource</th>
@@ -196,6 +221,8 @@ export default function AuditLogPage() {
                   const hasDetails =
                     (event.details && Object.keys(event.details).length > 0) ||
                     event.user_agent;
+                  const actor = auditActor(event, actorNames);
+                  const ip = auditIp(event.ip);
                   return (
                     <Fragment key={event.id}>
                       <tr
@@ -210,22 +237,27 @@ export default function AuditLogPage() {
                               <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
                             ))}
                         </td>
-                        <td className="whitespace-nowrap font-mono text-xs text-slate-400">
-                          {formatDateTime(event.occurred_at)}
+                        <td
+                          className="whitespace-nowrap font-mono text-xs tabular-nums text-slate-400"
+                          title={formatDateTimeFull(event.occurred_at)}
+                        >
+                          {formatTimestamp(event.occurred_at)}
                         </td>
                         <td>
                           <div className="flex items-center gap-2">
-                            <span className="text-slate-200">{actorLabel(event)}</span>
+                            <span className="text-slate-200" title={actor.title}>
+                              {actor.label}
+                            </span>
                             {/* Users are the common case; only mark keys and anonymous calls. */}
-                            {event.actor_type !== 'admin_user' && (
+                            {actor.kind !== 'user' && (
                               <Pill tone="neutral" size="xs">
-                                {event.actor_type === 'api_key' ? 'key' : 'anon'}
+                                {actor.kind === 'key' ? 'key' : 'anon'}
                               </Pill>
                             )}
                           </div>
                         </td>
                         <td className="font-mono text-xs text-slate-200">{event.action}</td>
-                        <td className="text-[13px] text-slate-400">
+                        <td className="text-ui text-slate-400">
                           {event.resource_type}
                           {event.resource_id && (
                             <span className="font-mono text-xs"> {event.resource_id.slice(0, 8)}</span>
@@ -233,14 +265,19 @@ export default function AuditLogPage() {
                         </td>
                         <td>
                           {event.outcome === 'success' ? (
-                            <span className="text-[13px] text-slate-500">success</span>
+                            <span className="text-ui text-slate-500">success</span>
                           ) : (
                             <Pill tone={OUTCOME_TONE[event.outcome] || 'neutral'} size="xs" dot>
                               {event.outcome}
                             </Pill>
                           )}
                         </td>
-                        <td className="font-mono text-xs text-slate-400">{event.ip || '—'}</td>
+                        <td
+                          className="font-mono text-xs text-slate-400"
+                          title={ip && ip !== event.ip ? event.ip : undefined}
+                        >
+                          {ip || '—'}
+                        </td>
                       </tr>
                       {expanded && (
                         <tr>

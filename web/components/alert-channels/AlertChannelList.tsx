@@ -10,12 +10,18 @@ import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import EmptyState from '@/components/ui/EmptyState';
+import TableSkeleton from '@/components/ui/TableSkeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { usePluginNames } from './usePluginNames';
 
-// The workspace's alert channels, shown as the Channels tab of Settings.
+// The workspace's alert channels, shown on the Notifications tab of Settings
+// under the default routing.
 export default function AlertChannelList() {
   const { showToast } = useToast();
+  const canWrite = useCanWrite();
+  const pluginName = usePluginNames();
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -64,14 +70,18 @@ export default function AlertChannelList() {
     }
   };
 
+  // Ghost "New channel": the page's one accent button is Save notifications
+  // above, and the empty state carries its own.
   const actions = (
     <div className="flex items-center gap-2">
       <Button variant="ghost" size="sm" icon={<LayoutGrid strokeWidth={1.75} />} asChild>
         <Link href="/alert-channels/catalog">Browse catalog</Link>
       </Button>
-      <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-        <Link href="/alert-channels/new">New channel</Link>
-      </Button>
+      {canWrite && (
+        <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+          <Link href="/alert-channels/new">New channel</Link>
+        </Button>
+      )}
     </div>
   );
 
@@ -81,18 +91,30 @@ export default function AlertChannelList() {
         <EmptyState
           icon={<Send strokeWidth={1.5} />}
           title="No alert channels yet"
-          description="Add a channel so alerts reach your team."
-          action={actions}
+          description={
+            // The catalog (per-plugin setup docs) is read-only, so viewers get
+            // the link too; a text link keeps the one accent action.
+            <>
+              Add a channel so alerts reach your team.{' '}
+              <Link href="/alert-channels/catalog" className="text-cyan-300 transition-colors hover:text-cyan-200 hover:underline">
+                Browse the catalog
+              </Link>
+            </>
+          }
+          action={canWrite ? { label: 'New channel', href: '/alert-channels/new', icon: <Plus strokeWidth={1.75} /> } : undefined}
         />
       ) : (
         <div className="glass overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-            <p className="text-[13px] text-slate-400">Where alert notifications are delivered.</p>
+          <div className="flex flex-wrap items-center justify-between gap-3 p-5 pb-4">
+            <div>
+              <h2 className="text-title font-semibold text-white">Channels</h2>
+              <p className="mt-0.5 text-xs text-slate-500">Where alert notifications are delivered.</p>
+            </div>
             {actions}
           </div>
 
           {loading ? (
-            <p className="px-4 pb-4 text-sm text-slate-500">Loading alert channels…</p>
+            <TableSkeleton bare rows={2} columns={2} label="Loading alert channels" />
           ) : error ? (
             <div className="px-4 pb-4">
               <Callout
@@ -124,14 +146,14 @@ export default function AlertChannelList() {
                           {channel.name}
                         </Link>
                       </td>
-                      <td className="text-[13px] text-slate-400">{channel.type}</td>
+                      <td className="text-ui text-slate-400">{pluginName(channel.type)}</td>
                       <td>
                         <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
                           {channel.is_active ? 'Active' : 'Inactive'}
                         </Pill>
                       </td>
                       <td className="text-right">
-                        <div className="inline-flex items-center gap-0.5">
+                        {canWrite && <div className="inline-flex items-center gap-0.5">
                           <IconButton
                             icon={<Send strokeWidth={1.75} />}
                             label="Send a test notification"
@@ -148,7 +170,7 @@ export default function AlertChannelList() {
                             onClick={() => setPendingDelete(channel)}
                             danger
                           />
-                        </div>
+                        </div>}
                       </td>
                     </tr>
                   ))}
@@ -160,7 +182,7 @@ export default function AlertChannelList() {
       )}
 
       <ConfirmDialog
-        open={pendingDelete !== null}
+        open={canWrite && pendingDelete !== null}
         title="Delete alert channel"
         description={
           pendingDelete

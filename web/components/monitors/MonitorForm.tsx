@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { ReactNode, useState, useEffect, useId, useRef } from 'react';
 import {
   Monitor,
   CreateMonitorRequest,
@@ -31,8 +31,8 @@ import {
   SyntheticBrowserStepConfig,
   Location,
 } from '@/lib/types';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, ChevronUp, ChevronDown, Trash2, X, Plus, Eye, EyeOff, type LucideIcon } from 'lucide-react';
-import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame, ChevronUp, ChevronDown, Trash2, X, Plus, Eye, EyeOff, type LucideIcon } from 'lucide-react';
+import { getMonitorResults, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
 import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
 import FormActions from '@/components/ui/FormActions';
@@ -42,9 +42,7 @@ import Callout, { type CalloutTone } from '@/components/ui/Callout';
 import FilterChip from '@/components/ui/FilterChip';
 import Tabs from '@/components/ui/Tabs';
 import { AlertingSection } from './AlertingSection';
-import { LocationsSection } from './LocationsSection';
 import GroupForm from './GroupForm';
-import { MonitorMultiSelect } from './MonitorMultiSelect';
 import AgentForm from './AgentForm';
 import PushForm from './PushForm';
 import SipForm from './SipForm';
@@ -53,11 +51,15 @@ import TcpForm from './TcpForm';
 import PrometheusForm from './PrometheusForm';
 import WebsocketForm from './WebsocketForm';
 import DatabaseForm, { type DatabaseMonitorType } from './DatabaseForm';
-import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
-import CurlPreview from './CurlPreview';
+import HttpMonitorForm, { MethodUrlRow, sectionsWithErrors } from './HttpMonitorForm';
+import ScheduleSection from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
 import Switch from '@/components/ui/Switch';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import { formatLatency } from '@/lib/format';
 
-const FIELD_LABEL = 'block text-[13px] font-medium text-slate-300';
+const FIELD_LABEL = 'block text-ui font-medium text-slate-300';
 
 const EDITOR_MODE_TABS = [
   { id: 'basic', label: 'Basic' },
@@ -69,7 +71,9 @@ const BROWSER_SETUP_TABS = [
   { id: 'expert', label: 'Expert' },
 ] as const;
 
-const TILE_SELECTED = 'bg-cyan-500/[0.08] ring-1 ring-inset ring-cyan-500/45';
+// Selected is neutral raised glass, never orange (orange is for actions).
+const TILE_SELECTED = 'bg-glass-strong shadow-segment';
+
 
 interface MonitorFormProps {
   monitor?: Monitor;
@@ -79,7 +83,25 @@ interface MonitorFormProps {
   loading?: boolean;
 }
 
-// Reusable input component
+// Field helpers for the HTTP, ping, DNS and synthetic sections. Each links its
+// label to the control and marks it invalid, so a failed submit can find and
+// focus the first broken field (see revealFirstError).
+function useFieldIds(error?: string, hint?: string) {
+  const id = useId();
+  const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
+  return {
+    id,
+    errorId,
+    hintId,
+    control: {
+      id,
+      'aria-invalid': error ? (true as const) : undefined,
+      'aria-describedby': error ? errorId : hint ? hintId : undefined,
+    },
+  };
+}
+
 function FormInput({
   label,
   type = 'text',
@@ -88,6 +110,7 @@ function FormInput({
   placeholder,
   error,
   hint,
+  required,
   ...props
 }: {
   label: string;
@@ -97,21 +120,29 @@ function FormInput({
   placeholder?: string;
   error?: string;
   hint?: string;
+  required?: boolean;
   [key: string]: any;
 }) {
+  const f = useFieldIds(error, hint);
   return (
     <div>
-      <label className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
+      <label htmlFor={f.id} className={`${FIELD_LABEL} mb-1.5`}>
+        {label}
+        {required && <span className="ml-1 text-rose-300" aria-hidden="true">*</span>}
+      </label>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className="input"
+        // The asterisk is aria-hidden; this is the required cue for AT.
+        aria-required={required || undefined}
+        {...f.control}
         {...props}
       />
-      {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
-      {hint && !error && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+      {error && <p id={f.errorId} className="mt-1 text-xs text-rose-300">{error}</p>}
+      {hint && !error && <p id={f.hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
 }
@@ -135,24 +166,25 @@ function FormTextarea({
   rows?: number;
   [key: string]: any;
 }) {
+  const f = useFieldIds(error, hint);
   return (
     <div>
-      <label className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
+      <label htmlFor={f.id} className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
       <textarea
         rows={rows}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className="input min-h-[96px]"
+        {...f.control}
         {...props}
       />
-      {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
-      {hint && !error && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+      {error && <p id={f.errorId} className="mt-1 text-xs text-rose-300">{error}</p>}
+      {hint && !error && <p id={f.hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
 }
 
-// Reusable select component
 function FormSelect({
   label,
   value,
@@ -168,25 +200,26 @@ function FormSelect({
   hint?: string;
   disabled?: boolean;
 }) {
+  const f = useFieldIds(undefined, hint);
   return (
     <div>
-      <label className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
+      <label htmlFor={f.id} className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         className="input"
+        {...f.control}
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>
         ))}
       </select>
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+      {hint && <p id={f.hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );
 }
 
-// Toggle component
 function FormToggle({
   label,
   description,
@@ -204,157 +237,220 @@ function FormToggle({
         <p className="text-sm font-medium text-slate-200">{label}</p>
         {description && <p className="text-xs text-slate-500">{description}</p>}
       </div>
-      <Switch checked={checked} onChange={onChange} />
+      <Switch checked={checked} onChange={onChange} label={label} />
     </div>
   );
 }
 
 // Monitor type registry. Adding a new type (redis, postgres, websocket, …)
 // only requires a new entry here — the picker, categories, search, and
-// name placeholder all derive from it.
+// name placeholder all derive from it. Display names come from
+// lib/monitor-type-labels so the picker matches the list and detail pages.
 type MonitorTypeMeta = {
   type: MonitorType;
   label: string;
+  /** One line at the picker's column width (~30 characters). */
   description: string;
   icon: LucideIcon;
   category: (typeof MONITOR_TYPE_CATEGORIES)[number];
   namePlaceholder: string;
 };
 
-const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Databases & Brokers', 'Infrastructure', 'Organization'] as const;
+const MONITOR_TYPE_CATEGORIES = ['Web & API', 'Network', 'Databases & brokers', 'Infrastructure & grouping'] as const;
+
+const typeMeta = (type: MonitorType, rest: Omit<MonitorTypeMeta, 'type' | 'label'>): MonitorTypeMeta => ({
+  type,
+  label: monitorTypeLabel(type),
+  ...rest,
+});
 
 const MONITOR_TYPE_META: MonitorTypeMeta[] = [
-  { type: 'http', label: 'HTTP', description: 'Check an HTTP endpoint', icon: Globe, category: 'Web & API', namePlaceholder: 'My API health check' },
-  { type: 'websocket', label: 'WebSocket', description: 'Upgrade handshake and reply checks', icon: Cable, category: 'Web & API', namePlaceholder: 'Live updates socket' },
-  { type: 'synthetic_api', label: 'Synthetic API', description: 'Multi-step API journey', icon: Code, category: 'Web & API', namePlaceholder: 'Checkout API journey' },
-  { type: 'synthetic_browser', label: 'Synthetic Browser', description: 'Real-browser user flow', icon: MousePointer2, category: 'Web & API', namePlaceholder: 'Login flow check' },
-  { type: 'ping', label: 'Ping', description: 'ICMP reachability check', icon: Radio, category: 'Network', namePlaceholder: 'Edge gateway ping' },
-  { type: 'dns', label: 'DNS', description: 'Resolve and verify records', icon: Search, category: 'Network', namePlaceholder: 'example.com DNS' },
-  { type: 'grpc', label: 'gRPC', description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' },
-  { type: 'tcp', label: 'TCP', description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' },
-  { type: 'sip', label: 'SIP', description: 'OPTIONS ping and REGISTER auth probes', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' },
-  { type: 'postgres', label: 'PostgreSQL', description: 'Connect, auth, and query checks', icon: Database, category: 'Databases & Brokers', namePlaceholder: 'Postgres production' },
-  { type: 'mysql', label: 'MySQL', description: 'Connect, auth, and query checks', icon: Cylinder, category: 'Databases & Brokers', namePlaceholder: 'MySQL production' },
-  { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases & Brokers', namePlaceholder: 'Redis cache' },
-  { type: 'mongodb', label: 'MongoDB', description: 'Connect, auth, and ping', icon: Leaf, category: 'Databases & Brokers', namePlaceholder: 'Mongo cluster' },
-  { type: 'prometheus', label: 'Prometheus', description: 'PromQL queries with numeric thresholds', icon: Radio, category: 'Infrastructure', namePlaceholder: 'API error rate' },
-  { type: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect and auth checks', icon: MessageSquare, category: 'Databases & Brokers', namePlaceholder: 'RabbitMQ production' },
-  { type: 'agent', label: 'Agent', description: 'Host metrics from an agent', icon: Server, category: 'Infrastructure', namePlaceholder: 'Production server' },
-  { type: 'push', label: 'Push', description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure', namePlaceholder: 'My service health' },
-  { type: 'group', label: 'Group', description: 'Roll up monitors into one status', icon: Folder, category: 'Organization', namePlaceholder: 'Production services' },
+  typeMeta('http', { description: 'Check an HTTP endpoint', icon: Globe, category: 'Web & API', namePlaceholder: 'My API health check' }),
+  typeMeta('websocket', { description: 'Handshake and reply checks', icon: Cable, category: 'Web & API', namePlaceholder: 'Live updates socket' }),
+  typeMeta('synthetic_api', { description: 'Multi-step API journey', icon: Code, category: 'Web & API', namePlaceholder: 'Checkout API journey' }),
+  typeMeta('synthetic_browser', { description: 'Real-browser user flow', icon: MousePointer2, category: 'Web & API', namePlaceholder: 'Login flow check' }),
+  typeMeta('ping', { description: 'ICMP reachability', icon: Radio, category: 'Network', namePlaceholder: 'Edge gateway ping' }),
+  typeMeta('dns', { description: 'Resolve and verify records', icon: Search, category: 'Network', namePlaceholder: 'example.com DNS' }),
+  typeMeta('grpc', { description: 'gRPC health checks', icon: Network, category: 'Network', namePlaceholder: 'My gRPC service' }),
+  typeMeta('tcp', { description: 'Connect to a host and port', icon: PlugZap, category: 'Network', namePlaceholder: 'Postgres port reachability' }),
+  typeMeta('sip', { description: 'OPTIONS and REGISTER probes', icon: Phone, category: 'Network', namePlaceholder: 'My SIP server' }),
+  typeMeta('postgres', { description: 'Connect, auth and query', icon: Database, category: 'Databases & brokers', namePlaceholder: 'Postgres production' }),
+  typeMeta('mysql', { description: 'Connect, auth and query', icon: Cylinder, category: 'Databases & brokers', namePlaceholder: 'MySQL production' }),
+  typeMeta('redis', { description: 'Connect and PING latency', icon: Zap, category: 'Databases & brokers', namePlaceholder: 'Redis cache' }),
+  typeMeta('mongodb', { description: 'Connect, auth and ping', icon: Leaf, category: 'Databases & brokers', namePlaceholder: 'Mongo cluster' }),
+  typeMeta('rabbitmq', { description: 'AMQP connect and auth', icon: MessageSquare, category: 'Databases & brokers', namePlaceholder: 'RabbitMQ production' }),
+  typeMeta('prometheus', { description: 'PromQL with thresholds', icon: Flame, category: 'Infrastructure & grouping', namePlaceholder: 'API error rate' }),
+  typeMeta('agent', { description: 'Host metrics from a collector', icon: Server, category: 'Infrastructure & grouping', namePlaceholder: 'Production server' }),
+  typeMeta('push', { description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure & grouping', namePlaceholder: 'My service health' }),
+  typeMeta('group', { description: 'Roll monitors up into one status', icon: Folder, category: 'Infrastructure & grouping', namePlaceholder: 'Production services' }),
 ];
 
 const getTypeMeta = (type: MonitorType): MonitorTypeMeta =>
   MONITOR_TYPE_META.find((m) => m.type === type) ?? MONITOR_TYPE_META[0];
 
+// Browser journeys legitimately take longer than one request.
+// Errors cleared by edits to another field (useClearErrorsOnEdit): the
+// timeout is checked against the interval, the URL against the TLS options,
+// the TLS expiry check against the URL scheme.
+const MONITOR_FORM_RELATED_FIELDS: Record<string, string[]> = {
+  timeout_seconds: ['interval_seconds'],
+  url: ['tls_skip_verify', 'tls_ca_pem', 'tls_server_name'],
+  tls_min_days_valid: ['url'],
+};
+
+const defaultTimeoutFor = (type: MonitorType): number =>
+  type === 'synthetic_api' || type === 'synthetic_browser' ? 30 : 10;
+
+/**
+ * Step one of a fresh create: choose the type. Categories sit side by side as
+ * columns, so the grid has no orphan tiles and the whole catalogue fits in one
+ * short block. `onCancel` (when a type was already chosen) closes it again.
+ */
 function MonitorTypePicker({
   value,
   onSelect,
-  open,
-  onOpenChange,
-  locked,
+  onCancel,
 }: {
-  value: MonitorType;
+  value: MonitorType | null;
   onSelect: (type: MonitorType) => void;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  locked: boolean;
+  onCancel?: () => void;
 }) {
   const [query, setQuery] = useState('');
-  const selected = getTypeMeta(value);
-  const SelectedIcon = selected.icon;
+  const headingId = useId();
+  const searchRef = useRef<HTMLInputElement>(null);
+  // Reopened from "Change type" (onCancel set): the button that had focus is
+  // gone, so focus moves to the search. A fresh create leaves focus alone.
+  const reopened = Boolean(onCancel);
+  useEffect(() => {
+    if (reopened) searchRef.current?.focus();
+  }, [reopened]);
   const q = query.trim().toLowerCase();
   const matches = (m: MonitorTypeMeta) =>
     !q ||
     m.label.toLowerCase().includes(q) ||
+    m.type.includes(q) ||
     m.description.toLowerCase().includes(q) ||
     m.category.toLowerCase().includes(q);
   const visible = MONITOR_TYPE_META.filter(matches);
 
-  if (locked || !open) {
-    return (
-      <div className="glass flex flex-wrap items-center justify-between gap-3 px-6 py-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <SelectedIcon className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-white">{selected.label} monitor</p>
-            <p className="truncate text-xs text-slate-500">{selected.description}</p>
-          </div>
-        </div>
-        {locked ? (
-          <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
-            <Lock className="h-3.5 w-3.5" strokeWidth={1.75} />
-            Type is fixed after creation
-          </span>
-        ) : (
-          <Button type="button" variant="ghost" onClick={() => onOpenChange(true)}>
-            Change type
-          </Button>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="glass p-6">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+    <section
+      aria-labelledby={headingId}
+      className="glass p-5 sm:p-6"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && onCancel) {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+    >
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-[15px] font-semibold text-white">Monitor type</h3>
-          <p className="mt-0.5 text-[13px] text-slate-400">Pick what you want to watch. The type can&apos;t be changed later.</p>
+          <h2 id={headingId} className="text-title font-semibold text-white">Monitor type</h2>
+          <p className="mt-0.5 text-ui text-slate-400">Choose what to watch.</p>
         </div>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search types…"
-            aria-label="Search monitor types"
-            className="input input-sm !w-52 !pl-8"
-          />
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          <div className="relative min-w-0 flex-1 sm:flex-none">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter picks the only (or first) match: "redis⏎".
+                if (e.key === 'Enter' && visible.length > 0) {
+                  e.preventDefault();
+                  onSelect(visible[0].type);
+                }
+              }}
+              placeholder="Search types…"
+              aria-label="Search monitor types"
+              className="input input-sm !pl-8 sm:!w-52"
+            />
+          </div>
+          {onCancel && (
+            <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+          )}
         </div>
       </div>
-      <div className="space-y-5" role="radiogroup" aria-label="Monitor type">
+      <div className="grid gap-x-5 gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
         {MONITOR_TYPE_CATEGORIES.map((category) => {
           const items = visible.filter((m) => m.category === category);
           if (items.length === 0) return null;
           return (
-            <div key={category}>
+            <div key={category} role="group" aria-label={category}>
               <p className="mb-2 text-xs font-medium text-slate-500">{category}</p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <ul className="grid grid-cols-2 gap-1.5 sm:grid-cols-1">
                 {items.map((m) => {
                   const Icon = m.icon;
                   const isSelected = m.type === value;
                   return (
-                    <button
-                      key={m.type}
-                      type="button"
-                      role="radio"
-                      aria-checked={isSelected}
-                      onClick={() => onSelect(m.type)}
-                      className={`glass-well flex items-start gap-3 p-3 text-left transition-colors ${
-                        isSelected ? TILE_SELECTED : 'hover:bg-well-hover'
-                      }`}
-                    >
-                      <Icon
-                        className={`mt-0.5 h-4 w-4 shrink-0 ${isSelected ? 'text-cyan-400' : 'text-slate-400'}`}
-                        strokeWidth={1.75}
-                      />
-                      <div className="min-w-0">
-                        <p className={`text-[13px] font-medium ${isSelected ? 'text-white' : 'text-slate-200'}`}>{m.label}</p>
-                        <p className="mt-0.5 text-xs leading-snug text-slate-500">{m.description}</p>
-                      </div>
-                    </button>
+                    <li key={m.type}>
+                      <button
+                        type="button"
+                        onClick={() => onSelect(m.type)}
+                        aria-current={isSelected ? 'true' : undefined}
+                        title={m.label}
+                        className={`glass-well flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                          isSelected ? TILE_SELECTED : 'hover:bg-well-hover'
+                        }`}
+                      >
+                        <Icon className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
+                        <span className="min-w-0">
+                          {/* Wraps in the two-column phone grid, where truncation would hide the name. */}
+                          <span className="block break-words text-ui font-medium leading-tight text-slate-100 sm:truncate sm:leading-normal">{m.label}</span>
+                          <span className="hidden truncate text-xs text-slate-500 sm:block">{m.description}</span>
+                        </span>
+                      </button>
+                    </li>
                   );
                 })}
-              </div>
+              </ul>
             </div>
           );
         })}
-        {visible.length === 0 && (
-          <p className="py-2 text-center text-[13px] text-slate-500">No monitor types match &ldquo;{query}&rdquo;.</p>
-        )}
       </div>
+      {visible.length === 0 && (
+        <p className="py-2 text-center text-ui text-slate-500">No monitor types match &ldquo;{query}&rdquo;.</p>
+      )}
+    </section>
+  );
+}
+
+/** The chosen type, collapsed to one line above the form. */
+function MonitorTypeBar({
+  type,
+  locked,
+  onChange,
+}: {
+  type: MonitorType;
+  locked: boolean;
+  onChange: () => void;
+}) {
+  const selected = getTypeMeta(type);
+  const Icon = selected.icon;
+  return (
+    <div className="glass flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <Icon className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-white">{selected.label} monitor</p>
+          <p className="truncate text-xs text-slate-500">{selected.description}</p>
+        </div>
+      </div>
+      {locked ? (
+        <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+          <Lock className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+          Type is fixed after creation
+        </span>
+      ) : (
+        <Button type="button" variant="ghost" size="sm" onClick={onChange}>
+          Change type
+        </Button>
+      )}
     </div>
   );
 }
@@ -879,7 +975,7 @@ export default function MonitorForm({
   const sourceTags = monitor?.tags || initialData?.tags || [];
   const sourceName = monitor?.name || initialData?.name || '';
   const sourceIntervalSeconds = monitor?.interval_seconds || initialData?.interval_seconds || 60;
-  const sourceTimeoutSeconds = monitor?.timeout_seconds || initialData?.timeout_seconds || 30;
+  const sourceTimeoutSeconds = monitor?.timeout_seconds || initialData?.timeout_seconds || defaultTimeoutFor(sourceType);
   const sourceEnabled = monitor?.enabled ?? initialData?.enabled ?? true;
 
   const initialType: MonitorType = sourceType;
@@ -983,9 +1079,16 @@ export default function MonitorForm({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors, MONITOR_FORM_RELATED_FIELDS);
+  useFollowEnabled(monitor?.enabled, setFormData);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
-  // Expanded by default when creating so all types are discoverable up front.
-  const [typePickerOpen, setTypePickerOpen] = useState(!isEditMode);
+  // A fresh create starts at the type step, with no form until a type is
+  // picked; edit and clone already have their type.
+  const [typeChosen, setTypeChosen] = useState(isEditMode || Boolean(initialData));
+  const [typePickerOpen, setTypePickerOpen] = useState(!typeChosen);
+  const formRef = useRef<HTMLFormElement>(null);
+  const formBodyRef = useRef<HTMLDivElement>(null);
+  const typeBarRef = useRef<HTMLDivElement>(null);
   const [syntheticAPIMode, setSyntheticAPIMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserMode, setSyntheticBrowserMode] = useState<SyntheticEditorMode>('basic');
   const [syntheticBrowserSetupMode, setSyntheticBrowserSetupMode] = useState<SyntheticBrowserSetupMode>(
@@ -995,24 +1098,9 @@ export default function MonitorForm({
   const [syntheticTestState, setSyntheticTestState] = useState<SyntheticTestState>({ phase: 'idle' });
   const testSequenceRef = useRef(0);
   const mountedRef = useRef(true);
-  const [availableMonitors, setAvailableMonitors] = useState<Monitor[]>([]);
   const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
   // '' = fan out to all the monitor's locations (or default fleet when none).
   const [testLocationId, setTestLocationId] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    getMonitors({ page_size: 100 })
-      .then((res) => {
-        if (!cancelled) setAvailableMonitors(res.items || []);
-      })
-      .catch(() => {
-        // Dependency picker degrades to empty; not fatal for the form.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const isSavedMonitor = Boolean(monitor?.id);
   const isSyntheticMonitor = monitorType === 'synthetic_api' || monitorType === 'synthetic_browser';
@@ -1370,6 +1458,7 @@ export default function MonitorForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     setErrors({});
 
     const newErrors: Record<string, string> = {};
@@ -1689,6 +1778,8 @@ export default function MonitorForm({
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
+      setOpenSections((prev) => ({ ...prev, ...sectionsWithErrors(newErrors) }));
+      revealFirstError(formRef.current);
       return;
     }
 
@@ -2003,101 +2094,99 @@ export default function MonitorForm({
     await onSubmit(requestData);
   };
 
-  const typePicker = (
+  const selectType = (type: MonitorType) => {
+    // Keep a timeout the operator never touched in step with the new type.
+    if (formData.timeout_seconds === defaultTimeoutFor(monitorType)) {
+      setFormData((prev) => ({ ...prev, timeout_seconds: defaultTimeoutFor(type) }));
+    }
+    setMonitorType(type);
+    setTypeChosen(true);
+    setTypePickerOpen(false);
+    setErrors({});
+    // Straight on to naming it.
+    requestAnimationFrame(() =>
+      formBodyRef.current?.querySelector<HTMLElement>('input:not([type="hidden"]), textarea, select')?.focus()
+    );
+  };
+
+  const typeHeader = typePickerOpen ? (
     <MonitorTypePicker
-      value={monitorType}
-      onSelect={(type) => {
-        setMonitorType(type);
-        setTypePickerOpen(false);
-      }}
-      open={typePickerOpen}
-      onOpenChange={setTypePickerOpen}
-      locked={isEditMode}
+      value={typeChosen ? monitorType : null}
+      onSelect={selectType}
+      onCancel={
+        typeChosen
+          ? () => {
+              setTypePickerOpen(false);
+              // Back to the "Change type" button the picker replaced.
+              requestAnimationFrame(() => typeBarRef.current?.querySelector<HTMLElement>('button')?.focus());
+            }
+          : undefined
+      }
     />
+  ) : (
+    <div ref={typeBarRef} className="max-w-3xl">
+      <MonitorTypeBar type={monitorType} locked={isEditMode} onChange={() => setTypePickerOpen(true)} />
+    </div>
+  );
+
+  // The picker spans the page; the form itself is capped to a readable width.
+  const shell = (body: ReactNode) => (
+    <div className="space-y-5">
+      {typeHeader}
+      {typeChosen && (
+        // Hidden rather than unmounted while the picker is reopened, so a
+        // half-filled form survives a look at the other types.
+        <div ref={formBodyRef} hidden={typePickerOpen} className="max-w-3xl">
+          {body}
+        </div>
+      )}
+    </div>
   );
 
   // Delegate to specialized forms
   if (monitorType === 'group') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <GroupForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
-      </div>
-    );
+    return shell(<GroupForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'agent') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <AgentForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
-      </div>
-    );
+    return shell(<AgentForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'push') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <PushForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
-      </div>
-    );
+    return shell(<PushForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'sip') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <SipForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
-      </div>
-    );
+    return shell(<SipForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'grpc') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
-      </div>
-    );
+    return shell(<GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'prometheus') {
-    return <div className="space-y-5">{typePicker}<PrometheusForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} /></div>;
+    return shell(<PrometheusForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'tcp') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <TcpForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
-      </div>
-    );
+    return shell(<TcpForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'websocket') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <WebsocketForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
-      </div>
-    );
+    return shell(<WebsocketForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'redis' || monitorType === 'postgres' || monitorType === 'mongodb' || monitorType === 'rabbitmq' || monitorType === 'mysql') {
-    return (
-      <div className="space-y-5">
-        {typePicker}
-        <DatabaseForm
-          key={monitorType}
-          type={monitorType as DatabaseMonitorType}
-          monitor={monitor}
-          initialData={initialData}
-          onSubmit={onSubmit}
-          onCancel={onCancel}
-          loading={loading}
-        />
-      </div>
+    return shell(
+      <DatabaseForm
+        key={monitorType}
+        type={monitorType as DatabaseMonitorType}
+        monitor={monitor}
+        initialData={initialData}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        loading={loading}
+      />
     );
   }
 
@@ -2120,82 +2209,78 @@ export default function MonitorForm({
     collect_timing: formData.collect_timing,
   };
 
-  // Plain-language summary of what this monitor will do, shown next to the
-  // form actions so misconfigurations are visible right before submitting.
-  const checkPlan = (() => {
-    const target = (() => {
-      switch (monitorType) {
-        case 'http': {
-          if (!formData.url.trim()) return null;
-          let host = formData.url.trim();
-          try {
-            const u = new URL(host.startsWith('http') ? host : `https://${host}`);
-            host = `${u.hostname}${u.pathname !== '/' ? u.pathname : ''}`;
-          } catch {
-            /* show as typed */
-          }
-          return `${formData.method} ${host} · expect ${formData.status_rules.trim() || '2xx'}`;
+  // Plain-language summary of what this monitor will do, shown in the sticky
+  // action bar so misconfigurations are visible right before submitting.
+  const planTarget = ((): ReactNode[] | null => {
+    switch (monitorType) {
+      case 'http': {
+        if (!formData.url.trim()) return null;
+        let host = formData.url.trim();
+        try {
+          const u = new URL(host.startsWith('http') ? host : `https://${host}`);
+          host = `${u.hostname}${u.pathname !== '/' ? u.pathname : ''}`;
+        } catch {
+          /* show as typed */
         }
-        case 'ping':
-          return formData.host.trim() ? `ping ${formData.host.trim()}` : null;
-        case 'dns':
-          return formData.host.trim() ? `resolve ${formData.dns_record_type} for ${formData.host.trim()}` : null;
-        case 'synthetic_api': {
-          const steps = formData.synthetic_api_steps.length;
-          return `run ${steps}-step API journey`;
-        }
-        case 'synthetic_browser': {
-          const steps = isSyntheticBrowserGuidedMode
-            ? syntheticBrowserGuidedPreview.steps.length
-            : formData.synthetic_browser_steps.length;
-          return `run ${steps}-step browser journey`;
-        }
-        default:
-          return null;
+        return [<PlanTarget key="t">{formData.method} {host}</PlanTarget>, `expects ${formData.status_rules.trim() || '2xx'}`];
       }
-    })();
-    if (!target) return null;
-    const fails = formData.consecutive_failures_threshold;
-    return `Every ${formData.interval_seconds}s · ${target} · down after ${fails} failed check${fails === 1 ? '' : 's'}`;
+      case 'ping':
+        return formData.host.trim() ? [<PlanTarget key="t">ping {formData.host.trim()}</PlanTarget>] : null;
+      case 'dns':
+        return formData.host.trim()
+          ? [<PlanTarget key="t">{formData.dns_record_type} {formData.host.trim()}</PlanTarget>]
+          : null;
+      case 'synthetic_api':
+        return [`${formData.synthetic_api_steps.length}-step API journey`];
+      case 'synthetic_browser': {
+        const steps = isSyntheticBrowserGuidedMode
+          ? syntheticBrowserGuidedPreview.steps.length
+          : formData.synthetic_browser_steps.length;
+        return [`${steps}-step browser journey`];
+      }
+      default:
+        return null;
+    }
   })();
+  const planParts = planTarget
+    ? [everyLabel(formData.interval_seconds), ...planTarget, downAfterLabel(formData.consecutive_failures_threshold)]
+    : [];
 
-  return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      {typePicker}
+  return shell(
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <FormSection title="Target">
+        <FormInput
+          label="Monitor name"
+          required
+          value={formData.name}
+          onChange={(v) => setFormData({ ...formData, name: v })}
+          placeholder={getTypeMeta(monitorType).namePlaceholder}
+          error={errors.name}
+        />
 
-      {/* Basic Info */}
-      <div id="monitor-name-field">
-        <FormSection title="Basics">
-          <FormInput
-            label="Monitor name"
-            value={formData.name}
-            onChange={(v) => setFormData({ ...formData, name: v })}
-            placeholder={getTypeMeta(monitorType).namePlaceholder}
-            error={errors.name}
+        {monitorType === 'http' && (
+          <MethodUrlRow
+            method={formData.method}
+            url={formData.url}
+            onMethodChange={(v) => setFormData({ ...formData, method: v })}
+            onUrlChange={(v) => setFormData({ ...formData, url: v })}
+            error={errors.url}
           />
+        )}
 
-          {/* HTTP URL + Method hero row */}
-          {monitorType === 'http' && (
-            <>
-              <MethodUrlRow
-                method={formData.method}
-                url={formData.url}
-                onMethodChange={(v) => setFormData({ ...formData, method: v })}
-                onUrlChange={(v) => setFormData({ ...formData, url: v })}
-                error={errors.url}
-              />
-              <CurlPreview
-                method={formData.method}
-                url={formData.url}
-                headers={formData.request_headers}
-                body={formData.body}
-              />
-            </>
-          )}
-        </FormSection>
-      </div>
+        {(monitorType === 'ping' || monitorType === 'dns') && (
+          <FormInput
+            label="Host"
+            required
+            value={formData.host}
+            onChange={(v) => setFormData({ ...formData, host: v })}
+            placeholder={monitorType === 'ping' ? 'example.com or 8.8.8.8' : 'example.com'}
+            error={errors.host}
+            className="input font-mono"
+          />
+        )}
+      </FormSection>
 
-      {/* HTTP collapsible sections */}
       {monitorType === 'http' && (
         <HttpMonitorForm
           data={httpData}
@@ -2206,28 +2291,8 @@ export default function MonitorForm({
         />
       )}
 
-      {/* Ping Configuration */}
-      {monitorType === 'ping' && (
-        <FormSection title="Ping configuration">
-          <FormInput
-            label="Host"
-            value={formData.host}
-            onChange={(v) => setFormData({ ...formData, host: v })}
-            placeholder="example.com or 8.8.8.8"
-            error={errors.host}
-          />
-        </FormSection>
-      )}
-
       {monitorType === 'dns' && (
-        <FormSection title="DNS configuration">
-          <FormInput
-            label="Host"
-            value={formData.host}
-            onChange={(v) => setFormData({ ...formData, host: v })}
-            placeholder="example.com"
-            error={errors.host}
-          />
+        <FormSection title="Check">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormSelect
               label="Record type"
@@ -2244,34 +2309,34 @@ export default function MonitorForm({
               hint="Defaults to A if not set."
             />
             <FormInput
-              label="Expected answers (optional)"
+              label="Expected answers"
               value={formData.dns_expected_answers}
               onChange={(v) => setFormData({ ...formData, dns_expected_answers: v })}
               placeholder="1.2.3.4, 5.6.7.8"
-              hint="Comma or newline separated. Leave empty to accept any answer."
+              hint="Optional. Comma or newline separated; empty accepts any answer."
+              className="input font-mono"
             />
           </div>
           <FormInput
-            label="Nameserver (optional)"
+            label="Nameserver"
             value={formData.dns_nameserver}
             onChange={(v) => setFormData({ ...formData, dns_nameserver: v })}
             placeholder="10.0.0.2 or resolver.internal:53"
-            hint="Query this DNS server instead of the worker's system resolver — for private zones and VPC resolvers."
+            hint="Optional. Query this DNS server instead of the worker's system resolver, for private zones and VPC resolvers."
+            className="input font-mono"
           />
         </FormSection>
       )}
 
       {monitorType === 'synthetic_api' && (
-        <FormSection title="Synthetic API configuration">
+        <FormSection title="Check">
           <div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <Tabs tabs={EDITOR_MODE_TABS} active={syntheticAPIMode} onChange={setSyntheticAPIMode} />
-              <p className="text-xs tabular-nums text-slate-500">
-                {formData.synthetic_api_steps.length} steps
-                {' · '}
-                {(formData.synthetic_api_variables || []).filter((v) => v.key.trim()).length} variables
-                {' · '}
-                {formData.synthetic_api_steps.reduce((sum, step) => sum + step.extracts.length, 0)} extracts
+              <p className="flex flex-wrap gap-x-3 text-xs tabular-nums text-slate-500">
+                <span>{formData.synthetic_api_steps.length} steps</span>
+                <span>{(formData.synthetic_api_variables || []).filter((v) => v.key.trim()).length} variables</span>
+                <span>{formData.synthetic_api_steps.reduce((sum, step) => sum + step.extracts.length, 0)} extracts</span>
               </p>
             </div>
             <p className="mt-2 text-xs text-slate-500">
@@ -2282,7 +2347,7 @@ export default function MonitorForm({
           <div className="glass-well flex flex-wrap items-center justify-between gap-3 p-4">
             <div>
               <p className="text-sm font-medium text-white">Quick start templates</p>
-              <p className="text-[13px] text-slate-400">Load a starter workflow, then customize fields for your environment.</p>
+              <p className="text-ui text-slate-400">Load a starter workflow, then customize fields for your environment.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="ghost" size="xs" onClick={() => applySyntheticAPITemplate('single_health')}>
@@ -2298,7 +2363,7 @@ export default function MonitorForm({
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-medium text-white">Realtime test</p>
-                <p className="text-[13px] text-slate-400">Runs the saved monitor immediately and streams the latest result state here.</p>
+                <p className="text-ui text-slate-400">Runs the saved monitor immediately and streams the latest result state here.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {formData.location_ids.length > 0 && (
@@ -2336,9 +2401,11 @@ export default function MonitorForm({
               <Callout tone={getSyntheticResultTone(syntheticTestState.phase)} className="mt-3">
                 <p>{syntheticTestState.message || 'Running...'}</p>
                 {syntheticTestState.result && (
-                  <p className="mt-1 text-[13px]">
+                  <p className="mt-1 text-ui">
                     Status: <span className="font-medium text-white">{syntheticTestState.result.status}</span>
-                    {typeof syntheticTestState.result.latency_ms === 'number' ? ` · ${syntheticTestState.result.latency_ms}ms` : ''}
+                    {typeof syntheticTestState.result.latency_ms === 'number' && (
+                      <span className="ml-3 tabular-nums">{formatLatency(syntheticTestState.result.latency_ms)}</span>
+                    )}
                   </p>
                 )}
               </Callout>
@@ -2908,12 +2975,12 @@ export default function MonitorForm({
       )}
 
       {monitorType === 'synthetic_browser' && (
-        <FormSection title="Synthetic browser configuration">
+        <FormSection title="Check">
           <div>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-medium text-white">Setup mode</p>
-                <p className="text-[13px] text-slate-400">
+                <p className="text-ui text-slate-400">
                   Guided mode hides step-level complexity and applies safe defaults.
                 </p>
               </div>
@@ -2942,7 +3009,7 @@ export default function MonitorForm({
 
               {syntheticBrowserGuidedStep === 1 && (
                 <div className="space-y-3">
-                  <p className="text-[13px] text-slate-400">Pick the journey type you want to monitor.</p>
+                  <p className="text-ui text-slate-400">Pick the journey type you want to monitor.</p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                     <button
                       type="button"
@@ -3067,19 +3134,17 @@ export default function MonitorForm({
               {syntheticBrowserGuidedStep === 3 && (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <p className="text-[13px] text-slate-400">Review generated journey before creating the monitor.</p>
-                    <p className="text-xs tabular-nums text-slate-500">
-                      {syntheticBrowserGuidedPreview.steps.length} steps
-                      {' · '}
-                      {Object.keys(syntheticBrowserGuidedPreview.variables).length} variables
-                      {' · '}
-                      Screenshot on failure
+                    <p className="text-ui text-slate-400">Review generated journey before creating the monitor.</p>
+                    <p className="flex flex-wrap gap-x-3 text-xs tabular-nums text-slate-500">
+                      <span>{syntheticBrowserGuidedPreview.steps.length} steps</span>
+                      <span>{Object.keys(syntheticBrowserGuidedPreview.variables).length} variables</span>
+                      <span>Screenshot on failure</span>
                     </p>
                   </div>
                   <div className="glass-well divide-y divide-divider">
                     {syntheticBrowserGuidedPreview.steps.map((step, idx) => (
                       <div key={`guided-preview-step-${idx}`} className="px-4 py-2.5">
-                        <p className="text-[13px] font-medium text-slate-200">
+                        <p className="text-ui font-medium text-slate-200">
                           Step {idx + 1}: {syntheticBrowserActionMeta[step.action].label}
                         </p>
                         <p className="break-all font-mono text-xs text-slate-500">
@@ -3124,12 +3189,10 @@ export default function MonitorForm({
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <Tabs tabs={EDITOR_MODE_TABS} active={syntheticBrowserMode} onChange={setSyntheticBrowserMode} />
-                  <p className="text-xs tabular-nums text-slate-500">
-                    {formData.synthetic_browser_steps.length} steps
-                    {' · '}
-                    {(formData.synthetic_browser_variables || []).filter((v) => v.key.trim()).length} variables
-                    {' · '}
-                    Artifacts: {formData.synthetic_browser_screenshot_on_failure ? 'Screenshot' : 'No screenshot'}
+                  <p className="flex flex-wrap gap-x-3 text-xs tabular-nums text-slate-500">
+                    <span>{formData.synthetic_browser_steps.length} steps</span>
+                    <span>{(formData.synthetic_browser_variables || []).filter((v) => v.key.trim()).length} variables</span>
+                    <span>{formData.synthetic_browser_screenshot_on_failure ? 'Screenshot on failure' : 'No screenshot'}</span>
                   </p>
                 </div>
                 <p className="mt-2 text-xs text-slate-500">
@@ -3140,7 +3203,7 @@ export default function MonitorForm({
               <div className="glass-well flex flex-wrap items-center justify-between gap-3 p-4">
                 <div>
                   <p className="text-sm font-medium text-white">Quick start templates</p>
-                  <p className="text-[13px] text-slate-400">Start from a realistic browser flow and adjust selectors/URLs.</p>
+                  <p className="text-ui text-slate-400">Start from a realistic browser flow and adjust selectors/URLs.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -3166,7 +3229,7 @@ export default function MonitorForm({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium text-white">Realtime test</p>
-                    <p className="text-[13px] text-slate-400">Runs the saved monitor immediately and streams the latest result state here.</p>
+                    <p className="text-ui text-slate-400">Runs the saved monitor immediately and streams the latest result state here.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {formData.location_ids.length > 0 && (
@@ -3204,9 +3267,11 @@ export default function MonitorForm({
                   <Callout tone={getSyntheticResultTone(syntheticTestState.phase)} className="mt-3">
                     <p>{syntheticTestState.message || 'Running...'}</p>
                     {syntheticTestState.result && (
-                      <p className="mt-1 text-[13px]">
+                      <p className="mt-1 text-ui">
                         Status: <span className="font-medium text-white">{syntheticTestState.result.status}</span>
-                        {typeof syntheticTestState.result.latency_ms === 'number' ? ` · ${syntheticTestState.result.latency_ms}ms` : ''}
+                        {typeof syntheticTestState.result.latency_ms === 'number' && (
+                      <span className="ml-3 tabular-nums">{formatLatency(syntheticTestState.result.latency_ms)}</span>
+                    )}
                       </p>
                     )}
                   </Callout>
@@ -3378,7 +3443,10 @@ export default function MonitorForm({
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-sm font-medium text-white">Step {stepIdx + 1}</p>
-                          <p className="text-xs text-slate-500">{actionMeta.label} · {stepSummary}</p>
+                          <p className="flex flex-wrap gap-x-3 text-xs text-slate-500">
+                            <span>{actionMeta.label}</span>
+                            {stepSummary && <span className="min-w-0 truncate">{stepSummary}</span>}
+                          </p>
                         </div>
                         <div className="flex gap-1">
                           <IconButton
@@ -3515,51 +3583,34 @@ export default function MonitorForm({
         </FormSection>
       )}
 
-      {/* Schedule */}
-      <FormSection title="Schedule">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormInput
-            label="Interval (seconds)"
-            type="number"
-            value={formData.interval_seconds}
-            onChange={(v) => setFormData({ ...formData, interval_seconds: parseInt(v) || 60 })}
-            min={10}
-            step={5}
-          />
-          <FormInput
-            label="Timeout (seconds)"
-            type="number"
-            value={formData.timeout_seconds}
-            onChange={(v) => setFormData({ ...formData, timeout_seconds: parseInt(v) || 30 })}
-            min={1}
-            error={errors.timeout_seconds}
-            hint="Must be less than interval"
-          />
-        </div>
-      </FormSection>
+      <ScheduleSection
+        intervalSeconds={formData.interval_seconds}
+        onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
+        timeoutSeconds={formData.timeout_seconds}
+        onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
+        timeoutError={errors.timeout_seconds}
+        locations={{
+          selectedIds: formData.location_ids,
+          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+          quorum: formData.location_quorum,
+          onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
+          onLocationsLoaded: setAvailableLocations,
+        }}
+        enabled={formData.enabled}
+        onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+      />
 
-      {/* Locations */}
-      <FormSection
-        title="Locations"
-        summary={
-          formData.location_ids.length > 0
-            ? `${formData.location_ids.length} selected`
-            : 'Default fleet'
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
         }
-        collapsible
-        defaultOpen={formData.location_ids.length > 0}
       >
-        <LocationsSection
-          selectedIds={formData.location_ids}
-          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
-          quorum={formData.location_quorum}
-          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
-          onLocationsLoaded={setAvailableLocations}
-        />
-      </FormSection>
-
-      {/* Alerting */}
-      <FormSection title="Alerting">
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
@@ -3573,50 +3624,9 @@ export default function MonitorForm({
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </FormSection>
+      </FormPanel>
 
-      {/* Dependencies */}
-      <FormSection
-        title="Dependencies"
-        summary={
-          formData.depends_on_ids.length > 0
-            ? `${formData.depends_on_ids.length} selected`
-            : 'None'
-        }
-        collapsible
-        defaultOpen={formData.depends_on_ids.length > 0}
-        infoTip={{
-          title: 'Monitor dependencies',
-          entries: [
-            {
-              label: 'What it does',
-              value:
-                'When an upstream dependency is down, alerts for this monitor are annotated with the likely root cause.',
-            },
-          ],
-        }}
-      >
-        <p className="text-[13px] text-slate-400">
-          Upstream monitors this one depends on (e.g. the database behind this API).
-        </p>
-        <MonitorMultiSelect
-          monitors={availableMonitors}
-          selectedIds={formData.depends_on_ids}
-          onChange={(ids) => setFormData({ ...formData, depends_on_ids: ids })}
-          excludeIds={monitor ? [monitor.id] : []}
-        />
-        {errors.depends_on_ids && <p className="text-xs text-rose-300">{errors.depends_on_ids}</p>}
-      </FormSection>
-
-      {/* Meta */}
-      <FormSection title="Meta">
-        <FormInput
-          label="Tags"
-          value={formData.tags}
-          onChange={(v) => setFormData({ ...formData, tags: v })}
-          placeholder="production, api, critical"
-          hint="Comma-separated tags for filtering"
-        />
+      <LabelsSection tags={formData.tags} onTagsChange={(v) => setFormData({ ...formData, tags: v })}>
         {monitorType === 'http' && (
           <DisplayFieldsEditor
             value={formData.display_fields}
@@ -3624,16 +3634,10 @@ export default function MonitorForm({
             error={errors.display_fields}
           />
         )}
-        <FormToggle
-          label="Monitor enabled"
-          description="Run checks on the configured schedule"
-          checked={formData.enabled}
-          onChange={(v) => setFormData({ ...formData, enabled: v })}
-        />
-      </FormSection>
+      </LabelsSection>
 
       <FormActions
-        middle={checkPlan}
+        middle={<PlanSummary parts={planParts} errors={errors} />}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',

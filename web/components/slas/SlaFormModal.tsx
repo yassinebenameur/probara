@@ -134,7 +134,7 @@ export function SlaFormModal({ sla, onDone, onCancel }: SlaFormModalProps) {
       return next;
     });
 
-  const label = 'mb-1.5 block text-[13px] font-medium text-slate-300';
+  const label = 'mb-1.5 block text-ui font-medium text-slate-300';
   const labelHint = 'font-normal text-slate-500';
 
   return (
@@ -144,7 +144,7 @@ export function SlaFormModal({ sla, onDone, onCancel }: SlaFormModalProps) {
           <div className="flex items-start justify-between gap-4 px-6 pt-5">
             <div>
               <h2 className="text-base font-semibold text-white">{sla ? 'Edit SLA' : 'New SLA'}</h2>
-              <p className="mt-1 text-[13px] text-slate-400">
+              <p className="mt-1 text-ui text-slate-400">
                 A target for a set of monitors over calendar periods. Maintenance windows and paused time are excluded.
               </p>
             </div>
@@ -171,14 +171,14 @@ export function SlaFormModal({ sla, onDone, onCancel }: SlaFormModalProps) {
               <div className="flex flex-wrap items-center gap-2">
                 {SLA_TARGET_PRESETS.map((preset) => (
                   <FilterChip key={preset} selected={Number(target) === preset} onClick={() => setTarget(String(preset))}
-                    className="font-mono tabular-nums">
+                    className="tabular-nums">
                     {formatTarget(preset)}
                   </FilterChip>
                 ))}
                 <div className="flex items-center gap-1.5">
                   <input id="sla-target" type="number" step="0.001" min="0" max="99.9999" value={target}
-                    onChange={(e) => setTarget(e.target.value)} className="input input-sm h-7 !w-28 font-mono tabular-nums" />
-                  <span className="text-[13px] text-slate-400">%</span>
+                    onChange={(e) => setTarget(e.target.value)} className="input input-sm h-7 !w-28 tabular-nums" />
+                  <span className="text-ui text-slate-400">%</span>
                 </div>
               </div>
             </div>
@@ -214,7 +214,7 @@ export function SlaFormModal({ sla, onDone, onCancel }: SlaFormModalProps) {
                   }`}>
                     <input type="radio" name="sla-aggregation" value={mode} checked={aggregation === mode}
                       onChange={() => setAggregation(mode)} className="sr-only" />
-                    <div className="text-[13px] font-medium text-white">{SLA_AGGREGATION_LABELS[mode]}</div>
+                    <div className="text-ui font-medium text-white">{SLA_AGGREGATION_LABELS[mode]}</div>
                     <div className="mt-1 text-xs leading-snug text-slate-400">{AGGREGATION_HELP[mode]}</div>
                   </label>
                 ))}

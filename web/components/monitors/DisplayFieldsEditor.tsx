@@ -24,10 +24,10 @@ export default function DisplayFieldsEditor({
   const full = value.length >= MAX_HTTP_DISPLAY_FIELDS;
 
   return (
-    <FormField label="List display values (optional)" error={error}>
+    <FormField label="Show values in monitor list" error={error}>
       {value.length > 0 && (
         <div className="mb-2 space-y-2">
-          <div className="grid gap-2 text-[11px] text-slate-500" style={COLUMNS}>
+          <div className="grid gap-2 text-2xs text-slate-500" style={COLUMNS}>
             <span>JSON path</span>
             <span>Label</span>
           </div>
@@ -71,8 +71,8 @@ export default function DisplayFieldsEditor({
 
       {!error && (
         <p className="mt-1 text-xs text-slate-500">
-          Shown next to the name in the monitors list, from the latest check (gjson path, e.g.{' '}
-          <code className="text-slate-300">checks.db</code>). Leave the label empty to show only the value.
+          Pull a field from the latest JSON response (e.g. <code className="text-slate-300">checks.db</code>) and
+          show it beside the name. Leave the label empty to show only the value.
         </p>
       )}
     </FormField>

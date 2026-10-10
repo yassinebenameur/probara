@@ -17,7 +17,8 @@ export default function Switch({ checked, onChange, label, tone = 'accent', disa
   return (
     <button
       type="button"
-      aria-pressed={checked}
+      role="switch"
+      aria-checked={checked}
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}

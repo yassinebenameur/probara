@@ -34,7 +34,7 @@ export function SSOPanel() {
             <p className="text-sm font-medium text-white">
               {status.enabled ? `Login with “${status.label || 'SSO'}” is active` : 'SSO is not configured'}
             </p>
-            <p className="mt-0.5 text-[13px] text-slate-400">
+            <p className="mt-0.5 text-ui text-slate-400">
               {status.enabled
                 ? 'Users can sign in through the identity provider from the login page.'
                 : 'Set OIDC_ENABLED=true with issuer, client ID and secret to offer SSO login.'}

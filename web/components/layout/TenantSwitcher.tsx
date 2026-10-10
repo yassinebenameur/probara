@@ -71,10 +71,11 @@ export default function TenantSwitcher() {
   if (!isAdmin || tenants.length <= 1) return null;
 
   return (
-    <label className="relative block">
-      <span className="sr-only">Tenant</span>
+    <label className="block">
+      <span className="mb-1 block px-1 text-2xs font-medium text-slate-500">Workspace</span>
+      <span className="relative block">
       <select
-        className="w-full cursor-pointer appearance-none truncate rounded-lg border border-edge-control bg-control py-2 pl-3 pr-8 text-[13px] font-medium text-slate-200 transition-colors hover:bg-control-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
+        className="w-full cursor-pointer appearance-none truncate rounded-lg border border-edge-control bg-control py-2 pl-3 pr-8 text-ui font-medium text-slate-200 transition-colors hover:bg-control-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
         value={selectedTenantId ?? ''}
         onChange={(e) => {
           setSelectedTenantId(e.target.value);
@@ -92,6 +93,7 @@ export default function TenantSwitcher() {
         strokeWidth={1.75}
         aria-hidden="true"
       />
+      </span>
     </label>
   );
 }

@@ -1,15 +1,54 @@
 import { ReactNode } from 'react';
+import Link from 'next/link';
+import Button from './Button';
+
+/** The one next step: rendered as the accent button. */
+export interface EmptyStateAction {
+  label: string;
+  href?: string;
+  onClick?: () => void;
+  icon?: ReactNode;
+}
 
 interface EmptyStateProps {
   icon?: ReactNode;
   title: string;
-  description?: string;
-  action?: ReactNode;
+  /** One sentence of direction. */
+  description?: ReactNode;
+  /**
+   * A single action. Prefer the object form (an accent button); a node is
+   * still accepted for existing callers. While the empty state carries the
+   * action, hide the duplicate in the page header.
+   */
+  action?: ReactNode | EmptyStateAction;
+  /** `inline` drops the glass panel, for an empty list inside a panel. */
+  variant?: 'panel' | 'inline';
 }
 
-export default function EmptyState({ icon, title, description, action }: EmptyStateProps) {
+function isActionConfig(value: unknown): value is EmptyStateAction {
+  return typeof value === 'object' && value !== null && !('type' in value) && 'label' in value;
+}
+
+export default function EmptyState({ icon, title, description, action, variant = 'panel' }: EmptyStateProps) {
+  let renderedAction: ReactNode = null;
+  if (isActionConfig(action)) {
+    renderedAction = action.href ? (
+      <Button variant="accent" icon={action.icon} asChild>
+        <Link href={action.href}>{action.label}</Link>
+      </Button>
+    ) : (
+      <Button variant="accent" icon={action.icon} onClick={action.onClick}>
+        {action.label}
+      </Button>
+    );
+  } else if (action) {
+    renderedAction = action as ReactNode;
+  }
+
   return (
-    <div className="glass flex flex-col items-center justify-center px-6 py-14 text-center">
+    <div
+      className={`${variant === 'panel' ? 'glass py-14' : 'py-10'} flex flex-col items-center justify-center px-6 text-center`}
+    >
       {icon && (
         <span
           className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-full bg-well-hover text-slate-400 [&_svg]:h-5 [&_svg]:w-5"
@@ -18,11 +57,11 @@ export default function EmptyState({ icon, title, description, action }: EmptySt
           {icon}
         </span>
       )}
-      <h3 className="text-[15px] font-semibold text-white">{title}</h3>
+      <h3 className="text-title font-semibold text-white">{title}</h3>
       {description && (
         <p className="mt-1.5 max-w-sm text-sm text-slate-400">{description}</p>
       )}
-      {action && <div className="mt-5">{action}</div>}
+      {renderedAction && <div className="mt-5">{renderedAction}</div>}
     </div>
   );
 }

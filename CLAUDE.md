@@ -188,7 +188,8 @@ or imported groups come back empty. Any other path that creates groups through
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
    in `status-page/internal/statuspage/render.go` (badge ≤ 5 chars),
    `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
-   `web/lib/monitor-type-labels.ts` (every operator-UI type label), and the type count + `monitorGroups` on the
+   `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
+   `badge`), and the type count + `monitorGroups` on the
    landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
 
 ## Cross-service contracts
@@ -358,15 +359,50 @@ or imported groups come back empty. Any other path that creates groups through
   `FormSection`), overlays `.glass-overlay`, groups inside a panel
   `.glass-well`, banners `components/ui/Callout.tsx`; never nest a blurred
   surface in another. Orange (`cyan-*`) is for actions only; text on it is
-  `text-onaccent`. The rules and token list sit in the comment at the top of
+  `text-onaccent`. "Selected" (chips, tabs, segments) is neutral raised
+  glass (`SELECTED_SEGMENT` in `components/ui/roving.ts`), never orange.
+  Type scale is `text-2xs`/`xs`/`ui`/`sm`/`title`, no arbitrary px sizes.
+  The rules and token list sit in the comment at the top of
   `app/globals.css` and in `tailwind.config.ts`.
+- **Formatting and tones have one home each**: dates, recency, durations,
+  uptime %, latency and the `RANGES` table live in `lib/format.ts`
+  (`formatDateTime`, `formatTimestamp`, `formatRelativeTime`, `formatUptime`,
+  `formatLatency`, …); what colour a state or number gets lives in
+  `lib/status-tones.ts` (`uptimeTone(pct, target)` for availability only;
+  `failedChecksTone` for check-bucket trace bars, `utilizationTone` for
+  agent gauges from the monitor's `metric_rules`; alert/incident/check/
+  monitor-status tones). Never `toLocaleString()`, `toFixed()` on a percent,
+  or an inline uptime threshold in a component. Severity order, monitor
+  target and short failure reasons are `STATUS_RANK`/`sortBySeverity`,
+  `monitorTarget`, `shortFailureReason` in `lib/monitor-utils.ts`.
+- **Shared controls**: time ranges use `components/ui/RangePicker.tsx`
+  (page-scoped: header or Tabs `trailing`, never inside one card); monitor
+  types render as `components/ui/TypeBadge.tsx`, labels from
+  `lib/monitor-type-labels.ts` only; write affordances gate on
+  `useCanWrite()` / `useIsTenantAdmin()` from `CurrentUserProvider` (both
+  read false while identity loads, so "read-only" copy also waits for
+  `useCurrentUser().loading` to clear). Recent
+  checks draw as `components/monitors/CheckTrace.tsx`, the one check-history
+  trace (monitors list, dashboard) — never a second bar strip.
+- **`/monitors` deep links** (`?status=`, repeatable `?tag=`,
+  `?routing=unrouted`, `?sort=name`) are parsed and written only by
+  `parseMonitorListParams`/`formatMonitorListParams` in `lib/monitor-list.ts`;
+  link to the filtered list rather than adding page-local query handling.
+- **Alert counts**: "active" = `status=active` only (sidebar fleet health,
+  dashboard tile); "open" = active + acknowledged (the alerts page's default
+  view). Keep the words matched to what is counted.
 - **Overlays must portal**: pages wrap content in `space-y-*`, which puts a
   `margin-top` on a `fixed inset-0` sibling, so the backdrop stops covering the
   viewport (and `main`'s `overflow-x-clip` can clip it), and every `.glass`
   ancestor's `backdrop-filter` becomes the containing block of a `fixed`
   child, offsetting and clipping it. Wrap modal roots in
   `components/ui/ModalPortal.tsx` (menus/popovers: `createPortal`, as
-  `RowMenu` and `InfoTip` do).
+  `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus and restores
+  it on close; pass `onEscape` unless the modal handles Escape itself.
+- **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
+  (brings back native min/max checks), `useClearErrorsOnEdit` and
+  `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
+  form does the same.
 
 ## Build, test, verify
 

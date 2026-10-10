@@ -37,11 +37,11 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupFlowNode>) {
                 expandGroup(id, 'page');
               }}
               title={`Show ${Math.min(EXPAND_PAGE, data.hiddenCount)} more`}
-              className="nodrag nopan block w-full truncate text-left text-[13px] font-medium text-slate-200 transition-colors hover:text-cyan-300"
+              className="nodrag nopan block w-full truncate text-left text-ui font-medium text-slate-200 transition-colors hover:text-cyan-300"
             >
               +{data.hiddenCount} more {label}
             </button>
-            <p className="mt-1 flex items-center gap-2 text-[11px]">
+            <p className="mt-1 flex items-center gap-2 text-2xs">
               {data.downCount > 0 && (
                 <span className="flex items-center gap-1 text-rose-300">
                   <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
@@ -69,7 +69,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupFlowNode>) {
               expandGroup(id, 'all');
             }}
             title={`Show all ${data.hiddenCount}`}
-            className="nodrag nopan shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-well-hover hover:text-cyan-300"
+            className="nodrag nopan shrink-0 rounded-md px-1.5 py-0.5 text-2xs font-medium text-slate-400 transition-colors hover:bg-well-hover hover:text-cyan-300"
           >
             All
           </button>

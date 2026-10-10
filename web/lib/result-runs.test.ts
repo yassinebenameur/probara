@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { collapseResultRuns } from './result-runs';
+import { collapseResultRuns, describeRun } from './result-runs';
 import type { CheckResult } from './types';
 
 function result(id: string, status: CheckResult['status'], location_name?: string): CheckResult {
@@ -44,4 +44,48 @@ test('collapseResultRuns keeps locations apart', () => {
 
 test('collapseResultRuns returns nothing for no results', () => {
   assert.deepEqual(collapseResultRuns([]), []);
+});
+
+function at(id: string, status: CheckResult['status'], local: Date): CheckResult {
+  return { id, status, result_source: 'monitor', created_at: local.toISOString() } as CheckResult;
+}
+
+test('describeRun keeps the end date when a run spans days', () => {
+  const [run] = collapseResultRuns([
+    at('2', 'failure', new Date(2026, 9, 9, 10, 51, 53)),
+    at('1', 'failure', new Date(2026, 9, 6, 9, 25, 27)),
+  ]);
+  const span = describeRun(run);
+  assert.equal(span.start, '2026-10-06 09:25:27');
+  assert.equal(span.end, '2026-10-09 10:51:53');
+  assert.equal(span.count, '×2');
+  assert.equal(span.duration, '3d 1h');
+});
+
+test('describeRun prints only the time when a run stays within one day', () => {
+  const [run] = collapseResultRuns([
+    at('2', 'failure', new Date(2026, 9, 6, 10, 51, 53)),
+    at('1', 'failure', new Date(2026, 9, 6, 9, 25, 27)),
+  ]);
+  const span = describeRun(run);
+  assert.equal(span.end, '10:51:53');
+  assert.equal(span.duration, '1h 26m');
+});
+
+test('describeRun marks a run cut off by the fetch limit as a lower bound', () => {
+  const [run] = collapseResultRuns([
+    at('2', 'failure', new Date(2026, 9, 6, 10, 0, 0)),
+    at('1', 'failure', new Date(2026, 9, 6, 9, 0, 0)),
+  ]);
+  const span = describeRun(run, { truncated: true });
+  assert.equal(span.count, '×2+');
+  assert.equal(span.duration, '1h+');
+});
+
+test('describeRun leaves a single check without an end or count', () => {
+  const [run] = collapseResultRuns([at('1', 'success', new Date(2026, 9, 6, 9, 0, 0))]);
+  const span = describeRun(run);
+  assert.equal(span.end, null);
+  assert.equal(span.count, '');
+  assert.equal(span.duration, null);
 });

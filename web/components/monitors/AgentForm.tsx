@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Download } from 'lucide-react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, AgentInstallCommand, ApiKey, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
 import { getAgentInstallCommand, getApiKeys } from '@/lib/api';
@@ -17,7 +17,9 @@ import MetricRuleBuilder, {
   draftsFromRules,
   rulesFromDrafts,
 } from './MetricRuleBuilder';
-import Switch from '@/components/ui/Switch';
+import { IntervalField } from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, ToggleRow, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
 
 type ServerType =
   | 'linux-amd64'
@@ -94,10 +96,14 @@ export default function AgentForm({
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
   });
   const [ruleDrafts, setRuleDrafts] = useState<MetricRuleDraft[]>(() => draftsFromRules(initialRules));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors);
+  useFollowEnabled(monitor?.enabled, setFormData);
+  const formRef = useRef<HTMLFormElement>(null);
   const [ruleErrors, setRuleErrors] = useState<Record<number, string>>({});
 
   useEffect(() => {
@@ -107,6 +113,7 @@ export default function AgentForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     setErrors({});
     setRuleErrors({});
 
@@ -119,6 +126,7 @@ export default function AgentForm({
     if (Object.keys(newErrors).length > 0 || Object.keys(newRuleErrors).length > 0) {
       setErrors(newErrors);
       setRuleErrors(newRuleErrors);
+      revealFirstError(formRef.current);
       return;
     }
 
@@ -146,6 +154,7 @@ export default function AgentForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
+    requestData.depends_on_ids = formData.depends_on_ids;
 
     try {
       await onSubmit(requestData);
@@ -336,7 +345,7 @@ export default function AgentForm({
             <p className="text-sm text-slate-500">Loading installation details…</p>
           ) : installCommand ? (
             <>
-              <p className="text-[13px] text-slate-400">
+              <p className="text-ui text-slate-400">
                 The install script sets up <span className="font-mono text-slate-300">probara-collector</span>
                 {' '}(an OpenTelemetry Collector distribution
                 {installCommand.collector_version ? `, v${installCommand.collector_version}` : ''})
@@ -469,7 +478,7 @@ export default function AgentForm({
               </FormField>
 
               <div className="glass-well p-4">
-                <p className="text-[13px] font-medium text-white">Collected metrics</p>
+                <p className="text-ui font-medium text-white">Collected metrics</p>
                 <p className="mt-1 text-xs text-slate-400">
                   OpenTelemetry hostmetrics: CPU and memory utilization, swap, per-mount filesystem
                   usage, disk and network I/O, load averages, process count, and uptime — stored as
@@ -497,59 +506,25 @@ export default function AgentForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <FormSection title="Agent">
-        <FormField
-          label="Agent name"
-          required
-          error={errors.name}
-        >
-          <input
-            type="text"
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="Production server"
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Identifier for this monitored server</p>
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <FormSection title="Target">
+        <FormField label="Agent name" required error={errors.name}>
+          {(control) => (
+            <>
+              <input
+                {...control}
+                type="text"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                placeholder="Production server"
+                className="input"
+              />
+              <FieldHint>Identifier for this monitored server</FieldHint>
+            </>
+          )}
         </FormField>
 
-        <FormField
-          label="Reporting interval (seconds)"
-          required
-          error={errors.expected_interval_seconds}
-          infoTip="Agent is marked stale if no report arrives within twice this interval."
-        >
-          <input
-            type="number"
-            value={formData.expected_interval_seconds}
-            onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
-            min={10}
-            step={10}
-            className="input"
-          />
-        </FormField>
-
-        <FormField label="Tags">
-          <input
-            type="text"
-            value={formData.tags}
-            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-            placeholder="production, us-east-1"
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
-        </FormField>
-
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-200">Agent enabled</p>
-            <p className="text-xs text-slate-500">Accept metrics from this agent</p>
-          </div>
-          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle agent enabled" />
-        </div>
-
-        {isEditMode && monitor && (
+        {isEditMode && monitor ? (
           <div>
             <Button
               variant="ghost"
@@ -560,10 +535,43 @@ export default function AgentForm({
               View installation instructions
             </Button>
           </div>
+        ) : (
+          <p className="text-xs text-slate-500">
+            After creating, open the monitor&apos;s Settings tab for the collector install command.
+          </p>
         )}
       </FormSection>
 
-      <FormSection title="Alerting">
+      <FormPanel title="Schedule">
+        <IntervalField
+          label="Expect a report every"
+          value={formData.expected_interval_seconds}
+          onChange={(n) => setFormData((prev) => ({ ...prev, expected_interval_seconds: n }))}
+          presets={[30, 60, 300]}
+          min={10}
+          step={10}
+          error={errors.expected_interval_seconds}
+          hint="The agent is marked stale if no report arrives within twice this interval."
+        />
+        <ToggleRow
+          title="Monitor enabled"
+          description="Accept metrics from this agent"
+          checked={formData.enabled}
+          onChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+        />
+      </FormPanel>
+
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
+        }
+      >
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.expected_interval_seconds}
@@ -572,15 +580,15 @@ export default function AgentForm({
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}
-          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
+          hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </FormSection>
+      </FormPanel>
 
       <FormSection title="Metric alert rules">
-        <p className="text-[13px] text-slate-400">
+        <p className="text-ui text-slate-400">
           Open an alert when a reported metric breaches its threshold, optionally only after it is
           sustained for a duration. Utilization thresholds are entered as percentages. Evaluated
           independently of up/down status.
@@ -593,11 +601,25 @@ export default function AgentForm({
         />
       </FormSection>
 
+      <LabelsSection
+        tags={formData.tags}
+        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+        placeholder="production, us-east-1"
+      />
+
       <FormActions
-        middle={`Expect an agent report every ${formData.expected_interval_seconds}s`}
+        middle={
+          <PlanSummary
+            errors={{ ...errors, ...Object.fromEntries(Object.entries(ruleErrors).map(([k, v]) => [`rule_${k}`, v])) }}
+            parts={[
+              `Expect a report every ${formData.expected_interval_seconds}s`,
+              ruleDrafts.length > 0 && `${ruleDrafts.length} metric rule${ruleDrafts.length === 1 ? '' : 's'}`,
+            ]}
+          />
+        }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create agent monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',

@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Check, Copy } from 'lucide-react';
 import type { Monitor } from '@/lib/types';
+import {
+  COMPONENT_STATUS_LABEL,
+  pageHeadline,
+  type ComponentStatus,
+} from '@/lib/status-page-status';
 import IconButton from '@/components/ui/IconButton';
 import { DEFAULT_PRIMARY, DEFAULT_SECONDARY, type Basics, type EditableSection } from './useStatusPageFormState';
 
@@ -10,6 +15,10 @@ interface PagePreviewProps {
   basics: Basics;
   sections: EditableSection[];
   monitors: Monitor[];
+  /** What visitors see per monitor id now; null while a group's members load. */
+  statuses: ReadonlyMap<string, ComponentStatus | null>;
+  /** The monitor list is still loading, so no status is known yet. */
+  statusLoading: boolean;
   /** Resolved public URL (may include auth query params — stripped for display). */
   publicUrl: string;
 }
@@ -30,13 +39,54 @@ const DARK_PAGE_PALETTE = {
   '--tw-emerald-300': '125 227 167',
   '--tw-emerald-400': '70 209 127',
   '--tw-emerald-500': '47 189 106',
+  '--tw-amber-300': '238 202 107',
+  '--tw-amber-400': '230 178 63',
+  '--tw-amber-500': '220 158 38',
+  '--tw-rose-300': '247 151 162',
+  '--tw-rose-400': '244 112 125',
+  '--tw-rose-500': '240 74 90',
+  '--tw-sky-300': '151 204 230',
+  '--tw-sky-400': '111 181 221',
+  '--tw-sky-500': '83 157 201',
+  '--tw-slate-400': '139 147 160',
 } as CSSProperties;
+
+// The public page's own tones (ok / warn / down / maint / unknown), drawn
+// from the pinned dark palette above.
+const STATUS_TEXT: Record<ComponentStatus, string> = {
+  up: 'text-emerald-300',
+  degraded: 'text-amber-300',
+  down: 'text-rose-300',
+  maintenance: 'text-sky-300',
+  unknown: 'text-slate-400',
+};
+
+const STATUS_DOT: Record<ComponentStatus, string> = {
+  up: 'bg-emerald-400',
+  degraded: 'bg-amber-400',
+  down: 'bg-rose-400',
+  maintenance: 'bg-sky-400',
+  unknown: 'bg-slate-400',
+};
+
+const HEADLINE_STYLE = {
+  ok: { box: 'border-emerald-500/20 bg-emerald-500/[0.07]', dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  issues: { box: 'border-amber-500/25 bg-amber-500/[0.08]', dot: 'bg-amber-400', text: 'text-amber-300' },
+  maintenance: { box: 'border-sky-500/25 bg-sky-500/[0.08]', dot: 'bg-sky-400', text: 'text-sky-300' },
+} as const;
 
 /**
  * Stylized live mock of the public status page. Reflects branding, title,
  * and the first section's monitors so edits give immediate visual feedback.
  */
-export default function PagePreview({ basics, sections, monitors, publicUrl }: PagePreviewProps) {
+export default function PagePreview({
+  basics,
+  sections,
+  monitors,
+  statuses,
+  statusLoading,
+  publicUrl,
+}: PagePreviewProps) {
   const primary = safeHex(basics.primary_color, DEFAULT_PRIMARY);
   const secondary = safeHex(basics.secondary_color, DEFAULT_SECONDARY);
   const displayUrl = publicUrl.split('?')[0];
@@ -55,7 +105,22 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
   const previewRows = (previewSection?.monitors ?? []).slice(0, 3).map((entry) => ({
     id: entry.monitor_id,
     name: entry.display_name.trim() || monitorNames.get(entry.monitor_id) || 'Monitor',
+    status: statuses.get(entry.monitor_id) ?? null,
   }));
+
+  // The headline counts every component on the page, like the public page;
+  // it waits until each one's status is known rather than guess "operational".
+  const allStatuses = sections.flatMap((section) =>
+    section.monitors
+      .filter((entry) => statuses.has(entry.monitor_id))
+      .map((entry) => statuses.get(entry.monitor_id) ?? null),
+  );
+  const headline =
+    statusLoading || allStatuses.some((status) => status === null)
+      ? null
+      : allStatuses.length === 0
+        ? null
+        : pageHeadline(allStatuses as ComponentStatus[]);
   const overflow = (previewSection?.monitors.length ?? 0) - previewRows.length;
 
   const handleCopy = async () => {
@@ -75,7 +140,7 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
       <div className="glass-well overflow-hidden">
         {/* Browser chrome */}
         <div className="flex items-center gap-1.5 py-1 pl-2 pr-1">
-          <span className="min-w-0 flex-1 truncate rounded-md bg-well-hover px-2 py-1 text-center font-mono text-[11px] text-slate-400">
+          <span className="min-w-0 flex-1 truncate rounded-md bg-well-hover px-2 py-1 text-center font-mono text-2xs text-slate-400">
             {displayUrl}
           </span>
           <IconButton
@@ -125,22 +190,36 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
                 <p className="truncate text-sm font-semibold text-white">
                   {basics.title.trim() || 'Untitled status page'}
                 </p>
-                <p className="truncate text-[11px] text-slate-500">
+                <p className="truncate text-2xs text-slate-500">
                   {basics.description.trim() || 'System status'}
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.07] px-3 py-2">
-              <span className="relative flex h-2 w-2 flex-shrink-0" aria-hidden="true">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40 motion-reduce:hidden" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-              </span>
-              <span className="text-xs font-medium text-emerald-300">All systems operational</span>
-            </div>
+            {headline ? (
+              <div
+                className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border px-3 py-2 ${HEADLINE_STYLE[headline.tone].box}`}
+              >
+                <span
+                  className={`h-2 w-2 flex-shrink-0 rounded-full ${HEADLINE_STYLE[headline.tone].dot}`}
+                  aria-hidden="true"
+                />
+                <span className={`whitespace-nowrap text-xs font-medium ${HEADLINE_STYLE[headline.tone].text}`}>
+                  {headline.label}
+                </span>
+                {headline.tone !== 'ok' && (
+                  <span className="ml-auto text-2xs tabular-nums text-slate-400">{headline.summary}</span>
+                )}
+              </div>
+            ) : (
+              <div
+                className="h-[34px] rounded-lg border border-white/[0.05] bg-white/[0.02]"
+                aria-hidden="true"
+              />
+            )}
 
             <div className="space-y-2">
-              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">
+              <p className="text-2xs font-medium uppercase tracking-[0.14em] text-slate-500">
                 {previewSection?.title.trim() || 'Services'}
               </p>
               {previewRows.length === 0 ? (
@@ -151,7 +230,7 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
                       className="flex items-center justify-between rounded-lg border border-dashed border-white/[0.07] px-3 py-2"
                     >
                       <span className="h-2 w-24 rounded bg-white/[0.05]" />
-                      <UptimeBars muted />
+                      <PlaceholderBars />
                     </div>
                   ))}
                 </div>
@@ -163,11 +242,11 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
                       className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
                     >
                       <span className="min-w-0 truncate text-xs text-slate-300">{row.name}</span>
-                      <UptimeBars />
+                      <ComponentState status={row.status} />
                     </div>
                   ))}
                   {overflow > 0 && (
-                    <p className="px-1 text-[11px] text-slate-500">
+                    <p className="px-1 text-2xs text-slate-500">
                       + {overflow} more in this section
                     </p>
                   )}
@@ -177,21 +256,33 @@ export default function PagePreview({ basics, sections, monitors, publicUrl }: P
           </div>
         </div>
       </div>
-      <p className="mt-2 text-center text-xs text-slate-500">Live preview · updates as you edit</p>
+      <p className="mt-2 text-center text-xs text-slate-500">
+        Preview with current status, updates as you edit
+      </p>
     </div>
   );
 }
 
-function UptimeBars({ muted = false }: { muted?: boolean }) {
+/** Placeholder strip for an empty section. */
+function PlaceholderBars() {
   return (
     <span className="flex flex-shrink-0 items-center gap-[2px]" aria-hidden="true">
       {Array.from({ length: 18 }, (_, i) => (
-        <span
-          key={i}
-          className={`h-3 w-[3px] rounded-sm ${muted ? 'bg-white/[0.06]' : 'bg-emerald-400'}`}
-          style={muted ? undefined : { opacity: 0.55 + ((i * 7) % 5) * 0.1 }}
-        />
+        <span key={i} className="h-3 w-[3px] rounded-sm bg-white/[0.06]" />
       ))}
+    </span>
+  );
+}
+
+/** The component's current public status, as the published page labels it. */
+function ComponentState({ status }: { status: ComponentStatus | null }) {
+  if (!status) {
+    return <span className="h-2 w-16 flex-shrink-0 rounded bg-white/[0.05]" aria-hidden="true" />;
+  }
+  return (
+    <span className={`flex flex-shrink-0 items-center gap-1.5 text-2xs font-medium ${STATUS_TEXT[status]}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden="true" />
+      {COMPONENT_STATUS_LABEL[status]}
     </span>
   );
 }

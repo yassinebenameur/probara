@@ -48,7 +48,7 @@ const TONE: Record<Exclude<PillTone, 'tag'>, { bg: string; text: string; border:
 };
 
 const SIZE: Record<PillSize, string> = {
-  xs: 'text-[0.7rem] leading-4 px-1.5 py-px gap-1',
+  xs: 'text-2xs leading-4 px-1.5 py-px gap-1',
   sm: 'text-xs leading-4 px-2 py-0.5 gap-1.5',
 };
 

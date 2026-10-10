@@ -13,6 +13,7 @@ import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
+import { usePluginNames } from '@/components/alert-channels/usePluginNames';
 
 const DELAY_PRESETS = [
   { label: 'Immediately', value: 0 },
@@ -32,6 +33,10 @@ export interface ChannelPickerProps {
    * without fetching the channels a second time.
    */
   onChannelsLoaded?: (channels: AlertChannel[]) => void;
+  /** Read-only: selection and delays are shown but cannot change. */
+  disabled?: boolean;
+  /** Id of the visible label naming the channel list. */
+  ariaLabelledBy?: string;
 }
 
 export default function ChannelPicker({
@@ -40,7 +45,10 @@ export default function ChannelPicker({
   defaultChannelIds = [],
   showDelays = true,
   onChannelsLoaded,
+  disabled = false,
+  ariaLabelledBy,
 }: ChannelPickerProps) {
+  const pluginName = usePluginNames();
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -137,15 +145,15 @@ export default function ChannelPicker({
     <div className="space-y-2">
       <div className="glass-well overflow-hidden">
         {loadingChannels ? (
-          <div className="px-4 py-3 text-[13px] text-slate-500">Loading channels…</div>
+          <div className="px-4 py-3 text-ui text-slate-500">Loading channels…</div>
         ) : loadError ? (
-          <div className="px-4 py-3 text-[13px] text-rose-300">{loadError}</div>
+          <div className="px-4 py-3 text-ui text-rose-300">{loadError}</div>
         ) : channels.length === 0 ? (
-          <div className="px-4 py-3 text-[13px] text-slate-500">
-            No channels configured yet. Create one below.
+          <div className="px-4 py-3 text-ui text-slate-500">
+            {disabled ? 'No channels yet.' : 'No channels yet. Add one below to start receiving alerts.'}
           </div>
         ) : (
-          <ul className="divide-y divide-divider">
+          <ul className="divide-y divide-divider" aria-labelledby={ariaLabelledBy}>
             {channels.map((channel) => {
               const isSelected = selectedIds.has(channel.id);
               const assignment = value.find((a) => a.channel_id === channel.id);
@@ -161,7 +169,8 @@ export default function ChannelPicker({
                     id={`channel-${channel.id}`}
                     checked={isSelected}
                     onChange={() => handleToggle(channel)}
-                    className="h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500"
+                    disabled={disabled}
+                    className="h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500 disabled:cursor-not-allowed"
                   />
 
                   <label
@@ -169,7 +178,7 @@ export default function ChannelPicker({
                     className="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
                   >
                     <span className="truncate text-sm text-slate-200">{channel.name}</span>
-                    <span className="flex-shrink-0 text-xs text-slate-500">{channel.type}</span>
+                    <span className="flex-shrink-0 text-xs text-slate-500">{pluginName(channel.type)}</span>
                     {isDefault && (
                       <span className="flex-shrink-0 text-xs text-slate-400">(default)</span>
                     )}
@@ -191,6 +200,7 @@ export default function ChannelPicker({
                       }
                       className="input input-sm ml-auto !w-auto flex-shrink-0 cursor-pointer"
                       aria-label={`Delay for ${channel.name}`}
+                      disabled={disabled}
                     >
                       {DELAY_PRESETS.map((preset) => (
                         <option key={preset.value} value={preset.value}>
@@ -206,10 +216,10 @@ export default function ChannelPicker({
         )}
       </div>
 
-      {showCreate ? (
+      {disabled ? null : showCreate ? (
         <div className="glass-well space-y-4 p-4">
           <div className="flex items-center justify-between">
-            <span className="text-[15px] font-semibold text-white">New channel</span>
+            <span className="text-title font-semibold text-white">New channel</span>
             <IconButton
               icon={<X strokeWidth={1.75} />}
               label="Close new channel panel"
@@ -235,7 +245,7 @@ export default function ChannelPicker({
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="inline-flex items-center gap-1.5 text-[13px] font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+          className="inline-flex items-center gap-1.5 text-ui font-medium text-cyan-300 transition-colors hover:text-cyan-200"
         >
           <Plus className="h-4 w-4" strokeWidth={1.75} />
           New channel

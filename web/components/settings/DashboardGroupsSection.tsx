@@ -9,9 +9,12 @@ import { getDashboardSummary, updateTenantSettings } from '@/lib/api';
 interface Props {
   initialTags: string[];
   onSaved?: (next: string[]) => void;
+  /** Non-admins see the groups but cannot add or remove them. */
+  readOnly?: boolean;
 }
 
-export default function DashboardGroupsSection({ initialTags, onSaved }: Props) {
+// Each add or remove saves immediately, so there is no Save button.
+export default function DashboardGroupsSection({ initialTags, onSaved, readOnly = false }: Props) {
   const [selected, setSelected] = useState<string[]>(initialTags);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -57,10 +60,10 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
         {selected.map((tag) => (
           <span
             key={tag}
-            className="inline-flex h-7 items-center gap-1 rounded-full bg-well-hover pl-3 pr-1 text-xs font-medium text-slate-200"
+            className={`inline-flex h-7 items-center gap-1 rounded-full bg-well-hover pl-3 text-xs font-medium text-slate-200 ${readOnly ? 'pr-3' : 'pr-1'}`}
           >
             {tag}
-            <button
+            {!readOnly && <button
               type="button"
               onClick={() => persist(selected.filter((t) => t !== tag))}
               aria-label={`Remove ${tag}`}
@@ -68,11 +71,11 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
               className="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-control-hover hover:text-white disabled:opacity-40"
             >
               <X className="h-3 w-3" strokeWidth={2} />
-            </button>
+            </button>}
           </span>
         ))}
 
-        <div className="relative">
+        {!readOnly && <div className="relative">
           <Button
             type="button"
             variant="ghost"
@@ -106,7 +109,7 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
               )}
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}

@@ -190,7 +190,7 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
     >
       <div className="space-y-4">
         {empty && (
-          <p className="text-[13px] text-slate-400">
+          <p className="text-ui text-slate-400">
             No dependencies yet. Link the services this monitor relies on so alerts can point at
             the likely root cause.
           </p>
@@ -223,7 +223,7 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
         )}
         <Link
           href="/dependencies"
-          className="inline-flex items-center gap-1.5 text-[13px] font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+          className="inline-flex items-center gap-1.5 text-ui font-medium text-cyan-300 transition-colors hover:text-cyan-200"
         >
           <Workflow className="h-4 w-4" strokeWidth={1.75} />
           View dependency graph

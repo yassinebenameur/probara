@@ -5,7 +5,9 @@ import { Check, Layers, Loader2, Plus, Search } from 'lucide-react';
 import type { Monitor } from '@/lib/types';
 import Button from '@/components/ui/Button';
 import { monitorMatches, sortMonitors, type DerivedState } from './useStatusPageFormState';
-import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import TypeBadge from '@/components/ui/TypeBadge';
+import { MONITOR_STATUS_DOT } from '@/lib/status-tones';
+import { leafComponentStatus } from '@/lib/status-page-status';
 
 interface MonitorPickerProps {
   monitors: Monitor[];
@@ -160,22 +162,20 @@ export default function MonitorPicker({
                       <span
                         aria-hidden="true"
                         className={`h-2 w-2 flex-shrink-0 rounded-full ${
-                          monitor.enabled ? 'bg-emerald-500' : 'bg-slate-500'
+                          MONITOR_STATUS_DOT[monitor.enabled ? leafComponentStatus(monitor) : 'paused']
                         }`}
                       />
                     )}
                     <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
                       {monitor.name}
                     </span>
-                    <span className="flex-shrink-0 text-xs text-slate-500">
-                      {elsewhere ? (
-                        <span className="text-amber-300">
-                          in {placement.sectionTitle || 'another section'}
-                        </span>
-                      ) : (
-                        monitorTypeLabel(monitor.type)
-                      )}
-                    </span>
+                    {elsewhere ? (
+                      <span className="flex-shrink-0 text-xs text-amber-300">
+                        in {placement.sectionTitle || 'another section'}
+                      </span>
+                    ) : (
+                      <TypeBadge type={monitor.type} />
+                    )}
                   </button>
                 );
               })

@@ -3,23 +3,21 @@
 import Link from 'next/link';
 import { Info } from 'lucide-react';
 import {
-  dayTone, formatSlaDuration, formatSlaPct, formatTarget, slaTone, type SlaReport, type SlaReportOutage,
+  dayTone, formatSlaDate, formatSlaDuration, formatSlaPct, formatTarget, slaTone, type SlaReport, type SlaReportOutage,
 } from '@/lib/sla';
+import { formatDate, formatDateTime, formatUptime } from '@/lib/format';
+import TypeBadge from '@/components/ui/TypeBadge';
 import Panel from '@/components/ui/Panel';
 import { AvailabilityFigure, BudgetBar, SlaStatusPill, TONE_BG, TONE_TEXT } from './SlaVisuals';
 
 function formatInZone(iso: string, timeZone: string, withTime = true): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      timeZone,
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {}),
-    }).format(new Date(iso));
-  } catch {
-    return new Date(iso).toLocaleString();
-  }
+  // The report reads in the SLA's own timezone, not the browser's.
+  return formatSlaDate(iso, timeZone, withTime) ?? (withTime ? formatDateTime(iso) : formatDate(iso));
+}
+
+/** A report day (`2026-10-01`, already in the SLA's zone) as `1 Oct 2026`. */
+function formatDay(date: string): string {
+  return formatSlaDate(`${date}T12:00:00Z`, 'UTC', false) ?? date;
 }
 
 /** Last included day of a half-open period: its end minus one second. */
@@ -61,8 +59,8 @@ function OutageTable({ outages, timeZone, showMonitor }: { outages: SlaReportOut
               <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-300">
                 {o.ongoing ? <span className="text-rose-300">ongoing</span> : formatInZone(o.end, timeZone)}
               </td>
-              <td className="whitespace-nowrap py-2 pr-4 font-mono tabular-nums text-slate-200">{formatSlaDuration(o.duration_seconds)}</td>
-              <td className="whitespace-nowrap py-2 pr-4 font-mono tabular-nums text-slate-400">
+              <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-200">{formatSlaDuration(o.duration_seconds)}</td>
+              <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-400">
                 {o.planned_seconds > 0 ? formatSlaDuration(o.planned_seconds) : '—'}
               </td>
               {showMonitor && (
@@ -89,10 +87,16 @@ export function SlaReportView({ report }: { report: SlaReport }) {
 
   return (
     <div className="space-y-4">
-      <div className="text-[13px] text-slate-400">
-        {formatInZone(period.start, tz, false)} – {formatInZone(lastDay(period.end), tz, false)} ({tz})
-        {running && <> · to {formatInZone(period.effective_end, tz)}</>}
-        {report.issued && <> · issued {formatInZone(report.issued.issued_at, tz)} by {report.issued.issued_by}</>}
+      <div className="flex flex-wrap gap-x-3 text-ui text-slate-400">
+        <span>
+          {formatInZone(period.start, tz, false)} – {formatInZone(lastDay(period.end), tz, false)} ({tz})
+        </span>
+        {running && <span>to {formatInZone(period.effective_end, tz)}</span>}
+        {report.issued && (
+          <span>
+            issued {formatInZone(report.issued.issued_at, tz)} by {report.issued.issued_by}
+          </span>
+        )}
       </div>
 
       <div className="glass grid grid-cols-2 gap-4 p-5 lg:grid-cols-4">
@@ -100,13 +104,13 @@ export function SlaReportView({ report }: { report: SlaReport }) {
           <AvailabilityFigure value={summary.availability_pct} tone={tone} />
         </Tile>
         <Tile label="Target">
-          <span className="font-mono">{formatTarget(def.target_pct)}</span>
+          <span className="tabular-nums">{formatTarget(def.target_pct)}</span>
         </Tile>
         <Tile label="Status" hint={running ? 'Period in progress' : undefined}>
           <SlaStatusPill met={summary.met} running={running} />
         </Tile>
         <Tile label="Coverage" hint="Observed share of the period">
-          <span className="font-mono">{summary.coverage_pct.toFixed(1)}%</span>
+          <span className="tabular-nums">{formatUptime(summary.coverage_pct)}</span>
         </Tile>
       </div>
 
@@ -116,15 +120,15 @@ export function SlaReportView({ report }: { report: SlaReport }) {
           <dl className="mt-4 grid grid-cols-3 gap-3 text-sm">
             <div>
               <dt className="text-xs text-slate-400">Allowed so far</dt>
-              <dd className="mt-0.5 font-mono tabular-nums text-slate-200">{formatSlaDuration(budget.allowed_seconds)}</dd>
+              <dd className="mt-0.5 tabular-nums text-slate-200">{formatSlaDuration(budget.allowed_seconds)}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400">Consumed</dt>
-              <dd className="mt-0.5 font-mono tabular-nums text-slate-200">{formatSlaDuration(budget.consumed_seconds)}</dd>
+              <dd className="mt-0.5 tabular-nums text-slate-200">{formatSlaDuration(budget.consumed_seconds)}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400">Remaining</dt>
-              <dd className={`mt-0.5 font-mono tabular-nums ${budget.remaining_seconds < 0 ? 'text-rose-300' : 'text-slate-200'}`}>
+              <dd className={`mt-0.5 tabular-nums ${budget.remaining_seconds < 0 ? 'text-rose-300' : 'text-slate-200'}`}>
                 {summary.has_data ? formatSlaDuration(budget.remaining_seconds) : '—'}
               </dd>
             </div>
@@ -135,22 +139,22 @@ export function SlaReportView({ report }: { report: SlaReport }) {
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <dt className="text-xs text-slate-400">Outages</dt>
-              <dd className="mt-0.5 font-mono tabular-nums text-slate-200">{report.response.outage_count}</dd>
+              <dd className="mt-0.5 tabular-nums text-slate-200">{report.response.outage_count}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400">Mean time to recover</dt>
-              <dd className="mt-0.5 font-mono tabular-nums text-slate-200">{formatSlaDuration(report.response.mttr_seconds)}</dd>
+              <dd className="mt-0.5 tabular-nums text-slate-200">{formatSlaDuration(report.response.mttr_seconds)}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400">Availability alerts</dt>
-              <dd className="mt-0.5 font-mono tabular-nums text-slate-200">
+              <dd className="mt-0.5 tabular-nums text-slate-200">
                 {report.response.alert_count}
                 <span className="text-slate-500"> ({report.response.acknowledged_count} acked)</span>
               </dd>
             </div>
             <div>
               <dt className="text-xs text-slate-400">Mean time to acknowledge</dt>
-              <dd className="mt-0.5 font-mono tabular-nums text-slate-200">{formatSlaDuration(report.response.mtta_seconds)}</dd>
+              <dd className="mt-0.5 tabular-nums text-slate-200">{formatSlaDuration(report.response.mtta_seconds)}</dd>
             </div>
           </dl>
         </Panel>
@@ -163,14 +167,14 @@ export function SlaReportView({ report }: { report: SlaReport }) {
               const t = dayTone(d.availability_pct, def.target_pct);
               return (
                 <div key={d.date} className={`flex-1 rounded-[2px] ${TONE_BG[t]}`}
-                  title={`${d.date}: ${d.has_data ? formatSlaPct(d.availability_pct) : 'no data'}${
-                    d.down_seconds > 0 ? ` · ${formatSlaDuration(d.down_seconds)} down` : ''}`} />
+                  title={`${formatDay(d.date)}: ${d.has_data ? formatSlaPct(d.availability_pct) : 'no data'}${
+                    d.down_seconds > 0 ? `, ${formatSlaDuration(d.down_seconds)} down` : ''}`} />
               );
             })}
           </div>
-          <div className="mt-1.5 flex justify-between font-mono text-[11px] tabular-nums text-slate-500">
-            <span>{report.daily[0].date}</span>
-            <span>{report.daily[report.daily.length - 1].date}</span>
+          <div className="mt-1.5 flex justify-between text-2xs tabular-nums text-slate-500">
+            <span>{formatDay(report.daily[0].date)}</span>
+            <span>{formatDay(report.daily[report.daily.length - 1].date)}</span>
           </div>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
             {([['good', 'At or above target'], ['warn', 'Below target, ≥ 99%'], ['bad', 'Below 99%'], ['none', 'No data']] as const).map(
@@ -206,17 +210,19 @@ export function SlaReportView({ report }: { report: SlaReport }) {
                 {report.monitors.map((m) => {
                   const met = m.availability_pct === null ? null : m.availability_pct + 1e-9 >= def.target_pct;
                   return (
-                    <tr key={m.id} className="border-b border-divider align-baseline last:border-0">
+                    <tr key={m.id} className="border-b border-divider align-middle last:border-0">
                       <td className="py-2 pr-4">
-                        <Link href={`/monitors/${m.id}`} className="text-slate-200 hover:text-cyan-300">{m.name}</Link>
-                        <span className="ml-1.5 text-xs text-slate-500">{m.type}</span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <TypeBadge type={m.type} />
+                          <Link href={`/monitors/${m.id}`} className="truncate text-slate-200 hover:text-cyan-300">{m.name}</Link>
+                        </span>
                       </td>
-                      <td className={`whitespace-nowrap py-2 pr-4 font-mono tabular-nums ${TONE_TEXT[slaTone(met)]}`}>{formatSlaPct(m.availability_pct)}</td>
-                      <td className="whitespace-nowrap py-2 pr-4 font-mono tabular-nums text-slate-400">{m.coverage_pct.toFixed(1)}%</td>
-                      <td className="whitespace-nowrap py-2 pr-4 font-mono tabular-nums text-slate-300">{formatSlaDuration(m.unplanned_down_seconds)}</td>
-                      <td className="whitespace-nowrap py-2 pr-4 font-mono tabular-nums text-slate-400">{formatSlaDuration(m.planned_down_seconds)}</td>
-                      <td className="whitespace-nowrap py-2 pr-4 font-mono tabular-nums text-slate-400">{formatSlaDuration(m.paused_seconds)}</td>
-                      <td className="py-2 font-mono tabular-nums text-slate-300">{m.outage_count}</td>
+                      <td className={`whitespace-nowrap py-2 pr-4 tabular-nums ${TONE_TEXT[slaTone(met)]}`}>{formatSlaPct(m.availability_pct)}</td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-400">{formatUptime(m.coverage_pct)}</td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-300">{formatSlaDuration(m.unplanned_down_seconds)}</td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-400">{formatSlaDuration(m.planned_down_seconds)}</td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-400">{formatSlaDuration(m.paused_seconds)}</td>
+                      <td className="py-2 tabular-nums text-slate-300">{m.outage_count}</td>
                     </tr>
                   );
                 })}

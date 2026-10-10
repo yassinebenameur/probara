@@ -71,7 +71,7 @@ export default function ConnectPage() {
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label htmlFor="api-key" className="mb-1.5 block text-[13px] font-medium text-slate-300">
+            <label htmlFor="api-key" className="mb-1.5 block text-ui font-medium text-slate-300">
               API key
             </label>
             <input

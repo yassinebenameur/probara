@@ -27,7 +27,7 @@ interface CopyableTargetProps {
 }
 
 const SIZE: Record<CopyableTargetSize, { text: string; icon: string; gap: string }> = {
-  xs: { text: 'text-[11px]', icon: 'h-3 w-3', gap: 'gap-1' },
+  xs: { text: 'text-2xs', icon: 'h-3 w-3', gap: 'gap-1' },
   sm: { text: 'text-xs', icon: 'h-3.5 w-3.5', gap: 'gap-1.5' },
 };
 

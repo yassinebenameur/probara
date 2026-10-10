@@ -70,7 +70,7 @@ export default function NewUserPage() {
     <div className="max-w-2xl space-y-6">
       <PageHeader
         breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'New user' }]}
-        title="Create user"
+        title="New user"
         subtitle="Add a team member with per-tenant roles, or a platform admin."
       />
 

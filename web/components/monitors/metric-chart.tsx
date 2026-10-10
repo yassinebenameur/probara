@@ -13,6 +13,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { formatDate, formatTimestamp } from '@/lib/format';
 
 export type TimeRange = '1h' | '6h' | '24h' | '7d';
 
@@ -99,12 +100,11 @@ export function buildChartRows(inputs: ChartSeriesInput[], stepMs: number): Char
   return rows;
 }
 
+// Axis and tooltip labels go through lib/format so every chart on the page
+// reads `15:19` / `2 Oct` like the rest of the UI, whatever the browser locale.
 export function formatTimeLabel(timestampMs: number, range: TimeRange): string {
-  const date = new Date(timestampMs);
-  if (range === '7d') {
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (range === '7d') return formatDate(timestampMs);
+  return formatTimestamp(timestampMs, { seconds: false }).slice(11);
 }
 
 export function MetricTooltip({
@@ -171,7 +171,7 @@ export function MetricChart({
 }) {
   const hasData = data.some((row) => series.some((s) => row[s.key] !== null && row[s.key] !== undefined));
   if (!hasData) {
-    return <p className="py-3 text-center text-[13px] text-slate-500">No data in range</p>;
+    return <p className="py-3 text-center text-ui text-slate-500">No data in range</p>;
   }
 
   return (

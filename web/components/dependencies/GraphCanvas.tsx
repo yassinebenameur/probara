@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   applyEdgeChanges,
@@ -61,6 +61,16 @@ export interface GraphCanvasProps {
   onEdgePersisted: (from: string, to: string) => void;
   onEdgeRemoved: (from: string, to: string) => void;
   onAddExtra: (monitor: DependencyMonitor) => void;
+  /** False for read-only users: no linking, unlinking or placing monitors. */
+  canWrite?: boolean;
+  /** Rendered next to "Add monitor" (the "Suggest with AI" trigger). */
+  aiAction?: ReactNode;
+}
+
+// Read-only users can still pan, zoom and focus, but an edge never selects,
+// so its unlink button and the Delete key have nothing to act on.
+function lockEdges(edges: Edge[]): Edge[] {
+  return edges.map((e) => ({ ...e, selectable: false, deletable: false }));
 }
 
 export function GraphCanvas({
@@ -78,6 +88,8 @@ export function GraphCanvas({
   onEdgePersisted,
   onEdgeRemoved,
   onAddExtra,
+  canWrite = true,
+  aiAction,
 }: GraphCanvasProps) {
   const router = useRouter();
   const { fitView } = useReactFlow();
@@ -86,12 +98,12 @@ export function GraphCanvas({
   // Local copies so user drags layer on top of the computed layout; reseeded
   // whenever the structural state (focus/expand/graph) produces a new layout.
   const [rfNodes, setRfNodes] = useState<AppNode[]>(flowNodes);
-  const [rfEdges, setRfEdges] = useState<Edge[]>(flowEdges);
+  const [rfEdges, setRfEdges] = useState<Edge[]>(() => (canWrite ? flowEdges : lockEdges(flowEdges)));
 
   const mountedRef = useRef(false);
   useEffect(() => {
     setRfNodes(flowNodes);
-    setRfEdges(flowEdges);
+    setRfEdges(canWrite ? flowEdges : lockEdges(flowEdges));
     // The very first fit is ReactFlow's own fitView prop (it waits for node
     // measurement); this effect only re-fits after focus/expand changes.
     if (!mountedRef.current) {
@@ -103,7 +115,7 @@ export function GraphCanvas({
       60
     );
     return () => window.clearTimeout(timer);
-  }, [flowNodes, flowEdges, fitView]);
+  }, [flowNodes, flowEdges, fitView, canWrite]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<AppNode>[]) => setRfNodes((ns) => applyNodeChanges(changes, ns)),
@@ -128,7 +140,7 @@ export function GraphCanvas({
   // immediately and snaps back if the API rejects it (e.g. a cycle).
   const onConnect = useCallback(
     (conn: Connection) => {
-      if (!isValidConnection(conn)) return;
+      if (!canWrite || !isValidConnection(conn)) return;
       const targetNode = rfNodes.find((n) => n.id === conn.target && n.type === 'monitor');
       const targetState = targetNode ? (targetNode.data as MonitorNodeData).monitor.current_state : undefined;
       const edge = styleEdge(conn.source, conn.target, targetState);
@@ -143,7 +155,7 @@ export function GraphCanvas({
           showToast(apiErrorMessage(err), 'error');
         });
     },
-    [isValidConnection, rfNodes, showToast, onEdgePersisted]
+    [canWrite, isValidConnection, rfNodes, showToast, onEdgePersisted]
   );
 
   // Fires for the edge ✕ button and the Delete/Backspace key alike.
@@ -190,14 +202,13 @@ export function GraphCanvas({
     <div className="flex min-w-0 flex-1 flex-col">
       {/* Toolbar */}
       <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-divider py-2.5 pl-12 pr-4 md:px-4">
-        <div className="flex items-center gap-2 text-xs text-slate-400">
+        <div className="flex items-center gap-3 text-xs text-slate-400">
           <span>
             <span className="font-medium tabular-nums text-slate-200">
               {visibleMonitors === totalServices ? totalServices : `${visibleMonitors} of ${totalServices}`}
             </span>{' '}
             services
           </span>
-          <span className="text-slate-500">·</span>
           <span>
             <span className="font-medium tabular-nums text-slate-200">{totalLinks}</span> links
           </span>
@@ -260,18 +271,21 @@ export function GraphCanvas({
           >
             Tidy up
           </Button>
-          <AddMonitorPicker existingIds={existingIds} onAdd={onAddExtra} />
+          {canWrite && <AddMonitorPicker existingIds={existingIds} onAdd={onAddExtra} />}
+          {aiAction}
         </div>
       </div>
 
       {/* Canvas */}
       <div className="relative min-h-0 flex-1">
         <div className="pointer-events-none absolute left-4 right-4 top-3 z-[5] flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-          <span className="hidden text-[11px] text-slate-500 2xl:inline">
-            Drag handle → node to link · click a link to unlink · double-click opens the monitor
+          <span className="hidden text-2xs text-slate-500 2xl:inline">
+            {canWrite
+              ? 'Drag from a handle to a monitor to link it. Click a link to unlink it. Double-click a monitor to open it.'
+              : 'Double-click a monitor to open it.'}
           </span>
           {LEGEND.map(({ state, label }) => (
-            <span key={label} className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <span key={label} className="flex items-center gap-1.5 text-2xs text-slate-400">
               <span className={`h-2 w-2 rounded-full ${stateStyle(state).dot}`} />
               {label}
             </span>
@@ -283,8 +297,9 @@ export function GraphCanvas({
               <Workflow className="mx-auto h-9 w-9 text-slate-500" strokeWidth={1.5} />
               <p className="mt-3 text-sm font-medium text-slate-400">The canvas is empty</p>
               <p className="mt-1 max-w-xs text-xs text-slate-500">
-                Use “Add monitor” above to place services here, then drag between them to declare
-                who depends on whom.
+                {canWrite
+                  ? 'Use “Add monitor” above to place services here, then drag between them to declare who depends on whom.'
+                  : 'Pick a service in the list to see its dependencies.'}
               </p>
             </div>
           </div>
@@ -297,7 +312,7 @@ export function GraphCanvas({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
-          onEdgesDelete={onEdgesDelete}
+          onEdgesDelete={canWrite ? onEdgesDelete : undefined}
           isValidConnection={isValidConnection}
           onNodeDoubleClick={(_, node) => {
             if (node.type === 'monitor') router.push(`/monitors/${node.id}`);
@@ -309,10 +324,10 @@ export function GraphCanvas({
           minZoom={0.15}
           proOptions={{ hideAttribution: true }}
           nodesDraggable
-          nodesConnectable
+          nodesConnectable={canWrite}
           nodesFocusable={false}
-          edgesFocusable
-          deleteKeyCode={['Delete', 'Backspace']}
+          edgesFocusable={canWrite}
+          deleteKeyCode={canWrite ? ['Delete', 'Backspace'] : null}
           connectionRadius={36}
           connectionLineStyle={{ stroke: 'var(--accent)', strokeWidth: 2, strokeDasharray: '6 4' }}
           colorMode={themeName}

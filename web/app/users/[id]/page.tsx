@@ -112,6 +112,7 @@ export default function EditUserPage() {
       <PageHeader
         breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'Edit' }]}
         title="Edit user"
+        subtitle="Change the account's details and its role in each workspace."
       />
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -200,21 +201,21 @@ export default function EditUserPage() {
             </div>
             <div>
               <dt className="text-xs text-slate-500">Sign-in method</dt>
-              <dd className="mt-0.5 text-[13px] text-slate-300">
+              <dd className="mt-0.5 text-ui text-slate-300">
                 {isOidcUser ? 'SSO (OIDC)' : 'Password'}
               </dd>
             </div>
             <div>
               <dt className="text-xs text-slate-500">Created</dt>
-              <dd className="mt-0.5 text-[13px] text-slate-300">{formatDateTime(user.created_at, "-")}</dd>
+              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.created_at, "-")}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-500">Last updated</dt>
-              <dd className="mt-0.5 text-[13px] text-slate-300">{formatDateTime(user.updated_at, "-")}</dd>
+              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.updated_at, "-")}</dd>
             </div>
             <div>
               <dt className="text-xs text-slate-500">Last login</dt>
-              <dd className="mt-0.5 text-[13px] text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
+              <dd className="mt-0.5 text-ui text-slate-300">{formatDateTime(user.last_login_at, "-")}</dd>
             </div>
           </dl>
         </Panel>

@@ -263,7 +263,7 @@ function LoginPageInner() {
             <div>
               <label
                 htmlFor="username"
-                className="mb-1.5 block text-[13px] font-medium text-slate-300"
+                className="mb-1.5 block text-ui font-medium text-slate-300"
               >
                 Username
               </label>
@@ -284,7 +284,7 @@ function LoginPageInner() {
             <div>
               <label
                 htmlFor="password"
-                className="mb-1.5 block text-[13px] font-medium text-slate-300"
+                className="mb-1.5 block text-ui font-medium text-slate-300"
               >
                 Password
               </label>
@@ -306,7 +306,7 @@ function LoginPageInner() {
               <div>
                 <label
                   htmlFor="confirm-password"
-                  className="mb-1.5 block text-[13px] font-medium text-slate-300"
+                  className="mb-1.5 block text-ui font-medium text-slate-300"
                 >
                   Confirm password
                 </label>

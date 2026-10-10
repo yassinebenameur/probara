@@ -3,36 +3,64 @@ import type {
   DashboardFailureEvent,
   DashboardOpsSummary,
   DashboardProblemMonitor,
-  DashboardStats,
 } from './types';
+import { STATUS_RANK, type MonitorDisplayStatus } from './monitor-utils';
+import { formatDurationBetween, formatLatency, formatRelativeTime, formatUptime, pluralize } from './format';
+import { formatMonitorListParams } from './monitor-list';
+import { MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE, StatusTone, uptimeTone } from './status-tones';
 
 export type OperationalTone = 'critical' | 'attention' | 'stable' | 'clean';
 
 export type OperationalSummary = {
+  /** Built from the counts ("16 monitors down, 14 active alerts"), never a generic verdict. */
   label: string;
-  description: string;
+  /** Optional second fact; absent when the label already says it all. */
+  description?: string;
   tone: OperationalTone;
+  /** Monitors the Needs attention panel counts: the same number as the Down tile when any are down. */
   attentionCount: number;
-  primaryActionLabel: string;
-  primaryActionHref: string;
+  /** Where the problem is; null when there is nothing to go and look at. */
+  primaryAction: { label: string; href: string } | null;
   metrics: Array<{
     label: string;
     value: string;
     detail?: string;
+    /** Hover text for facts that do not fit the tile. */
+    title?: string;
     tone?: OperationalTone;
   }>;
 };
 
+/** The monitors list filtered to down monitors (app/monitors/page.tsx reads ?status). */
+export const DOWN_MONITORS_HREF = '/monitors?status=down';
+
+/**
+ * The down-monitors link for a dashboard scoped to `tags`: the count on the
+ * link is the tag-scoped down_monitors, so the list it opens carries the same
+ * scope.
+ */
+export function downMonitorsHref(tags: readonly string[] = []): string {
+  if (tags.length === 0) return DOWN_MONITORS_HREF;
+  return `/monitors?${formatMonitorListParams({ status: 'down', tags: [...tags], unroutedOnly: false, sort: 'status' })}`;
+}
+/** Same target as OPEN_ALERTS_HREF in components/layout/FleetHealth.tsx (kept here so lib tests stay React-free). */
+export const OPEN_ALERTS_HREF = '/alerts?status=active';
+
 export type ActivityTimelineItem = {
   id: string;
-  label: string;
+  /** Monitor (or alert subject) name: the bold line. */
   title: string;
+  /** The monitor's current state (Down, Degraded, Up) or an alert event (Alert fired…). */
+  event: string;
+  tone: StatusTone;
+  /** Secondary fact ("12 failed checks", "Alert fired 2 h ago"); empty when there is none. */
   detail: string;
-  /** Full check error_message for failure items; undefined for alert items. */
+  /** Raw error text of the latest failed check (or open alert); undefined when there is none. */
   reason?: string;
+  /** Drill-down for the row; undefined when the subject has no page. */
+  href?: string;
   occurredAt: string;
   relativeTime: string;
-  tone: 'success' | 'warning' | 'danger' | 'info';
 };
 
 // ─── Failure reason parsing ─────────────────────────────────────────────────
@@ -65,52 +93,115 @@ export function parseFailureReason(message: string | null | undefined): FailureR
   return { category: REASON_PREFIX_CATEGORIES[prefix] ?? null, text };
 }
 
+/**
+ * Display status of a dashboard monitor row. The persisted state machine
+ * (current_state) is the monitor's real state: a multi-location monitor
+ * failing below quorum is degraded even when its latest check passed, and
+ * the API's current_status maps degraded to "success". current_status (the
+ * latest check outcome) is only the fallback for rows without a state, such
+ * as service-group members.
+ */
+export function problemMonitorStatus(
+  monitor: { current_state?: string | null; current_status?: string | null } | null | undefined,
+): MonitorDisplayStatus {
+  switch (monitor?.current_state) {
+    case 'down':
+      return 'down';
+    // suspect = failing, not yet confirmed: the same reading the monitors
+    // list gives it (getEffectiveMonitorStatus).
+    case 'degraded':
+    case 'suspect':
+      return 'degraded';
+    case 'up':
+      return 'up';
+    case 'unknown':
+      return 'unknown';
+  }
+  switch (monitor?.current_status) {
+    case 'failure':
+    case 'error':
+      return 'down';
+    case 'degraded':
+      return 'degraded';
+    case 'success':
+      return 'up';
+    default:
+      return 'unknown';
+  }
+}
+
+/** Monitors the problem list shows as currently degraded (null until it loads). */
+export function countDegraded(monitors: DashboardProblemMonitor[] | null | undefined): number | null {
+  if (!monitors) return null;
+  return monitors.filter((monitor) => problemMonitorStatus(monitor) === 'degraded').length;
+}
+
+/**
+ * Needs attention's header total and "View all" count. The problem list holds
+ * leaf monitors only (the API leaves groups out), while ops_summary's down
+ * count includes groups, so a list that came back below the fetch limit is
+ * complete and is counted itself; only a capped list falls back to the
+ * ops-summary totals, which are then the better lower bound.
+ */
+export function needsAttentionTotals(
+  monitors: DashboardProblemMonitor[] | null | undefined,
+  listLimit: number,
+  fallback: { total: number; unhealthy: number },
+): { total: number; unhealthy: number } {
+  if (!monitors || monitors.length >= listLimit) return fallback;
+  const unhealthy = monitors.filter((monitor) => {
+    const status = problemMonitorStatus(monitor);
+    return status === 'down' || status === 'degraded';
+  }).length;
+  return { total: monitors.length, unhealthy };
+}
+
 type OperationalSummaryInput = {
   opsSummary?: DashboardOpsSummary | null;
   problemMonitorsCount: number;
+  /**
+   * Monitors currently degraded (countDegraded over the problem list); null
+   * while that list loads. ops_summary has no degraded count: it counts a
+   * degraded monitor as up.
+   */
+  degradedMonitors?: number | null;
   recentFailuresCount: number;
   /** null = no checks in the window; the tile renders "—", never "0.00%". */
   overallUptime: number | null;
   avgResponseMs: number;
+  /** Monitors in scope (stats.total_monitors). */
+  totalMonitors?: number;
+  /** Monitors with HTTP checks; 0 makes the latency tile "—". */
+  httpMonitors?: number;
   rangeLabel?: string;
+  /** Dashboard tag scope; the down link carries it to the monitors list. */
+  tags?: readonly string[];
 };
 
-export function formatPercent(value: number): string {
-  return `${Number.isFinite(value) ? value.toFixed(2) : '0.00'}%`;
-}
-
-export function formatRelativeTimeFrom(dateString: string, now = new Date()): string {
-  const date = new Date(dateString);
-  const seconds = Math.max(0, Math.floor((now.getTime() - date.getTime()) / 1000));
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
+// Healthy values stay neutral; only warn/bad carry colour.
+const UPTIME_OPERATIONAL_TONE = { good: 'clean', warn: 'attention', bad: 'critical', none: undefined } as const;
 
 export function buildOperationalSummary(input: OperationalSummaryInput): OperationalSummary {
-  const downMonitors = input.opsSummary?.down_monitors ?? 0;
-  const activeAlerts = input.opsSummary?.active_alerts ?? 0;
-  const suppressedAlerts = input.opsSummary?.suppressed_alerts ?? 0;
-  const pausedMonitors = input.opsSummary?.paused_monitors ?? 0;
-  const maintenanceMonitors = input.opsSummary?.maintenance_monitors ?? 0;
-  // A down monitor normally also has an open outage alert, so adding the two
-  // counted it twice. Alerts have their own tile.
-  const attentionCount = Math.max(input.problemMonitorsCount, downMonitors);
+  const ops = input.opsSummary;
+  const downMonitors = ops?.down_monitors ?? 0;
+  const upMonitors = ops?.up_monitors ?? 0;
+  const activeAlerts = ops?.active_alerts ?? 0;
+  const acknowledgedAlerts = ops?.acknowledged_alerts ?? 0;
+  const suppressedAlerts = ops?.suppressed_alerts ?? 0;
+  const pausedMonitors = ops?.paused_monitors ?? 0;
+  const maintenanceMonitors = ops?.maintenance_monitors ?? 0;
+  const totalMonitors = input.totalMonitors ?? upMonitors + downMonitors + pausedMonitors + maintenanceMonitors;
+  const activeMonitors = Math.max(0, totalMonitors - pausedMonitors - maintenanceMonitors);
+  const degradedMonitors = input.degradedMonitors ?? 0;
+  const unhealthyMonitors = downMonitors + degradedMonitors;
+  const rangePhrase = (input.rangeLabel ?? 'the selected range').toLowerCase();
+
+  // The problem-monitor list is capped server-side, so its length is a lower
+  // bound; the down and degraded counts are the real total whenever larger. A
+  // down monitor usually also has an open alert, so the two are never summed.
+  const attentionCount = Math.max(input.problemMonitorsCount, unhealthyMonitors);
   const actionNeeded = downMonitors > 0 || activeAlerts > 0;
   const hasRecentResolvedHistory = input.recentFailuresCount > 0 || input.problemMonitorsCount > 0;
-
-  const label = actionNeeded
-    ? 'Action needed'
-    : hasRecentResolvedHistory
-      ? 'No active outage'
-      : 'No active outages';
-
-  const description = actionNeeded
-    ? 'Some monitors or alerts need operator review.'
-    : hasRecentResolvedHistory
-      ? 'Customer-facing checks are healthy. Recent issues have been resolved.'
-      : 'Customer-facing checks are healthy.';
 
   const tone: OperationalTone = actionNeeded
     ? 'critical'
@@ -120,70 +211,106 @@ export function buildOperationalSummary(input: OperationalSummaryInput): Operati
         ? 'stable'
         : 'clean';
 
+  let label: string;
+  let description: string | undefined;
+  let primaryAction: OperationalSummary['primaryAction'] = null;
+  if (actionNeeded || degradedMonitors > 0) {
+    // "monitors" once, on the first count: "5 monitors down, 3 degraded".
+    const monitorFacts = ([
+      [downMonitors, 'down'],
+      [degradedMonitors, 'degraded'],
+    ] as const)
+      .filter(([count]) => count > 0)
+      .map(([count, state], i) => (i === 0 ? `${pluralize(count, 'monitor')} ${state}` : `${count} ${state}`));
+    // "active", not "open": the alerts page's Open view adds acknowledged ones.
+    const facts = [...monitorFacts, activeAlerts > 0 ? pluralize(activeAlerts, 'active alert') : null].filter(Boolean);
+    label = facts.join(', ');
+    if (!actionNeeded) description = 'Some locations fail their checks; no monitor is down.';
+    // The monitors list's Down filter includes degraded monitors.
+    primaryAction = unhealthyMonitors > 0
+      ? {
+          label: downMonitors > 0 && degradedMonitors > 0
+            ? `Review ${unhealthyMonitors} monitors`
+            : `Review ${unhealthyMonitors} ${downMonitors > 0 ? 'down' : 'degraded'}`,
+          href: downMonitorsHref(input.tags),
+        }
+      : { label: 'Review alerts', href: OPEN_ALERTS_HREF };
+  } else if (attentionCount > 0) {
+    label = `${pluralize(attentionCount, 'monitor')} had failed checks`;
+    description = `None is down now; the failures were in the ${rangePhrase}.`;
+  } else if (totalMonitors === 0) {
+    label = 'No monitors yet';
+  } else {
+    label = upMonitors >= activeMonitors && activeMonitors > 0
+      ? `All ${pluralize(activeMonitors, 'monitor')} up`
+      : `${pluralize(upMonitors, 'monitor')} up`;
+    description = hasRecentResolvedHistory ? `Earlier failures in the ${rangePhrase} have recovered.` : undefined;
+  }
+
+  // The tile has room for two short facts; the full split is on hover.
+  const fleetSplit = [
+    downMonitors > 0 ? `${downMonitors} down` : null,
+    degradedMonitors > 0 ? `${degradedMonitors} degraded` : null,
+    pausedMonitors > 0 ? `${pausedMonitors} paused` : null,
+    maintenanceMonitors > 0 ? `${maintenanceMonitors} in maintenance` : null,
+  ].filter(Boolean);
+
+  const alertSplit = [
+    acknowledgedAlerts > 0 ? `${acknowledgedAlerts} acknowledged` : null,
+    suppressedAlerts > 0 ? `${suppressedAlerts} suppressed` : null,
+  ].filter(Boolean);
+
+  const httpMonitors = input.httpMonitors ?? 1;
+  const hasLatency = httpMonitors > 0 && input.avgResponseMs > 0;
+
   return {
     label,
     description,
     tone,
     attentionCount,
-    primaryActionLabel: 'View monitors',
-    primaryActionHref: '/monitors',
+    primaryAction,
     metrics: [
       {
         label: 'Uptime',
-        value: input.overallUptime == null ? '—' : formatPercent(input.overallUptime),
+        value: formatUptime(input.overallUptime),
         detail: input.overallUptime == null ? 'No checks in range' : input.rangeLabel ?? 'Selected range',
-        tone:
-          input.overallUptime == null
-            ? undefined
-            : input.overallUptime >= 99
-              ? 'clean'
-              : input.overallUptime >= 95
-                ? 'attention'
-                : 'critical',
+        tone: UPTIME_OPERATIONAL_TONE[uptimeTone(input.overallUptime)],
       },
       {
-        label: 'Avg response',
-        value: `${Math.round(input.avgResponseMs || 0)}ms`,
-        detail: 'HTTP checks',
+        label: 'Avg HTTP latency',
+        value: hasLatency ? formatLatency(input.avgResponseMs) : '—',
+        // The range is named once, under Uptime.
+        // Latency averages successful checks only: with HTTP monitors in scope
+        // and no average, the checks ran and failed — they did not not run.
+        detail: hasLatency ? undefined : httpMonitors === 0 ? 'No HTTP monitors' : 'No successful checks in range',
       },
       {
-        label: 'Attention',
-        value: String(attentionCount),
-        detail:
-          [
-            pausedMonitors > 0 ? `${pausedMonitors} paused` : null,
-            maintenanceMonitors > 0 ? `${maintenanceMonitors} maintenance` : null,
-          ]
-            .filter(Boolean)
-            .join(' · ') || 'Monitors',
-        tone: attentionCount > 0 ? 'attention' : 'clean',
+        label: 'Down',
+        value: String(downMonitors),
+        detail: degradedMonitors > 0
+          ? `of ${totalMonitors}, ${degradedMonitors} degraded`
+          : `of ${pluralize(totalMonitors, 'monitor')}`,
+        title: fleetSplit.length > 0 ? `${pluralize(totalMonitors, 'monitor')}: ${fleetSplit.join(', ')}` : undefined,
+        tone: downMonitors > 0 ? 'critical' : 'clean',
       },
       {
         label: 'Active alerts',
         value: String(activeAlerts),
-        detail:
-          activeAlerts > 0
-            ? suppressedAlerts > 0
-              ? `${suppressedAlerts} suppressed by dependency`
-              : 'Needs review'
-            : 'None',
+        detail: alertSplit.join(', ') || (activeAlerts > 0 ? 'None acknowledged' : 'None active'),
         tone: activeAlerts > 0 ? 'critical' : 'clean',
       },
     ],
   };
 }
 
-function monitorStatusPriority(monitor: DashboardProblemMonitor): number {
-  if (monitor.current_status === 'error') return 0;
-  if (monitor.current_status === 'failure') return 1;
-  if (monitor.uptime < 99) return 2;
-  return 3;
-}
-
+/**
+ * Needs attention order: current state first (down, degraded, then the
+ * monitors that are up again), then lower uptime, then the latest failure.
+ */
 export function sortNeedsAttention(monitors: DashboardProblemMonitor[]): DashboardProblemMonitor[] {
   return [...monitors].sort((a, b) => {
-    const priorityDelta = monitorStatusPriority(a) - monitorStatusPriority(b);
-    if (priorityDelta !== 0) return priorityDelta;
+    const stateDelta = STATUS_RANK[problemMonitorStatus(a)] - STATUS_RANK[problemMonitorStatus(b)];
+    if (stateDelta !== 0) return stateDelta;
 
     const uptimeDelta = a.uptime - b.uptime;
     if (uptimeDelta !== 0) return uptimeDelta;
@@ -195,65 +322,143 @@ export function sortNeedsAttention(monitors: DashboardProblemMonitor[]): Dashboa
 }
 
 type BuildActivityTimelineInput = {
+  /** Newest failed checks across the fleet (dashboard recent-failures). */
   failures: DashboardFailureEvent[];
+  /** Newest alerts (dashboard recent-alerts; the API does not range-filter them). */
   alerts: Alert[];
+  /**
+   * The problem-monitor list: each monitor's current state and its exact
+   * failed-check count for the range.
+   */
+  monitors?: DashboardProblemMonitor[];
+  /** Start of the dashboard range: an alert whose latest event is older did not change in it. */
+  since?: Date | null;
   now?: Date;
 };
 
-function alertLabel(alert: Alert): string {
-  if (alert.status === 'resolved') return 'Alert resolved';
-  if (alert.status === 'acknowledged') return 'Alert acknowledged';
-  return 'Alert triggered';
+type AlertEvent = { verb: string; event: string; tone: StatusTone; at: string };
+
+function alertEvent(alert: Alert): AlertEvent {
+  if (alert.status === 'resolved') {
+    return { verb: 'resolved', event: 'Alert resolved', tone: 'success', at: alert.resolved_at || alert.triggered_at };
+  }
+  if (alert.status === 'acknowledged') {
+    return { verb: 'acknowledged', event: 'Acknowledged', tone: 'warning', at: alert.acknowledged_at || alert.triggered_at };
+  }
+  return { verb: 'fired', event: 'Alert fired', tone: 'danger', at: alert.triggered_at };
 }
 
-function alertTone(alert: Alert): ActivityTimelineItem['tone'] {
-  if (alert.status === 'resolved') return 'success';
-  if (alert.status === 'acknowledged') return 'warning';
-  return 'danger';
+function alertTitle(alert: Alert): string {
+  if (alert.monitor_name) return alert.monitor_name;
+  if (alert.source_location_name && alert.target_location_name) {
+    return `${alert.source_location_name} to ${alert.target_location_name}`;
+  }
+  return alert.policy_name || 'Alert';
 }
 
-function failureLabel(failure: DashboardFailureEvent): string {
-  if (failure.state === 'resolved') return 'Failure resolved';
-  if (failure.status === 'error') return 'Monitor issue detected';
-  return 'Failure detected';
-}
+const time = (value: string) => new Date(value).getTime();
 
-function failureTone(failure: DashboardFailureEvent): ActivityTimelineItem['tone'] {
-  if (failure.state === 'resolved') return 'success';
-  if (failure.result_source === 'platform') return 'info';
-  return failure.status === 'error' ? 'warning' : 'danger';
-}
-
+/**
+ * One row per monitor, newest first: what the monitor is now and what
+ * happened to it in the range.
+ *
+ * Failed checks are per location, so they are not state changes: a monitor
+ * failing from one of three locations alternates failed and passing checks,
+ * and reading each next pass as a recovery made it flap Down/Recovered. A
+ * monitor's failed checks therefore collapse into one row that wears its
+ * current state (problem list: down, degraded, up), with the exact
+ * failed-check count for the range. Alert lifecycle events are real
+ * transitions; one in range joins its monitor's row, or stands alone for a
+ * monitor without failed checks (or a location pair). No API reports state
+ * transitions yet, so "Recovered" is never inferred.
+ */
 export function buildActivityTimeline(input: BuildActivityTimelineInput): ActivityTimelineItem[] {
   const now = input.now ?? new Date();
-  const failureItems: ActivityTimelineItem[] = input.failures.map((failure) => ({
-    id: `failure-${failure.check_result_id}`,
-    label: failureLabel(failure),
-    title: failure.monitor_name,
-    detail: [
-      failure.result_source === 'platform' ? 'Platform event' : failure.status,
-      typeof failure.latency_ms === 'number' ? `${failure.latency_ms}ms` : undefined,
-    ].filter(Boolean).join(' · '),
-    reason: failure.error_message || undefined,
-    occurredAt: failure.occurred_at,
-    relativeTime: formatRelativeTimeFrom(failure.occurred_at, now),
-    tone: failureTone(failure),
-  }));
+  const since = input.since ? input.since.getTime() : -Infinity;
+  const states = new Map((input.monitors ?? []).map((monitor) => [monitor.monitor_id, monitor]));
 
-  const alertItems: ActivityTimelineItem[] = input.alerts.map((alert) => ({
-    id: `alert-${alert.id}`,
-    label: alertLabel(alert),
-    title: alert.monitor_name || alert.policy_name || 'Alert',
-    detail: [
-      alert.policy_name,
-      `${alert.failure_count} failure${alert.failure_count === 1 ? '' : 's'}`,
-    ].filter(Boolean).join(' · '),
-    occurredAt: alert.triggered_at,
-    relativeTime: formatRelativeTimeFrom(alert.triggered_at, now),
-    tone: alertTone(alert),
-  }));
+  // Newest failed check per monitor (and per source: platform errors are the
+  // platform's, not the target's).
+  const latestFailure = new Map<string, DashboardFailureEvent>();
+  for (const failure of input.failures) {
+    const key = `${failure.monitor_id}|${failure.result_source === 'platform' ? 'platform' : 'monitor'}`;
+    const seen = latestFailure.get(key);
+    if (!seen || time(failure.occurred_at) > time(seen.occurred_at)) latestFailure.set(key, failure);
+  }
 
-  return [...failureItems, ...alertItems].sort(
-    (a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime(),
-  );
+  // Newest alert event in range per monitor; alerts without a monitor stand alone.
+  const monitorAlerts = new Map<string, { alert: Alert; event: AlertEvent }>();
+  const standaloneAlerts: Array<{ alert: Alert; event: AlertEvent }> = [];
+  for (const alert of input.alerts) {
+    const event = alertEvent(alert);
+    if (time(event.at) < since) continue;
+    if (!alert.monitor_id) {
+      standaloneAlerts.push({ alert, event });
+      continue;
+    }
+    const seen = monitorAlerts.get(alert.monitor_id);
+    if (!seen || time(event.at) > time(seen.event.at)) monitorAlerts.set(alert.monitor_id, { alert, event });
+  }
+
+  const items: ActivityTimelineItem[] = [];
+
+  for (const failure of latestFailure.values()) {
+    const href = `/monitors/${failure.monitor_id}`;
+    if (failure.result_source === 'platform') {
+      items.push({
+        id: `platform-${failure.monitor_id}`,
+        title: failure.monitor_name,
+        event: 'Platform',
+        tone: 'info',
+        detail: 'Check could not run',
+        reason: failure.error_message || undefined,
+        href,
+        occurredAt: failure.occurred_at,
+        relativeTime: formatRelativeTime(failure.occurred_at, now),
+      });
+      continue;
+    }
+    const known = states.get(failure.monitor_id);
+    const status = known ? problemMonitorStatus(known) : null;
+    const alertInRange = monitorAlerts.get(failure.monitor_id);
+    monitorAlerts.delete(failure.monitor_id);
+    const failedCount = known ? known.failure_count + known.error_count : 0;
+    const occurredAt =
+      alertInRange && time(alertInRange.event.at) > time(failure.occurred_at) ? alertInRange.event.at : failure.occurred_at;
+    items.push({
+      id: `monitor-${failure.monitor_id}`,
+      title: failure.monitor_name,
+      // Without a known state the row claims only what the checks show.
+      event: status ? MONITOR_STATUS_LABEL[status] : 'Checks failing',
+      tone: status ? MONITOR_STATUS_TONE[status] : 'danger',
+      detail: alertInRange
+        ? `Alert ${alertInRange.event.verb} ${formatRelativeTime(alertInRange.event.at, now)}`
+        : failedCount > 0
+          ? pluralize(failedCount, 'failed check')
+          : '',
+      reason: failure.error_message || undefined,
+      href,
+      occurredAt,
+      relativeTime: formatRelativeTime(occurredAt, now),
+    });
+  }
+
+  for (const { alert, event } of [...monitorAlerts.values(), ...standaloneAlerts]) {
+    items.push({
+      id: `alert-${alert.id}`,
+      title: alertTitle(alert),
+      event: event.event,
+      tone: event.tone,
+      detail:
+        alert.status === 'resolved' && alert.resolved_at
+          ? `Lasted ${formatDurationBetween(alert.triggered_at, alert.resolved_at, now)}`
+          : '',
+      reason: alert.status === 'resolved' ? undefined : alert.last_error || undefined,
+      href: alert.monitor_id ? `/monitors/${alert.monitor_id}` : undefined,
+      occurredAt: event.at,
+      relativeTime: formatRelativeTime(event.at, now),
+    });
+  }
+
+  return items.sort((a, b) => time(b.occurredAt) - time(a.occurredAt));
 }

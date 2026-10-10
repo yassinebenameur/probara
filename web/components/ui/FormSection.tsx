@@ -48,7 +48,7 @@ export default function FormSection({
     <div className="glass p-6">
       {title && (
         <div className="mb-4 flex items-center gap-2">
-          <h3 className="text-[15px] font-semibold text-white">{title}</h3>
+          <h3 className="text-title font-semibold text-white">{title}</h3>
           {renderInfoTip(infoTip)}
         </div>
       )}

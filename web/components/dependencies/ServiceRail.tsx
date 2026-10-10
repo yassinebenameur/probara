@@ -57,15 +57,14 @@ export function ServiceRail({
 
       <div className="dashboard-scroll min-h-0 flex-1 space-y-px overflow-y-auto px-2 pb-2">
         {entries.length > 0 && (
-          <p className="px-2.5 pb-1.5 pt-3 text-[11px] text-slate-500">
+          <p className="px-2.5 pb-1.5 pt-3 text-2xs text-slate-500">
             {filtered.length} of {entries.length} service{entries.length === 1 ? '' : 's'}
           </p>
         )}
         {entries.length === 0 ? (
           <div className="px-4 py-6 text-center">
-            <p className="text-[13px] text-slate-500">
-              No dependencies yet. Add monitors to the canvas and drag between them, or use
-              Suggest with AI.
+            <p className="text-ui text-slate-500">
+              Nothing linked yet. Drag from one monitor to another on the canvas to declare a dependency.
             </p>
           </div>
         ) : rows.length === 0 ? (
@@ -93,12 +92,12 @@ export function ServiceRail({
                   strokeWidth={1.75}
                 />
                 <span
-                  className={`min-w-0 flex-1 truncate text-[13px] ${active ? 'font-medium text-white' : 'text-slate-300'}`}
+                  className={`min-w-0 flex-1 truncate text-ui ${active ? 'font-medium text-white' : 'text-slate-300'}`}
                   title={monitor.name}
                 >
                   {monitor.name}
                 </span>
-                <span className="flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-slate-500">
+                <span className="flex shrink-0 items-center gap-1.5 text-2xs tabular-nums text-slate-500">
                   {dependents > 0 && (
                     <span
                       className="flex items-center"
@@ -123,7 +122,7 @@ export function ServiceRail({
           })
         )}
         {overflow > 0 && (
-          <p className="px-4 py-2 text-center text-[11px] text-slate-500">
+          <p className="px-4 py-2 text-center text-2xs text-slate-500">
             {overflow} more — refine your search
           </p>
         )}

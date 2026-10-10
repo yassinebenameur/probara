@@ -23,7 +23,8 @@ const JSON_MODES = [
 
 const API_KEY_PLACEHOLDER = '••••••••  (saved — leave blank to keep)';
 
-export function AISettingsPanel() {
+// Read-only users see the effective configuration without a Save button.
+export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -132,15 +133,16 @@ export function AISettingsPanel() {
               id="ai-enabled"
               checked={enabled}
               onChange={(e) => setEnabled(e.target.checked)}
-              className="mt-0.5 h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500"
+              disabled={readOnly}
+              className="mt-0.5 h-4 w-4 flex-shrink-0 cursor-pointer accent-cyan-500 disabled:cursor-not-allowed"
             />
-            <label htmlFor="ai-enabled" className="cursor-pointer text-sm text-slate-200">
+            <label htmlFor="ai-enabled" className={`text-sm text-slate-200 ${readOnly ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
               Enable AI analysis for this workspace
             </label>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Select label="Provider" className="h-10" value={provider} onChange={(e) => setProvider(e.target.value)}>
+            <Select label="Provider" className="h-10" value={provider} disabled={readOnly} onChange={(e) => setProvider(e.target.value)}>
               {PROVIDERS.map((p) => (
                 <option key={p.value} value={p.value}>{p.label}</option>
               ))}
@@ -149,16 +151,18 @@ export function AISettingsPanel() {
               label="Base URL"
               placeholder="http://localhost:30000/v1"
               value={baseURL}
+              disabled={readOnly}
               onChange={(e) => setBaseURL(e.target.value)}
             />
             <Input
               label="Model"
               placeholder="gpt-4o-mini"
               value={model}
+              disabled={readOnly}
               onChange={(e) => setModel(e.target.value)}
             />
             <div>
-              <label className="mb-1.5 block text-[13px] font-medium text-slate-300">
+              <label className="mb-1.5 block text-ui font-medium text-slate-300">
                 API key {hasAPIKey && <span className="font-normal text-slate-500">(set)</span>}
               </label>
               <input
@@ -166,18 +170,19 @@ export function AISettingsPanel() {
                 type="password"
                 placeholder={hasAPIKey ? API_KEY_PLACEHOLDER : 'Optional — leave blank for keyless local servers'}
                 value={apiKey}
+                disabled={readOnly}
                 onChange={(e) => setApiKey(e.target.value)}
               />
             </div>
           </div>
 
           <details>
-            <summary className="cursor-pointer text-[13px] font-medium text-slate-400 transition-colors hover:text-white">
+            <summary className="cursor-pointer text-ui font-medium text-slate-400 transition-colors hover:text-white">
               Advanced
             </summary>
             <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="sm:col-span-2">
-                <Select label="Structured output" className="h-10" value={jsonMode} onChange={(e) => setJSONMode(e.target.value)}>
+                <Select label="Structured output" className="h-10" value={jsonMode} disabled={readOnly} onChange={(e) => setJSONMode(e.target.value)}>
                   {JSON_MODES.map((m) => (
                     <option key={m.value} value={m.value}>{m.label}</option>
                   ))}
@@ -188,6 +193,7 @@ export function AISettingsPanel() {
                 type="number"
                 min={1}
                 value={maxTokens}
+                disabled={readOnly}
                 onChange={(e) => setMaxTokens(Number(e.target.value))}
               />
               <Input
@@ -195,6 +201,7 @@ export function AISettingsPanel() {
                 type="number"
                 min={1}
                 value={timeoutSeconds}
+                disabled={readOnly}
                 onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
               />
             </div>
@@ -214,9 +221,11 @@ export function AISettingsPanel() {
             <Button variant="ghost" size="sm" loading={testing} disabled={testing || !baseURL || !model} onClick={handleTest}>
               Test connection
             </Button>
-            <Button variant="accent" size="sm" loading={saving} disabled={saving} onClick={handleSave}>
-              Save
-            </Button>
+            {!readOnly && (
+              <Button variant="accent" size="sm" loading={saving} disabled={saving} onClick={handleSave}>
+                Save
+              </Button>
+            )}
           </div>
         </div>
       )}

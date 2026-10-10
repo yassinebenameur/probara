@@ -296,7 +296,7 @@ export default function MetricRuleBuilder({
       </datalist>
 
       {drafts.length === 0 && (
-        <p className="glass-well px-4 py-3 text-[13px] text-slate-400">
+        <p className="glass-well px-4 py-3 text-ui text-slate-400">
           No metric rules. Alerts open only for missed heartbeats until you add one.
         </p>
       )}
@@ -383,7 +383,7 @@ export default function MetricRuleBuilder({
               {draft.filters.map((filter, filterIndex) => (
                 <span
                   key={`${filter.key}-${filterIndex}`}
-                  className="inline-flex items-center gap-1 rounded-full bg-well-hover py-0.5 pl-2 pr-1 font-mono text-[11px] text-slate-200"
+                  className="inline-flex items-center gap-1 rounded-full bg-well-hover py-0.5 pl-2 pr-1 font-mono text-2xs text-slate-200"
                 >
                   {filter.key}={filter.value}
                   <button
@@ -430,7 +430,7 @@ export default function MetricRuleBuilder({
               </span>
             </div>
 
-            {error && <p className="text-xs text-rose-300">{error}</p>}
+            {error && <p data-form-error className="text-xs text-rose-300">{error}</p>}
           </div>
         );
       })}

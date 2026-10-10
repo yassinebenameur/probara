@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Sparkles } from 'lucide-react';
 
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
@@ -17,8 +18,9 @@ const CONFIDENCE_TONE: Record<string, PillTone> = {
   low: 'neutral',
 };
 
-// Returns the scan trigger (for the page header) and the results panel,
-// which stays hidden until a scan has run.
+// Returns the scan trigger (rendered in the graph toolbar, or in the empty
+// canvas) and the results panel, which stays hidden until a scan has run.
+// `renderButton` sizes the trigger for where it sits.
 export function useAISuggestions(onAccepted?: () => void) {
   const { showToast } = useToast();
   const [loading, setLoading] = useState(false);
@@ -67,8 +69,8 @@ export function useAISuggestions(onAccepted?: () => void) {
     setSuggestions((prev) => prev.filter((x) => keyOf(x) !== keyOf(s)));
   };
 
-  const button = (
-    <Button variant="ghost" size="sm" loading={loading} disabled={loading} onClick={run}>
+  const renderButton = (size: 'sm' | 'xs' = 'sm') => (
+    <Button variant="ghost" size={size} icon={<Sparkles strokeWidth={1.75} />} loading={loading} disabled={loading} onClick={run}>
       {ran ? 'Re-scan with AI' : 'Suggest with AI'}
     </Button>
   );
@@ -102,7 +104,7 @@ export function useAISuggestions(onAccepted?: () => void) {
                     {s.confidence}
                   </Pill>
                 </div>
-                {s.reason && <div className="mt-1 text-[13px] text-slate-400">{s.reason}</div>}
+                {s.reason && <div className="mt-1 text-ui text-slate-400">{s.reason}</div>}
               </div>
               <div className="flex flex-shrink-0 items-center gap-2">
                 <Button
@@ -125,5 +127,5 @@ export function useAISuggestions(onAccepted?: () => void) {
     </Panel>
   );
 
-  return { button, results };
+  return { renderButton, results };
 }

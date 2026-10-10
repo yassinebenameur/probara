@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Monitor,
   CreateMonitorRequest,
@@ -41,8 +41,10 @@ import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import { AlertingSection } from './AlertingSection';
-import { LocationsSection } from './LocationsSection';
-import Switch from '@/components/ui/Switch';
+import ScheduleSection from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { SELECTED_SEGMENT } from '@/components/ui/roving';
 
 export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb' | 'rabbitmq' | 'mysql';
 
@@ -183,7 +185,7 @@ function SecretInput({
         />
         <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1">
           {hasStored && !value && (
-            <span className={`flex items-center gap-1 rounded-full bg-well-hover py-0.5 pl-2 text-[11px] font-medium text-slate-300 ${onClear ? 'pr-1' : 'pr-2'}`} title="A value is stored. Leave blank to keep it.">
+            <span className={`flex items-center gap-1 rounded-full bg-well-hover py-0.5 pl-2 text-2xs font-medium text-slate-300 ${onClear ? 'pr-1' : 'pr-2'}`} title="A value is stored. Leave blank to keep it.">
               <KeyRound className="h-3 w-3" strokeWidth={1.75} />
               set
               {onClear && (
@@ -211,34 +213,6 @@ function SecretInput({
         </div>
       </div>
       {error && <p className="mt-1 text-xs text-rose-300">{error}</p>}
-    </div>
-  );
-}
-
-function MiniToggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <Switch checked={checked} onChange={onChange} label={label} />
-  );
-}
-
-function ToggleRow({
-  title,
-  description,
-  checked,
-  onChange,
-}: {
-  title: string;
-  description: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-200">{title}</p>
-        <p className="text-xs text-slate-500">{description}</p>
-      </div>
-      <MiniToggle checked={checked} onChange={onChange} label={title} />
     </div>
   );
 }
@@ -331,6 +305,7 @@ export default function DatabaseForm({
     notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
     location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
     location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
   });
 
   // Explicitly dropped stored secrets ("Clear" on the set-chip): the field is
@@ -341,6 +316,9 @@ export default function DatabaseForm({
   const hasStoredConnString = storedConnString;
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors);
+  useFollowEnabled(monitor?.enabled, setFormData);
+  const formRef = useRef<HTMLFormElement>(null);
   const [certsOpen, setCertsOpen] = useState(
     Boolean(formData.tls_ca_pem || formData.tls_client_cert_pem || storedClientKey)
   );
@@ -569,9 +547,16 @@ export default function DatabaseForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     const newErrors = validate();
     setErrors(newErrors);
-    if (Object.keys(newErrors).length > 0) return;
+    if (Object.keys(newErrors).length > 0) {
+      // Open the disclosures that hold an error so it can be shown and focused.
+      if (newErrors.tls_client_key_pem) setCertsOpen(true);
+      if (newErrors.max_replication_lag_seconds || newErrors.warn_replication_lag_seconds) setClusterChecksOpen(true);
+      revealFirstError(formRef.current);
+      return;
+    }
 
     const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
       name: formData.name.trim(),
@@ -589,6 +574,7 @@ export default function DatabaseForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map((t) => t.trim()).filter((t) => t);
     }
+    requestData.depends_on_ids = formData.depends_on_ids;
     requestData.location_ids = formData.location_ids;
     requestData.location_quorum =
       formData.location_ids.length >= 2
@@ -598,22 +584,28 @@ export default function DatabaseForm({
     await onSubmit(requestData);
   };
 
-  const summary = (() => {
+  const planParts = (() => {
     const target = usingConnString
       ? formData.connection_string.trim() || hasStoredConnString
         ? `${meta.label} via connection string`
         : null
       : formData.host.trim()
-        ? `${meta.label} ${formData.host.trim()}:${formData.port}${formData.tls_enabled ? ' (TLS)' : ''}`
+        ? `${meta.label} ${formData.host.trim()}:${formData.port}`
         : null;
-    if (!target) return undefined;
+    if (!target) return [];
     const check = QUERY_CAPABLE_TYPES.includes(type) && formData.query.trim() ? 'run query' : meta.checkVerb;
-    return `Every ${formData.interval_seconds}s · ${check} ${target} · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`;
+    return [
+      everyLabel(formData.interval_seconds),
+      <PlanTarget key="t">{target}</PlanTarget>,
+      !usingConnString && formData.tls_enabled && 'with TLS',
+      check,
+      downAfterLabel(formData.consecutive_failures_threshold),
+    ];
   })();
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <FormSection title="Connection">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <FormSection title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -638,9 +630,9 @@ export default function DatabaseForm({
                 role="radio"
                 aria-checked={formData.connection_mode === mode}
                 onClick={() => setFormData({ ...formData, connection_mode: mode })}
-                className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
+                className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
                   formData.connection_mode === mode
-                    ? 'bg-glass-strong text-white shadow-glass'
+                    ? SELECTED_SEGMENT
                     : 'text-slate-400 hover:text-slate-100'
                 }`}
               >
@@ -674,6 +666,7 @@ export default function DatabaseForm({
                 description="Accept self-signed or mismatched certificates when the URI enables TLS"
                 checked={formData.tls_skip_verify}
                 onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
+                tone="warning"
               />
             )}
           </>
@@ -681,25 +674,35 @@ export default function DatabaseForm({
           <>
             <div className="grid grid-cols-[1fr_120px] gap-4">
               <FormField label="Host" required error={errors.host}>
-                <input
-                  type="text"
-                  value={formData.host}
-                  onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                  placeholder={meta.hostPlaceholder}
-                  className="input"
-                />
-                <p className="mt-1 text-xs text-slate-500">{meta.label} hostname or IP</p>
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="text"
+                      value={formData.host}
+                      onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                      placeholder={meta.hostPlaceholder}
+                      className="input"
+                    />
+                    <FieldHint>{meta.label} hostname or IP</FieldHint>
+                  </>
+                )}
               </FormField>
               <FormField label="Port" error={errors.port}>
-                <input
-                  type="number"
-                  value={formData.port}
-                  onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value, 10) || meta.defaultPort })}
-                  min={1}
-                  max={65535}
-                  className="input"
-                />
-                <p className="mt-1 text-xs text-slate-500">Default: {meta.defaultPort}</p>
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="number"
+                      value={formData.port}
+                      onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value, 10) || meta.defaultPort })}
+                      min={1}
+                      max={65535}
+                      className="input"
+                    />
+                    <FieldHint>Default: {meta.defaultPort}</FieldHint>
+                  </>
+                )}
               </FormField>
             </div>
 
@@ -740,29 +743,39 @@ export default function DatabaseForm({
 
             {type === 'redis' && (
               <FormField label="Database index">
-                <input
-                  type="number"
-                  value={formData.db_index}
-                  onChange={(e) => setFormData({ ...formData, db_index: parseInt(e.target.value, 10) || 0 })}
-                  min={0}
-                  max={15}
-                  className="input"
-                />
-                <p className="mt-1 text-xs text-slate-500">0–15, default 0</p>
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="number"
+                      value={formData.db_index}
+                      onChange={(e) => setFormData({ ...formData, db_index: parseInt(e.target.value, 10) || 0 })}
+                      min={0}
+                      max={15}
+                      className="input"
+                    />
+                    <FieldHint>0–15, default 0</FieldHint>
+                  </>
+                )}
               </FormField>
             )}
 
             {type === 'postgres' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <FormField label="Database">
-                  <input
-                    type="text"
-                    value={formData.database}
-                    onChange={(e) => setFormData({ ...formData, database: e.target.value })}
-                    placeholder="postgres"
-                    className="input"
-                  />
-                  <p className="mt-1 text-xs text-slate-500">Default: postgres</p>
+                  {(control) => (
+                    <>
+                      <input
+                        {...control}
+                        type="text"
+                        value={formData.database}
+                        onChange={(e) => setFormData({ ...formData, database: e.target.value })}
+                        placeholder="postgres"
+                        className="input"
+                      />
+                      <FieldHint>Default: postgres</FieldHint>
+                    </>
+                  )}
                 </FormField>
                 <FormField label="TLS (sslmode)">
                   <select
@@ -783,51 +796,71 @@ export default function DatabaseForm({
             {type === 'mongodb' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <FormField label="Auth source">
-                  <input
-                    type="text"
-                    value={formData.auth_source}
-                    onChange={(e) => setFormData({ ...formData, auth_source: e.target.value })}
-                    placeholder="admin"
-                    className="input"
-                  />
-                  <p className="mt-1 text-xs text-slate-500">Database to authenticate against. Default: admin</p>
+                  {(control) => (
+                    <>
+                      <input
+                        {...control}
+                        type="text"
+                        value={formData.auth_source}
+                        onChange={(e) => setFormData({ ...formData, auth_source: e.target.value })}
+                        placeholder="admin"
+                        className="input"
+                      />
+                      <FieldHint>Database to authenticate against. Default: admin</FieldHint>
+                    </>
+                  )}
                 </FormField>
                 <FormField label="Replica set (optional)">
-                  <input
-                    type="text"
-                    value={formData.replica_set}
-                    onChange={(e) => setFormData({ ...formData, replica_set: e.target.value })}
-                    placeholder="rs0"
-                    className="input"
-                  />
-                  <p className="mt-1 text-xs text-slate-500">Discover the topology and assert a reachable primary</p>
+                  {(control) => (
+                    <>
+                      <input
+                        {...control}
+                        type="text"
+                        value={formData.replica_set}
+                        onChange={(e) => setFormData({ ...formData, replica_set: e.target.value })}
+                        placeholder="rs0"
+                        className="input"
+                      />
+                      <FieldHint>Discover the topology and assert a reachable primary</FieldHint>
+                    </>
+                  )}
                 </FormField>
               </div>
             )}
 
             {type === 'rabbitmq' && (
               <FormField label="Virtual host">
-                <input
-                  type="text"
-                  value={formData.vhost}
-                  onChange={(e) => setFormData({ ...formData, vhost: e.target.value })}
-                  placeholder="/"
-                  className="input"
-                />
-                <p className="mt-1 text-xs text-slate-500">Default: /</p>
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="text"
+                      value={formData.vhost}
+                      onChange={(e) => setFormData({ ...formData, vhost: e.target.value })}
+                      placeholder="/"
+                      className="input"
+                    />
+                    <FieldHint>Default: /</FieldHint>
+                  </>
+                )}
               </FormField>
             )}
 
             {type === 'mysql' && (
               <FormField label="Database (optional)">
-                <input
-                  type="text"
-                  value={formData.database}
-                  onChange={(e) => setFormData({ ...formData, database: e.target.value })}
-                  placeholder="app"
-                  className="input"
-                />
-                <p className="mt-1 text-xs text-slate-500">Default schema to select after connecting</p>
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="text"
+                      value={formData.database}
+                      onChange={(e) => setFormData({ ...formData, database: e.target.value })}
+                      placeholder="app"
+                      className="input"
+                    />
+                    <FieldHint>Default schema to select after connecting</FieldHint>
+                  </>
+                )}
               </FormField>
             )}
 
@@ -845,6 +878,7 @@ export default function DatabaseForm({
                     description="Accept self-signed or mismatched certificates"
                     checked={formData.tls_skip_verify}
                     onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
+                    tone="warning"
                   />
                 )}
               </div>
@@ -879,26 +913,36 @@ export default function DatabaseForm({
             {certsOpen && (
               <div className="space-y-4 px-4 pb-4 pt-1">
                 <FormField label="CA certificate (PEM, optional)">
-                  <textarea
-                    rows={4}
-                    value={formData.tls_ca_pem}
-                    onChange={(e) => setFormData({ ...formData, tls_ca_pem: e.target.value })}
-                    placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
-                    spellCheck={false}
-                    className="input min-h-[88px] font-mono"
-                  />
-                  <p className="mt-1 text-xs text-slate-500">Verify a server certificate signed by a private or internal CA</p>
+                  {(control) => (
+                    <>
+                      <textarea
+                        {...control}
+                        rows={4}
+                        value={formData.tls_ca_pem}
+                        onChange={(e) => setFormData({ ...formData, tls_ca_pem: e.target.value })}
+                        placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
+                        spellCheck={false}
+                        className="input min-h-[88px] font-mono"
+                      />
+                      <FieldHint>Verify a server certificate signed by a private or internal CA</FieldHint>
+                    </>
+                  )}
                 </FormField>
                 <FormField label="Client certificate (PEM, optional)">
-                  <textarea
-                    rows={4}
-                    value={formData.tls_client_cert_pem}
-                    onChange={(e) => setFormData({ ...formData, tls_client_cert_pem: e.target.value })}
-                    placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
-                    spellCheck={false}
-                    className="input min-h-[88px] font-mono"
-                  />
-                  <p className="mt-1 text-xs text-slate-500">Only for mutual TLS / X.509 authentication</p>
+                  {(control) => (
+                    <>
+                      <textarea
+                        {...control}
+                        rows={4}
+                        value={formData.tls_client_cert_pem}
+                        onChange={(e) => setFormData({ ...formData, tls_client_cert_pem: e.target.value })}
+                        placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
+                        spellCheck={false}
+                        className="input min-h-[88px] font-mono"
+                      />
+                      <FieldHint>Only for mutual TLS / X.509 authentication</FieldHint>
+                    </>
+                  )}
                 </FormField>
                 {(formData.tls_client_cert_pem.trim() !== '' || formData.tls_client_key_pem !== '' || hasStoredClientKey) && (
                   <FormField
@@ -998,21 +1042,26 @@ export default function DatabaseForm({
         </div>
       </FormSection>
 
-      <FormSection title="Checks">
+      <FormSection title="Check">
         {QUERY_CAPABLE_TYPES.includes(type) && (
           <>
             <FormField
               label="Assertion query (optional)"
               error={errors.query}
             >
-              <input
-                type="text"
-                value={formData.query}
-                onChange={(e) => setFormData({ ...formData, query: e.target.value })}
-                placeholder="SELECT 1"
-                className="input font-mono"
-              />
-              <p className="mt-1 text-xs text-slate-500">Runs after connecting; the check fails if it errors or returns 0 rows. Example: SELECT 1</p>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.query}
+                    onChange={(e) => setFormData({ ...formData, query: e.target.value })}
+                    placeholder="SELECT 1"
+                    className="input font-mono"
+                  />
+                  <FieldHint>Runs after connecting; the check fails if it errors or returns 0 rows. Example: SELECT 1</FieldHint>
+                </>
+              )}
             </FormField>
             {formData.query.trim() !== '' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -1210,47 +1259,35 @@ export default function DatabaseForm({
         </div>
       </FormSection>
 
-      <FormSection title="Schedule">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Interval (seconds)">
-            <input
-              type="number"
-              value={formData.interval_seconds}
-              onChange={(e) => setFormData({ ...formData, interval_seconds: parseInt(e.target.value, 10) || 60 })}
-              min={10}
-              step={5}
-              className="input"
-            />
-          </FormField>
-          <FormField label="Timeout (seconds)" error={errors.timeout_seconds}>
-            <input
-              type="number"
-              value={formData.timeout_seconds}
-              onChange={(e) => setFormData({ ...formData, timeout_seconds: parseInt(e.target.value, 10) || 10 })}
-              min={1}
-              className="input"
-            />
-            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
-          </FormField>
-        </div>
-      </FormSection>
+      <ScheduleSection
+        intervalSeconds={formData.interval_seconds}
+        onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
+        timeoutSeconds={formData.timeout_seconds}
+        onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
+        timeoutError={errors.timeout_seconds}
+        locations={{
+          selectedIds: formData.location_ids,
+          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+          quorum: formData.location_quorum,
+          onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
+          onLocationsLoaded: setAvailableLocations,
+        }}
+        enabled={formData.enabled}
+        onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+        enabledDescription={`Run ${meta.label} checks on this schedule`}
+      />
 
-      <FormSection
-        title="Locations"
-        summary={formData.location_ids.length > 0 ? `${formData.location_ids.length} selected` : 'Default fleet'}
-        collapsible
-        defaultOpen={formData.location_ids.length > 0}
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
+        }
       >
-        <LocationsSection
-          selectedIds={formData.location_ids}
-          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
-          quorum={formData.location_quorum}
-          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
-          onLocationsLoaded={setAvailableLocations}
-        />
-      </FormSection>
-
-      <FormSection title="Alerting">
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
@@ -1259,35 +1296,21 @@ export default function DatabaseForm({
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}
-          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
+          hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Meta">
-        <FormField label="Tags">
-          <input
-            type="text"
-            value={formData.tags}
-            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-            placeholder={`production, ${type}, critical`}
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
-        </FormField>
-
-        <ToggleRow
-          title="Monitor enabled"
-          description={`Run ${meta.label} checks on schedule`}
-          checked={formData.enabled}
-          onChange={(v) => setFormData({ ...formData, enabled: v })}
-        />
-      </FormSection>
+      <LabelsSection
+        tags={formData.tags}
+        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+        placeholder={`production, ${type}, critical`}
+      />
 
       <FormActions
-        middle={summary}
+        middle={<PlanSummary parts={planParts} errors={errors} />}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',

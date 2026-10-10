@@ -11,6 +11,7 @@ import FormCard from '@/components/ui/FormCard';
 import Panel from '@/components/ui/Panel';
 import Pill from '@/components/ui/Pill';
 import Callout from '@/components/ui/Callout';
+import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 
 export default function EditAlertChannelPage() {
   const router = useRouter();
@@ -77,8 +78,9 @@ export default function EditAlertChannelPage() {
   return (
     <div className="max-w-5xl space-y-6">
       <PageHeader
-        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Channels', href: '/settings?tab=channels' }, { label: channel.name }]}
+        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Notifications', href: '/settings?tab=channels' }, { label: channel.name }]}
         title="Edit alert channel"
+        subtitle="Change where and how this channel delivers alerts."
       />
 
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
@@ -117,14 +119,14 @@ export default function EditAlertChannelPage() {
             </div>
             <div>
               <dt className="text-xs text-slate-500">Created</dt>
-              <dd className="mt-0.5 text-[13px] text-slate-300">
-                {new Date(channel.created_at).toLocaleString()}
+              <dd className="mt-0.5 text-ui text-slate-300" title={formatDateTimeFull(channel.created_at)}>
+                {formatDateTime(channel.created_at)}
               </dd>
             </div>
             <div>
               <dt className="text-xs text-slate-500">Last updated</dt>
-              <dd className="mt-0.5 text-[13px] text-slate-300">
-                {new Date(channel.updated_at).toLocaleString()}
+              <dd className="mt-0.5 text-ui text-slate-300" title={formatDateTimeFull(channel.updated_at)}>
+                {formatDateTime(channel.updated_at)}
               </dd>
             </div>
           </dl>

@@ -7,7 +7,7 @@ import {
   downloadIssuedSlaReport, downloadSlaReport, getIssuedSlaReports, getSla, getSlaReport, issueSlaReport,
 } from '@/lib/api';
 import {
-  SLA_PERIOD_LABELS, formatSlaPct, formatTarget, slaTone,
+  SLA_AGGREGATION_LABELS, SLA_PERIOD_LABELS, formatSlaPct, formatSlaPeriodRange, formatTarget, slaTone,
   type Sla, type SlaExportFormat, type SlaReport, type SlaReportQuery, type SlaReportRef,
 } from '@/lib/sla';
 import { formatDateTime } from '@/lib/format';
@@ -18,6 +18,7 @@ import PageHeader from '@/components/ui/PageHeader';
 import Tabs, { useUrlTab } from '@/components/ui/Tabs';
 import EmptyState from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/ToastProvider';
+import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { SlaFormModal } from '@/components/slas/SlaFormModal';
 import { SlaReportView } from '@/components/slas/SlaReportView';
 import { SlaStatusPill, TONE_TEXT, saveDownload } from '@/components/slas/SlaVisuals';
@@ -44,6 +45,7 @@ export default function SlaDetailPage() {
   const params = useParams<{ id: string }>();
   const slaId = Array.isArray(params?.id) ? params.id[0] : params?.id;
   const { showToast } = useToast();
+  const canWrite = useCanWrite();
   const [tab, setTab] = useUrlTab(TAB_IDS);
   const [sla, setSla] = useState<Sla | null>(null);
   const [report, setReport] = useState<SlaReport | null>(null);
@@ -127,6 +129,12 @@ export default function SlaDetailPage() {
     ? report.period.is_closed ? report.period.key : report.period.previous_key
     : undefined;
   const alreadyIssued = issued.some((r) => r.period_key === issuablePeriod);
+  // Readable when the shown period is the one issued; the previous period's
+  // dates are not in the response, so it keeps its key.
+  const issuablePeriodLabel =
+    report && issuablePeriod && report.period.is_closed && sla
+      ? `${formatSlaPeriodRange(report.period.start, report.period.end, sla.timezone)} (${issuablePeriod})`
+      : issuablePeriod;
 
   const issue = async () => {
     if (!slaId || !issuablePeriod) return;
@@ -155,13 +163,18 @@ export default function SlaDetailPage() {
       <PageHeader
         breadcrumb={[{ label: 'SLAs', href: '/slas' }, { label: sla.name }]}
         title={sla.name}
-        subtitle={`${formatTarget(sla.target_pct)} target · ${SLA_PERIOD_LABELS[sla.period].toLowerCase()} periods in ${sla.timezone} · ${
-          sla.aggregation === 'serial' ? 'serial (all must be up)' : 'mean of monitors'}${
-          sla.degraded_counts_as_down ? ' · degraded counts as down' : ''}`}
+        subtitle={[
+          `${formatTarget(sla.target_pct)} target`,
+          `${SLA_PERIOD_LABELS[sla.period]} periods in ${sla.timezone}`,
+          SLA_AGGREGATION_LABELS[sla.aggregation],
+          sla.degraded_counts_as_down ? 'Degraded counts as down' : null,
+        ]}
         action={
-          <Button variant="ghost" size="sm" icon={<Pencil strokeWidth={1.75} />} onClick={() => setEditing(true)}>
-            Edit
-          </Button>
+          canWrite ? (
+            <Button variant="ghost" size="sm" icon={<Pencil strokeWidth={1.75} />} onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          ) : undefined
         }
       />
 
@@ -175,11 +188,19 @@ export default function SlaDetailPage() {
                 {f.label}
               </Button>
             ))}
-            <Button variant="ghost" size="xs" icon={<Stamp strokeWidth={1.75} />} loading={issuing}
-              disabled={!issuablePeriod || alreadyIssued} onClick={issue}
-              title={alreadyIssued ? `${issuablePeriod} is already issued` : 'Freeze this closed period as an immutable report'}>
-              {issuablePeriod ? `Issue ${issuablePeriod}` : 'Issue report'}
-            </Button>
+            {canWrite && (
+              <Button variant="ghost" size="xs" icon={<Stamp strokeWidth={1.75} />} loading={issuing}
+                disabled={!issuablePeriod || alreadyIssued} onClick={issue}
+                title={
+                  !issuablePeriod
+                    ? 'No closed period to issue yet'
+                    : alreadyIssued
+                      ? `${issuablePeriodLabel} is already issued`
+                      : `Freeze ${issuablePeriodLabel} as an immutable report`
+                }>
+                Issue report
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -190,8 +211,8 @@ export default function SlaDetailPage() {
             <div className="flex items-center gap-1">
               <IconButton size="sm" icon={<ChevronLeft strokeWidth={1.75} />} label="Previous period"
                 disabled={!period?.previous_key} onClick={() => setQuery({ period: period?.previous_key })} />
-              <span className="min-w-[7rem] text-center font-mono text-sm tabular-nums text-white">
-                {period?.is_custom ? 'Custom range' : period?.key ?? '…'}
+              <span className="min-w-[9rem] text-center text-sm tabular-nums text-white" title={period?.key}>
+                {period ? formatSlaPeriodRange(period.start, period.end, sla.timezone) : '…'}
               </span>
               <IconButton size="sm" icon={<ChevronRight strokeWidth={1.75} />} label="Next period"
                 disabled={!period?.next_key} onClick={() => setQuery({ period: period?.next_key })} />
@@ -255,11 +276,13 @@ export default function SlaDetailPage() {
               <tbody>
                 {issued.map((r) => (
                   <tr key={r.id}>
-                    <td className="font-mono tabular-nums text-white">{r.period_key}</td>
-                    <td className={`font-mono tabular-nums ${TONE_TEXT[slaTone(r.met)]}`}>{formatSlaPct(r.availability_pct)}</td>
-                    <td className="font-mono tabular-nums text-slate-300">{formatTarget(r.target_pct)}</td>
+                    <td className="whitespace-nowrap tabular-nums text-white" title={r.period_key}>
+                      {formatSlaPeriodRange(r.period_start, r.period_end, sla.timezone)}
+                    </td>
+                    <td className={`tabular-nums ${TONE_TEXT[slaTone(r.met)]}`}>{formatSlaPct(r.availability_pct)}</td>
+                    <td className="tabular-nums text-slate-300">{formatTarget(r.target_pct)}</td>
                     <td><SlaStatusPill met={r.met} /></td>
-                    <td className="whitespace-nowrap text-[13px] tabular-nums text-slate-400">
+                    <td className="whitespace-nowrap text-ui tabular-nums text-slate-400">
                       {formatDateTime(r.issued_at)}
                       <div className="text-xs text-slate-500">{r.issued_by}</div>
                     </td>

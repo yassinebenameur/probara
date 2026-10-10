@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import Link from 'next/link';
 import { getLocations } from '@/lib/api';
 import type { Location } from '@/lib/types';
@@ -23,6 +23,7 @@ export function LocationsSection({
   onLocationsLoaded,
 }: LocationsSectionProps) {
   const [locations, setLocations] = useState<Location[]>([]);
+  const quorumId = useId();
 
   useEffect(() => {
     getLocations({ page_size: 100 })
@@ -37,7 +38,7 @@ export function LocationsSection({
 
   return (
     <div className="space-y-4">
-      <p className="text-[13px] text-slate-400">
+      <p className="text-ui text-slate-400">
         Run this check from your private locations. None selected = the default platform fleet.
       </p>
 
@@ -60,10 +61,11 @@ export function LocationsSection({
 
       {selectedIds.length >= 2 && (
         <div>
-          <label className="mb-1.5 block text-[13px] font-medium text-slate-300">
+          <label htmlFor={quorumId} className="mb-1.5 block text-ui font-medium text-slate-300">
             Locations required down
           </label>
           <input
+            id={quorumId}
             type="number"
             min={1}
             max={selectedIds.length}

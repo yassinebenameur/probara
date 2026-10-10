@@ -87,8 +87,9 @@ export default function UsersPage() {
   const header = (
     <PageHeader
       title="Users"
+      subtitle="Platform accounts and the role each one has in every workspace."
       action={
-        !apiKeyMode ? (
+        !apiKeyMode && isSuperadmin && !userLoading ? (
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
@@ -99,7 +100,7 @@ export default function UsersPage() {
               Refresh
             </Button>
             <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-              <Link href="/users/new">Add user</Link>
+              <Link href="/users/new">New user</Link>
             </Button>
           </div>
         ) : undefined
@@ -159,7 +160,7 @@ export default function UsersPage() {
           description="Add admin accounts to allow more team members to log in."
           action={
             <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
-              <Link href="/users/new">Add user</Link>
+              <Link href="/users/new">New user</Link>
             </Button>
           }
         />
@@ -182,25 +183,25 @@ export default function UsersPage() {
                 {users.map((user) => (
                   <tr key={user.id}>
                     <td className="font-medium text-white">{user.username}</td>
-                    <td className="text-[13px] text-slate-400">{user.email || '—'}</td>
+                    <td className="text-ui text-slate-400">{user.email || '—'}</td>
                     <td>
                       {user.platform_role === 'superadmin' ? (
                         <Pill tone="info" size="xs">Superadmin</Pill>
                       ) : (
-                        <span className="text-[13px] text-slate-400">Member</span>
+                        <span className="text-ui text-slate-400">Member</span>
                       )}
                     </td>
-                    <td className="text-[13px] text-slate-400">
+                    <td className="text-ui text-slate-400">
                       {user.auth_method === 'oidc' ? 'SSO' : 'Password'}
                     </td>
-                    <td className="text-[13px] text-slate-400">
+                    <td className="text-ui text-slate-400">
                       {user.platform_role === 'superadmin'
                         ? 'All'
                         : (user.memberships || [])
                             .map((m) => `${m.tenant_name || m.tenant_id} (${m.role})`)
                             .join(', ') || '—'}
                     </td>
-                    <td className="whitespace-nowrap text-[13px] text-slate-400">
+                    <td className="whitespace-nowrap text-ui text-slate-400">
                       {formatDateTime(user.last_login_at)}
                     </td>
                     <td>

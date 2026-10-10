@@ -59,7 +59,7 @@ export function LocationDeployModal({ location, onClose }: LocationDeployModalPr
               <h2 className="text-base font-semibold text-white">
                 Deploy worker — {location.name}
               </h2>
-              <p className="mt-1 text-[13px] text-slate-400">
+              <p className="mt-1 text-ui text-slate-400">
                 Run a worker inside the network you want checks to originate from.
               </p>
             </div>
@@ -75,7 +75,7 @@ export function LocationDeployModal({ location, onClose }: LocationDeployModalPr
               <div className="space-y-5">
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[13px] font-medium text-slate-300">Docker run</span>
+                    <span className="text-ui font-medium text-slate-300">Docker run</span>
                     <Button
                       variant="subtle"
                       size="xs"
@@ -92,7 +92,7 @@ export function LocationDeployModal({ location, onClose }: LocationDeployModalPr
 
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <span className="text-[13px] font-medium text-slate-300">Docker Compose</span>
+                    <span className="text-ui font-medium text-slate-300">Docker Compose</span>
                     <Button
                       variant="subtle"
                       size="xs"
@@ -109,7 +109,7 @@ export function LocationDeployModal({ location, onClose }: LocationDeployModalPr
 
                 {envEntries.length > 0 && (
                   <div>
-                    <span className="mb-1.5 block text-[13px] font-medium text-slate-300">
+                    <span className="mb-1.5 block text-ui font-medium text-slate-300">
                       Running your own image? Set these variables
                     </span>
                     <div className="glass-well overflow-x-auto">

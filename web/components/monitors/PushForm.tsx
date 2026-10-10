@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link2 } from 'lucide-react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, PushMonitorConfig, PushInfo, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
 import { getPushInfo } from '@/lib/api';
@@ -9,10 +9,11 @@ import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
-import FilterChip from '@/components/ui/FilterChip';
 import { AlertingSection } from './AlertingSection';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
-import Switch from '@/components/ui/Switch';
+import { IntervalField } from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FieldHint, FormPanel, LabelsSection, NumberInput, PlanSummary, ToggleRow, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
 
 interface PushFormProps {
   monitor?: Monitor;
@@ -55,9 +56,13 @@ export default function PushForm({
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
     dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors);
+  useFollowEnabled(monitor?.enabled, setFormData);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (!isEditMode && !initialPushConfig) {
@@ -70,6 +75,7 @@ export default function PushForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     setErrors({});
 
     const newErrors: Record<string, string> = {};
@@ -79,6 +85,7 @@ export default function PushForm({
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
+      revealFirstError(formRef.current);
       return;
     }
 
@@ -104,6 +111,7 @@ export default function PushForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
+    requestData.depends_on_ids = formData.depends_on_ids;
 
     try {
       await onSubmit(requestData);
@@ -224,8 +232,8 @@ export default function PushForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <FormSection title="Monitor">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <FormSection title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -235,7 +243,7 @@ export default function PushForm({
             className="input"
           />
         </FormField>
-        {canViewCredentials && isEditMode && monitor && (
+        {canViewCredentials && isEditMode && monitor ? (
           <div>
             <Button
               variant="ghost"
@@ -243,57 +251,68 @@ export default function PushForm({
               icon={<Link2 strokeWidth={1.75} />}
               onClick={() => setShowWebhookInfo(true)}
             >
-              View webhook URL &amp; instructions
+              View webhook URL and instructions
             </Button>
           </div>
+        ) : (
+          !isEditMode && <p className="text-xs text-slate-500">After creating, open the monitor&apos;s Settings tab to copy its webhook URL and token.</p>
         )}
       </FormSection>
 
-      <FormSection title="Timing">
-        <FormField
-          label="Expected interval (seconds)"
-          required
+      <FormPanel title="Schedule">
+        <IntervalField
+          label="Expect a push every"
+          value={formData.expected_interval_seconds}
+          onChange={(n) => setFormData((prev) => ({ ...prev, expected_interval_seconds: n }))}
+          presets={INTERVAL_PRESETS}
+          min={5}
+          step={5}
           error={errors.expected_interval_seconds}
-        >
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {INTERVAL_PRESETS.map((preset) => (
-              <FilterChip
-                key={preset}
-                selected={formData.expected_interval_seconds === preset}
-                onClick={() => setFormData({ ...formData, expected_interval_seconds: preset })}
-              >
-                {preset >= 60 ? `${preset / 60}m` : `${preset}s`}
-              </FilterChip>
-            ))}
-          </div>
-          <input
-            type="number"
-            value={formData.expected_interval_seconds}
-            onChange={(e) => setFormData({ ...formData, expected_interval_seconds: parseInt(e.target.value) || 60 })}
-            min={5}
-            step={5}
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">How often your service sends a push</p>
+          hint="How often your service sends a push"
+        />
+
+        <FormField label="Grace period" error={errors.grace_period_seconds}>
+          {(control) => (
+            <>
+              <span className="flex items-center gap-2">
+                <NumberInput
+                  {...control}
+                  value={formData.grace_period_seconds}
+                  onChange={(n) => setFormData((prev) => ({ ...prev, grace_period_seconds: n }))}
+                  min={0}
+                  step={5}
+                  className="input input-sm !w-24 tabular-nums"
+                />
+                <span className="text-xs text-slate-500">seconds</span>
+              </span>
+              {!errors.grace_period_seconds && (
+                <FieldHint>
+                  Buffer before marking down. Total window: {formData.expected_interval_seconds + formData.grace_period_seconds}s
+                </FieldHint>
+              )}
+            </>
+          )}
         </FormField>
 
-        <FormField
-          label="Grace period (seconds)"
-          error={errors.grace_period_seconds}
-        >
-          <input
-            type="number"
-            value={formData.grace_period_seconds}
-            onChange={(e) => setFormData({ ...formData, grace_period_seconds: parseInt(e.target.value) || 0 })}
-            min={0}
-            step={5}
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Buffer before marking down. Total window: {formData.expected_interval_seconds + formData.grace_period_seconds}s</p>
-        </FormField>
-      </FormSection>
+        <ToggleRow
+          title="Monitor enabled"
+          description="Accept pushes and track uptime"
+          checked={formData.enabled}
+          onChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+        />
+      </FormPanel>
 
-      <FormSection title="Alerting">
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
+        }
+      >
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.expected_interval_seconds}
@@ -302,39 +321,32 @@ export default function PushForm({
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}
-          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
+          hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Meta">
-        <FormField label="Tags">
-          <input
-            type="text"
-            value={formData.tags}
-            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-            placeholder="production, backend, critical"
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
-        </FormField>
-
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
-            <p className="text-xs text-slate-500">Accept pushes and track uptime</p>
-          </div>
-          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
-        </div>
-      </FormSection>
+      <LabelsSection
+        tags={formData.tags}
+        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+        placeholder="production, backend, critical"
+      />
 
       <FormActions
-        middle={`Expect a push every ${formData.expected_interval_seconds}s · down if none arrives within ${formData.expected_interval_seconds + formData.grace_period_seconds}s`}
+        middle={
+          <PlanSummary
+            errors={errors}
+            parts={[
+              `Expect a push every ${formData.expected_interval_seconds}s`,
+              `down if none arrives within ${formData.expected_interval_seconds + formData.grace_period_seconds}s`,
+            ]}
+          />
+        }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create push monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',

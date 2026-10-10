@@ -1,7 +1,8 @@
 'use client';
 
 import type { MonitorLocationStatus } from '@/lib/types';
-import { formatTimeAgo, monitorStateColors } from '@/lib/monitor-utils';
+import { monitorStateColors } from '@/lib/monitor-utils';
+import { formatDateTimeFull, formatLatency, formatRelativeTime } from '@/lib/format';
 
 interface MonitorLocationStripProps {
   locations: MonitorLocationStatus[];
@@ -29,22 +30,43 @@ export function MonitorLocationStrip({ locations, quorum }: MonitorLocationStrip
     <div className="glass flex flex-wrap items-center gap-2 px-5 py-4">
       {locations.map((loc) => {
         const colors = monitorStateColors(loc.current_state);
+        const hasLatency = typeof loc.last_latency_ms === 'number';
+        // Latency is a success measure: a failing location's last duration
+        // is how long the failure took (often the timeout), so it moves to
+        // the state's tooltip instead of reading as response time.
+        const showLatency = hasLatency && loc.current_state === 'up';
         return (
-          <div key={loc.id} className="glass-well flex items-center gap-2 px-3 py-1.5">
+          <div key={loc.id} className="glass-well flex min-w-0 max-w-full items-center gap-2 px-3 py-1.5">
             <span className={`h-2 w-2 flex-shrink-0 rounded-full ${colors.dot}`} aria-hidden="true" />
-            <span className="text-sm font-medium text-white">{loc.name}</span>
-            <span className="text-xs text-slate-400">{stateLabel(loc.current_state)}</span>
-            <span className="text-xs tabular-nums text-slate-500">
-              {typeof loc.last_latency_ms === 'number' ? `${loc.last_latency_ms}ms` : '—'}
-              {loc.last_check_at ? ` · ${formatTimeAgo(loc.last_check_at)}` : ''}
+            <span className="min-w-0 truncate text-sm font-medium text-white" title={loc.name}>
+              {loc.name}
             </span>
+            <span
+              className="shrink-0 whitespace-nowrap text-xs text-slate-400"
+              title={hasLatency && !showLatency ? `Last check failed after ${formatLatency(loc.last_latency_ms)}` : undefined}
+            >
+              {stateLabel(loc.current_state)}
+            </span>
+            {showLatency && (
+              <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-slate-500">
+                {formatLatency(loc.last_latency_ms)}
+              </span>
+            )}
+            {loc.last_check_at && (
+              <span
+                className="shrink-0 whitespace-nowrap text-xs tabular-nums text-slate-500"
+                title={formatDateTimeFull(loc.last_check_at)}
+              >
+                {formatRelativeTime(loc.last_check_at)}
+              </span>
+            )}
             {!loc.connected && (
-              <span className="text-xs text-amber-300">worker offline</span>
+              <span className="shrink-0 whitespace-nowrap text-xs text-amber-300">worker offline</span>
             )}
           </div>
         );
       })}
-      <span className="ml-auto text-xs text-slate-500">
+      <span className="text-xs text-slate-500 sm:ml-auto">
         Down when ≥ {quorum} of {locations.length} locations fail
       </span>
     </div>

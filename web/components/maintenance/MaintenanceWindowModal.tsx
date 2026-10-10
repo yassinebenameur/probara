@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { X } from 'lucide-react';
 import { createMaintenanceWindow, getGroupMembers, updateMaintenanceWindow } from '@/lib/api';
 import type { MaintenanceWindow, Monitor } from '@/lib/types';
@@ -17,7 +17,7 @@ interface MaintenanceWindowModalProps {
   onCancel: () => void;
 }
 
-const labelClass = 'mb-1.5 block text-[13px] font-medium text-slate-300';
+const labelClass = 'mb-1.5 block text-ui font-medium text-slate-300';
 
 // datetime-local inputs work in the browser's local timezone; the API speaks
 // ISO/UTC. Convert at the edges.
@@ -40,6 +40,7 @@ function defaultEnd(): string {
 }
 
 export function MaintenanceWindowModal({ window, onDone, onCancel }: MaintenanceWindowModalProps) {
+  const titleId = useId();
   const [title, setTitle] = useState(window?.title ?? '');
   const [description, setDescription] = useState(window?.description ?? '');
   const [startsAt, setStartsAt] = useState(window ? isoToLocalInput(window.starts_at) : defaultStart());
@@ -119,15 +120,20 @@ export function MaintenanceWindowModal({ window, onDone, onCancel }: Maintenance
   };
 
   return (
-    <ModalPortal>
+    <ModalPortal onEscape={saving ? undefined : onCancel}>
       <div className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="glass-overlay flex max-h-[90vh] w-full max-w-xl flex-col">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          className="glass-overlay flex max-h-[90vh] w-full max-w-xl flex-col"
+        >
           <div className="flex items-start justify-between gap-4 px-6 pt-5">
             <div>
-              <h2 className="text-base font-semibold text-white">
+              <h2 id={titleId} className="text-base font-semibold text-white">
                 {window ? 'Edit maintenance window' : 'Schedule maintenance'}
               </h2>
-              <p className="mt-1 text-[13px] text-slate-400">
+              <p className="mt-1 text-ui text-slate-400">
                 Alerts for the selected monitors are suppressed during the window. Checks keep running.
               </p>
             </div>

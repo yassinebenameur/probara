@@ -26,29 +26,42 @@ export function SlaStatusPill({ met, running }: { met: boolean | null | undefine
   return <Pill tone={PILL_TONE[tone]} size="xs">{label}</Pill>;
 }
 
-/** Remaining error budget as a bar; overspent budgets fill red past zero. */
+/**
+ * Remaining error budget as a bar. An overspent budget is an empty track with
+ * a rose edge labelled "Exhausted": a full red bar under "budget left" would
+ * read as a full budget.
+ */
 export function BudgetBar({ remainingPct }: { remainingPct: number | null | undefined }) {
   if (remainingPct === null || remainingPct === undefined) {
     return <div className="h-1.5 w-full rounded-full bg-well-hover" aria-label="No error budget data" />;
   }
+  const exhausted = remainingPct <= 0;
   const clamped = Math.max(0, Math.min(100, remainingPct));
-  const tone: SlaTone = remainingPct < 0 ? 'bad' : remainingPct < 25 ? 'warn' : 'good';
+  const tone: SlaTone = exhausted ? 'bad' : remainingPct < 25 ? 'warn' : 'good';
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-well-hover" role="meter" aria-valuemin={0}
-        aria-valuemax={100} aria-valuenow={Math.round(remainingPct)} aria-label="Error budget remaining">
-        <div className={`h-full rounded-full ${remainingPct < 0 ? 'w-full bg-rose-500/70' : TONE_BG[tone]}`}
-          style={remainingPct < 0 ? undefined : { width: `${clamped}%` }} />
+      <div
+        className={`h-1.5 w-full overflow-hidden rounded-full ${
+          exhausted ? 'bg-rose-500/15 shadow-[inset_0_0_0_1px_rgb(var(--tw-rose-500)/0.45)]' : 'bg-well-hover'
+        }`}
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(clamped)}
+        aria-valuetext={exhausted ? 'Exhausted' : `${Math.round(clamped)}% left`}
+        aria-label="Error budget remaining"
+      >
+        {!exhausted && <div className={`h-full rounded-full ${TONE_BG[tone]}`} style={{ width: `${clamped}%` }} />}
       </div>
-      <span className={`w-12 shrink-0 text-right font-mono text-xs tabular-nums ${TONE_TEXT[tone]}`}>
-        {remainingPct < 0 ? 'over' : `${Math.round(remainingPct)}%`}
+      <span className={`w-16 shrink-0 text-right text-xs tabular-nums ${TONE_TEXT[tone]}`}>
+        {exhausted ? 'Exhausted' : `${Math.round(remainingPct)}%`}
       </span>
     </div>
   );
 }
 
 export function AvailabilityFigure({ value, tone, className = '' }: { value: number | null; tone: SlaTone; className?: string }) {
-  return <span className={`font-mono tabular-nums ${TONE_TEXT[tone]} ${className}`}>{formatSlaPct(value)}</span>;
+  return <span className={`tabular-nums ${TONE_TEXT[tone]} ${className}`}>{formatSlaPct(value)}</span>;
 }
 
 /** Saves a downloaded blob under its server-provided filename. */

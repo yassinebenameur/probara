@@ -1,3 +1,4 @@
+import { formatLatency, formatRelativeTime } from './format';
 import { CheckResult, HTTPDisplayValue, Monitor, MonitorState, MonitorType } from './types';
 
 export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
@@ -143,13 +144,13 @@ export function getEffectiveMonitorStatus(
 export function monitorStateColors(state?: MonitorState): { dot: string; text: string; border: string } {
   switch (state) {
     case 'up':
-      return { dot: 'bg-emerald-500', text: 'text-emerald-400', border: 'border-emerald-500/40' };
+      return { dot: 'bg-emerald-500', text: 'text-emerald-300', border: 'border-emerald-500/40' };
     case 'suspect':
-      return { dot: 'bg-amber-500', text: 'text-amber-400', border: 'border-amber-500/40' };
+      return { dot: 'bg-amber-500', text: 'text-amber-300', border: 'border-amber-500/40' };
     case 'degraded':
-      return { dot: 'bg-amber-500', text: 'text-amber-400', border: 'border-amber-500/40' };
+      return { dot: 'bg-amber-500', text: 'text-amber-300', border: 'border-amber-500/40' };
     case 'down':
-      return { dot: 'bg-rose-500', text: 'text-rose-400', border: 'border-rose-500/40' };
+      return { dot: 'bg-rose-500', text: 'text-rose-300', border: 'border-rose-500/40' };
     default:
       return { dot: 'bg-slate-500', text: 'text-slate-400', border: 'border-slate-500/40' };
   }
@@ -179,62 +180,42 @@ export function monitorTargetLabel(type?: MonitorType | string): string {
 }
 
 /**
- * Format timestamp into relative time string
- * @param timestamp ISO timestamp string
- * @returns Relative time string like "4s ago" or "2 min ago"
+ * Relative time ("12s ago", "3 min ago"). Kept as an alias so existing
+ * imports keep working; the implementation is formatRelativeTime in
+ * lib/format.ts.
  */
 export function formatTimeAgo(timestamp: string): string {
-  const now = new Date().getTime();
-  const then = new Date(timestamp).getTime();
-  const diffMs = now - then;
-  const diffSeconds = Math.floor(diffMs / 1000);
-
-  if (diffSeconds < 60) {
-    return `${diffSeconds}s ago`;
-  } else if (diffSeconds < 3600) {
-    const minutes = Math.floor(diffSeconds / 60);
-    return `${minutes} min ago`;
-  } else if (diffSeconds < 86400) {
-    const hours = Math.floor(diffSeconds / 3600);
-    return `${hours} hr ago`;
-  } else {
-    const days = Math.floor(diffSeconds / 86400);
-    return `${days} day${days > 1 ? 's' : ''} ago`;
-  }
+  return formatRelativeTime(timestamp);
 }
 
 /**
- * Calculate latency statistics from check results
- * @param results Array of check results
- * @returns Object with median and p95 latency in ms
+ * Latency statistics over successful operational checks. Failed checks are
+ * left out: their latency is usually the timeout (a down Mongo reads
+ * "10000ms") or a fast refusal that looks healthy. All zeros, with
+ * `samples: 0`, when there is nothing to measure; render that as "—".
  */
 export function calculateLatencyStats(results: CheckResult[]): {
   median: number;
   p95: number;
   latest: number;
+  samples: number;
 } {
-  const operationalResults = getOperationalResults(results);
-  if (operationalResults.length === 0) {
-    return { median: 0, p95: 0, latest: 0 };
+  const measured = getOperationalResults(results).filter(
+    (r) => r.status === 'success' && r.latency_ms !== undefined && r.latency_ms !== null
+  );
+  if (measured.length === 0) {
+    return { median: 0, p95: 0, latest: 0, samples: 0 };
   }
 
-  const latencies = operationalResults
-    .filter((r) => r.latency_ms !== undefined && r.latency_ms !== null)
-    .map((r) => r.latency_ms!);
-
-  if (latencies.length === 0) {
-    return { median: 0, p95: 0, latest: 0 };
-  }
-
+  const latencies = measured.map((r) => r.latency_ms!);
   const sorted = [...latencies].sort((a, b) => a - b);
-  const latest = operationalResults.find((r) => r.latency_ms !== undefined && r.latency_ms !== null)?.latency_ms ?? 0;
+  // Results arrive newest first.
+  const latest = latencies[0];
 
-  // Calculate median
   const mid = Math.floor(sorted.length / 2);
   const median =
     sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 
-  // Calculate P95
   const p95Index = Math.ceil(sorted.length * 0.95) - 1;
   const p95 = sorted[p95Index];
 
@@ -242,5 +223,128 @@ export function calculateLatencyStats(results: CheckResult[]): {
     median: Math.round(median),
     p95: Math.round(p95),
     latest: Math.round(latest),
+    samples: sorted.length,
   };
+}
+
+// Severity order for lists: problems first, then healthy, then the states an
+// operator chose (maintenance, paused). Sort by this, then by name.
+export const STATUS_RANK: Record<MonitorDisplayStatus, number> = {
+  down: 0,
+  degraded: 1,
+  unknown: 2,
+  up: 3,
+  maintenance: 4,
+  paused: 5,
+};
+
+/** Stable severity-then-name sort; `getStatus` maps an item to its display status. */
+export function sortBySeverity<T>(
+  items: readonly T[],
+  getStatus: (item: T) => MonitorDisplayStatus,
+  getName: (item: T) => string
+): T[] {
+  return [...items].sort(
+    (a, b) =>
+      STATUS_RANK[getStatus(a)] - STATUS_RANK[getStatus(b)] ||
+      getName(a).localeCompare(getName(b), undefined, { sensitivity: 'base' })
+  );
+}
+
+/**
+ * The address a monitor checks, as shown under its name: the URL for HTTP,
+ * synthetic, Prometheus and WebSocket monitors, `host:port` for gRPC and TCP,
+ * the host for everything else. Null when the type has no target (push,
+ * group, agent without a host).
+ */
+export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>): string | null {
+  const config = monitor.config as Record<string, unknown> | undefined;
+  const str = (key: string) => {
+    const v = config?.[key];
+    return typeof v === 'string' && v.trim() ? v : null;
+  };
+  if (config) {
+    if ('url' in config) return str('url');
+    if ('base_url' in config) return str('base_url');
+    if ('start_url' in config) return str('start_url');
+    const host = str('host');
+    if (monitor.type === 'grpc' && host) {
+      const port = (config.port as number | undefined) || (config.use_tls === false ? 80 : 443);
+      return `${host}:${port}`;
+    }
+    if (monitor.type === 'tcp' && host) {
+      return config.port ? `${host}:${config.port}` : host;
+    }
+  }
+  if (monitor.url) return monitor.url;
+  return str('host');
+}
+
+const HTTP_METHOD_PREFIX = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|Get|Post|Put|Patch|Delete|Head|Options) "[^"]*":\s*/;
+// Category prefixes the HTTP checker writes ("connect: …", "status_code: …").
+const CATEGORY_PREFIX = /^(timeout|dns|connect|status_code|latency|tls|unknown|body_read|request_creation|invalid_url)\s*:\s*/i;
+
+// Assertion failures the checkers write ("body: missing \"timeout\"", "header
+// X-Id: != \"1\"", "query_value: …"). They quote the operator's own expected
+// values, so the transport keyword matching below must never run on them: a
+// body assertion about "timeout" is not a timeout. Shown verbatim.
+const ASSERTION_PREFIX = /^(body|body_assertions|json_assertions|header(\s+[^:\s]+)?|expected_substring|query_value)\s*:/i;
+
+function shortenOne(raw: string, timeoutSeconds?: number): string {
+  let text = raw.trim();
+  if (ASSERTION_PREFIX.test(text)) return text;
+  const category = CATEGORY_PREFIX.exec(text)?.[1]?.toLowerCase();
+  if (category && category !== 'tls') text = text.replace(CATEGORY_PREFIX, '');
+  text = text.replace(HTTP_METHOD_PREFIX, '');
+
+  const status = /^got (\d{3})\b/.exec(text) ?? (category === 'status_code' ? /(\d{3})/.exec(text) : null);
+  if (status) return `HTTP ${status[1]}`;
+
+  const slow = /^(\d+)ms > (\d+)ms/.exec(text);
+  if (category === 'latency' && slow) {
+    return `slow response (${formatLatency(Number(slow[1]))}, limit ${formatLatency(Number(slow[2]))})`;
+  }
+
+  const lower = text.toLowerCase();
+  if (lower.includes('certificate has expired')) return 'TLS certificate expired';
+  if (lower.includes('certificate signed by unknown authority')) return 'TLS certificate not trusted';
+  if (lower.includes('certificate is valid for') || lower.includes('certificate is not valid for')) {
+    return 'TLS certificate name mismatch';
+  }
+  if (lower.includes('connection refused')) return 'connection refused';
+  if (lower.includes('connection reset')) return 'connection reset';
+  if (lower.includes('no such host')) return 'no such host';
+  if (lower.includes('no route to host')) return 'no route to host';
+  if (lower.includes('network is unreachable')) return 'network unreachable';
+  if (category === 'timeout' || /deadline exceeded|timed? ?out|timeout/.test(lower)) {
+    return timeoutSeconds ? `timed out after ${timeoutSeconds} s` : 'timed out';
+  }
+  if (/(^|: )eof$/.test(lower)) return 'connection closed';
+
+  // Drop the dialler noise ("dial tcp 10.0.0.1:443: ") and keep the cause.
+  return text.replace(/dial (tcp|udp)[46]? (\[[^\]]*\]|[^:\s]*)(:\d+)?:\s*/g, '').replace(/^connect:\s*/, '') || raw.trim();
+}
+
+/**
+ * A short, human reason for a failed check: `connection refused`,
+ * `HTTP 503`, `timed out after 10 s`. Strips Go's
+ * `Get "url": dial tcp addr: connect:` framing, which repeats the monitor's
+ * own target and pushes the cause past any truncation. Show the raw message
+ * in a `title` tooltip next to it. Several assertion failures keep the first
+ * and count the rest. Empty when there is nothing to say.
+ */
+export function shortFailureReason(
+  raw: string | null | undefined,
+  opts: { httpStatus?: number | null; timeoutSeconds?: number } = {}
+): string {
+  const text = raw?.trim();
+  if (!text) return opts.httpStatus && opts.httpStatus >= 400 ? `HTTP ${opts.httpStatus}` : '';
+  const parts = text.split('; ').filter(Boolean);
+  const first = shortenOne(parts[0], opts.timeoutSeconds);
+  if (parts.length === 1) return first;
+  // Name the other failed assertions ("HTTP 503 + latency") rather than an
+  // opaque "+1 more"; the raw text stays in the caller's title tooltip.
+  const others = parts.slice(1).map((p) => /^([a-z_]+):/i.exec(p)?.[1]?.replace(/_/g, ' '));
+  if (others.every(Boolean)) return `${first} + ${[...new Set(others)].join(', ')}`;
+  return `${first} + ${parts.length - 1} more`;
 }

@@ -25,7 +25,8 @@ function buildCurl(method: string, url: string, headers: HeaderKV[], body: strin
     const truncated = body.length > 80 ? body.slice(0, 80) + '...' : body;
     parts.push(`  -d '${truncated}'`);
   }
-  parts.push(`  ${url || 'https://example.com'}`);
+  // Never a made-up host: a placeholder would read as real configuration.
+  parts.push(`  ${url.trim() || '<url>'}`);
   return parts.join(' \\\n');
 }
 

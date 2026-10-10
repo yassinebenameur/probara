@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { testMonitorConfig, type TestMonitorConfigResponse } from '@/lib/api';
 import {
   Monitor,
@@ -17,14 +17,17 @@ import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
-import { LocationsSection } from './LocationsSection';
-import Switch from '@/components/ui/Switch';
+import ScheduleSection from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
 
 const PREVIEW_STATUS_COLORS: Record<string, string> = {
   success: 'text-emerald-300',
   failure: 'text-rose-300',
   error: 'text-amber-300',
 };
+
+const OPERATOR_SYMBOL: Record<string, string> = { lt: '<', lte: '≤', gt: '>', gte: '≥', eq: '=', ne: '≠' };
 
 interface PrometheusFormProps {
   monitor?: Monitor;
@@ -67,9 +70,13 @@ export default function PrometheusForm({
     notification_channels: monitor?.notification_channels ?? initialData?.notification_channels ?? [] as ChannelAssignment[],
     location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
     location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors);
+  useFollowEnabled(monitor?.enabled, setFormData);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [preview, setPreview] = useState<TestMonitorConfigResponse | null>(null);
   const [previewError, setPreviewError] = useState('');
@@ -101,6 +108,7 @@ export default function PrometheusForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     setErrors({});
 
     const newErrors: Record<string, string> = {};
@@ -108,12 +116,15 @@ export default function PrometheusForm({
     if (!formData.url.trim()) newErrors.url = 'Endpoint is required';
     if (!formData.query.trim()) newErrors.query = 'Query is required';
     if (!Number.isFinite(formData.threshold)) newErrors.threshold = 'Enter a finite threshold';
+    if (formData.auth_type === 'basic' && !formData.username.trim()) newErrors.username = 'Username is required';
+    if (formData.auth_type === 'bearer' && !formData.bearer_token) newErrors.bearer_token = 'Bearer token is required';
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
+      revealFirstError(formRef.current);
       return;
     }
 
@@ -133,6 +144,7 @@ export default function PrometheusForm({
     requestData.dependency_suppression = formData.dependency_suppression;
     requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
     requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(Boolean);
+    requestData.depends_on_ids = formData.depends_on_ids;
     requestData.location_ids = formData.location_ids;
     requestData.location_quorum =
       formData.location_ids.length >= 2
@@ -143,51 +155,61 @@ export default function PrometheusForm({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <FormSection title="Prometheus query">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <FormSection title="Target">
         <FormField label="Monitor name" required error={errors.name}>
-          <input aria-label="Monitor name" className="input" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="API error rate" required />
+          <input className="input" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="API error rate" />
         </FormField>
         <FormField label="Prometheus base URL" required error={errors.url}>
-          <input aria-label="Prometheus base URL" className="input" type="url" value={formData.url} onChange={e => setFormData({...formData, url: e.target.value})} placeholder="https://prometheus.example.com" required />
-          <p className="mt-1 text-xs text-slate-500">Include any reverse-proxy path prefix. The query endpoint is added automatically.</p>
+          {(control) => (
+            <>
+              <input {...control} className="input font-mono" type="url" value={formData.url} onChange={e => setFormData({...formData, url: e.target.value})} placeholder="https://prometheus.example.com" />
+              <FieldHint>Include any reverse-proxy path prefix. The query endpoint is added automatically.</FieldHint>
+            </>
+          )}
         </FormField>
+        <FormField label="Authentication">
+          <select className="input" value={formData.auth_type} onChange={e => setFormData({...formData, auth_type: e.target.value as NonNullable<PrometheusMonitorConfig['auth_type']>})}>
+            <option value="none">None</option><option value="basic">Basic authentication</option><option value="bearer">Bearer token</option>
+          </select>
+        </FormField>
+        {formData.auth_type === 'basic' && <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Username" required error={errors.username}><input className="input" autoComplete="off" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} /></FormField>
+          <FormField label="Password">{(control) => <><input {...control} className="input" type="password" autoComplete="new-password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} /><FieldHint>Stored encrypted. Leave the masked value to keep the saved password.</FieldHint></>}</FormField>
+        </div>}
+        {formData.auth_type === 'bearer' && <FormField label="Bearer token" required error={errors.bearer_token}>{(control) => <><input {...control} className="input" type="password" autoComplete="new-password" value={formData.bearer_token} onChange={e => setFormData({...formData, bearer_token: e.target.value})} /><FieldHint>Stored encrypted. Leave the masked value to keep the saved token.</FieldHint></>}</FormField>}
+      </FormSection>
+      <FormSection title="Check">
         <FormField label="PromQL query" required error={errors.query}>
-          <textarea aria-label="PromQL query" className="input font-mono" rows={4} value={formData.query} onChange={e => setFormData({...formData, query: e.target.value})} placeholder={'100 * sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))'} required />
-          <p className="mt-1 text-xs text-slate-500">Return a scalar or instant vector. Use sum(), max() or another PromQL aggregation when you need a single value.</p>
+          {(control) => (
+            <>
+              <textarea {...control} className="input font-mono" rows={4} value={formData.query} onChange={e => setFormData({...formData, query: e.target.value})} placeholder={'100 * sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))'} />
+              <FieldHint>Return a scalar or instant vector. Use sum(), max() or another PromQL aggregation when you need a single value.</FieldHint>
+            </>
+          )}
         </FormField>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField label="Healthy when every value is">
-            <select aria-label="Healthy comparison" className="input" value={formData.operator} onChange={e => setFormData({...formData, operator: e.target.value as PrometheusMonitorConfig['operator']})}>
+            <select className="input" value={formData.operator} onChange={e => setFormData({...formData, operator: e.target.value as PrometheusMonitorConfig['operator']})}>
               <option value="lt">Less than (&lt;)</option><option value="lte">At most (≤)</option>
               <option value="gt">Greater than (&gt;)</option><option value="gte">At least (≥)</option>
               <option value="eq">Equal to (=)</option><option value="ne">Not equal to (≠)</option>
             </select>
           </FormField>
           <FormField label="Threshold" required error={errors.threshold}>
-            <input aria-label="Threshold" className="input" type="number" step="any" required value={Number.isNaN(formData.threshold) ? '' : formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.valueAsNumber})} />
+            <input className="input tabular-nums" type="number" step="any" value={Number.isNaN(formData.threshold) ? '' : formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.valueAsNumber})} />
           </FormField>
         </div>
         <FormField label="When the query returns no samples">
-          <select aria-label="No samples status" className="input" value={formData.no_data_status} onChange={e => setFormData({...formData, no_data_status: e.target.value as NonNullable<PrometheusMonitorConfig['no_data_status']>})}>
-            <option value="failure">Down</option><option value="error">Error</option><option value="success">Up</option>
-          </select>
-          <p className="mt-1 text-xs text-slate-500">Query errors, warnings and non-finite values always report an error.</p>
+          {(control) => (
+            <>
+              <select {...control} className="input" value={formData.no_data_status} onChange={e => setFormData({...formData, no_data_status: e.target.value as NonNullable<PrometheusMonitorConfig['no_data_status']>})}>
+                <option value="failure">Down</option><option value="error">Error</option><option value="success">Up</option>
+              </select>
+              <FieldHint>Query errors, warnings and non-finite values always report an error.</FieldHint>
+            </>
+          )}
         </FormField>
-      </FormSection>
-      <FormSection title="Authentication">
-        <FormField label="Authentication method">
-          <select aria-label="Authentication method" className="input" value={formData.auth_type} onChange={e => setFormData({...formData, auth_type: e.target.value as NonNullable<PrometheusMonitorConfig['auth_type']>})}>
-            <option value="none">None</option><option value="basic">Basic authentication</option><option value="bearer">Bearer token</option>
-          </select>
-        </FormField>
-        {formData.auth_type === 'basic' && <>
-          <FormField label="Username" required><input aria-label="Username" className="input" autoComplete="off" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} required /></FormField>
-          <FormField label="Password"><input aria-label="Password" className="input" type="password" autoComplete="new-password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} /><p className="mt-1 text-xs text-slate-500">Stored encrypted. Leave the masked value to keep the saved password.</p></FormField>
-        </>}
-        {formData.auth_type === 'bearer' && <FormField label="Bearer token" required><input aria-label="Bearer token" className="input" type="password" autoComplete="new-password" value={formData.bearer_token} onChange={e => setFormData({...formData, bearer_token: e.target.value})} required /><p className="mt-1 text-xs text-slate-500">Stored encrypted. Leave the masked value to keep the saved token.</p></FormField>}
-      </FormSection>
-      <FormSection title="Query preview">
         {formData.location_ids.length > 1 && <FormField label="Preview location">
           <select className="input" value={formData.location_ids.includes(previewLocation) ? previewLocation : formData.location_ids[0]} onChange={e => setPreviewLocation(e.target.value)}>
             {formData.location_ids.map(id => <option key={id} value={id}>{locations.find(location => location.id === id)?.name ?? id}</option>)}
@@ -219,8 +241,7 @@ export default function PrometheusForm({
                       <span className="text-slate-500">Samples</span>
                       <span className="text-slate-300">
                         {preview.metrics_data.prometheus.sample_count}
-                        {' · '}
-                        <span className={preview.metrics_data.prometheus.failed_count > 0 ? 'text-rose-300' : 'text-emerald-300'}>
+                        <span className={`ml-3 ${preview.metrics_data.prometheus.failed_count > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>
                           {preview.metrics_data.prometheus.failed_count} outside threshold
                         </span>
                       </span>
@@ -241,51 +262,35 @@ export default function PrometheusForm({
         </div>
       </FormSection>
 
-      <FormSection title="Schedule">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Interval (seconds)">
-            <input
-              type="number"
-              value={formData.interval_seconds}
-              onChange={(e) => setFormData({ ...formData, interval_seconds: parseInt(e.target.value, 10) || 60 })}
-              min={10}
-              step={5}
-              className="input"
-            />
-          </FormField>
+      <ScheduleSection
+        intervalSeconds={formData.interval_seconds}
+        onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
+        timeoutSeconds={formData.timeout_seconds}
+        onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
+        timeoutError={errors.timeout_seconds}
+        locations={{
+          selectedIds: formData.location_ids,
+          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+          quorum: formData.location_quorum,
+          onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
+          onLocationsLoaded: setLocations,
+        }}
+        enabled={formData.enabled}
+        onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+        enabledDescription="Run PromQL checks on this schedule"
+      />
 
-          <FormField
-            label="Timeout (seconds)"
-            error={errors.timeout_seconds}
-          >
-            <input
-              type="number"
-              value={formData.timeout_seconds}
-              onChange={(e) => setFormData({ ...formData, timeout_seconds: parseInt(e.target.value, 10) || 10 })}
-              min={1}
-              className="input"
-            />
-            <p className="mt-1 text-xs text-slate-500">Must be less than interval</p>
-          </FormField>
-        </div>
-      </FormSection>
-
-      <FormSection
-        title="Locations"
-        summary={formData.location_ids.length > 0 ? `${formData.location_ids.length} selected` : 'Default fleet'}
-        collapsible
-        defaultOpen={formData.location_ids.length > 0}
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
+        }
       >
-        <LocationsSection
-          onLocationsLoaded={setLocations}
-          selectedIds={formData.location_ids}
-          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
-          quorum={formData.location_quorum}
-          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
-        />
-      </FormSection>
-
-      <FormSection title="Alerting">
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
@@ -294,36 +299,35 @@ export default function PrometheusForm({
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}
-          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
+          hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Meta">
-        <FormField label="Tags">
-          <input
-            type="text"
-            value={formData.tags}
-            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-            placeholder="production, network, critical"
-            className="input"
-          />
-          <p className="mt-1 text-xs text-slate-500">Comma-separated tags for filtering</p>
-        </FormField>
-
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-200">Monitor enabled</p>
-            <p className="text-xs text-slate-500">Run PromQL checks on schedule</p>
-          </div>
-          <Switch checked={formData.enabled} onChange={() => setFormData({ ...formData, enabled: !formData.enabled })} label="Toggle monitor enabled" />
-        </div>
-      </FormSection>
+      <LabelsSection
+        tags={formData.tags}
+        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+        placeholder="production, network, critical"
+      />
 
       <FormActions
-        middle={`Every ${formData.interval_seconds}s · down after ${formData.consecutive_failures_threshold} failed checks`}
+        middle={
+          <PlanSummary
+            errors={errors}
+            parts={
+              formData.query.trim()
+                ? [
+                    everyLabel(formData.interval_seconds),
+                    <PlanTarget key="t">PromQL</PlanTarget>,
+                    `healthy while every value is ${OPERATOR_SYMBOL[formData.operator] ?? formData.operator} ${formData.threshold}`,
+                    downAfterLabel(formData.consecutive_failures_threshold),
+                  ]
+                : [everyLabel(formData.interval_seconds), downAfterLabel(formData.consecutive_failures_threshold)]
+            }
+          />
+        }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',

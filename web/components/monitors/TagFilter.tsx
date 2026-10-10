@@ -56,7 +56,7 @@ export default function TagFilter({
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="flex flex-shrink-0 items-center gap-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-white"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded text-xs font-medium text-slate-400 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
         >
           {open ? (
             <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
@@ -65,8 +65,8 @@ export default function TagFilter({
           )}
           <TagIcon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
           Tags
-          <span className="font-normal text-slate-500">
-            {selected.size > 0 ? `· ${selected.size} active` : `· ${tags.length}`}
+          <span className="ml-1 font-normal tabular-nums text-slate-500">
+            {selected.size > 0 ? `${selected.size} active` : tags.length}
           </span>
         </button>
 
@@ -77,7 +77,7 @@ export default function TagFilter({
               <TagPill key={tag} tag={tag} size="xs" selected onClick={() => onToggle(tag)} />
             ))}
             {selectedTags.length > 6 && (
-              <span className="text-[11px] text-slate-500">+{selectedTags.length - 6}</span>
+              <span className="text-2xs text-slate-500">+{selectedTags.length - 6}</span>
             )}
           </div>
         )}
@@ -125,8 +125,8 @@ export default function TagFilter({
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => onToggle(tag)}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
-                      isSelected ? 'bg-cyan-500/[0.08]' : 'hover:bg-well-hover'
+                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                      isSelected ? 'bg-well-hover' : 'hover:bg-well-hover'
                     }`}
                   >
                     <span
@@ -150,7 +150,7 @@ export default function TagFilter({
                     <span className="min-w-0 flex-1">
                       <TagPill tag={tag} size="xs" />
                     </span>
-                    <span className="flex-shrink-0 text-[11px] tabular-nums text-slate-500">
+                    <span className="flex-shrink-0 text-2xs tabular-nums text-slate-500">
                       {count}
                     </span>
                   </button>
@@ -158,8 +158,8 @@ export default function TagFilter({
               })
             )}
             {hidden > 0 && (
-              <p className="px-2 py-1.5 text-center text-[11px] text-slate-500">
-                {hidden} more — search to narrow the list
+              <p className="px-2 py-1.5 text-center text-2xs text-slate-500">
+                {hidden} more; search to narrow the list
               </p>
             )}
           </div>

@@ -15,7 +15,7 @@ import type {
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import Callout from '@/components/ui/Callout';
 
-const GROUP_LABEL = 'mb-2.5 block text-[13px] font-medium text-slate-300';
+const GROUP_LABEL = 'mb-2.5 block text-ui font-medium text-slate-300';
 const OPTION = 'flex items-start gap-2.5 text-sm text-slate-200';
 const OPTION_HINT = 'mt-0.5 block text-xs text-slate-500';
 const RADIO = 'mt-1 accent-cyan-500';
@@ -69,7 +69,7 @@ export function AlertingSection({
 
   const defaults = settings?.default_channels ?? [];
   const defaultSummary = defaults.length
-    ? defaults.map((c) => c.channel_name ?? c.channel_id).join(' · ')
+    ? defaults.map((c) => c.channel_name ?? c.channel_id).join(', ')
     : null;
   const muted = mode === 'custom' && customChannels.length === 0;
   // A selection made entirely of disabled channels delivers nothing either —
@@ -95,10 +95,10 @@ export function AlertingSection({
   return (
     <div className="space-y-5">
       {isGroup && rollup && onRollupChange && (
-        <div>
-          <label className={GROUP_LABEL}>
+        <fieldset>
+          <legend className={GROUP_LABEL}>
             When monitors in this group go down
-          </label>
+          </legend>
           <div className="space-y-2.5">
             <label className={OPTION}>
               <input
@@ -129,7 +129,7 @@ export function AlertingSection({
               </span>
             </label>
           </div>
-        </div>
+        </fieldset>
       )}
 
       {!isGroup && (
@@ -164,8 +164,8 @@ export function AlertingSection({
           Notifications are configured on each monitor individually. This group won&apos;t send its own alert.
         </p>
       ) : (
-      <div>
-        <label className={GROUP_LABEL}>Notifications</label>
+      <fieldset>
+        <legend className={GROUP_LABEL}>Notifications</legend>
         <div className="space-y-2.5">
           <label className={OPTION}>
             <input type="radio" className={RADIO} checked={mode === 'default'} onChange={() => onModeChange('default')} />
@@ -176,8 +176,11 @@ export function AlertingSection({
           </label>
           {mode === 'default' && settings && defaults.length === 0 && (
             <Callout tone="warning" className="ml-6">
-              No default configured — alerts won&apos;t notify anyone.{' '}
-              <Link href="/settings" className={LINK}>Connect a channel</Link>
+              No default configured, so alerts won&apos;t notify anyone.{' '}
+              {/* A new tab, so a half-filled monitor form isn't lost. */}
+              <Link href="/settings?tab=channels" target="_blank" rel="noopener noreferrer" className={LINK}>
+                Connect a channel<span className="sr-only"> (opens in a new tab)</span>
+              </Link>
             </Callout>
           )}
           <label className={OPTION}>
@@ -205,15 +208,15 @@ export function AlertingSection({
             </div>
           )}
         </div>
-      </div>
+      </fieldset>
       )}
 
       {!perMonitorRollup && dependencySuppression && onDependencySuppressionChange &&
         (hasDependencies || dependencySuppression !== 'inherit') && (
-        <div>
-          <label className={GROUP_LABEL}>
+        <fieldset>
+          <legend className={GROUP_LABEL}>
             When an upstream dependency is down
-          </label>
+          </legend>
           <div className="space-y-2.5">
             <label className={OPTION}>
               <input
@@ -268,7 +271,7 @@ export function AlertingSection({
               <Link href="/dependencies" className={LINK}>Open the dependency graph</Link>
             </p>
           )}
-        </div>
+        </fieldset>
       )}
     </div>
   );

@@ -258,7 +258,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Display fields put facts from a JSON response on the monitors list, such as a deployed `version` or `checks.db`. Configure them under List display values in the form's Meta section. They are resolved on every check, including failed ones, and shown as chips from the latest result (a chip without a label shows only the value), with the full value in the preview panel. A path that is missing or a body that is not JSON shows nothing and never fails the check. Scalars are shown as text and objects or arrays as raw JSON, cut to 64 characters. Each value is stored with its check result for the raw result retention window and is visible to anyone who can read the monitor, so do not point a display field at sensitive data.",
+            "Display fields put facts from a JSON response on the monitors list, such as a deployed `version` or `checks.db`. Configure them under Show values in monitor list, in the form's Labels & display section. They are resolved on every check, including failed ones, and shown as chips from the latest result (a chip without a label shows only the value), with the full value in the preview panel. A path that is missing or a body that is not JSON shows nothing and never fails the check. Scalars are shown as text and objects or arrays as raw JSON, cut to 64 characters. Each value is stored with its check result for the raw result retention window and is visible to anyone who can read the monitor, so do not point a display field at sensitive data.",
         },
         {
           type: "code",

@@ -8,7 +8,7 @@ import Pill from '@/components/ui/Pill';
 import SelectCheckbox from '@/components/ui/SelectCheckbox';
 import TagPill from '@/components/monitors/TagPill';
 import TagFilter from '@/components/monitors/TagFilter';
-import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import TypeBadge from '@/components/ui/TypeBadge';
 
 interface MonitorMultiSelectProps {
   monitors: Monitor[];
@@ -220,14 +220,16 @@ export function MonitorMultiSelect({
               {mon.name}
             </p>
             <div className="flex min-w-0 items-center gap-1.5">
-              <p className="flex-shrink-0 text-xs text-slate-500">
-                {covered ? `Covered by ${opts?.coveredBy}` : monitorTypeLabel(mon.type)}
-              </p>
+              {covered ? (
+                <p className="flex-shrink-0 text-xs text-slate-500">Covered by {opts?.coveredBy}</p>
+              ) : (
+                <TypeBadge type={mon.type} />
+              )}
               {(mon.tags ?? []).slice(0, 2).map((tag) => (
                 <TagPill key={tag} tag={tag} size="xs" />
               ))}
               {(mon.tags?.length ?? 0) > 2 && (
-                <span className="text-[11px] text-slate-500">+{mon.tags!.length - 2}</span>
+                <span className="text-2xs text-slate-500">+{mon.tags!.length - 2}</span>
               )}
             </div>
           </div>
@@ -279,7 +281,7 @@ export function MonitorMultiSelect({
             <>
               {selectedIds.length} selected
               {coveredCount !== selectedIds.length && (
-                <span className="text-slate-500"> · covers {coveredCount} monitors</span>
+                <span className="ml-3 text-slate-500">covers {coveredCount} monitors</span>
               )}
             </>
           ) : (
@@ -337,7 +339,7 @@ export function MonitorMultiSelect({
                             <p className="text-xs text-slate-500">
                               {isSelected ? 'Group — covers ' : 'Group — '}
                               {total} {total === 1 ? 'member' : 'members'}
-                              {members.length !== total && ` · ${members.length} match`}
+                              {members.length !== total && <span className="ml-3">{members.length} match</span>}
                             </p>
                           </div>
                         </button>

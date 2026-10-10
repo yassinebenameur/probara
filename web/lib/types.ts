@@ -1087,7 +1087,10 @@ export interface DashboardOpsSummary {
 export interface DashboardProblemMonitor {
   monitor_id: string;
   monitor_name: string;
+  /** Latest check outcome as the API maps it from the state; degraded reads "success". */
   current_status: string | null;
+  /** The persisted state machine value (monitors.current_state): the monitor's real state. */
+  current_state?: MonitorState;
   failure_count: number;
   error_count: number;
   uptime: number;
@@ -1236,6 +1239,11 @@ export interface IncidentListItem {
   title: string;
   state: IncidentState;
   source: IncidentSource;
+  severity: IncidentSeverity;
+  owner_user_id?: string;
+  owner_username?: string;
+  /** Not in the list response yet; the list shows Opened once the API sends it. */
+  created_at?: string;
   updated_at: string;
   resolved_at?: string;
   linked_alert_count: number;

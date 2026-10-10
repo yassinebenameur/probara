@@ -22,7 +22,7 @@ export default function Panel({
       {(title || actions) && (
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            {title && <h2 className="text-[15px] font-semibold text-white">{title}</h2>}
+            {title && <h2 className="text-title font-semibold text-white">{title}</h2>}
             {subtitle && (
               <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>
             )}

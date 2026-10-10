@@ -85,7 +85,7 @@ export default function IncidentTimeline({
                 </span>
                 <div className="min-w-0 flex-1 pt-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">
-                    <span className="text-[13px] font-medium text-slate-200">{label}</span>
+                    <span className="text-ui font-medium text-slate-200">{label}</span>
                     <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
                   </div>
                   <p className="mt-1 whitespace-pre-line text-sm text-slate-300">{entry.message}</p>
@@ -98,7 +98,7 @@ export default function IncidentTimeline({
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <form onSubmit={submitInternal} className="glass-well flex flex-col p-4">
-          <div className="text-[13px] font-medium text-slate-300">Add internal note</div>
+          <div className="text-ui font-medium text-slate-300">Add internal note</div>
           <textarea
             className="input mt-2 min-h-[88px] flex-1 resize-y"
             value={internalMessage}
@@ -114,7 +114,7 @@ export default function IncidentTimeline({
         </form>
 
         <form onSubmit={submitPublic} className="glass-well flex flex-col p-4">
-          <div className="text-[13px] font-medium text-slate-300">Add public update</div>
+          <div className="text-ui font-medium text-slate-300">Add public update</div>
           <textarea
             className="input mt-2 min-h-[88px] flex-1 resize-y"
             value={publicMessage}

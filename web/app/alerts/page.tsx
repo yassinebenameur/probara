@@ -1,170 +1,274 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getAlerts } from '@/lib/api';
+import { RANGES, RangeId, rangeStart } from '@/lib/format';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import AlertTable from '@/components/alerts/AlertTable';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
+import ChipGroup from '@/components/ui/ChipGroup';
 import FilterChip from '@/components/ui/FilterChip';
+import IconButton from '@/components/ui/IconButton';
 import PageHeader from '@/components/ui/PageHeader';
+import Select from '@/components/ui/Select';
 
-type TimeFilter = '1h' | '24h' | '7d' | '30d' | 'all';
+// 'open' (active + acknowledged) is the default: the queue an operator works.
+type StatusFilter = 'open' | AlertStatus | 'all';
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: 'open', label: 'Open' },
+  { value: 'active', label: 'Active' },
+  { value: 'acknowledged', label: 'Acknowledged' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'all', label: 'All' },
+];
+const DEFAULT_STATUS: StatusFilter = 'open';
 
-export default function AlertsPage() {
+// The API's `since` keeps every alert open at some point after it, so the
+// window reads "open during", and it only narrows resolved alerts: an
+// unresolved alert is inside every window.
+const WINDOWS = ['1h', '24h', '7d', '30d', 'all'] as const satisfies readonly RangeId[];
+type AlertWindow = (typeof WINDOWS)[number];
+const DEFAULT_WINDOW: AlertWindow = '7d';
+
+const PAGE_SIZE = 20;
+// The API caps page_size at 100.
+const MAX_API_PAGE = 100;
+
+function parseStatus(value: string | null): StatusFilter {
+  return STATUS_FILTERS.some((f) => f.value === value) ? (value as StatusFilter) : DEFAULT_STATUS;
+}
+
+function parseWindow(value: string | null): AlertWindow {
+  return (WINDOWS as readonly string[]).includes(value ?? '') ? (value as AlertWindow) : DEFAULT_WINDOW;
+}
+
+// The first `n` alerts of one status, newest first, plus the server total.
+async function fetchFirst(status: AlertStatus, n: number): Promise<{ items: Alert[]; total: number }> {
+  const size = Math.min(MAX_API_PAGE, n);
+  const items: Alert[] = [];
+  let total = 0;
+  for (let page = 1; ; page++) {
+    const res = await getAlerts({ status, page, page_size: size });
+    const batch = res?.items || [];
+    total = res?.total || 0;
+    items.push(...batch);
+    if (items.length >= n || batch.length < size || items.length >= total) break;
+  }
+  return { items: items.slice(0, n), total };
+}
+
+function AlertsView() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const statusFilter = parseStatus(searchParams.get('status'));
+  const windowFilter = parseWindow(searchParams.get('range'));
+
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<AlertStatus | 'all'>('all');
-  const [timeFilter, setTimeFilter] = useState<TimeFilter>('7d');
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const pageSize = 20;
+  // The page belongs to the filters it was chosen under: any filter change
+  // (a chip, a sidebar link) reads as page 1 in the same render, so no
+  // request ever goes out for the old page under the new filter.
+  const filterKey = `${statusFilter}|${windowFilter}`;
+  const [pageState, setPageState] = useState({ key: filterKey, page: 1 });
+  const page = pageState.key === filterKey ? pageState.page : 1;
+  const setPage = (update: (current: number) => number) =>
+    setPageState({ key: filterKey, page: update(page) });
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<{ active: number; acknowledged: number } | null>(null);
+  const requestRef = useRef(0);
   const { subscribe } = useAlertEvents();
 
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // Filters live in the URL (the sidebar links to ?status=active), so a
+  // change replaces the query and the page re-renders from it.
+  const setFilters = (next: { status?: StatusFilter; range?: AlertWindow }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    const status = next.status ?? statusFilter;
+    const range = next.range ?? windowFilter;
+    if (status === DEFAULT_STATUS) params.delete('status');
+    else params.set('status', status);
+    if (range === DEFAULT_WINDOW) params.delete('range');
+    else params.set('range', range);
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
+
+  // Header counts come from the server, not from the rows on this page.
+  const loadCounts = useCallback(async () => {
+    try {
+      const [active, acknowledged] = await Promise.all([
+        getAlerts({ status: 'active', page_size: 1 }),
+        getAlerts({ status: 'acknowledged', page_size: 1 }),
+      ]);
+      setCounts({ active: active?.total || 0, acknowledged: acknowledged?.total || 0 });
+    } catch {
+      // The list shows the error; keep the last counts.
+    }
+  }, []);
+
   const loadAlerts = useCallback(async () => {
+    const request = ++requestRef.current;
     try {
       setLoading(true);
       setError('');
 
-      const params: any = {
-        page,
-        page_size: pageSize,
-      };
-
-      if (statusFilter !== 'all') {
-        params.status = statusFilter;
+      let items: Alert[];
+      let count: number;
+      if (statusFilter === 'open') {
+        // No multi-status filter in the API: merge the two lists, unhandled
+        // (active) first, each newest first, and page through the result.
+        const want = page * PAGE_SIZE;
+        const [active, acknowledged] = await Promise.all([
+          fetchFirst('active', want),
+          fetchFirst('acknowledged', want),
+        ]);
+        items = [...active.items, ...acknowledged.items].slice((page - 1) * PAGE_SIZE, want);
+        count = active.total + acknowledged.total;
+      } else {
+        const since = rangeStart(windowFilter)?.toISOString();
+        const response = await getAlerts({
+          page,
+          page_size: PAGE_SIZE,
+          ...(statusFilter !== 'all' && { status: statusFilter }),
+          ...(since && { since }),
+        });
+        items = response?.items || [];
+        count = response?.total || 0;
       }
 
-      if (timeFilter !== 'all') {
-        const now = new Date();
-        let since: Date;
-        switch (timeFilter) {
-          case '1h':
-            since = new Date(now.getTime() - 60 * 60 * 1000);
-            break;
-          case '24h':
-            since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-            break;
-          case '7d':
-            since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-            break;
-          case '30d':
-            since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-            break;
-          default:
-            since = new Date(0);
-        }
-        params.since = since.toISOString();
-      }
-
-      const response = await getAlerts(params);
-      setAlerts(response?.items || []);
-      setTotalPages(Math.ceil((response?.total || 0) / pageSize));
+      if (request !== requestRef.current) return;
+      setAlerts(items);
+      setTotal(count);
     } catch (err: any) {
+      if (request !== requestRef.current) return;
       setError(err.message || 'Failed to load alerts');
       setAlerts([]);
     } finally {
-      setLoading(false);
+      if (request === requestRef.current) setLoading(false);
     }
-  }, [page, statusFilter, timeFilter]);
+  }, [page, statusFilter, windowFilter]);
 
   useEffect(() => {
     loadAlerts();
   }, [loadAlerts]);
 
-  // Handle real-time updates
-  const handleAlertUpdate = useCallback((alert: Alert, eventType: 'created' | 'acknowledged' | 'resolved') => {
+  useEffect(() => {
+    loadCounts();
+  }, [loadCounts]);
+
+  const refresh = () => {
+    loadAlerts();
+    loadCounts();
+  };
+
+  // Live updates: rows already on screen change in place (so a row does not
+  // jump away mid-scan); an alert not listed yet whose new status matches the
+  // filter (created, or newly acknowledged/resolved) is added on page 1, so
+  // the list keeps up with the chip counts.
+  const handleAlertUpdate = useCallback((alert: Alert) => {
     setAlerts(prev => {
       const exists = prev.find(a => a.id === alert.id);
       if (exists) {
         return prev.map(a => a.id === alert.id ? alert : a);
       }
-      // New alert - add to top if it matches filters
-      if (statusFilter === 'all' || alert.status === statusFilter) {
-        return [alert, ...prev].slice(0, pageSize);
+      const matches =
+        statusFilter === 'all' ||
+        alert.status === statusFilter ||
+        (statusFilter === 'open' && alert.status !== 'resolved');
+      if (page === 1 && matches) {
+        return [alert, ...prev].slice(0, PAGE_SIZE);
       }
       return prev;
     });
-    
-  }, [statusFilter]);
+  }, [statusFilter, page]);
 
   useEffect(() => {
     return subscribe((event) => {
-      handleAlertUpdate(event.alert, event.type);
+      handleAlertUpdate(event.alert);
+      loadCounts();
     });
-  }, [handleAlertUpdate, subscribe]);
+  }, [handleAlertUpdate, subscribe, loadCounts]);
 
   const handleAlertTableUpdate = (alert: Alert) => {
     setAlerts(prev => prev.map(a => a.id === alert.id ? alert : a));
+    loadCounts();
   };
 
-  const statusOptions: { value: AlertStatus | 'all'; label: string }[] = [
-    { value: 'all', label: 'All statuses' },
-    { value: 'active', label: 'Active' },
-    { value: 'acknowledged', label: 'Acknowledged' },
-    { value: 'resolved', label: 'Resolved' },
-  ];
+  const chipCount = (value: StatusFilter): number | undefined => {
+    if (!counts) return undefined;
+    if (value === 'open') return counts.active + counts.acknowledged;
+    if (value === 'active') return counts.active;
+    if (value === 'acknowledged') return counts.acknowledged;
+    return undefined;
+  };
 
-  const timeOptions: { value: TimeFilter; label: string }[] = [
-    { value: '1h', label: 'Last hour' },
-    { value: '24h', label: 'Last 24 hours' },
-    { value: '7d', label: 'Last 7 days' },
-    { value: '30d', label: 'Last 30 days' },
-    { value: 'all', label: 'All time' },
-  ];
-
-  const activeCount = alerts.filter(a => a.status === 'active').length;
-  const acknowledgedCount = alerts.filter(a => a.status === 'acknowledged').length;
+  const windowApplies = statusFilter === 'resolved' || statusFilter === 'all';
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Alerts"
         subtitle={
-          activeCount > 0 || acknowledgedCount > 0
-            ? `${activeCount} active · ${acknowledgedCount} acknowledged`
-            : 'No active alerts'
+          counts === null
+            ? undefined
+            : counts.active + counts.acknowledged === 0
+              ? 'No open alerts'
+              : [`${counts.active} active`, `${counts.acknowledged} acknowledged`]
         }
         action={
-          <Button variant="ghost" size="sm" icon={<RefreshCw strokeWidth={1.75} />} onClick={loadAlerts}>
-            Refresh
-          </Button>
+          <IconButton
+            icon={<RefreshCw strokeWidth={1.75} />}
+            label="Refresh"
+            onClick={refresh}
+            loading={loading && alerts.length > 0}
+          />
         }
       />
 
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <div className="flex flex-wrap gap-1.5">
-          {statusOptions.map(opt => (
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <ChipGroup ariaLabel="Status">
+          {STATUS_FILTERS.map(opt => (
             <FilterChip
               key={opt.value}
               selected={statusFilter === opt.value}
-              onClick={() => { setStatusFilter(opt.value); setPage(1); }}
+              count={chipCount(opt.value)}
+              onClick={() => setFilters({ status: opt.value })}
             >
               {opt.label}
             </FilterChip>
           ))}
-        </div>
+        </ChipGroup>
 
-        <div className="flex flex-wrap gap-1.5">
-          {timeOptions.map(opt => (
-            <FilterChip
-              key={opt.value}
-              selected={timeFilter === opt.value}
-              onClick={() => { setTimeFilter(opt.value); setPage(1); }}
+        {windowApplies && (
+          <div className="flex items-center gap-2">
+            <label htmlFor="alerts-window" className="text-xs font-medium text-slate-400">
+              Open during
+            </label>
+            <Select
+              id="alerts-window"
+              className="input-xs w-auto rounded-lg py-0 pl-2.5 text-xs"
+              value={windowFilter}
+              onChange={(e) => setFilters({ range: parseWindow(e.target.value) })}
             >
-              {opt.label}
-            </FilterChip>
-          ))}
-        </div>
+              {WINDOWS.map(id => (
+                <option key={id} value={id}>{RANGES[id].long}</option>
+              ))}
+            </Select>
+          </div>
+        )}
       </div>
 
       {error && (
         <Callout
           tone="danger"
-          action={<Button variant="subtle" size="xs" onClick={loadAlerts}>Retry</Button>}
+          action={<Button variant="subtle" size="xs" onClick={refresh}>Retry</Button>}
         >
           {error}
         </Callout>
@@ -174,6 +278,9 @@ export default function AlertsPage() {
         alerts={alerts}
         onAlertUpdate={handleAlertTableUpdate}
         loading={loading}
+        emptyTitle={
+          statusFilter === 'open' ? 'No open alerts' : statusFilter === 'active' ? 'No active alerts' : 'No alerts found'
+        }
       />
 
       {totalPages > 1 && (
@@ -186,7 +293,7 @@ export default function AlertsPage() {
           >
             Previous
           </Button>
-          <span className="text-[13px] tabular-nums text-slate-400">
+          <span className="text-ui tabular-nums text-slate-400">
             Page {page} of {totalPages}
           </span>
           <Button
@@ -200,5 +307,14 @@ export default function AlertsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// useSearchParams needs a Suspense boundary for the production prerender.
+export default function AlertsPage() {
+  return (
+    <Suspense>
+      <AlertsView />
+    </Suspense>
   );
 }

@@ -43,6 +43,26 @@ export function useCurrentUser(): CurrentUserValue {
   return useContext(CurrentUserContext);
 }
 
+/**
+ * Whether to show write affordances (create buttons, row edit/delete, drag
+ * to link). False while identity loads, so a viewer never sees a button
+ * flash and then vanish; the server still enforces every write.
+ */
+export function useCanWrite(): boolean {
+  const { canWrite, loading } = useCurrentUser();
+  return canWrite && !loading;
+}
+
+/**
+ * Tenant-admin-only affordances (workspace settings, notification and
+ * retention policy, API keys): tenant admin or superadmin, through a user
+ * session. API keys never qualify, matching the server's admin gates.
+ */
+export function useIsTenantAdmin(): boolean {
+  const { isSuperadmin, role, actorType, loading } = useCurrentUser();
+  return !loading && actorType !== 'api_key' && (isSuperadmin || role === 'admin');
+}
+
 export function CurrentUserProvider({ children }: { children: React.ReactNode }) {
   const [value, setValue] = useState<CurrentUserValue>({ ...permissiveDefault, loading: true });
   const [reloadKey, setReloadKey] = useState(0);

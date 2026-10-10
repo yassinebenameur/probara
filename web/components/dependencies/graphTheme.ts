@@ -124,10 +124,11 @@ export function styleEdge(from: string, to: string, upstreamState?: MonitorState
   };
 }
 
+// Suspect and degraded share one colour on nodes and edges alike, so the
+// legend names them as one entry rather than two identical swatches.
 export const LEGEND: Array<{ state: MonitorState; label: string }> = [
   { state: 'up', label: 'Up' },
-  { state: 'suspect', label: 'Suspect' },
-  { state: 'degraded', label: 'Degraded' },
+  { state: 'suspect', label: 'Suspect or degraded' },
   { state: 'down', label: 'Down' },
   { state: 'unknown', label: 'Unknown' },
 ];

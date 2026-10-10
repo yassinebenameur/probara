@@ -11,6 +11,7 @@ import {
   deleteLibraryTemplate,
   getLibraryTemplateSource,
 } from '@/lib/api';
+import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
@@ -193,7 +194,7 @@ export default function StatusPageTemplateLibraryPage() {
           </div>
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <label className="block text-[13px] font-medium text-slate-300">
+              <label className="block text-ui font-medium text-slate-300">
                 Template source
               </label>
               <Button
@@ -253,8 +254,11 @@ export default function StatusPageTemplateLibraryPage() {
                   <span className="min-w-0 truncate text-sm font-medium text-white">{item.name}</span>
                   <span className="shrink-0 text-xs text-slate-500">{formatBytes(item.size_bytes)}</span>
                 </div>
-                <div className="mt-0.5 truncate pl-6 text-xs text-slate-500">
-                  {item.description || '—'} · updated {new Date(item.updated_at).toLocaleString()}
+                <div className="mt-0.5 flex min-w-0 gap-x-3 pl-6 text-xs text-slate-500">
+                  {item.description && <span className="min-w-0 truncate">{item.description}</span>}
+                  <span className="shrink-0" title={formatDateTimeFull(item.updated_at)}>
+                    Updated {formatDateTime(item.updated_at)}
+                  </span>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-0.5">

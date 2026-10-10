@@ -1,5 +1,7 @@
 'use client';
 
+import { UPTIME_TONE_VAR, uptimeTone } from '@/lib/status-tones';
+
 interface Props {
   buckets: (number | null)[]; // 0-100 values; null = no checks in that bucket
 }
@@ -36,7 +38,10 @@ export default function GroupSparkline({ buckets }: Props) {
   if (current.length > 0) segments.push(current);
 
   const worst = Math.min(...values);
-  const stroke = worst >= 99 ? 'var(--success)' : worst >= 95 ? 'var(--warning)' : 'var(--danger)';
+  // A healthy line stays neutral ink so green never sits next to an outage
+  // elsewhere on the page; only warn/bad carry the shared uptime tone.
+  const tone = uptimeTone(worst);
+  const stroke = tone === 'good' ? 'var(--text-secondary)' : UPTIME_TONE_VAR[tone];
 
   return (
     <svg width={width} height={height} aria-label="Uptime sparkline" role="img">

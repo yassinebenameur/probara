@@ -10,7 +10,7 @@ import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import Select from '@/components/ui/Select';
-import { monitorTypeLabel } from '@/lib/monitor-type-labels';
+import TypeBadge from '@/components/ui/TypeBadge';
 
 interface IncidentPublicationEditorProps {
   incident: IncidentDetail;
@@ -127,10 +127,14 @@ export default function IncidentPublicationEditor({
                       <div className="text-sm font-medium text-white">
                         {publication.status_page_title}
                       </div>
-                      <div className="mt-0.5 text-xs text-slate-500">
+                      <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
                         <span className="font-mono">/{publication.status_page_slug}</span>
-                        {' · '}
-                        {publicationComponentNames(publication.monitor_ids)}
+                        <span className="min-w-0">
+                          {publication.monitor_ids.length === 1 ? 'Component' : 'Components'}{' '}
+                          <span className="text-slate-300">
+                            {publicationComponentNames(publication.monitor_ids)}
+                          </span>
+                        </span>
                       </div>
                     </div>
                     <IconButton
@@ -150,7 +154,7 @@ export default function IncidentPublicationEditor({
                 value={selectedStatusPageId}
                 onChange={(event) => setSelectedStatusPageId(event.target.value)}
                 disabled={saving}
-                className="h-9 py-0 text-[13px]"
+                className="h-9 py-0 text-ui"
               >
                 {statusPages.map((statusPage) => (
                   <option key={statusPage.id} value={statusPage.id}>
@@ -161,7 +165,7 @@ export default function IncidentPublicationEditor({
             </div>
 
             <div>
-              <div className="text-[13px] font-medium text-slate-300">Affected components</div>
+              <div className="text-ui font-medium text-slate-300">Affected components</div>
               <div className="mt-0.5 text-xs text-slate-500">
                 Leave all unchecked to publish the incident platform-wide.
               </div>
@@ -180,8 +184,8 @@ export default function IncidentPublicationEditor({
                         onChange={() => toggleMonitorSelection(monitor.id)}
                         disabled={saving}
                       />
+                      <TypeBadge type={monitor.type} />
                       <span>{monitor.name}</span>
-                      <span className="text-xs text-slate-500">{monitorTypeLabel(monitor.type)}</span>
                     </label>
                   ))}
                 </div>

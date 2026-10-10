@@ -38,7 +38,7 @@ export function NotificationNudge({ unroutedMonitors = 0 }: { unroutedMonitors?:
       <Callout
         tone="warning"
         className="mb-6"
-        title={`${unroutedMonitors} monitor${unroutedMonitors === 1 ? "'s" : "s'"} alerts reach nobody`}
+        title={`${unroutedMonitors} monitor${unroutedMonitors === 1 ? ' alerts' : 's alert'} no one`}
       >
         No active channel routes {unroutedMonitors === 1 ? 'it' : 'them'}, so an outage would go unnoticed.{' '}
         <Link href="/monitors?routing=unrouted" className="font-medium text-cyan-300 hover:text-cyan-200">

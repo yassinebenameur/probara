@@ -38,9 +38,10 @@ export default function AlertChannelCatalogPage() {
     <div className="space-y-6">
       <PageHeader
         title="Alert channel catalog"
+        subtitle="Every channel type this deployment can deliver alerts to."
         action={
           <Button variant="ghost" size="sm" icon={<ArrowLeft strokeWidth={1.75} />} asChild>
-            <Link href="/settings?tab=channels">Back to channels</Link>
+            <Link href="/settings?tab=channels">Back to notifications</Link>
           </Button>
         }
       />
@@ -71,10 +72,10 @@ function PluginCard({ manifest }: { manifest: PluginManifest }) {
         </span>
         <div className="min-w-0 flex-1">
           <div>
-            <h3 className="inline text-[15px] font-semibold text-white">{manifest.display_name}</h3>
+            <h3 className="inline text-title font-semibold text-white">{manifest.display_name}</h3>
             <span className="ml-2 whitespace-nowrap text-xs tabular-nums text-slate-500">v{manifest.version}</span>
           </div>
-          <p className="mt-1 text-[13px] text-slate-400">{manifest.description}</p>
+          <p className="mt-1 text-ui text-slate-400">{manifest.description}</p>
         </div>
       </div>
 

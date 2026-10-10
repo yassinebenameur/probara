@@ -57,7 +57,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
               <h2 className="text-base font-semibold text-white">
                 Edit alerting — {monitorIds.length} monitor{monitorIds.length === 1 ? '' : 's'}
               </h2>
-              <p className="mt-1 text-[13px] text-slate-400">
+              <p className="mt-1 text-ui text-slate-400">
                 Unchecked sections are left unchanged.
               </p>
             </div>
@@ -79,7 +79,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
 
               {touchSensitivity && (
                 <div className="mt-3 pl-6">
-                  <label className="text-[13px] text-slate-300">
+                  <label className="text-ui text-slate-300">
                     Mark down after{' '}
                     <select
                       value={threshold}
@@ -122,7 +122,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
                         onChange={() => setMode('default')}
                         className="h-3.5 w-3.5 cursor-pointer accent-cyan-500"
                       />
-                      <span className="text-[13px] text-slate-300">Workspace default</span>
+                      <span className="text-ui text-slate-300">Workspace default</span>
                     </label>
                     <label className="flex cursor-pointer items-center gap-2">
                       <input
@@ -133,7 +133,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
                         onChange={() => setMode('custom')}
                         className="h-3.5 w-3.5 cursor-pointer accent-cyan-500"
                       />
-                      <span className="text-[13px] text-slate-300">Custom channel list</span>
+                      <span className="text-ui text-slate-300">Custom channel list</span>
                     </label>
                   </div>
 

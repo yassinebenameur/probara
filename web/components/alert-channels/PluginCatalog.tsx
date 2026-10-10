@@ -46,7 +46,7 @@ export default function PluginCatalog({
               strokeWidth={1.75}
             />
             <div className="min-w-0">
-              <p className={`text-[13px] font-medium ${selected ? 'text-white' : 'text-slate-200'}`}>
+              <p className={`text-ui font-medium ${selected ? 'text-white' : 'text-slate-200'}`}>
                 {manifest.display_name}
               </p>
               <p className="mt-0.5 text-xs leading-snug text-slate-500">{manifest.description}</p>

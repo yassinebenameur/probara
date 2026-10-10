@@ -28,6 +28,7 @@ export function getTagColor(tag: string) {
 
 // Tag pill — renders a colored Pill using the per-tag color palette. When onClick
 // is provided, the wrapping span becomes a focusable button with a selected ring.
+// The ring is neutral: orange is for actions, never for "selected".
 export default function TagPill({
   tag,
   size = 'sm',
@@ -52,7 +53,7 @@ export default function TagPill({
       onClick={onClick}
       aria-pressed={selected}
       className={`inline-flex rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
-        selected ? 'ring-1 ring-cyan-500/60' : 'hover:opacity-80'
+        selected ? 'ring-1 ring-slate-300/80' : 'opacity-75 hover:opacity-100'
       }`}
     >
       {pill}

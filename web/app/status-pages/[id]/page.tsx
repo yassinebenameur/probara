@@ -89,7 +89,7 @@ export default function EditStatusPagePage() {
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: statusPage.title }]}
         title={statusPage.title}
-        subtitle={<span className="font-mono text-[13px]">/{statusPage.slug}</span>}
+        subtitle={<span className="font-mono text-ui">/{statusPage.slug}</span>}
         action={
           <>
             <Button

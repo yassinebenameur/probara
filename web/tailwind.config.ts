@@ -48,6 +48,12 @@ const config: Config = {
           "monospace",
         ],
       },
+      // One step per role; see the type note in app/globals.css.
+      fontSize: {
+        "2xs": ["11px", { lineHeight: "16px" }],
+        ui: ["13px", { lineHeight: "18px" }],
+        title: ["16px", { lineHeight: "22px" }],
+      },
       colors: {
         white: "rgb(var(--tw-white) / <alpha-value>)",
         slate: {
@@ -303,12 +309,11 @@ const config: Config = {
         },
         divider: "var(--divider)",
         onaccent: "var(--accent-ink)",
-        primary: "#ff5a24",
+        // The only semantic aliases. warning is the -300 step so text in it
+        // keeps AA in light mode (the -300 steps darken there).
         success: "rgb(var(--tw-emerald-500) / <alpha-value>)",
-        error: "rgb(var(--tw-rose-500) / <alpha-value>)",
         danger: "rgb(var(--tw-rose-500) / <alpha-value>)",
-        warning: "rgb(var(--tw-amber-400) / <alpha-value>)",
-        muted: "rgb(var(--tw-slate-500) / <alpha-value>)",
+        warning: "rgb(var(--tw-amber-300) / <alpha-value>)",
       },
       borderRadius: {
         lg: "10px",
@@ -318,9 +323,10 @@ const config: Config = {
         full: "999px",
       },
       boxShadow: {
-        soft: "var(--glass-shadow)",
-        subtle: "var(--glass-shadow)",
         glass: "inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow)",
+        // Selected tab/segment: raised glass plus a hairline, so it still
+        // separates from the well in dark mode where the fill is darker.
+        segment: "inset 0 0 0 1px var(--glass-edge-strong), inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow)",
         overlay: "inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow-overlay)",
         accent: "inset 0 1px 0 0 rgb(255 255 255 / 0.28), 0 6px 18px -8px rgb(255 90 36 / 0.7)",
       },

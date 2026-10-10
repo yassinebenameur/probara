@@ -48,6 +48,7 @@ import IconButton from '@/components/ui/IconButton';
 import FormField from '@/components/ui/FormField';
 import Pill from '@/components/ui/Pill';
 import { useToast } from '@/components/ui/ToastProvider';
+import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 
 const CODE_AREA =
   'glass-well block w-full font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 ' +
@@ -379,7 +380,7 @@ export default function StatusPageTemplatePage() {
           { label: 'Template' },
         ]}
         title="Page template"
-        subtitle={`Live: ${activeLabel}${hasDraft ? ' · unpublished draft' : ''}`}
+        subtitle={[`Live: ${activeLabel}`, hasDraft ? 'Unpublished draft' : null]}
         action={
           <Button variant="ghost" size="sm" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
             <a href={publicUrl} target="_blank" rel="noopener noreferrer">
@@ -393,7 +394,7 @@ export default function StatusPageTemplatePage() {
         title="Quick branding"
         summary="Custom CSS, extra <head> markup, and footer HTML applied to the built-in template"
       >
-        <p className="text-[13px] text-slate-400">
+        <p className="text-ui text-slate-400">
           The lightweight way to make the page match your brand: these snippets are injected
           into the built-in template (and available to custom templates as{' '}
           <code className="font-mono text-xs text-slate-200">.CustomCSS</code>,{' '}
@@ -445,10 +446,13 @@ export default function StatusPageTemplatePage() {
       <div className="glass">
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold text-white">Full template editor</h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Go html/template · {formatBytes(source.length)} / {formatBytes(maxSize)}
-              {dirty ? ' · unsaved changes' : ''}
+            <h2 className="text-title font-semibold text-white">Full template editor</h2>
+            <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
+              <span>Go html/template</span>
+              <span className="tabular-nums">
+                {formatBytes(source.length)} / {formatBytes(maxSize)}
+              </span>
+              {dirty && <span className="text-amber-300">Unsaved changes</span>}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-1">
@@ -457,7 +461,7 @@ export default function StatusPageTemplatePage() {
                 value=""
                 onChange={(e) => handleApplyFromLibrary(e.target.value)}
                 disabled={busy}
-                className="input input-sm mr-1 h-9 !w-auto text-[13px]"
+                className="input input-sm mr-1 h-9 !w-auto text-ui"
               >
                 <option value="" disabled>
                   Apply from library…
@@ -526,8 +530,8 @@ export default function StatusPageTemplatePage() {
           />
           <div className="glass-well flex min-h-[560px] flex-col overflow-hidden">
             <div className="flex items-center justify-between gap-2 py-1.5 pl-4 pr-1.5">
-              <span className="min-w-0 truncate text-[13px] font-medium text-slate-300">
-                Draft preview <span className="font-normal text-slate-500">· live data</span>
+              <span className="min-w-0 truncate text-ui font-medium text-slate-300">
+                Draft preview <span className="ml-2 font-normal text-slate-500">live data</span>
               </span>
               <div className="flex flex-shrink-0 items-center gap-1">
                 <Button
@@ -630,12 +634,12 @@ export default function StatusPageTemplatePage() {
                   >
                     {v.status}
                   </Pill>
-                  <span className="text-xs text-slate-500">
-                    {formatBytes(v.size_bytes)}
-                    {v.published_at
-                      ? ` · published ${new Date(v.published_at).toLocaleString()}`
-                      : ''}
-                  </span>
+                  <span className="text-xs tabular-nums text-slate-500">{formatBytes(v.size_bytes)}</span>
+                  {v.published_at && (
+                    <span className="text-xs text-slate-500" title={formatDateTimeFull(v.published_at)}>
+                      published {formatDateTime(v.published_at)}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-0.5">
                   {v.version != null && (

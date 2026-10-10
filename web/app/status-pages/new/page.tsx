@@ -31,7 +31,8 @@ export default function NewStatusPagePage() {
     <div className="space-y-6">
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: 'New' }]}
-        title="Create status page"
+        title="New status page"
+        subtitle="Pick the monitors to publish; you can add sections, branding and a custom template later."
       />
 
       <StatusPageForm

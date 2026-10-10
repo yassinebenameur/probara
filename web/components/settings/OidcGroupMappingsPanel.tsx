@@ -8,6 +8,7 @@ import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
+import { formatDateTimeFull } from '@/lib/format';
 import {
   createOidcGroupMapping,
   deleteOidcGroupMapping,
@@ -19,9 +20,9 @@ import type { OidcGroupMapping, OidcSeenGroup, Tenant } from '@/lib/types';
 
 const TENANT_ROLES = ['admin', 'editor', 'viewer'] as const;
 
-const LABEL_CLASS = 'mb-1.5 block text-[13px] font-medium text-slate-300';
+const LABEL_CLASS = 'mb-1.5 block text-ui font-medium text-slate-300';
 
-const SEGMENT_CLASS = 'cursor-pointer rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors';
+const SEGMENT_CLASS = 'cursor-pointer rounded-lg px-3 py-1.5 text-ui font-medium transition-colors';
 const SEGMENT_ACTIVE = 'bg-glass-strong text-white shadow-glass';
 const SEGMENT_IDLE = 'text-slate-400 hover:text-slate-100';
 
@@ -173,7 +174,7 @@ export function OidcGroupMappingsPanel() {
           {mappings.length === 0 ? (
             <div className="glass-well px-4 py-6 text-center">
               <p className="text-sm font-medium text-white">No group mappings yet</p>
-              <p className="mx-auto mt-1 max-w-md text-[13px] text-slate-400">
+              <p className="mx-auto mt-1 max-w-md text-ui text-slate-400">
                 Roles stay manually managed until you add one. Once a mapping exists, the identity
                 provider decides SSO users&apos; roles — removing someone from a group revokes the
                 role at their next sign-in.
@@ -266,7 +267,7 @@ export function OidcGroupMappingsPanel() {
                             </select>
                           </span>
                         ) : (
-                          <Pill tone="warning" size="xs" dot>Platform · superadmin</Pill>
+                          <Pill tone="warning" size="xs" dot>Platform superadmin</Pill>
                         )}
                       </td>
                       <td className="py-3 text-right">
@@ -432,8 +433,8 @@ export function OidcGroupMappingsPanel() {
                       key={g.group_name}
                       type="button"
                       onClick={() => prefillGroup(g.group_name)}
-                      title={`Last seen ${new Date(g.last_seen_at).toLocaleString()}`}
-                      className="cursor-pointer rounded-full bg-well-hover px-2.5 py-1 font-mono text-[11px] text-slate-300 transition-colors hover:bg-control-hover hover:text-white"
+                      title={`Last seen ${formatDateTimeFull(g.last_seen_at)}`}
+                      className="cursor-pointer rounded-full bg-well-hover px-2.5 py-1 font-mono text-2xs text-slate-300 transition-colors hover:bg-control-hover hover:text-white"
                     >
                       {g.group_name}
                     </button>
@@ -445,8 +446,8 @@ export function OidcGroupMappingsPanel() {
 
           {scopeRequested && (
             <p className="text-xs text-slate-500">
-              Reading the “{groupsClaim}” claim · groups scope requested ✓ · changes are recorded
-              in the audit log
+              Reading the “{groupsClaim}” claim with the groups scope requested. Changes are
+              recorded in the audit log.
             </p>
           )}
         </div>

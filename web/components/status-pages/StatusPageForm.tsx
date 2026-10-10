@@ -9,8 +9,10 @@ import type {
   StatusPageSection,
   UpdateStatusPageRequest,
 } from '@/lib/types';
-import { getMonitors } from '@/lib/api';
+import { getMonitor, getMonitors } from '@/lib/api';
+import { componentStatus, type ComponentStatus } from '@/lib/status-page-status';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
+import { pluralize } from '@/lib/format';
 import FormField from '@/components/ui/FormField';
 import Button from '@/components/ui/Button';
 import SectionList from './SectionList';
@@ -75,6 +77,10 @@ export default function StatusPageForm({
   const { state, dispatch } = useStatusPageFormState(statusPage);
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [monitorsLoading, setMonitorsLoading] = useState(true);
+  // Direct members per group. The monitor list omits member_ids, so groups
+  // on the page (and groups nested in them) are fetched one by one.
+  const [groupMembers, setGroupMembers] = useState<Map<string, string[]>>(() => new Map());
+  const requestedGroupsRef = useRef(new Set<string>());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const formRef = useRef<HTMLFormElement>(null);
   // Once the user edits the slug by hand, stop deriving it from the title.
@@ -120,6 +126,54 @@ export default function StatusPageForm({
       cancelled = true;
     };
   }, []);
+
+  const monitorsById = useMemo(() => new Map(monitors.map((m) => [m.id, m])), [monitors]);
+
+  // Load members for every group the page shows, then for groups nested in
+  // those, until the tree is complete.
+  useEffect(() => {
+    const wanted = new Set<string>();
+    state.sections.forEach((section) =>
+      section.monitors.forEach((entry) => {
+        if (monitorsById.get(entry.monitor_id)?.type === 'group') wanted.add(entry.monitor_id);
+      }),
+    );
+    groupMembers.forEach((members) =>
+      members.forEach((id) => {
+        if (monitorsById.get(id)?.type === 'group') wanted.add(id);
+      }),
+    );
+    const missing = [...wanted].filter((id) => !requestedGroupsRef.current.has(id));
+    if (missing.length === 0) return;
+    missing.forEach((id) => requestedGroupsRef.current.add(id));
+    Promise.all(
+      missing.map((id) =>
+        getMonitor(id)
+          .then((group) => [id, group.member_ids ?? []] as const)
+          .catch(() => null),
+      ),
+    ).then((loaded) => {
+      setGroupMembers((prev) => {
+        const next = new Map(prev);
+        loaded.forEach((entry) => {
+          if (entry) next.set(entry[0], [...entry[1]]);
+        });
+        return next;
+      });
+    });
+  }, [state.sections, monitorsById, groupMembers]);
+
+  // What a visitor of the published page sees for each monitor right now.
+  const componentStatuses = useMemo(() => {
+    const map = new Map<string, ComponentStatus | null>();
+    state.sections.forEach((section) =>
+      section.monitors.forEach((entry) => {
+        const monitor = monitorsById.get(entry.monitor_id);
+        if (monitor) map.set(monitor.id, componentStatus(monitor, monitorsById, groupMembers));
+      }),
+    );
+    return map;
+  }, [state.sections, monitorsById, groupMembers]);
 
   // ⌘S / Ctrl+S saves the page.
   useEffect(() => {
@@ -243,15 +297,13 @@ export default function StatusPageForm({
     public_url: statusPage?.public_url,
   });
 
-  const summary =
-    state.sections.length === 0
-      ? 'Add at least one section to publish.'
-      : `${state.sections.length} section${state.sections.length === 1 ? '' : 's'} · ${derived.membershipCount} monitor${derived.membershipCount === 1 ? '' : 's'}`;
+  const sectionCount = state.sections.length;
+  const monitorCount = derived.membershipCount;
 
   return (
     <form ref={formRef} onSubmit={handleSubmit} className="space-y-6">
       <section className="glass p-6">
-        <h3 className="mb-5 text-[15px] font-semibold text-white">Identity & branding</h3>
+        <h3 className="mb-5 text-title font-semibold text-white">Identity & branding</h3>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
           <div className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -344,6 +396,8 @@ export default function StatusPageForm({
             basics={state.basics}
             sections={state.sections}
             monitors={monitors}
+            statuses={componentStatuses}
+            statusLoading={monitorsLoading}
             publicUrl={publicUrl}
           />
         </div>
@@ -353,14 +407,22 @@ export default function StatusPageForm({
         sections={state.sections}
         monitors={monitors}
         monitorsLoading={monitorsLoading}
+        statuses={componentStatuses}
+        groupMembers={groupMembers}
         derived={derived}
         errors={errors}
         dispatch={dispatch}
         onAddSection={handleAddSection}
       />
 
-      <div className="glass-overlay sticky bottom-4 z-20 flex flex-wrap items-center gap-3 !rounded-2xl px-4 py-3">
-        <div className="mr-auto flex min-w-0 items-center gap-2 text-xs">
+      {/* Pinned to the viewport only while there is something to save: a clean
+          page keeps the bar at the end of the form instead of over the sections. */}
+      <div
+        className={`glass-overlay z-20 flex flex-wrap items-center gap-3 !rounded-2xl px-4 py-3 ${
+          isDirty || !statusPage ? 'sticky bottom-4' : ''
+        }`}
+      >
+        <div className="mr-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           {isDirty ? (
             <span className="flex items-center gap-1.5 text-amber-300">
               <CircleDot className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
@@ -372,10 +434,14 @@ export default function StatusPageForm({
               All changes saved
             </span>
           ) : null}
-          <span className="truncate text-slate-500">
-            {(isDirty || statusPage) && <span aria-hidden="true">· </span>}
-            {summary}
-          </span>
+          {sectionCount === 0 ? (
+            <span className="text-slate-500">Add at least one section to publish.</span>
+          ) : (
+            <>
+              <span className="tabular-nums text-slate-500">{pluralize(sectionCount, 'section')}</span>
+              <span className="tabular-nums text-slate-500">{pluralize(monitorCount, 'monitor')}</span>
+            </>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-2">
           {onCancel && (

@@ -12,9 +12,15 @@ import { stateStyle, TYPE_ICONS } from './graphTheme';
 export function AddMonitorPicker({
   existingIds,
   onAdd,
+  variant = 'ghost',
+  align = 'right',
 }: {
   existingIds: Set<string>;
   onAdd: (monitor: DependencyMonitor) => void;
+  /** `accent` when it is the empty canvas's one next step. */
+  variant?: 'ghost' | 'accent';
+  /** Popover anchor: under the right edge (toolbar) or centred (empty state). */
+  align?: 'right' | 'center';
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -73,15 +79,20 @@ export function AddMonitorPicker({
     <div className="relative" ref={rootRef}>
       <Button
         type="button"
-        variant="ghost"
-        size="xs"
+        variant={variant}
+        size={variant === 'accent' ? 'sm' : 'xs'}
         icon={<Plus strokeWidth={1.75} />}
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
       >
         Add monitor
       </Button>
       {open && (
-        <div className="glass-overlay absolute right-0 top-full z-20 mt-2 w-72 !rounded-xl p-1.5">
+        <div
+          className={`glass-overlay absolute top-full z-20 mt-2 w-72 !rounded-xl p-1.5 text-left ${
+            align === 'center' ? 'left-1/2 -translate-x-1/2' : 'right-0'
+          }`}
+        >
           <input
             type="text"
             autoFocus

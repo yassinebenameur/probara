@@ -132,7 +132,7 @@ export default function AlertChannelForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <section>
-        <h3 className="mb-3 text-[15px] font-semibold text-white">Channel type</h3>
+        <h3 className="mb-3 text-title font-semibold text-white">Channel type</h3>
         <PluginCatalog
           manifests={catalogManifests}
           selectedType={selectedType}
@@ -142,7 +142,7 @@ export default function AlertChannelForm({
       </section>
 
       <section className="space-y-4">
-        <h3 className="text-[15px] font-semibold text-white">Configuration</h3>
+        <h3 className="text-title font-semibold text-white">Configuration</h3>
         <FormField label="Channel name" required error={errors.name}>
           <input
             type="text"
