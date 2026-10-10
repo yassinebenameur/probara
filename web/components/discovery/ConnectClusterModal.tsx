@@ -1,12 +1,16 @@
 'use client';
 
-import { KeyboardEvent, useState } from 'react';
+import { FormEvent, KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import { Check, Copy, Download, KeyRound, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
 import FormField from '@/components/ui/FormField';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import ModalPortal from '@/components/ui/ModalPortal';
-import DiscoveryModal from './DiscoveryModal';
+import Dialog from '@/components/ui/Dialog';
+import Input from '@/components/ui/Input';
+import Select from '@/components/ui/Select';
+import { SELECTED_SEGMENT } from '@/components/ui/roving';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { createDiscoveryIntegration } from '@/lib/api';
 import {
   collectorManifest, errorMessage, installCommands, manifestInputErrors, parseNamespaces, validNamespace,
@@ -39,6 +43,7 @@ interface ConnectClusterModalProps {
 }
 
 export default function ConnectClusterModal({ install, locations, onCreated, onClose }: ConnectClusterModalProps) {
+  const formId = useId();
   const [integration, setIntegration] = useState<(DiscoveryIntegration & { token: string }) | null>(install ?? null);
   const [name, setName] = useState('');
   const [namespaces, setNamespaces] = useState<string[]>([]);
@@ -51,6 +56,19 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
   const [touched, setTouched] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+
+  // Removing a chip unmounts its focused × button: focus the chip that took
+  // its place, else the one before, else the namespace input (as TagFilter).
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const draftRef = useRef<HTMLInputElement>(null);
+  const refocusChip = useRef<number | null>(null);
+  useEffect(() => {
+    const index = refocusChip.current;
+    if (index === null) return;
+    refocusChip.current = null;
+    const chips = chipsRef.current?.querySelectorAll<HTMLElement>('[data-namespace-remove]');
+    (chips?.[Math.min(index, chips.length - 1)] ?? draftRef.current)?.focus();
+  }, [namespaces]);
 
   const invalidNamespaces = namespaces.filter((ns) => !validNamespace(ns));
   const commitDraft = () => {
@@ -65,7 +83,9 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
   const allNamespaces = [...new Set([...namespaces, ...parseNamespaces(draft)])];
   const canCreate = !saving && name.trim() !== '' && allNamespaces.length > 0 && allNamespaces.length <= 20 && allNamespaces.every(validNamespace);
 
-  const create = async () => {
+  const create = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canCreate) return;
     setSaving(true); setError('');
     try {
       const created = await createDiscoveryIntegration({ name: name.trim(), namespaces: allNamespaces, location_id: locationId || null });
@@ -102,25 +122,26 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
 
   return (
     <>
-      <DiscoveryModal
+      <Dialog
         title={install ? `Reinstall collector · ${install.name}` : 'Connect a Kubernetes cluster'}
-        subtitle={!install && <Steps step={step} />}
+        description={install ? undefined : <Steps step={step} />}
         onClose={requestClose}
-        locked={saving}
-        width="lg"
+        busy={saving}
+        size="lg"
+        bodyClassName="dashboard-scroll space-y-5"
         footer={step === 1 ? <>
-          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button variant="accent" onClick={() => void create()} disabled={!canCreate} loading={saving}>Create and continue</Button>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button type="submit" form={formId} variant="accent" size="sm" disabled={!canCreate} loading={saving}>Create and continue</Button>
         </> : <>
-          <Button variant="ghost" onClick={requestClose}>{downloaded ? 'Done' : 'Close'}</Button>
-          <Button variant="accent" icon={<Download strokeWidth={1.75} />} onClick={download}>{downloaded ? 'Download again' : 'Download manifest'}</Button>
+          <Button variant="ghost" size="sm" onClick={requestClose}>{downloaded ? 'Done' : 'Close'}</Button>
+          <Button variant="accent" size="sm" icon={<Download strokeWidth={1.75} />} onClick={download}>{downloaded ? 'Download again' : 'Download manifest'}</Button>
         </>}
       >
-        {error && <p role="alert" className="mb-4 rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{error}</p>}
+        {error && <Callout tone="danger">{error}</Callout>}
         {step === 1 ? (
-          <div className="space-y-5">
+          <form id={formId} noValidate onSubmit={(e) => void create(e)} className="space-y-5">
             <FormField label="Cluster name" required>
-              <input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="e.g. production-eu" autoFocus />
+              <Input value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="e.g. production-eu" autoFocus />
             </FormField>
             <FormField
               label="Namespaces"
@@ -128,46 +149,49 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
               description="The collector lists Services and Ingresses in these namespaces only (up to 20). They must already exist."
               error={invalidNamespaces.length ? `Not a valid namespace: ${invalidNamespaces.join(', ')}` : undefined}
             >
-              <div className="input flex min-h-[42px] flex-wrap items-center gap-1.5 !py-1.5">
-                {namespaces.map((ns) => (
-                  <span key={ns} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs ${validNamespace(ns) ? 'border-white/10 bg-white/[0.04] text-slate-200' : 'border-rose-500/40 bg-rose-500/10 text-rose-200'}`}>
-                    {ns}
-                    <button type="button" aria-label={`Remove ${ns}`} className="text-slate-500 hover:text-white" onClick={() => setNamespaces(namespaces.filter((n) => n !== ns))}>
-                      <X className="h-3 w-3" aria-hidden="true" />
-                    </button>
-                  </span>
-                ))}
-                <input
-                  aria-label="Add namespace"
-                  className="min-w-[8rem] flex-1 border-0 bg-transparent font-mono text-sm text-slate-200 shadow-none outline-none ring-0 placeholder:font-sans placeholder:text-slate-500 focus:outline-none focus:ring-0 focus-visible:outline-none"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={onNamespaceKey}
-                  onBlur={commitDraft}
-                  placeholder={namespaces.length ? 'Add another…' : 'Type a namespace and press Enter'}
-                />
-              </div>
+              {(field) => (
+                <div ref={chipsRef} className="input flex min-h-10 flex-wrap items-center gap-1.5 !py-1.5 focus-within:!border-[var(--focus)] focus-within:bg-control-hover focus-within:shadow-[0_0_0_1px_var(--focus)]">
+                  {namespaces.map((ns, index) => (
+                    // Removable chip; an invalid namespace takes Pill's danger tint.
+                    <span key={ns} className={`inline-flex h-6 items-center gap-1 rounded-full pl-2.5 pr-0.5 font-mono text-xs ${validNamespace(ns) ? 'bg-well-hover text-slate-200' : 'bg-rose-500/[0.13] text-rose-300'}`}>
+                      {ns}
+                      <button type="button" data-namespace-remove="" aria-label={`Remove ${ns}`} className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-control-hover hover:text-white ${FOCUS_RING}`} onClick={() => { refocusChip.current = index; setNamespaces(namespaces.filter((n) => n !== ns)); }}>
+                        <X className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    {...field}
+                    ref={draftRef}
+                    className="min-w-[8rem] flex-1 border-0 bg-transparent p-0 font-mono text-sm text-white shadow-none outline-none ring-0 placeholder:font-sans placeholder:text-slate-500 focus:outline-none focus:ring-0 focus-visible:outline-none"
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={onNamespaceKey}
+                    onBlur={commitDraft}
+                    placeholder={namespaces.length ? 'Add another…' : 'Type a namespace and press Enter'}
+                  />
+                </div>
+              )}
             </FormField>
             <FormField label="Default private location" description="Pre-selected when you approve checks of cluster-internal targets. Optional.">
-              <select className="input" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+              <Select value={locationId} onChange={(e) => setLocationId(e.target.value)}>
                 <option value="">None — choose per check</option>
                 {locations.filter((l) => l.enabled).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
+              </Select>
             </FormField>
             <p className="text-xs text-slate-500">Nothing is monitored automatically: you review every suggestion before a monitor is created.</p>
-          </div>
+          </form>
         ) : integration && commands && (
           <div className="space-y-5">
-            <div className="flex gap-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5 text-xs text-amber-200">
-              <KeyRound className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              <p>The manifest contains a collector credential that is shown <strong>only now</strong>. Download it before closing — otherwise you will have to rotate the credential. Keep the file private and delete it after applying.</p>
-            </div>
+            <Callout tone="warning" icon={<KeyRound strokeWidth={1.75} />}>
+              The manifest contains a collector credential that is shown <strong className="font-semibold text-white">only now</strong>. Download it before closing — otherwise you will have to rotate the credential. Keep the file private and delete it after applying.
+            </Callout>
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField label="Probara API origin" required error={touched ? fieldErrors.origin : undefined} description="HTTPS origin the cluster can reach.">
-                <input className="input" value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="https://probara.example.com" />
+                <Input className="font-mono" value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="https://probara.example.com" />
               </FormField>
               <FormField label="Collector image" required error={touched ? fieldErrors.image : undefined} description="The discovery-collector image from this release.">
-                <input className="input font-mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ghcr.io/…/probara-discovery-collector:tag" />
+                <Input className="font-mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ghcr.io/…/probara-discovery-collector:tag" />
               </FormField>
             </div>
             <div className="space-y-3">
@@ -175,12 +199,11 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
               <CommandBlock label="2. Check the first scan" value={commands.logs} />
             </div>
             <p className="text-xs text-slate-500">
-              Runs in <span className="font-mono text-slate-400">{integration.namespaces[0]}</span> with list-only access to Services and Ingresses in {integration.namespaces.length === 1 ? 'that namespace' : `${integration.namespaces.length} namespaces`}. The first scan starts immediately, then every 5 minutes.
+              Runs in <span className="font-mono text-slate-300">{integration.namespaces[0]}</span> with list-only access to Services and Ingresses in {integration.namespaces.length === 1 ? 'that namespace' : `${integration.namespaces.length} namespaces`}. The first scan starts immediately, then every 5 minutes.
             </p>
           </div>
         )}
-      </DiscoveryModal>
-      <ModalPortal>
+      </Dialog>
       <ConfirmDialog
         open={confirmClose}
         title="Close without the manifest?"
@@ -189,7 +212,6 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
         onConfirm={() => { setConfirmClose(false); onClose(); }}
         onCancel={() => setConfirmClose(false)}
       />
-      </ModalPortal>
     </>
   );
 }
@@ -197,16 +219,16 @@ export default function ConnectClusterModal({ install, locations, onCreated, onC
 function Steps({ step }: { step: number }) {
   const items = ['Cluster', 'Install collector'];
   return (
-    <ol className="mt-1 flex items-center gap-3">
+    <ol className="flex items-center gap-3 text-xs">
       {items.map((label, i) => {
         const n = i + 1;
         const state = n < step ? 'done' : n === step ? 'current' : 'todo';
         return (
           <li key={label} className="flex items-center gap-1.5">
-            <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold ${state === 'todo' ? 'border border-white/15 text-slate-500' : 'bg-cyan-500 text-white'}`}>
-              {state === 'done' ? <Check className="h-2.5 w-2.5" aria-hidden="true" /> : n}
+            <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-2xs font-semibold tabular-nums ${state === 'todo' ? 'border border-edge-control text-slate-500' : SELECTED_SEGMENT}`}>
+              {state === 'done' ? <Check className="h-3 w-3" strokeWidth={2.25} aria-hidden="true" /> : n}
             </span>
-            <span className={state === 'current' ? 'text-slate-200' : 'text-slate-500'}>{label}</span>
+            <span className={state === 'current' ? 'font-medium text-white' : 'text-slate-500'} aria-current={state === 'current' ? 'step' : undefined}>{label}</span>
           </li>
         );
       })}
@@ -222,10 +244,10 @@ export function CommandBlock({ label, value }: { label: string; value: string })
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-xs font-medium text-slate-400">{label}</span>
-        <Button variant="ghost" size="xs" icon={copied ? <Check strokeWidth={2} /> : <Copy strokeWidth={1.75} />} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</Button>
+        <span className="text-ui font-medium text-slate-300">{label}</span>
+        <Button variant="subtle" size="xs" icon={copied ? <Check strokeWidth={2} /> : <Copy strokeWidth={1.75} />} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</Button>
       </div>
-      <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-lg border border-white/[0.06] bg-slate-950/60 px-3 py-2.5 font-mono text-xs text-slate-200">{value}</pre>
+      <pre className="glass-well overflow-x-auto whitespace-pre-wrap break-all px-3 py-2.5 font-mono text-xs text-slate-200">{value}</pre>
     </div>
   );
 }

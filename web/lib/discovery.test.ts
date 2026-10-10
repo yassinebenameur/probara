@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  collectorHealth, collectorManifest, coverageQueryString, errorMessage, isDuplicateTarget, isNotFound, manifestInputErrors,
+  collectorHealth, collectorManifest, coverageGaps, coverageQueryString, errorMessage, gapInfo, isDuplicateTarget, isNotFound, manifestInputErrors,
   parseNamespaces, serviceSuggestions, suggestionTarget, validNamespace, type DiscoveryIntegration, type DiscoveryService,
 } from './discovery';
 
@@ -80,4 +80,10 @@ test('API error objects keep their message and code', () => {
   assert.equal(isNotFound(new Error('boom')), false);
   assert.equal(errorMessage(new Error('boom')), 'boom');
   assert.equal(errorMessage(42), 'The request failed. Please retry.');
+});
+test('gap tones stay on the shared status-tone vocabulary', () => {
+  const statusTones = ['success', 'danger', 'warning', 'info', 'neutral'];
+  for (const [code, gap] of Object.entries(coverageGaps)) assert.ok(statusTones.includes(gap.tone), code);
+  assert.equal(gapInfo('resource_missing').tone, 'danger');
+  assert.deepEqual(gapInfo('something_new'), { short: 'something_new', label: 'something_new', tone: 'neutral' });
 });

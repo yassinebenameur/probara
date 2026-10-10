@@ -1,15 +1,20 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useId, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import Dialog from '@/components/ui/Dialog';
 import Pill from '@/components/ui/Pill';
-import DiscoveryModal from './DiscoveryModal';
-import { Notice } from './ApproveModal';
+import Radio from '@/components/ui/Radio';
+import ScrollList from '@/components/ui/ScrollList';
+import TableSkeleton from '@/components/ui/TableSkeleton';
+import TypeBadge from '@/components/ui/TypeBadge';
 import { linkDiscoveryMonitor } from '@/lib/api';
 import { getAllMonitors } from '@/lib/monitor-list';
 import { errorMessage, suggestionTarget, type DiscoveryMonitor, type DiscoveryService, type DiscoverySuggestion } from '@/lib/discovery';
-import { monitorStateColors } from '@/lib/monitor-utils';
+import { displayStatusFromState, monitorTarget } from '@/lib/monitor-utils';
+import { MONITOR_STATUS_DOT } from '@/lib/status-tones';
 import type { Monitor, MonitorState } from '@/lib/types';
 
 const MAX_ROWS = 100;
@@ -23,14 +28,9 @@ interface LinkMonitorModalProps {
   onClose: () => void;
 }
 
-function monitorTarget(m: Monitor): string {
-  const c = (m.config || {}) as unknown as Record<string, unknown>;
-  if (typeof c.url === 'string') return c.url;
-  if (typeof c.host === 'string') return c.port ? `${c.host}:${c.port}` : c.host;
-  return '';
-}
-
 export default function LinkMonitorModal({ service, suggestion, candidates, initialMonitorId, onLinked, onClose }: LinkMonitorModalProps) {
+  const formId = useId();
+  const radioName = useId();
   const [monitors, setMonitors] = useState<Monitor[] | null>(null);
   const [loadError, setLoadError] = useState('');
   const [query, setQuery] = useState('');
@@ -48,10 +48,13 @@ export default function LinkMonitorModal({ service, suggestion, candidates, init
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (monitors || []).filter((m) => !candidateIds.has(m.id) && (!q || m.name.toLowerCase().includes(q) || monitorTarget(m).toLowerCase().includes(q)));
+    return (monitors || []).filter((m) => !candidateIds.has(m.id) && (!q || m.name.toLowerCase().includes(q) || (monitorTarget(m) ?? '').toLowerCase().includes(q)));
   }, [monitors, query, candidateIds]);
 
-  const submit = async () => {
+  const canSubmit = Boolean(selected) && !saving && !linkedIds.has(selected);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canSubmit) return;
     const name = candidates.find((m) => m.id === selected)?.name || monitors?.find((m) => m.id === selected)?.name || 'Monitor';
     setSaving(true); setError('');
     try {
@@ -65,65 +68,79 @@ export default function LinkMonitorModal({ service, suggestion, candidates, init
   };
 
   return (
-    <DiscoveryModal
+    <Dialog
       title={`Link a monitor to ${service.name}`}
-      subtitle={suggestion ? <>For <span className="break-all font-mono text-slate-400">{suggestionTarget(suggestion)}</span></> : 'Counts toward this service’s coverage. Nothing about the monitor changes.'}
+      description={suggestion ? <>For <span className="break-all font-mono">{suggestionTarget(suggestion)}</span></> : 'Counts toward this service’s coverage. Nothing about the monitor changes.'}
       onClose={onClose}
-      locked={saving}
+      busy={saving}
       footer={<>
-        <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-        <Button variant="accent" onClick={() => void submit()} disabled={!selected || saving || linkedIds.has(selected)} loading={saving}>Link monitor</Button>
+        <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button type="submit" form={formId} variant="accent" size="sm" disabled={!canSubmit} loading={saving}>Link monitor</Button>
       </>}
     >
-      <div className="space-y-4">
-        {error && <Notice tone="danger">{error}</Notice>}
+      <form id={formId} noValidate onSubmit={(e) => void submit(e)} className="space-y-5">
+        {error && <Callout tone="danger">{error}</Callout>}
         {candidates.length > 0 && (
           <section>
-            <h3 className="mb-2 text-xs font-medium text-slate-400">Checks the same target</h3>
-            <p className="mb-2 text-xs text-slate-500">Verify its assertions and location before linking.</p>
-            <ul className="divide-y divide-white/[0.04] rounded-lg border border-amber-500/20 bg-amber-500/[0.04]">
-              {candidates.map((m) => <MonitorOption key={m.id} id={m.id} name={m.name} type={m.type} state={m.state} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} onSelect={setSelected} />)}
-            </ul>
+            <h3 className="text-ui font-medium text-slate-300">Checks the same target</h3>
+            <p className="mb-2 mt-0.5 text-xs text-slate-500">Verify its assertions and location before linking.</p>
+            <div role="radiogroup" aria-label="Monitors that check the same target" className="glass-well space-y-1 p-1.5">
+              {candidates.map((m) => <MonitorOption key={m.id} name={radioName} id={m.id} label={m.name} type={m.type} state={m.state} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} onSelect={setSelected} />)}
+            </div>
           </section>
         )}
         <section>
-          {candidates.length > 0 && <h3 className="mb-2 text-xs font-medium text-slate-400">Any monitor</h3>}
+          {candidates.length > 0 && <h3 className="mb-2 text-ui font-medium text-slate-300">Any monitor</h3>}
           <div className="relative mb-2">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" aria-hidden="true" />
-            <input className="input !pl-8" aria-label="Search monitors" placeholder="Search by name or target" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus={candidates.length === 0} />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
+            <input type="search" className="input !pl-9" aria-label="Search monitors" placeholder="Search by name or target" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} autoFocus={candidates.length === 0} />
           </div>
-          {loadError ? <p className="text-xs text-rose-300">{loadError}</p> : monitors === null ? (
-            <p className="py-6 text-center text-xs text-slate-500">Loading monitors…</p>
+          {loadError ? <Callout tone="danger">{loadError}</Callout> : monitors === null ? (
+            <div className="glass-well overflow-hidden"><TableSkeleton bare rows={4} columns={1} label="Loading monitors" /></div>
           ) : matches.length === 0 ? (
-            <p className="py-6 text-center text-xs text-slate-500">{query ? 'No monitor matches.' : 'No other monitors in this workspace.'}</p>
+            <p className="glass-well px-3 py-6 text-center text-xs text-slate-500">{query ? 'No monitor matches.' : 'No other monitors in this workspace.'}</p>
           ) : (
-            <ul className="dashboard-scroll max-h-72 divide-y divide-white/[0.04] overflow-y-auto rounded-lg border border-white/[0.06]">
-              {matches.slice(0, MAX_ROWS).map((m) => <MonitorOption key={m.id} id={m.id} name={m.name} type={m.type} state={m.current_state} target={monitorTarget(m)} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} onSelect={setSelected} />)}
-            </ul>
+            <div className="glass-well relative p-1.5">
+              <ScrollList maxHeight="18rem" label="Monitors" className="dashboard-scroll">
+                <div role="radiogroup" aria-label="Monitors" className="space-y-1">
+                  {matches.slice(0, MAX_ROWS).map((m) => <MonitorOption key={m.id} name={radioName} id={m.id} label={m.name} type={m.type} state={m.current_state} target={monitorTarget(m) ?? ''} paused={!m.enabled} selected={selected === m.id} linked={linkedIds.has(m.id)} onSelect={setSelected} />)}
+                </div>
+              </ScrollList>
+            </div>
           )}
           {matches.length > MAX_ROWS && <p className="mt-2 text-xs text-slate-500">Showing {MAX_ROWS} of {matches.length}. Refine the search.</p>}
         </section>
-      </div>
-    </DiscoveryModal>
+      </form>
+    </Dialog>
   );
 }
 
-function MonitorOption({ id, name, type, state, target, paused, selected, linked, onSelect }: {
-  id: string; name: string; type: string; state?: string; target?: string; paused: boolean; selected: boolean; linked: boolean; onSelect: (id: string) => void;
+function MonitorOption({ name, id, label, type, state, target, paused, selected, linked, onSelect }: {
+  name: string; id: string; label: string; type: string; state?: MonitorState; target?: string; paused: boolean; selected: boolean; linked: boolean; onSelect: (id: string) => void;
 }) {
-  const colors = monitorStateColors(state as MonitorState | undefined);
+  const dot = MONITOR_STATUS_DOT[displayStatusFromState({ enabled: !paused, current_state: state })];
+  // The whole row is the radio's label; its text column stretches so the
+  // pills and type badge sit right. Checked rows take well-strong.
   return (
-    <li>
-      <label className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm transition-colors ${selected ? 'bg-cyan-500/[0.08]' : 'hover:bg-white/[0.03]'} ${linked ? 'cursor-not-allowed opacity-50' : ''}`}>
-        <input type="radio" name="link-monitor" className="shrink-0" checked={selected} disabled={linked} onChange={() => onSelect(id)} />
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${paused ? 'bg-slate-600' : colors.dot}`} aria-hidden="true" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-slate-200">{name}</span>
-          {target && <span className="block truncate font-mono text-[11px] text-slate-500">{target}</span>}
+    <Radio
+      name={name}
+      value={id}
+      checked={selected}
+      disabled={linked}
+      onChange={() => onSelect(id)}
+      stretch
+      className={`w-full rounded-lg px-3 !py-2 transition-colors ${selected ? 'bg-well-strong' : linked ? '' : 'hover:bg-well-hover'}`}
+      label={
+        <span className="flex items-center gap-3">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate">{label}</span>
+            {target && <span className="block truncate font-mono text-2xs text-slate-500">{target}</span>}
+          </span>
+          {linked ? <Pill size="xs">Linked</Pill> : paused ? <Pill size="xs">Paused</Pill> : null}
+          <TypeBadge type={type} />
         </span>
-        {linked ? <Pill size="xs">Linked</Pill> : paused ? <Pill size="xs">Paused</Pill> : null}
-        <Pill size="xs">{type}</Pill>
-      </label>
-    </li>
+      }
+    />
   );
 }

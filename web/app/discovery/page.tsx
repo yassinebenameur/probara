@@ -1,32 +1,50 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { KeyRound, Plus, RefreshCw, Search, Trash2, Workflow } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowUpDown, KeyRound, Plus, Radar, RefreshCw, Search, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
+import LiveStatus from '@/components/ui/LiveStatus';
+import Page from '@/components/ui/Page';
 import PageHeader from '@/components/ui/PageHeader';
-import Panel from '@/components/ui/Panel';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import Select from '@/components/ui/Select';
+import { useUrlSort } from '@/components/ui/SortableHeader';
 import Pill from '@/components/ui/Pill';
 import EmptyState from '@/components/ui/EmptyState';
 import FilterChip from '@/components/ui/FilterChip';
+import ChipGroup from '@/components/ui/ChipGroup';
+import Callout from '@/components/ui/Callout';
+import TableSkeleton from '@/components/ui/TableSkeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import ModalPortal from '@/components/ui/ModalPortal';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
-import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
-import ServiceTable from '@/components/discovery/ServiceTable';
+import { useCanWrite, useCurrentUser } from '@/components/providers/CurrentUserProvider';
+import ServiceTable, { rowGaps } from '@/components/discovery/ServiceTable';
 import ConnectClusterModal from '@/components/discovery/ConnectClusterModal';
-import ApproveModal, { Notice } from '@/components/discovery/ApproveModal';
+import ApproveModal from '@/components/discovery/ApproveModal';
 import LinkMonitorModal from '@/components/discovery/LinkMonitorModal';
 import { deleteDiscoveryIntegration, getAlertChannels, getDiscoveryCoverage, getDiscoveryIntegrations, getLocations, rotateDiscoveryToken, unlinkDiscoveryMonitor } from '@/lib/api';
 import {
-  collectorHealth, DISCOVERY_PAGE_SIZE, errorMessage, installCommands, isNotFound,
+  collectorHealth, DISCOVERY_PAGE_SIZE, errorMessage, gapInfo, installCommands, isNotFound,
   type DiscoveryCoverage, type DiscoveryIntegration, type DiscoveryMonitor, type DiscoveryService, type DiscoverySort, type DiscoverySuggestion,
 } from '@/lib/discovery';
-import { formatTimeAgo } from '@/lib/monitor-utils';
+import { pluralize } from '@/lib/format';
+import type { SortDir, SortState } from '@/lib/sort';
+import { TONE_TEXT, type StatusTone } from '@/lib/status-tones';
 import type { AlertChannel, Location } from '@/lib/types';
+import { useLiveRefresh } from '@/lib/useLiveRefresh';
+import { useNow } from '@/lib/useNow';
+import { flashStyle, useRowFlash, type FlashTone } from '@/lib/useRowFlash';
 
-const POLL_MS = 30_000;
+const REFRESH_MS = 30_000;
+
+// Coverage is paged and sorted by the API, which orders each key one way
+// only: namespace then name A→Z, or most gaps first. The header shows that
+// order and a second click keeps it (there is no reverse to switch to).
+const SORT_KEYS = ['name', 'gaps'] as const;
+const SORT_DIR: Record<DiscoverySort, SortDir> = { name: 'asc', gaps: 'desc' };
+const DEFAULT_SORT: SortState<DiscoverySort> = { key: 'name', dir: 'asc' };
 
 type Modal =
   | { kind: 'connect' }
@@ -40,8 +58,11 @@ type Confirm =
 
 export default function DiscoveryPage() {
   const { showToast } = useToast();
-  const { canWrite, loading: identityLoading } = useCurrentUser();
-  const writable = canWrite && !identityLoading;
+  const writable = useCanWrite();
+  // Read-only copy waits for identity, as useCanWrite reads false while it loads.
+  const { loading: userLoading } = useCurrentUser();
+  const readOnly = !writable && !userLoading;
+  const now = useNow('minute');
 
   const [integrations, setIntegrations] = useState<DiscoveryIntegration[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,13 +73,15 @@ export default function DiscoveryPage() {
 
   const [coverage, setCoverage] = useState<DiscoveryCoverage | null>(null);
   const [coverageError, setCoverageError] = useState('');
-  const [fetching, setFetching] = useState(false);
-  const [tick, setTick] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   const [gapsOnly, setGapsOnly] = useState(false);
-  const [sort, setSort] = useState<DiscoverySort>('name');
+  const [urlSort, setUrlSort] = useUrlSort(SORT_KEYS, DEFAULT_SORT, SORT_DIR);
+  const sort = urlSort.key;
+  const sortState: SortState<DiscoverySort> = { key: sort, dir: SORT_DIR[sort] };
+  const changeSort = (next: DiscoverySort) => { setUrlSort({ key: next, dir: SORT_DIR[next] }); setPage(1); };
+  const coverageRequest = useRef(0);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const [modal, setModal] = useState<Modal | null>(null);
@@ -100,28 +123,55 @@ export default function DiscoveryPage() {
     return () => window.clearTimeout(t);
   }, [search]);
 
-  useEffect(() => {
-    if (!selectedId) return;
-    let active = true;
-    setFetching(true);
-    getDiscoveryCoverage(selectedId, { page, q, gaps: gapsOnly, sort })
-      .then((v) => { if (active) { setCoverage(v); setCoverageError(''); } })
-      .catch((e) => {
-        if (!active) return;
-        // Removed elsewhere (or just now): refresh the list instead of reporting a stale ID.
-        if (isNotFound(e)) void loadIntegrations();
-        else setCoverageError(errorMessage(e));
-      })
-      .finally(() => { if (active) setFetching(false); });
-    return () => { active = false; };
-  }, [selectedId, page, q, gapsOnly, sort, tick, loadIntegrations]);
+  // A visible load (first, manual, new page/filter/sort) reports its error in
+  // place; a silent one (the poll, a stream event, a tab return) keeps the
+  // rows and lets LiveStatus say the update failed. A response that a newer
+  // request overtook is dropped.
+  const loadCoverage = useCallback(async ({ silent }: { silent: boolean }) => {
+    if (!selectedId) return true;
+    const request = ++coverageRequest.current;
+    try {
+      const v = await getDiscoveryCoverage(selectedId, { page, q, gaps: gapsOnly, sort });
+      if (request === coverageRequest.current) { setCoverage(v); setCoverageError(''); }
+      return true;
+    } catch (e) {
+      if (request !== coverageRequest.current) return true;
+      // Removed elsewhere (or just now): refresh the list instead of reporting a stale ID.
+      if (isNotFound(e)) { void loadIntegrations(); return true; }
+      if (!silent) setCoverageError(errorMessage(e));
+      return false;
+    }
+  }, [selectedId, page, q, gapsOnly, sort, loadIntegrations]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') setTick((v) => v + 1); }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, []);
+  // Linked monitors' states ride the alert stream, so a monitor event reloads
+  // coverage (debounced) as well as the 30s poll.
+  const live = useLiveRefresh(loadCoverage, {
+    intervalMs: REFRESH_MS,
+    enabled: Boolean(selectedId),
+    streamFilter: (event) => Boolean(event.alert.monitor_id),
+  });
+  const reloadCoverage = () => void live.refresh();
+  const rowFlash = useRowFlash(coverage?.items, (s) => s.id, (s) => rowGaps(s).join(','));
 
-  const refresh = () => { setTick((v) => v + 1); void loadIntegrations(); };
+  // Screen-reader news, politely, for the coverage changes the flash shows.
+  const [coverageNews, setCoverageNews] = useState('');
+  const announced = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = Array.from(rowFlash.flashing).filter((id) => !announced.current.has(id));
+    announced.current = new Set(rowFlash.flashing);
+    if (fresh.length === 0 || !coverage) return;
+    const byId = new Map(coverage.items.map((s) => [s.id, s]));
+    const parts = fresh
+      .map((id) => byId.get(id))
+      .filter((s): s is DiscoveryService => Boolean(s))
+      .map((s) => {
+        const gaps = rowGaps(s).length;
+        return gaps === 0 ? `${s.name} is now covered` : `${s.name} now has ${pluralize(gaps, 'gap')}`;
+      });
+    if (parts.length > 0) setCoverageNews(parts.length > 3 ? `${parts.length} services changed coverage` : parts.join('. '));
+  }, [rowFlash.flashing, coverage]);
+
+  const refresh = () => { reloadCoverage(); void loadIntegrations(); };
 
   const runConfirm = async () => {
     if (!confirm) return;
@@ -139,8 +189,8 @@ export default function DiscoveryPage() {
         void loadIntegrations();
       } else {
         await unlinkDiscoveryMonitor(confirm.service.id, confirm.monitor.id);
-        showToast(`Unlinked ${confirm.monitor.name}`, 'success');
-        setTick((v) => v + 1);
+        // No toast: the monitor leaves the open row in place.
+        reloadCoverage();
       }
       setConfirm(null);
     } catch (e) {
@@ -150,143 +200,186 @@ export default function DiscoveryPage() {
     }
   };
 
-  const health = collectorHealth(coverage ? coverage.last_seen_at : integration?.last_seen_at);
+  const health = collectorHealth(coverage ? coverage.last_seen_at : integration?.last_seen_at, now);
   const lastSeen = coverage?.last_seen_at ?? integration?.last_seen_at ?? null;
   const filtered = Boolean(q || gapsOnly);
   const pageCount = coverage ? Math.max(1, Math.ceil(coverage.total / (coverage.page_size || DISCOVERY_PAGE_SIZE))) : 1;
   const commands = integration ? installCommands(integration) : null;
 
-  const connectAction = writable && (
-    <Button variant="accent" icon={<Plus strokeWidth={1.75} />} onClick={() => setModal({ kind: 'connect' })}>Connect cluster</Button>
-  );
+  const openConnect = () => setModal({ kind: 'connect' });
+  const clearFilters = () => { setSearch(''); setQ(''); setGapsOnly(false); setPage(1); };
+  const nextSort: DiscoverySort = sort === 'gaps' ? 'name' : 'gaps';
+  const sortLabel = `Sorted by ${SORT_LABEL[sort].toLowerCase()}. Switch to ${SORT_LABEL[nextSort].toLowerCase()}`;
 
   return (
-    <div className="space-y-4">
+    <Page width="data">
       <PageHeader
         title="Discovery"
         subtitle="Kubernetes services and the monitors that cover them."
         titleInfoTip="Coverage checks that each discovered service has an enabled monitor with recent results and a reachable alert channel. It does not verify functional behaviour or notification delivery."
         action={integrations.length > 0 && <>
-          <Button variant="ghost" icon={<RefreshCw strokeWidth={1.75} className={fetching ? 'animate-spin' : ''} />} onClick={refresh}>Refresh</Button>
-          {connectAction}
+          {live.updatedAt !== null && (
+            <LiveStatus
+              updatedAt={live.updatedAt}
+              refreshing={live.refreshing}
+              failed={live.failed && !coverageError}
+              onRefresh={refresh}
+              refreshLabel="Refresh discovery"
+              className="mr-1"
+            />
+          )}
+          {writable && <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} onClick={openConnect}>Connect cluster</Button>}
         </>}
       />
 
       {pageError && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-          <p className="text-sm text-rose-300">{pageError}</p>
-          <Button variant="danger" size="xs" onClick={() => void loadIntegrations()}>Retry</Button>
-        </div>
+        <Callout tone="danger" action={<Button variant="ghost" size="xs" onClick={() => void loadIntegrations()}>Retry</Button>}>
+          {pageError}
+        </Callout>
       )}
 
       {loading ? (
-        <Panel><p className="text-sm text-slate-500">Loading discovery…</p></Panel>
+        <TableSkeleton rows={4} columns={3} label="Loading discovery" />
       ) : integrations.length === 0 ? (
         !pageError && <EmptyState
-          icon={<Workflow strokeWidth={1.5} />}
-          title="Connect your first cluster"
-          description="A read-only collector lists Services and Ingresses in the namespaces you choose. Probara suggests checks for them and shows which services have no monitoring. Nothing is created without your review."
-          action={connectAction || undefined}
+          icon={<Radar strokeWidth={1.5} />}
+          title="No clusters connected"
+          description={readOnly
+            ? 'A read-only collector lists Services and Ingresses and shows which have no monitoring. An editor can connect a cluster.'
+            : 'A read-only collector lists Services and Ingresses in the namespaces you choose. Probara suggests checks for them and shows which services have no monitoring. Nothing is created without your review.'}
+          action={writable ? { label: 'Connect cluster', onClick: openConnect, icon: <Plus strokeWidth={1.75} /> } : undefined}
         />
       ) : integration && (
         <>
-          {/* Cluster bar */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-white/[0.06] bg-slate-900/50 px-4 py-3">
-            {integrations.length > 1 ? (
-              <select aria-label="Cluster" className="input !w-auto !py-1.5 font-medium" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-                {integrations.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-              </select>
-            ) : <span className="text-sm font-medium text-white">{integration.name}</span>}
-            <HealthPill health={health} />
-            <span className="text-xs text-slate-500">{lastSeen ? `Last scan ${formatTimeAgo(lastSeen)}` : 'No scan yet'}</span>
-            <div className="flex min-w-0 basis-full flex-wrap items-center gap-1 sm:basis-auto sm:flex-1">
-              {integration.namespaces.map((ns) => <Pill key={ns} size="xs" className="whitespace-nowrap font-mono">{ns}</Pill>)}
-            </div>
-            {writable && (
-              <div className="flex items-center gap-0.5">
-                <IconButton icon={<KeyRound strokeWidth={1.75} />} label="Rotate credential and reinstall collector" onClick={() => setConfirm({ kind: 'rotate', integration })} />
-                <IconButton icon={<Trash2 strokeWidth={1.75} />} label="Remove cluster" danger onClick={() => setConfirm({ kind: 'remove', integration })} />
+          {/* Cluster identity on top, its coverage summary underneath: one panel. */}
+          <div className="glass overflow-hidden">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
+              {integrations.length > 1 ? (
+                <Select aria-label="Cluster" className="input-sm !w-auto max-w-full truncate font-medium" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+                  {integrations.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                </Select>
+              ) : <span className="text-title font-semibold text-white">{integration.name}</span>}
+              <HealthPill health={health} />
+              <RelativeTime value={lastSeen} prefix="Last scan " fallback="No scan yet" className="text-xs text-slate-500" />
+              <div className="flex min-w-0 basis-full flex-wrap items-center gap-1 sm:basis-auto sm:flex-1">
+                {integration.namespaces.map((ns) => <Pill key={ns} size="xs" className="whitespace-nowrap font-mono">{ns}</Pill>)}
               </div>
-            )}
+              {writable && (
+                <div className="flex items-center gap-0.5">
+                  <IconButton icon={<KeyRound strokeWidth={1.75} />} label="Rotate credential and reinstall collector" onClick={() => setConfirm({ kind: 'rotate', integration })} />
+                  <IconButton icon={<Trash2 strokeWidth={1.75} />} label="Remove cluster" danger onClick={() => setConfirm({ kind: 'remove', integration })} />
+                </div>
+              )}
+            </div>
+            {coverage?.summary && coverage.summary.services > 0 && <SummaryRow summary={coverage.summary} />}
           </div>
 
           {coverage?.inventory_stale && health === 'stale' && (
-            <Notice tone="warning">
-              No complete scan since {lastSeen ? formatTimeAgo(lastSeen) : 'setup'}. Gaps may be out of date and new approvals are paused.
-              {commands && <> Check the collector: <CopyableTarget value={commands.logs} label="command" size="xs" href={null} className="align-middle" textClassName="text-amber-100" /></>}
-            </Notice>
+            // Live region: a poll can flip the collector to stale while the page is open.
+            <Callout tone="warning" live="polite" title={lastSeen ? <>Last complete scan <RelativeTime value={lastSeen} /></> : 'No complete scan since setup'}>
+              Gaps may be out of date and new approvals are paused.
+              {commands && <> Check the collector: <CopyableTarget value={commands.logs} label="command" size="xs" href={null} className="align-middle" /></>}
+            </Callout>
           )}
 
-          {coverage?.summary && coverage.summary.services > 0 && <SummaryStrip summary={coverage.summary} />}
-
           {health === 'waiting' && coverage && coverage.total === 0 && !filtered ? (
-              <EmptyState
-                icon={<RefreshCw strokeWidth={1.5} />}
-                title="Waiting for the first scan"
-                description={`Apply the collector manifest to the cluster; the first scan runs as soon as it starts. If you no longer have the manifest, rotate the credential to download a new one.`}
-                action={writable ? <Button variant="ghost" icon={<KeyRound strokeWidth={1.75} />} onClick={() => setConfirm({ kind: 'rotate', integration })}>Get a new manifest</Button> : undefined}
-              />
-            ) : (
-              <Panel allowOverflow>
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" aria-hidden="true" />
-                    <input className="input !py-1.5 !pl-8" aria-label="Search services" placeholder="Search services or namespaces" value={search} onChange={(e) => setSearch(e.target.value)} />
-                  </div>
+            <EmptyState
+              icon={<RefreshCw strokeWidth={1.5} />}
+              title="Waiting for the first scan"
+              description={readOnly
+                ? 'The first scan runs as soon as the collector starts in the cluster.'
+                : 'Apply the collector manifest to the cluster; the first scan runs as soon as it starts. If you no longer have the manifest, rotate the credential to download a new one.'}
+              action={writable ? <Button variant="ghost" icon={<KeyRound strokeWidth={1.75} />} onClick={() => setConfirm({ kind: 'rotate', integration })}>Get a new manifest</Button> : undefined}
+            />
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+                <div className="relative w-full sm:w-64">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
+                  <input
+                    type="search"
+                    className="input input-sm h-8 py-0 !pl-8"
+                    aria-label="Search services or namespaces"
+                    placeholder="Search services or namespaces"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+                <ChipGroup ariaLabel="Coverage">
                   <FilterChip selected={!gapsOnly} count={coverage?.summary?.services} onClick={() => { setGapsOnly(false); setPage(1); }}>All</FilterChip>
                   <FilterChip selected={gapsOnly} count={coverage?.summary?.with_gaps} onClick={() => { setGapsOnly(true); setPage(1); }}>With gaps</FilterChip>
-                  <select aria-label="Sort services" className="input !w-auto !py-1.5 text-xs sm:ml-auto" value={sort} onChange={(e) => { setSort(e.target.value as DiscoverySort); setPage(1); }}>
-                    <option value="name">Sort by namespace / name</option>
-                    <option value="gaps">Sort by most gaps</option>
-                  </select>
-                </div>
+                </ChipGroup>
+                {/* Below xl the Coverage column (and its sortable header) folds
+                    under the service name, so the order needs its own control. */}
+                <FilterChip
+                  className="self-start sm:ml-auto sm:self-auto xl:hidden"
+                  icon={<ArrowUpDown strokeWidth={1.75} />}
+                  aria-label={sortLabel}
+                  onClick={() => changeSort(nextSort)}
+                >
+                  {SORT_LABEL[sort]}
+                </FilterChip>
+              </div>
 
-                {coverageError ? (
-                  <div className="flex items-center justify-between gap-3 py-6">
-                    <p className="text-sm text-rose-300">{coverageError}</p>
-                    <Button variant="ghost" size="xs" onClick={() => setTick((v) => v + 1)}>Retry</Button>
-                  </div>
-                ) : !coverage ? (
-                  <p className="py-6 text-sm text-slate-500">Loading services…</p>
-                ) : coverage.items.length === 0 ? (
-                  filtered ? (
-                    <InlineEmpty title="No services match" description="Try another search or show all services." action={<Button variant="ghost" size="xs" onClick={() => { setSearch(''); setQ(''); setGapsOnly(false); setPage(1); }}>Clear filters</Button>} />
-                  ) : (
-                    <InlineEmpty title="Nothing discovered" description={`The last scan found no Services or Ingresses in ${integration.namespaces.join(', ')}.`} />
-                  )
+              {coverageError ? (
+                <Callout tone="danger" action={<Button variant="ghost" size="xs" onClick={reloadCoverage} loading={live.loading}>Retry</Button>}>
+                  {coverageError}
+                </Callout>
+              ) : !coverage ? (
+                <TableSkeleton rows={5} columns={3} label="Loading services" />
+              ) : coverage.items.length === 0 ? (
+                filtered ? (
+                  <EmptyState
+                    icon={<Search strokeWidth={1.5} />}
+                    title="No services match"
+                    description="Try another search or show all services."
+                    action={<Button variant="ghost" size="sm" onClick={clearFilters}>Clear filters</Button>}
+                  />
                 ) : (
-                  <>
-                    <ServiceTable
-                      items={coverage.items}
-                      expanded={expanded}
-                      onToggle={(id) => setExpanded(expanded === id ? null : id)}
-                      writable={writable}
-                      stale={coverage.inventory_stale}
-                      onApprove={(service, suggestion) => setModal({ kind: 'approve', service, suggestion })}
-                      onLink={(service, suggestion, monitorId) => setModal({ kind: 'link', service, suggestion, monitorId })}
-                      onUnlink={(service, monitor) => setConfirm({ kind: 'unlink', service, monitor })}
-                    />
-                    {coverage.total > (coverage.page_size || DISCOVERY_PAGE_SIZE) && (
-                      <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-                        <span>Page {page} of {pageCount} · {coverage.total} services</span>
-                        <div className="flex gap-2">
-                          <Button variant="ghost" size="xs" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Button>
-                          <Button variant="ghost" size="xs" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</Button>
-                        </div>
+                  <EmptyState
+                    icon={<Radar strokeWidth={1.5} />}
+                    title="Nothing discovered"
+                    description={`The last scan found no Services or Ingresses in ${integration.namespaces.join(', ')}.`}
+                  />
+                )
+              ) : (
+                <div className="glass overflow-hidden">
+                  <ServiceTable
+                    items={coverage.items}
+                    expanded={expanded}
+                    onToggle={(id) => setExpanded(expanded === id ? null : id)}
+                    writable={writable}
+                    stale={coverage.inventory_stale}
+                    onApprove={(service, suggestion) => setModal({ kind: 'approve', service, suggestion })}
+                    onLink={(service, suggestion, monitorId) => setModal({ kind: 'link', service, suggestion, monitorId })}
+                    onUnlink={(service, monitor) => setConfirm({ kind: 'unlink', service, monitor })}
+                    sort={sortState}
+                    onSort={(next) => changeSort(next.key)}
+                    rowFlash={(service) => ({ className: rowFlash.flashClass(service.id), style: flashStyle(coverageTone(service)) })}
+                  />
+                  {coverage.total > (coverage.page_size || DISCOVERY_PAGE_SIZE) && (
+                    <div className="flex items-center justify-between gap-3 border-t border-divider px-4 py-3 text-xs text-slate-500">
+                      <span className="tabular-nums">Page {page} of {pageCount} ({pluralize(coverage.total, 'service')})</span>
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="xs" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Button>
+                        <Button variant="ghost" size="xs" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</Button>
                       </div>
-                    )}
-                  </>
-                )}
-              </Panel>
-            )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
+
+      <p role="status" className="sr-only">{coverageNews}</p>
 
       {modal?.kind === 'connect' && (
         <ConnectClusterModal
           locations={locations}
           onCreated={(created) => void loadIntegrations(created.id)}
-          onClose={() => { setModal(null); setTick((v) => v + 1); }}
+          onClose={() => { setModal(null); reloadCoverage(); }}
         />
       )}
       {modal?.kind === 'install' && (
@@ -301,7 +394,8 @@ export default function DiscoveryPage() {
           channels={channels}
           defaultLocationId={integration?.location_id ?? null}
           stale={Boolean(coverage?.inventory_stale)}
-          onCreated={(_, name) => { setModal(null); setExpanded(modal.service.id); setTick((v) => v + 1); showToast(`Created ${name} and linked it to ${modal.service.name}`, 'success'); }}
+          // No toast: the open row shows the new monitor in place.
+          onCreated={() => { setModal(null); setExpanded(modal.service.id); reloadCoverage(); }}
           onLinkInstead={(monitorId) => setModal({ kind: 'link', service: modal.service, suggestion: modal.suggestion, monitorId })}
           onClose={() => setModal(null)}
         />
@@ -312,12 +406,12 @@ export default function DiscoveryPage() {
           suggestion={modal.suggestion}
           candidates={modal.suggestion ? modal.service.candidates[modal.suggestion.key] || [] : []}
           initialMonitorId={modal.monitorId}
-          onLinked={(name) => { setModal(null); setExpanded(modal.service.id); setTick((v) => v + 1); showToast(`Linked ${name} to ${modal.service.name}`, 'success'); }}
+          onLinked={() => { setModal(null); setExpanded(modal.service.id); reloadCoverage(); }}
           onClose={() => setModal(null)}
         />
       )}
 
-      <ModalPortal>
+      {/* ConfirmDialog portals itself (components/ui/ConfirmDialog.tsx). */}
       <ConfirmDialog
         open={confirm !== null}
         loading={confirming}
@@ -332,9 +426,19 @@ export default function DiscoveryPage() {
         onConfirm={() => void runConfirm()}
         onCancel={() => setConfirm(null)}
       />
-      </ModalPortal>
-    </div>
+    </Page>
   );
+}
+
+const SORT_LABEL: Record<DiscoverySort, string> = { name: 'Namespace, name', gaps: 'Most gaps' };
+
+// A row that just changed flashes in its new worst gap's tone (green once covered).
+function coverageTone(service: DiscoveryService): FlashTone {
+  const tones = rowGaps(service).map((g) => gapInfo(g).tone);
+  if (tones.length === 0) return 'success';
+  if (tones.includes('danger')) return 'danger';
+  if (tones.includes('warning')) return 'warning';
+  return 'neutral';
 }
 
 function HealthPill({ health }: { health: ReturnType<typeof collectorHealth> }) {
@@ -343,32 +447,24 @@ function HealthPill({ health }: { health: ReturnType<typeof collectorHealth> }) 
   return <Pill size="xs" dot>Waiting for first scan</Pill>;
 }
 
-function SummaryStrip({ summary }: { summary: NonNullable<DiscoveryCoverage['summary']> }) {
-  const tiles = [
-    { label: 'Services', value: summary.services, tone: 'text-white' },
-    { label: 'Fully covered', value: summary.covered, tone: summary.covered > 0 ? 'text-emerald-300' : 'text-white' },
-    { label: 'With gaps', value: summary.with_gaps, tone: summary.with_gaps > 0 ? 'text-amber-300' : 'text-white' },
-    { label: 'Unmonitored', value: summary.unmonitored, tone: summary.unmonitored > 0 ? 'text-amber-300' : 'text-white' },
-    { label: 'Missing', value: summary.missing, tone: summary.missing > 0 ? 'text-rose-300' : 'text-white' },
+// KPI row in the cluster panel, laid out like SlaReportView's tiles. A count
+// takes its status tone only when non-zero; zero stays neutral.
+function SummaryRow({ summary }: { summary: NonNullable<DiscoveryCoverage['summary']> }) {
+  const tiles: { label: string; value: number; tone?: StatusTone }[] = [
+    { label: 'Services', value: summary.services },
+    { label: 'Fully covered', value: summary.covered, tone: 'success' },
+    { label: 'With gaps', value: summary.with_gaps, tone: 'warning' },
+    { label: 'Unmonitored', value: summary.unmonitored, tone: 'warning' },
+    { label: 'Missing', value: summary.missing, tone: 'danger' },
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <dl className="grid grid-cols-2 gap-4 border-t border-divider px-5 py-4 sm:grid-cols-3 lg:grid-cols-5">
       {tiles.map((t) => (
-        <div key={t.label} className="rounded-lg border border-white/[0.06] bg-slate-950/35 px-4 py-3">
-          <p className="text-xs font-medium text-slate-500">{t.label}</p>
-          <p className={`mt-1 text-2xl font-semibold tabular-nums ${t.tone}`}>{t.value}</p>
+        <div key={t.label}>
+          <dt className="text-xs text-slate-400">{t.label}</dt>
+          <dd className={`mt-1 text-metric font-semibold tabular-nums ${t.tone && t.value > 0 ? TONE_TEXT[t.tone] : 'text-white'}`}>{t.value}</dd>
         </div>
       ))}
-    </div>
-  );
-}
-
-function InlineEmpty({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
-  return (
-    <div className="py-10 text-center">
-      <p className="text-sm font-medium text-slate-200">{title}</p>
-      <p className="mt-1 text-sm text-slate-500">{description}</p>
-      {action && <div className="mt-4">{action}</div>}
-    </div>
+    </dl>
   );
 }

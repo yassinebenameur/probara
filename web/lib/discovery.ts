@@ -1,3 +1,6 @@
+import type { StatusTone } from './status-tones';
+import type { MonitorState } from './types';
+
 export interface DiscoveryIntegration {
   id: string; name: string; namespaces: string[]; location_id: string | null;
   last_seen_at: string | null; revision: number; token?: string;
@@ -6,7 +9,7 @@ export interface DiscoverySuggestion {
   key: string; type: 'http' | 'tcp'; target: string; port?: number; internal: boolean; reason: string;
 }
 export interface DiscoveryMonitor {
-  id: string; name: string; type: string; enabled: boolean; state: string;
+  id: string; name: string; type: string; enabled: boolean; state: MonitorState;
   fresh: boolean; routed: boolean; suggestion_key: string | null;
 }
 export interface DiscoveryResource {
@@ -42,7 +45,9 @@ export function coverageQueryString(query: DiscoveryCoverageQuery): string {
   return params.toString();
 }
 
-export type GapTone = 'danger' | 'warning' | 'neutral';
+// Gap tones are the shared Pill/status vocabulary (lib/status-tones.ts), narrowed
+// to the three a coverage gap can carry; colour classes come from there, never here.
+export type GapTone = Extract<StatusTone, 'danger' | 'warning' | 'neutral'>;
 export const coverageGaps: Record<string, { short: string; label: string; tone: GapTone }> = {
   inventory_stale: { short: 'Stale inventory', label: 'Inventory has not refreshed in 15 minutes', tone: 'neutral' },
   resource_missing_grace: { short: 'Missing (grace)', label: 'Resource missing — within the 15-minute grace period', tone: 'neutral' },
