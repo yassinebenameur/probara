@@ -45,10 +45,10 @@ export default function FormSection({
     );
   }
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
+    <div className="glass p-6">
       {title && (
         <div className="mb-4 flex items-center gap-2">
-          <h3 className="text-sm font-medium text-white">{title}</h3>
+          <h3 className="text-title font-semibold text-white">{title}</h3>
           {renderInfoTip(infoTip)}
         </div>
       )}

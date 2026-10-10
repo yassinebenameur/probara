@@ -8,11 +8,12 @@ import {
   UpdateAlertChannelRequest,
 } from '@/lib/types';
 import { getAlertChannelPlugins } from '@/lib/api';
+import Callout from '@/components/ui/Callout';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import PluginCatalog from './PluginCatalog';
 import SchemaForm, { CLEARED_SECRET } from './SchemaForm';
+import Switch from '@/components/ui/Switch';
 
 interface AlertChannelFormProps {
   channel?: AlertChannel;
@@ -70,6 +71,8 @@ export default function AlertChannelForm({
     return () => {
       cancelled = true;
     };
+    // Mount-only: the preselect reads the initial props, not later changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectedManifest = useMemo(
@@ -115,24 +118,31 @@ export default function AlertChannelForm({
   };
 
   if (loadingManifests) {
-    return <p className="text-sm text-slate-400">Loading plugin catalog…</p>;
+    return <p className="text-sm text-slate-500">Loading plugin catalog…</p>;
   }
   if (loadError) {
-    return <p className="text-sm text-rose-400">{loadError}</p>;
+    return <Callout tone="danger">{loadError}</Callout>;
   }
 
+  // The type is fixed once a channel exists, so edit shows just that one.
+  const catalogManifests = isEdit && selectedManifest ? [selectedManifest] : manifests;
+
+  // Plain sections rather than FormSection panels: the form is embedded in a
+  // FormCard on its own pages and in a well inside ChannelPicker.
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <FormSection title="Channel type" summary="How alerts are delivered">
+      <section>
+        <h3 className="mb-3 text-title font-semibold text-white">Channel type</h3>
         <PluginCatalog
-          manifests={manifests}
+          manifests={catalogManifests}
           selectedType={selectedType}
           onSelect={handleSelectPlugin}
           disabled={isEdit}
         />
-      </FormSection>
+      </section>
 
-      <FormSection title="Basics">
+      <section className="space-y-4">
+        <h3 className="text-title font-semibold text-white">Configuration</h3>
         <FormField label="Channel name" required error={errors.name}>
           <input
             type="text"
@@ -142,10 +152,8 @@ export default function AlertChannelForm({
             className="input"
           />
         </FormField>
-      </FormSection>
 
-      {selectedManifest && (
-        <FormSection title="Configuration" summary={selectedManifest.description}>
+        {selectedManifest && (
           <SchemaForm
             manifest={selectedManifest}
             value={configValue}
@@ -153,32 +161,16 @@ export default function AlertChannelForm({
             errors={errors}
             isEdit={isEdit}
           />
-        </FormSection>
-      )}
+        )}
 
-      <FormSection title="Status">
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Channel active</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-200">Channel active</p>
             <p className="text-xs text-slate-500">Deliver alerts using this channel</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsActive(!isActive)}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              isActive ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={isActive}
-            aria-label="Toggle channel active"
-          >
-            <span
-              className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                isActive ? 'translate-x-4' : ''
-              }`}
-            />
-          </button>
+          <Switch checked={isActive} onChange={() => setIsActive(!isActive)} label="Toggle channel active" />
         </div>
-      </FormSection>
+      </section>
 
       <FormActions
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}

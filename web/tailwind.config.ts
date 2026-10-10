@@ -1,7 +1,9 @@
 import type { Config } from "tailwindcss";
 
 /*
- * Flight-recorder theme (shared with the documentation website).
+ * Flight-recorder palette (shared with the documentation website), worn as
+ * "instrument glass" in the operator UI — see the surface rules at the top of
+ * app/globals.css.
  *
  * Every color scale resolves through CSS variables defined at the end of
  * app/globals.css, so the whole app re-skins for dark (default) and light
@@ -15,6 +17,10 @@ import type { Config } from "tailwindcss";
  *
  * 'white' is also variable-backed: it flips to ink in light mode so the
  * ubiquitous text-white / border-white/[α] utilities adapt automatically.
+ *
+ * The semantic glass tokens (glass, well, control, edge, divider, onaccent)
+ * are theme-aware CSS variables that already carry their alpha, so they take
+ * no /α modifier: bg-control, border-edge, text-onaccent.
  */
 const config: Config = {
   content: [
@@ -41,6 +47,12 @@ const config: Config = {
           "Menlo",
           "monospace",
         ],
+      },
+      // One step per role; see the type note in app/globals.css.
+      fontSize: {
+        "2xs": ["11px", { lineHeight: "16px" }],
+        ui: ["13px", { lineHeight: "18px" }],
+        title: ["16px", { lineHeight: "22px" }],
       },
       colors: {
         white: "rgb(var(--tw-white) / <alpha-value>)",
@@ -278,21 +290,45 @@ const config: Config = {
           900: "rgb(var(--tw-gray-900) / <alpha-value>)",
           950: "rgb(var(--tw-gray-950) / <alpha-value>)",
         },
-        primary: "#ff5a24",
+        glass: {
+          DEFAULT: "var(--glass-fill)",
+          strong: "var(--glass-fill-strong)",
+        },
+        well: {
+          DEFAULT: "var(--well)",
+          hover: "var(--well-hover)",
+        },
+        control: {
+          DEFAULT: "var(--control)",
+          hover: "var(--control-hover)",
+        },
+        edge: {
+          DEFAULT: "var(--glass-edge)",
+          strong: "var(--glass-edge-strong)",
+          control: "var(--control-edge)",
+        },
+        divider: "var(--divider)",
+        onaccent: "var(--accent-ink)",
+        // The only semantic aliases. warning is the -300 step so text in it
+        // keeps AA in light mode (the -300 steps darken there).
         success: "rgb(var(--tw-emerald-500) / <alpha-value>)",
-        error: "rgb(var(--tw-rose-500) / <alpha-value>)",
         danger: "rgb(var(--tw-rose-500) / <alpha-value>)",
-        warning: "rgb(var(--tw-amber-400) / <alpha-value>)",
-        muted: "rgb(var(--tw-slate-500) / <alpha-value>)",
+        warning: "rgb(var(--tw-amber-300) / <alpha-value>)",
       },
       borderRadius: {
         lg: "10px",
-        xl: "14px",
+        xl: "12px",
+        "2xl": "16px",
+        "3xl": "22px",
         full: "999px",
       },
       boxShadow: {
-        soft: "var(--shadow-soft)",
-        subtle: "var(--shadow-subtle)",
+        glass: "inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow)",
+        // Selected tab/segment: raised glass plus a hairline, so it still
+        // separates from the well in dark mode where the fill is darker.
+        segment: "inset 0 0 0 1px var(--glass-edge-strong), inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow)",
+        overlay: "inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow-overlay)",
+        accent: "inset 0 1px 0 0 rgb(255 255 255 / 0.28), 0 6px 18px -8px rgb(255 90 36 / 0.7)",
       },
     },
   },

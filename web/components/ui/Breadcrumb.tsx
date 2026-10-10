@@ -13,11 +13,11 @@ interface BreadcrumbProps {
 export default function Breadcrumb({ items }: BreadcrumbProps) {
   if (items.length === 0) return null;
   return (
-    <nav aria-label="Breadcrumb" className="mb-2 flex items-center gap-1.5 text-xs text-slate-500">
+    <nav aria-label="Breadcrumb" className="mb-2 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
       {items.map((item, idx) => {
         const isLast = idx === items.length - 1;
         const content: ReactNode = isLast ? (
-          <span className="text-slate-200">{item.label}</span>
+          <span className="truncate text-slate-300">{item.label}</span>
         ) : item.href ? (
           <Link className="transition-colors hover:text-slate-200" href={item.href}>
             {item.label}
@@ -28,7 +28,7 @@ export default function Breadcrumb({ items }: BreadcrumbProps) {
         return (
           <span key={`${item.label}-${idx}`} className="inline-flex items-center gap-1.5">
             {content}
-            {!isLast && <span aria-hidden="true">›</span>}
+            {!isLast && <span aria-hidden="true" className="text-slate-600">/</span>}
           </span>
         );
       })}

@@ -11,7 +11,7 @@ import FormCard from '@/components/ui/FormCard';
 
 export default function NewAlertChannelPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-slate-400">Loading…</p>}>
+    <Suspense fallback={<p className="text-sm text-slate-500">Loading…</p>}>
       <NewAlertChannelPageInner />
     </Suspense>
   );
@@ -46,8 +46,9 @@ function NewAlertChannelPageInner() {
   return (
     <div className="max-w-2xl space-y-6">
       <PageHeader
-        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Channels', href: '/settings?tab=channels' }, { label: 'New' }]}
-        title="Create alert channel"
+        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Notifications', href: '/settings?tab=channels' }, { label: 'New' }]}
+        title="New alert channel"
+        subtitle="Choose where alert notifications are delivered, then send a test."
       />
 
       <FormCard>
@@ -58,7 +59,6 @@ function NewAlertChannelPageInner() {
           loading={loading}
         />
       </FormCard>
-
     </div>
   );
 }

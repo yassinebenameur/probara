@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Archivo, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
+import AmbientBackdrop from '@/components/layout/AmbientBackdrop';
 import Layout from '@/components/layout/Layout';
 import { ToastProvider } from '@/components/ui/ToastProvider';
 
@@ -37,6 +38,7 @@ export default function RootLayout({
               "try{document.documentElement.dataset.theme=localStorage.getItem('probara-theme')==='dark'?'dark':'light';}catch(e){document.documentElement.dataset.theme='light';}",
           }}
         />
+        <AmbientBackdrop />
         <ToastProvider>
           <Layout>{children}</Layout>
         </ToastProvider>

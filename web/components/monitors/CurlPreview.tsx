@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { Check, Copy } from 'lucide-react';
+import Button from '@/components/ui/Button';
 
 type HeaderKV = { key: string; value: string; reveal?: boolean };
 
@@ -24,7 +25,8 @@ function buildCurl(method: string, url: string, headers: HeaderKV[], body: strin
     const truncated = body.length > 80 ? body.slice(0, 80) + '...' : body;
     parts.push(`  -d '${truncated}'`);
   }
-  parts.push(`  ${url || 'https://example.com'}`);
+  // Never a made-up host: a placeholder would read as real configuration.
+  parts.push(`  ${url.trim() || '<url>'}`);
   return parts.join(' \\\n');
 }
 
@@ -55,17 +57,17 @@ export default function CurlPreview({ method, url, headers, body }: CurlPreviewP
   }, [curl]);
 
   return (
-    <div className="flex items-start justify-between gap-2 rounded-lg border border-white/[0.06] bg-slate-950/60 px-3 py-2">
-      <pre className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-slate-400">
-        <span className="text-violet-400">curl</span> <span className="text-amber-300">-X</span>{' '}
-        <span className="text-cyan-300">{method || 'GET'}</span>
+    <div className="glass-well flex items-start justify-between gap-2 py-2 pl-3 pr-2">
+      <pre className="min-w-0 flex-1 whitespace-pre-wrap break-all py-0.5 font-mono text-xs leading-relaxed text-slate-400">
+        <span className="text-slate-500">curl -X</span>{' '}
+        <span className="font-medium text-slate-200">{method || 'GET'}</span>
         {shown[0].split(' ').slice(3).length > 0 ? ` ${shown[0].split(' ').slice(3).join(' ')}` : ''}
         {shown.slice(1).map((line, i) => `\n${line}`).join('')}
         {!expanded && hasMore && (
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="ml-1 text-slate-600 hover:text-cyan-400 transition-colors"
+            className="ml-1 text-slate-500 transition-colors hover:text-cyan-300"
           >
             …+{lines.length - 2} line{lines.length - 2 > 1 ? 's' : ''}
           </button>
@@ -74,30 +76,23 @@ export default function CurlPreview({ method, url, headers, body }: CurlPreviewP
           <button
             type="button"
             onClick={() => setExpanded(false)}
-            className="ml-1 text-slate-600 hover:text-cyan-400 transition-colors"
+            className="ml-1 text-slate-500 transition-colors hover:text-cyan-300"
           >
             collapse
           </button>
         )}
       </pre>
-      <button
+      <Button
         type="button"
+        variant="subtle"
+        size="xs"
         onClick={handleCopy}
-        className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-slate-500 transition-colors hover:bg-slate-800 hover:text-cyan-300"
         title="Copy cURL command"
+        icon={copied ? <Check className="h-3.5 w-3.5 text-emerald-400" strokeWidth={1.75} /> : <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />}
+        className={copied ? '!text-emerald-300' : ''}
       >
-        {copied ? (
-          <>
-            <Check className="h-3 w-3 text-emerald-400" strokeWidth={2.5} />
-            <span className="text-emerald-400">Copied</span>
-          </>
-        ) : (
-          <>
-            <Copy className="h-3 w-3" strokeWidth={2} />
-            Copy
-          </>
-        )}
-      </button>
+        {copied ? 'Copied' : 'Copy'}
+      </Button>
     </div>
   );
 }

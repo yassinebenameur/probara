@@ -70,7 +70,7 @@ export default function NewUserPage() {
     <div className="max-w-2xl space-y-6">
       <PageHeader
         breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'New user' }]}
-        title="Create user"
+        title="New user"
         subtitle="Add a team member with per-tenant roles, or a platform admin."
       />
 
@@ -105,22 +105,24 @@ export default function NewUserPage() {
           </FormField>
 
           <FormField label="Sign-in method" required>
-            <div className="flex gap-4 text-sm text-slate-300">
-              <label className="flex items-center gap-2">
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-slate-200">
+              <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="radio"
                   name="sign-in-method"
                   checked={signInMethod === 'password'}
                   onChange={() => setSignInMethod('password')}
+                  className="h-4 w-4 cursor-pointer accent-cyan-500"
                 />
                 Password
               </label>
-              <label className="flex items-center gap-2">
+              <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="radio"
                   name="sign-in-method"
                   checked={signInMethod === 'oidc'}
                   onChange={() => setSignInMethod('oidc')}
+                  className="h-4 w-4 cursor-pointer accent-cyan-500"
                 />
                 SSO only (no local password)
               </label>
@@ -144,6 +146,7 @@ export default function NewUserPage() {
             description="Superadmins bypass tenant membership and manage users and tenants"
           >
             <Select
+              className="h-10"
               value={platformRole}
               onChange={(event) => setPlatformRole(event.target.value as PlatformRole)}
             >
@@ -174,7 +177,6 @@ export default function NewUserPage() {
           />
         </form>
       </FormCard>
-
     </div>
   );
 }

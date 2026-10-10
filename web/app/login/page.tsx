@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/ui/Button";
 import BrandMark from "@/components/ui/BrandMark";
+import Callout from "@/components/ui/Callout";
 import { clearApiKey } from "@/lib/auth";
 import { getOidcStatus } from "@/lib/api";
 import type { OidcStatus } from "@/lib/types";
@@ -218,168 +219,157 @@ function LoginPageInner() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      <div className="pointer-events-none fixed inset-0 bg-gradient-to-br from-cyan-500/5 via-transparent to-sky-500/5" />
+    <div className="flex min-h-screen items-center justify-center px-4 py-10">
+      <div className="glass-overlay w-full max-w-md p-8">
+        <div className="mb-6 flex justify-center">
+          <BrandMark size={48} />
+        </div>
 
-      <div className="relative w-full max-w-md p-8">
-        <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-8 backdrop-blur-xl">
-          <div className="mb-8 flex justify-center">
-            <BrandMark
-              size={56}
-              className="drop-shadow-[0_8px_16px_rgba(255,90,36,0.25)]"
-            />
-          </div>
-
-          <div className="mb-8 text-center">
-            {authMode === "bootstrap" ? (
-              <>
-                <h1 className="text-2xl font-semibold tracking-tight text-white">
-                  Create first admin
-                </h1>
-                <p className="mt-2 text-sm text-slate-500">
-                  No admin user found. Set up the initial administrator.
-                </p>
-              </>
-            ) : (
-              <>
-                <h1 className="text-2xl font-semibold tracking-tight text-white">
-                  Admin sign in
-                </h1>
-                <p className="mt-2 text-sm text-slate-500">
-                  Use your admin credentials to access all tenants
-                </p>
-              </>
-            )}
-          </div>
-
-          {authMode === "loading" ? (
-            <div className="py-8 text-center text-sm text-slate-400">
-              Checking admin setup...
-            </div>
+        <div className="mb-8 text-center">
+          {authMode === "bootstrap" ? (
+            <>
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
+                Create first admin
+              </h1>
+              <p className="mt-2 text-sm text-slate-400">
+                No admin user found. Set up the initial administrator.
+              </p>
+            </>
           ) : (
-            <form
-              onSubmit={
-                authMode === "bootstrap"
-                  ? handleBootstrapSubmit
-                  : handleLoginSubmit
-              }
-              className="space-y-6"
-            >
-              <div>
-                <label
-                  htmlFor="username"
-                  className="mb-2 block text-sm font-medium text-slate-400"
-                >
-                  Username
-                </label>
-                <input
-                  id="username"
-                  name="username"
-                  type="text"
-                  required
-                  autoComplete="username"
-                  className="input"
-                  placeholder="Enter your username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="password"
-                  className="mb-2 block text-sm font-medium text-slate-400"
-                >
-                  Password
-                </label>
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  required
-                  autoComplete="current-password"
-                  className="input"
-                  placeholder="Enter your password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-
-              {authMode === "bootstrap" && (
-                <div>
-                  <label
-                    htmlFor="confirm-password"
-                    className="mb-2 block text-sm font-medium text-slate-400"
-                  >
-                    Confirm password
-                  </label>
-                  <input
-                    id="confirm-password"
-                    name="confirm-password"
-                    type="password"
-                    required
-                    autoComplete="new-password"
-                    className="input"
-                    placeholder="Confirm your password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    disabled={loading}
-                  />
-                </div>
-              )}
-
-              {error && (
-                <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-                  <p className="text-sm text-rose-400">{error}</p>
-                </div>
-              )}
-
-              <Button
-                type="submit"
-                variant="accent"
-                size="sm"
-                loading={loading}
-                disabled={loading}
-                className="w-full justify-center"
-              >
-                {loading
-                  ? authMode === "bootstrap"
-                    ? "Creating admin…"
-                    : "Signing in…"
-                  : authMode === "bootstrap"
-                    ? "Create admin and continue"
-                    : "Continue to dashboard"}
-              </Button>
-
-              {oidc.enabled && authMode === "login" && (
-                <>
-                  <div className="flex items-center gap-3">
-                    <div className="h-px flex-1 bg-white/[0.08]" />
-                    <span className="text-xs uppercase tracking-wider text-slate-500">
-                      or
-                    </span>
-                    <div className="h-px flex-1 bg-white/[0.08]" />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={loading}
-                    className="w-full justify-center"
-                    onClick={() => {
-                      clearApiKey();
-                      window.location.href = "/api/v1/auth/oidc/start";
-                    }}
-                  >
-                    Continue with {oidc.label || "SSO"}
-                  </Button>
-                </>
-              )}
-            </form>
+            <>
+              <h1 className="text-2xl font-semibold tracking-tight text-white">
+                Admin sign in
+              </h1>
+              <p className="mt-2 text-sm text-slate-400">
+                Use your admin credentials to access all tenants
+              </p>
+            </>
           )}
         </div>
+
+        {authMode === "loading" ? (
+          <div className="py-8 text-center text-sm text-slate-400">
+            Checking admin setup...
+          </div>
+        ) : (
+          <form
+            onSubmit={
+              authMode === "bootstrap"
+                ? handleBootstrapSubmit
+                : handleLoginSubmit
+            }
+            className="space-y-5"
+          >
+            <div>
+              <label
+                htmlFor="username"
+                className="mb-1.5 block text-ui font-medium text-slate-300"
+              >
+                Username
+              </label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                required
+                autoComplete="username"
+                className="input"
+                placeholder="Enter your username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="password"
+                className="mb-1.5 block text-ui font-medium text-slate-300"
+              >
+                Password
+              </label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                required
+                autoComplete="current-password"
+                className="input"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+
+            {authMode === "bootstrap" && (
+              <div>
+                <label
+                  htmlFor="confirm-password"
+                  className="mb-1.5 block text-ui font-medium text-slate-300"
+                >
+                  Confirm password
+                </label>
+                <input
+                  id="confirm-password"
+                  name="confirm-password"
+                  type="password"
+                  required
+                  autoComplete="new-password"
+                  className="input"
+                  placeholder="Confirm your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+            )}
+
+            {error && <Callout tone="danger">{error}</Callout>}
+
+            <Button
+              type="submit"
+              variant="accent"
+              size="sm"
+              loading={loading}
+              disabled={loading}
+              className="!h-10 w-full justify-center !text-sm"
+            >
+              {loading
+                ? authMode === "bootstrap"
+                  ? "Creating admin…"
+                  : "Signing in…"
+                : authMode === "bootstrap"
+                  ? "Create admin and continue"
+                  : "Continue to dashboard"}
+            </Button>
+
+            {oidc.enabled && authMode === "login" && (
+              <>
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-divider" />
+                  <span className="text-xs text-slate-500">or</span>
+                  <div className="h-px flex-1 bg-divider" />
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={loading}
+                  className="!h-10 w-full justify-center !text-sm"
+                  onClick={() => {
+                    clearApiKey();
+                    // A full-page navigation: the API answers with a redirect to the identity provider.
+                    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+                    window.location.href = "/api/v1/auth/oidc/start";
+                  }}
+                >
+                  Continue with {oidc.label || "SSO"}
+                </Button>
+              </>
+            )}
+          </form>
+        )}
       </div>
     </div>
   );

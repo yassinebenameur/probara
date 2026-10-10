@@ -8,7 +8,10 @@ import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
+import Panel from '@/components/ui/Panel';
 import Pill from '@/components/ui/Pill';
+import Callout from '@/components/ui/Callout';
+import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 
 export default function EditAlertChannelPage() {
   const router = useRouter();
@@ -23,6 +26,7 @@ export default function EditAlertChannelPage() {
 
   useEffect(() => {
     loadChannel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const loadChannel = async () => {
@@ -60,29 +64,26 @@ export default function EditAlertChannelPage() {
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-500">Loading alert channel…</div>
+        <p className="text-sm text-slate-500">Loading alert channel…</p>
       </div>
     );
   }
 
   if (error || !channel) {
     return (
-      <FormCard>
-        <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
-          {error || 'Alert channel not found'}
-        </div>
-      </FormCard>
+      <Callout tone="danger">{error || 'Alert channel not found'}</Callout>
     );
   }
 
   return (
     <div className="max-w-5xl space-y-6">
       <PageHeader
-        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Channels', href: '/settings?tab=channels' }, { label: channel.name }]}
+        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Notifications', href: '/settings?tab=channels' }, { label: channel.name }]}
         title="Edit alert channel"
+        subtitle="Change where and how this channel delivers alerts."
       />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <FormCard>
             <AlertChannelForm
@@ -94,23 +95,22 @@ export default function EditAlertChannelPage() {
           </FormCard>
         </div>
 
-        <FormCard>
-          <h3 className="text-sm font-medium text-white">Channel details</h3>
-          <dl className="mt-4 space-y-4">
+        <Panel title="Channel details">
+          <dl className="space-y-3">
             <div>
-              <dt className="text-xs font-medium text-slate-500">Channel ID</dt>
-              <dd className="mt-1 break-all font-mono text-xs text-slate-300">{channel.id}</dd>
+              <dt className="text-xs text-slate-500">Channel ID</dt>
+              <dd className="mt-0.5 break-all font-mono text-xs text-slate-300">{channel.id}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Tenant ID</dt>
-              <dd className="mt-1 break-all font-mono text-xs text-slate-300">{channel.tenant_id}</dd>
+              <dt className="text-xs text-slate-500">Tenant ID</dt>
+              <dd className="mt-0.5 break-all font-mono text-xs text-slate-300">{channel.tenant_id}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Type</dt>
-              <dd className="mt-1 text-sm text-slate-300">{channel.type.toUpperCase()}</dd>
+              <dt className="text-xs text-slate-500">Type</dt>
+              <dd className="mt-0.5 font-mono text-xs text-slate-300">{channel.type}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Status</dt>
+              <dt className="text-xs text-slate-500">Status</dt>
               <dd className="mt-1">
                 <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
                   {channel.is_active ? 'Active' : 'Inactive'}
@@ -118,21 +118,20 @@ export default function EditAlertChannelPage() {
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Created</dt>
-              <dd className="mt-1 text-sm text-slate-300">
-                {new Date(channel.created_at).toLocaleString()}
+              <dt className="text-xs text-slate-500">Created</dt>
+              <dd className="mt-0.5 text-ui text-slate-300" title={formatDateTimeFull(channel.created_at)}>
+                {formatDateTime(channel.created_at)}
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Last updated</dt>
-              <dd className="mt-1 text-sm text-slate-300">
-                {new Date(channel.updated_at).toLocaleString()}
+              <dt className="text-xs text-slate-500">Last updated</dt>
+              <dd className="mt-0.5 text-ui text-slate-300" title={formatDateTimeFull(channel.updated_at)}>
+                {formatDateTime(channel.updated_at)}
               </dd>
             </div>
           </dl>
-        </FormCard>
+        </Panel>
       </div>
-
     </div>
   );
 }

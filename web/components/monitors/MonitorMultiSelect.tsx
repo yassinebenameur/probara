@@ -8,6 +8,7 @@ import Pill from '@/components/ui/Pill';
 import SelectCheckbox from '@/components/ui/SelectCheckbox';
 import TagPill from '@/components/monitors/TagPill';
 import TagFilter from '@/components/monitors/TagFilter';
+import TypeBadge from '@/components/ui/TypeBadge';
 
 interface MonitorMultiSelectProps {
   monitors: Monitor[];
@@ -194,7 +195,7 @@ export function MonitorMultiSelect({
 
   const rowClass = (isSelected: boolean) =>
     `flex items-center gap-3 rounded-lg px-3 py-2 transition-colors ${
-      isSelected ? 'border border-cyan-500/30 bg-cyan-500/10' : 'border border-transparent hover:bg-white/[0.03]'
+      isSelected ? 'bg-well-hover' : 'hover:bg-well'
     }`;
 
   const monitorRow = (mon: Monitor, opts?: { covered?: boolean; coveredBy?: string }) => {
@@ -219,20 +220,24 @@ export function MonitorMultiSelect({
               {mon.name}
             </p>
             <div className="flex min-w-0 items-center gap-1.5">
-              <p className="flex-shrink-0 text-xs text-slate-500">
-                {covered ? `Covered by ${opts?.coveredBy}` : mon.type.toUpperCase()}
-              </p>
+              {covered ? (
+                <p className="flex-shrink-0 text-xs text-slate-500">Covered by {opts?.coveredBy}</p>
+              ) : (
+                <TypeBadge type={mon.type} />
+              )}
               {(mon.tags ?? []).slice(0, 2).map((tag) => (
                 <TagPill key={tag} tag={tag} size="xs" />
               ))}
               {(mon.tags?.length ?? 0) > 2 && (
-                <span className="text-[9px] text-slate-500">+{mon.tags!.length - 2}</span>
+                <span className="text-2xs text-slate-500">+{mon.tags!.length - 2}</span>
               )}
             </div>
           </div>
-          <Pill tone={mon.enabled ? 'success' : 'neutral'} size="xs" dot>
-            {mon.enabled ? 'Active' : 'Paused'}
-          </Pill>
+          {!mon.enabled && (
+            <Pill tone="neutral" size="xs">
+              Paused
+            </Pill>
+          )}
         </button>
       </div>
     );
@@ -244,20 +249,21 @@ export function MonitorMultiSelect({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={grouped ? 'Search monitors and groups...' : 'Search monitors...'}
-            // `.input` sets padding via shorthand and wins the cascade, so the
-            // icon clearance has to be important or the placeholder sits under it.
-            className="input !pl-9"
-            aria-label="Search monitors"
-          />
-        </div>
+      <div className="relative">
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+          strokeWidth={1.75}
+        />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={grouped ? 'Search monitors and groups...' : 'Search monitors...'}
+          // `.input` sets padding via shorthand and wins the cascade, so the
+          // icon clearance has to be important or the placeholder sits under it.
+          className="input !pl-9"
+          aria-label="Search monitors"
+        />
       </div>
 
       {allTags.length > 0 && (
@@ -275,7 +281,7 @@ export function MonitorMultiSelect({
             <>
               {selectedIds.length} selected
               {coveredCount !== selectedIds.length && (
-                <span className="text-slate-500"> · covers {coveredCount} monitors</span>
+                <span className="ml-3 text-slate-500">covers {coveredCount} monitors</span>
               )}
             </>
           ) : (
@@ -296,7 +302,7 @@ export function MonitorMultiSelect({
       </div>
 
       <div
-        className={`${maxHeightClass} overflow-y-auto rounded-lg border border-white/[0.06] bg-slate-900/40 p-2`}
+        className={`${maxHeightClass} glass-well overflow-y-auto p-1.5`}
       >
         {nothingVisible ? (
           <p className="py-6 text-center text-sm text-slate-500">
@@ -308,9 +314,7 @@ export function MonitorMultiSelect({
           <div className="space-y-3">
             {visibleGroups.length > 0 && (
               <div className="space-y-1">
-                <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                  Groups
-                </p>
+                <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-slate-500">Groups</p>
                 {visibleGroups.map(({ group, members, total }) => {
                   const isSelected = selected.has(group.id);
                   const selectedMembers = members.filter((m) => selected.has(m.id)).length;
@@ -329,13 +333,13 @@ export function MonitorMultiSelect({
                           onClick={() => toggle(group.id)}
                           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
                         >
-                          <Layers className="h-3.5 w-3.5 flex-shrink-0 text-indigo-400" />
+                          <Layers className="h-4 w-4 flex-shrink-0 text-slate-400" strokeWidth={1.75} />
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-medium text-white">{group.name}</p>
                             <p className="text-xs text-slate-500">
                               {isSelected ? 'Group — covers ' : 'Group — '}
                               {total} {total === 1 ? 'member' : 'members'}
-                              {members.length !== total && ` · ${members.length} match`}
+                              {members.length !== total && <span className="ml-3">{members.length} match</span>}
                             </p>
                           </div>
                         </button>
@@ -345,18 +349,18 @@ export function MonitorMultiSelect({
                             onClick={() => toggleExpanded(group.id)}
                             aria-expanded={isOpen}
                             aria-label={`${isOpen ? 'Hide' : 'Show'} members of ${group.name}`}
-                            className="flex-shrink-0 rounded p-1 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-300"
+                            className="flex-shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-well-hover hover:text-white"
                           >
                             {isOpen ? (
-                              <ChevronDown className="h-3.5 w-3.5" />
+                              <ChevronDown className="h-4 w-4" strokeWidth={1.75} />
                             ) : (
-                              <ChevronRight className="h-3.5 w-3.5" />
+                              <ChevronRight className="h-4 w-4" strokeWidth={1.75} />
                             )}
                           </button>
                         )}
                       </div>
                       {isOpen && members.length > 0 && (
-                        <div className="mt-1 space-y-1 border-l border-white/[0.08] pl-3 ml-4">
+                        <div className="ml-5 mt-1 space-y-1 border-l border-divider pl-2">
                           {members.map((member) =>
                             monitorRow(member, { covered: isSelected, coveredBy: group.name })
                           )}
@@ -371,9 +375,7 @@ export function MonitorMultiSelect({
             {visibleLoose.length > 0 && (
               <div className="space-y-1">
                 {visibleGroups.length > 0 && (
-                  <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                    Ungrouped
-                  </p>
+                  <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-slate-500">Ungrouped</p>
                 )}
                 {visibleLoose.map((mon) => monitorRow(mon))}
               </div>

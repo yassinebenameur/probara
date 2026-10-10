@@ -13,6 +13,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { formatDate, formatTimestamp } from '@/lib/format';
 
 export type TimeRange = '1h' | '6h' | '24h' | '7d';
 
@@ -35,6 +36,13 @@ export const RANGE_STEP_SECONDS: Record<TimeRange, number> = {
 export const METRIC_SYNC_ID = 'agent-metrics';
 
 export const SERIES_COLORS = ['#e6b23f', '#ff8a5c', '#6fb5dd', '#46d17f', '#f472b6', '#fb923c'];
+
+// Chart chrome shared by every chart in the monitor views: a frosted tooltip,
+// muted axis ticks and a hairline hover cursor, all theme-aware.
+export const CHART_TOOLTIP_CLASS =
+  'rounded-xl border border-edge-strong bg-glass-strong px-3 py-2 text-white shadow-overlay backdrop-blur-[20px]';
+export const CHART_AXIS_TICK = { fill: 'var(--text-muted)', fontSize: 11 };
+export const CHART_CURSOR = { stroke: 'var(--glass-edge-strong)', strokeWidth: 1 };
 
 // A unified chart row keyed by timestamp; missing buckets have null values so
 // Recharts (connectNulls={false}) breaks the area across reporting gaps.
@@ -92,12 +100,11 @@ export function buildChartRows(inputs: ChartSeriesInput[], stepMs: number): Char
   return rows;
 }
 
+// Axis and tooltip labels go through lib/format so every chart on the page
+// reads `15:19` / `2 Oct` like the rest of the UI, whatever the browser locale.
 export function formatTimeLabel(timestampMs: number, range: TimeRange): string {
-  const date = new Date(timestampMs);
-  if (range === '7d') {
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (range === '7d') return formatDate(timestampMs);
+  return formatTimestamp(timestampMs, { seconds: false }).slice(11);
 }
 
 export function MetricTooltip({
@@ -118,17 +125,21 @@ export function MetricTooltip({
   if (entries.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 shadow-xl">
+    <div className={CHART_TOOLTIP_CLASS}>
       <p className="text-xs text-slate-400">{formatTimeLabel(label, range)}</p>
       {entries.map((entry, index) => (
-        <p key={`${entry.name}-${index}`} className="mt-1 flex items-center gap-2 text-sm text-white">
+        <p key={`${entry.name}-${index}`} className="mt-1 flex items-center gap-2 text-sm">
           <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
-          <span className="text-slate-400">{entry.name}:</span>
-          <span className="font-medium">{formatter(entry.value as number)}</span>
+          <span className="text-slate-400">{entry.name}</span>
+          <span className="font-medium tabular-nums">{formatter(entry.value as number)}</span>
         </p>
       ))}
     </div>
   );
+}
+
+function BrushHandle({ x, y, width, height }: { x: number; y: number; width: number; height: number }) {
+  return <rect x={x} y={y} width={width} height={height} rx={3} fill="var(--control-edge-strong)" />;
 }
 
 export function MetricChart({
@@ -160,11 +171,7 @@ export function MetricChart({
 }) {
   const hasData = data.some((row) => series.some((s) => row[s.key] !== null && row[s.key] !== undefined));
   if (!hasData) {
-    return (
-      <div className="flex items-center justify-center text-xs text-slate-500" style={{ height }}>
-        No data in range
-      </div>
-    );
+    return <p className="py-3 text-center text-ui text-slate-500">No data in range</p>;
   }
 
   return (
@@ -186,7 +193,9 @@ export function MetricChart({
             scale="time"
             axisLine={false}
             tickLine={false}
-            tick={{ fill: '#64748b', fontSize: 11 }}
+            tick={CHART_AXIS_TICK}
+            tickMargin={6}
+            minTickGap={40}
             tickFormatter={(value) => formatTimeLabel(value, range)}
           />
           <YAxis
@@ -194,10 +203,13 @@ export function MetricChart({
             axisLine={false}
             tickLine={false}
             width={yAxisWidth}
-            tick={{ fill: '#64748b', fontSize: 11 }}
+            tick={CHART_AXIS_TICK}
             tickFormatter={(value) => yTickFormatter(value)}
           />
-          <Tooltip content={<MetricTooltip range={range} formatter={valueFormatter} />} />
+          <Tooltip
+            cursor={CHART_CURSOR}
+            content={<MetricTooltip range={range} formatter={valueFormatter} />}
+          />
           {referenceLines?.map((line) => (
             <ReferenceLine
               key={`ref-${line.label}-${line.y}`}
@@ -206,7 +218,7 @@ export function MetricChart({
               strokeDasharray="4 4"
               strokeOpacity={0.7}
               ifOverflow="extendDomain"
-              label={{ value: line.label, position: 'insideTopRight', fill: '#f87171', fontSize: 10 }}
+              label={{ value: line.label, position: 'insideTopRight', fill: 'var(--danger)', fontSize: 11 }}
             />
           ))}
           {series.map((s) => (
@@ -226,10 +238,11 @@ export function MetricChart({
           {showBrush && (
             <Brush
               dataKey="ts"
-              height={20}
-              travellerWidth={8}
-              stroke="var(--border-default)"
-              fill="rgba(16,19,26,0.6)"
+              height={16}
+              travellerWidth={6}
+              stroke="var(--control-edge)"
+              fill="transparent"
+              traveller={BrushHandle}
               tickFormatter={(value) => formatTimeLabel(value as number, range)}
             />
           )}

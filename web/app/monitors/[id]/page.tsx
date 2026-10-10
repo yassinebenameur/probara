@@ -2,11 +2,11 @@
 
 import PrometheusDetails from '@/components/monitors/PrometheusDetails';
 import { useRouter, useParams } from 'next/navigation';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import Image from 'next/image';
-import { Trash2 } from 'lucide-react';
+import { AlertTriangle, Eraser, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
-import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings } from '@/lib/api';
+import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings, getSlas, runMonitorNow, toggleMonitorEnabled } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import MonitorDetailOverview from '@/components/monitors/MonitorDetailOverview';
@@ -17,33 +17,46 @@ import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
 import PageHeader from '@/components/ui/PageHeader';
-import FormCard from '@/components/ui/FormCard';
+import Panel from '@/components/ui/Panel';
+import Pill from '@/components/ui/Pill';
+import Tabs, { useUrlTab } from '@/components/ui/Tabs';
+import RangePicker from '@/components/ui/RangePicker';
+import RowMenu, { RowMenuItem, RowMenuSeparator } from '@/components/ui/RowMenu';
+import TypeBadge from '@/components/ui/TypeBadge';
+import Callout from '@/components/ui/Callout';
+import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import ModalPortal from '@/components/ui/ModalPortal';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
-import { getEffectiveMonitorStatus, monitorTargetLabel, MonitorDisplayStatus } from '@/lib/monitor-utils';
+import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { getEffectiveMonitorStatus, monitorTarget, monitorTargetLabel, shortFailureReason } from '@/lib/monitor-utils';
+import { checkResultLabel, MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE } from '@/lib/status-tones';
+import { formatDateTime, formatDateTimeFull, formatDuration, formatRelativeTime, RANGES } from '@/lib/format';
+import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
 
-type TabType = 'overview' | 'history' | 'settings' | 'json';
+const TAB_IDS = ['overview', 'history', 'settings', 'json'] as const;
 
 const isDatabaseMonitorType = (t: string): boolean =>
   t === 'redis' || t === 'postgres' || t === 'mongodb' || t === 'rabbitmq' || t === 'mysql';
 type OverviewTimeRange = MonitorAnalyticsRange;
 
-const OVERVIEW_RANGE_MS: Record<OverviewTimeRange, number> = {
-  '1h': 60 * 60 * 1000,
-  '6h': 6 * 60 * 60 * 1000,
-  '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-  '30d': 30 * 24 * 60 * 60 * 1000,
-  '90d': 90 * 24 * 60 * 60 * 1000,
-  '365d': 365 * 24 * 60 * 60 * 1000,
-};
+const OVERVIEW_RANGES: readonly OverviewTimeRange[] = ['1h', '6h', '24h', '7d', '30d', '90d', '365d'];
+const AGENT_RANGES: readonly AgentTimeRange[] = ['1h', '6h', '24h', '7d'];
+
+// Monitors that never execute a check of their own: a group rolls up its
+// members (the API refuses run-now for it), agent and push monitors are
+// pushed to. Run check and the timeout fact are hidden for them.
+const PASSIVE_TYPES = new Set(['group', 'agent', 'push']);
 
 const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const OVERVIEW_RESULTS_LIMIT = 50;
+// Run check polls for the run's result this long before handing over to the
+// regular 15 s refresh.
+const RUN_RESULT_WAIT_MS = 60_000;
 
 function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckResult[]): CheckResult[] {
   const byID = new Map<string, CheckResult>();
@@ -60,24 +73,151 @@ function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckRe
   );
 }
 
-// Status badge component
-function StatusBadge({ status }: { status: MonitorDisplayStatus }) {
-  const config = {
-    up: { label: 'Operational', bg: 'bg-emerald-500/10', text: 'text-emerald-400', dot: 'bg-emerald-500' },
-    down: { label: 'Down', bg: 'bg-rose-500/10', text: 'text-rose-400', dot: 'bg-rose-500' },
-    degraded: { label: 'Degraded', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
-    paused: { label: 'Paused', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
-    maintenance: { label: 'Maintenance', bg: 'bg-sky-500/10', text: 'text-sky-300', dot: 'bg-sky-500' },
-    unknown: { label: 'Unknown', bg: 'bg-slate-500/10', text: 'text-slate-300', dot: 'bg-slate-500' },
-  };
-  const { label, bg, text, dot } = config[status];
-
+// Label/value line in the overview sidebar. Warnings and notes wrap instead
+// of truncating so the whole message stays readable.
+function DetailRow({
+  label,
+  tone = 'default',
+  children,
+}: {
+  label: string;
+  tone?: 'default' | 'warning' | 'note';
+  children: ReactNode;
+}) {
+  const labelClass = tone === 'warning' ? 'text-amber-300' : 'text-slate-400';
+  const valueClass =
+    tone === 'warning'
+      ? 'text-right text-amber-300'
+      : tone === 'note'
+        ? 'text-right text-slate-400'
+        : 'min-w-0 truncate text-right text-slate-200';
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full ${bg} px-2.5 py-1 text-xs font-medium ${text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
-      {label}
-    </span>
+    <div className="flex justify-between gap-3">
+      <span className={`shrink-0 ${labelClass}`}>{label}</span>
+      <span className={valueClass}>{children}</span>
+    </div>
   );
+}
+
+// Type-specific facts for the sidebar's Server panel: what the database or
+// broker reported about itself, the TCP TLS version. Interval and timeout
+// live in the page header. Empty when the type has nothing to add, so the
+// panel is not rendered at all.
+function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
+  const rows: ReactNode[] = [];
+  if (isDatabaseMonitorType(monitor.type)) {
+    const latest = results.find((r) => {
+      const md = r.metrics_data as DBMetricsEnvelope | undefined;
+      return Boolean(md && md[monitor.type as keyof DBMetricsEnvelope]);
+    });
+    const dbMetrics = latest
+      ? (latest.metrics_data as DBMetricsEnvelope)[monitor.type as keyof DBMetricsEnvelope]
+      : null;
+    if (dbMetrics) {
+      const server = [
+        [dbMetrics.product, dbMetrics.server_version].filter(Boolean).join(' '),
+        dbMetrics.role,
+        dbMetrics.replica_set ? `set ${dbMetrics.replica_set}` : '',
+      ]
+        .filter(Boolean)
+        .join(', ');
+      const mongo = monitor.type === 'mongodb' ? (dbMetrics as MongoDBMetrics) : null;
+      const repl = mongo?.replication;
+      const mongoRows = mongo
+        ? [
+            mongo.connected_clients != null && mongo.connections_available != null
+              ? { label: 'Connections', value: `${mongo.connected_clients} current, ${mongo.connections_available} available` }
+              : null,
+            mongo.used_memory_bytes != null || mongo.mem_virtual_bytes != null
+              ? {
+                  label: 'Memory',
+                  value: [
+                    mongo.used_memory_bytes != null ? `${formatBytes(mongo.used_memory_bytes)} resident` : '',
+                    mongo.mem_virtual_bytes != null ? `${formatBytes(mongo.mem_virtual_bytes)} virtual` : '',
+                  ].filter(Boolean).join(', '),
+                }
+              : null,
+            mongo.cache_used_bytes != null && mongo.cache_max_bytes != null
+              ? {
+                  label: 'Cache',
+                  value: `${formatBytes(mongo.cache_used_bytes)} / ${formatBytes(mongo.cache_max_bytes)}${
+                    mongo.cache_dirty_bytes != null ? `, ${formatBytes(mongo.cache_dirty_bytes)} dirty` : ''
+                  }`,
+                }
+              : null,
+            mongo.network_bytes_in != null && mongo.network_bytes_out != null
+              ? { label: 'Network', value: `${formatBytes(mongo.network_bytes_in)} in, ${formatBytes(mongo.network_bytes_out)} out` }
+              : null,
+            repl
+              ? {
+                  label: 'Replication',
+                  value: `${repl.members_healthy}/${repl.members_total} healthy${
+                    repl.max_lag_seconds != null ? `, lag ${repl.max_lag_seconds.toFixed(1)}s` : ''
+                  }${repl.primary ? `, primary ${repl.primary}` : ''}`,
+                }
+              : null,
+          ].filter((row): row is { label: string; value: string } => row !== null)
+        : [];
+      const mongoWarnings = mongo
+        ? [
+            mongo.replication_lag_warn_seconds != null
+              ? `replication lag over ${mongo.replication_lag_warn_seconds}s threshold`
+              : null,
+            repl && !repl.primary ? 'replica set has no primary' : null,
+            repl && repl.members_healthy < repl.members_total ? 'unhealthy replica set member(s)' : null,
+          ].filter((w): w is string => w !== null)
+        : [];
+      const mongoHints = (mongo?.unavailable ?? []).map((u) =>
+        u.reason === 'unauthorized'
+          ? 'Cluster checks skipped: grant clusterMonitor'
+          : u.reason === 'not_replica_set'
+            ? 'Replication: not a replica set'
+            : 'Cluster checks temporarily unavailable'
+      );
+      // "Version", not "Server": the panel around it is already titled Server.
+      if (server) rows.push(<DetailRow key="server" label="Version">{server}</DetailRow>);
+      for (const row of mongoRows) {
+        rows.push(
+          <DetailRow key={row.label} label={row.label}>
+            {row.value}
+          </DetailRow>
+        );
+      }
+      if (dbMetrics.latency_warn_ms) {
+        rows.push(
+          <DetailRow key="latency-warn" label="Warning" tone="warning">
+            latency over {dbMetrics.latency_warn_ms}ms threshold
+          </DetailRow>
+        );
+      }
+      for (const warning of mongoWarnings) {
+        rows.push(
+          <DetailRow key={warning} label="Warning" tone="warning">
+            {warning}
+          </DetailRow>
+        );
+      }
+      for (const hint of mongoHints) {
+        rows.push(
+          <DetailRow key={hint} label="Note" tone="note">
+            {hint}
+          </DetailRow>
+        );
+      }
+    }
+  }
+  if (monitor.type === 'tcp') {
+    const cfg = monitor.config as TCPMonitorConfig | undefined;
+    const latest = results.find((r) => {
+      const md = r.metrics_data as TCPMetricsEnvelope | undefined;
+      return Boolean(md && md.tcp);
+    });
+    const tcpMetrics = latest ? (latest.metrics_data as TCPMetricsEnvelope).tcp : null;
+    if (cfg?.use_tls) {
+      rows.push(<DetailRow key="tls" label="TLS">{tcpMetrics?.tls_version || 'Enabled'}</DetailRow>);
+    }
+  }
+  return rows;
 }
 
 function ConfirmHistoryResetModal({
@@ -101,74 +241,50 @@ function ConfirmHistoryResetModal({
   const canConfirm = confirmationText.trim().toUpperCase() === expectedText && !loading;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-rose-500/20 bg-slate-950 shadow-2xl">
-        <div className="border-b border-white/[0.06] px-6 py-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-rose-400">Danger Zone</p>
-              <h2 className="mt-2 text-lg font-semibold text-white">Clear monitor history</h2>
-              <p className="mt-2 text-sm text-slate-400">
+    <ModalPortal>
+      <div className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="glass-overlay w-full max-w-lg">
+          <div className="flex items-start gap-4 px-6 pt-5">
+            <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-rose-500/[0.13] text-rose-400">
+              <AlertTriangle className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-white">Clear monitor history</h2>
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-400">
                 {isGroup
                   ? `This will permanently remove checks, alerts, and SLA history for ${monitorName} and every monitor inside that group.`
                   : `This will permanently remove checks, alerts, and SLA history for ${monitorName}, but keep the monitor itself.`}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/[0.16] hover:text-white"
-              disabled={loading}
-            >
-              Close
-            </button>
           </div>
-        </div>
 
-        <div className="space-y-4 px-6 py-5">
-          <div className="rounded-xl border border-rose-500/15 bg-rose-500/5 px-4 py-3 text-sm text-slate-300">
-            <p className="font-medium text-rose-300">This cannot be undone.</p>
-            <p className="mt-1 text-slate-400">
+          <div className="space-y-4 px-6 py-4">
+            <Callout tone="danger" title="This cannot be undone.">
               Dashboard failures, monitor analytics, and public status page history will rebuild only from future checks.
-            </p>
-          </div>
+            </Callout>
 
-          <div>
-            <label className="block text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-              Type {expectedText} to confirm
-            </label>
-            <input
+            <Input
+              label={`Type ${expectedText} to confirm`}
               type="text"
               value={confirmationText}
               onChange={(event) => onConfirmationTextChange(event.target.value)}
-              className="mt-2 w-full rounded-xl border border-white/[0.08] bg-slate-900 px-4 py-3 text-sm text-white outline-none transition-colors focus:border-rose-400/60"
               placeholder={expectedText}
               autoFocus
               disabled={loading}
             />
           </div>
-        </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-white/[0.06] px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-white/[0.08] px-4 py-2 text-sm text-slate-300 transition-colors hover:border-white/[0.16] hover:text-white"
-            disabled={loading}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={!canConfirm}
-            className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-300 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/[0.08] disabled:bg-slate-900 disabled:text-slate-500"
-          >
-            {loading ? 'Clearing…' : isGroup ? 'Clear Group History' : 'Clear History'}
-          </button>
+          <div className="flex items-center justify-end gap-2 px-6 pb-5">
+            <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
+              Cancel
+            </Button>
+            <Button type="button" variant="danger" onClick={onConfirm} disabled={!canConfirm} loading={loading}>
+              {loading ? 'Clearing…' : isGroup ? 'Clear group history' : 'Clear history'}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 }
 
@@ -176,6 +292,7 @@ export default function EditMonitorPage() {
   const router = useRouter();
   const params = useParams();
   const id = params.id as string;
+  const canWrite = useCanWrite();
 
   const [monitor, setMonitor] = useState<Monitor | null>(null);
   const [loading, setLoading] = useState(true);
@@ -186,20 +303,36 @@ export default function EditMonitorPage() {
   const [deleting, setDeleting] = useState(false);
   const [results, setResults] = useState<MonitorResultsResponse | null>(null);
   const [historyResults, setHistoryResults] = useState<MonitorResultsResponse | null>(null);
+  const [historyAnalytics, setHistoryAnalytics] = useState<MonitorAnalyticsResponse | null>(null);
   const [analytics, setAnalytics] = useState<MonitorAnalyticsResponse | null>(null);
+  const [coveringSlas, setCoveringSlas] = useState<Sla[]>([]);
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [isHistoryResetModalOpen, setIsHistoryResetModalOpen] = useState(false);
   const [historyResetConfirmation, setHistoryResetConfirmation] = useState('');
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [activeTab, setActiveTab] = useUrlTab(TAB_IDS);
   const [agentTimeRange, setAgentTimeRange] = useState<AgentTimeRange>('24h');
   const [overviewRange, setOverviewRange] = useState<OverviewTimeRange>('24h');
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
+  const [runningCheck, setRunningCheck] = useState(false);
+  const [togglingEnabled, setTogglingEnabled] = useState(false);
   const isPollingRef = useRef(false);
   const resultsRef = useRef<MonitorResultsResponse | null>(null);
+  const mountedRef = useRef(true);
+  // Latest analytics request per panel: a slow earlier range (1y) must not
+  // overwrite the range the picker now shows.
+  const analyticsRequestRef = useRef(0);
+  const historyAnalyticsRequestRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     resultsRef.current = results;
@@ -207,6 +340,7 @@ export default function EditMonitorPage() {
 
   useEffect(() => {
     setHistoryResults(null);
+    setHistoryAnalytics(null);
   }, [id]);
 
   const loadMonitor = useCallback(async () => {
@@ -239,9 +373,11 @@ export default function EditMonitorPage() {
           : { limit: OVERVIEW_RESULTS_LIMIT };
 
       const data = await getMonitorResults(id, requestParams);
+      // A monitor with no results yet (just created, paused) returns null.
+      const fetched = data.results ?? [];
 
       if (opts?.silent && currentResults?.results?.length) {
-        const mergedResults = mergeAndSortResults(data.results, currentResults.results)
+        const mergedResults = mergeAndSortResults(fetched, currentResults.results)
           .slice(0, OVERVIEW_RESULTS_LIMIT);
 
         const mergedPayload: MonitorResultsResponse = {
@@ -253,7 +389,7 @@ export default function EditMonitorPage() {
       } else {
         const nextPayload: MonitorResultsResponse = {
           monitor_id: data.monitor_id,
-          results: data.results.slice(0, OVERVIEW_RESULTS_LIMIT),
+          results: fetched.slice(0, OVERVIEW_RESULTS_LIMIT),
         };
         resultsRef.current = nextPayload;
         setResults(nextPayload);
@@ -281,22 +417,46 @@ export default function EditMonitorPage() {
     }
   }, [id]);
 
-  const loadAnalytics = useCallback(async (range?: OverviewTimeRange) => {
-    if (monitor?.type === 'agent') {
+  // The History tab's availability comes from the same interval analytics
+  // as the Overview at 7d, so the two tabs never disagree.
+  // Both analytics loaders wait for the monitor's type (agents have none) and
+  // drop any response a newer request has superseded.
+  const monitorType = monitor?.type;
+  const loadHistoryAnalytics = useCallback(async () => {
+    const requestID = ++historyAnalyticsRequestRef.current;
+    if (!monitorType) return;
+    if (monitorType === 'agent') {
+      setHistoryAnalytics(null);
+      return;
+    }
+    try {
+      const data = await getMonitorAnalytics(id, { range: '7d' });
+      if (historyAnalyticsRequestRef.current === requestID) setHistoryAnalytics(data);
+    } catch (err) {
+      console.error('Failed to load 7-day monitor analytics:', err);
+      if (historyAnalyticsRequestRef.current === requestID) setHistoryAnalytics(null);
+    }
+  }, [id, monitorType]);
+
+  const loadAnalytics = useCallback(async () => {
+    const requestID = ++analyticsRequestRef.current;
+    if (!monitorType) return;
+    if (monitorType === 'agent') {
       setAnalytics(null);
+      setAnalyticsLoading(false);
       return;
     }
     try {
       setAnalyticsLoading(true);
-      const data = await getMonitorAnalytics(id, { range: range ?? overviewRange });
-      setAnalytics(data);
+      const data = await getMonitorAnalytics(id, { range: overviewRange });
+      if (analyticsRequestRef.current === requestID) setAnalytics(data);
     } catch (err) {
       console.error('Failed to load monitor analytics:', err);
-      setAnalytics(null);
+      if (analyticsRequestRef.current === requestID) setAnalytics(null);
     } finally {
-      setAnalyticsLoading(false);
+      if (analyticsRequestRef.current === requestID) setAnalyticsLoading(false);
     }
-  }, [id, monitor?.type, overviewRange]);
+  }, [id, monitorType, overviewRange]);
 
   useEffect(() => {
     void loadMonitor();
@@ -321,6 +481,24 @@ export default function EditMonitorPage() {
       cancelled = true;
     };
   }, []);
+
+  // The availability target is the strictest SLA covering this monitor;
+  // with none, lib/sla's default stands in.
+  useEffect(() => {
+    let cancelled = false;
+    getSlas({ monitor_id: id })
+      .then((slas) => {
+        if (!cancelled) setCoveringSlas(slas);
+      })
+      .catch(() => {
+        if (!cancelled) setCoveringSlas([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+  const slaTarget = strictestTarget(coveringSlas);
+  const targetSla = coveringSlas.find((s) => s.target_pct === slaTarget);
 
   useEffect(() => {
     void loadResults();
@@ -377,7 +555,8 @@ export default function EditMonitorPage() {
       return;
     }
     void loadHistoryResults();
-  }, [activeTab, loadHistoryResults]);
+    void loadHistoryAnalytics();
+  }, [activeTab, loadHistoryResults, loadHistoryAnalytics]);
 
   const handleSubmit = async (data: UpdateMonitorRequest) => {
     try {
@@ -405,6 +584,63 @@ export default function EditMonitorPage() {
     }
   };
 
+  // Queues an on-demand run (all of the monitor's locations), then waits for
+  // its first result so the toast can say how it went.
+  const handleRunCheck = async () => {
+    if (!monitor || runningCheck) return;
+    setRunningCheck(true);
+    try {
+      const run = await runMonitorNow(monitor.id);
+      showToast('Check queued', 'info', 3000);
+      const queuedMs = Date.parse(run.queued_at) || Date.now();
+      const sinceISO = new Date(queuedMs - 1500).toISOString();
+      const deadline = Date.now() + RUN_RESULT_WAIT_MS;
+      while (mountedRef.current && Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        if (!mountedRef.current) return;
+        const data = await getMonitorResults(monitor.id, { limit: 10, since: sinceISO });
+        const result = (data.results || []).find((r) => Date.parse(r.created_at) >= queuedMs - 1500);
+        if (result) {
+          await loadResults({ silent: true });
+          void loadAnalytics();
+          const reason = shortFailureReason(result.error_message, {
+            httpStatus: result.http_status,
+            timeoutSeconds: monitor.timeout_seconds,
+          });
+          showToast(
+            `Check ${checkResultLabel(result.status).toLowerCase()}${reason ? `: ${reason}` : ''}`,
+            result.status === 'success' ? 'success' : result.status === 'degraded' ? 'warning' : 'error'
+          );
+          return;
+        }
+      }
+      if (mountedRef.current) {
+        showToast('No result yet. It will appear under Latest checks when the worker reports.', 'info');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to run the check', 'error');
+    } finally {
+      if (mountedRef.current) setRunningCheck(false);
+    }
+  };
+
+  const handleToggleEnabled = async () => {
+    if (!monitor || togglingEnabled) return;
+    const next = !monitor.enabled;
+    setTogglingEnabled(true);
+    try {
+      const updated = await toggleMonitorEnabled(monitor.id, next);
+      // Keep the detail-only fields (locations, routing) the update
+      // response may not embed.
+      setMonitor((prev) => (prev ? { ...prev, enabled: updated.enabled ?? next } : updated));
+      showToast(next ? 'Monitor resumed' : 'Monitor paused', 'success');
+    } catch (err: any) {
+      showToast(err.message || `Failed to ${next ? 'resume' : 'pause'} the monitor`, 'error');
+    } finally {
+      setTogglingEnabled(false);
+    }
+  };
+
   const openHistoryResetModal = () => {
     setHistoryResetConfirmation('');
     setIsHistoryResetModalOpen(true);
@@ -425,11 +661,13 @@ export default function EditMonitorPage() {
       setResults((current) => current ? { ...current, results: [] } : current);
       setHistoryResults((current) => current ? { ...current, results: [] } : current);
       setAnalytics(null);
+      setHistoryAnalytics(null);
       await Promise.all([
         loadMonitor(),
         loadResults(),
         loadAnalytics(),
         activeTab === 'history' ? loadHistoryResults() : Promise.resolve(),
+        activeTab === 'history' ? loadHistoryAnalytics() : Promise.resolve(),
       ]);
       showToast(monitor.type === 'group'
           ? 'Group history cleared for all member monitors'
@@ -441,29 +679,6 @@ export default function EditMonitorPage() {
     } finally {
       setClearingHistory(false);
     }
-  };
-
-  // Get URL from monitor config — mirrors the monitor list so synthetic and
-  // gRPC monitors expose the same copyable target on both screens.
-  const getUrl = () => {
-    if (!monitor) return null;
-    if (monitor.config && 'url' in monitor.config) return monitor.config.url;
-    if (monitor.config && 'base_url' in monitor.config) return monitor.config.base_url || null;
-    if (monitor.config && 'start_url' in monitor.config) return monitor.config.start_url;
-    if (monitor.type === 'grpc' && monitor.config && 'host' in monitor.config) {
-      const cfg = monitor.config as { host?: string; port?: number; use_tls?: boolean };
-      if (cfg.host) {
-        const port = cfg.port || (cfg.use_tls === false ? 80 : 443);
-        return `${cfg.host}:${port}`;
-      }
-    }
-    if (monitor.type === 'tcp' && monitor.config && 'host' in monitor.config) {
-      const cfg = monitor.config as { host?: string; port?: number };
-      if (cfg.host) return cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host;
-    }
-    if (monitor.url) return monitor.url;
-    if (monitor.config && 'host' in monitor.config) return monitor.config.host;
-    return null;
   };
 
   const status = monitor ? getEffectiveMonitorStatus(monitor, results?.results || []) : 'unknown';
@@ -546,18 +761,18 @@ export default function EditMonitorPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-slate-500">Loading monitor...</div>
+      <div className="flex h-64 items-center justify-center text-sm text-slate-500">
+        Loading monitor...
       </div>
     );
   }
 
   if (error || !monitor) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
-        <p className="text-rose-400">{error || 'Monitor not found'}</p>
+      <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
+        <p className="text-sm text-rose-300">{error || 'Monitor not found'}</p>
         <Button variant="ghost" size="sm" onClick={() => router.push('/monitors')}>
-          ← Back to monitors
+          Back to monitors
         </Button>
       </div>
     );
@@ -574,7 +789,7 @@ export default function EditMonitorPage() {
       ? HISTORY_WINDOW_MS
       : monitor.type === 'agent'
         ? AGENT_RANGE_MS[agentTimeRange]
-        : OVERVIEW_RANGE_MS[overviewRange];
+        : (RANGES[overviewRange].ms ?? 0);
   const boundedRetentionDays =
     tenantRetentionDays && tenantRetentionDays > 0 ? tenantRetentionDays : null;
   const retentionWindowMs =
@@ -586,69 +801,203 @@ export default function EditMonitorPage() {
     retentionWindowMs !== null &&
     selectedWindowMs > retentionWindowMs;
 
+  const isPassive = PASSIVE_TYPES.has(monitor.type);
+  const target = monitorTarget(monitor);
+  const lastCheckAt = results?.results?.[0]?.created_at ?? analytics?.summary?.latest_check_at;
+  const serverRows = serverFactRows(monitor, results?.results || []);
+  const isGroup = monitor.type === 'group';
+
+  const aside = (
+    <>
+      {isGroup && <GroupMembersCard groupId={monitor.id} />}
+
+      {(monitor.type === 'prometheus' || serverRows.length > 0) && (
+        <Panel title={monitor.type === 'prometheus' ? 'Query' : 'Server'}>
+          <div className="space-y-2.5 text-sm">
+            {monitor.type === 'prometheus' && (
+              <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
+            )}
+            {serverRows}
+          </div>
+        </Panel>
+      )}
+
+      <MonitorDependenciesCard monitorId={monitor.id} monitorType={monitor.type} />
+
+      {monitor.type === 'synthetic_browser' && (
+        <Panel title="Latest failure screenshot">
+          {screenshotLoading ? (
+            <p className="text-ui text-slate-400">Loading screenshot...</p>
+          ) : screenshotBlobURL ? (
+            <>
+              <div className="glass-well overflow-hidden p-2">
+                <Image
+                  src={screenshotBlobURL}
+                  alt="Latest synthetic browser failure screenshot"
+                  width={1200}
+                  height={675}
+                  className="h-auto max-h-[220px] w-full rounded-lg object-contain"
+                  unoptimized
+                  loading="lazy"
+                />
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                {latestSyntheticBrowserResult
+                  ? <span title={formatDateTimeFull(latestSyntheticBrowserResult.created_at)}>Captured {formatDateTime(latestSyntheticBrowserResult.created_at)}</span>
+                  : 'Latest run'}
+              </p>
+            </>
+          ) : (
+            <p className="text-ui text-slate-400">
+              No screenshot available yet. A failed run with screenshot capture enabled is required.
+            </p>
+          )}
+        </Panel>
+      )}
+    </>
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
         breadcrumb={[{ label: 'Monitors', href: '/monitors' }, { label: monitor.name }]}
-        title={
-          <span className="flex items-center gap-3">
-            <span>{monitor.name}</span>
-            <StatusBadge status={status} />
-          </span>
+        title={monitor.name}
+        titleAside={
+          <Pill tone={MONITOR_STATUS_TONE[status]} dot>
+            {MONITOR_STATUS_LABEL[status]}
+          </Pill>
         }
+        // One line of facts on desktop: the target truncates (full value in
+        // its tooltip, copy/open stay visible) so "checked …" never wraps
+        // alone. Phones put the target on its own line above the facts.
         subtitle={
-          <span className="inline-flex max-w-full flex-wrap items-center gap-x-2">
-            <span className="uppercase">{monitor.type}</span>
-            {getUrl() && (
-              <>
-                <span aria-hidden="true">·</span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums sm:flex-nowrap">
+            <span className="inline-flex min-w-0 items-center gap-2 max-sm:basis-full">
+              <TypeBadge type={monitor.type} />
+              {target && (
                 <CopyableTarget
-                  value={getUrl() as string}
+                  value={target}
                   label={monitorTargetLabel(monitor.type)}
                   size="sm"
+                  className="min-w-0"
                   textClassName="text-slate-400"
                 />
-              </>
+              )}
+            </span>
+            <span className="shrink-0 whitespace-nowrap">every {formatDuration(monitor.interval_seconds)}</span>
+            {!isPassive && monitor.timeout_seconds > 0 && (
+              <span className="shrink-0 whitespace-nowrap">timeout {formatDuration(monitor.timeout_seconds)}</span>
             )}
-          </span>
+            {/* Agent results are scheduler-written freshness verdicts, not
+                reports; the agent view shows the real last report itself. */}
+            {lastCheckAt && monitor.type !== 'agent' && (
+              <span className="shrink-0 whitespace-nowrap" title={formatDateTimeFull(lastCheckAt)}>
+                checked {formatRelativeTime(lastCheckAt)}
+              </span>
+            )}
+          </div>
         }
         action={
-          <>
-            <Button variant="ghost" size="sm" onClick={openHistoryResetModal}>
-              {monitor.type === 'group' ? 'Clear group history' : 'Clear history'}
-            </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              icon={<Trash2 strokeWidth={1.75} />}
-              onClick={() => setConfirmDelete(true)}
-            >
-              Delete
-            </Button>
-          </>
+          canWrite ? (
+            <>
+              {!isPassive && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<RefreshCw className={`h-4 w-4 ${runningCheck ? 'animate-spin' : ''}`} strokeWidth={1.75} />}
+                  onClick={handleRunCheck}
+                  disabled={runningCheck}
+                  title="Run the check now on every location of this monitor"
+                >
+                  {runningCheck ? 'Running…' : 'Run check'}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={
+                  monitor.enabled ? (
+                    <Pause className="h-4 w-4" strokeWidth={1.75} />
+                  ) : (
+                    <Play className="h-4 w-4" strokeWidth={1.75} />
+                  )
+                }
+                onClick={handleToggleEnabled}
+                loading={togglingEnabled}
+              >
+                {monitor.enabled ? 'Pause' : 'Resume'}
+              </Button>
+              <RowMenu label="More actions">
+                <RowMenuItem
+                  icon={<Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                  onSelect={() => setActiveTab('settings')}
+                >
+                  Edit settings
+                </RowMenuItem>
+                <RowMenuItem
+                  icon={<Eraser className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                  onSelect={openHistoryResetModal}
+                >
+                  {isGroup ? 'Clear group history…' : 'Clear history…'}
+                </RowMenuItem>
+                <RowMenuSeparator />
+                <RowMenuItem
+                  danger
+                  icon={<Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />}
+                  onSelect={() => setConfirmDelete(true)}
+                >
+                  Delete…
+                </RowMenuItem>
+              </RowMenu>
+            </>
+          ) : undefined
         }
       />
 
       <AlertRoutingNotice routing={monitor.alert_routing} enabled={monitor.enabled} />
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-slate-900/50 p-1 w-fit">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`rounded-md px-4 py-1.5 text-xs font-medium transition-colors ${
-              activeTab === tab.id
-                ? 'bg-white/[0.08] text-white'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {!monitor.enabled && (
+        <Callout tone="info">
+          Paused. No checks run and no alerts are sent until it is resumed.
+          {lastCheckAt && (
+            <>
+              {' '}Last check <span title={formatDateTimeFull(lastCheckAt)}>{formatDateTime(lastCheckAt)}</span>.
+            </>
+          )}
+        </Callout>
+      )}
 
-      {monitor.locations && monitor.locations.length > 0 && (
+      {monitor.in_maintenance && (
+        <Callout tone="info">
+          Under maintenance
+          {monitor.maintenance_until ? (
+            <>
+              {' '}until <span title={formatDateTimeFull(monitor.maintenance_until)}>{formatDateTime(monitor.maintenance_until)}</span>
+            </>
+          ) : null}
+          . Alerts are suppressed; checks keep running.
+        </Callout>
+      )}
+
+      <Tabs
+        tabs={tabs}
+        active={activeTab}
+        onChange={setActiveTab}
+        label="Monitor sections"
+        trailing={
+          activeTab === 'overview' ? (
+            monitor.type === 'agent' ? (
+              <RangePicker ranges={AGENT_RANGES} value={agentTimeRange} onChange={setAgentTimeRange} />
+            ) : (
+              <RangePicker ranges={OVERVIEW_RANGES} value={overviewRange} onChange={setOverviewRange} />
+            )
+          ) : activeTab === 'history' ? (
+            <span className="text-xs text-slate-500">{RANGES['7d'].long}</span>
+          ) : undefined
+        }
+      />
+
+      {monitor.locations && monitor.locations.length > 0 && (activeTab === 'overview' || activeTab === 'history') && (
         <MonitorLocationStrip
           locations={monitor.locations}
           quorum={monitor.location_quorum ?? 1}
@@ -656,262 +1005,46 @@ export default function EditMonitorPage() {
       )}
 
       {showRetentionWarning && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-          <p className="text-sm text-amber-300">
-            Data retention is set to {boundedRetentionDays} day{boundedRetentionDays === 1 ? '' : 's'}.
-            Older history is deleted, so this view may be partial.
-          </p>
-        </div>
+        <Callout tone="warning">
+          Data retention is set to {boundedRetentionDays} day{boundedRetentionDays === 1 ? '' : 's'}.
+          Older history is deleted, so this view may be partial.
+        </Callout>
       )}
 
-      {monitor.in_maintenance && (
-        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3">
-          <p className="text-sm text-sky-300">
-            Under maintenance
-            {monitor.maintenance_until
-              ? ` until ${new Date(monitor.maintenance_until).toLocaleString()}`
-              : ''}{' '}
-            — alerts are suppressed; checks keep running.
-          </p>
-        </div>
+      {activeTab === 'overview' && (
+        <MonitorDetailOverview
+          monitor={monitor}
+          results={results?.results || []}
+          analytics={analytics}
+          loading={resultsLoading || analyticsLoading}
+          agentTimeRange={agentTimeRange}
+          timeRange={overviewRange}
+          slaTarget={slaTarget}
+          targetSla={targetSla}
+          resultsLimit={OVERVIEW_RESULTS_LIMIT}
+          aside={aside}
+        />
       )}
-
-      {/* Content */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
-        {/* Main Content */}
-        <div>
-          {activeTab === 'overview' && (
-              <MonitorDetailOverview
-                monitor={monitor}
-                results={results?.results || []}
-                analytics={analytics}
-                loading={resultsLoading || analyticsLoading}
-              agentTimeRange={agentTimeRange}
-              onAgentTimeRangeChange={setAgentTimeRange}
-              timeRange={overviewRange}
-              onTimeRangeChange={(range) => {
-                setOverviewRange(range);
-                void loadAnalytics(range);
-              }}
-            />
-          )}
-          {activeTab === 'history' && (
-            <MonitorDetailHistory
-              results={historyResults?.results || []}
-              loading={resultsLoading}
-            />
-          )}
-          {activeTab === 'settings' && (
-            <FormCard>
-              <MonitorForm
-                monitor={monitor}
-                onSubmit={handleSubmit}
-                onCancel={() => router.push('/monitors')}
-                loading={saving}
-              />
-            </FormCard>
-          )}
-          {activeTab === 'json' && (
-            <MonitorDetailJson monitor={monitor} />
-          )}
-        </div>
-
-        {/* Sidebar - Quick Stats (visible on overview) */}
-        {activeTab === 'overview' && (
-          <div className="space-y-4">
-            {monitor.type === 'group' && <GroupMembersCard groupId={monitor.id} />}
-
-            <FormCard className="p-4">
-              <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Configuration</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Interval</span>
-                  <span className="text-slate-300">{monitor.interval_seconds}s</span>
-                </div>
-                {monitor.type !== 'group' && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Timeout</span>
-                    <span className="text-slate-300">{monitor.timeout_seconds}s</span>
-                  </div>
-                )}
-                {monitor.type === 'prometheus' && (
-                  <div className="border-t border-dashed border-white/[0.06] pt-2">
-                    <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
-                  </div>
-                )}
-                {(() => {
-                  // Server facts reported by the database/broker checkers
-                  // (version, role, …) live in the latest result's metrics.
-                  if (!isDatabaseMonitorType(monitor.type)) return null;
-                  const latest = (results?.results || []).find((r) => {
-                    const md = r.metrics_data as DBMetricsEnvelope | undefined;
-                    return Boolean(md && md[monitor.type as keyof DBMetricsEnvelope]);
-                  });
-                  const dbMetrics = latest
-                    ? (latest.metrics_data as DBMetricsEnvelope)[monitor.type as keyof DBMetricsEnvelope]
-                    : null;
-                  if (!dbMetrics) return null;
-                  const server = [
-                    [dbMetrics.product, dbMetrics.server_version].filter(Boolean).join(' '),
-                    dbMetrics.role,
-                    dbMetrics.replica_set ? `set ${dbMetrics.replica_set}` : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' · ');
-                  const mongo = monitor.type === 'mongodb' ? (dbMetrics as MongoDBMetrics) : null;
-                  const repl = mongo?.replication;
-                  const mongoRows = mongo
-                    ? [
-                        mongo.connected_clients != null && mongo.connections_available != null
-                          ? { label: 'Connections', value: `${mongo.connected_clients} current · ${mongo.connections_available} available` }
-                          : null,
-                        mongo.used_memory_bytes != null || mongo.mem_virtual_bytes != null
-                          ? {
-                              label: 'Memory',
-                              value: [
-                                mongo.used_memory_bytes != null ? `${formatBytes(mongo.used_memory_bytes)} resident` : '',
-                                mongo.mem_virtual_bytes != null ? `${formatBytes(mongo.mem_virtual_bytes)} virtual` : '',
-                              ].filter(Boolean).join(' · '),
-                            }
-                          : null,
-                        mongo.cache_used_bytes != null && mongo.cache_max_bytes != null
-                          ? {
-                              label: 'Cache',
-                              value: `${formatBytes(mongo.cache_used_bytes)} / ${formatBytes(mongo.cache_max_bytes)}${
-                                mongo.cache_dirty_bytes != null ? ` · ${formatBytes(mongo.cache_dirty_bytes)} dirty` : ''
-                              }`,
-                            }
-                          : null,
-                        mongo.network_bytes_in != null && mongo.network_bytes_out != null
-                          ? { label: 'Network', value: `${formatBytes(mongo.network_bytes_in)} in · ${formatBytes(mongo.network_bytes_out)} out` }
-                          : null,
-                        repl
-                          ? {
-                              label: 'Replication',
-                              value: `${repl.members_healthy}/${repl.members_total} healthy${
-                                repl.max_lag_seconds != null ? ` · lag ${repl.max_lag_seconds}s` : ''
-                              }${repl.primary ? ` · primary ${repl.primary}` : ''}`,
-                            }
-                          : null,
-                      ].filter((row): row is { label: string; value: string } => row !== null)
-                    : [];
-                  const mongoWarnings = mongo
-                    ? [
-                        mongo.replication_lag_warn_seconds != null
-                          ? `replication lag over ${mongo.replication_lag_warn_seconds}s threshold`
-                          : null,
-                        repl && !repl.primary ? 'replica set has no primary' : null,
-                        repl && repl.members_healthy < repl.members_total ? 'unhealthy replica set member(s)' : null,
-                      ].filter((w): w is string => w !== null)
-                    : [];
-                  const mongoHints = (mongo?.unavailable ?? []).map((u) =>
-                    u.reason === 'unauthorized'
-                      ? 'Cluster checks skipped — grant clusterMonitor'
-                      : u.reason === 'not_replica_set'
-                        ? 'Replication: not a replica set'
-                        : 'Cluster checks temporarily unavailable'
-                  );
-                  return (
-                    <>
-                      {server && (
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Server</span>
-                          <span className="truncate text-right text-slate-300">{server}</span>
-                        </div>
-                      )}
-                      {mongoRows.map((row) => (
-                        <div key={row.label} className="flex justify-between">
-                          <span className="text-slate-500">{row.label}</span>
-                          <span className="truncate text-right text-slate-300">{row.value}</span>
-                        </div>
-                      ))}
-                      {dbMetrics.latency_warn_ms ? (
-                        <div className="flex justify-between">
-                          <span className="text-amber-400">Warning</span>
-                          <span className="text-right text-amber-300">
-                            latency over {dbMetrics.latency_warn_ms}ms threshold
-                          </span>
-                        </div>
-                      ) : null}
-                      {mongoWarnings.map((warning) => (
-                        <div key={warning} className="flex justify-between">
-                          <span className="text-amber-400">Warning</span>
-                          <span className="text-right text-amber-300">{warning}</span>
-                        </div>
-                      ))}
-                      {mongoHints.map((hint) => (
-                        <div key={hint} className="flex justify-between gap-2">
-                          <span className="shrink-0 text-slate-500">Note</span>
-                          <span className="text-right text-slate-400">{hint}</span>
-                        </div>
-                      ))}
-                    </>
-                  );
-                })()}
-                {monitor.type === 'tcp' && (() => {
-                  const cfg = monitor.config as TCPMonitorConfig | undefined;
-                  const latest = (results?.results || []).find((r) => {
-                    const md = r.metrics_data as TCPMetricsEnvelope | undefined;
-                    return Boolean(md && md.tcp);
-                  });
-                  const tcpMetrics = latest ? (latest.metrics_data as TCPMetricsEnvelope).tcp : null;
-                  const target = cfg?.host ? (cfg.port ? `${cfg.host}:${cfg.port}` : cfg.host) : null;
-                  return (
-                    <>
-                      {target && (
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">Target</span>
-                          <span className="truncate text-right text-slate-300">{target}</span>
-                        </div>
-                      )}
-                      {cfg?.use_tls && (
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">TLS</span>
-                          <span className="text-right text-slate-300">
-                            {tcpMetrics?.tls_version || 'Enabled'}
-                          </span>
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-            </FormCard>
-
-            <MonitorDependenciesCard monitorId={monitor.id} monitorType={monitor.type} />
-
-            {monitor.type === 'synthetic_browser' && (
-              <FormCard className="p-4">
-                <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">Latest failure screenshot</h3>
-                {screenshotLoading ? (
-                  <p className="text-xs text-slate-500">Loading screenshot...</p>
-                ) : screenshotBlobURL ? (
-                  <div className="overflow-hidden rounded-lg border border-white/[0.08] bg-slate-800/40 p-2">
-                    <Image
-                      src={screenshotBlobURL}
-                      alt="Latest synthetic browser failure screenshot"
-                      width={1200}
-                      height={675}
-                      className="h-auto max-h-[220px] w-full rounded-md object-contain"
-                      unoptimized
-                      loading="lazy"
-                    />
-                    <p className="mt-2 text-[11px] text-slate-500">
-                      {latestSyntheticBrowserResult
-                        ? `Captured ${new Date(latestSyntheticBrowserResult.created_at).toLocaleString()}`
-                        : 'Latest run'}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-500">
-                    No screenshot available yet. A failed run with screenshot capture enabled is required.
-                  </p>
-                )}
-              </FormCard>
-            )}
-          </div>
-        )}
-      </div>
+      {activeTab === 'history' && (
+        <MonitorDetailHistory
+          results={historyResults?.results || []}
+          analytics={historyAnalytics}
+          slaTarget={slaTarget}
+          timeoutSeconds={monitor.timeout_seconds}
+          loading={resultsLoading}
+        />
+      )}
+      {activeTab === 'settings' && (
+        <MonitorForm
+          monitor={monitor}
+          onSubmit={handleSubmit}
+          onCancel={() => router.push('/monitors')}
+          loading={saving}
+        />
+      )}
+      {activeTab === 'json' && (
+        <MonitorDetailJson monitor={monitor} analytics={analytics} />
+      )}
 
       <ConfirmDialog
         open={confirmDelete}

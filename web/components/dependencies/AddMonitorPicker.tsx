@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Workflow } from 'lucide-react';
 import { DependencyMonitor, MonitorState } from '@/lib/types';
 import { getMonitors } from '@/lib/api';
+import Button from '@/components/ui/Button';
 import { stateStyle, TYPE_ICONS } from './graphTheme';
 
 // Toolbar popover: search any monitor and drop it onto the canvas so it can
@@ -11,9 +12,15 @@ import { stateStyle, TYPE_ICONS } from './graphTheme';
 export function AddMonitorPicker({
   existingIds,
   onAdd,
+  variant = 'ghost',
+  align = 'right',
 }: {
   existingIds: Set<string>;
   onAdd: (monitor: DependencyMonitor) => void;
+  /** `accent` when it is the empty canvas's one next step. */
+  variant?: 'ghost' | 'accent';
+  /** Popover anchor: under the right edge (toolbar) or centred (empty state). */
+  align?: 'right' | 'center';
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -70,16 +77,22 @@ export function AddMonitorPicker({
 
   return (
     <div className="relative" ref={rootRef}>
-      <button
+      <Button
         type="button"
+        variant={variant}
+        size={variant === 'accent' ? 'sm' : 'xs'}
+        icon={<Plus strokeWidth={1.75} />}
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-slate-900/80 px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/[0.15] hover:text-slate-200"
+        aria-expanded={open}
       >
-        <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
         Add monitor
-      </button>
+      </Button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-xl border border-white/[0.08] bg-slate-900 p-2 shadow-2xl">
+        <div
+          className={`glass-overlay absolute top-full z-20 mt-2 w-72 !rounded-xl p-1.5 text-left ${
+            align === 'center' ? 'left-1/2 -translate-x-1/2' : 'right-0'
+          }`}
+        >
           <input
             type="text"
             autoFocus
@@ -87,9 +100,9 @@ export function AddMonitorPicker({
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
             placeholder="Search monitors…"
-            className="mb-1.5 w-full rounded-lg border border-white/[0.08] bg-slate-950/80 px-2.5 py-1.5 text-xs text-white placeholder:text-slate-600 focus:border-cyan-500/50 focus:outline-none"
+            className="input input-sm mb-1.5"
           />
-          <div className="max-h-64 space-y-0.5 overflow-y-auto">
+          <div className="dashboard-scroll max-h-64 space-y-px overflow-y-auto">
             {allMonitors === null ? (
               <p className="px-2 py-3 text-center text-xs text-slate-500">Loading…</p>
             ) : candidates.length === 0 ? (
@@ -109,7 +122,7 @@ export function AddMonitorPicker({
                       setOpen(false);
                       setQuery('');
                     }}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.05]"
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well-hover"
                   >
                     <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${s.iconTile}`}>
                       <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />

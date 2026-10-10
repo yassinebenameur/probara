@@ -1,13 +1,14 @@
 'use client';
 
-import { useState } from 'react';
-import { Info } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
-import { LocationsSection } from './LocationsSection';
+import ScheduleSection from './ScheduleSection';
+import DependenciesField from './DependenciesField';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
 
 interface SipFormProps {
   monitor?: Monitor;
@@ -53,12 +54,17 @@ export default function SipForm({
     notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
     location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
     location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
+    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useClearErrorsOnEdit(formData, setErrors);
+  useFollowEnabled(monitor?.enabled, setFormData);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (reportConstraintViolation(formRef.current)) return;
     setErrors({});
 
     const newErrors: Record<string, string> = {};
@@ -74,6 +80,7 @@ export default function SipForm({
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
+      revealFirstError(formRef.current);
       return;
     }
 
@@ -116,6 +123,7 @@ export default function SipForm({
     if (formData.tags.trim()) {
       requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
     }
+    requestData.depends_on_ids = formData.depends_on_ids;
     requestData.location_ids = formData.location_ids;
     requestData.location_quorum =
       formData.location_ids.length >= 2
@@ -126,8 +134,8 @@ export default function SipForm({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <FormSection title="Endpoint">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <FormSection title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -138,28 +146,40 @@ export default function SipForm({
           />
         </FormField>
 
-        <FormField label="Host" required error={errors.host} description="Hostname or IP">
-          <input
-            type="text"
-            value={formData.host}
-            onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-            placeholder="sip.example.com"
-            className="input"
-          />
+        <FormField label="Host" required error={errors.host}>
+          {(control) => (
+            <>
+              <input
+                {...control}
+                type="text"
+                value={formData.host}
+                onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                placeholder="sip.example.com"
+                className="input font-mono"
+              />
+              <FieldHint>Hostname or IP</FieldHint>
+            </>
+          )}
         </FormField>
 
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Port" required error={errors.port} description="Default: 5060">
-            <input
-              type="number"
-              value={formData.port}
-              onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value) || 5060 })}
-              min={1}
-              max={65535}
-              className="input"
-            />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Port" required error={errors.port}>
+            {(control) => (
+              <>
+                <input
+                  {...control}
+                  type="number"
+                  value={formData.port}
+                  onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value) || 5060 })}
+                  min={1}
+                  max={65535}
+                  className="input tabular-nums"
+                />
+                <FieldHint>Default: 5060 (5061 for TLS)</FieldHint>
+              </>
+            )}
           </FormField>
-          <FormField label="Transport" description="SIP transport protocol">
+          <FormField label="Transport">
             <select
               value={formData.transport}
               onChange={(e) => {
@@ -185,140 +205,137 @@ export default function SipForm({
         </div>
 
         {formData.transport === 'tls' && (
-          <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-white">Skip certificate verification</p>
-              <p className="text-xs text-slate-500">For lab servers with self-signed certificates</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setFormData({ ...formData, tls_skip_verify: !formData.tls_skip_verify })}
-              className={`relative h-5 w-9 rounded-full transition-colors ${
-                formData.tls_skip_verify ? 'bg-cyan-500' : 'bg-slate-700'
-              }`}
-              aria-pressed={formData.tls_skip_verify}
-              aria-label="Toggle certificate verification skip"
-            >
-              <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                formData.tls_skip_verify ? 'translate-x-4' : ''
-              }`} />
-            </button>
-          </div>
-        )}
-
-        <FormField label="Expected status code" description="Default: 200 OK">
-          <input
-            type="number"
-            value={formData.expected_status}
-            onChange={(e) => setFormData({ ...formData, expected_status: e.target.value })}
-            placeholder="200"
-            min={100}
-            max={699}
-            className="input"
+          <ToggleRow
+            title="Skip certificate verification"
+            description="For lab servers with self-signed certificates"
+            checked={formData.tls_skip_verify}
+            onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
+            tone="warning"
           />
-        </FormField>
+        )}
       </FormSection>
 
       <FormSection title="Check">
-        <FormField label="Method" description="What the probe proves">
-          <select
-            value={formData.method}
-            onChange={(e) => setFormData({ ...formData, method: e.target.value as 'options' | 'register' })}
-            className="input"
-          >
-            <option value="options">OPTIONS — server availability ping</option>
-            <option value="register">REGISTER — registrar + authentication probe</option>
-          </select>
+        <FormField label="Method">
+          {(control) => (
+            <>
+              <select
+                {...control}
+                value={formData.method}
+                onChange={(e) => setFormData({ ...formData, method: e.target.value as 'options' | 'register' })}
+                className="input"
+              >
+                <option value="options">OPTIONS: server availability ping</option>
+                <option value="register">REGISTER: registrar and authentication probe</option>
+              </select>
+              <FieldHint>
+                {formData.method === 'register'
+                  ? 'Sends a query-style REGISTER (no Contact) that exercises the registrar and its digest authentication without creating or removing any bindings.'
+                  : 'Sends a SIP OPTIONS request to test server availability without initiating a call. Answers digest challenges when credentials are configured.'}
+              </FieldHint>
+            </>
+          )}
         </FormField>
 
         {formData.method === 'register' && (
-          <FormField
-            label="SIP domain"
-            description="Domain of the address-of-record. Defaults to the host."
-          >
-            <input
-              type="text"
-              value={formData.domain}
-              onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
-              placeholder="example.com"
-              className="input"
-            />
+          <FormField label="SIP domain">
+            {(control) => (
+              <>
+                <input
+                  {...control}
+                  type="text"
+                  value={formData.domain}
+                  onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
+                  placeholder="example.com"
+                  className="input font-mono"
+                />
+                <FieldHint>Domain of the address-of-record. Defaults to the host.</FieldHint>
+              </>
+            )}
           </FormField>
         )}
 
-        <div className="grid grid-cols-2 gap-4">
-          <FormField
-            label="Username"
-            error={errors.username}
-            description="Digest auth user (optional)"
-          >
-            <input
-              type="text"
-              value={formData.username}
-              onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-              placeholder="agent42"
-              autoComplete="off"
-              className="input"
-            />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Username" error={errors.username}>
+            {(control) => (
+              <>
+                <input
+                  {...control}
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                  placeholder="agent42"
+                  autoComplete="off"
+                  className="input"
+                />
+                <FieldHint>Optional digest auth user</FieldHint>
+              </>
+            )}
           </FormField>
-          <FormField
-            label="Password"
-            description={isEditMode ? 'Leave *** to keep the stored password' : 'Stored encrypted'}
-          >
-            <input
-              type="password"
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              autoComplete="new-password"
-              className="input"
-            />
-          </FormField>
-        </div>
-      </FormSection>
-
-      <FormSection title="Schedule">
-        <div className="grid grid-cols-2 gap-4">
-          <FormField label="Interval (seconds)" description="How often to check">
-            <input
-              type="number"
-              value={formData.interval_seconds}
-              onChange={(e) => setFormData({ ...formData, interval_seconds: parseInt(e.target.value) || 60 })}
-              min={10}
-              step={5}
-              className="input"
-            />
-          </FormField>
-          <FormField
-            label="Timeout (seconds)"
-            error={errors.timeout_seconds}
-            description="Must be less than interval"
-          >
-            <input
-              type="number"
-              value={formData.timeout_seconds}
-              onChange={(e) => setFormData({ ...formData, timeout_seconds: parseInt(e.target.value) || 10 })}
-              min={1}
-              className="input"
-            />
+          <FormField label="Password">
+            {(control) => (
+              <>
+                <input
+                  {...control}
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  autoComplete="new-password"
+                  className="input"
+                />
+                <FieldHint>{isEditMode ? 'Leave *** to keep the stored password' : 'Stored encrypted'}</FieldHint>
+              </>
+            )}
           </FormField>
         </div>
+
+        <FormField label="Expected status code">
+          {(control) => (
+            <>
+              <input
+                {...control}
+                type="number"
+                value={formData.expected_status}
+                onChange={(e) => setFormData({ ...formData, expected_status: e.target.value })}
+                placeholder="200"
+                min={100}
+                max={699}
+                className="input !w-32 tabular-nums"
+              />
+              <FieldHint>Default: 200 OK</FieldHint>
+            </>
+          )}
+        </FormField>
       </FormSection>
 
-      <FormSection
-        title="Locations"
-        summary={formData.location_ids.length > 0 ? `${formData.location_ids.length} selected` : 'Default fleet'}
-        collapsible
-        defaultOpen={formData.location_ids.length > 0}
+      <ScheduleSection
+        intervalSeconds={formData.interval_seconds}
+        onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
+        timeoutSeconds={formData.timeout_seconds}
+        onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
+        timeoutError={errors.timeout_seconds}
+        locations={{
+          selectedIds: formData.location_ids,
+          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+          quorum: formData.location_quorum,
+          onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
+        }}
+        enabled={formData.enabled}
+        onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+        enabledDescription={`Run SIP ${formData.method === 'register' ? 'REGISTER' : 'OPTIONS'} checks on this schedule`}
+      />
+
+      <FormPanel
+        title="Alerting"
+        rows={
+          <DependenciesField
+            selectedIds={formData.depends_on_ids}
+            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+            excludeId={monitor?.id}
+            error={errors.depends_on_ids}
+          />
+        }
       >
-        <LocationsSection
-          selectedIds={formData.location_ids}
-          onChange={(ids) => setFormData({ ...formData, location_ids: ids })}
-          quorum={formData.location_quorum}
-          onQuorumChange={(n) => setFormData({ ...formData, location_quorum: n })}
-        />
-      </FormSection>
-
-      <FormSection title="Alerting">
         <AlertingSection
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
@@ -327,72 +344,40 @@ export default function SipForm({
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
           dependencySuppression={formData.dependency_suppression}
-          hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
+          hasDependencies={formData.depends_on_ids.length > 0}
           onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Meta">
-        <FormField label="Tags" description="Comma-separated, e.g. production, voip, critical">
-          <input
-            type="text"
-            value={formData.tags}
-            onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-            placeholder="production, voip, critical"
-            className="input"
-          />
-        </FormField>
-
-        <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-slate-900/40 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-white">Monitor enabled</p>
-            <p className="text-xs text-slate-500">
-              Run SIP {formData.method === 'register' ? 'REGISTER' : 'OPTIONS'} checks on schedule
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setFormData({ ...formData, enabled: !formData.enabled })}
-            className={`relative h-5 w-9 rounded-full transition-colors ${
-              formData.enabled ? 'bg-cyan-500' : 'bg-slate-700'
-            }`}
-            aria-pressed={formData.enabled}
-            aria-label="Toggle monitor enabled"
-          >
-            <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-              formData.enabled ? 'translate-x-4' : ''
-            }`} />
-          </button>
-        </div>
-      </FormSection>
-
-      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
-        <div className="flex items-start gap-3">
-          <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300" strokeWidth={1.75} />
-          <div>
-            <p className="mb-1 text-xs font-medium text-white">
-              {formData.method === 'register' ? 'SIP REGISTER probe' : 'SIP OPTIONS request'}
-            </p>
-            <p className="text-xs text-slate-400">
-              {formData.method === 'register'
-                ? 'Sends a query-style REGISTER (no Contact) that exercises the registrar and its digest authentication without creating or removing any bindings.'
-                : 'Sends a SIP OPTIONS request to test server availability without initiating a call. Answers digest challenges when credentials are configured.'}
-            </p>
-          </div>
-        </div>
-      </div>
+      <LabelsSection
+        tags={formData.tags}
+        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+        placeholder="production, voip, critical"
+      />
 
       <FormActions
         middle={
-          formData.host.trim()
-            ? `Every ${formData.interval_seconds}s · SIP ${formData.method.toUpperCase()} ${formData.host.trim()}:${formData.port} (${formData.transport.toUpperCase()}) · down after ${formData.consecutive_failures_threshold} failed check${formData.consecutive_failures_threshold === 1 ? '' : 's'}`
-            : undefined
+          <PlanSummary
+            errors={errors}
+            parts={
+              formData.host.trim()
+                ? [
+                    everyLabel(formData.interval_seconds),
+                    <PlanTarget key="t">
+                      SIP {formData.method.toUpperCase()} {formData.host.trim()}:{formData.port}
+                    </PlanTarget>,
+                    `over ${formData.transport.toUpperCase()}`,
+                    downAfterLabel(formData.consecutive_failures_threshold),
+                  ]
+                : []
+            }
+          />
         }
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create SIP monitor',
+          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
           loading,
           disabled: loading,
           type: 'submit',

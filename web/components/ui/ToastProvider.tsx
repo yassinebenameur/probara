@@ -40,19 +40,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     
     const configs: Record<string, { title: string; message: string; type: ToastMessage['type']; duration: number }> = {
       created: {
-        title: 'Alert Triggered',
+        title: 'Alert triggered',
         message: `${monitorName} is down`,
         type: 'error',
         duration: 30000, // 30 seconds for critical alerts
       },
       acknowledged: {
-        title: 'Alert Acknowledged',
+        title: 'Alert acknowledged',
         message: `${monitorName}`,
         type: 'warning',
         duration: 15000, // 15 seconds
       },
       resolved: {
-        title: 'Alert Resolved',
+        title: 'Alert resolved',
         message: `${monitorName} is back up`,
         type: 'success',
         duration: 15000, // 15 seconds
@@ -71,7 +71,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ toasts, showToast, showAlertToast, removeToast }}>
       {children}
       {/* Toast container */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3">
+      <div className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 sm:bottom-6 sm:right-6">
         {toasts.map(toast => (
           <ToastItem key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
         ))}
@@ -130,99 +130,47 @@ function ToastItem({ toast, onClose }: { toast: ToastMessage; onClose: () => voi
     return () => clearTimeout(timer);
   }, []);
 
-  const typeConfig: Record<ToastMessage['type'], { 
-    icon: React.ReactNode; 
-    iconBg: string; 
-    iconColor: string;
-    bgColor: string;
-    borderColor: string;
-    glowColor: string;
-  }> = {
-    error: {
-      icon: <AlertIcon />,
-      iconBg: 'bg-rose-500/30',
-      iconColor: 'text-rose-300',
-      bgColor: 'bg-rose-950/80',
-      borderColor: 'border-rose-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(240,74,90,0.3)]',
-    },
-    success: {
-      icon: <CheckIcon />,
-      iconBg: 'bg-emerald-500/30',
-      iconColor: 'text-emerald-300',
-      bgColor: 'bg-emerald-950/80',
-      borderColor: 'border-emerald-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(70,209,127,0.3)]',
-    },
-    warning: {
-      icon: <WarningIcon />,
-      iconBg: 'bg-amber-500/30',
-      iconColor: 'text-amber-300',
-      bgColor: 'bg-amber-950/80',
-      borderColor: 'border-amber-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(230,178,63,0.3)]',
-    },
-    info: {
-      icon: <InfoIcon />,
-      iconBg: 'bg-cyan-500/30',
-      iconColor: 'text-cyan-300',
-      bgColor: 'bg-cyan-950/80',
-      borderColor: 'border-cyan-500/50',
-      glowColor: 'shadow-[0_0_30px_rgba(255,90,36,0.3)]',
-    },
+  const typeConfig: Record<ToastMessage['type'], { icon: React.ReactNode; tint: string; bar: string }> = {
+    error: { icon: <AlertIcon />, tint: 'bg-rose-500/[0.14] text-rose-400', bar: 'bg-rose-500' },
+    success: { icon: <CheckIcon />, tint: 'bg-emerald-500/[0.14] text-emerald-400', bar: 'bg-emerald-500' },
+    warning: { icon: <WarningIcon />, tint: 'bg-amber-500/[0.16] text-amber-400', bar: 'bg-amber-500' },
+    info: { icon: <InfoIcon />, tint: 'bg-sky-500/[0.14] text-sky-400', bar: 'bg-sky-500' },
   };
 
   const config = typeConfig[toast.type];
 
   return (
     <div
-      className={`
-        transform transition-all duration-300 ease-out
-        ${isVisible ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'}
-      `}
+      className={`transform transition-all duration-300 ease-out motion-reduce:transition-none ${
+        isVisible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
+      }`}
       role="alert"
     >
-      <div
-        className={`
-          relative overflow-hidden
-          ${config.bgColor} backdrop-blur-xl
-          border ${config.borderColor}
-          rounded-xl ${config.glowColor}
-          min-w-[340px] max-w-md
-        `}
-      >
-        {/* Progress bar */}
-        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-slate-800">
-          <div 
-            className={`h-full ${config.iconColor.replace('text-', 'bg-')} animate-toast-progress`}
-            style={{ animationDuration: `${toast.duration || 5000}ms` }}
-          />
-        </div>
-        
-        <div className="flex items-start gap-3 p-4">
-          {/* Icon */}
-          <div className={`flex-shrink-0 p-2 rounded-lg ${config.iconBg} ${config.iconColor}`}>
+      <div className="glass-overlay relative w-[min(22rem,calc(100vw-2rem))] overflow-hidden !rounded-2xl">
+        <div className="flex items-start gap-3 p-3.5">
+          <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full ${config.tint} [&_svg]:h-4 [&_svg]:w-4`}>
             {config.icon}
           </div>
-          
-          {/* Content */}
-          <div className="flex-1 min-w-0 pt-0.5">
-            {toast.title && (
-              <p className="text-sm font-semibold text-white">{toast.title}</p>
-            )}
-            <p className={`text-sm ${toast.title ? 'text-slate-400' : 'text-white'}`}>
-              {toast.message}
-            </p>
+
+          <div className="min-w-0 flex-1 pt-1">
+            {toast.title && <p className="text-sm font-semibold text-white">{toast.title}</p>}
+            <p className={`text-sm ${toast.title ? 'text-slate-400' : 'text-white'}`}>{toast.message}</p>
           </div>
-          
-          {/* Close button */}
+
           <button
             onClick={onClose}
-            className="flex-shrink-0 p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-800/50 transition-colors"
+            className="flex-shrink-0 rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-well-hover hover:text-slate-200"
             aria-label="Close"
           >
             <CloseIcon />
           </button>
+        </div>
+
+        <div className="absolute inset-x-0 bottom-0 h-0.5 bg-well-hover">
+          <div
+            className={`h-full ${config.bar} animate-toast-progress opacity-60`}
+            style={{ animationDuration: `${toast.duration || 5000}ms` }}
+          />
         </div>
       </div>
     </div>

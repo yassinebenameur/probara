@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { AlertTriangle, BellOff } from 'lucide-react';
 import { getNotificationSettings } from '@/lib/api';
 import type {
   AlertChannel,
@@ -12,6 +13,13 @@ import type {
   NotificationSettings,
 } from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
+import Callout from '@/components/ui/Callout';
+
+const GROUP_LABEL = 'mb-2.5 block text-ui font-medium text-slate-300';
+const OPTION = 'flex items-start gap-2.5 text-sm text-slate-200';
+const OPTION_HINT = 'mt-0.5 block text-xs text-slate-500';
+const RADIO = 'mt-1 accent-cyan-500';
+const LINK = 'font-medium text-cyan-300 hover:text-cyan-200';
 
 interface AlertingSectionProps {
   isGroup: boolean;
@@ -46,7 +54,7 @@ function detectionHint(threshold: number, intervalSeconds: number): string {
   // then (threshold - 1) fast rechecks confirm the outage.
   const worstCaseSeconds = intervalSeconds + (threshold - 1) * recheck;
   const approx = worstCaseSeconds >= 90 ? `~${Math.round(worstCaseSeconds / 60)} min` : `~${worstCaseSeconds}s`;
-  return `rechecks every ${recheck}s once a failure is seen — alerted within ${approx} of an outage starting`;
+  return `Rechecks every ${recheck}s once a failure is seen — alerted within ${approx} of an outage starting`;
 }
 
 export function AlertingSection({
@@ -61,7 +69,7 @@ export function AlertingSection({
 
   const defaults = settings?.default_channels ?? [];
   const defaultSummary = defaults.length
-    ? defaults.map((c) => c.channel_name ?? c.channel_id).join(' · ')
+    ? defaults.map((c) => c.channel_name ?? c.channel_id).join(', ')
     : null;
   const muted = mode === 'custom' && customChannels.length === 0;
   // A selection made entirely of disabled channels delivers nothing either —
@@ -87,41 +95,41 @@ export function AlertingSection({
   return (
     <div className="space-y-5">
       {isGroup && rollup && onRollupChange && (
-        <div>
-          <label className="mb-2 block text-sm font-medium text-slate-200">
+        <fieldset>
+          <legend className={GROUP_LABEL}>
             When monitors in this group go down
-          </label>
-          <div className="space-y-2">
-            <label className="flex items-start gap-2 text-sm text-slate-300">
+          </legend>
+          <div className="space-y-2.5">
+            <label className={OPTION}>
               <input
                 type="radio"
-                className="mt-0.5"
+                className={RADIO}
                 checked={rollup === 'per_monitor'}
                 onChange={() => onRollupChange('per_monitor')}
               />
               <span>
                 Alert me for each monitor
-                <span className="block text-xs text-slate-500">
+                <span className={OPTION_HINT}>
                   Each member notifies on its own. Best for grouping similar monitors (e.g. all ASRs).
                 </span>
               </span>
             </label>
-            <label className="flex items-start gap-2 text-sm text-slate-300">
+            <label className={OPTION}>
               <input
                 type="radio"
-                className="mt-0.5"
+                className={RADIO}
                 checked={rollup === 'group'}
                 onChange={() => onRollupChange('group')}
               />
               <span>
                 Send one alert for the whole group
-                <span className="block text-xs text-slate-500">
+                <span className={OPTION_HINT}>
                   Members are silenced; one group alert covers them. Best for a single service made of several monitors.
                 </span>
               </span>
             </label>
           </div>
-        </div>
+        </fieldset>
       )}
 
       {!isGroup && (
@@ -130,7 +138,7 @@ export function AlertingSection({
             Mark down after{' '}
             <select
               aria-label="Consecutive failed checks before marking down"
-              className="mx-1 rounded-md border border-white/[0.06] bg-slate-900 px-2 py-1 text-sm text-slate-200"
+              className="input input-sm mx-1 !w-auto"
               value={threshold}
               onChange={(e) => onThresholdChange(Number(e.target.value))}
             >
@@ -141,38 +149,42 @@ export function AlertingSection({
             consecutive failed checks
           </div>
           {threshold === 1 ? (
-            <p className="mt-1 text-xs text-amber-400">
-              ⚠ alerts on the very first failed check — a single network blip will page you
+            <p className="mt-1.5 flex items-center gap-1.5 text-xs text-amber-300">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+              Alerts on the very first failed check — a single network blip will page you
             </p>
           ) : (
-            <p className="mt-1 text-xs text-slate-500">ⓘ {detectionHint(threshold, intervalSeconds)}</p>
+            <p className="mt-1.5 text-xs text-slate-500">{detectionHint(threshold, intervalSeconds)}</p>
           )}
         </div>
       )}
 
       {perMonitorRollup ? (
         <p className="text-xs text-slate-500">
-          ⓘ Notifications are configured on each monitor individually. This group won&apos;t send its own alert.
+          Notifications are configured on each monitor individually. This group won&apos;t send its own alert.
         </p>
       ) : (
-      <div>
-        <label className="mb-2 block text-sm font-medium text-slate-200">Notifications</label>
-        <div className="space-y-2">
-          <label className="flex items-start gap-2 text-sm text-slate-300">
-            <input type="radio" checked={mode === 'default'} onChange={() => onModeChange('default')} />
+      <fieldset>
+        <legend className={GROUP_LABEL}>Notifications</legend>
+        <div className="space-y-2.5">
+          <label className={OPTION}>
+            <input type="radio" className={RADIO} checked={mode === 'default'} onChange={() => onModeChange('default')} />
             <span>
               Workspace default
               {defaultSummary && <span className="ml-1 text-xs text-slate-500">— {defaultSummary}</span>}
             </span>
           </label>
           {mode === 'default' && settings && defaults.length === 0 && (
-            <div className="ml-6 rounded-lg border border-amber-600/40 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
-              ⚠ No default configured — alerts won&apos;t notify anyone.{' '}
-              <Link href="/settings" className="text-cyan-400">Connect a channel</Link>
-            </div>
+            <Callout tone="warning" className="ml-6">
+              No default configured, so alerts won&apos;t notify anyone.{' '}
+              {/* A new tab, so a half-filled monitor form isn't lost. */}
+              <Link href="/settings?tab=channels" target="_blank" rel="noopener noreferrer" className={LINK}>
+                Connect a channel<span className="sr-only"> (opens in a new tab)</span>
+              </Link>
+            </Callout>
           )}
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input type="radio" checked={mode === 'custom'} onChange={switchToCustom} />
+          <label className={OPTION}>
+            <input type="radio" className={RADIO} checked={mode === 'custom'} onChange={switchToCustom} />
             <span>Custom for this monitor…</span>
           </label>
           {mode === 'custom' && (
@@ -184,32 +196,32 @@ export function AlertingSection({
                 onChannelsLoaded={setChannels}
               />
               {muted && (
-                <div className="rounded-lg border border-rose-700/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-                  🔕 This monitor is muted — alerts fire (status page, incidents) but notify no one.
-                </div>
+                <Callout tone="danger" icon={<BellOff strokeWidth={1.75} />}>
+                  This monitor is muted — alerts fire (status page, incidents) but notify no one.
+                </Callout>
               )}
               {mutedByDisabled && (
-                <div className="rounded-lg border border-rose-700/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-                  🔕 Every channel selected here is disabled — alerts fire but notify no one.
-                </div>
+                <Callout tone="danger" icon={<BellOff strokeWidth={1.75} />}>
+                  Every channel selected here is disabled — alerts fire but notify no one.
+                </Callout>
               )}
             </div>
           )}
         </div>
-      </div>
+      </fieldset>
       )}
 
       {!perMonitorRollup && dependencySuppression && onDependencySuppressionChange &&
         (hasDependencies || dependencySuppression !== 'inherit') && (
-        <div>
-          <label className="mb-2 block text-sm font-medium text-slate-200">
+        <fieldset>
+          <legend className={GROUP_LABEL}>
             When an upstream dependency is down
-          </label>
-          <div className="space-y-2">
-            <label className="flex items-start gap-2 text-sm text-slate-300">
+          </legend>
+          <div className="space-y-2.5">
+            <label className={OPTION}>
               <input
                 type="radio"
-                className="mt-0.5"
+                className={RADIO}
                 checked={dependencySuppression === 'inherit'}
                 onChange={() => onDependencySuppressionChange('inherit')}
               />
@@ -222,30 +234,30 @@ export function AlertingSection({
                 )}
               </span>
             </label>
-            <label className="flex items-start gap-2 text-sm text-slate-300">
+            <label className={OPTION}>
               <input
                 type="radio"
-                className="mt-0.5"
+                className={RADIO}
                 checked={dependencySuppression === 'off'}
                 onChange={() => onDependencySuppressionChange('off')}
               />
               <span>
                 Always page
-                <span className="block text-xs text-slate-500">
+                <span className={OPTION_HINT}>
                   Notify even when the outage is explained by a dependency. For monitors that must never go quiet.
                 </span>
               </span>
             </label>
-            <label className="flex items-start gap-2 text-sm text-slate-300">
+            <label className={OPTION}>
               <input
                 type="radio"
-                className="mt-0.5"
+                className={RADIO}
                 checked={dependencySuppression === 'on'}
                 onChange={() => onDependencySuppressionChange('on')}
               />
               <span>
                 Suppress notifications while an upstream is down
-                <span className="block text-xs text-slate-500">
+                <span className={OPTION_HINT}>
                   The alert still opens and the root cause&apos;s notification lists this monitor. If the upstream
                   recovers and this monitor stays down, it pages{' '}
                   {graceLabel(settings?.dependency_suppression_grace_seconds ?? 120)}.
@@ -254,12 +266,12 @@ export function AlertingSection({
             </label>
           </div>
           {!hasDependencies && (
-            <p className="mt-1 text-xs text-slate-500">
-              ⓘ This monitor has no upstream dependencies, so this setting has no effect yet.{' '}
-              <Link href="/dependencies" className="text-cyan-400">Open the dependency graph</Link>
+            <p className="mt-2 text-xs text-slate-500">
+              This monitor has no upstream dependencies, so this setting has no effect yet.{' '}
+              <Link href="/dependencies" className={LINK}>Open the dependency graph</Link>
             </p>
           )}
-        </div>
+        </fieldset>
       )}
     </div>
   );

@@ -91,7 +91,7 @@ export default function InfoTip({
         aria-label={ariaLabel}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
+        className="inline-flex items-center justify-center rounded-full text-slate-500 transition-colors hover:text-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
       >
         <Info className={iconSize} strokeWidth={1.75} aria-hidden="true" />
       </button>
@@ -99,7 +99,7 @@ export default function InfoTip({
         <div
           ref={popoverRef}
           role="dialog"
-          className="fixed z-[100] w-64 rounded-xl border border-white/10 bg-slate-900/95 p-3 text-xs shadow-[0_18px_45px_rgba(0,0,0,0.5)] backdrop-blur-md"
+          className="glass-overlay fixed z-[100] w-64 !rounded-xl p-3 text-xs"
           style={{
             left: position.left,
             top: position.top,
@@ -108,7 +108,7 @@ export default function InfoTip({
           }}
         >
           {title && (
-            <div className="mb-2 border-b border-white/[0.06] pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <div className="mb-2 border-b border-divider pb-2 text-xs font-semibold text-slate-200">
               {title}
             </div>
           )}

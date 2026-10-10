@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   applyEdgeChanges,
@@ -21,6 +21,7 @@ import { Expand, Focus, LayoutGrid, Workflow, X } from 'lucide-react';
 import { DependencyMonitor } from '@/lib/types';
 import { addMonitorDependency, removeMonitorDependency } from '@/lib/api';
 import { useToast } from '@/components/ui/ToastProvider';
+import Button from '@/components/ui/Button';
 import { apiErrorMessage, LEGEND, stateStyle, styleEdge } from './graphTheme';
 import { isGroupId, type AppNode, type MonitorNodeData } from './graphModel';
 import { MonitorNode } from './MonitorNode';
@@ -32,6 +33,18 @@ import { useThemeName } from '@/components/ui/useThemeName';
 
 const nodeTypes = { monitor: MonitorNode, depGroup: GroupNode };
 const edgeTypes = { dependency: DependencyEdge };
+
+// React Flow reads its chrome colours from these variables; pointing them at
+// the glass tokens keeps the controls and minimap theme-aware.
+const FLOW_CHROME = {
+  '--xy-background-color': 'transparent',
+  '--xy-controls-button-background-color': 'var(--glass-fill-strong)',
+  '--xy-controls-button-background-color-hover': 'var(--bg-elevated)',
+  '--xy-controls-button-color': 'var(--text-secondary)',
+  '--xy-controls-button-color-hover': 'var(--text-primary)',
+  '--xy-controls-button-border-color': 'var(--divider)',
+  '--xy-controls-box-shadow': 'var(--glass-shadow)',
+} as CSSProperties;
 
 export interface GraphCanvasProps {
   flowNodes: AppNode[];
@@ -48,6 +61,16 @@ export interface GraphCanvasProps {
   onEdgePersisted: (from: string, to: string) => void;
   onEdgeRemoved: (from: string, to: string) => void;
   onAddExtra: (monitor: DependencyMonitor) => void;
+  /** False for read-only users: no linking, unlinking or placing monitors. */
+  canWrite?: boolean;
+  /** Rendered next to "Add monitor" (the "Suggest with AI" trigger). */
+  aiAction?: ReactNode;
+}
+
+// Read-only users can still pan, zoom and focus, but an edge never selects,
+// so its unlink button and the Delete key have nothing to act on.
+function lockEdges(edges: Edge[]): Edge[] {
+  return edges.map((e) => ({ ...e, selectable: false, deletable: false }));
 }
 
 export function GraphCanvas({
@@ -65,21 +88,22 @@ export function GraphCanvas({
   onEdgePersisted,
   onEdgeRemoved,
   onAddExtra,
+  canWrite = true,
+  aiAction,
 }: GraphCanvasProps) {
   const router = useRouter();
   const { fitView } = useReactFlow();
   const { showToast } = useToast();
   const themeName = useThemeName();
-  const isLight = themeName === 'light';
   // Local copies so user drags layer on top of the computed layout; reseeded
   // whenever the structural state (focus/expand/graph) produces a new layout.
   const [rfNodes, setRfNodes] = useState<AppNode[]>(flowNodes);
-  const [rfEdges, setRfEdges] = useState<Edge[]>(flowEdges);
+  const [rfEdges, setRfEdges] = useState<Edge[]>(() => (canWrite ? flowEdges : lockEdges(flowEdges)));
 
   const mountedRef = useRef(false);
   useEffect(() => {
     setRfNodes(flowNodes);
-    setRfEdges(flowEdges);
+    setRfEdges(canWrite ? flowEdges : lockEdges(flowEdges));
     // The very first fit is ReactFlow's own fitView prop (it waits for node
     // measurement); this effect only re-fits after focus/expand changes.
     if (!mountedRef.current) {
@@ -87,11 +111,11 @@ export function GraphCanvas({
       return;
     }
     const timer = window.setTimeout(
-      () => fitView({ padding: 0.2, duration: 400, maxZoom: 1.1 }),
+      () => fitView({ padding: 0.1, duration: 400, maxZoom: 1.1 }),
       60
     );
     return () => window.clearTimeout(timer);
-  }, [flowNodes, flowEdges, fitView]);
+  }, [flowNodes, flowEdges, fitView, canWrite]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<AppNode>[]) => setRfNodes((ns) => applyNodeChanges(changes, ns)),
@@ -116,7 +140,7 @@ export function GraphCanvas({
   // immediately and snaps back if the API rejects it (e.g. a cycle).
   const onConnect = useCallback(
     (conn: Connection) => {
-      if (!isValidConnection(conn)) return;
+      if (!canWrite || !isValidConnection(conn)) return;
       const targetNode = rfNodes.find((n) => n.id === conn.target && n.type === 'monitor');
       const targetState = targetNode ? (targetNode.data as MonitorNodeData).monitor.current_state : undefined;
       const edge = styleEdge(conn.source, conn.target, targetState);
@@ -131,7 +155,7 @@ export function GraphCanvas({
           showToast(apiErrorMessage(err), 'error');
         });
     },
-    [isValidConnection, rfNodes, showToast, onEdgePersisted]
+    [canWrite, isValidConnection, rfNodes, showToast, onEdgePersisted]
   );
 
   // Fires for the edge ✕ button and the Delete/Backspace key alike.
@@ -155,7 +179,7 @@ export function GraphCanvas({
 
   const relayout = useCallback(() => {
     setRfNodes(flowNodes);
-    window.requestAnimationFrame(() => fitView({ padding: 0.2, duration: 500 }));
+    window.requestAnimationFrame(() => fitView({ padding: 0.1, duration: 500 }));
   }, [flowNodes, fitView]);
 
   const onNodeMouseEnter = useCallback(
@@ -177,27 +201,27 @@ export function GraphCanvas({
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-white/[0.06] bg-slate-950/40 px-4 py-2.5">
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          <span className="font-medium text-slate-300">
-            {visibleMonitors === totalServices ? totalServices : `${visibleMonitors} of ${totalServices}`}
-          </span>{' '}
-          services
-          <span className="text-slate-700">·</span>
-          <span className="font-medium text-slate-300">{totalLinks}</span> links
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-divider py-2.5 pl-12 pr-4 md:px-4">
+        <div className="flex items-center gap-3 text-xs text-slate-400">
+          <span>
+            <span className="font-medium tabular-nums text-slate-200">
+              {visibleMonitors === totalServices ? totalServices : `${visibleMonitors} of ${totalServices}`}
+            </span>{' '}
+            services
+          </span>
+          <span>
+            <span className="font-medium tabular-nums text-slate-200">{totalLinks}</span> links
+          </span>
           {downTotal > 0 && (
-            <span className="ml-1 inline-flex items-center gap-1.5 rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 font-medium text-rose-400">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-500 opacity-60" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-rose-500" />
-              </span>
+            <span className="ml-1 inline-flex items-center gap-1.5 font-medium text-rose-300">
+              <span className="h-2 w-2 rounded-full bg-rose-500" />
               {downTotal} down
             </span>
           )}
         </div>
 
         {focusMonitor && (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 py-0.5 pl-2.5 pr-1 text-xs text-cyan-300">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/40 bg-cyan-500/[0.14] py-0.5 pl-2.5 pr-1 text-xs font-medium text-cyan-300">
             <Focus className="h-3 w-3" strokeWidth={2} />
             <span className="max-w-[180px] truncate" title={focusMonitor.name}>
               {focusMonitor.name}
@@ -206,7 +230,7 @@ export function GraphCanvas({
               type="button"
               onClick={onClearFocus}
               title="Leave focus"
-              className="flex h-4 w-4 items-center justify-center rounded-full text-cyan-400/70 transition-colors hover:bg-cyan-500/20 hover:text-cyan-300"
+              className="flex h-4 w-4 items-center justify-center rounded-full transition-colors hover:bg-cyan-500/20 hover:text-cyan-200"
             >
               <X className="h-3 w-3" strokeWidth={2} />
             </button>
@@ -215,68 +239,67 @@ export function GraphCanvas({
 
         <div className="ml-auto flex items-center gap-2">
           {focusMonitor && !showAll && (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="xs"
+              icon={<Expand strokeWidth={1.75} />}
               onClick={onShowAll}
               title="Render the entire dependency map"
-              className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-slate-900/80 px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/[0.15] hover:text-slate-200"
             >
-              <Expand className="h-3.5 w-3.5" strokeWidth={1.75} />
               Show all ({totalServices})
-            </button>
+            </Button>
           )}
           {showAll && isLargeGraph && (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="xs"
+              icon={<Focus strokeWidth={1.75} />}
               onClick={onExitShowAll}
-              className="flex items-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1.5 text-xs text-cyan-400 transition-colors hover:border-cyan-500/50 hover:bg-cyan-500/20"
             >
-              <Focus className="h-3.5 w-3.5" strokeWidth={1.75} />
               Focus view
-            </button>
+            </Button>
           )}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
+            icon={<LayoutGrid strokeWidth={1.75} />}
             onClick={relayout}
             title="Re-run automatic layout"
-            className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-slate-900/80 px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/[0.15] hover:text-slate-200"
           >
-            <LayoutGrid className="h-3.5 w-3.5" strokeWidth={1.75} />
             Tidy up
-          </button>
-          <AddMonitorPicker existingIds={existingIds} onAdd={onAddExtra} />
-        </div>
-
-        <div className="flex w-full items-center gap-3 xl:w-auto">
-          {LEGEND.map(({ state, label }) => (
-            <span key={label} className="flex items-center gap-1.5 text-[11px] text-slate-500">
-              <span className={`h-1.5 w-1.5 rounded-full ${stateStyle(state).dot}`} />
-              {label}
-            </span>
-          ))}
-          <span className="hidden border-l border-white/[0.06] pl-3 text-[11px] text-slate-600 2xl:inline">
-            drag handle → node to link · click a link to unlink · double-click opens the monitor
-          </span>
+          </Button>
+          {canWrite && <AddMonitorPicker existingIds={existingIds} onAdd={onAddExtra} />}
+          {aiAction}
         </div>
       </div>
 
       {/* Canvas */}
       <div className="relative min-h-0 flex-1">
-        <div
-          className="pointer-events-none absolute inset-0 z-[1]"
-          style={{
-            background:
-              'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(var(--accent-rgb), 0.05), transparent 70%)',
-          }}
-        />
+        <div className="pointer-events-none absolute left-4 right-4 top-3 z-[5] flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+          <span className="hidden text-2xs text-slate-500 2xl:inline">
+            {canWrite
+              ? 'Drag from a handle to a monitor to link it. Click a link to unlink it. Double-click a monitor to open it.'
+              : 'Double-click a monitor to open it.'}
+          </span>
+          {LEGEND.map(({ state, label }) => (
+            <span key={label} className="flex items-center gap-1.5 text-2xs text-slate-400">
+              <span className={`h-2 w-2 rounded-full ${stateStyle(state).dot}`} />
+              {label}
+            </span>
+          ))}
+        </div>
         {rfNodes.length === 0 && (
           <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center">
             <div className="text-center">
-              <Workflow className="mx-auto h-9 w-9 text-slate-600" strokeWidth={1.5} />
+              <Workflow className="mx-auto h-9 w-9 text-slate-500" strokeWidth={1.5} />
               <p className="mt-3 text-sm font-medium text-slate-400">The canvas is empty</p>
               <p className="mt-1 max-w-xs text-xs text-slate-500">
-                Use “Add monitor” above to place services here, then drag between them to declare
-                who depends on whom.
+                {canWrite
+                  ? 'Use “Add monitor” above to place services here, then drag between them to declare who depends on whom.'
+                  : 'Pick a service in the list to see its dependencies.'}
               </p>
             </div>
           </div>
@@ -289,7 +312,7 @@ export function GraphCanvas({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
-          onEdgesDelete={onEdgesDelete}
+          onEdgesDelete={canWrite ? onEdgesDelete : undefined}
           isValidConnection={isValidConnection}
           onNodeDoubleClick={(_, node) => {
             if (node.type === 'monitor') router.push(`/monitors/${node.id}`);
@@ -297,34 +320,34 @@ export function GraphCanvas({
           onNodeMouseEnter={onNodeMouseEnter}
           onNodeMouseLeave={onNodeMouseLeave}
           fitView
-          fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
+          fitViewOptions={{ padding: 0.1, maxZoom: 1.2 }}
           minZoom={0.15}
           proOptions={{ hideAttribution: true }}
           nodesDraggable
-          nodesConnectable
+          nodesConnectable={canWrite}
           nodesFocusable={false}
-          edgesFocusable
-          deleteKeyCode={['Delete', 'Backspace']}
+          edgesFocusable={canWrite}
+          deleteKeyCode={canWrite ? ['Delete', 'Backspace'] : null}
           connectionRadius={36}
-          connectionLineStyle={{ stroke: '#ff8a5c', strokeWidth: 2, strokeDasharray: '6 4' }}
+          connectionLineStyle={{ stroke: 'var(--accent)', strokeWidth: 2, strokeDasharray: '6 4' }}
           colorMode={themeName}
           onlyRenderVisibleElements
           className="!bg-transparent"
+          style={FLOW_CHROME}
         >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={24}
-            size={1}
-            color={isLight ? '#d9dde3' : '#161b24'}
+          <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--divider)" />
+          <Controls
+            showInteractive={false}
+            position="bottom-left"
+            className="overflow-hidden !rounded-lg border border-edge"
           />
-          <Controls showInteractive={false} position="bottom-left" />
           {!focusMonitor && rfNodes.length > 20 && (
             <MiniMap
               pannable
               zoomable
               position="bottom-right"
-              maskColor={isLight ? 'rgba(238,240,243, 0.6)' : 'rgba(11,13,17, 0.55)'}
-              bgColor={isLight ? 'rgba(255,255,255, 0.9)' : 'rgba(16,19,26, 0.85)'}
+              maskColor="color-mix(in srgb, var(--bg-base) 60%, transparent)"
+              bgColor="var(--glass-fill-strong)"
               nodeStrokeWidth={3}
               nodeColor={(node) => {
                 const data = node.data as MonitorNodeData | undefined;
@@ -332,9 +355,9 @@ export function GraphCanvas({
                 if (state === 'down') return '#f04a5a';
                 if (state === 'suspect' || state === 'degraded') return '#e6b23f';
                 if (state === 'up') return '#46d17f';
-                return isLight ? '#a8b0ba' : '#475569';
+                return 'rgb(var(--tw-slate-600))';
               }}
-              className="!rounded-lg !border !border-white/[0.08]"
+              className="overflow-hidden !rounded-lg border border-edge"
             />
           )}
         </ReactFlow>

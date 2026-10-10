@@ -3,14 +3,18 @@
 import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
+import Button from '@/components/ui/Button';
 import { getDashboardSummary, updateTenantSettings } from '@/lib/api';
 
 interface Props {
   initialTags: string[];
   onSaved?: (next: string[]) => void;
+  /** Non-admins see the groups but cannot add or remove them. */
+  readOnly?: boolean;
 }
 
-export default function DashboardGroupsSection({ initialTags, onSaved }: Props) {
+// Each add or remove saves immediately, so there is no Save button.
+export default function DashboardGroupsSection({ initialTags, onSaved, readOnly = false }: Props) {
   const [selected, setSelected] = useState<string[]>(initialTags);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -46,7 +50,7 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
   return (
     <Panel
       title="Dashboard groups"
-      subtitle="Pick the tags that should appear as service groups on the dashboard. Other tags stay available for filtering and search."
+      subtitle="Tags shown as service groups on the dashboard. Other tags stay available for filtering and search."
       allowOverflow
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -56,36 +60,38 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
         {selected.map((tag) => (
           <span
             key={tag}
-            className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-200"
+            className={`inline-flex h-7 items-center gap-1 rounded-full bg-well-hover pl-3 text-xs font-medium text-slate-200 ${readOnly ? 'pr-3' : 'pr-1'}`}
           >
             {tag}
-            <button
+            {!readOnly && <button
               type="button"
               onClick={() => persist(selected.filter((t) => t !== tag))}
               aria-label={`Remove ${tag}`}
               disabled={saving}
-              className="text-cyan-200 transition-colors hover:text-white disabled:opacity-50"
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-control-hover hover:text-white disabled:opacity-40"
             >
               <X className="h-3 w-3" strokeWidth={2} />
-            </button>
+            </button>}
           </span>
         ))}
 
-        <div className="relative">
-          <button
+        {!readOnly && <div className="relative">
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
+            icon={<Plus strokeWidth={1.75} />}
             onClick={() => setPickerOpen((v) => !v)}
             disabled={saving || addable.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08] disabled:opacity-50"
           >
-            <Plus className="h-3 w-3" strokeWidth={2} /> Add tag
-          </button>
+            Add tag
+          </Button>
           {pickerOpen && (
-            <div className="absolute left-0 z-50 mt-2 w-72 rounded-xl border border-white/[0.08] bg-slate-950/95 p-3 shadow-2xl backdrop-blur">
+            <div className="glass-overlay absolute left-0 z-50 mt-2 w-72 !rounded-xl p-2">
               {addable.length === 0 ? (
-                <p className="text-xs text-slate-500">No more tags to add.</p>
+                <p className="px-1 py-0.5 text-xs text-slate-500">No more tags to add.</p>
               ) : (
-                <div className="flex max-h-56 flex-wrap gap-2 overflow-y-auto">
+                <div className="flex max-h-56 flex-wrap gap-1.5 overflow-y-auto">
                   {addable.map((tag) => (
                     <button
                       type="button"
@@ -94,7 +100,7 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
                         setPickerOpen(false);
                         persist([...selected, tag].sort((a, b) => a.localeCompare(b)));
                       }}
-                      className="rounded-full border border-white/[0.08] bg-slate-900 px-2.5 py-1 text-xs text-slate-300 transition-colors hover:text-white"
+                      className="rounded-full bg-well-hover px-2.5 py-1 text-xs text-slate-300 transition-colors hover:bg-control-hover hover:text-white"
                     >
                       {tag}
                     </button>
@@ -103,7 +109,7 @@ export default function DashboardGroupsSection({ initialTags, onSaved }: Props) 
               )}
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}

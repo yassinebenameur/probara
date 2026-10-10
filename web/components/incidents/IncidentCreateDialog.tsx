@@ -1,11 +1,16 @@
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
+import { X } from 'lucide-react';
 
 import { createIncident } from '@/lib/api';
 import type { AdminUser, IncidentDetail, IncidentSeverity } from '@/lib/types';
 import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import FormField from '@/components/ui/FormField';
+import IconButton from '@/components/ui/IconButton';
+import ModalPortal from '@/components/ui/ModalPortal';
 
 export interface IncidentCreateDialogInitialContext {
   alert_id?: string;
@@ -113,135 +118,121 @@ export default function IncidentCreateDialog({
     setSaving(false);
   };
 
-  const selectBaseClass = 'input';
-  const selectErrorClass = 'border-rose-500/50 bg-rose-500/5 focus:border-rose-500/70 focus:ring-1 focus:ring-rose-500/20';
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-2xl rounded-2xl border border-white/[0.08] bg-slate-900 p-6 shadow-2xl">
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-white">Create Incident</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Start a human-managed incident and keep publication manual.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200"
-          >
-            Close
-          </button>
-        </div>
-
-        {initialContext?.alert_id || initialContext?.monitor_id ? (
-          <div className="mb-4 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-xs text-slate-400">
-            Creating with linked
-            {initialContext.alert_id ? ` alert ${initialContext.alert_id}` : ''}
-            {initialContext.alert_id && initialContext.monitor_id ? ' and' : ''}
-            {initialContext.monitor_id ? ` monitor ${initialContext.monitor_id}` : ''}
-          </div>
-        ) : null}
-
-        <form className="space-y-4" onSubmit={handleSubmit}>
-          <Input
-            label="Title"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="API outage"
-            maxLength={140}
-            disabled={saving}
-          />
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-slate-400">
-              Summary
-            </label>
-            <textarea
-              value={summary}
-              onChange={(event) => setSummary(event.target.value)}
-              placeholder="Requests are failing across regions."
-              className="input min-h-[120px] resize-y"
-              disabled={saving}
-              maxLength={2000}
-            />
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
+    <ModalPortal>
+      <div className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="glass-overlay max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto">
+          <div className="flex items-start justify-between gap-4 px-6 pt-5">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">
-                Severity
-              </label>
-              <select
-                value={severity}
-                onChange={(event) => setSeverity(event.target.value as IncidentSeverity)}
-                className={`${selectBaseClass} ${error ? selectErrorClass : ''}`}
+              <h2 className="text-base font-semibold text-white">Create incident</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Start a human-managed incident and keep publication manual.
+              </p>
+            </div>
+            <IconButton icon={<X strokeWidth={1.75} />} label="Close" onClick={onClose} />
+          </div>
+
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4 px-6 py-4">
+              {initialContext?.alert_id || initialContext?.monitor_id ? (
+                <div className="glass-well px-3 py-2 text-xs text-slate-400">
+                  Creating with linked
+                  {initialContext.alert_id ? (
+                    <> alert <span className="font-mono">{initialContext.alert_id}</span></>
+                  ) : ''}
+                  {initialContext.alert_id && initialContext.monitor_id ? ' and' : ''}
+                  {initialContext.monitor_id ? (
+                    <> monitor <span className="font-mono">{initialContext.monitor_id}</span></>
+                  ) : ''}
+                </div>
+              ) : null}
+
+              <Input
+                label="Title"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="API outage"
+                maxLength={140}
+                disabled={saving}
+              />
+
+              <FormField label="Summary">
+                <textarea
+                  value={summary}
+                  onChange={(event) => setSummary(event.target.value)}
+                  placeholder="Requests are failing across regions."
+                  className="input min-h-[120px] resize-y"
+                  disabled={saving}
+                  maxLength={2000}
+                />
+              </FormField>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <FormField label="Severity">
+                  <select
+                    value={severity}
+                    onChange={(event) => setSeverity(event.target.value as IncidentSeverity)}
+                    className="input"
+                    disabled={saving}
+                  >
+                    {severityOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+
+                <FormField label="Owner">
+                  <select
+                    value={ownerUserId}
+                    onChange={(event) => setOwnerUserId(event.target.value)}
+                    className="input"
+                    disabled={saving || users.length === 0}
+                  >
+                    <option value="" disabled>
+                      {users.length === 0 ? 'No users available' : 'Select an owner'}
+                    </option>
+                    {users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {getUserLabel(user)}
+                      </option>
+                    ))}
+                  </select>
+                  {users.length === 0 ? (
+                    <p className="mt-1 text-xs text-slate-500">
+                      Load users before creating an incident.
+                    </p>
+                  ) : null}
+                </FormField>
+              </div>
+
+              {error ? <Callout tone="danger">{error}</Callout> : null}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-6 pb-5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
                 disabled={saving}
               >
-                {severityOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-400">
-                Owner
-              </label>
-              <select
-                value={ownerUserId}
-                onChange={(event) => setOwnerUserId(event.target.value)}
-                className={`${selectBaseClass} ${error ? selectErrorClass : ''}`}
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="accent"
+                size="sm"
                 disabled={saving || users.length === 0}
+                loading={saving}
               >
-                <option value="" disabled>
-                  {users.length === 0 ? 'No users available' : 'Select an owner'}
-                </option>
-                {users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {getUserLabel(user)}
-                  </option>
-                ))}
-              </select>
-              {users.length === 0 ? (
-                <p className="mt-1 text-xs text-slate-500">
-                  Load users before creating an incident.
-                </p>
-              ) : null}
+                {saving ? 'Creating…' : 'Create incident'}
+              </Button>
             </div>
-          </div>
-
-          {error ? (
-            <div className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-              {error}
-            </div>
-          ) : null}
-
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              disabled={saving}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="accent"
-              size="sm"
-              disabled={saving || users.length === 0}
-              loading={saving}
-            >
-              {saving ? 'Creating…' : 'Create incident'}
-            </Button>
-          </div>
-        </form>
+          </form>
+        </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 }

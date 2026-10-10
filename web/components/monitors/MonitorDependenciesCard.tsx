@@ -12,9 +12,12 @@ import {
 } from '@/lib/api';
 import { monitorStateColors } from '@/lib/monitor-utils';
 import { useToast } from '@/components/ui/ToastProvider';
-import FormCard from '@/components/ui/FormCard';
+import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import ModalPortal from '@/components/ui/ModalPortal';
 import { MonitorMultiSelect } from './MonitorMultiSelect';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
 interface MonitorDependenciesCardProps {
   monitorId: string;
@@ -33,11 +36,11 @@ function DependencyRow({ item }: { item: DependencyMonitor }) {
   return (
     <Link
       href={`/monitors/${item.id}`}
-      className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-white/[0.04]"
+      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-well"
     >
       <span className={`h-2 w-2 shrink-0 rounded-full ${colors.dot}`} />
-      <span className="min-w-0 flex-1 truncate text-sm text-slate-300">{item.name}</span>
-      <span className="text-[10px] uppercase text-slate-600">{item.type}</span>
+      <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{item.name}</span>
+      <span className="text-xs text-slate-500">{monitorTypeLabel(item.type)}</span>
     </Link>
   );
 }
@@ -92,43 +95,45 @@ function EditDependenciesModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      role="dialog"
-      aria-label="Edit dependencies"
-    >
-      <div className="w-full max-w-lg rounded-xl border border-white/[0.08] bg-slate-900 p-5 shadow-2xl">
-        <div className="mb-1 flex items-center gap-2">
-          <Workflow className="h-4 w-4 text-cyan-400" strokeWidth={1.75} />
-          <h2 className="text-sm font-medium text-white">Edit dependencies</h2>
-        </div>
-        <p className="mb-4 text-xs text-slate-500">
-          Pick the upstream monitors this one depends on. When one of them is down, alerts for
-          this monitor are annotated with the likely root cause.
-        </p>
+    <ModalPortal>
+      <div
+        className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+        role="dialog"
+        aria-label="Edit dependencies"
+      >
+        <div className="glass-overlay w-full max-w-lg">
+          <div className="px-6 pt-5">
+            <h2 className="text-base font-semibold text-white">Edit dependencies</h2>
+            <p className="mt-1.5 text-sm leading-relaxed text-slate-400">
+              Pick the upstream monitors this one depends on. When one of them is down, alerts for
+              this monitor are annotated with the likely root cause.
+            </p>
+          </div>
 
-        <MonitorMultiSelect
-          monitors={monitors}
-          selectedIds={selected}
-          onChange={setSelected}
-          excludeIds={[monitorId]}
-        />
+          <div className="space-y-3 px-6 py-4">
+            <MonitorMultiSelect
+              monitors={monitors}
+              selectedIds={selected}
+              onChange={setSelected}
+              excludeIds={[monitorId]}
+            />
+            {error && <Callout tone="danger">{error}</Callout>}
+          </div>
 
-        {error && <p className="mt-2 text-xs text-rose-400">{error}</p>}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" size="sm" type="button" onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
-          <Button variant="accent" size="sm" type="button" onClick={save} loading={saving} disabled={saving}>
-            {saving ? 'Saving…' : 'Save dependencies'}
-          </Button>
+          <div className="flex justify-end gap-2 px-6 pb-5">
+            <Button variant="ghost" size="sm" type="button" onClick={onClose} disabled={saving}>
+              Cancel
+            </Button>
+            <Button variant="accent" size="sm" type="button" onClick={save} loading={saving} disabled={saving}>
+              {saving ? 'Saving…' : 'Save dependencies'}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 }
 
@@ -167,33 +172,36 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
   const empty = upstream.length === 0 && downstream.length === 0;
 
   return (
-    <FormCard className="p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-slate-500">Dependencies</h3>
-        <button
+    <Panel
+      title="Dependencies"
+      actions={
+        <Button
           type="button"
+          variant="subtle"
+          size="xs"
+          className="-mr-2.5"
+          icon={<Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />}
           onClick={() => setEditing(true)}
           title="Edit dependencies"
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-slate-500 transition-colors hover:bg-white/[0.05] hover:text-cyan-400"
         >
-          <Pencil className="h-3 w-3" strokeWidth={1.75} />
           Edit
-        </button>
-      </div>
-      <div className="space-y-3">
+        </Button>
+      }
+    >
+      <div className="space-y-4">
         {empty && (
-          <p className="text-xs text-slate-500">
+          <p className="text-ui text-slate-400">
             No dependencies yet. Link the services this monitor relies on so alerts can point at
             the likely root cause.
           </p>
         )}
         {upstream.length > 0 && (
           <div>
-            <p className="mb-1 flex items-center gap-1.5 text-[11px] text-slate-500">
-              <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} />
+            <p className="mb-1 flex items-center gap-1.5 text-xs text-slate-500">
+              <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
               Depends on
             </p>
-            <div className="space-y-0.5">
+            <div className="-mx-2 space-y-0.5">
               {upstream.map((item) => (
                 <DependencyRow key={item.id} item={item} />
               ))}
@@ -202,11 +210,11 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
         )}
         {downstream.length > 0 && (
           <div>
-            <p className="mb-1 flex items-center gap-1.5 text-[11px] text-slate-500">
-              <ArrowDownLeft className="h-3 w-3" strokeWidth={1.75} />
+            <p className="mb-1 flex items-center gap-1.5 text-xs text-slate-500">
+              <ArrowDownLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
               Depended on by
             </p>
-            <div className="space-y-0.5">
+            <div className="-mx-2 space-y-0.5">
               {downstream.map((item) => (
                 <DependencyRow key={item.id} item={item} />
               ))}
@@ -215,9 +223,9 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
         )}
         <Link
           href="/dependencies"
-          className="flex items-center gap-1.5 pt-1 text-xs text-cyan-400 transition-colors hover:text-cyan-300"
+          className="inline-flex items-center gap-1.5 text-ui font-medium text-cyan-300 transition-colors hover:text-cyan-200"
         >
-          <Workflow className="h-3.5 w-3.5" strokeWidth={1.75} />
+          <Workflow className="h-4 w-4" strokeWidth={1.75} />
           View dependency graph
         </Link>
       </div>
@@ -230,6 +238,6 @@ export function MonitorDependenciesCard({ monitorId, monitorType }: MonitorDepen
           onSaved={load}
         />
       )}
-    </FormCard>
+    </Panel>
   );
 }

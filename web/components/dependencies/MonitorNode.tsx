@@ -7,40 +7,30 @@ import { stateStyle, TYPE_ICONS } from './graphTheme';
 import { type MonitorFlowNode } from './graphModel';
 import { useGraphActions } from './graphActions';
 import { useNodeVisual } from './hoverStore';
+import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
 function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
   const { monitor } = data;
   const s = stateStyle(monitor.current_state);
   const Icon = TYPE_ICONS[monitor.type] ?? Workflow;
-  const failing =
-    monitor.current_state === 'down' ||
-    monitor.current_state === 'suspect' ||
-    monitor.current_state === 'degraded';
   const { dimmed, highlighted } = useNodeVisual(id);
   const { focusNode, expandFrontier } = useGraphActions();
   // While a connection is being dragged from another node, the whole card
   // becomes the drop target — dropping anywhere on it completes the link.
   const connection = useConnection();
   const isDropTarget = connection.inProgress && connection.fromNode?.id !== id;
+  const emphasized = highlighted || data.isFocus || isDropTarget;
 
+  // Nodes sit inside the canvas transform, so they are opaque cards rather
+  // than blurred glass.
   return (
     <div
       className={[
-        'group relative w-[216px] rounded-xl border',
-        'bg-gradient-to-br from-slate-900/95 to-slate-950/95',
-        'transition-all duration-200 hover:-translate-y-px hover:border-cyan-400/40 hover:shadow-[0_0_20px_-6px_rgba(255,138,92,0.4)]',
-        s.card,
+        'group relative w-[216px] rounded-xl border bg-glass-strong shadow-[0_1px_2px_rgb(0_0_0/0.12)] transition-[opacity,border-color] duration-200',
+        emphasized ? 'border-cyan-500/70' : `${s.card} hover:border-cyan-500/40`,
         dimmed ? 'opacity-20' : 'opacity-100',
-        highlighted || data.isFocus
-          ? 'border-cyan-400/70 shadow-[0_0_24px_-4px_rgba(255,138,92,0.55)]'
-          : '',
-        isDropTarget ? 'border-cyan-400/60 shadow-[0_0_20px_-4px_rgba(255,138,92,0.5)]' : '',
       ].join(' ')}
-      style={{ transitionProperty: 'opacity, transform, border-color, box-shadow' }}
     >
-      <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl">
-        <span className={`absolute inset-y-0 left-0 w-[3px] ${s.accent}`} />
-      </span>
       {isDropTarget ? (
         <Handle
           type="target"
@@ -51,33 +41,28 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
         <Handle
           type="target"
           position={Position.Left}
-          className="!h-2.5 !w-2.5 !border-2 !border-slate-700 !bg-slate-900 transition-colors group-hover:!border-cyan-400/70"
+          className="!h-2.5 !w-2.5 !border-2 !border-slate-500 !bg-slate-900 transition-colors group-hover:!border-cyan-500"
         />
       )}
-      <div className="flex cursor-pointer items-center gap-2.5 py-2.5 pl-3.5 pr-3">
+      <div className="flex cursor-pointer items-center gap-2.5 px-3 py-2.5">
         <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${s.iconTile}`}>
           <Icon className="h-4 w-4" strokeWidth={1.75} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-medium leading-tight text-white" title={monitor.name}>
+          <p className="truncate text-ui font-medium leading-tight text-white" title={monitor.name}>
             {monitor.name}
           </p>
-          <p className="node-meta mt-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500">
-            {monitor.type}
-            <span className="relative flex h-1.5 w-1.5">
-              {failing && !data.lowDetail && (
-                <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${s.dot} opacity-60`} />
-              )}
-              <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${s.dot}`} />
-            </span>
-            <span className={s.text}>{monitor.current_state || 'unknown'}</span>
+          <p className="node-meta mt-1 flex items-center gap-1.5 text-2xs text-slate-500">
+            {monitorTypeLabel(monitor.type)}
+            <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+            <span className={`capitalize ${s.text}`}>{monitor.current_state || 'unknown'}</span>
           </p>
         </div>
       </div>
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-2.5 !w-2.5 !border-2 !border-slate-700 !bg-slate-900 transition-colors group-hover:!border-cyan-400/70 group-hover:!bg-cyan-500/30"
+        className="!h-2.5 !w-2.5 !border-2 !border-slate-500 !bg-slate-900 transition-colors group-hover:!border-cyan-500 group-hover:!bg-cyan-500/30"
       />
 
       {!data.isFocus && (
@@ -88,7 +73,7 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
             e.stopPropagation();
             focusNode(id);
           }}
-          className="nodrag nopan absolute -right-2 -top-2 z-10 hidden h-6 w-6 items-center justify-center rounded-full border border-white/[0.1] bg-slate-900 text-slate-400 shadow-lg transition-colors hover:border-cyan-400/50 hover:text-cyan-400 group-hover:flex"
+          className="nodrag nopan absolute -right-2 -top-2 z-10 hidden h-6 w-6 items-center justify-center rounded-full border border-edge-strong bg-slate-900 text-slate-400 shadow-[0_1px_2px_rgb(0_0_0/0.12)] transition-colors hover:border-cyan-500/50 hover:text-cyan-300 group-hover:flex"
         >
           <Crosshair className="h-3.5 w-3.5" strokeWidth={1.75} />
         </button>
@@ -102,7 +87,7 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
             e.stopPropagation();
             expandFrontier(id);
           }}
-          className="nodrag nopan absolute -bottom-3 left-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-0.5 pr-1.5 text-[10px] font-medium tabular-nums text-cyan-400 transition-colors hover:border-cyan-500/60 hover:bg-cyan-500/15"
+          className="nodrag nopan absolute -bottom-3 left-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-0.5 pr-1.5 text-2xs font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
         >
           <ChevronLeft className="h-3 w-3" strokeWidth={2} />
           {data.hiddenIn}
@@ -116,7 +101,7 @@ function MonitorNodeImpl({ id, data }: NodeProps<MonitorFlowNode>) {
             e.stopPropagation();
             expandFrontier(id);
           }}
-          className="nodrag nopan absolute -bottom-3 right-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-1.5 pr-0.5 text-[10px] font-medium tabular-nums text-cyan-400 transition-colors hover:border-cyan-500/60 hover:bg-cyan-500/15"
+          className="nodrag nopan absolute -bottom-3 right-2 z-10 flex items-center gap-0.5 rounded-full border border-cyan-500/30 bg-slate-900 py-px pl-1.5 pr-0.5 text-2xs font-medium tabular-nums text-cyan-300 transition-colors hover:border-cyan-500/60"
         >
           {data.hiddenOut}
           <ChevronRight className="h-3 w-3" strokeWidth={2} />

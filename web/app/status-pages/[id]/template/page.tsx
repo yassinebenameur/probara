@@ -11,7 +11,9 @@ import {
   Rocket,
   RotateCcw,
   Trash2,
-  FileCode,
+  FileInput,
+  BookmarkPlus,
+  Library,
 } from 'lucide-react';
 import {
   StatusPage,
@@ -41,7 +43,16 @@ import {
 import PageHeader from '@/components/ui/PageHeader';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import IconButton from '@/components/ui/IconButton';
+import FormField from '@/components/ui/FormField';
+import Pill from '@/components/ui/Pill';
 import { useToast } from '@/components/ui/ToastProvider';
+import { formatDateTime, formatDateTimeFull } from '@/lib/format';
+
+const CODE_AREA =
+  'glass-well block w-full font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 ' +
+  'focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-500/50';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -324,20 +335,30 @@ export default function StatusPageTemplatePage() {
 
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-500">Loading template…</div>
+      <div className="animate-pulse space-y-6">
+        <div className="space-y-2">
+          <div className="h-4 w-56 rounded-md bg-well-hover" />
+          <div className="h-8 w-48 rounded-lg bg-well-hover" />
+        </div>
+        <div className="glass h-14" />
+        <div className="glass h-[700px]" />
+        <span className="sr-only">Loading template…</span>
       </div>
     );
   }
 
   if (error || !statusPage) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center gap-4">
-        <p className="text-rose-400">{error || 'Status page not found'}</p>
-        <Button variant="ghost" size="sm" onClick={() => router.push(`/status-pages/${id}`)}>
-          ← Back to status page
-        </Button>
-      </div>
+      <Callout
+        tone="danger"
+        action={
+          <Button variant="ghost" size="xs" onClick={() => router.push(`/status-pages/${id}`)}>
+            ← Back to status page
+          </Button>
+        }
+      >
+        {error || 'Status page not found'}
+      </Callout>
     );
   }
 
@@ -352,14 +373,6 @@ export default function StatusPageTemplatePage() {
 
   return (
     <div className="space-y-6">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".html,.gohtml,.tmpl,.txt"
-        className="hidden"
-        onChange={handleUpload}
-      />
-
       <PageHeader
         breadcrumb={[
           { label: 'Status pages', href: '/status-pages' },
@@ -367,9 +380,9 @@ export default function StatusPageTemplatePage() {
           { label: 'Template' },
         ]}
         title="Page template"
-        subtitle={`Live: ${activeLabel}${hasDraft ? ' · unpublished draft' : ''}`}
+        subtitle={[`Live: ${activeLabel}`, hasDraft ? 'Unpublished draft' : null]}
         action={
-          <Button variant="accent" size="sm" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
+          <Button variant="ghost" size="sm" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
             <a href={publicUrl} target="_blank" rel="noopener noreferrer">
               Open public page
             </a>
@@ -378,83 +391,77 @@ export default function StatusPageTemplatePage() {
       />
 
       <CollapsibleSection
-        title="Quick branding (CSS & HTML injection)"
+        title="Quick branding"
         summary="Custom CSS, extra <head> markup, and footer HTML applied to the built-in template"
       >
-        <div className="space-y-4">
-          <p className="text-sm text-slate-500">
-            The lightweight way to make the page match your brand: these snippets are injected
-            into the built-in template (and available to custom templates as{' '}
-            <code className="text-xs text-cyan-300">.CustomCSS</code>,{' '}
-            <code className="text-xs text-cyan-300">.CustomHeadHTML</code>,{' '}
-            <code className="text-xs text-cyan-300">.CustomFooterHTML</code>).
-          </p>
-          <div className="grid gap-4 lg:grid-cols-3">
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Custom CSS
-              </label>
-              <textarea
-                value={brandingCSS}
-                onChange={(e) => setBrandingCSS(e.target.value)}
-                rows={8}
-                spellCheck={false}
-                placeholder={':root { --brand-primary: #6366f1; }\n.header { … }'}
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Extra &lt;head&gt; HTML
-              </label>
-              <textarea
-                value={brandingHead}
-                onChange={(e) => setBrandingHead(e.target.value)}
-                rows={8}
-                spellCheck={false}
-                placeholder={'<link rel="icon" href="…">\n<meta property="og:image" content="…">'}
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-slate-500">
-                Footer HTML
-              </label>
-              <textarea
-                value={brandingFooter}
-                onChange={(e) => setBrandingFooter(e.target.value)}
-                rows={8}
-                spellCheck={false}
-                placeholder={'<div class="links">…</div>'}
-                className="w-full rounded-lg border border-white/[0.06] bg-slate-950/50 p-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <Button variant="accent" size="sm" onClick={handleSaveBranding} loading={savingBranding}>
-              Save branding
-            </Button>
-          </div>
+        <p className="text-ui text-slate-400">
+          The lightweight way to make the page match your brand: these snippets are injected
+          into the built-in template (and available to custom templates as{' '}
+          <code className="font-mono text-xs text-slate-200">.CustomCSS</code>,{' '}
+          <code className="font-mono text-xs text-slate-200">.CustomHeadHTML</code>,{' '}
+          <code className="font-mono text-xs text-slate-200">.CustomFooterHTML</code>).
+        </p>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <FormField label="Custom CSS">
+            <textarea
+              value={brandingCSS}
+              onChange={(e) => setBrandingCSS(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              wrap="off"
+              placeholder={':root { --brand-primary: #6366f1; }\n.header { … }'}
+              className={`${CODE_AREA} p-3`}
+            />
+          </FormField>
+          <FormField label="Extra <head> HTML">
+            <textarea
+              value={brandingHead}
+              onChange={(e) => setBrandingHead(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              wrap="off"
+              placeholder={'<link rel="icon" href="…">\n<meta property="og:image" content="…">'}
+              className={`${CODE_AREA} p-3`}
+            />
+          </FormField>
+          <FormField label="Footer HTML">
+            <textarea
+              value={brandingFooter}
+              onChange={(e) => setBrandingFooter(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              wrap="off"
+              placeholder={'<div class="links">…</div>'}
+              className={`${CODE_AREA} p-3`}
+            />
+          </FormField>
+        </div>
+        <div className="flex justify-end">
+          <Button variant="ghost" size="sm" onClick={handleSaveBranding} loading={savingBranding}>
+            Save branding
+          </Button>
         </div>
       </CollapsibleSection>
 
-      <div className="rounded-xl border border-white/[0.06] bg-slate-900/40">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3">
-          <div className="flex items-center gap-2 text-sm text-slate-300">
-            <FileCode className="h-4 w-4 text-cyan-400" strokeWidth={1.75} />
-            <span className="font-medium">Full template editor</span>
-            <span className="text-xs text-slate-500">
-              Go html/template · {formatBytes(source.length)} / {formatBytes(maxSize)}
-              {dirty ? ' · unsaved changes' : ''}
-            </span>
+      <div className="glass">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="text-title font-semibold text-white">Full template editor</h2>
+            <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-slate-500">
+              <span>Go html/template</span>
+              <span className="tabular-nums">
+                {formatBytes(source.length)} / {formatBytes(maxSize)}
+              </span>
+              {dirty && <span className="text-amber-300">Unsaved changes</span>}
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1">
             {libraryItems.length > 0 && (
               <select
                 value=""
                 onChange={(e) => handleApplyFromLibrary(e.target.value)}
                 disabled={busy}
-                className="rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                className="input input-sm mr-1 h-9 !w-auto text-ui"
               >
                 <option value="" disabled>
                   Apply from library…
@@ -466,21 +473,34 @@ export default function StatusPageTemplatePage() {
                 ))}
               </select>
             )}
-            <Button variant="ghost" size="sm" onClick={handleSaveToLibrary} disabled={busy}>
+            <Button
+              variant="subtle"
+              size="sm"
+              icon={<BookmarkPlus strokeWidth={1.75} />}
+              onClick={handleSaveToLibrary}
+              disabled={busy}
+            >
               Save to library
             </Button>
             <Button
-              variant="ghost"
+              variant="subtle"
               size="sm"
+              icon={<Library strokeWidth={1.75} />}
               onClick={() => router.push('/status-pages/templates')}
             >
               Manage library
             </Button>
-            <Button variant="ghost" size="sm" onClick={handleLoadDefault} disabled={busy}>
+            <Button
+              variant="subtle"
+              size="sm"
+              icon={<FileInput strokeWidth={1.75} />}
+              onClick={handleLoadDefault}
+              disabled={busy}
+            >
               Load built-in
             </Button>
             <Button
-              variant="ghost"
+              variant="subtle"
               size="sm"
               icon={<Upload strokeWidth={1.75} />}
               onClick={() => fileInputRef.current?.click()}
@@ -489,7 +509,7 @@ export default function StatusPageTemplatePage() {
               Upload file
             </Button>
             <Button
-              variant="ghost"
+              variant="subtle"
               size="sm"
               icon={<Download strokeWidth={1.75} />}
               onClick={handleDownload}
@@ -500,28 +520,29 @@ export default function StatusPageTemplatePage() {
           </div>
         </div>
 
-        <div className="grid gap-0 xl:grid-cols-2">
+        <div className="grid gap-4 px-5 xl:grid-cols-2">
           <textarea
             value={source}
             onChange={(e) => setSource(e.target.value)}
             spellCheck={false}
-            className="min-h-[560px] w-full resize-y border-0 bg-slate-950/60 p-4 font-mono text-xs leading-5 text-slate-200 focus:outline-none xl:border-r xl:border-white/[0.06]"
+            wrap="off"
+            className={`${CODE_AREA} min-h-[560px] resize-y p-4`}
           />
-          <div className="flex min-h-[560px] flex-col">
-            <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2">
-              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Draft preview (live data)
+          <div className="glass-well flex min-h-[560px] flex-col overflow-hidden">
+            <div className="flex items-center justify-between gap-2 py-1.5 pl-4 pr-1.5">
+              <span className="min-w-0 truncate text-ui font-medium text-slate-300">
+                Draft preview <span className="ml-2 font-normal text-slate-500">live data</span>
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-shrink-0 items-center gap-1">
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="subtle"
+                  size="xs"
                   icon={<RefreshCw strokeWidth={1.75} />}
                   onClick={() => setPreviewNonce((n) => n + 1)}
                 >
                   Refresh
                 </Button>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="subtle" size="xs" icon={<ArrowUpRight strokeWidth={1.75} />} asChild>
                   <a href={previewUrl} target="_blank" rel="noopener noreferrer">
                     Open
                   </a>
@@ -533,7 +554,7 @@ export default function StatusPageTemplatePage() {
                 key={previewNonce}
                 src={previewUrl}
                 title="Draft template preview"
-                className="min-h-0 w-full flex-1 bg-white"
+                className="min-h-0 w-full flex-1 bg-[#fff]"
                 sandbox="allow-scripts allow-same-origin"
               />
             ) : (
@@ -544,7 +565,7 @@ export default function StatusPageTemplatePage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
           <div className="flex flex-wrap items-center gap-2">
             {hasDraft && (
               <Button
@@ -598,50 +619,44 @@ export default function StatusPageTemplatePage() {
           title="Version history"
           summary={`${historyVersions.length} version${historyVersions.length === 1 ? '' : 's'}`}
         >
-          <div className="divide-y divide-white/[0.06]">
+          <div className="divide-y divide-divider">
             {historyVersions.map((v) => (
               <div
                 key={`${v.version}-${v.created_at}`}
-                className="flex flex-wrap items-center justify-between gap-3 py-3"
+                className="flex flex-wrap items-center justify-between gap-3 py-2.5"
               >
                 <div className="flex items-center gap-3">
-                  <span className="font-mono text-sm text-slate-200">v{v.version}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider ${
-                      v.status === 'published'
-                        ? 'bg-emerald-500/10 text-emerald-300'
-                        : 'bg-slate-500/10 text-slate-400'
-                    }`}
+                  <span className="text-sm font-medium tabular-nums text-white">v{v.version}</span>
+                  <Pill
+                    size="xs"
+                    tone={v.status === 'published' ? 'success' : 'neutral'}
+                    className="capitalize"
                   >
                     {v.status}
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    {formatBytes(v.size_bytes)}
-                    {v.published_at
-                      ? ` · published ${new Date(v.published_at).toLocaleString()}`
-                      : ''}
-                  </span>
+                  </Pill>
+                  <span className="text-xs tabular-nums text-slate-500">{formatBytes(v.size_bytes)}</span>
+                  {v.published_at && (
+                    <span className="text-xs text-slate-500" title={formatDateTimeFull(v.published_at)}>
+                      published {formatDateTime(v.published_at)}
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-0.5">
                   {v.version != null && (
                     <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
+                      <IconButton
+                        icon={<FileInput strokeWidth={1.75} />}
+                        label="Load into editor"
                         onClick={() => handleLoadVersion(v.version!)}
                         disabled={busy}
-                      >
-                        Load into editor
-                      </Button>
+                      />
                       {v.status !== 'published' && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
+                        <IconButton
+                          icon={<Rocket strokeWidth={1.75} />}
+                          label="Republish"
                           onClick={() => handleRevert(v.version!)}
                           disabled={busy}
-                        >
-                          Republish
-                        </Button>
+                        />
                       )}
                     </>
                   )}
@@ -651,6 +666,14 @@ export default function StatusPageTemplatePage() {
           </div>
         </CollapsibleSection>
       )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".html,.gohtml,.tmpl,.txt"
+        className="hidden"
+        onChange={handleUpload}
+      />
     </div>
   );
 }

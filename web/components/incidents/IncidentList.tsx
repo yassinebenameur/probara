@@ -1,95 +1,128 @@
 'use client';
 
 import Link from 'next/link';
+import { Siren } from 'lucide-react';
 
 import type { IncidentListItem } from '@/lib/types';
-import { formatDateTime, pluralize } from '@/lib/format';
+import { formatDateTime, formatDateTimeFull, formatDurationBetween, pluralize } from '@/lib/format';
+import {
+  INCIDENT_STATE_LABEL,
+  incidentSeverityLabel,
+  incidentSeverityTone,
+  incidentStateTone,
+} from '@/lib/status-tones';
 import EmptyState from '@/components/ui/EmptyState';
-import Pill, { PillTone } from '@/components/ui/Pill';
+import Pill from '@/components/ui/Pill';
+
+export type IncidentRow = IncidentListItem;
 
 interface IncidentListProps {
-  incidents: IncidentListItem[];
+  incidents: IncidentRow[];
+  emptyTitle?: string;
+  emptyDescription?: string;
 }
 
-function stateTone(state: IncidentListItem['state']): PillTone {
-  switch (state) {
-    case 'resolved':
-      return 'success';
-    case 'monitoring':
-      return 'warning';
-    case 'identified':
-    case 'investigating':
-      return 'danger';
-    default:
-      return 'neutral';
-  }
-}
-
-export default function IncidentList({ incidents }: IncidentListProps) {
+export default function IncidentList({
+  incidents,
+  emptyTitle = 'No incidents yet',
+  emptyDescription = 'Create one manually, or have monitors open incidents automatically in Settings.',
+}: IncidentListProps) {
   if (incidents.length === 0) {
     return (
       <EmptyState
-        title="No incidents yet"
-        description="Create one manually, or have monitors open incidents automatically in Settings."
+        icon={<Siren strokeWidth={1.75} />}
+        title={emptyTitle}
+        description={emptyDescription}
       />
     );
   }
 
   return (
-    <div className="table-card">
-      <table className="data-table text-xs">
-        <thead>
-          <tr>
-            <th>Incident</th>
-            <th>State</th>
-            <th>Links</th>
-            <th>Published</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {incidents.map((incident, index) => {
-            const links = [
-              incident.linked_alert_count > 0 ? pluralize(incident.linked_alert_count, 'alert') : null,
-              incident.linked_monitor_count > 0 ? pluralize(incident.linked_monitor_count, 'monitor') : null,
-            ].filter(Boolean);
-            return (
-              <tr key={incident.id} className={index % 2 === 1 ? 'bg-slate-900/[0.35]' : ''}>
-                <td>
-                  <Link
-                    href={`/incidents/${incident.id}`}
-                    className="text-sm font-medium text-white hover:text-cyan-400"
-                  >
-                    {incident.title}
-                  </Link>
-                  {(incident.source === 'auto' || incident.resolved_at) && (
-                    <div className="mt-1 flex items-center gap-2 text-[0.7rem] text-slate-500">
+    <div className="glass overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="data-table text-ui">
+          <thead>
+            <tr>
+              <th className="w-full">Incident</th>
+              <th className="hidden sm:table-cell">Severity</th>
+              <th>State</th>
+              <th className="hidden md:table-cell">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {incidents.map((incident) => {
+              // Only the facts that exist: no column of dashes.
+              const facts = [
+                incident.owner_username ? `Owner ${incident.owner_username}` : null,
+                incident.linked_alert_count > 0 ? pluralize(incident.linked_alert_count, 'alert') : null,
+                incident.linked_monitor_count > 0 ? pluralize(incident.linked_monitor_count, 'monitor') : null,
+                incident.publication_count > 0
+                  ? `public on ${pluralize(incident.publication_count, 'page')}`
+                  : null,
+                // The list response has no created_at yet (IncidentListItem),
+                // so fall back to when it was resolved.
+                incident.resolved_at
+                  ? incident.created_at
+                    ? `resolved after ${formatDurationBetween(incident.created_at, incident.resolved_at)}`
+                    : `resolved ${formatDateTime(incident.resolved_at)}`
+                  : null,
+              ].filter((f): f is string => Boolean(f));
+              return (
+                // The title link stretches over the row (row-link), so the
+                // whole row navigates and the title stays the one tab stop.
+                <tr key={incident.id} className="relative">
+                  <td className="max-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Link
+                        href={`/incidents/${incident.id}`}
+                        className="row-link truncate text-sm font-medium text-white transition-colors hover:text-cyan-300 focus:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-cyan-500/50"
+                      >
+                        {incident.title}
+                      </Link>
                       {incident.source === 'auto' && (
-                        <Pill tone="warning" size="xs">Auto</Pill>
+                        <Pill tone="neutral" size="xs">Auto</Pill>
                       )}
-                      {incident.resolved_at ? (
-                        <span>Resolved {formatDateTime(incident.resolved_at)}</span>
-                      ) : null}
                     </div>
-                  )}
-                </td>
-                <td>
-                  <Pill tone={stateTone(incident.state)} size="xs" dot className="capitalize">
-                    {incident.state}
-                  </Pill>
-                </td>
-                <td className="text-slate-400">{links.length > 0 ? links.join(' · ') : '—'}</td>
-                <td className="text-slate-400">
-                  {incident.publication_count > 0 ? pluralize(incident.publication_count, 'page') : '—'}
-                </td>
-                <td className="text-slate-400">
-                  {formatDateTime(incident.updated_at)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                    {/* Below md the Updated (and below sm the Severity)
+                        column folds into this caption. */}
+                    <div className={`mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs tabular-nums text-slate-500 ${facts.length === 0 ? 'md:hidden' : ''}`}>
+                      {incident.severity && (
+                        <span className={`sm:hidden ${incidentSeverityTone(incident.severity) === 'danger' ? 'text-rose-300' : ''}`}>
+                          {incidentSeverityLabel(incident.severity)}
+                        </span>
+                      )}
+                      {facts.map((fact) => <span key={fact}>{fact}</span>)}
+                      <span className="md:hidden" title={formatDateTimeFull(incident.updated_at)}>
+                        updated {formatDateTime(incident.updated_at)}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="hidden sm:table-cell">
+                    {incident.severity ? (
+                      <Pill tone={incidentSeverityTone(incident.severity)} size="sm">
+                        {incidentSeverityLabel(incident.severity)}
+                      </Pill>
+                    ) : (
+                      <span className="text-slate-500">—</span>
+                    )}
+                  </td>
+                  <td>
+                    <Pill tone={incidentStateTone(incident.state)} size="sm" dot className="whitespace-nowrap">
+                      {INCIDENT_STATE_LABEL[incident.state] ?? incident.state}
+                    </Pill>
+                  </td>
+                  <td
+                    className="hidden whitespace-nowrap tabular-nums text-slate-400 md:table-cell"
+                    title={formatDateTimeFull(incident.updated_at)}
+                  >
+                    {formatDateTime(incident.updated_at)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

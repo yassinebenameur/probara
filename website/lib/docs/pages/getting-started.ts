@@ -250,8 +250,8 @@ export const GETTING_STARTED_PAGE: DocPage = {
           items: [
             "Open `Monitors` and choose a new [HTTP monitor](/docs/monitors/#http).",
             "Enter a public `http://` or `https://` URL, a check interval, and a timeout shorter than that interval.",
-            "Use `Test` to perform a compute-only check before saving. A test result is returned immediately and is not added to monitor history.",
-            "Save the monitor, then choose `Run now` to enqueue a real check. This result is persisted and participates in state and alert evaluation.",
+            "Optionally, run a compute-only check before saving with `POST /api/v1/monitors/test` (the database and Prometheus forms offer it as `Test connection` and `Test query`). The result comes back immediately and is not added to monitor history.",
+            "Save the monitor, then choose `Run check` in the monitor page's header to enqueue a real check (`Run now` in the API). This result is persisted and participates in state and alert evaluation.",
             "Review the current state, result history, timings, and analytics after the worker reports.",
           ],
         },

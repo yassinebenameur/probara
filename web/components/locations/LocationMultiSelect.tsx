@@ -4,7 +4,6 @@ import { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Location } from '@/lib/types';
 import Button from '@/components/ui/Button';
-import Pill from '@/components/ui/Pill';
 
 interface LocationMultiSelectProps {
   locations: Location[];
@@ -45,17 +44,18 @@ export function LocationMultiSelect({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search locations..."
-            className="input !pl-9"
-          />
-        </div>
+      <div className="relative">
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+          strokeWidth={1.75}
+        />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search locations..."
+          className="input !pl-9"
+        />
       </div>
 
       <div className="flex items-center justify-between">
@@ -72,7 +72,7 @@ export function LocationMultiSelect({
         </div>
       </div>
 
-      <div className="max-h-56 overflow-y-auto rounded-lg border border-white/[0.06] bg-slate-900/40 p-2">
+      <div className="glass-well max-h-56 overflow-y-auto p-1.5">
         {filtered.length === 0 ? (
           <p className="py-6 text-center text-sm text-slate-500">
             {locations.length === 0 ? emptyMessage : 'No locations match your search'}
@@ -85,9 +85,7 @@ export function LocationMultiSelect({
                 <label
                   key={loc.id}
                   className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 transition-colors ${
-                    isSelected
-                      ? 'border border-cyan-500/30 bg-cyan-500/10'
-                      : 'border border-transparent hover:bg-white/[0.03]'
+                    isSelected ? 'bg-well-hover' : 'hover:bg-well'
                   }`}
                 >
                   <input
@@ -97,23 +95,27 @@ export function LocationMultiSelect({
                     className="sr-only"
                   />
                   <div
-                    className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${
-                      isSelected ? 'border-cyan-500 bg-cyan-500' : 'border-slate-600'
+                    className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
+                      isSelected ? 'border-cyan-500 bg-cyan-500' : 'border-edge-control bg-control'
                     }`}
                   >
                     {isSelected && (
-                      <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <svg className="h-2.5 w-2.5 text-onaccent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                       </svg>
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-white">{loc.name}</p>
-                    <p className="text-xs text-slate-500">{loc.slug}</p>
+                    <p className="font-mono text-xs text-slate-500">{loc.slug}</p>
                   </div>
-                  <Pill tone={loc.connected ? 'success' : 'danger'} size="xs" dot>
+                  <span className="flex flex-shrink-0 items-center gap-1.5 text-xs text-slate-400">
+                    <span
+                      className={`h-2 w-2 rounded-full ${loc.connected ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                      aria-hidden="true"
+                    />
                     {loc.connected ? 'Connected' : 'Disconnected'}
-                  </Pill>
+                  </span>
                 </label>
               );
             })}
