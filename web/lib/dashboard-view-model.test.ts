@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildActivityTimeline,
   buildOperationalSummary,
+  parseFailureReason,
   sortNeedsAttention,
 } from './dashboard-view-model';
 
@@ -17,6 +18,8 @@ test('buildOperationalSummary reports action needed for active outage signals', 
       maintenance_monitors: 0,
       active_alerts: 0,
       acknowledged_alerts: 0,
+      suppressed_alerts: 0,
+      unrouted_monitors: 0,
     },
     problemMonitorsCount: 2,
     recentFailuresCount: 0,
@@ -30,6 +33,29 @@ test('buildOperationalSummary reports action needed for active outage signals', 
   assert.equal(summary.primaryActionLabel, 'View monitors');
 });
 
+test('buildOperationalSummary counts a down monitor once even when it has an open alert', () => {
+  const summary = buildOperationalSummary({
+    opsSummary: {
+      up_monitors: 8,
+      down_monitors: 12,
+      paused_monitors: 1,
+      maintenance_monitors: 0,
+      active_alerts: 10,
+      acknowledged_alerts: 0,
+      suppressed_alerts: 0,
+      unrouted_monitors: 0,
+    },
+    problemMonitorsCount: 5,
+    recentFailuresCount: 0,
+    overallUptime: 44.4,
+    avgResponseMs: 53,
+  });
+
+  assert.equal(summary.attentionCount, 12);
+  assert.equal(summary.metrics.find((metric) => metric.label === 'Attention')?.value, '12');
+  assert.equal(summary.metrics.find((metric) => metric.label === 'Active alerts')?.value, '10');
+});
+
 test('buildOperationalSummary avoids contradictory operational copy when only resolved history exists', () => {
   const summary = buildOperationalSummary({
     opsSummary: {
@@ -39,6 +65,8 @@ test('buildOperationalSummary avoids contradictory operational copy when only re
       maintenance_monitors: 0,
       active_alerts: 0,
       acknowledged_alerts: 0,
+      suppressed_alerts: 0,
+      unrouted_monitors: 0,
     },
     problemMonitorsCount: 0,
     recentFailuresCount: 3,
@@ -49,6 +77,31 @@ test('buildOperationalSummary avoids contradictory operational copy when only re
   assert.equal(summary.label, 'No active outage');
   assert.equal(summary.tone, 'stable');
   assert.match(summary.description, /resolved/i);
+});
+
+test('buildOperationalSummary renders no-data uptime as a dash, never 0.00% (S-D1)', () => {
+  const summary = buildOperationalSummary({
+    opsSummary: {
+      up_monitors: 0,
+      down_monitors: 0,
+      paused_monitors: 2,
+      maintenance_monitors: 0,
+      active_alerts: 0,
+      acknowledged_alerts: 0,
+      suppressed_alerts: 0,
+      unrouted_monitors: 0,
+    },
+    problemMonitorsCount: 0,
+    recentFailuresCount: 0,
+    overallUptime: null,
+    avgResponseMs: 0,
+  });
+
+  const uptimeTile = summary.metrics.find((metric) => metric.label === 'Uptime');
+  assert.ok(uptimeTile);
+  assert.equal(uptimeTile.value, '—');
+  assert.equal(uptimeTile.tone, undefined);
+  assert.match(uptimeTile.detail ?? '', /no checks/i);
 });
 
 test('sortNeedsAttention puts active and lower uptime monitors first', () => {
@@ -123,4 +176,50 @@ test('buildActivityTimeline merges failures and alerts chronologically with clea
     items.map((item) => item.label),
     ['Alert triggered', 'Failure resolved'],
   );
+});
+
+test('buildActivityTimeline carries the failure error message as reason', () => {
+  const items = buildActivityTimeline({
+    failures: [
+      {
+        check_result_id: 'r1',
+        monitor_id: 'm1',
+        monitor_name: 'API',
+        status: 'error',
+        result_source: 'monitor',
+        error_message: 'dns: lookup api.example.com: no such host',
+        latency_ms: 12,
+        occurred_at: '2026-04-24T10:00:00.000Z',
+        state: 'firing',
+      },
+    ],
+    alerts: [],
+    now,
+  });
+
+  assert.equal(items[0].reason, 'dns: lookup api.example.com: no such host');
+  assert.equal(items[0].detail, 'error · 12ms');
+});
+
+test('parseFailureReason categorizes known worker prefixes and passes through the rest', () => {
+  assert.deepEqual(parseFailureReason('timeout: context deadline exceeded'), {
+    category: 'timeout',
+    text: 'timeout: context deadline exceeded',
+  });
+  assert.equal(parseFailureReason('dns: no such host')?.category, 'dns');
+  assert.equal(parseFailureReason('connect: connection refused')?.category, 'connect');
+  assert.equal(parseFailureReason('status_code: got 404')?.category, 'status');
+  assert.equal(parseFailureReason('latency: 3200ms > 1000ms')?.category, 'latency');
+  assert.equal(parseFailureReason('tls: missing certificate info')?.category, 'tls');
+
+  // Unknown prefixes keep the raw text but get no pill category.
+  assert.deepEqual(parseFailureReason('redis: NOAUTH Authentication required'), {
+    category: null,
+    text: 'redis: NOAUTH Authentication required',
+  });
+  assert.equal(parseFailureReason('no colon here')?.category, null);
+  assert.equal(parseFailureReason(''), null);
+  assert.equal(parseFailureReason('   '), null);
+  assert.equal(parseFailureReason(null), null);
+  assert.equal(parseFailureReason(undefined), null);
 });

@@ -184,6 +184,10 @@ func (m *MockResultsService) GetMonitorAnalytics(ctx context.Context, tenantID, 
 	}, nil
 }
 
+func (m *MockResultsService) GetMonitorMetricsSnapshots(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorMetricsSnapshotsResponse, error) {
+	return &models.MonitorMetricsSnapshotsResponse{MonitorID: monitorID, Range: rangeValue, Snapshots: []models.MetricsSnapshot{}}, nil
+}
+
 type MockCheckJobPublisher struct {
 	subject string
 	job     *sharedmodels.Job

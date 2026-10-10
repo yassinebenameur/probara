@@ -69,7 +69,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
           type: "list",
           items: [
             "Docker with Docker Compose v2 for PostgreSQL, NATS, and the Docker-backed workflow.",
-            "Go 1.23-compatible tooling. The repository currently declares Go 1.23 and a Go 1.23.4 toolchain.",
+            "Go 1.26-compatible tooling. Both Go modules currently declare Go 1.26 and a Go 1.26.5 toolchain.",
             "A current Node.js LTS release and npm for the web application.",
             "GNU Make and a Bash-compatible shell for the repository scripts. On Windows, run the Make targets from an environment that provides these tools.",
           ],
@@ -113,7 +113,7 @@ export const GETTING_STARTED_PAGE: DocPage = {
             "Starts PostgreSQL and NATS with Docker Compose.",
             "Bootstraps local database access and validates the Go toolchain.",
             "Runs the database migrations with `go run ./cmd/migrate`.",
-            "Builds the installable host-agent artifacts and starts the Go services as local processes.",
+            "Builds the installable collector artifacts and starts the Go services as local processes.",
             "Launches the Next.js web application.",
           ],
         },

@@ -193,9 +193,9 @@ func TestPurger_DetachesAutoIncidentsBeforeDelete(t *testing.T) {
 
 	// Incident must still exist, detached.
 	var (
-		isAuto       bool
-		autoMonitor  *uuid.UUID
-		autoPolicy   *uuid.UUID
+		isAuto      bool
+		autoMonitor *uuid.UUID
+		autoPolicy  *uuid.UUID
 	)
 	require.NoError(t, dbClient.QueryRowContext(ctx,
 		`SELECT is_auto_created, auto_monitor_id, auto_alert_policy_id FROM incidents WHERE id = $1`,

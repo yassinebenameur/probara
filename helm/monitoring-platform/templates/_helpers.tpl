@@ -60,6 +60,63 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Name of the Secret the chart renders itself.
+*/}}
+{{- define "monitoring-platform.secretName" -}}
+{{- printf "%s-secret" (include "monitoring-platform.fullname" .) }}
+{{- end }}
+
+{{/*
+Render one env var backed by a Kubernetes Secret, resolving the source in a
+fixed order so that any credential can come from an operator-supplied Secret
+(External Secrets Operator, Vault, sealed-secrets, SOPS — they all land a plain
+Secret in the namespace):
+
+  1. the field's own existingSecret        -> that Secret, its existingSecretKey
+  2. chart-wide secrets.existingSecret     -> that Secret, the canonical key
+  3. neither                               -> the chart-managed <fullname>-secret
+
+The key defaults to the canonical name in every mode, so a single chart-wide
+Secret carrying postgres_url / nats_url / admin_jwt_secret / probara_secrets_key
+/ oidc_client_secret / nats_platform_password /
+nats_location_auth_issuer_seed satisfies the whole install.
+
+Args (dict): ctx (root context), name (env var), key (canonical key),
+secret (per-field existingSecret), secretKey (per-field existingSecretKey).
+*/}}
+{{- define "monitoring-platform.secretEnv" -}}
+{{- $external := default .ctx.Values.secrets.existingSecret .secret -}}
+- name: {{ .name }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $external | default (include "monitoring-platform.secretName" .ctx) | quote }}
+      key: {{ ternary (default .key .secretKey) .key (not (empty $external)) | quote }}
+{{- end }}
+
+{{/*
+True when a secret field is satisfied by EITHER a literal value or any existing
+Secret reference. Guards must test this, never the literal alone: an
+external-secret install leaves the literal empty, and a guard keyed on the
+literal would silently drop the env var (for PROBARA_SECRETS_KEY that means
+running with at-rest encryption disabled).
+
+Args (dict): ctx, value (the literal), secret (per-field existingSecret).
+*/}}
+{{- define "monitoring-platform.hasSecret" -}}
+{{- if or .value .secret .ctx.Values.secrets.existingSecret -}}true{{- end -}}
+{{- end }}
+
+{{/*
+True when a secret field is still chart-managed, i.e. its value belongs in the
+Secret this chart renders. Inverse of "some existing Secret supplies it".
+
+Args (dict): ctx, secret (per-field existingSecret).
+*/}}
+{{- define "monitoring-platform.chartManagedSecret" -}}
+{{- if and (not .secret) (not .ctx.Values.secrets.existingSecret) -}}true{{- end -}}
+{{- end }}
+
+{{/*
 PostgreSQL connection URL
 */}}
 {{- define "monitoring-platform.postgresUrl" -}}

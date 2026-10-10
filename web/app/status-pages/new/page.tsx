@@ -32,7 +32,6 @@ export default function NewStatusPagePage() {
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: 'New' }]}
         title="Create status page"
-        subtitle="Set up a public page to display your service status."
       />
 
       <StatusPageForm

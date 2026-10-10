@@ -59,12 +59,24 @@ func TestService_GetGroupMembersAndLeafMembers(t *testing.T) {
 		t.Fatalf("AddMonitorsToGroup(parent <- child,leafB) error = %v", err)
 	}
 
+	if _, err := dbClient.ExecContext(ctx, `UPDATE monitors SET current_state = 'down' WHERE id = $1`, leafB); err != nil {
+		t.Fatalf("set leafB state: %v", err)
+	}
+
 	directMembers, err := svc.GetGroupMembers(ctx, tenantID, parentGroupID)
 	if err != nil {
 		t.Fatalf("GetGroupMembers() error = %v", err)
 	}
 	if len(directMembers) != 2 {
 		t.Fatalf("GetGroupMembers() length = %d, want 2", len(directMembers))
+	}
+	// The detail page draws each member's state from this field.
+	states := map[uuid.UUID]string{}
+	for _, member := range directMembers {
+		states[member.ID] = member.CurrentState
+	}
+	if states[leafB] != "down" || states[childGroupID] != "unknown" {
+		t.Fatalf("GetGroupMembers() current_state = %v, want leafB down and child unknown", states)
 	}
 
 	leafMembers, err := svc.GetGroupLeafMembers(ctx, tenantID, parentGroupID)

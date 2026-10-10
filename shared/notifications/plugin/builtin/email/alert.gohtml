@@ -153,6 +153,27 @@ markup and the plain-text part always describe the same alert.
     </td></tr>
     {{end}}
 
+    {{if .Impacted}}
+    <!-- Dependency blast radius: the downstream pages this one stands in for. -->
+    <tr><td class="pb-pad" style="padding:24px 40px 0 40px;">
+      <div class="pb-muted" style="font-family:'IBM Plex Mono','SFMono-Regular',Consolas,Menlo,monospace;font-size:10px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#71717a;padding-bottom:10px;">Also affecting <span class="pb-dim" style="color:#a1a1aa;letter-spacing:0;text-transform:none;font-weight:400;">· notifications suppressed</span></div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        {{range .Impacted}}
+        <tr>
+          <td valign="top" style="width:6px;padding:8px 0 0 0;font-size:0;line-height:0;"><div style="width:6px;height:6px;border-radius:3px;background:{{$.Tone.Accent}};font-size:0;line-height:0;">&nbsp;</div></td>
+          <td class="pb-text" style="padding:0 0 8px 12px;font-size:14px;line-height:1.5;color:#3f3f46;">{{.}}</td>
+        </tr>
+        {{end}}
+        {{if .ImpactedMore}}
+        <tr>
+          <td style="width:6px;font-size:0;line-height:0;">&nbsp;</td>
+          <td class="pb-dim" style="padding:0 0 8px 12px;font-size:13px;line-height:1.5;color:#a1a1aa;">… and {{.ImpactedMore}} more</td>
+        </tr>
+        {{end}}
+      </table>
+    </td></tr>
+    {{end}}
+
     {{if .Rows}}
     <tr><td class="pb-pad" style="padding:28px 40px 0 40px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">

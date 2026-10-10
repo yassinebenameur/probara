@@ -7,9 +7,10 @@
 --   1. Repair gaps left by the original 48h-only hourly backfill shipped in
 --      migration 000041_create_monitor_hourly_rollups (hours older than 48h at
 --      migration time were never aggregated into monitor_hourly_rollups).
---   2. Recover check_results rows skipped by the rollup job's poisoned-row
---      handling (scheduler logs "Skipping poisoned rollup row" and increments
---      rollup_rows_skipped_total; the raw row stays in check_results).
+--   2. Repair history from before the dirty-bucket ledger (migration 000083):
+--      the retired incremental cursor could permanently skip late-visible
+--      rows and its poisoned-row handling could drop rows outright. Buckets
+--      written since the ledger landed are exact and need no repair.
 --
 -- USAGE
 --   psql "$DATABASE_URL" \
@@ -32,8 +33,10 @@
 --   the rollup advisory lock for a long time (stalling the incremental job),
 --   and risks statement timeouts. Loop over consecutive [start, end) days.
 --
---   WARNING — RETENTION: never run this over ranges at or older than any
---   tenant's raw retention horizon (tenants.data_retention_days). Raw rows
+--   WARNING — RETENTION: never run this over ranges at or older than the raw
+--   check_results horizon: the hour 30 days ago for every tenant
+--   (RollupMarkHorizonSQL in shared/monitorstate/record.go).
+--   Raw rows
 --   there have been pruned, so the replace-semantics rebuild would UNDERCOUNT
 --   any bucket that straddles the horizon (rebuilt from only the surviving
 --   raws). Rollups for fully-pruned history must be left untouched.

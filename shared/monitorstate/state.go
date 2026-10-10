@@ -31,6 +31,10 @@ type Transition struct {
 	OpenedOutage        bool // entered down
 	ClosedOutage        bool // left down via success
 	Duplicate           bool // result was already recorded; no state applied
+	// HistoryOnly: the result was recorded as history but deliberately did
+	// not run the machine — late evidence (S-O2) or a location-less result
+	// for a location-bound monitor (S-E5).
+	HistoryOnly bool
 }
 
 // Apply advances the state machine with one check result.

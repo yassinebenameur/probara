@@ -3,6 +3,7 @@ package alerter
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -177,6 +178,9 @@ func (a *Alerter) resolveMeshEdgeAlerts(ctx context.Context) error {
 
 	for _, e := range toResolve {
 		resolvedAt, err := a.resolveAlert(ctx, e.alertID, time.Now())
+		if errors.Is(err, errAlertAlreadyResolved) {
+			continue
+		}
 		if err != nil {
 			a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": e.alertID}).Error("Failed to resolve mesh edge alert")
 			continue
@@ -285,10 +289,10 @@ func (a *Alerter) dispatchOpenMeshAlerts(ctx context.Context) error {
 			state := getNotificationState(states, oa.edge.alertID, target.channel.ID)
 			switch {
 			case state == nil && alertAge >= target.delay:
-				a.fireChannel(ctx, "created", binding, &record, target.channel, now)
+				a.fireChannel(ctx, "created", binding, &record, target.channel, now, reminderInterval)
 			case state != nil && state.LastEventType != "resolved" && reminderInterval > 0 &&
 				now.Sub(state.LastSentAt) >= reminderInterval:
-				a.fireChannel(ctx, "reminder", binding, &record, target.channel, now)
+				a.fireChannel(ctx, "reminder", binding, &record, target.channel, now, reminderInterval)
 			}
 		}
 	}

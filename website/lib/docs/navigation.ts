@@ -40,6 +40,11 @@ export const DOC_NAVIGATION: DocNavGroup[] = [
         description: 'Sections, incidents, themes, templates, live updates.',
       },
       {
+        slug: 'slas',
+        title: 'SLA reporting',
+        description: 'Targets, error budgets, calendar reports, PDF/CSV exports.',
+      },
+      {
         slug: 'dependencies',
         title: 'Dependencies & analytics',
         description: 'Service graph, correlations, dashboard, and rollups.',

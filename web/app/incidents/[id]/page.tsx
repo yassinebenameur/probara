@@ -24,6 +24,8 @@ import Panel from '@/components/ui/Panel';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
+import { Unlink } from 'lucide-react';
 import Pill from '@/components/ui/Pill';
 import { formatDateTime } from '@/lib/format';
 
@@ -316,12 +318,10 @@ export default function IncidentDetailPage() {
                   <div>
                     <div className="text-sm font-medium text-white">{alert.monitor_name || alert.id}</div>
                     <div className="mt-1 text-xs text-slate-500">
-                      {alert.policy_name || 'Unknown policy'} · {alert.status} · {alert.failure_count} failures
+                      {alert.status} · {alert.failure_count} failures
                     </div>
                   </div>
-                  <Button variant="ghost" size="xs" onClick={() => handleDetachAlert(alert.id)}>
-                    Detach
-                  </Button>
+                  <IconButton icon={<Unlink strokeWidth={1.75} />} label="Detach from incident" onClick={() => handleDetachAlert(alert.id)} />
                 </div>
               ))
             )}
@@ -366,9 +366,7 @@ export default function IncidentDetailPage() {
                     <div className="text-sm font-medium text-white">{monitor.name}</div>
                     <div className="mt-1 text-xs uppercase tracking-wide text-slate-500">{monitor.type}</div>
                   </div>
-                  <Button variant="ghost" size="xs" onClick={() => handleDetachMonitor(monitor.id)}>
-                    Detach
-                  </Button>
+                  <IconButton icon={<Unlink strokeWidth={1.75} />} label="Detach from incident" onClick={() => handleDetachMonitor(monitor.id)} />
                 </div>
               ))
             )}

@@ -63,7 +63,6 @@ export default function IncidentTimeline({
     <Panel
       title="Timeline"
       subtitle={`${pluralize(entries.length, 'event')} recorded`}
-      dotColor="var(--warning)"
     >
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
         <div className="space-y-3">

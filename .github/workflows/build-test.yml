@@ -2,46 +2,148 @@ name: Build and Test
 
 on:
   push:
-    branches: [ dev, staging, main ]
+    branches: [dev, staging, main]
   pull_request:
-    branches: [ dev, staging, main ]
+    branches: [dev, staging, main]
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  go-format:
+    name: Go formatting
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v6
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.23'
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
 
-    - name: Cache Go modules
-      uses: actions/cache@v5
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Check formatting
+        run: make fmt
 
-    - name: Download dependencies
-      run: go mod download
+  go-test:
+    name: Go test (${{ matrix.name }})
+    runs-on: ubuntu-latest
 
-    - name: Run go fmt
-      run: go fmt ./...
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: main module
+            directory: .
+            go-version-file: go.mod
+            dependency-path: go.sum
+            coverage-file: coverage-main.out
+            coverage-flag: main
 
-    - name: Run go vet
-      run: go vet ./...
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-    - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out ./...
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.go-version-file }}
+          cache-dependency-path: ${{ matrix.dependency-path }}
 
-    - name: Upload coverage
-      uses: codecov/codecov-action@v7
-      if: always()
-      with:
-        files: ./coverage.out
-        fail_ci_if_error: false
+      - name: Download dependencies
+        working-directory: ${{ matrix.directory }}
+        run: go mod download
+
+      - name: Run go vet
+        working-directory: ${{ matrix.directory }}
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: ${{ matrix.directory }}
+        # Explicit bash adds -o pipefail, so tee cannot mask a test failure.
+        shell: bash
+        run: go test -v -race -coverprofile="${{ github.workspace }}/${{ matrix.coverage-file }}" ./... 2>&1 | tee "${{ runner.temp }}/go-test.log"
+
+      # The -v output of the whole module runs to hundreds of thousands of
+      # lines, so a failing test scrolls far out of any log tail and the run
+      # ends on a bare "FAIL". Repeat the failures at the end of the job, in
+      # the step summary, and as annotations on the check run.
+      - name: Summarize test failures
+        if: failure()
+        run: |
+          log="${{ runner.temp }}/go-test.log"
+          [ -f "$log" ] || exit 0
+          # A test's own output precedes its FAIL line; a panic or race
+          # report follows its header.
+          failed='^[[:space:]]*--- FAIL|^FAIL[[:space:]]'
+          crashed='^panic:|^WARNING: DATA RACE'
+          context=$({ grep -E -B40 "$failed" "$log"; grep -E -A40 "$crashed" "$log"; } | tail -n 600 || true)
+          echo "$context"
+          {
+            echo '## Go test failures'
+            echo '```'
+            echo "$context"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^[[:space:]]*--- FAIL|^FAIL[[:space:]]' "$log" | sed -E 's/^[[:space:]]+//' | head -n 50 |
+            while IFS= read -r line; do echo "::error title=Go test failure::$line"; done
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v7
+        if: always()
+        with:
+          files: ./${{ matrix.coverage-file }}
+          flags: ${{ matrix.coverage-flag }}
+          fail_ci_if_error: false
+
+  frontend:
+    name: Frontend (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: operator UI
+            directory: web
+            lockfile: web/package-lock.json
+          - name: website
+            directory: website
+            lockfile: website/package-lock.json
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: ${{ matrix.lockfile }}
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.directory }}
+        run: npm ci
+
+      - name: Run lint
+        working-directory: ${{ matrix.directory }}
+        run: npm run lint
+
+      - name: Run typecheck
+        working-directory: ${{ matrix.directory }}
+        run: npm exec -- tsc --noEmit
+
+      - name: Run unit tests
+        if: matrix.directory == 'web'
+        working-directory: ${{ matrix.directory }}
+        run: npm test
+
+      - name: Run production build
+        working-directory: ${{ matrix.directory }}
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: npm run build

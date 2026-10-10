@@ -91,10 +91,48 @@ func loadSMTPConfig() (SMTPConfig, error) {
 	return cfg, nil
 }
 
+// NotificationEgressConfig is the outbound-connection policy for notification
+// plugins (generic webhook, chat, paging and SMS channels). Every service that
+// can invoke a plugin's Send needs it — the same three workloads as
+// SMTPConfig. Channel URLs are tenant-supplied, so private and reserved
+// addresses (including cloud metadata) are refused unless the operator opts
+// out or allow-lists a range for an internal receiver.
+type NotificationEgressConfig struct {
+	NotificationBlockPrivateIPs bool
+	NotificationAllowedCIDRs    []*net.IPNet
+}
+
+// loadNotificationEgressConfig reads NOTIFICATION_BLOCK_PRIVATE_IPS (default
+// true) and NOTIFICATION_ALLOWED_CIDRS (comma-separated). Sole parser for
+// these, like loadSMTPConfig.
+func loadNotificationEgressConfig() (NotificationEgressConfig, error) {
+	cfg := NotificationEgressConfig{NotificationBlockPrivateIPs: true}
+	if v := strings.TrimSpace(os.Getenv("NOTIFICATION_BLOCK_PRIVATE_IPS")); v != "" {
+		block, err := strconv.ParseBool(v)
+		if err != nil {
+			return NotificationEgressConfig{}, fmt.Errorf("invalid NOTIFICATION_BLOCK_PRIVATE_IPS: %w", err)
+		}
+		cfg.NotificationBlockPrivateIPs = block
+	}
+	for _, p := range strings.Split(os.Getenv("NOTIFICATION_ALLOWED_CIDRS"), ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(p)
+		if err != nil {
+			return NotificationEgressConfig{}, fmt.Errorf("invalid NOTIFICATION_ALLOWED_CIDRS entry %q: %w", p, err)
+		}
+		cfg.NotificationAllowedCIDRs = append(cfg.NotificationAllowedCIDRs, cidr)
+	}
+	return cfg, nil
+}
+
 // APIConfig contains configuration for the API service
 type APIConfig struct {
 	BaseConfig
 	SMTPConfig
+	NotificationEgressConfig
 	AlertStream        string
 	AlertSubject       string
 	AlertConsumerName  string
@@ -142,6 +180,12 @@ type APIConfig struct {
 	// staleness and probe-now timeouts agree with the actual probe cadence.
 	MeshProbeIntervalSeconds int
 	MeshProbeTimeoutSeconds  int
+	// OTLP ingest guardrails for agent monitors pushing OpenTelemetry
+	// metrics: max distinct series per monitor (overflow points are rejected
+	// via OTLP partial_success) and max export requests per monitor per
+	// minute (excess gets 429 + Retry-After, which the collector retries).
+	OTLPMaxSeriesPerMonitor int
+	OTLPMonitorRatePerMin   int
 }
 
 // SchedulerConfig contains configuration for the scheduler service
@@ -179,6 +223,11 @@ type SchedulerConfig struct {
 	MeshProbeTimeoutSeconds  int
 	MeshFailureThreshold     int
 	MeshScheduleBatchSize    int
+	// MetricRawRetentionDays is how long raw metric_samples partitions are
+	// kept before the partition-maintenance pass drops them (hourly metric
+	// rollups survive independently). Per-tenant data_retention_days can only
+	// tighten this, never extend it.
+	MetricRawRetentionDays int
 }
 
 // WorkerConfig contains configuration for the worker service
@@ -187,6 +236,7 @@ type WorkerConfig struct {
 	// SMTP backend wired into the builtin email plugin (worker side, used by
 	// the notifications consumer).
 	SMTPConfig
+	NotificationEgressConfig
 	WorkerConcurrency  int
 	NATSConsumerName   string
 	CheckJobStream     string
@@ -230,6 +280,7 @@ type WorkerConfig struct {
 type AlerterConfig struct {
 	BaseConfig
 	SMTPConfig
+	NotificationEgressConfig
 	AlertStream                  string
 	AlertSubject                 string
 	AlertEvalIntervalSeconds     int
@@ -257,6 +308,23 @@ type StatusPageConfig struct {
 	// is expected to render well within them. See LoadStatusPageConfig for defaults.
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+
+	// VAPID keypair for visitor browser notifications (RFC 8292). Both halves
+	// must be set for the feature to be live; a page's enable_push_notifications
+	// setting alone does nothing without them.
+	//
+	// The public key is NOT a credential -- it ships inside every rendered page
+	// as the applicationServerKey. The private key signs the push JWT.
+	//
+	// Never generate these at startup: with more than one status-page replica
+	// each would mint a different pair, so a subscription created against one
+	// replica is unusable by another, and a restart would silently invalidate
+	// every stored subscription.
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string
+	// VAPIDSubject is the JWT "sub" claim: a mailto: or https: contact the push
+	// service can reach. Some push services reject a missing or malformed one.
+	VAPIDSubject string
 }
 
 // LoadBaseConfig loads base configuration from environment variables
@@ -484,6 +552,24 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, fmt.Errorf("PROBARA_SECRETS_KEY is required when NATS location authorization is enabled")
 	}
 
+	// OTLP_* — ingest guardrails for the OTel metrics endpoint.
+	cfg.OTLPMaxSeriesPerMonitor = 2000
+	if v := strings.TrimSpace(os.Getenv("OTLP_MAX_SERIES_PER_MONITOR")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid OTLP_MAX_SERIES_PER_MONITOR: %q", v)
+		}
+		cfg.OTLPMaxSeriesPerMonitor = n
+	}
+	cfg.OTLPMonitorRatePerMin = 60
+	if v := strings.TrimSpace(os.Getenv("OTLP_MONITOR_RATE_PER_MIN")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid OTLP_MONITOR_RATE_PER_MIN: %q", v)
+		}
+		cfg.OTLPMonitorRatePerMin = n
+	}
+
 	// OIDC_* — platform-level SSO configuration (needs PublicBaseURL for the
 	// default redirect URL, so it loads last).
 	oidcCfg, err := loadOIDCConfig(cfg.PublicBaseURL)
@@ -501,6 +587,11 @@ func LoadAPIConfig() (*APIConfig, error) {
 		return nil, err
 	}
 	cfg.SMTPConfig = smtpCfg
+	egressCfg, err := loadNotificationEgressConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.NotificationEgressConfig = egressCfg
 
 	return cfg, nil
 }
@@ -798,6 +889,15 @@ func LoadSchedulerConfig() (*SchedulerConfig, error) {
 		cfg.MeshScheduleBatchSize = n
 	}
 
+	cfg.MetricRawRetentionDays = 30
+	if v := strings.TrimSpace(os.Getenv("METRIC_RAW_RETENTION_DAYS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("invalid METRIC_RAW_RETENTION_DAYS: %q", v)
+		}
+		cfg.MetricRawRetentionDays = n
+	}
+
 	return cfg, nil
 }
 
@@ -976,6 +1076,11 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		return nil, err
 	}
 	cfg.SMTPConfig = smtpCfg
+	egressCfg, err := loadNotificationEgressConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.NotificationEgressConfig = egressCfg
 
 	return cfg, nil
 }
@@ -1077,6 +1182,11 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 		return nil, err
 	}
 	cfg.SMTPConfig = smtpCfg
+	egressCfg, err := loadNotificationEgressConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.NotificationEgressConfig = egressCfg
 
 	// ALERT_EMAIL_TO
 	cfg.AlertEmailTo = os.Getenv("ALERT_EMAIL_TO")
@@ -1119,7 +1229,20 @@ func LoadStatusPageConfig() (*StatusPageConfig, error) {
 	cfg.ReadTimeout = envDurationSeconds("STATUS_PAGE_READ_TIMEOUT_SECONDS", 15*time.Second)
 	cfg.WriteTimeout = envDurationSeconds("STATUS_PAGE_WRITE_TIMEOUT_SECONDS", 60*time.Second)
 
+	// Web Push (optional; unset means the feature is off everywhere).
+	cfg.VAPIDPublicKey = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_PUBLIC_KEY"))
+	cfg.VAPIDPrivateKey = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_PRIVATE_KEY"))
+	cfg.VAPIDSubject = strings.TrimSpace(os.Getenv("STATUS_PAGE_VAPID_SUBJECT"))
+
 	return cfg, nil
+}
+
+// WebPushConfigured reports whether the deployment can send browser
+// notifications. Both key halves are required; the subject is validated by the
+// sender rather than here so a bad value fails loudly at send time instead of
+// silently disabling the feature at boot.
+func (c *StatusPageConfig) WebPushConfigured() bool {
+	return c != nil && c.VAPIDPublicKey != "" && c.VAPIDPrivateKey != ""
 }
 
 // envDurationSeconds reads an integer number of seconds from the environment,

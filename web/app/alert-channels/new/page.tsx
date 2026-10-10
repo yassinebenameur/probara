@@ -35,7 +35,7 @@ function NewAlertChannelPageInner() {
       await createAlertChannel(data as CreateAlertChannelRequest);
       showToast('Alert channel created successfully', 'success');
       setTimeout(() => {
-        router.push('/alert-channels');
+        router.push('/settings?tab=channels');
       }, 1000);
     } catch (err: any) {
       showToast(err.message || 'Failed to create alert channel', 'error');
@@ -46,16 +46,15 @@ function NewAlertChannelPageInner() {
   return (
     <div className="max-w-2xl space-y-6">
       <PageHeader
-        breadcrumb={[{ label: 'Alert channels', href: '/alert-channels' }, { label: 'New' }]}
+        breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Channels', href: '/settings?tab=channels' }, { label: 'New' }]}
         title="Create alert channel"
-        subtitle="Configure where alerts should be delivered."
       />
 
       <FormCard>
         <AlertChannelForm
           initialType={initialType}
           onSubmit={handleSubmit}
-          onCancel={() => router.push('/alert-channels')}
+          onCancel={() => router.push('/settings?tab=channels')}
           loading={loading}
         />
       </FormCard>

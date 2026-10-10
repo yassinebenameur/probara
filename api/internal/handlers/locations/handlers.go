@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/api/internal/middleware"
 	"github.com/yassinebenameur/probara/api/internal/models"
 	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 )
 
@@ -203,6 +204,10 @@ func (h *Handlers) DeleteLocation(w http.ResponseWriter, r *http.Request) {
 
 // GetDeployInfo handles GET /api/v1/locations/{id}/deploy.
 func (h *Handlers) GetDeployInfo(w http.ResponseWriter, r *http.Request) {
+	if !ctxpkg.CanWrite(r.Context()) {
+		errors.WriteForbiddenError(w, "worker credentials require write permission")
+		return
+	}
 	tenantUUID, ok := h.tenantUUID(w, r)
 	if !ok {
 		return

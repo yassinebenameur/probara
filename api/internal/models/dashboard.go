@@ -104,12 +104,14 @@ type DashboardRecentAlertsResponse struct {
 // (now - 24h, now]. They are not derived from the per-hour Trend/Activity24h
 // buckets and may differ from naive sums of those.
 type DashboardStats struct {
-	TotalMonitors  int     `json:"total_monitors"`
-	ActiveMonitors int     `json:"active_monitors"`
-	HTTPMonitors   int     `json:"http_monitors"`
-	AgentMonitors  int     `json:"agent_monitors"`
-	OverallUptime  float64 `json:"overall_uptime"`
-	AvgResponseMS  float64 `json:"avg_response_ms"`
+	TotalMonitors  int `json:"total_monitors"`
+	ActiveMonitors int `json:"active_monitors"`
+	HTTPMonitors   int `json:"http_monitors"`
+	AgentMonitors  int `json:"agent_monitors"`
+	// OverallUptime is null when no monitor had a check in the window —
+	// no data must never render as 0% or 100% (S-D1, docs/state-semantics.md).
+	OverallUptime *float64 `json:"overall_uptime"`
+	AvgResponseMS float64  `json:"avg_response_ms"`
 }
 
 // DashboardTrendPoint is one bucket in the trend series.
@@ -151,6 +153,15 @@ type DashboardOpsSummary struct {
 	MaintenanceMonitors int `json:"maintenance_monitors"`
 	ActiveAlerts        int `json:"active_alerts"`
 	AcknowledgedAlerts  int `json:"acknowledged_alerts"`
+	// SuppressedAlerts is how many of the open (active + acknowledged) alerts
+	// the alerter is currently sending no notification for because an
+	// upstream dependency explains them. It is a subset of the two counts
+	// above, not an additional bucket.
+	SuppressedAlerts int `json:"suppressed_alerts"`
+	// UnroutedMonitors counts active monitors whose alerts would notify
+	// nobody — no active channel resolves for them (shared/alertrouting).
+	// Paused monitors are excluded: they never alert in the first place.
+	UnroutedMonitors int `json:"unrouted_monitors"`
 }
 
 // DashboardProblemMonitor represents a monitor that needs attention for the selected range.
@@ -163,6 +174,10 @@ type DashboardProblemMonitor struct {
 	ErrorCount      int        `json:"error_count"`
 	Uptime          float64    `json:"uptime"`
 	LatestFailureAt *time.Time `json:"latest_failure_at"`
+	// LatestErrorMessage is the error_message of the monitor's most recent
+	// failing check inside the requested range (nil when the check recorded
+	// no message or the failures fell outside raw check_results retention).
+	LatestErrorMessage *string `json:"latest_error_message,omitempty"`
 }
 
 // DashboardFailureEvent represents a recent failing check and its current state.
@@ -180,19 +195,22 @@ type DashboardFailureEvent struct {
 }
 
 // DashboardGroupMember is a preview row inside a group: top members sorted worst-uptime-first.
+// Uptime is null when the member had no checks in the window (paused, new) —
+// never a synthetic 100% (S-D1).
 type DashboardGroupMember struct {
 	MonitorID     uuid.UUID `json:"monitor_id"`
 	MonitorName   string    `json:"monitor_name"`
-	Uptime        float64   `json:"uptime"`
+	Uptime        *float64  `json:"uptime"`
 	CurrentStatus *string   `json:"current_status"`
 }
 
 // DashboardGroup is a single tag-derived service group.
 // Tag is *string so the sentinel for the ungrouped row can be nil (rendered as `"tag": null` in JSON).
+// Uptime is the mean over members WITH data; null when no member has any.
 type DashboardGroup struct {
 	Tag            *string                `json:"tag"`
 	MonitorCount   int                    `json:"monitor_count"`
-	Uptime         float64                `json:"uptime"`
+	Uptime         *float64               `json:"uptime"`
 	AttentionCount int                    `json:"attention_count"`
 	WorstMember    *DashboardGroupMember  `json:"worst_member"`
 	Members        []DashboardGroupMember `json:"members"`
@@ -206,8 +224,9 @@ type DashboardGroupSparklineQuery struct {
 }
 
 // DashboardGroupSparklineResponse is the lazy per-group uptime sparkline.
+// A null bucket means no checks landed in it (S-D1) — render a gap, not 100%.
 type DashboardGroupSparklineResponse struct {
 	Tag     *string        `json:"tag"`
 	Range   DashboardRange `json:"range"`
-	Buckets []float64      `json:"buckets"`
+	Buckets []*float64     `json:"buckets"`
 }

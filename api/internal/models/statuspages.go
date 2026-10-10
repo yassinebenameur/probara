@@ -20,6 +20,11 @@ type StatusPageSettings struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      *string `json:"default_theme,omitempty"`
 	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
+	// EnablePushNotifications offers visitors a browser-notification opt-in on
+	// the public page. Off by default: it asks visitors for a permission the
+	// operator should choose to request. Effective only when the deployment
+	// also configures a VAPID keypair.
+	EnablePushNotifications *bool `json:"enable_push_notifications,omitempty"`
 	// Tenant-authored branding injected verbatim into the built-in template
 	// (custom CSS after the base styles, extra <head> markup, and markup
 	// before </body>). Lighter-weight customization than a full template.

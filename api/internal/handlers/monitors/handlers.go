@@ -23,8 +23,10 @@ import (
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
 	"github.com/yassinebenameur/probara/api/internal/validation"
+	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/logger"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
 type checkJobPublisher interface {
@@ -154,6 +156,10 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 		errors.WriteValidationError(w, err.Error())
 		return
 	}
+	if containsEncryptedTestSecret(req.Type, req.Config) {
+		errors.WriteValidationError(w, "encrypted credentials cannot be supplied in test requests; use saved secret placeholders")
+		return
+	}
 	if req.TimeoutSeconds <= 0 {
 		req.TimeoutSeconds = 10
 	}
@@ -171,8 +177,18 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 		monitorID = &parsed
 	}
 
+	// Custom destinations must not turn a read-only test into an oracle for
+	// saved credentials. Tests using only caller-supplied credentials remain safe.
+	if monitorID != nil && secrets.HasMonitorSecrets(string(req.Type)) && !ctxpkg.CanWrite(r.Context()) {
+		errors.WriteForbiddenError(w, "testing with saved credentials requires write permission")
+		return
+	}
 	config, err := h.service.ResolveTestConfig(r.Context(), tenantUUID, monitorID, req.Type, req.Config)
 	if err != nil {
+		if stderrors.Is(err, monitorservice.ErrMonitorTypeMismatch) {
+			errors.WriteValidationError(w, err.Error())
+			return
+		}
 		if err.Error() == "monitor not found" {
 			errors.WriteNotFoundError(w, "monitor not found")
 			return
@@ -365,7 +381,47 @@ func (h *Handlers) GetMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(monitor)
+	json.NewEncoder(w).Encode(monitorForResponse(r.Context(), *monitor))
+}
+
+// monitorForResponse copies the model so redaction never changes stored state.
+func monitorForResponse(ctx context.Context, monitor models.Monitor) models.Monitor {
+	if !ctxpkg.CanWrite(ctx) {
+		monitor.PushToken = nil
+	}
+	// Group membership reads load models directly, bypassing the monitor
+	// service's normal masking boundary. Neither ciphertext nor plaintext
+	// credentials should leave any read endpoint.
+	if secrets.HasMonitorSecrets(string(monitor.Type)) {
+		masked, err := secrets.MaskMonitorConfig(string(monitor.Type), monitor.Config)
+		if err != nil {
+			monitor.Config = nil
+		} else {
+			monitor.Config = masked
+		}
+	}
+	return monitor
+}
+
+func containsEncryptedTestSecret(monitorType models.MonitorType, config json.RawMessage) bool {
+	var fields map[string]any
+	if json.Unmarshal(config, &fields) != nil {
+		return false // The type validator reports malformed config separately.
+	}
+	for _, field := range secrets.MonitorSecretFields[string(monitorType)] {
+		if value, ok := fields[field].(string); ok && secrets.LooksLikeEnvelope(value) {
+			return true
+		}
+	}
+	for _, field := range secrets.MonitorSecretMapFields[string(monitorType)] {
+		values, _ := fields[field].(map[string]any)
+		for _, raw := range values {
+			if value, ok := raw.(string); ok && secrets.LooksLikeEnvelope(value) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ListMonitors handles GET /api/v1/monitors
@@ -419,6 +475,9 @@ func (h *Handlers) ListMonitors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	for i := range result.Items {
+		result.Items[i] = monitorForResponse(r.Context(), result.Items[i])
+	}
 	json.NewEncoder(w).Encode(result)
 }
 
@@ -801,17 +860,7 @@ func (h *Handlers) GetMonitorAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeValue := models.MonitorAnalyticsRange24h
-	switch models.MonitorAnalyticsRange(r.URL.Query().Get("range")) {
-	case models.MonitorAnalyticsRange1h,
-		models.MonitorAnalyticsRange6h,
-		models.MonitorAnalyticsRange24h,
-		models.MonitorAnalyticsRange7d,
-		models.MonitorAnalyticsRange30d,
-		models.MonitorAnalyticsRange90d,
-		models.MonitorAnalyticsRange365d:
-		rangeValue = models.MonitorAnalyticsRange(r.URL.Query().Get("range"))
-	}
+	rangeValue := parseAnalyticsRange(r)
 
 	response, err := h.resultService.GetMonitorAnalytics(r.Context(), tenantUUID, monitorID, rangeValue)
 	if err != nil {
@@ -826,6 +875,62 @@ func (h *Handlers) GetMonitorAnalytics(w http.ResponseWriter, r *http.Request) {
 			"range":      rangeValue,
 		}).Error("Failed to get monitor analytics")
 		errors.WriteInternalError(w, "failed to get monitor analytics")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// parseAnalyticsRange reads ?range=, defaulting unknown values to 24h.
+func parseAnalyticsRange(r *http.Request) models.MonitorAnalyticsRange {
+	switch value := models.MonitorAnalyticsRange(r.URL.Query().Get("range")); value {
+	case models.MonitorAnalyticsRange1h,
+		models.MonitorAnalyticsRange6h,
+		models.MonitorAnalyticsRange24h,
+		models.MonitorAnalyticsRange7d,
+		models.MonitorAnalyticsRange30d,
+		models.MonitorAnalyticsRange90d,
+		models.MonitorAnalyticsRange365d:
+		return value
+	}
+	return models.MonitorAnalyticsRange24h
+}
+
+// GetMonitorMetricsSnapshots handles GET /api/v1/monitors/{id}/metrics-snapshots
+func (h *Handlers) GetMonitorMetricsSnapshots(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := middleware.GetTenantID(r.Context())
+	if err != nil {
+		errors.WriteUnauthorizedError(w, "tenant ID not found")
+		return
+	}
+
+	monitorID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		errors.WriteValidationError(w, "invalid monitor ID")
+		return
+	}
+
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		errors.WriteInternalError(w, "invalid tenant ID")
+		return
+	}
+
+	rangeValue := parseAnalyticsRange(r)
+	response, err := h.resultService.GetMonitorMetricsSnapshots(r.Context(), tenantUUID, monitorID, rangeValue)
+	if err != nil {
+		if err.Error() == "monitor not found" {
+			errors.WriteNotFoundError(w, "monitor not found")
+			return
+		}
+		h.logger.WithFields(map[string]interface{}{
+			"error":      err.Error(),
+			"tenant_id":  tenantID,
+			"monitor_id": monitorID,
+			"range":      rangeValue,
+		}).Error("Failed to get monitor metrics snapshots")
+		errors.WriteInternalError(w, "failed to get monitor metrics snapshots")
 		return
 	}
 
@@ -1305,5 +1410,8 @@ func (h *Handlers) GetGroupMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	for i := range members {
+		members[i] = monitorForResponse(r.Context(), members[i])
+	}
 	json.NewEncoder(w).Encode(members)
 }

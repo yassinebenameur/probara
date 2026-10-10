@@ -81,9 +81,10 @@ func (m *mockDashboardService) GetRecentAlerts(ctx context.Context, tenantID uui
 func (m *mockDashboardService) GetGroupSparkline(ctx context.Context, tenantID uuid.UUID, params *models.DashboardGroupSparklineQuery) (*models.DashboardGroupSparklineResponse, error) {
 	copied := *params
 	m.lastGroupSparklineParams = &copied
-	buckets := make([]float64, 12)
+	buckets := make([]*float64, 12)
 	for i := range buckets {
-		buckets[i] = 100.0
+		v := 100.0
+		buckets[i] = &v
 	}
 	return &models.DashboardGroupSparklineResponse{
 		Tag:     params.Tag,

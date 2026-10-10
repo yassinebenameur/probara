@@ -107,7 +107,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 	query := `
 		SELECT m.id, m.tenant_id, m.name, m.type, m.config,
 			m.interval_seconds, m.timeout_seconds, m.alert_policy_id, m.enabled, m.tags,
-			m.next_run_at, m.created_at, m.updated_at
+			m.next_run_at, m.created_at, m.updated_at, m.current_state
 		FROM monitors m
 		INNER JOIN monitor_groups mg ON m.id = mg.monitor_id
 		WHERE mg.group_id = $1 AND m.tenant_id = $2 AND m.deleted_at IS NULL
@@ -130,6 +130,7 @@ func (s *Service) GetGroupMembers(ctx context.Context, tenantID, groupID uuid.UU
 			&monitor.Config, &monitor.IntervalSeconds, &monitor.TimeoutSeconds,
 			&monitor.AlertPolicyID, &monitor.Enabled,
 			pq.Array(&tags), &monitor.NextRunAt, &monitor.CreatedAt, &monitor.UpdatedAt,
+			&monitor.CurrentState,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan monitor: %w", err)

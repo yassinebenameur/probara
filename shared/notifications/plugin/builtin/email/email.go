@@ -81,8 +81,6 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		IconKey:     "mail",
 		Version:     "1.0.0",
 		Capabilities: []plugin.Capability{
-			plugin.CapabilityRenderedAlert,
-			plugin.CapabilityRawEvent,
 			plugin.CapabilityTestable,
 		},
 		Fields: []plugin.Field{
@@ -328,28 +326,19 @@ func templateData(event notifications.AlertEvent, appBaseURL string) map[string]
 		"source_location_name": sourceLocation,
 		"target_location_name": targetLocation,
 		"failing_locations":    event.Alert.FailingLocationNames(),
+		"impacted_monitors":    event.Alert.ImpactedMonitorNames(),
+		"impacted_count":       event.Alert.ImpactedCount,
 
 		"label":              view.Label,
 		"status_label":       view.Tone.Label,
 		"summary":            view.Summary,
-		"duration":           durationOf(view),
+		"duration":           view.Duration(),
 		"triggered_at_human": humanTime(event.Alert.TriggeredAt),
 		"resolved_at_human":  humanTimeOf(event.Alert.ResolvedAt),
 		"action_url":         view.ActionURL,
 		"action_label":       view.ActionLabel,
 		"accent_color":       view.Tone.Accent,
 	}
-}
-
-// durationOf pulls the "how long has this been open" row out of the resolved
-// view so override templates get the same string the built-in email shows.
-func durationOf(v alertView) string {
-	for _, row := range v.Rows {
-		if row.Label == "Open for" || row.Label == "Total duration" {
-			return row.Value
-		}
-	}
-	return ""
 }
 
 func humanTimeOf(t *time.Time) string {

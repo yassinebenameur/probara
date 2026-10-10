@@ -1,127 +1,68 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+// Curated host overview for agent monitors, fed by the generic metric store
+// (POST /monitors/{id}/metrics/query) instead of per-check metrics_data.
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Area,
-  AreaChart,
-  Brush,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import { AgentMetrics, CheckResult, MetricThresholdsConfig } from '@/lib/types';
+  MetricQueryRefResult,
+  MetricQueryResponse,
+  MetricQuerySpec,
+  MetricRule,
+  MetricSeriesData,
+} from '@/lib/types';
+import { getMonitorMetricSeries, queryMonitorMetrics } from '@/lib/api';
+import { displayAttr, formatBytes, formatDurationSeconds, ratioToPercent } from '@/lib/metrics';
+import {
+  ChartRow,
+  ChartSeriesInput,
+  MetricChart,
+  RANGE_MS,
+  RANGE_STEP_SECONDS,
+  ReferenceThreshold,
+  SERIES_COLORS,
+  TimeRange,
+  buildChartRows,
+} from './metric-chart';
+
+export type { TimeRange } from './metric-chart';
 
 interface AgentMetricsViewProps {
-  results: CheckResult[];
-  loading?: boolean;
+  monitorId: string;
+  expectedIntervalSeconds: number;
+  metricRules?: MetricRule[];
   timeRange?: TimeRange;
   onTimeRangeChange?: (range: TimeRange) => void;
-  thresholds?: MetricThresholdsConfig;
 }
 
-interface ReferenceThreshold {
-  y: number;
-  label: string;
-}
-
-export type TimeRange = '1h' | '6h' | '24h' | '7d';
-
-interface MetricPoint {
-  timestampMs: number;
-  cpuPercent: number;
-  cpuCores: number;
-  memoryUsed: number;
-  memoryTotal: number;
-  swapUsed: number;
-  swapTotal: number;
-  diskUsed: number;
-  diskTotal: number;
-  diskMounts: { path: string; used: number; total: number; fstype: string }[];
-  diskReadBytes: number;
-  diskWriteBytes: number;
-  networkBytesIn: number;
-  networkBytesOut: number;
-  loadAvg1: number;
-  loadAvg5: number;
-  loadAvg15: number;
-  processCount: number;
-  uptimeSeconds: number;
-}
-
-interface SeriesPoint {
-  timestampMs: number;
-  value: number;
-}
-
-// A unified chart row keyed by timestamp; gap rows have all-null values so
-// Recharts (connectNulls={false}) breaks the area across reporting gaps.
-type ChartRow = Record<string, number | null> & { ts: number };
-
-const RANGE_MS: Record<TimeRange, number> = {
-  '1h': 60 * 60 * 1000,
-  '6h': 6 * 60 * 60 * 1000,
-  '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-};
-
-const GAP_MIN_THRESHOLD_MS: Record<TimeRange, number> = {
-  '1h': 90 * 1000,
-  '6h': 2 * 60 * 1000,
-  '24h': 3 * 60 * 1000,
-  '7d': 15 * 60 * 1000,
-};
-
-const GAP_MAX_THRESHOLD_MS: Record<TimeRange, number> = {
-  '1h': 10 * 60 * 1000,
-  '6h': 30 * 60 * 1000,
-  '24h': 2 * 60 * 60 * 1000,
-  '7d': 12 * 60 * 60 * 1000,
-};
-
-const MOUNT_COLORS = ['#e6b23f', '#ff8a5c', '#6fb5dd', '#46d17f', '#f472b6', '#fb923c'];
 const MAX_MOUNTS = 6;
-const SYNC_ID = 'agent-metrics';
+const POLL_INTERVAL_MS = 10000;
 
-function isAgentMetrics(metrics: unknown): metrics is AgentMetrics {
-  if (!metrics || typeof metrics !== 'object') return false;
-  const candidate = metrics as AgentMetrics;
-  return (
-    typeof candidate.cpu_percent === 'number' &&
-    typeof candidate.memory_used === 'number' &&
-    typeof candidate.memory_total === 'number' &&
-    typeof candidate.disk_used === 'number' &&
-    typeof candidate.disk_total === 'number' &&
-    typeof candidate.network_bytes_in === 'number' &&
-    typeof candidate.network_bytes_out === 'number' &&
-    typeof candidate.load_avg_1 === 'number' &&
-    typeof candidate.load_avg_5 === 'number' &&
-    typeof candidate.load_avg_15 === 'number' &&
-    typeof candidate.process_count === 'number'
-  );
-}
+// Curated dashboard panels — one batch POST per range change.
+// system.filesystem.utilization carries NO `state` attribute (hostmetrics
+// emits {device, mode, mountpoint, type}; the value is already the used
+// fraction per mount) — never filter it on state. Only system.filesystem.usage
+// has a state attr (used/free/reserved).
+const CHART_QUERIES: MetricQuerySpec[] = [
+  { ref: 'cpu', metric_name: 'system.cpu.utilization', attribute_filters: { state: 'used' }, agg: 'avg' },
+  { ref: 'mem', metric_name: 'system.memory.utilization', attribute_filters: { state: 'used' }, agg: 'avg' },
+  { ref: 'swap', metric_name: 'system.paging.utilization', attribute_filters: { state: 'used' }, agg: 'avg' },
+  { ref: 'fs', metric_name: 'system.filesystem.utilization', agg: 'avg' },
+  { ref: 'diskio', metric_name: 'system.disk.io', agg: 'avg', rate: true },
+  { ref: 'net', metric_name: 'system.network.io', agg: 'avg', rate: true },
+];
 
-function toEpochMs(metricsTimestamp: string | undefined, createdAt: string): number {
-  const metricsMs = metricsTimestamp ? Date.parse(metricsTimestamp) : Number.NaN;
-  if (Number.isFinite(metricsMs)) return metricsMs;
-  const createdMs = Date.parse(createdAt);
-  if (Number.isFinite(createdMs)) return createdMs;
-  return Date.now();
-}
-
-function safePercent(used: number, total: number): number {
-  if (total <= 0) return 0;
-  return (used / total) * 100;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
+// Stat cards and gauges: last values over a short trailing window.
+const STAT_QUERIES: MetricQuerySpec[] = [
+  { ref: 'mem_used', metric_name: 'system.memory.usage', attribute_filters: { state: 'used' }, agg: 'last' },
+  { ref: 'swap_used', metric_name: 'system.paging.usage', attribute_filters: { state: 'used' }, agg: 'last' },
+  { ref: 'load1', metric_name: 'system.cpu.load_average.1m', agg: 'last' },
+  { ref: 'load5', metric_name: 'system.cpu.load_average.5m', agg: 'last' },
+  { ref: 'load15', metric_name: 'system.cpu.load_average.15m', agg: 'last' },
+  { ref: 'procs', metric_name: 'system.processes.count', agg: 'last' },
+  { ref: 'uptime', metric_name: 'system.uptime', agg: 'last' },
+  { ref: 'cores', metric_name: 'system.cpu.logical.count', agg: 'last' },
+];
 
 function formatRate(bytesPerSecond: number): string {
   if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 B/s';
@@ -143,16 +84,6 @@ function formatTimeAgo(seconds: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-function formatUptime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return 'N/A';
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
 }
 
 function getStatusColor(percent: number): string {
@@ -213,185 +144,63 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatTimeLabel(timestampMs: number, range: TimeRange): string {
-  const date = new Date(timestampMs);
-  if (range === '7d') {
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+function lastPoint(series?: MetricSeriesData): [number, number] | null {
+  const points = series?.points;
+  if (!points || points.length === 0) return null;
+  return points[points.length - 1];
+}
+
+function lastValue(series?: MetricSeriesData): number | null {
+  return lastPoint(series)?.[1] ?? null;
+}
+
+// Client-side aggregation across fan-out series sharing a direction attribute
+// (per-second rates are server-side; this just sums devices per bucket).
+function sumByDirection(result: MetricQueryRefResult | undefined, direction: string): [number, number][] {
+  const totals = new Map<number, number>();
+  for (const series of result?.series || []) {
+    if ((series.attributes.direction || '') !== direction) continue;
+    for (const [ts, value] of series.points) {
+      totals.set(ts, (totals.get(ts) || 0) + value);
+    }
   }
-  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return Array.from(totals.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([ts, value]) => [ts, value] as [number, number]);
 }
 
-function getSeriesGapThresholdMs(timestamps: number[], timeRange: TimeRange): number {
-  if (timestamps.length < 2) return GAP_MIN_THRESHOLD_MS[timeRange];
-
-  const intervals: number[] = [];
-  for (let i = 1; i < timestamps.length; i += 1) {
-    const diffMs = timestamps[i] - timestamps[i - 1];
-    if (diffMs > 0) intervals.push(diffMs);
-  }
-
-  if (intervals.length === 0) return GAP_MIN_THRESHOLD_MS[timeRange];
-
-  intervals.sort((a, b) => a - b);
-  const denseIdx = Math.min(intervals.length - 1, Math.floor(intervals.length * 0.1));
-  const denseInterval = intervals[denseIdx];
-  const dynamicThreshold = denseInterval * 2;
-
-  return Math.min(
-    Math.max(dynamicThreshold, GAP_MIN_THRESHOLD_MS[timeRange]),
-    GAP_MAX_THRESHOLD_MS[timeRange]
-  );
-}
-
-interface ChartSeries {
-  key: string;
-  name: string;
-  color: string;
-}
-
-function MetricTooltip({
-  active,
-  payload,
-  label,
-  range,
-  formatter,
-}: {
-  active?: boolean;
-  payload?: Array<{ color?: string; name?: string; value?: number | null }>;
-  label?: number;
-  range: TimeRange;
-  formatter: (value: number) => string;
-}) {
-  if (!active || !payload?.length || typeof label !== 'number') return null;
-  const entries = payload.filter((entry) => entry.value !== null && entry.value !== undefined);
-  if (entries.length === 0) return null;
-
-  return (
-    <div className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 shadow-xl">
-      <p className="text-xs text-slate-400">{formatTimeLabel(label, range)}</p>
-      {entries.map((entry, index) => (
-        <p key={`${entry.name}-${index}`} className="mt-1 flex items-center gap-2 text-sm text-white">
-          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
-          <span className="text-slate-400">{entry.name}:</span>
-          <span className="font-medium">{formatter(entry.value as number)}</span>
-        </p>
-      ))}
-    </div>
-  );
-}
-
-function MetricChart({
-  data,
-  series,
-  range,
-  yDomain,
-  yTickFormatter,
-  valueFormatter,
-  height = 180,
-  showBrush = false,
-  referenceLines,
-}: {
-  data: ChartRow[];
-  series: ChartSeries[];
-  range: TimeRange;
-  yDomain?: [number | string, number | string];
-  yTickFormatter: (value: number) => string;
-  valueFormatter: (value: number) => string;
-  height?: number;
-  showBrush?: boolean;
-  referenceLines?: ReferenceThreshold[];
-}) {
-  const hasData = data.some((row) => series.some((s) => row[s.key] !== null && row[s.key] !== undefined));
-  if (!hasData) {
-    return (
-      <div className="flex items-center justify-center text-xs text-slate-500" style={{ height }}>
-        No data in range
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} syncId={SYNC_ID} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
-          <defs>
-            {series.map((s) => (
-              <linearGradient key={s.key} id={`agentGradient-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={s.color} stopOpacity={0.25} />
-                <stop offset="100%" stopColor={s.color} stopOpacity={0} />
-              </linearGradient>
-            ))}
-          </defs>
-          <XAxis
-            dataKey="ts"
-            type="number"
-            domain={['dataMin', 'dataMax']}
-            scale="time"
-            axisLine={false}
-            tickLine={false}
-            tick={{ fill: '#64748b', fontSize: 11 }}
-            tickFormatter={(value) => formatTimeLabel(value, range)}
-          />
-          <YAxis
-            domain={yDomain ?? ['auto', 'auto']}
-            axisLine={false}
-            tickLine={false}
-            width={56}
-            tick={{ fill: '#64748b', fontSize: 11 }}
-            tickFormatter={(value) => yTickFormatter(value)}
-          />
-          <Tooltip content={<MetricTooltip range={range} formatter={valueFormatter} />} />
-          {referenceLines?.map((line) => (
-            <ReferenceLine
-              key={`ref-${line.label}-${line.y}`}
-              y={line.y}
-              stroke="#f04a5a"
-              strokeDasharray="4 4"
-              strokeOpacity={0.7}
-              ifOverflow="extendDomain"
-              label={{ value: line.label, position: 'insideTopRight', fill: '#f87171', fontSize: 10 }}
-            />
-          ))}
-          {series.map((s) => (
-            <Area
-              key={s.key}
-              type="monotone"
-              dataKey={s.key}
-              name={s.name}
-              stroke={s.color}
-              strokeWidth={2}
-              fill={`url(#agentGradient-${s.key})`}
-              connectNulls={false}
-              dot={false}
-              isAnimationActive={false}
-            />
-          ))}
-          {showBrush && (
-            <Brush
-              dataKey="ts"
-              height={20}
-              travellerWidth={8}
-              stroke="var(--border-default)"
-              fill="rgba(16,19,26,0.6)"
-              tickFormatter={(value) => formatTimeLabel(value as number, range)}
-            />
-          )}
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
+function ruleFiltersMatchAnySeries(
+  rule: MetricRule,
+  seriesList: MetricSeriesData[]
+): boolean {
+  if (!rule.attribute_filters || Object.keys(rule.attribute_filters).length === 0) return true;
+  if (seriesList.length === 0) return true;
+  return seriesList.some((series) =>
+    Object.entries(rule.attribute_filters || {}).every(([key, value]) => series.attributes[key] === value)
   );
 }
 
 export default function AgentMetricsView({
-  results,
-  loading = false,
+  monitorId,
+  expectedIntervalSeconds,
+  metricRules,
   timeRange: controlledTimeRange,
   onTimeRangeChange,
-  thresholds,
 }: AgentMetricsViewProps) {
   const [localTimeRange, setLocalTimeRange] = useState<TimeRange>('24h');
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [chartResponse, setChartResponse] = useState<MetricQueryResponse | null>(null);
+  const [statsResponse, setStatsResponse] = useState<MetricQueryResponse | null>(null);
+  // Real ingest recency: newest last_seen_at across discovered series. Chart
+  // points are bucket STARTS (up to one step old), so they must never feed
+  // the staleness check.
+  const [lastSeenMs, setLastSeenMs] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const timeRange = controlledTimeRange ?? localTimeRange;
+
+  const safeInterval = expectedIntervalSeconds > 0 ? expectedIntervalSeconds : 60;
+  const stepSeconds = Math.min(86400, Math.max(10, RANGE_STEP_SECONDS[timeRange], safeInterval));
 
   const handleTimeRangeChange = (range: TimeRange) => {
     if (!controlledTimeRange) {
@@ -400,133 +209,137 @@ export default function AgentMetricsView({
     onTimeRangeChange?.(range);
   };
 
+  const loadMetrics = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const now = Date.now();
+      const end = new Date(now).toISOString();
+      const start = new Date(now - RANGE_MS[timeRange]).toISOString();
+      const statsWindowSeconds = Math.min(86400, Math.max(3 * safeInterval, 300));
+      const statsStart = new Date(now - statsWindowSeconds * 1000).toISOString();
+
+      try {
+        if (!opts?.silent) setLoading(true);
+        const [charts, stats, discovery] = await Promise.all([
+          queryMonitorMetrics(monitorId, {
+            start,
+            end,
+            step_seconds: stepSeconds,
+            queries: CHART_QUERIES,
+          }),
+          queryMonitorMetrics(monitorId, {
+            start: statsStart,
+            end,
+            step_seconds: statsWindowSeconds,
+            queries: STAT_QUERIES,
+          }),
+          getMonitorMetricSeries(monitorId),
+        ]);
+        setChartResponse(charts);
+        setStatsResponse(stats);
+        setLastSeenMs(
+          (discovery.items || []).reduce((newest, item) => {
+            const seen = Date.parse(item.last_seen_at);
+            return Number.isFinite(seen) && seen > newest ? seen : newest;
+          }, 0)
+        );
+        setLoadError('');
+        setNowMs(Date.now());
+      } catch (err) {
+        console.error('Failed to load agent metrics:', err);
+        if (!opts?.silent) setLoadError('Failed to load metrics');
+      } finally {
+        if (!opts?.silent) setLoading(false);
+      }
+    },
+    [monitorId, timeRange, stepSeconds, safeInterval]
+  );
+
+  useEffect(() => {
+    void loadMetrics();
+  }, [loadMetrics]);
+
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 10000);
-
+      if (document.visibilityState !== 'visible') return;
+      void loadMetrics({ silent: true });
+    }, POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [loadMetrics]);
 
-  const metricPoints = useMemo<MetricPoint[]>(() => {
-    return results
-      .filter((result): result is CheckResult & { metrics_data: AgentMetrics } => isAgentMetrics(result.metrics_data))
-      .map((result) => {
-        const metrics = result.metrics_data;
-        return {
-          timestampMs: toEpochMs(metrics.timestamp, result.created_at),
-          cpuPercent: metrics.cpu_percent,
-          cpuCores: metrics.cpu_cores ?? 0,
-          memoryUsed: metrics.memory_used,
-          memoryTotal: metrics.memory_total,
-          swapUsed: metrics.swap_used ?? 0,
-          swapTotal: metrics.swap_total ?? 0,
-          diskUsed: metrics.disk_used,
-          diskTotal: metrics.disk_total,
-          diskMounts: metrics.disk_mounts ?? [],
-          diskReadBytes: metrics.disk_read_bytes ?? 0,
-          diskWriteBytes: metrics.disk_write_bytes ?? 0,
-          networkBytesIn: metrics.network_bytes_in,
-          networkBytesOut: metrics.network_bytes_out,
-          loadAvg1: metrics.load_avg_1,
-          loadAvg5: metrics.load_avg_5,
-          loadAvg15: metrics.load_avg_15,
-          processCount: metrics.process_count,
-          uptimeSeconds: metrics.uptime_seconds ?? 0,
-        };
-      })
-      .sort((a, b) => a.timestampMs - b.timestampMs);
-  }, [results]);
+  const refResults = useMemo(() => {
+    const map = new Map<string, MetricQueryRefResult>();
+    for (const result of chartResponse?.results || []) map.set(result.ref, result);
+    return map;
+  }, [chartResponse]);
 
-  const filteredPoints = useMemo(() => {
-    const cutoff = nowMs - RANGE_MS[timeRange];
-    return metricPoints.filter((point) => point.timestampMs >= cutoff);
-  }, [metricPoints, nowMs, timeRange]);
+  const statResults = useMemo(() => {
+    const map = new Map<string, MetricQueryRefResult>();
+    for (const result of statsResponse?.results || []) map.set(result.ref, result);
+    return map;
+  }, [statsResponse]);
 
-  const hasRangeData = filteredPoints.length > 0;
-  const latestPoint = metricPoints.length > 0 ? metricPoints[metricPoints.length - 1] : null;
+  const statValue = useCallback(
+    (ref: string): number | null => lastValue(statResults.get(ref)?.series?.[0]),
+    [statResults]
+  );
 
-  // Mount paths present in the range (capped), each gets a synthetic chart key.
-  const mountSeries = useMemo<Array<{ key: string; path: string; color: string }>>(() => {
-    const seen: string[] = [];
-    for (const point of filteredPoints) {
-      for (const mount of point.diskMounts) {
-        if (!seen.includes(mount.path)) seen.push(mount.path);
-      }
-    }
-    return seen.slice(0, MAX_MOUNTS).map((path, index) => ({
+  const cpuSeries = refResults.get('cpu')?.series?.[0];
+  const memSeries = refResults.get('mem')?.series?.[0];
+  const swapSeries = refResults.get('swap')?.series?.[0];
+  const fsResult = refResults.get('fs');
+  const diskioResult = refResults.get('diskio');
+  const netResult = refResults.get('net');
+
+  // Mounts present in the range (capped), each gets a synthetic chart key.
+  // Prefer writable filesystems when the collector reports a mode attribute
+  // (hides read-only system volumes, e.g. on macOS), and dedupe by mountpoint.
+  const mountSeries = useMemo(() => {
+    const all = fsResult?.series || [];
+    const writable = all.filter((series) => series.attributes.mode === 'rw');
+    const candidates = writable.length > 0 ? writable : all;
+    const seenMounts = new Set<string>();
+    const deduped = candidates
+      .slice()
+      .sort((a, b) => (displayAttr(a.attributes) || '').localeCompare(displayAttr(b.attributes) || ''))
+      .filter((series) => {
+        const mount = series.attributes.mountpoint || series.series_key;
+        if (seenMounts.has(mount)) return false;
+        seenMounts.add(mount);
+        return true;
+      });
+    return deduped.slice(0, MAX_MOUNTS).map((series, index) => ({
       key: `mount${index}`,
-      path,
-      color: MOUNT_COLORS[index % MOUNT_COLORS.length],
+      label: displayAttr(series.attributes) || series.series_key,
+      color: SERIES_COLORS[index % SERIES_COLORS.length],
+      series,
     }));
-  }, [filteredPoints]);
+  }, [fsResult]);
 
-  // Unified dataset for every chart: one row per sample, plus all-null gap rows
-  // so the synced charts share an x-domain, cursor, and brush.
-  const chartData = useMemo<ChartRow[]>(() => {
-    if (filteredPoints.length === 0) return [];
-    const timestamps = filteredPoints.map((point) => point.timestampMs);
-    const gapMs = getSeriesGapThresholdMs(timestamps, timeRange);
+  // Unified row grid for every chart so the synced charts share an x-domain,
+  // cursor, and brush; missing buckets stay null and break the areas.
+  const chartRows = useMemo<ChartRow[]>(() => {
+    const stepMs = (refResults.get('cpu')?.step_seconds ?? stepSeconds) * 1000;
+    const toPercent = (v: number) => v * 100;
+    const inputs: ChartSeriesInput[] = [
+      { key: 'cpu', points: cpuSeries?.points || [], transform: toPercent },
+      { key: 'mem', points: memSeries?.points || [], transform: toPercent },
+      { key: 'swap', points: swapSeries?.points || [], transform: toPercent },
+      ...mountSeries.map((mount) => ({
+        key: mount.key,
+        points: mount.series.points,
+        transform: toPercent,
+      })),
+      { key: 'diskRead', points: sumByDirection(diskioResult, 'read') },
+      { key: 'diskWrite', points: sumByDirection(diskioResult, 'write') },
+      { key: 'netIn', points: sumByDirection(netResult, 'receive') },
+      { key: 'netOut', points: sumByDirection(netResult, 'transmit') },
+    ];
+    return buildChartRows(inputs, stepMs);
+  }, [refResults, stepSeconds, cpuSeries, memSeries, swapSeries, mountSeries, diskioResult, netResult]);
 
-    const nullRow = (ts: number): ChartRow => {
-      const row: ChartRow = { ts } as ChartRow;
-      row.cpu = null;
-      row.mem = null;
-      row.swap = null;
-      row.disk = null;
-      row.netIn = null;
-      row.netOut = null;
-      row.diskRead = null;
-      row.diskWrite = null;
-      for (const mount of mountSeries) row[mount.key] = null;
-      return row;
-    };
-
-    const rows: ChartRow[] = [];
-    for (let i = 0; i < filteredPoints.length; i += 1) {
-      const point = filteredPoints[i];
-      const prev = i > 0 ? filteredPoints[i - 1] : null;
-      const isGap = prev !== null && point.timestampMs - prev.timestampMs > gapMs;
-
-      if (isGap && prev) {
-        rows.push(nullRow((prev.timestampMs + point.timestampMs) / 2));
-      }
-
-      let netIn: number | null = null;
-      let netOut: number | null = null;
-      let diskRead: number | null = null;
-      let diskWrite: number | null = null;
-      if (prev && !isGap) {
-        const dtSeconds = (point.timestampMs - prev.timestampMs) / 1000;
-        if (dtSeconds > 0) {
-          netIn = Math.max(0, point.networkBytesIn - prev.networkBytesIn) / dtSeconds;
-          netOut = Math.max(0, point.networkBytesOut - prev.networkBytesOut) / dtSeconds;
-          diskRead = Math.max(0, point.diskReadBytes - prev.diskReadBytes) / dtSeconds;
-          diskWrite = Math.max(0, point.diskWriteBytes - prev.diskWriteBytes) / dtSeconds;
-        }
-      }
-
-      const row: ChartRow = { ts: point.timestampMs } as ChartRow;
-      row.cpu = point.cpuPercent >= 0 ? point.cpuPercent : null;
-      row.mem = safePercent(point.memoryUsed, point.memoryTotal);
-      row.swap = point.swapTotal > 0 ? safePercent(point.swapUsed, point.swapTotal) : null;
-      row.disk = safePercent(point.diskUsed, point.diskTotal);
-      row.netIn = netIn;
-      row.netOut = netOut;
-      row.diskRead = diskRead;
-      row.diskWrite = diskWrite;
-      for (const mount of mountSeries) {
-        const found = point.diskMounts.find((m) => m.path === mount.path);
-        row[mount.key] = found && found.total > 0 ? safePercent(found.used, found.total) : null;
-      }
-      rows.push(row);
-    }
-    return rows;
-  }, [filteredPoints, timeRange, mountSeries]);
-
-  if (loading) {
+  if (loading && !chartResponse) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="text-slate-500">Loading metrics...</div>
@@ -534,7 +347,7 @@ export default function AgentMetricsView({
     );
   }
 
-  if (!latestPoint) {
+  if (lastSeenMs === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-800/50 mb-4">
@@ -548,36 +361,99 @@ export default function AgentMetricsView({
           </svg>
         </div>
         <p className="text-sm font-medium text-white">No metrics available</p>
-        <p className="text-xs text-slate-500 mt-1">Waiting for agent to report</p>
+        <p className="text-xs text-slate-500 mt-1">
+          {loadError || 'Waiting for the collector to push metrics'}
+        </p>
       </div>
     );
   }
 
-  const memoryPercent = safePercent(latestPoint.memoryUsed, latestPoint.memoryTotal);
-  const diskPercent = safePercent(latestPoint.diskUsed, latestPoint.diskTotal);
-  const swapPercent = latestPoint.swapTotal > 0 ? safePercent(latestPoint.swapUsed, latestPoint.swapTotal) : 0;
-  const swapAvailable = latestPoint.swapTotal > 0;
-  const cpuAvailable = latestPoint.cpuPercent >= 0;
-  const cpuPercent = cpuAvailable ? latestPoint.cpuPercent : 0;
+  const cpuRatio = lastValue(cpuSeries);
+  const memRatio = lastValue(memSeries);
+  const swapRatio = lastValue(swapSeries);
 
-  const latestRow = chartData.length > 0 ? chartData[chartData.length - 1] : null;
+  const cpuAvailable = cpuRatio !== null;
+  const cpuPercent = cpuRatio !== null ? cpuRatio * 100 : 0;
+  const memoryPercent = memRatio !== null ? memRatio * 100 : 0;
+  const swapAvailable = swapRatio !== null && swapRatio > 0;
+  const swapPercent = swapRatio !== null ? swapRatio * 100 : 0;
+
+  // Filesystem aggregate gauge: the fullest mount in range.
+  let worstMountPercent = 0;
+  let worstMountLabel = '';
+  for (const mount of mountSeries) {
+    const value = lastValue(mount.series);
+    if (value !== null && value * 100 > worstMountPercent) {
+      worstMountPercent = value * 100;
+      worstMountLabel = mount.label;
+    }
+  }
+
+  const memUsedBytes = statValue('mem_used');
+  const memTotalBytes =
+    memUsedBytes !== null && memRatio !== null && memRatio > 0 ? memUsedBytes / memRatio : null;
+  const swapUsedBytes = statValue('swap_used');
+  const swapTotalBytes =
+    swapUsedBytes !== null && swapRatio !== null && swapRatio > 0 ? swapUsedBytes / swapRatio : null;
+  const load1 = statValue('load1');
+  const load5 = statValue('load5');
+  const load15 = statValue('load15');
+  const uptimeSeconds = statValue('uptime');
+  const coreCount = statValue('cores');
+  // Processes: sum across per-status series.
+  const processCount = (statResults.get('procs')?.series || []).reduce((sum, series) => {
+    const value = lastValue(series);
+    return value !== null ? sum + value : sum;
+  }, 0);
+  const hasProcessData = (statResults.get('procs')?.series || []).length > 0;
+
+  const latestRow = chartRows.length > 0 ? chartRows[chartRows.length - 1] : null;
   const latestInRate = latestRow?.netIn ?? 0;
   const latestOutRate = latestRow?.netOut ?? 0;
 
-  const timeSinceReportSec = Math.max(0, Math.floor((nowMs - latestPoint.timestampMs) / 1000));
-  const isStale = timeSinceReportSec > 300;
+  const timeSinceReportSec = Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000));
+  const staleAfterSec = Math.max(3 * safeInterval, 120);
+  const isStale = timeSinceReportSec > staleAfterSec;
 
   const percentTick = (value: number) => `${value.toFixed(0)}%`;
   const percentValue = (value: number) => `${value.toFixed(1)}%`;
 
-  const thresholdLine = (value: number | undefined, label: string): ReferenceThreshold[] =>
-    value != null && value > 0 ? [{ y: value, label: `${label} ${value}%` }] : [];
-  const cpuRefLines = thresholdLine(thresholds?.cpu_percent, 'alert');
+  // Threshold ReferenceLines from the monitor's metric_rules: rules whose
+  // metric matches the panel and whose filters fit the panel's series.
+  const rules = metricRules || [];
+  const ratioRuleLines = (
+    metricName: string,
+    seriesList: MetricSeriesData[],
+    prefix: string
+  ): ReferenceThreshold[] =>
+    rules
+      .filter((rule) => rule.metric_name === metricName && ruleFiltersMatchAnySeries(rule, seriesList))
+      .map((rule) => ({
+        y: ratioToPercent(rule.threshold),
+        label: `${prefix} ${ratioToPercent(rule.threshold)}%`,
+      }));
+  const rateRuleLines = (metricName: string, seriesList: MetricSeriesData[]): ReferenceThreshold[] =>
+    rules
+      .filter((rule) => rule.metric_name === metricName && ruleFiltersMatchAnySeries(rule, seriesList))
+      .map((rule) => ({ y: rule.threshold, label: `alert ${formatRateTick(rule.threshold)}` }));
+
+  const cpuRefLines = ratioRuleLines('system.cpu.utilization', cpuSeries ? [cpuSeries] : [], 'alert');
   const memSwapRefLines = [
-    ...thresholdLine(thresholds?.memory_percent, 'mem'),
-    ...thresholdLine(thresholds?.swap_percent, 'swap'),
+    ...ratioRuleLines('system.memory.utilization', memSeries ? [memSeries] : [], 'mem'),
+    ...ratioRuleLines('system.paging.utilization', swapSeries ? [swapSeries] : [], 'swap'),
   ];
-  const diskRefLines = thresholdLine(thresholds?.disk_percent, 'alert');
+  const diskRefLines = ratioRuleLines(
+    'system.filesystem.utilization',
+    mountSeries.map((mount) => mount.series),
+    'alert'
+  );
+  const diskIORefLines = rateRuleLines('system.disk.io', diskioResult?.series || []);
+  const netRefLines = rateRuleLines('system.network.io', netResult?.series || []);
+
+  const bucketCount = chartRows.reduce(
+    (count, row) => (row.cpu !== null && row.cpu !== undefined ? count + 1 : count),
+    0
+  );
 
   return (
     <div className="space-y-6">
@@ -589,7 +465,14 @@ export default function AgentMetricsView({
         <span className="text-xs text-slate-500">Last report: {formatTimeAgo(timeSinceReportSec)}</span>
       </div>
 
-      {!hasRangeData && (
+      {isStale && (
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
+          No metrics received in the last {formatDurationSeconds(staleAfterSec)} — the collector may be
+          stopped or unable to reach the platform.
+        </div>
+      )}
+
+      {chartRows.length === 0 && (
         <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
           No points in the selected range. Charts remain empty for this range.
         </div>
@@ -598,35 +481,55 @@ export default function AgentMetricsView({
       <div className="grid grid-cols-3 gap-6 rounded-xl border border-white/[0.06] bg-slate-900/50 p-6">
         <CircularProgress
           value={cpuPercent}
-          label={latestPoint.cpuCores > 0 ? `CPU · ${latestPoint.cpuCores} cores` : 'CPU'}
+          label={coreCount !== null && coreCount > 0 ? `CPU · ${Math.round(coreCount)} cores` : 'CPU'}
           color={cpuAvailable ? getStatusColor(cpuPercent) : '#64748b'}
           displayValue={cpuAvailable ? `${cpuPercent.toFixed(0)}%` : 'N/A'}
         />
         <CircularProgress value={memoryPercent} label="Memory" color={getStatusColor(memoryPercent)} />
-        <CircularProgress value={diskPercent} label="Disk" color={getStatusColor(diskPercent)} />
+        <CircularProgress
+          value={worstMountPercent}
+          label={worstMountLabel ? `Disk · ${worstMountLabel}` : 'Disk'}
+          color={getStatusColor(worstMountPercent)}
+        />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Memory" value={`${formatBytes(latestPoint.memoryUsed)} / ${formatBytes(latestPoint.memoryTotal)}`} />
+        <StatCard
+          label="Memory"
+          value={
+            memUsedBytes !== null
+              ? `${formatBytes(memUsedBytes)}${memTotalBytes !== null ? ` / ${formatBytes(memTotalBytes)}` : ''}`
+              : 'N/A'
+          }
+        />
         <StatCard
           label="Swap"
-          value={swapAvailable ? `${formatBytes(latestPoint.swapUsed)} / ${formatBytes(latestPoint.swapTotal)}` : 'None'}
+          value={
+            swapAvailable && swapUsedBytes !== null
+              ? `${formatBytes(swapUsedBytes)}${swapTotalBytes !== null ? ` / ${formatBytes(swapTotalBytes)}` : ''}`
+              : 'None'
+          }
         />
-        <StatCard label="Disk" value={`${formatBytes(latestPoint.diskUsed)} / ${formatBytes(latestPoint.diskTotal)}`} />
         <StatCard
           label="Load Average"
-          value={`${latestPoint.loadAvg1.toFixed(2)} · ${latestPoint.loadAvg5.toFixed(2)} · ${latestPoint.loadAvg15.toFixed(2)}`}
+          value={
+            load1 !== null && load5 !== null && load15 !== null
+              ? `${load1.toFixed(2)} · ${load5.toFixed(2)} · ${load15.toFixed(2)}`
+              : 'N/A'
+          }
         />
-        <StatCard label="Processes" value={`${latestPoint.processCount}`} />
-        <StatCard label="Uptime" value={formatUptime(latestPoint.uptimeSeconds)} />
-        <StatCard label="CPU Cores" value={latestPoint.cpuCores > 0 ? `${latestPoint.cpuCores}` : 'N/A'} />
+        <StatCard label="Processes" value={hasProcessData ? `${Math.round(processCount)}` : 'N/A'} />
+        <StatCard label="Uptime" value={uptimeSeconds !== null ? formatDurationSeconds(uptimeSeconds) : 'N/A'} />
+        <StatCard label="CPU Cores" value={coreCount !== null && coreCount > 0 ? `${Math.round(coreCount)}` : 'N/A'} />
       </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-slate-900/50 p-5">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h3 className="text-sm font-medium text-white">Metrics Over Time</h3>
-            <p className="text-xs text-slate-500 mt-1">{filteredPoints.length} samples in selected range</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {bucketCount} buckets at {formatDurationSeconds(stepSeconds)} resolution
+            </p>
           </div>
           <div className="flex gap-1">
             {(['1h', '6h', '24h', '7d'] as const).map((range) => (
@@ -651,7 +554,7 @@ export default function AgentMetricsView({
             </div>
             <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
               <MetricChart
-                data={chartData}
+                data={chartRows}
                 series={[{ key: 'cpu', name: 'CPU', color: '#ff8a5c' }]}
                 range={timeRange}
                 yDomain={[0, 100]}
@@ -671,7 +574,7 @@ export default function AgentMetricsView({
             </div>
             <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
               <MetricChart
-                data={chartData}
+                data={chartRows}
                 series={[
                   { key: 'mem', name: 'Memory', color: '#6fb5dd' },
                   { key: 'swap', name: 'Swap', color: '#f472b6' },
@@ -688,16 +591,14 @@ export default function AgentMetricsView({
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-slate-500">Disk Usage</span>
-              <span className="text-xs font-mono text-slate-400">{diskPercent.toFixed(1)}%</span>
+              <span className="text-xs font-mono text-slate-400">
+                {worstMountPercent > 0 ? `${worstMountPercent.toFixed(1)}%` : 'N/A'}
+              </span>
             </div>
             <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
               <MetricChart
-                data={chartData}
-                series={
-                  mountSeries.length > 0
-                    ? mountSeries.map((mount) => ({ key: mount.key, name: mount.path, color: mount.color }))
-                    : [{ key: 'disk', name: 'Disk', color: '#e6b23f' }]
-                }
+                data={chartRows}
+                series={mountSeries.map((mount) => ({ key: mount.key, name: mount.label, color: mount.color }))}
                 range={timeRange}
                 yDomain={[0, 100]}
                 yTickFormatter={percentTick}
@@ -711,7 +612,7 @@ export default function AgentMetricsView({
                 {mountSeries.map((mount) => (
                   <span key={mount.key} className="flex items-center gap-1.5">
                     <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: mount.color }} />
-                    {mount.path}
+                    {mount.label}
                   </span>
                 ))}
               </div>
@@ -728,7 +629,7 @@ export default function AgentMetricsView({
             </div>
             <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
               <MetricChart
-                data={chartData}
+                data={chartRows}
                 series={[
                   { key: 'diskRead', name: 'Read', color: '#2fbd6a' },
                   { key: 'diskWrite', name: 'Write', color: '#3b82f6' },
@@ -737,6 +638,7 @@ export default function AgentMetricsView({
                 yDomain={[0, 'auto']}
                 yTickFormatter={formatRateTick}
                 valueFormatter={formatRate}
+                referenceLines={diskIORefLines}
               />
             </div>
           </div>
@@ -751,7 +653,7 @@ export default function AgentMetricsView({
             </div>
             <div className="rounded-lg border border-white/[0.06] bg-slate-950/50 p-3">
               <MetricChart
-                data={chartData}
+                data={chartRows}
                 series={[
                   { key: 'netIn', name: 'In', color: '#2fbd6a' },
                   { key: 'netOut', name: 'Out', color: '#3b82f6' },
@@ -760,11 +662,8 @@ export default function AgentMetricsView({
                 yDomain={[0, 'auto']}
                 yTickFormatter={formatRateTick}
                 valueFormatter={formatRate}
+                referenceLines={netRefLines}
               />
-            </div>
-            <div className="mt-2 flex gap-4 text-[11px] text-slate-500">
-              <span>Total in: {formatBytes(latestPoint.networkBytesIn)}</span>
-              <span>Total out: {formatBytes(latestPoint.networkBytesOut)}</span>
             </div>
           </div>
         </div>

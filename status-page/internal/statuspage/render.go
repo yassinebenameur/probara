@@ -14,17 +14,25 @@ import (
 )
 
 type statusPageRenderView struct {
-	ID                  string
-	Slug                string
-	Title               string
-	Description         string
-	HasDescription      bool
-	LogoURL             *string
-	HasLogo             bool
-	PrimaryColor        string
-	SecondaryColor      string
-	DefaultTheme        string
-	AllowThemeToggle    bool
+	ID               string
+	Slug             string
+	Title            string
+	Description      string
+	HasDescription   bool
+	LogoURL          *string
+	HasLogo          bool
+	PrimaryColor     string
+	SecondaryColor   string
+	DefaultTheme     string
+	AllowThemeToggle bool
+	// PushEnabled is the page opt-in AND a configured VAPID keypair. The
+	// template renders the notification control only when it is true, and the
+	// subscribe handler re-checks the same conjunction server-side -- the
+	// control's presence is never the authority.
+	PushEnabled bool
+	// PushPublicKey is the VAPID application server key, base64url. Not a
+	// secret: it ships inside every rendered page by design.
+	PushPublicKey       string
 	ShowFooter          bool
 	FooterText          string
 	ShowGlobalUptime    bool
@@ -114,6 +122,7 @@ type statusPageMonitorView struct {
 	URL                    string
 	Type                   string
 	TypeLabel              string
+	TypeBadge              string
 	Status                 string
 	ToneClass              string
 	StatusLabel            string
@@ -251,17 +260,21 @@ func buildStatusPageRenderView(data *StatusPageData, apiEnabled bool) statusPage
 	}
 
 	view := statusPageRenderView{
-		ID:                data.ID,
-		Slug:              data.Slug,
-		Title:             data.Title,
-		Description:       strings.TrimSpace(derefString(data.Description)),
-		HasDescription:    strings.TrimSpace(derefString(data.Description)) != "",
-		LogoURL:           data.LogoURL,
-		HasLogo:           data.HasLogo,
-		PrimaryColor:      primary,
-		SecondaryColor:    secondary,
-		DefaultTheme:      normalizeTheme(data.DefaultTheme),
-		AllowThemeToggle:  data.AllowThemeToggle,
+		ID:               data.ID,
+		Slug:             data.Slug,
+		Title:            data.Title,
+		Description:      strings.TrimSpace(derefString(data.Description)),
+		HasDescription:   strings.TrimSpace(derefString(data.Description)) != "",
+		LogoURL:          data.LogoURL,
+		HasLogo:          data.HasLogo,
+		PrimaryColor:     primary,
+		SecondaryColor:   secondary,
+		DefaultTheme:     normalizeTheme(data.DefaultTheme),
+		AllowThemeToggle: data.AllowThemeToggle,
+		// Both halves required: the page opted in AND the deployment can
+		// actually send. Either alone renders a control that cannot work.
+		PushEnabled:       data.PushNotificationsEnabled && strings.TrimSpace(data.PushPublicKey) != "",
+		PushPublicKey:     strings.TrimSpace(data.PushPublicKey),
 		ShowFooter:        data.ShowFooter,
 		FooterText:        strings.TrimSpace(derefString(data.CustomFooterText)),
 		ShowGlobalUptime:  data.ShowGlobalUptime,
@@ -574,6 +587,7 @@ func buildStatusPageMonitorView(monitor MonitorStatus) statusPageMonitorView {
 		URL:                    monitor.URL,
 		Type:                   monitor.MonitorType,
 		TypeLabel:              typeLabel(monitor.MonitorType),
+		TypeBadge:              typeBadge(monitor.MonitorType),
 		Status:                 monitor.Status,
 		ToneClass:              statusTone(monitor.Status),
 		StatusLabel:            monitorStatusLabel(monitor.Status),
@@ -756,10 +770,42 @@ func typeLabel(kind string) string {
 		return "Redis"
 	case "postgres":
 		return "PostgreSQL"
+	case "mysql":
+		return "MySQL"
 	case "mongodb":
 		return "MongoDB"
 	case "rabbitmq":
 		return "RabbitMQ"
+	case "websocket":
+		return "WebSocket"
+	case "prometheus":
+		return "Prometheus"
+	default:
+		return strings.ToUpper(kind)
+	}
+}
+
+// typeBadge is the compact variant of typeLabel used where the label sits
+// inline next to the monitor name (list badge, kiosk tile). Labels are kept
+// to at most five characters so name columns stay aligned across rows;
+// database engines collapse to a generic DB — the full product name remains
+// available in the expanded detail panel via TypeLabel.
+func typeBadge(kind string) string {
+	switch kind {
+	case "postgres", "mysql", "mongodb":
+		return "DB"
+	case "rabbitmq":
+		return "MQ"
+	case "websocket":
+		return "WS"
+	case "prometheus":
+		return "PROM"
+	case "synthetic_api":
+		return "API"
+	case "synthetic_browser":
+		return "E2E"
+	case "grpc":
+		return "gRPC"
 	default:
 		return strings.ToUpper(kind)
 	}

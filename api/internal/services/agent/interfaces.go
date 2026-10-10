@@ -16,8 +16,13 @@ type AgentService interface {
 	// GetMonitorByAgentID retrieves a monitor by its agent ID
 	GetMonitorByAgentID(ctx context.Context, agentID string, tenantID uuid.UUID) (uuid.UUID, error)
 
-	// GenerateInstallCommand generates installation instructions for an agent
-	GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string, allowRemoteDisable bool) (*models.AgentInstallCommand, error)
+	// GenerateInstallCommand generates OTel Collector installation
+	// instructions for an agent monitor
+	GenerateInstallCommand(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, apiKey string) (*models.AgentInstallCommand, error)
+
+	// GenerateCollectorConfig renders the collector YAML for one platform
+	// (the config-management/stock-otelcol path)
+	GenerateCollectorConfig(ctx context.Context, monitorID, tenantID uuid.UUID, backendURL, platform string) (string, error)
 }
 
 // Ensure Service implements AgentService

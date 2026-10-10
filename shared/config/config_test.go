@@ -164,3 +164,29 @@ func TestLoadSchedulerConfig_InvalidRetentionHour(t *testing.T) {
 		t.Fatalf("expected error for invalid retention hour")
 	}
 }
+
+func TestLoadNotificationEgressConfig(t *testing.T) {
+	t.Setenv("NOTIFICATION_BLOCK_PRIVATE_IPS", "")
+	t.Setenv("NOTIFICATION_ALLOWED_CIDRS", "")
+	cfg, err := loadNotificationEgressConfig()
+	if err != nil || !cfg.NotificationBlockPrivateIPs || len(cfg.NotificationAllowedCIDRs) != 0 {
+		t.Fatalf("default = %+v, %v; want blocking on, no allow-list", cfg, err)
+	}
+
+	t.Setenv("NOTIFICATION_BLOCK_PRIVATE_IPS", "false")
+	t.Setenv("NOTIFICATION_ALLOWED_CIDRS", " 10.20.0.0/16, ,fd00::/8")
+	cfg, err = loadNotificationEgressConfig()
+	if err != nil || cfg.NotificationBlockPrivateIPs || len(cfg.NotificationAllowedCIDRs) != 2 {
+		t.Fatalf("explicit = %+v, %v", cfg, err)
+	}
+
+	t.Setenv("NOTIFICATION_ALLOWED_CIDRS", "10.0.0.0/33")
+	if _, err := loadNotificationEgressConfig(); err == nil {
+		t.Fatal("an invalid CIDR must fail startup")
+	}
+	t.Setenv("NOTIFICATION_ALLOWED_CIDRS", "")
+	t.Setenv("NOTIFICATION_BLOCK_PRIVATE_IPS", "maybe")
+	if _, err := loadNotificationEgressConfig(); err == nil {
+		t.Fatal("an invalid boolean must fail startup")
+	}
+}

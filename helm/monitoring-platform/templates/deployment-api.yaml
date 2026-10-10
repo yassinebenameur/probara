@@ -75,13 +75,8 @@ spec:
           value: "{{ .Values.api.metricsPort }}"
         - name: LOG_LEVEL
           value: "{{ .Values.api.logLevel }}"
-        - name: POSTGRES_URL
-          value: {{ include "monitoring-platform.postgresUrl" . | quote }}
-        - name: NATS_URL
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: nats_url
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "POSTGRES_URL" "key" "postgres_url" "secret" .Values.postgresql.existingSecret "secretKey" .Values.postgresql.existingSecretKey) | nindent 8 }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_URL" "key" "nats_url" "secret" .Values.nats.existingSecret "secretKey" .Values.nats.existingSecretKey) | nindent 8 }}
         - name: CHECK_JOB_STREAM
           value: {{ .Values.scheduler.checkJobStream | quote }}
         # Must match the scheduler/worker subject: "Run now" publishes
@@ -91,17 +86,9 @@ spec:
         - name: CHECK_RESULT_SUBJECT
           value: "check.results"
         {{- if .Values.nats.auth.enabled }}
-        - name: NATS_LOCATION_AUTH_ISSUER_SEED
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: nats_location_auth_issuer_seed
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "NATS_LOCATION_AUTH_ISSUER_SEED" "key" "nats_location_auth_issuer_seed" "secret" .Values.nats.auth.locationIssuerSeedExistingSecret "secretKey" .Values.nats.auth.locationIssuerSeedExistingSecretKey) | nindent 8 }}
         {{- end }}
-        - name: ADMIN_JWT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: admin_jwt_secret
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "ADMIN_JWT_SECRET" "key" "admin_jwt_secret" "secret" .Values.secrets.adminJwtSecretExistingSecret "secretKey" .Values.secrets.adminJwtSecretExistingSecretKey) | nindent 8 }}
         {{- with .Values.api.publicBaseURL }}
         - name: PUBLIC_BASE_URL
           value: {{ . | quote }}
@@ -119,11 +106,7 @@ spec:
           value: {{ .Values.auth.oidc.issuerUrl | quote }}
         - name: OIDC_CLIENT_ID
           value: {{ .Values.auth.oidc.clientId | quote }}
-        - name: OIDC_CLIENT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: oidc_client_secret
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "OIDC_CLIENT_SECRET" "key" "oidc_client_secret" "secret" .Values.secrets.oidcClientSecretExistingSecret "secretKey" .Values.secrets.oidcClientSecretExistingSecretKey) | nindent 8 }}
         - name: OIDC_SCOPES
           value: {{ .Values.auth.oidc.scopes | quote }}
         - name: OIDC_GROUPS_CLAIM
@@ -137,12 +120,8 @@ spec:
         - name: OIDC_JIT_DEFAULT_TENANT_ID
           value: {{ .Values.auth.oidc.jitDefaultTenantId | quote }}
         {{- end }}
-        {{- if .Values.secrets.probaraSecretsKey }}
-        - name: PROBARA_SECRETS_KEY
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "monitoring-platform.fullname" . }}-secret
-              key: probara_secrets_key
+        {{- if include "monitoring-platform.hasSecret" (dict "ctx" . "value" .Values.secrets.probaraSecretsKey "secret" .Values.secrets.probaraSecretsKeyExistingSecret) }}
+        {{- include "monitoring-platform.secretEnv" (dict "ctx" . "name" "PROBARA_SECRETS_KEY" "key" "probara_secrets_key" "secret" .Values.secrets.probaraSecretsKeyExistingSecret "secretKey" .Values.secrets.probaraSecretsKeyExistingSecretKey) | nindent 8 }}
         {{- end }}
         {{- with (include "monitoring-platform.smtpEnv" .) }}
         {{- . | nindent 8 }}

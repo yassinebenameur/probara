@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 // Plugin is the contract every alert channel integration implements. Plugins
@@ -34,23 +35,6 @@ type ChannelRef struct {
 	Config map[string]any
 }
 
-// RenderedAlert is the shared, channel-agnostic rendering of an alert. Plugins
-// that advertise CapabilityRenderedAlert receive a non-nil pointer; plugins
-// that only advertise CapabilityRawEvent may receive nil.
-type RenderedAlert struct {
-	Title    string
-	Body     string
-	Severity string
-	Link     string
-	Fields   []KeyValue
-}
-
-// KeyValue is a label/value pair used in RenderedAlert.Fields.
-type KeyValue struct {
-	Key   string
-	Value string
-}
-
 // DispatchRequest is the payload handed to Plugin.Send.
 //
 // Attempt is 1-indexed and increments across retries so plugins can adjust
@@ -59,7 +43,29 @@ type KeyValue struct {
 type DispatchRequest struct {
 	Channel   ChannelRef
 	Event     notifications.AlertEvent
-	Rendered  *RenderedAlert
 	EventType string
 	Attempt   int
+	// Test marks the synthetic event sent by the "test channel" API. Paging
+	// plugins resolve what they opened straight away so a test does not leave
+	// a real incident behind.
+	Test bool
+}
+
+// Type returns the event type being delivered: "created", "reminder",
+// "resolved" or "acknowledged".
+func (r DispatchRequest) Type() string {
+	if r.EventType != "" {
+		return r.EventType
+	}
+	if r.Event.Type != "" {
+		return r.Event.Type
+	}
+	return present.EventCreated
+}
+
+// View returns the shared presentation of this event — the wording every
+// plugin renders, with deep links built from the configured AppBaseURL.
+// Plugins own layout only; alert phrasing lives in package present.
+func (r DispatchRequest) View() present.Message {
+	return present.Build(r.Event, r.Type(), CurrentRuntime().AppBaseURL)
 }

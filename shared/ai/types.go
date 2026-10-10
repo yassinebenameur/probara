@@ -41,12 +41,12 @@ type IncidentContext struct {
 // AlertContext is one alert linked to the incident, including the deterministic
 // dependency-graph root cause already computed by the alerter (if any).
 type AlertContext struct {
-	MonitorName              string    `json:"monitor_name"`
-	Status                   string    `json:"status"`
-	FailureCount             int       `json:"failure_count"`
-	LastError                string    `json:"last_error,omitempty"`
-	TriggeredAt              time.Time `json:"triggered_at"`
-	DependencyRootCauseMonitor string  `json:"dependency_root_cause_monitor,omitempty"`
+	MonitorName                string    `json:"monitor_name"`
+	Status                     string    `json:"status"`
+	FailureCount               int       `json:"failure_count"`
+	LastError                  string    `json:"last_error,omitempty"`
+	TriggeredAt                time.Time `json:"triggered_at"`
+	DependencyRootCauseMonitor string    `json:"dependency_root_cause_monitor,omitempty"`
 }
 
 // MonitorContext is an affected monitor with its config and recent check

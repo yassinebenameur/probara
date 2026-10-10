@@ -173,6 +173,11 @@ export const LOCATIONS_PAGE: DocPage = {
             "The stored quorum is constrained to at least one and at most the selected location count. A down aggregate opens normal [availability alerts](/docs/alerting/#availability); degraded does not. Degraded state also does not use the suspect fast-recheck path.",
         },
         {
+          type: "paragraph",
+          text:
+            "Only locations with fresh evidence vote. A location that stops reporting for three check intervals (minimum 90 seconds) is treated exactly like one that never reported: its last state stops counting, so a silent-while-up location cannot mask a real outage and a silent-while-down one cannot pin the monitor down. When no location has fresh evidence — or a location-less monitor receives no results at all — the platform's absence watchdog moves the monitor to `unknown` rather than leaving its last state frozen. No data is never rendered as healthy.",
+        },
+        {
           type: "callout",
           tone: "info",
           title: "Choose quorum from the failure you care about",

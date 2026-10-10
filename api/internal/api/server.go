@@ -26,10 +26,13 @@ import (
 	locationhandlers "github.com/yassinebenameur/probara/api/internal/handlers/locations"
 	maintenancewindowhandlers "github.com/yassinebenameur/probara/api/internal/handlers/maintenancewindows"
 	meshhandlers "github.com/yassinebenameur/probara/api/internal/handlers/mesh"
+	metricsqueryhandlers "github.com/yassinebenameur/probara/api/internal/handlers/metricsquery"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
 	oidcmappinghandlers "github.com/yassinebenameur/probara/api/internal/handlers/oidcmappings"
+	otlphandlers "github.com/yassinebenameur/probara/api/internal/handlers/otlp"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
+	slahandlers "github.com/yassinebenameur/probara/api/internal/handlers/slas"
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
 	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
@@ -52,12 +55,15 @@ import (
 	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
 	meshservice "github.com/yassinebenameur/probara/api/internal/services/mesh"
+	metricsqueryservice "github.com/yassinebenameur/probara/api/internal/services/metricsquery"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
 	notificationsettingsservice "github.com/yassinebenameur/probara/api/internal/services/notificationsettings"
 	oidcauthservice "github.com/yassinebenameur/probara/api/internal/services/oidcauth"
 	oidcmappingsservice "github.com/yassinebenameur/probara/api/internal/services/oidcmappings"
+	otlpservice "github.com/yassinebenameur/probara/api/internal/services/otlp"
 	pushservice "github.com/yassinebenameur/probara/api/internal/services/push"
 	resultservice "github.com/yassinebenameur/probara/api/internal/services/results"
+	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
 	"github.com/yassinebenameur/probara/shared/ai"
@@ -81,8 +87,6 @@ type Server struct {
 	http               *http.Server
 	alertSubscriber    *alertservice.Subscriber
 	statusPublisher    *statusupdates.Publisher
-	pushStaleWorker    *pushservice.StaleWorker
-	agentStaleWorker   *agentservice.StaleWorker
 	auditRecorder      *auditservice.Recorder
 	auditPruner        *auditservice.Pruner
 	locationAuthorizer *locationnatsauthservice.Service
@@ -177,8 +181,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 	// Push service and handlers (created here to use in both public and authenticated routes)
 	pushSvc := pushservice.NewService(dbClient.DB, statusPublisher)
 	pushHandlers := pushhandlers.NewHandler(pushSvc, log, cfg.PublicBaseURL)
-	pushStaleWorker := pushservice.NewStaleWorker(dbClient.DB, log)
-	agentStaleWorker := agentservice.NewStaleWorker(dbClient.DB, log, statusPublisher)
+	// Push/agent staleness detection moved to the scheduler's absence
+	// watchdog (S-F4, docs/state-semantics.md) — one advisory-locked detector
+	// fleet-wide instead of one per API replica.
 	alertHub := alertservice.NewHub()
 	alertSubscriber := alertservice.NewSubscriber(checkJobQueue, alertHub, cfg, log)
 
@@ -235,6 +240,14 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			agentService := agentservice.NewService(dbClient.DB, statusPublisher)
 			agentHandlers := agenthandlers.NewHandler(agentService, log, cfg.PublicBaseURL)
 
+			// OTLP metrics ingest (OTel collector push for agent monitors)
+			otlpService := otlpservice.NewService(dbClient.DB, statusPublisher, cfg.OTLPMaxSeriesPerMonitor, cfg.OTLPMonitorRatePerMin)
+			otlpHandlers := otlphandlers.NewHandler(otlpService, log)
+
+			// Metric store read access for the UI (series discovery + range queries)
+			metricsQueryService := metricsqueryservice.NewService(dbClient.DB)
+			metricsQueryHandlers := metricsqueryhandlers.NewHandler(metricsQueryService, log)
+
 			// AI settings (per-tenant LLM config). The env LLM_* values are the
 			// global fallback so analysis works before a tenant configures a row.
 			aiEnvConfig := ai.Config{
@@ -288,7 +301,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			monitorHandlers.ConfigureDependencies(depservice.NewService(dbClient))
 
 			// Import service and handlers
-			importSvc := importservice.NewService(dbClient, monitorService)
+			importSvc := importservice.NewService(dbClient, monitorService, groupSvc)
 			importHdlrs := importhandlers.NewHandlers(importSvc, log)
 
 			// Private locations (remote worker deployments)
@@ -313,6 +326,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/history", meshHdlrs.GetEdgeHistory)
 				r.Post("/probe", meshHdlrs.ProbeNow)
 			})
+
+			// SLAs and their reports (live, issued, exported)
+			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo), Log: log}
+			r.Route("/slas", slaHandlers.Routes)
+			r.Route("/sla-reports", slaHandlers.ReportRoutes)
 
 			// Maintenance windows
 			maintenanceService := maintenancewindowservice.NewService(dbClient)
@@ -342,6 +360,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
+				r.Get("/{id}/metrics-snapshots", monitorHandlers.GetMonitorMetricsSnapshots)
 				r.Delete("/{id}/history", monitorHandlers.DeleteMonitorHistory)
 				r.Post("/{id}/run", monitorHandlers.RunMonitorNow)
 				r.Get("/{id}/artifacts/screenshot", monitorHandlers.GetSyntheticBrowserScreenshot)
@@ -356,8 +375,12 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/{id}/dependencies", monitorHandlers.AddMonitorDependency)
 				r.Delete("/{id}/dependencies/{dependsOnId}", monitorHandlers.RemoveMonitorDependency)
 				r.Get("/{id}/dependents", monitorHandlers.GetMonitorDependents)
+				// Metric store (agent monitors' OTel metrics)
+				r.Get("/{id}/metrics/series", metricsQueryHandlers.HandleListSeries)
+				r.Post("/{id}/metrics/query", metricsQueryHandlers.HandleQuery)
 				// Agent install endpoints
 				r.Get("/{id}/agent/install", agentHandlers.HandleGetInstallCommand)
+				r.Get("/{id}/agent/config.yaml", agentHandlers.HandleGetCollectorConfig)
 				r.Get("/{id}/agent/install/script.sh", agentHandlers.HandleGetInstallScript)
 				r.Get("/{id}/agent/install/script.ps1", agentHandlers.HandleGetWindowsInstallScript)
 				r.Get("/{id}/agent/uninstall/script.sh", agentHandlers.HandleGetUninstallScript)
@@ -368,8 +391,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/{id}/snooze", maintenanceHandlers.SnoozeMonitor)
 			})
 
-			// Agent metrics endpoint
+			// Agent metrics endpoint (legacy custom-agent push; superseded by OTLP)
 			r.Post("/agent/metrics", agentHandlers.HandleReceiveMetrics)
+
+			// OTLP/HTTP metrics export. The path ends in /v1/metrics because
+			// the collector's otlphttp exporter appends it: its config is
+			// just `endpoint: <base>/api/v1/otlp`.
+			r.Post("/otlp/v1/metrics", otlpHandlers.HandleExportMetrics)
 
 			// Dashboard
 			r.Route("/dashboard", func(r chi.Router) {
@@ -558,8 +586,6 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		http:               httpServer,
 		alertSubscriber:    alertSubscriber,
 		statusPublisher:    statusPublisher,
-		pushStaleWorker:    pushStaleWorker,
-		agentStaleWorker:   agentStaleWorker,
 		auditRecorder:      auditRecorder,
 		auditPruner:        auditPruner,
 		locationAuthorizer: locationAuthorizer,
@@ -598,12 +624,6 @@ func (s *Server) Start() error {
 			return fmt.Errorf("start alert subscriber: %w", err)
 		}
 	}
-	if s.pushStaleWorker != nil {
-		s.pushStaleWorker.Start()
-	}
-	if s.agentStaleWorker != nil {
-		s.agentStaleWorker.Start()
-	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Start()
 	}
@@ -627,12 +647,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if s.alertSubscriber != nil {
 		s.alertSubscriber.Stop()
-	}
-	if s.pushStaleWorker != nil {
-		s.pushStaleWorker.Stop()
-	}
-	if s.agentStaleWorker != nil {
-		s.agentStaleWorker.Stop()
 	}
 	if s.auditRecorder != nil {
 		s.auditRecorder.Stop()

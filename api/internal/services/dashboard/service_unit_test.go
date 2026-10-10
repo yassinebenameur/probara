@@ -38,8 +38,11 @@ func (f *fakeAnalyticsReader) GetScopeAnalytics(ctx context.Context, tenantID uu
 		GeneratedAt: now,
 		Source:      sharedanalytics.SourceRollup,
 		Summary: sharedanalytics.Summary{
-			SLAPct:       98.5,
-			AvgLatencyMS: &avgLatency,
+			HasData:         true,
+			Method:          "sampled",
+			AvailabilityPct: 98.5,
+			SLAPct:          98.5,
+			AvgLatencyMS:    &avgLatency,
 		},
 	}, nil
 }
@@ -92,8 +95,8 @@ func TestService_GetStats_LongRangeUsesInjectedAnalyticsReader(t *testing.T) {
 	if analytics.calls != 1 {
 		t.Fatalf("analytics calls = %d, want 1", analytics.calls)
 	}
-	if stats.OverallUptime != 98.5 {
-		t.Fatalf("OverallUptime = %.1f, want 98.5", stats.OverallUptime)
+	if stats.OverallUptime == nil || *stats.OverallUptime != 98.5 {
+		t.Fatalf("OverallUptime = %v, want 98.5", stats.OverallUptime)
 	}
 	if stats.AvgResponseMS != 245 {
 		t.Fatalf("AvgResponseMS = %.1f, want 245", stats.AvgResponseMS)
@@ -179,6 +182,21 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 			"monitor_id", "failure_count", "error_count", "latest_failure_at",
 		}).AddRow(monitorID, 2, 1, rangeEnd.Add(-time.Hour)))
 
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT DISTINCT ON (cr.monitor_id) cr.monitor_id, cr.error_message
+		FROM check_results cr
+		WHERE cr.tenant_id = $1
+		  AND cr.monitor_id = ANY($2)
+		  AND cr.status IN ('failure', 'error')
+		  AND cr.result_source <> 'platform'
+		  AND cr.created_at >= $3
+		  AND cr.created_at < $4
+		ORDER BY cr.monitor_id, cr.created_at DESC
+	`)).
+		WithArgs(tenantID, pq.Array([]uuid.UUID{monitorID}), rangeStart, rangeEnd).
+		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "error_message"}).
+			AddRow(monitorID, "timeout: context deadline exceeded"))
+
 	svc := NewService(&shareddb.Client{DB: sqlDB}, nil, &fakeAnalyticsReader{}, &fakeTenantSettingsReader{}, nil)
 
 	monitors, err := svc.getProblemMonitors(context.Background(), tenantID, models.DashboardRange30d, rangeStart, rangeEnd, problemMonitorLimit, nil)
@@ -190,6 +208,9 @@ func TestService_GetProblemMonitors_LongRangeUsesRollupCandidatesThenScopedRawCo
 	}
 	if monitors[0].FailureCount != 2 || monitors[0].ErrorCount != 1 {
 		t.Fatalf("counts = (%d,%d), want (2,1)", monitors[0].FailureCount, monitors[0].ErrorCount)
+	}
+	if monitors[0].LatestErrorMessage == nil || *monitors[0].LatestErrorMessage != "timeout: context deadline exceeded" {
+		t.Fatalf("LatestErrorMessage = %v, want timeout message", monitors[0].LatestErrorMessage)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -645,7 +666,12 @@ func TestService_GetOpsSummary_CountsFollowStateMachine(t *testing.T) {
 	tenantID := uuid.New()
 	mock.ExpectQuery("FROM alerts").
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"active_alerts", "acknowledged_alerts"}).AddRow(0, 0))
+		WillReturnRows(sqlmock.NewRows([]string{"active_alerts", "acknowledged_alerts", "suppressed_alerts"}).AddRow(0, 0, 0))
+	// Unrouted-monitor count (shared/alertrouting); state counts come from the
+	// health rows, not this query.
+	mock.ExpectQuery("FROM monitors m").
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 
 	rowFor := func(state string, enabled bool) models.DashboardMonitorHealth {
 		return models.DashboardMonitorHealth{
@@ -675,6 +701,9 @@ func TestService_GetOpsSummary_CountsFollowStateMachine(t *testing.T) {
 	}
 	if summary.PausedMonitors != 1 {
 		t.Fatalf("PausedMonitors = %d, want 1", summary.PausedMonitors)
+	}
+	if summary.UnroutedMonitors != 3 {
+		t.Fatalf("UnroutedMonitors = %d, want 3 (straight from the routing query)", summary.UnroutedMonitors)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

@@ -186,7 +186,7 @@ func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.
 }
 
 // openTLSExpiryAlert opens a tls_expiry alert if one is not already open.
-// Idempotent via the (monitor_id, kind, COALESCE(metric_name, '')) partial
+// Idempotent via the (monitor_id, kind, COALESCE(metric_name, ”)) partial
 // unique index, so it is safe across alerter replicas.
 func (a *Alerter) openTLSExpiryAlert(ctx context.Context, c tlsExpiryConfig, days int) error {
 	value := float64(days)
@@ -242,11 +242,7 @@ func (a *Alerter) resolveClearedTLSExpiryAlert(ctx context.Context, c tlsExpiryC
 // no longer in the evaluated set (threshold removed, monitor deleted/disabled).
 // keep is the set of monitor IDs evaluated this tick.
 func (a *Alerter) resolveOrphanTLSExpiryAlerts(ctx context.Context, keep []uuid.UUID) error {
-	if keep == nil {
-		// A nil slice encodes as SQL NULL and `= ANY(NULL)` filters every row
-		// out; an empty array keeps the "resolve everything" semantics.
-		keep = []uuid.UUID{}
-	}
+	keep = nonNilIDs(keep)
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT al.id, al.tenant_id, al.monitor_id, m.name, al.triggered_at
 		FROM alerts al

@@ -152,14 +152,19 @@ func dbLatencyResult(monitorType string, latencyMs int64, maxLatencyMs, warnLate
 	if metrics == nil {
 		metrics = &dbMetrics{}
 	}
+	return dbLatencyResultEnvelope(monitorType, latencyMs, maxLatencyMs, warnLatencyMs, metrics, metrics)
+}
+
+// dbLatencyResultEnvelope is dbLatencyResult for checkers whose metrics are a
+// type-specific superset of dbMetrics: `base` points at the embedded dbMetrics
+// (where the warn flag is set), `payload` is what is marshaled under the
+// monitor-type key.
+func dbLatencyResultEnvelope(monitorType string, latencyMs int64, maxLatencyMs, warnLatencyMs *int64, base *dbMetrics, payload any) CheckResult {
 	if warnLatencyMs != nil && *warnLatencyMs > 0 && latencyMs > *warnLatencyMs {
-		metrics.LatencyWarnMs = warnLatencyMs
+		base.LatencyWarnMs = warnLatencyMs
 	}
 
-	var metricsJSON json.RawMessage
-	if b, err := json.Marshal(map[string]*dbMetrics{monitorType: metrics}); err == nil {
-		metricsJSON = b
-	}
+	metricsJSON := dbMetricsEnvelope(monitorType, payload)
 
 	if maxLatencyMs != nil && *maxLatencyMs > 0 && latencyMs > *maxLatencyMs {
 		errMsg := fmt.Sprintf("latency: %dms > %dms", latencyMs, *maxLatencyMs)
@@ -183,14 +188,24 @@ func dbFailureResult(monitorType string, latencyMs int64, metrics *dbMetrics, er
 	if metrics == nil {
 		metrics = &dbMetrics{}
 	}
-	var metricsJSON json.RawMessage
-	if b, err := json.Marshal(map[string]*dbMetrics{monitorType: metrics}); err == nil {
-		metricsJSON = b
-	}
+	return dbFailureResultEnvelope(monitorType, latencyMs, metrics, errMsg)
+}
+
+// dbFailureResultEnvelope is dbFailureResult with an arbitrary metrics
+// payload (see dbLatencyResultEnvelope).
+func dbFailureResultEnvelope(monitorType string, latencyMs int64, payload any, errMsg string) CheckResult {
 	return CheckResult{
 		Status:       "failure",
 		LatencyMs:    &latencyMs,
 		ErrorMessage: &errMsg,
-		MetricsData:  metricsJSON,
+		MetricsData:  dbMetricsEnvelope(monitorType, payload),
 	}
+}
+
+func dbMetricsEnvelope(monitorType string, payload any) json.RawMessage {
+	b, err := json.Marshal(map[string]any{monitorType: payload})
+	if err != nil {
+		return nil
+	}
+	return b
 }

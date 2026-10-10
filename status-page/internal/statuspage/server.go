@@ -23,6 +23,7 @@ type Server struct {
 	db           *db.Client
 	http         *http.Server
 	subscriber   *Subscriber
+	pushSender   *pushSender
 	sseConnected prometheus.Gauge
 }
 
@@ -35,7 +36,24 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	service := NewService(dbClient, analyticsRepo)
 	hub := NewHub()
 	renderCache := newRenderCache(renderCacheTTLFromEnv())
-	handlers := NewHandlers(service, cfg, log, hub, renderCache)
+
+	// The push store is the package's only Postgres write path. It is created
+	// only when the deployment has VAPID keys, so a deployment without them
+	// keeps the service strictly read-only and 404s the push routes.
+	var pushes *pushStore
+	if cfg.WebPushConfigured() {
+		pushes = newPushStore(dbClient.DB)
+	}
+	handlers := NewHandlers(service, cfg, log, hub, renderCache, pushes)
+
+	// The push sender owns the reconcile-and-send loop. It exists only when
+	// VAPID keys are configured, so an unconfigured deployment starts no loop
+	// and never writes.
+	var pushSend *pushSender
+	if pushes != nil {
+		pushSend = newPushSender(pushes, cfg, log)
+		pushSend.Start()
+	}
 
 	// 1 while the NATS subscriber that drives SSE updates and render-cache
 	// invalidation is connected; 0 when it failed to start (pages then go
@@ -53,7 +71,7 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	// refreshed by TTL — loud failure, not a Warn-and-forget.
 	var subscriber *Subscriber
 	if cfg.NATSURL != "" {
-		if sub, err := NewSubscriber(cfg.NATSURL, hub, dbClient, log, renderCache); err != nil {
+		if sub, err := NewSubscriber(cfg.NATSURL, hub, dbClient, log, renderCache, pushSend); err != nil {
 			log.WithError(err).Error("Failed to initialize status update subscriber; live updates and event-driven cache invalidation are disabled")
 		} else {
 			if err := sub.Start(); err != nil {
@@ -79,7 +97,19 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 	// API proxy for the in-page status page customizer (optional via STATUS_PAGE_API_BASE_URL)
 	mux.HandleFunc("/_sp_api/", handlers.HandleAPIProxy)
 
-	// Public status page routes
+	// The service worker must be a real URL -- it is the one asset the page
+	// cannot inline. It is served from /public/status/ rather than from under
+	// a slug because a worker's default scope is its own directory: at
+	// /public/status/{slug}/sw.js the max scope would be
+	// /public/status/{slug}/, which is NOT a prefix of the page URL
+	// /public/status/{slug}, so registration would succeed and control
+	// nothing. From here the max scope covers every page, and the client
+	// narrows it to its own slug.
+	mux.HandleFunc("/public/status/sw.js", handlers.HandlePushServiceWorker)
+
+	// Public status page routes. This must stay registered last of the
+	// /public/status/ patterns; ServeMux resolves most-specific-first, so the
+	// exact sw.js pattern wins over this prefix.
 	mux.HandleFunc("/public/status/", handlers.HandleStatusPage)
 
 	readTimeout := cfg.ReadTimeout
@@ -106,6 +136,7 @@ func NewServer(cfg *config.StatusPageConfig, log *logger.Logger, metricsRegistry
 		db:           dbClient,
 		http:         httpServer,
 		subscriber:   subscriber,
+		pushSender:   pushSend,
 		sseConnected: sseConnected,
 	}
 }
@@ -122,6 +153,9 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down HTTP server")
+	if s.pushSender != nil {
+		s.pushSender.Stop()
+	}
 	if s.subscriber != nil {
 		s.subscriber.Close()
 		if s.sseConnected != nil {

@@ -1,0 +1,14 @@
+# Build-context hygiene for the Go service images (context = repo root).
+# The frontend image uses context ./web and is unaffected by this file.
+.git
+.claire
+.playwright-mcp
+**/node_modules
+web
+website
+static/collector
+collector/dist
+helm
+docs
+*.png
+*.log

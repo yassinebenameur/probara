@@ -8,6 +8,7 @@ import { DEPENDENCIES_PAGE } from "./dependencies";
 import { GETTING_STARTED_PAGE } from "./getting-started";
 import { LOCATIONS_PAGE } from "./locations";
 import { MONITORS_PAGE } from "./monitors";
+import { SLAS_PAGE } from "./slas";
 import { STATUS_PAGES_PAGE } from "./status-pages";
 
 export {
@@ -20,6 +21,7 @@ export {
   GETTING_STARTED_PAGE,
   LOCATIONS_PAGE,
   MONITORS_PAGE,
+  SLAS_PAGE,
   STATUS_PAGES_PAGE,
 };
 
@@ -30,6 +32,7 @@ export const PRODUCT_DOC_PAGES: DocPage[] = [
   LOCATIONS_PAGE,
   ALERTING_PAGE,
   STATUS_PAGES_PAGE,
+  SLAS_PAGE,
   DEPENDENCIES_PAGE,
   AGENTS_PAGE,
   ADMINISTRATION_PAGE,

@@ -206,7 +206,16 @@ func (i *Ingest) Start() error {
 		return fmt.Errorf("failed to ensure results stream: %w", err)
 	}
 
-	consumer, err := i.queue.CreateConsumer(ctx, i.config.CheckResultStream, i.config.ResultIngestConsumerName)
+	// Unlimited redelivery: a check result must never be dropped because the
+	// ingest transaction kept failing — most notably during a Helm rollout
+	// window where new code runs against the pre-migration schema and every
+	// persist errors until the migration job lands. The stream's MaxAge is
+	// the only bound; the backoff keeps a stuck message from busy-looping.
+	consumer, err := i.queue.CreateConsumerWithOptions(ctx, i.config.CheckResultStream, i.config.ResultIngestConsumerName,
+		queue.ConsumerOptions{
+			MaxDeliver: -1,
+			BackOff:    []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, time.Minute},
+		})
 	if err != nil {
 		return fmt.Errorf("failed to create ingest consumer: %w", err)
 	}

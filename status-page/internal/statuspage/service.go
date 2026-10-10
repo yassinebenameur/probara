@@ -13,7 +13,13 @@ import (
 	"github.com/lib/pq"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/metricstore"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
 )
+
+// ErrStatusPageNotFound is returned when a slug or ID resolves to no status
+// page. Handlers match it with errors.Is to answer 404 instead of 500.
+var ErrStatusPageNotFound = errors.New("status page not found")
 
 // StatusPageData represents the public status page data
 type StatusPageData struct {
@@ -44,6 +50,14 @@ type StatusPageData struct {
 	ShowMonitorTLS     bool                          `json:"-"` // For template use only
 	ShowLatencyCharts  bool                          `json:"-"` // For template use only
 	ShowAgentMetrics   bool                          `json:"-"` // For template use only
+	// PushNotificationsEnabled is the page's opt-in only; the render layer
+	// ANDs it with "the deployment has VAPID keys" before showing anything.
+	PushNotificationsEnabled bool `json:"-"` // For template use only
+	// PushPublicKey is the deployment's VAPID application server key, injected
+	// by the handler (the service layer has no config). Empty means the
+	// deployment cannot send push, which disables the control regardless of
+	// the page's own setting.
+	PushPublicKey string `json:"-"` // For template use only
 	// Tenant-authored branding injections (settings JSONB) applied to the
 	// built-in template; custom templates can also reference them.
 	CustomCSS        string `json:"-"` // For template use only
@@ -97,21 +111,21 @@ type StatusPageMaintenanceWindow struct {
 
 // MonitorStatus represents a monitor's status on a status page
 type MonitorStatus struct {
-	ID                 string               `json:"id"`
-	Name               string               `json:"name"`
-	URL                string               `json:"url"`
-	MonitorType        string               `json:"monitor_type"` // "http", "ping", "dns", "agent", "group", "push", "sip"
-	Status             string               `json:"status"`       // "up", "down", "error", "unknown"
-	Tags               []string             `json:"tags,omitempty"`
-	LastCheckTime      *time.Time           `json:"last_check_time,omitempty"`
-	LastHTTPStatus     *int                 `json:"last_http_status,omitempty"`
-	LastLatency        *int                 `json:"last_latency_ms,omitempty"`
-	TLSDaysUntilExpiry *int                 `json:"tls_days_until_expiry,omitempty"`
-	TLSNotAfter        string               `json:"tls_not_after,omitempty"`
+	ID                 string     `json:"id"`
+	Name               string     `json:"name"`
+	URL                string     `json:"url"`
+	MonitorType        string     `json:"monitor_type"` // "http", "ping", "dns", "agent", "group", "push", "sip"
+	Status             string     `json:"status"`       // "up", "down", "error", "unknown"
+	Tags               []string   `json:"tags,omitempty"`
+	LastCheckTime      *time.Time `json:"last_check_time,omitempty"`
+	LastHTTPStatus     *int       `json:"last_http_status,omitempty"`
+	LastLatency        *int       `json:"last_latency_ms,omitempty"`
+	TLSDaysUntilExpiry *int       `json:"tls_days_until_expiry,omitempty"`
+	TLSNotAfter        string     `json:"tls_not_after,omitempty"`
 	// CertExpiresSoon is set when the monitor has an open tls_expiry alert:
 	// the certificate is inside its configured warning window while the
 	// endpoint itself is still up.
-	CertExpiresSoon bool `json:"cert_expires_soon,omitempty"`
+	CertExpiresSoon    bool                 `json:"cert_expires_soon,omitempty"`
 	Uptime24h          *float64             `json:"uptime_24h,omitempty"`
 	Uptime24hFormatted string               `json:"-"` // For template use only
 	Uptime1h           *float64             `json:"uptime_1h,omitempty"`
@@ -258,9 +272,12 @@ type statusPageSettingsPatch struct {
 	FooterText        *string `json:"footer_text,omitempty"`
 	DefaultTheme      *string `json:"default_theme,omitempty"`
 	AllowThemeToggle  *bool   `json:"allow_theme_toggle,omitempty"`
-	CustomCSS         *string `json:"custom_css,omitempty"`
-	CustomHeadHTML    *string `json:"custom_head_html,omitempty"`
-	CustomFooterHTML  *string `json:"custom_footer_html,omitempty"`
+
+	EnablePushNotifications *bool `json:"enable_push_notifications,omitempty"`
+
+	CustomCSS        *string `json:"custom_css,omitempty"`
+	CustomHeadHTML   *string `json:"custom_head_html,omitempty"`
+	CustomFooterHTML *string `json:"custom_footer_html,omitempty"`
 }
 
 type statusPageSettingsStored struct {
@@ -275,9 +292,12 @@ type statusPageSettingsStored struct {
 	FooterText        *string
 	DefaultTheme      string
 	AllowThemeToggle  bool
-	CustomCSS         string
-	CustomHeadHTML    string
-	CustomFooterHTML  string
+
+	EnablePushNotifications bool
+
+	CustomCSS        string
+	CustomHeadHTML   string
+	CustomFooterHTML string
 }
 
 func defaultStatusPageSettings() statusPageSettingsStored {
@@ -292,6 +312,9 @@ func defaultStatusPageSettings() statusPageSettingsStored {
 		ShowFooter:        true,
 		DefaultTheme:      "dark",
 		AllowThemeToggle:  true,
+		// Off by default: enabling it makes the page ask visitors for
+		// notification permission, which is the operator's call to make.
+		EnablePushNotifications: false,
 	}
 }
 
@@ -347,6 +370,9 @@ func parseStatusPageSettings(settingsJSON []byte) statusPageSettingsStored {
 	if patch.AllowThemeToggle != nil {
 		stored.AllowThemeToggle = *patch.AllowThemeToggle
 	}
+	if patch.EnablePushNotifications != nil {
+		stored.EnablePushNotifications = *patch.EnablePushNotifications
+	}
 	if patch.CustomCSS != nil {
 		stored.CustomCSS = strings.TrimSpace(*patch.CustomCSS)
 	}
@@ -364,7 +390,7 @@ func (s *Service) GetTenantIDByStatusPageID(ctx context.Context, statusPageID uu
 	var tenantID uuid.UUID
 	if err := s.db.QueryRowContext(ctx, query, statusPageID).Scan(&tenantID); err != nil {
 		if err == sql.ErrNoRows {
-			return uuid.UUID{}, fmt.Errorf("status page not found")
+			return uuid.UUID{}, ErrStatusPageNotFound
 		}
 		return uuid.UUID{}, fmt.Errorf("failed to get tenant id: %w", err)
 	}
@@ -405,14 +431,14 @@ func (s *Service) GetDraftTemplateBySlug(ctx context.Context, slug string) (page
 	`, slug).Scan(&pageID, &draftSource)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return uuid.Nil, "", false, fmt.Errorf("status page not found")
+			return uuid.Nil, "", false, ErrStatusPageNotFound
 		}
 		if isUndefinedTableError(err) {
 			// Templates table missing: resolve the page alone so previews
 			// degrade to the live render instead of erroring.
 			if err := s.db.QueryRowContext(ctx, `SELECT id FROM status_pages WHERE slug = $1`, slug).Scan(&pageID); err != nil {
 				if err == sql.ErrNoRows {
-					return uuid.Nil, "", false, fmt.Errorf("status page not found")
+					return uuid.Nil, "", false, ErrStatusPageNotFound
 				}
 				return uuid.Nil, "", false, fmt.Errorf("failed to get status page: %w", err)
 			}
@@ -441,7 +467,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("status page not found")
+			return nil, ErrStatusPageNotFound
 		}
 		return nil, fmt.Errorf("failed to get status page: %w", err)
 	}
@@ -491,6 +517,7 @@ func (s *Service) GetStatusPageBySlug(ctx context.Context, slug string) (*Status
 	page.ShowMonitorTLS = settings.ShowMonitorTLS
 	page.ShowLatencyCharts = settings.ShowLatencyCharts
 	page.ShowAgentMetrics = settings.ShowAgentMetrics
+	page.PushNotificationsEnabled = settings.EnablePushNotifications
 	page.CustomCSS = settings.CustomCSS
 	page.CustomHeadHTML = settings.CustomHeadHTML
 	page.CustomFooterHTML = settings.CustomFooterHTML
@@ -755,10 +782,7 @@ func (s *Service) GetGlobal5MinuteUptime(ctx context.Context, statusPageID, tena
 			return nil, fmt.Errorf("failed to scan global 5-minute uptime: %w", err)
 		}
 
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
+		uptime := bucketUptime(total, successful)
 
 		result = append(result, MinuteUptime{
 			Time:   bucket.Format("15:04"),
@@ -1375,394 +1399,6 @@ func (s *Service) GetMonitorHistory(ctx context.Context, monitorID, tenantID uui
 	return history, nil
 }
 
-// CalculateUptime24h calculates uptime percentage over the last 24 hours
-func (s *Service) CalculateUptime24h(ctx context.Context, monitorID, tenantID uuid.UUID) (*float64, error) {
-	query := `
-		SELECT 
-			COUNT(*) as total,
-			COUNT(*) FILTER (WHERE status = 'success') as successful
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2 AND created_at >= NOW() - INTERVAL '24 hours'
-	`
-
-	var total, successful int
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&total, &successful)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate uptime: %w", err)
-	}
-
-	if total == 0 {
-		// No checks yet, return null
-		return nil, nil
-	}
-
-	uptime := (float64(successful) / float64(total)) * 100.0
-	return &uptime, nil
-}
-
-// CalculateUptime1h calculates uptime percentage over the last 1 hour
-func (s *Service) CalculateUptime1h(ctx context.Context, monitorID, tenantID uuid.UUID) (*float64, error) {
-	query := `
-		SELECT 
-			COUNT(*) as total,
-			COUNT(*) FILTER (WHERE status = 'success') as successful
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2 AND created_at >= NOW() - INTERVAL '1 hour'
-	`
-
-	var total, successful int
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&total, &successful)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate 1h uptime: %w", err)
-	}
-
-	if total == 0 {
-		return nil, nil
-	}
-
-	uptime := (float64(successful) / float64(total)) * 100.0
-	return &uptime, nil
-}
-
-// CalculateAvgLatency calculates average latency for a given time interval
-func (s *Service) CalculateAvgLatency(ctx context.Context, monitorID, tenantID uuid.UUID, interval string) (*float64, error) {
-	query := fmt.Sprintf(`
-		SELECT AVG(latency_ms)
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2 
-		  AND created_at >= NOW() - INTERVAL '%s'
-		  AND latency_ms IS NOT NULL
-		  AND status = 'success'
-	`, interval)
-
-	var avgLatency sql.NullFloat64
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&avgLatency)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate avg latency: %w", err)
-	}
-
-	if !avgLatency.Valid {
-		return nil, nil
-	}
-
-	val := avgLatency.Float64
-	return &val, nil
-}
-
-// GetMonitorHourlyUptime calculates hourly uptime for a single monitor over the last 24 hours
-func (s *Service) GetMonitorHourlyUptime(ctx context.Context, monitorID, tenantID uuid.UUID) ([]HourlyUptime, error) {
-	query := `
-		WITH hours AS (
-			SELECT generate_series(
-				date_trunc('hour', NOW() - INTERVAL '23 hours'),
-				date_trunc('hour', NOW()),
-				INTERVAL '1 hour'
-			) AS hour
-		),
-		hourly_stats AS (
-			SELECT 
-				date_trunc('hour', cr.created_at) AS hour,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = $1
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - INTERVAL '24 hours'
-			GROUP BY date_trunc('hour', cr.created_at)
-		)
-		SELECT 
-			h.hour,
-			COALESCE(hs.total, 0) AS total,
-			COALESCE(hs.successful, 0) AS successful
-		FROM hours h
-		LEFT JOIN hourly_stats hs ON h.hour = hs.hour
-		ORDER BY h.hour
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, monitorID, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query monitor hourly uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []HourlyUptime
-	for rows.Next() {
-		var hour time.Time
-		var total, successful int
-
-		if err := rows.Scan(&hour, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan monitor hourly uptime: %w", err)
-		}
-
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
-
-		result = append(result, HourlyUptime{
-			Hour:   hour.Format("15:04"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating monitor hourly uptime: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetMonitor5MinuteUptime calculates 5-minute bucket uptime for a single monitor over the last 1 hour
-func (s *Service) GetMonitor5MinuteUptime(ctx context.Context, monitorID, tenantID uuid.UUID) ([]MinuteUptime, error) {
-	query := `
-		WITH buckets AS (
-			SELECT generate_series(
-				date_trunc('minute', NOW() - INTERVAL '55 minutes') - (EXTRACT(minute FROM NOW())::int % 5) * INTERVAL '1 minute',
-				date_trunc('minute', NOW()),
-				INTERVAL '5 minutes'
-			) AS bucket
-		),
-		bucket_stats AS (
-			SELECT 
-				date_trunc('minute', cr.created_at) - (EXTRACT(minute FROM cr.created_at)::int % 5) * INTERVAL '1 minute' AS bucket,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = $1
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - INTERVAL '1 hour'
-			GROUP BY 1
-		)
-		SELECT 
-			b.bucket,
-			COALESCE(bs.total, 0) AS total,
-			COALESCE(bs.successful, 0) AS successful
-		FROM buckets b
-		LEFT JOIN bucket_stats bs ON b.bucket = bs.bucket
-		ORDER BY b.bucket
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, monitorID, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query monitor 5-minute uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []MinuteUptime
-	for rows.Next() {
-		var bucket time.Time
-		var total, successful int
-
-		if err := rows.Scan(&bucket, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan monitor 5-minute uptime: %w", err)
-		}
-
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
-
-		result = append(result, MinuteUptime{
-			Time:   bucket.Format("15:04"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating monitor 5-minute uptime: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetMonitorDailyUptime calculates daily uptime for a single monitor for N days
-func (s *Service) GetMonitorDailyUptime(ctx context.Context, monitorID, tenantID uuid.UUID, days int) ([]DailyUptime, error) {
-	query := `
-		WITH days AS (
-			SELECT generate_series(
-				date_trunc('day', NOW() - $3::INTERVAL),
-				date_trunc('day', NOW()),
-				INTERVAL '1 day'
-			) AS day
-		),
-		daily_stats AS (
-			SELECT 
-				date_trunc('day', cr.created_at) AS day,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = $1
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - $3::INTERVAL
-			GROUP BY date_trunc('day', cr.created_at)
-		)
-		SELECT 
-			d.day,
-			COALESCE(ds.total, 0) AS total,
-			COALESCE(ds.successful, 0) AS successful
-		FROM days d
-		LEFT JOIN daily_stats ds ON d.day = ds.day
-		ORDER BY d.day
-	`
-
-	interval := fmt.Sprintf("%d days", days)
-	rows, err := s.db.QueryContext(ctx, query, monitorID, tenantID, interval)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query monitor daily uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []DailyUptime
-	for rows.Next() {
-		var day time.Time
-		var total, successful int
-
-		if err := rows.Scan(&day, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan monitor daily uptime: %w", err)
-		}
-
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
-
-		result = append(result, DailyUptime{
-			Date:   day.Format("2006-01-02"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating monitor daily uptime: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetMonitorLatencyHistory gets latency data points for a monitor for sparkline chart
-func (s *Service) GetMonitorLatencyHistory(ctx context.Context, monitorID, tenantID uuid.UUID, limit int) ([]LatencyPoint, error) {
-	return s.GetMonitorLatencyHistoryForRange(ctx, monitorID, tenantID, "24 hours", limit)
-}
-
-// GetMonitorLatencyHistoryForRange gets latency data points for a monitor for a specific time range
-// For longer time ranges, it aggregates data into time buckets to reduce visual clutter
-func (s *Service) GetMonitorLatencyHistoryForRange(ctx context.Context, monitorID, tenantID uuid.UUID, interval string, limit int) ([]LatencyPoint, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 500 {
-		limit = 500
-	}
-
-	var query string
-	var bucketInterval string
-	timeFormat := "15:04"
-
-	// Determine aggregation strategy based on time range
-	// For shorter ranges, use raw data; for longer ranges, aggregate into buckets
-	switch interval {
-	case "1 hour":
-		// 1h: Use raw data points (most recent 'limit' points)
-		query = `
-			SELECT latency_ms, created_at FROM (
-				SELECT latency_ms, created_at
-				FROM check_results
-				WHERE monitor_id = $1 AND tenant_id = $2 
-				  AND created_at >= NOW() - $3::INTERVAL
-				  AND latency_ms IS NOT NULL
-				  AND status = 'success'
-				ORDER BY created_at DESC
-				LIMIT $4
-			) sub
-			ORDER BY created_at ASC
-		`
-	case "24 hours":
-		// 24h: Aggregate into 10-minute buckets (~144 buckets, limit to ~60)
-		bucketInterval = "10 minutes"
-		timeFormat = "15:04"
-		limit = 60
-	case "30 days":
-		// 30d: Aggregate into 4-hour buckets (~180 buckets, limit to ~80)
-		bucketInterval = "4 hours"
-		timeFormat = "Jan 2 15:04"
-		limit = 80
-	case "90 days":
-		// 90d: Aggregate into 12-hour buckets (~180 buckets, limit to ~80)
-		bucketInterval = "12 hours"
-		timeFormat = "Jan 2"
-		limit = 80
-	case "365 days":
-		// 1y: Aggregate into 2-day buckets (~183 buckets, limit to ~100)
-		bucketInterval = "2 days"
-		timeFormat = "Jan 2"
-		limit = 100
-	default:
-		// Default: raw data
-		query = `
-			SELECT latency_ms, created_at FROM (
-				SELECT latency_ms, created_at
-				FROM check_results
-				WHERE monitor_id = $1 AND tenant_id = $2 
-				  AND created_at >= NOW() - $3::INTERVAL
-				  AND latency_ms IS NOT NULL
-				  AND status = 'success'
-				ORDER BY created_at DESC
-				LIMIT $4
-			) sub
-			ORDER BY created_at ASC
-		`
-	}
-
-	// For aggregated queries, build a different query
-	if bucketInterval != "" {
-		query = fmt.Sprintf(`
-			SELECT 
-				ROUND(AVG(latency_ms))::int as avg_latency,
-				date_trunc('hour', created_at) + 
-					(EXTRACT(EPOCH FROM created_at - date_trunc('hour', created_at)) / 
-					 EXTRACT(EPOCH FROM '%s'::interval))::int * '%s'::interval as bucket_time
-			FROM check_results
-			WHERE monitor_id = $1 AND tenant_id = $2 
-			  AND created_at >= NOW() - $3::INTERVAL
-			  AND latency_ms IS NOT NULL
-			  AND status = 'success'
-			GROUP BY bucket_time
-			ORDER BY bucket_time ASC
-			LIMIT $4
-		`, bucketInterval, bucketInterval)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, monitorID, tenantID, interval, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query latency history: %w", err)
-	}
-	defer rows.Close()
-
-	var result []LatencyPoint
-
-	for rows.Next() {
-		var latencyMS int
-		var timestamp time.Time
-
-		if err := rows.Scan(&latencyMS, &timestamp); err != nil {
-			return nil, fmt.Errorf("failed to scan latency history: %w", err)
-		}
-
-		result = append(result, LatencyPoint{
-			Timestamp: timestamp,
-			LatencyMS: latencyMS,
-			Time:      timestamp.Format(timeFormat),
-			Unix:      timestamp.Unix(),
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating latency history: %w", err)
-	}
-
-	return result, nil
-}
-
 // GetGlobalHourlyUptime calculates hourly uptime across all monitors in a status page for the last 24 hours
 func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenantID uuid.UUID) ([]HourlyUptime, error) {
 	monitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, statusPageID, tenantID)
@@ -1841,10 +1477,7 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 			return nil, fmt.Errorf("failed to scan hourly uptime: %w", err)
 		}
 
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
+		uptime := bucketUptime(total, successful)
 
 		result = append(result, HourlyUptime{
 			Hour:   hour.Format("15:04"),
@@ -1859,244 +1492,134 @@ func (s *Service) GetGlobalHourlyUptime(ctx context.Context, statusPageID, tenan
 	return result, nil
 }
 
-// GetGlobalDailyUptime calculates daily uptime across all monitors in a status page for N days
-func (s *Service) GetGlobalDailyUptime(ctx context.Context, statusPageID, tenantID uuid.UUID, days int) ([]DailyUptime, error) {
-	monitorIDs, err := s.resolveStatusPageOperationalMonitorIDs(ctx, statusPageID, tenantID)
-	if err != nil {
-		return nil, err
+// agentMetricNames are the curated OpenTelemetry host-metric series the
+// agent collector emits that the status-page summary cards consume.
+var agentMetricNames = []string{
+	"system.cpu.utilization",
+	"system.memory.usage",
+	"system.memory.utilization",
+	"system.filesystem.usage",
+	"system.network.io",
+	"system.cpu.load_average.1m",
+	"system.cpu.load_average.5m",
+	"system.cpu.load_average.15m",
+	"system.processes.count",
+}
+
+// metricstoreQuerier adapts the service's read-only db.Querier to
+// metricstore.DBTX, which also declares ExecContext for write paths this
+// service never takes.
+type metricstoreQuerier struct{ db.Querier }
+
+func (metricstoreQuerier) ExecContext(context.Context, string, ...interface{}) (sql.Result, error) {
+	return nil, errors.New("statuspage: metric store access is read-only")
+}
+
+// nonNegBytes converts an aggregated float sample to the uint64 the display
+// struct carries, clamping pathological negatives instead of wrapping.
+func nonNegBytes(v float64) uint64 {
+	if v <= 0 {
+		return 0
 	}
-	if len(monitorIDs) == 0 {
-		return []DailyUptime{}, nil
-	}
-
-	query := `
-		WITH days AS (
-			SELECT generate_series(
-				date_trunc('day', NOW() - $3::INTERVAL),
-				date_trunc('day', NOW()),
-				INTERVAL '1 day'
-			) AS day
-		),
-		daily_stats AS (
-			SELECT 
-				date_trunc('day', cr.created_at) AS day,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = ANY($1)
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - $3::INTERVAL
-			GROUP BY date_trunc('day', cr.created_at)
-		)
-		SELECT 
-			d.day,
-			COALESCE(ds.total, 0) AS total,
-			COALESCE(ds.successful, 0) AS successful
-		FROM days d
-		LEFT JOIN daily_stats ds ON d.day = ds.day
-		ORDER BY d.day
-	`
-
-	interval := fmt.Sprintf("%d days", days)
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(monitorIDs), tenantID, interval)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query daily uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []DailyUptime
-	for rows.Next() {
-		var day time.Time
-		var total, successful int
-
-		if err := rows.Scan(&day, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan daily uptime: %w", err)
-		}
-
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
-
-		result = append(result, DailyUptime{
-			Date:   day.Format("2006-01-02"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating daily uptime: %w", err)
-	}
-
-	return result, nil
+	return uint64(v)
 }
 
 // GetLatestAgentMetrics retrieves the most recent agent metrics for a monitor
+// from the generic metric store (the newest fresh sample per curated host
+// series), mapped onto the same summary shape the templates always rendered.
 func (s *Service) GetLatestAgentMetrics(ctx context.Context, monitorID, tenantID uuid.UUID) (*AgentMetricsData, error) {
-	query := `
-		SELECT metrics_data, created_at
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2 AND metrics_data IS NOT NULL
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
+	// Freshness bound: interval × 3 (floor 90s), the same horizon state
+	// evaluation uses — a dead agent's last readings must not render
+	// forever. Fall back to a fixed window if the interval can't be read.
+	freshness := 15 * time.Minute
+	var intervalSeconds int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT interval_seconds FROM monitors WHERE id = $1 AND tenant_id = $2`,
+		monitorID, tenantID,
+	).Scan(&intervalSeconds); err == nil && intervalSeconds > 0 {
+		freshness = time.Duration(monitorstate.FreshnessHorizonSeconds(intervalSeconds)) * time.Second
+	}
 
-	var metricsJSON []byte
-	var createdAt time.Time
-
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&metricsJSON, &createdAt)
+	samples, err := metricstore.LatestSamples(ctx, metricstoreQuerier{s.db}, tenantID, monitorID, agentMetricNames, freshness)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("no agent metrics found")
-		}
 		return nil, fmt.Errorf("failed to get agent metrics: %w", err)
 	}
-
-	// Parse JSON metrics
-	var rawMetrics struct {
-		CPUPercent      float64 `json:"cpu_percent"`
-		MemoryUsed      uint64  `json:"memory_used"`
-		MemoryTotal     uint64  `json:"memory_total"`
-		DiskUsed        uint64  `json:"disk_used"`
-		DiskTotal       uint64  `json:"disk_total"`
-		NetworkBytesIn  uint64  `json:"network_bytes_in"`
-		NetworkBytesOut uint64  `json:"network_bytes_out"`
-		LoadAvg1        float64 `json:"load_avg_1"`
-		LoadAvg5        float64 `json:"load_avg_5"`
-		LoadAvg15       float64 `json:"load_avg_15"`
-		ProcessCount    int     `json:"process_count"`
+	if len(samples) == 0 {
+		return nil, fmt.Errorf("no agent metrics found")
 	}
 
-	if err := json.Unmarshal(metricsJSON, &rawMetrics); err != nil {
-		return nil, fmt.Errorf("failed to parse agent metrics: %w", err)
+	metrics := &AgentMetricsData{}
+	var (
+		memUsed, memTotal   float64 // bytes, from system.memory.usage per state
+		memUtil             float64 // ratio 0-1, from system.memory.utilization{state=used}
+		memUtilSeen         bool
+		diskUsed, diskTotal float64 // bytes, system.filesystem.usage summed across mountpoints
+		netIn, netOut       float64 // cumulative counter bytes summed across devices
+	)
+
+	for _, smp := range samples {
+		if smp.TS.After(metrics.Timestamp) {
+			metrics.Timestamp = smp.TS
+		}
+		state := smp.Attributes["state"]
+		switch smp.MetricName {
+		case "system.cpu.utilization":
+			if state == "used" {
+				metrics.CPUPercent = smp.Value * 100
+			}
+		case "system.memory.utilization":
+			if state == "used" {
+				memUtil = smp.Value
+				memUtilSeen = true
+			}
+		case "system.memory.usage":
+			memTotal += smp.Value
+			if state == "used" {
+				memUsed += smp.Value
+			}
+		case "system.filesystem.usage":
+			diskTotal += smp.Value
+			if state == "used" {
+				diskUsed += smp.Value
+			}
+		case "system.network.io":
+			switch smp.Attributes["direction"] {
+			case "receive":
+				netIn += smp.Value
+			case "transmit":
+				netOut += smp.Value
+			}
+		case "system.cpu.load_average.1m":
+			metrics.LoadAvg1 = smp.Value
+		case "system.cpu.load_average.5m":
+			metrics.LoadAvg5 = smp.Value
+		case "system.cpu.load_average.15m":
+			metrics.LoadAvg15 = smp.Value
+		case "system.processes.count":
+			metrics.ProcessCount += int(smp.Value)
+		}
 	}
 
-	metrics := &AgentMetricsData{
-		CPUPercent:      rawMetrics.CPUPercent,
-		MemoryUsed:      rawMetrics.MemoryUsed,
-		MemoryTotal:     rawMetrics.MemoryTotal,
-		DiskUsed:        rawMetrics.DiskUsed,
-		DiskTotal:       rawMetrics.DiskTotal,
-		NetworkBytesIn:  rawMetrics.NetworkBytesIn,
-		NetworkBytesOut: rawMetrics.NetworkBytesOut,
-		LoadAvg1:        rawMetrics.LoadAvg1,
-		LoadAvg5:        rawMetrics.LoadAvg5,
-		LoadAvg15:       rawMetrics.LoadAvg15,
-		ProcessCount:    rawMetrics.ProcessCount,
-		Timestamp:       createdAt,
+	// Memory: used/total from per-state usage bytes; if only the utilization
+	// ratio was reported alongside used bytes, derive the total from it.
+	if memTotal == 0 && memUtilSeen && memUtil > 0 && memUsed > 0 {
+		memTotal = memUsed / memUtil
 	}
+	metrics.MemoryUsed = nonNegBytes(memUsed)
+	metrics.MemoryTotal = nonNegBytes(memTotal)
+	metrics.DiskUsed = nonNegBytes(diskUsed)
+	metrics.DiskTotal = nonNegBytes(diskTotal)
+	metrics.NetworkBytesIn = nonNegBytes(netIn)
+	metrics.NetworkBytesOut = nonNegBytes(netOut)
 
 	// Calculate percentages
 	if metrics.MemoryTotal > 0 {
 		metrics.MemoryPercent = float64(metrics.MemoryUsed) / float64(metrics.MemoryTotal) * 100
+	} else if memUtilSeen {
+		metrics.MemoryPercent = memUtil * 100
 	}
 	if metrics.DiskTotal > 0 {
 		metrics.DiskPercent = float64(metrics.DiskUsed) / float64(metrics.DiskTotal) * 100
-	}
-
-	return metrics, nil
-}
-
-// GetMonitorDowntimePeriods gets downtime periods for a monitor for a specific time range
-// It detects continuous periods of failure by analyzing check results
-func (s *Service) GetMonitorDowntimePeriods(ctx context.Context, monitorID, tenantID uuid.UUID, interval string) ([]DowntimePeriod, error) {
-	// Query all check results in order to detect transitions
-	query := `
-		SELECT status, created_at
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2 
-		  AND created_at >= NOW() - $3::INTERVAL
-		ORDER BY created_at ASC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, monitorID, tenantID, interval)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query check results: %w", err)
-	}
-	defer rows.Close()
-
-	timeFormat := "15:04"
-	if interval != "1 hour" && interval != "24 hours" {
-		timeFormat = "Jan 2 15:04"
-	}
-
-	var periods []DowntimePeriod
-	var currentPeriodStart *time.Time
-	var lastFailureTime *time.Time
-
-	for rows.Next() {
-		var status string
-		var timestamp time.Time
-
-		if err := rows.Scan(&status, &timestamp); err != nil {
-			return nil, fmt.Errorf("failed to scan check result: %w", err)
-		}
-
-		isFailure := status != "success"
-
-		if isFailure {
-			if currentPeriodStart == nil {
-				// Start of a new downtime period
-				currentPeriodStart = &timestamp
-			}
-			lastFailureTime = &timestamp
-		} else {
-			if currentPeriodStart != nil && lastFailureTime != nil {
-				// End of downtime period - transition from failure to success
-				periods = append(periods, DowntimePeriod{
-					StartTime: currentPeriodStart.Format(timeFormat),
-					EndTime:   lastFailureTime.Format(timeFormat),
-					StartUnix: currentPeriodStart.Unix(),
-					EndUnix:   lastFailureTime.Unix(),
-				})
-				currentPeriodStart = nil
-				lastFailureTime = nil
-			}
-		}
-	}
-
-	// Handle case where we're still in a downtime period at the end
-	if currentPeriodStart != nil && lastFailureTime != nil {
-		periods = append(periods, DowntimePeriod{
-			StartTime: currentPeriodStart.Format(timeFormat),
-			EndTime:   lastFailureTime.Format(timeFormat),
-			StartUnix: currentPeriodStart.Unix(),
-			EndUnix:   lastFailureTime.Unix(),
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating check results: %w", err)
-	}
-
-	return periods, nil
-}
-
-// GetLatestPushMetrics retrieves the most recent push metrics for a monitor
-// Returns a dynamic map of metric names to values (auto-detected from push data)
-func (s *Service) GetLatestPushMetrics(ctx context.Context, monitorID, tenantID uuid.UUID) (map[string]interface{}, error) {
-	query := `
-		SELECT metrics_data
-		FROM check_results
-		WHERE monitor_id = $1 AND tenant_id = $2 AND metrics_data IS NOT NULL
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
-
-	var metricsJSON []byte
-
-	err := s.db.QueryRowContext(ctx, query, monitorID, tenantID).Scan(&metricsJSON)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("no push metrics found")
-		}
-		return nil, fmt.Errorf("failed to get push metrics: %w", err)
-	}
-
-	// Parse JSON metrics - push metrics are a dynamic map
-	var metrics map[string]interface{}
-	if err := json.Unmarshal(metricsJSON, &metrics); err != nil {
-		return nil, fmt.Errorf("failed to parse push metrics: %w", err)
 	}
 
 	return metrics, nil
@@ -2253,502 +1776,6 @@ func (s *Service) GetGroupAggregatedStatus(ctx context.Context, memberIDs []uuid
 	}
 
 	return result, nil
-}
-
-// CalculateGroupUptime24h calculates aggregated uptime for a group over the last 24 hours
-func (s *Service) CalculateGroupUptime24h(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID) (*float64, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	query := `
-		SELECT 
-			COUNT(*) as total,
-			COUNT(*) FILTER (WHERE status = 'success') as successful
-		FROM check_results
-		WHERE monitor_id = ANY($1) AND tenant_id = $2 AND created_at >= NOW() - INTERVAL '24 hours'
-	`
-
-	var total, successful int
-	err := s.db.QueryRowContext(ctx, query, pq.Array(memberIDs), tenantID).Scan(&total, &successful)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate group uptime: %w", err)
-	}
-
-	if total == 0 {
-		return nil, nil
-	}
-
-	uptime := (float64(successful) / float64(total)) * 100.0
-	return &uptime, nil
-}
-
-// CalculateGroupUptime1h calculates aggregated uptime for a group over the last 1 hour
-func (s *Service) CalculateGroupUptime1h(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID) (*float64, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	query := `
-		SELECT 
-			COUNT(*) as total,
-			COUNT(*) FILTER (WHERE status = 'success') as successful
-		FROM check_results
-		WHERE monitor_id = ANY($1) AND tenant_id = $2 AND created_at >= NOW() - INTERVAL '1 hour'
-	`
-
-	var total, successful int
-	err := s.db.QueryRowContext(ctx, query, pq.Array(memberIDs), tenantID).Scan(&total, &successful)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate group 1h uptime: %w", err)
-	}
-
-	if total == 0 {
-		return nil, nil
-	}
-
-	uptime := (float64(successful) / float64(total)) * 100.0
-	return &uptime, nil
-}
-
-// CalculateGroupAvgLatency calculates average latency for a group for a given time interval
-func (s *Service) CalculateGroupAvgLatency(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID, interval string) (*float64, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	query := fmt.Sprintf(`
-		SELECT AVG(latency_ms)
-		FROM check_results
-		WHERE monitor_id = ANY($1) AND tenant_id = $2 
-		  AND created_at >= NOW() - INTERVAL '%s'
-		  AND latency_ms IS NOT NULL
-		  AND status = 'success'
-	`, interval)
-
-	var avgLatency sql.NullFloat64
-	err := s.db.QueryRowContext(ctx, query, pq.Array(memberIDs), tenantID).Scan(&avgLatency)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate group avg latency: %w", err)
-	}
-
-	if !avgLatency.Valid {
-		return nil, nil
-	}
-
-	val := avgLatency.Float64
-	return &val, nil
-}
-
-// GetGroupHourlyUptime calculates hourly uptime for a group over the last 24 hours
-func (s *Service) GetGroupHourlyUptime(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID) ([]HourlyUptime, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	query := `
-		WITH hours AS (
-			SELECT generate_series(
-				date_trunc('hour', NOW() - INTERVAL '23 hours'),
-				date_trunc('hour', NOW()),
-				INTERVAL '1 hour'
-			) AS hour
-		),
-		hourly_stats AS (
-			SELECT 
-				date_trunc('hour', cr.created_at) AS hour,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = ANY($1)
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - INTERVAL '24 hours'
-			GROUP BY date_trunc('hour', cr.created_at)
-		)
-		SELECT 
-			h.hour,
-			COALESCE(hs.total, 0) AS total,
-			COALESCE(hs.successful, 0) AS successful
-		FROM hours h
-		LEFT JOIN hourly_stats hs ON h.hour = hs.hour
-		ORDER BY h.hour
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(memberIDs), tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query group hourly uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []HourlyUptime
-	for rows.Next() {
-		var hour time.Time
-		var total, successful int
-
-		if err := rows.Scan(&hour, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan group hourly uptime: %w", err)
-		}
-
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
-
-		result = append(result, HourlyUptime{
-			Hour:   hour.Format("15:04"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating group hourly uptime: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetGroup5MinuteUptime calculates 5-minute bucket uptime for a group over the last 1 hour
-func (s *Service) GetGroup5MinuteUptime(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID) ([]MinuteUptime, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	query := `
-		WITH buckets AS (
-			SELECT generate_series(
-				date_trunc('minute', NOW() - INTERVAL '55 minutes') - (EXTRACT(minute FROM NOW())::int % 5) * INTERVAL '1 minute',
-				date_trunc('minute', NOW()),
-				INTERVAL '5 minutes'
-			) AS bucket
-		),
-		bucket_stats AS (
-			SELECT 
-				date_trunc('minute', cr.created_at) - (EXTRACT(minute FROM cr.created_at)::int % 5) * INTERVAL '1 minute' AS bucket,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = ANY($1)
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - INTERVAL '1 hour'
-			GROUP BY 1
-		)
-		SELECT 
-			b.bucket,
-			COALESCE(bs.total, 0) AS total,
-			COALESCE(bs.successful, 0) AS successful
-		FROM buckets b
-		LEFT JOIN bucket_stats bs ON b.bucket = bs.bucket
-		ORDER BY b.bucket
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(memberIDs), tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query group 5-minute uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []MinuteUptime
-	for rows.Next() {
-		var bucket time.Time
-		var total, successful int
-
-		if err := rows.Scan(&bucket, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan group 5-minute uptime: %w", err)
-		}
-
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
-
-		result = append(result, MinuteUptime{
-			Time:   bucket.Format("15:04"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating group 5-minute uptime: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetGroupDailyUptime calculates daily uptime for a group for N days
-func (s *Service) GetGroupDailyUptime(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID, days int) ([]DailyUptime, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	query := `
-		WITH days AS (
-			SELECT generate_series(
-				date_trunc('day', NOW() - $3::INTERVAL),
-				date_trunc('day', NOW()),
-				INTERVAL '1 day'
-			) AS day
-		),
-		daily_stats AS (
-			SELECT 
-				date_trunc('day', cr.created_at) AS day,
-				COUNT(*) AS total,
-				COUNT(*) FILTER (WHERE cr.status = 'success') AS successful
-			FROM check_results cr
-			WHERE cr.monitor_id = ANY($1)
-			  AND cr.tenant_id = $2
-			  AND cr.created_at >= NOW() - $3::INTERVAL
-			GROUP BY date_trunc('day', cr.created_at)
-		)
-		SELECT 
-			d.day,
-			COALESCE(ds.total, 0) AS total,
-			COALESCE(ds.successful, 0) AS successful
-		FROM days d
-		LEFT JOIN daily_stats ds ON d.day = ds.day
-		ORDER BY d.day
-	`
-
-	interval := fmt.Sprintf("%d days", days)
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(memberIDs), tenantID, interval)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query group daily uptime: %w", err)
-	}
-	defer rows.Close()
-
-	var result []DailyUptime
-	for rows.Next() {
-		var day time.Time
-		var total, successful int
-
-		if err := rows.Scan(&day, &total, &successful); err != nil {
-			return nil, fmt.Errorf("failed to scan group daily uptime: %w", err)
-		}
-
-		uptime := -1.0 // -1 indicates no data
-		if total > 0 {
-			uptime = (float64(successful) / float64(total)) * 100.0
-		}
-
-		result = append(result, DailyUptime{
-			Date:   day.Format("2006-01-02"),
-			Uptime: uptime,
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating group daily uptime: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetGroupLatencyHistoryForRange gets aggregated latency data points for a group for a specific time range
-func (s *Service) GetGroupLatencyHistoryForRange(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID, interval string, limit int) ([]LatencyPoint, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 500 {
-		limit = 500
-	}
-
-	var query string
-	var bucketInterval string
-	timeFormat := "15:04"
-
-	// Determine aggregation strategy based on time range
-	switch interval {
-	case "1 hour":
-		// 1h: Use raw data points averaged across members
-		query = `
-			SELECT ROUND(AVG(latency_ms))::int as avg_latency, created_at FROM (
-				SELECT ROUND(AVG(latency_ms))::int as latency_ms, date_trunc('minute', created_at) as created_at
-				FROM check_results
-				WHERE monitor_id = ANY($1) AND tenant_id = $2 
-				  AND created_at >= NOW() - $3::INTERVAL
-				  AND latency_ms IS NOT NULL
-				  AND status = 'success'
-				GROUP BY date_trunc('minute', created_at)
-				ORDER BY created_at DESC
-				LIMIT $4
-			) sub
-			ORDER BY created_at ASC
-		`
-	case "24 hours":
-		bucketInterval = "10 minutes"
-		timeFormat = "15:04"
-		limit = 60
-	case "30 days":
-		bucketInterval = "4 hours"
-		timeFormat = "Jan 2 15:04"
-		limit = 80
-	case "90 days":
-		bucketInterval = "12 hours"
-		timeFormat = "Jan 2"
-		limit = 80
-	case "365 days":
-		bucketInterval = "2 days"
-		timeFormat = "Jan 2"
-		limit = 100
-	default:
-		query = `
-			SELECT ROUND(AVG(latency_ms))::int as avg_latency, created_at FROM (
-				SELECT ROUND(AVG(latency_ms))::int as latency_ms, date_trunc('minute', created_at) as created_at
-				FROM check_results
-				WHERE monitor_id = ANY($1) AND tenant_id = $2 
-				  AND created_at >= NOW() - $3::INTERVAL
-				  AND latency_ms IS NOT NULL
-				  AND status = 'success'
-				GROUP BY date_trunc('minute', created_at)
-				ORDER BY created_at DESC
-				LIMIT $4
-			) sub
-			ORDER BY created_at ASC
-		`
-	}
-
-	// For aggregated queries, build a different query
-	if bucketInterval != "" {
-		query = fmt.Sprintf(`
-			SELECT 
-				ROUND(AVG(latency_ms))::int as avg_latency,
-				date_trunc('hour', created_at) + 
-					(EXTRACT(EPOCH FROM created_at - date_trunc('hour', created_at)) / 
-					 EXTRACT(EPOCH FROM '%s'::interval))::int * '%s'::interval as bucket_time
-			FROM check_results
-			WHERE monitor_id = ANY($1) AND tenant_id = $2 
-			  AND created_at >= NOW() - $3::INTERVAL
-			  AND latency_ms IS NOT NULL
-			  AND status = 'success'
-			GROUP BY bucket_time
-			ORDER BY bucket_time ASC
-			LIMIT $4
-		`, bucketInterval, bucketInterval)
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(memberIDs), tenantID, interval, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query group latency history: %w", err)
-	}
-	defer rows.Close()
-
-	var result []LatencyPoint
-
-	for rows.Next() {
-		var latencyMS int
-		var timestamp time.Time
-
-		if err := rows.Scan(&latencyMS, &timestamp); err != nil {
-			return nil, fmt.Errorf("failed to scan group latency history: %w", err)
-		}
-
-		result = append(result, LatencyPoint{
-			Timestamp: timestamp,
-			LatencyMS: latencyMS,
-			Time:      timestamp.Format(timeFormat),
-			Unix:      timestamp.Unix(),
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating group latency history: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetGroupDowntimePeriods gets downtime periods for a group for a specific time range
-// A group is considered down when ANY member is down
-func (s *Service) GetGroupDowntimePeriods(ctx context.Context, memberIDs []uuid.UUID, tenantID uuid.UUID, interval string) ([]DowntimePeriod, error) {
-	if len(memberIDs) == 0 {
-		return nil, nil
-	}
-
-	// Query all check results from all members in order to detect transitions
-	// We aggregate by timestamp to see if any member was down at each point
-	query := `
-		WITH time_points AS (
-			SELECT DISTINCT date_trunc('minute', created_at) as minute
-			FROM check_results
-			WHERE monitor_id = ANY($1) AND tenant_id = $2 
-			  AND created_at >= NOW() - $3::INTERVAL
-		),
-		minute_status AS (
-			SELECT 
-				tp.minute,
-				CASE WHEN COUNT(*) FILTER (WHERE cr.status != 'success') > 0 THEN 'failure' ELSE 'success' END as status
-			FROM time_points tp
-			LEFT JOIN check_results cr ON date_trunc('minute', cr.created_at) = tp.minute
-			  AND cr.monitor_id = ANY($1) AND cr.tenant_id = $2
-			GROUP BY tp.minute
-		)
-		SELECT status, minute
-		FROM minute_status
-		ORDER BY minute ASC
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(memberIDs), tenantID, interval)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query group check results: %w", err)
-	}
-	defer rows.Close()
-
-	timeFormat := "15:04"
-	if interval != "1 hour" && interval != "24 hours" {
-		timeFormat = "Jan 2 15:04"
-	}
-
-	var periods []DowntimePeriod
-	var currentPeriodStart *time.Time
-	var lastFailureTime *time.Time
-
-	for rows.Next() {
-		var status string
-		var timestamp time.Time
-
-		if err := rows.Scan(&status, &timestamp); err != nil {
-			return nil, fmt.Errorf("failed to scan group check result: %w", err)
-		}
-
-		isFailure := status != "success"
-
-		if isFailure {
-			if currentPeriodStart == nil {
-				currentPeriodStart = &timestamp
-			}
-			lastFailureTime = &timestamp
-		} else {
-			if currentPeriodStart != nil && lastFailureTime != nil {
-				periods = append(periods, DowntimePeriod{
-					StartTime: currentPeriodStart.Format(timeFormat),
-					EndTime:   lastFailureTime.Format(timeFormat),
-					StartUnix: currentPeriodStart.Unix(),
-					EndUnix:   lastFailureTime.Unix(),
-				})
-				currentPeriodStart = nil
-				lastFailureTime = nil
-			}
-		}
-	}
-
-	// Handle case where we're still in a downtime period at the end
-	if currentPeriodStart != nil && lastFailureTime != nil {
-		periods = append(periods, DowntimePeriod{
-			StartTime: currentPeriodStart.Format(timeFormat),
-			EndTime:   lastFailureTime.Format(timeFormat),
-			StartUnix: currentPeriodStart.Unix(),
-			EndUnix:   lastFailureTime.Unix(),
-		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating group check results: %w", err)
-	}
-
-	return periods, nil
 }
 
 // GetGroupHistory gets aggregated check results history for a group

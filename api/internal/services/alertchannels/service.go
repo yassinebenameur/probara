@@ -202,6 +202,9 @@ func (s *Service) UpdateAlertChannel(ctx context.Context, tenantID, channelID uu
 			return nil, fmt.Errorf("decode existing config: %w", err)
 		}
 		merged := secrets.MergePreserveSecrets(manifest, incoming, current)
+		if err := s.validateMerged(existing.Type, manifest, merged); err != nil {
+			return nil, err
+		}
 		encrypted, err := secrets.EncryptConfig(s.encryptor, manifest, merged)
 		if err != nil {
 			return nil, fmt.Errorf("encrypt config: %w", err)
@@ -302,7 +305,36 @@ func (s *Service) TestAlertChannel(ctx context.Context, tenantID, channelID uuid
 		Event:     event,
 		EventType: "created",
 		Attempt:   1,
+		Test:      true,
 	})
+}
+
+// ErrInvalidConfig wraps a plugin's rejection of an updated channel config so
+// the handler can answer 400 instead of 500.
+var ErrInvalidConfig = errors.New("invalid alert channel config")
+
+// validateMerged runs the plugin's own Validate over the config an update
+// would store. Create validates the request body directly; an update can only
+// be judged after merging, because kept secrets (the webhook URL itself, for
+// most chat plugins) come from the stored row. Without this a channel created
+// with an allowed host could be edited to point anywhere.
+func (s *Service) validateMerged(t models.AlertChannelType, manifest plugin.Manifest, merged map[string]any) error {
+	p, ok := plugin.DefaultRegistry.Get(string(t))
+	if !ok {
+		return nil
+	}
+	plain, err := secrets.DecryptConfig(s.encryptor, manifest, merged)
+	if err != nil {
+		return fmt.Errorf("decrypt config for validation: %w", err)
+	}
+	raw, err := json.Marshal(plain)
+	if err != nil {
+		return fmt.Errorf("encode config for validation: %w", err)
+	}
+	if err := p.Validate(raw); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	return nil
 }
 
 func manifestFor(t models.AlertChannelType) plugin.Manifest {

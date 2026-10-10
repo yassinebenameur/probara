@@ -59,17 +59,21 @@ func main() {
 	}
 	sched.ConfigureEncryption(secretsEncryptor)
 
+	// Status updates reach the API SSE stream and status pages; shared by the
+	// results ingest and the absence watchdog.
+	statusPublisher, err := statusupdates.NewPublisher(cfg.NATSURL)
+	if err != nil {
+		log.WithError(err).Warn("Failed to initialize status update publisher; status pages won't live-update")
+		statusPublisher = nil
+	} else {
+		defer statusPublisher.Close()
+		sched.SetStatusPublisher(statusPublisher)
+	}
+
 	// Results ingest: persists check results workers publish over NATS and
 	// advances monitor state. Workers themselves have no Postgres access.
 	var ingestConsumer *ingest.Ingest
 	if cfg.ResultIngestEnabled {
-		statusPublisher, err := statusupdates.NewPublisher(cfg.NATSURL)
-		if err != nil {
-			log.WithError(err).Warn("Failed to initialize status update publisher; status pages won't live-update")
-			statusPublisher = nil
-		} else {
-			defer statusPublisher.Close()
-		}
 		ingestConsumer = ingest.New(cfg, log, metricsRegistry, dbClient, queueClient, statusPublisher)
 		ingestConsumer.ConfigureEncryption(secretsEncryptor)
 		go func() {

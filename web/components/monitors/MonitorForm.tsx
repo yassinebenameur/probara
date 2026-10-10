@@ -7,6 +7,7 @@ import {
   UpdateMonitorRequest,
   CheckResult,
   MonitorType,
+  DependencySuppression,
   NotificationMode,
   ChannelAssignment,
   HTTPMonitorConfig,
@@ -16,6 +17,7 @@ import {
   HTTPBodyAssertionOp,
   HTTPHeaderAssertion,
   HTTPHeaderAssertionOp,
+  HTTPDisplayField,
   HTTPJSONAssertion,
   HTTPJSONAssertionOp,
   HTTPStatusRange,
@@ -32,6 +34,7 @@ import {
 import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, getMonitors, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
+import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
 import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { LocationsSection } from './LocationsSection';
@@ -42,6 +45,7 @@ import PushForm from './PushForm';
 import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
+import PrometheusForm from './PrometheusForm';
 import WebsocketForm from './WebsocketForm';
 import DatabaseForm, { type DatabaseMonitorType } from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow } from './HttpMonitorForm';
@@ -237,6 +241,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   { type: 'mysql', label: 'MySQL', description: 'Connect, auth, and query checks', icon: Cylinder, category: 'Databases & Brokers', namePlaceholder: 'MySQL production' },
   { type: 'redis', label: 'Redis', description: 'Connect and PING latency', icon: Zap, category: 'Databases & Brokers', namePlaceholder: 'Redis cache' },
   { type: 'mongodb', label: 'MongoDB', description: 'Connect, auth, and ping', icon: Leaf, category: 'Databases & Brokers', namePlaceholder: 'Mongo cluster' },
+  { type: 'prometheus', label: 'Prometheus', description: 'PromQL queries with numeric thresholds', icon: Radio, category: 'Infrastructure', namePlaceholder: 'API error rate' },
   { type: 'rabbitmq', label: 'RabbitMQ', description: 'AMQP connect and auth checks', icon: MessageSquare, category: 'Databases & Brokers', namePlaceholder: 'RabbitMQ production' },
   { type: 'agent', label: 'Agent', description: 'Host metrics from an agent', icon: Server, category: 'Infrastructure', namePlaceholder: 'Production server' },
   { type: 'push', label: 'Push', description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure', namePlaceholder: 'My service health' },
@@ -937,6 +942,7 @@ export default function MonitorForm({
     })(),
     response_header_assertions: initialHTTPConfig?.response_header_assertions || ([] as HTTPHeaderAssertion[]),
     json_assertions: initialHTTPConfig?.json_assertions || ([] as HTTPJSONAssertion[]),
+    display_fields: initialHTTPConfig?.display_fields || ([] as HTTPDisplayField[]),
     max_latency_ms: initialHTTPConfig?.max_latency_ms?.toString() || '',
     follow_redirects: initialHTTPConfig?.follow_redirects ?? true,
     max_redirects: initialHTTPConfig?.max_redirects ?? 10,
@@ -974,6 +980,7 @@ export default function MonitorForm({
     timeout_seconds: sourceTimeoutSeconds,
     consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
     notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
+    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
     notification_channels: (monitor?.notification_channels ?? []) as ChannelAssignment[],
     enabled: sourceEnabled,
     tags: sourceTags.join(', '),
@@ -1443,6 +1450,9 @@ export default function MonitorForm({
           break;
         }
       }
+      if ((formData.display_fields || []).some(f => f.label?.trim() && !f.path.trim())) {
+        newErrors.display_fields = 'Each display value needs a path';
+      }
     } else if (monitorType === 'ping') {
       if (!formData.host.trim()) newErrors.host = 'Host is required';
     } else if (monitorType === 'dns') {
@@ -1757,6 +1767,16 @@ export default function MonitorForm({
         httpConfig.json_assertions = jsonAssertions;
       }
 
+      const displayFields = (formData.display_fields || [])
+        .map(f => ({
+          ...(f.label?.trim() ? { label: f.label.trim() } : {}),
+          path: f.path.trim(),
+        } as HTTPDisplayField))
+        .filter(f => f.path);
+      if (displayFields.length > 0) {
+        httpConfig.display_fields = displayFields;
+      }
+
       if (formData.max_latency_ms.trim()) {
         const maxLatency = parseInt(formData.max_latency_ms, 10);
         if (!isNaN(maxLatency)) httpConfig.max_latency_ms = maxLatency;
@@ -1977,6 +1997,7 @@ export default function MonitorForm({
 
     requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
     requestData.notification_mode = formData.notification_mode;
+    requestData.dependency_suppression = formData.dependency_suppression;
     requestData.notification_channels =
       formData.notification_mode === 'custom' ? formData.notification_channels : [];
     if (formData.tags.trim()) {
@@ -2049,6 +2070,10 @@ export default function MonitorForm({
         <GrpcForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />
       </div>
     );
+  }
+
+  if (monitorType === 'prometheus') {
+    return <div className="space-y-4">{typePicker}<PrometheusForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} /></div>;
   }
 
   if (monitorType === 'tcp') {
@@ -3638,6 +3663,9 @@ export default function MonitorForm({
           onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
           mode={formData.notification_mode}
           onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          dependencySuppression={formData.dependency_suppression}
+          hasDependencies={formData.depends_on_ids.length > 0}
+          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
           customChannels={formData.notification_channels}
           onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
         />
@@ -3685,6 +3713,13 @@ export default function MonitorForm({
           placeholder="production, api, critical"
           hint="Comma-separated tags for filtering"
         />
+        {monitorType === 'http' && (
+          <DisplayFieldsEditor
+            value={formData.display_fields}
+            onChange={(fields) => setFormData({ ...formData, display_fields: fields })}
+            error={errors.display_fields}
+          />
+        )}
         <FormToggle
           label="Monitor enabled"
           description="Run checks on the configured schedule"

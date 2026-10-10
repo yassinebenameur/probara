@@ -43,6 +43,10 @@ func (agentUnavailableService) GetMonitorByAgentID(context.Context, string, uuid
 	return uuid.Nil, nil
 }
 
-func (agentUnavailableService) GenerateInstallCommand(context.Context, uuid.UUID, uuid.UUID, string, string, bool) (*models.AgentInstallCommand, error) {
+func (agentUnavailableService) GenerateInstallCommand(context.Context, uuid.UUID, uuid.UUID, string, string) (*models.AgentInstallCommand, error) {
 	return nil, nil
+}
+
+func (agentUnavailableService) GenerateCollectorConfig(context.Context, uuid.UUID, uuid.UUID, string, string) (string, error) {
+	return "", nil
 }

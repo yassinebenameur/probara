@@ -82,7 +82,7 @@ export default function NewMonitorPage() {
             ? cloneSourceName
               ? `Cloning "${cloneSourceName}". Update anything before creating the new monitor.`
               : 'Loading monitor details to clone…'
-            : 'Set up a new monitor to track your service availability.'
+            : undefined
         }
       />
 

@@ -6,7 +6,11 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
+
+// emptyUUID is the monitor id mesh-edge alerts carry (they have no monitor).
+const emptyUUID = "00000000-0000-0000-0000-000000000000"
 
 func TestRenderHTML_DefaultIsBrandedAndSelfContained(t *testing.T) {
 	event := sampleEvent()
@@ -136,7 +140,7 @@ func TestNewAlertView_DurationUsesEventClockNotWallClock(t *testing.T) {
 	if !strings.Contains(v.Summary, "1h 35m") {
 		t.Errorf("summary should report elapsed time from the event timestamp: %q", v.Summary)
 	}
-	if got := durationOf(v); got != "1h 35m" {
+	if got := v.Duration(); got != "1h 35m" {
 		t.Errorf("duration row = %q, want 1h 35m", got)
 	}
 }
@@ -169,7 +173,7 @@ func TestHumanDuration(t *testing.T) {
 		48 * time.Hour:            "2d",
 	}
 	for in, want := range cases {
-		if got := humanDuration(in); got != want {
+		if got := present.HumanDuration(in); got != want {
 			t.Errorf("humanDuration(%s) = %q, want %q", in, got, want)
 		}
 	}

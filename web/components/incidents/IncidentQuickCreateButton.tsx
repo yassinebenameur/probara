@@ -29,7 +29,7 @@ export default function IncidentQuickCreateButton({
   return (
     <>
       <Button
-        variant="ghost"
+        variant="accent"
         size="sm"
         icon={<Plus strokeWidth={1.75} />}
         onClick={() => setOpen(true)}

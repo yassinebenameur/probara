@@ -23,8 +23,8 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
-	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	_ "github.com/yassinebenameur/probara/shared/notifications/plugin/builtin"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 

@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Bell, Network } from 'lucide-react';
+import { Bell, CircleCheck, Eye, Network } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { acknowledgeAlert, resolveAlert } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
-import Button from '@/components/ui/Button';
+import { formatAlertValue, formatSeriesLabel } from '@/lib/metrics';
+import IconButton from '@/components/ui/IconButton';
 import EmptyState from '@/components/ui/EmptyState';
 
 interface AlertTableProps {
@@ -38,21 +39,6 @@ function getStatusBadgeClass(status: AlertStatus): string {
       return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
     default:
       return 'bg-slate-500/10 text-slate-400 border border-slate-500/20';
-  }
-}
-
-function hostMetricLabel(metric?: string): string {
-  switch (metric) {
-    case 'cpu':
-      return 'CPU';
-    case 'memory':
-      return 'memory';
-    case 'disk':
-      return 'disk';
-    case 'swap':
-      return 'swap';
-    default:
-      return 'host metric';
   }
 }
 
@@ -107,7 +93,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
       <EmptyState
         icon={<Bell className="h-9 w-9" strokeWidth={1.5} />}
         title="No alerts found"
-        description="Alerts will appear here when monitors fail and trigger alert policies."
+        description="Alerts appear here when a monitor goes down."
       />
     );
   }
@@ -124,9 +110,6 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               Monitor
             </th>
             <th>
-              Policy
-            </th>
-            <th>
               Triggered
             </th>
             <th>
@@ -135,8 +118,8 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
             <th>
               Failures
             </th>
-            <th className="text-right">
-              Actions
+            <th>
+              <span className="sr-only">Actions</span>
             </th>
           </tr>
         </thead>
@@ -155,7 +138,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td>
                 {alert.kind === 'mesh_edge' ? (
                   <Link
-                    href="/mesh"
+                    href="/locations?tab=mesh"
                     className="inline-flex items-center gap-1.5 font-medium text-white hover:text-cyan-400"
                     title="Inter-location mesh path down — view the connectivity matrix"
                   >
@@ -197,13 +180,14 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                     className="ml-2 inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300"
                     title="Host metric breached its configured threshold"
                   >
-                    {hostMetricLabel(alert.metric_name)}
+                    {formatSeriesLabel(alert.metric_name)}
                   </span>
                 )}
                 {alert.kind === 'host_metric' && alert.metric_value != null && (
                   <p className="mt-0.5 text-[10px] text-amber-300/80">
-                    {alert.metric_value.toFixed(1)}%
-                    {alert.threshold_value != null && ` (threshold ${Math.round(alert.threshold_value)}%)`}
+                    {formatAlertValue(alert.metric_name, alert.metric_value)}
+                    {alert.threshold_value != null &&
+                      ` (threshold ${formatAlertValue(alert.metric_name, alert.threshold_value)})`}
                   </p>
                 )}
                 {alert.kind === 'tls_expiry' && (
@@ -228,17 +212,36 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
                 {alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id && (
                   <Link
                     href={`/monitors/${alert.root_cause_monitor_id}`}
-                    className="mt-1 inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400 hover:border-amber-500/40"
-                    title={`Likely caused by ${alert.root_cause_monitor_name}`}
+                    className={`mt-1 inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                      alert.suppression_reason === 'dependency'
+                        ? 'border-slate-500/30 bg-slate-500/10 text-slate-400 hover:border-slate-400/50'
+                        : 'border-amber-500/20 bg-amber-500/10 text-amber-400 hover:border-amber-500/40'
+                    }`}
+                    title={
+                      alert.suppression_reason === 'dependency'
+                        ? `Notifications suppressed: caused by ${alert.root_cause_monitor_name}`
+                        : `Likely caused by ${alert.root_cause_monitor_name}`
+                    }
                   >
-                    likely caused by: {alert.root_cause_monitor_name}
+                    {alert.suppression_reason === 'dependency' ? '🔕 suppressed · caused by' : 'likely caused by'}: {alert.root_cause_monitor_name}
                   </Link>
                 )}
-              </td>
-              <td>
-                <span className="text-slate-400">
-                  {alert.policy_name || 'Unknown'}
-                </span>
+                {alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name && (
+                  <span
+                    className="mt-1 inline-flex items-center rounded-full border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 text-[10px] font-medium text-slate-400"
+                    title="Notifications suppressed: the upstream dependency recovered moments ago; this pages if still down after the grace period"
+                  >
+                    🔕 suppressed · upstream just recovered
+                  </span>
+                )}
+                {(alert.impacted_count ?? 0) > 0 && (
+                  <span
+                    className="mt-1 ml-1 inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-400"
+                    title="Downstream monitors whose notifications this alert stands in for"
+                  >
+                    affects {alert.impacted_count} monitor{alert.impacted_count === 1 ? '' : 's'}
+                  </span>
+                )}
               </td>
               <td className="text-slate-400">
                 <div>{formatDateTime(alert.triggered_at)}</div>
@@ -254,26 +257,21 @@ export default function AlertTable({ alerts, onAlertUpdate, loading }: AlertTabl
               <td className="text-right">
                 <div className="flex items-center justify-end gap-1">
                   {alert.status === 'active' && (
-                    <Button
-                      variant="ghost"
-                      size="xs"
+                    <IconButton
+                      icon={<Eye strokeWidth={1.75} />}
+                      label="Acknowledge"
                       onClick={() => handleAcknowledge(alert.id)}
                       disabled={processingId === alert.id}
-                      loading={processingId === alert.id}
-                    >
-                      {processingId === alert.id ? '…' : 'Acknowledge'}
-                    </Button>
+                    />
                   )}
                   {(alert.status === 'active' || alert.status === 'acknowledged') && (
-                    <Button
-                      variant="accent"
-                      size="xs"
+                    <IconButton
+                      icon={<CircleCheck strokeWidth={1.75} />}
+                      label="Resolve"
                       onClick={() => handleResolve(alert.id)}
                       disabled={processingId === alert.id}
                       loading={processingId === alert.id}
-                    >
-                      {processingId === alert.id ? '…' : 'Resolve'}
-                    </Button>
+                    />
                   )}
                   {alert.status === 'resolved' && (
                     <span className="text-[10px] text-slate-500">

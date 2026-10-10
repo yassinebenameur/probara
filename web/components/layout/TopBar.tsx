@@ -72,7 +72,7 @@ export default function TopBar() {
   };
 
   return (
-    <header className="sticky top-0 z-30 flex h-12 items-center justify-end gap-3 border-b border-white/[0.06] bg-slate-950/70 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-30 flex h-14 items-center justify-end gap-3 border-b border-white/[0.06] bg-slate-950/70 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
       {isAdmin && tenants.length > 1 && (
         <label className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-slate-900/85 px-3 py-1 text-xs">
           <span className="text-[0.7rem] uppercase tracking-wide text-slate-500">Tenant</span>

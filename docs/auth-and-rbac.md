@@ -45,6 +45,16 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   `import/preview`, `dependency-suggestions`, `/mesh/probe`,
   `/ai-settings/test`). **Add new test/preview endpoints to that list** or
   viewers will get 403s.
+- Credential-bearing reads have explicit write-capability checks:
+  `/locations/{id}/deploy` and `/monitors/{id}/push/info` require a
+  superadmin, tenant admin/editor, or write-scope API key. Monitor get/list
+  and group-member responses omit push tokens for read-only identities;
+  monitor config secrets remain masked for every identity.
+- `/monitors/test` remains available to viewers for caller-supplied configs,
+  but using saved secrets (`monitor_id` with a secret-bearing monitor type)
+  requires write capability. The saved and requested monitor types must
+  match. Test requests cannot supply ciphertext envelopes directly: use
+  write-only placeholders for existing credentials.
 - `RequireTenantAdmin`: API key create/revoke, tenant settings mutation,
   audit log. Superadmin or tenant-role admin; API keys never pass.
 - `RequireSuperadmin`: `/users/*`.

@@ -2,6 +2,7 @@ package validation
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
@@ -170,9 +171,9 @@ func TestValidatorRegistry_Types(t *testing.T) {
 	types := registry.Types()
 
 	// HTTP, Ping, DNS, GRPC, Group, Agent, Push, SIP, Synthetic API, Synthetic Browser,
-	// Redis, Postgres, MongoDB, RabbitMQ, TCP, MySQL, WebSocket = 17 types
-	if len(types) != 17 {
-		t.Errorf("Expected 17 types, got %d", len(types))
+	// Redis, Postgres, MongoDB, RabbitMQ, TCP, MySQL, WebSocket, Prometheus = 18 types
+	if len(types) != 18 {
+		t.Errorf("Expected 18 types, got %d", len(types))
 	}
 }
 
@@ -242,6 +243,26 @@ func TestHTTPConfigValidator(t *testing.T) {
 		{
 			name:    "json number op with non-number value",
 			config:  json.RawMessage(`{"url":"https://example.com","method":"GET","json_assertions":[{"path":"latency","op":"number_gt","value":"abc"}]}`),
+			wantErr: true,
+		},
+		{
+			name:    "display fields",
+			config:  json.RawMessage(`{"url":"https://example.com","method":"GET","display_fields":[{"label":"ver","path":"version"},{"path":"checks.db"}]}`),
+			wantErr: false,
+		},
+		{
+			name:    "display field missing path",
+			config:  json.RawMessage(`{"url":"https://example.com","method":"GET","display_fields":[{"label":"ver","path":"  "}]}`),
+			wantErr: true,
+		},
+		{
+			name:    "display field label too long",
+			config:  json.RawMessage(`{"url":"https://example.com","method":"GET","display_fields":[{"label":"` + strings.Repeat("x", 33) + `","path":"version"}]}`),
+			wantErr: true,
+		},
+		{
+			name:    "too many display fields",
+			config:  json.RawMessage(`{"url":"https://example.com","method":"GET","display_fields":[{"path":"a"},{"path":"b"},{"path":"c"},{"path":"d"},{"path":"e"},{"path":"f"}]}`),
 			wantErr: true,
 		},
 		{

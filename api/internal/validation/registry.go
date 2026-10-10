@@ -77,6 +77,7 @@ func NewDefaultValidatorRegistry() *ValidatorRegistry {
 	registry := NewValidatorRegistry()
 
 	// Register default validators
+	registry.Register(models.MonitorTypePrometheus, &PrometheusConfigValidator{})
 	registry.Register(models.MonitorTypeHTTP, &HTTPConfigValidator{})
 	registry.Register(models.MonitorTypePing, &PingConfigValidator{})
 	registry.Register(models.MonitorTypeDNS, &DNSConfigValidator{})

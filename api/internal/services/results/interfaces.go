@@ -14,6 +14,8 @@ type ResultsService interface {
 	// GetMonitorResults retrieves check results for a monitor
 	GetMonitorResults(ctx context.Context, tenantID, monitorID uuid.UUID, limit int, since *time.Time) (*models.MonitorResultsResponse, error)
 	GetMonitorAnalytics(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorAnalyticsResponse, error)
+	// GetMonitorMetricsSnapshots returns downsampled metrics_data snapshots over a range
+	GetMonitorMetricsSnapshots(ctx context.Context, tenantID, monitorID uuid.UUID, rangeValue models.MonitorAnalyticsRange) (*models.MonitorMetricsSnapshotsResponse, error)
 }
 
 // Ensure Service implements ResultsService

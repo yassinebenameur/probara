@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,14 +15,21 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
+func TestMain(m *testing.M) {
+	// httptest servers listen on loopback, which the default egress policy
+	// refuses; the policy itself is covered in package plugin.
+	plugin.Configure(plugin.Runtime{})
+	os.Exit(m.Run())
+}
+
 func TestPlugin_Manifest(t *testing.T) {
 	p := New()
 	m := p.Manifest()
 	if m.Type != "teams" {
 		t.Errorf("Type = %q, want teams", m.Type)
 	}
-	if !m.HasCapability(plugin.CapabilityRawEvent) {
-		t.Error("expected CapabilityRawEvent")
+	if !m.HasCapability(plugin.CapabilityTestable) {
+		t.Error("expected CapabilityTestable")
 	}
 	if len(m.Fields) != 1 || m.Fields[0].Key != "webhook_url" || !m.Fields[0].Secret {
 		t.Errorf("expected one secret webhook_url field, got %+v", m.Fields)
@@ -53,8 +61,8 @@ func TestPlugin_Validate(t *testing.T) {
 	}
 }
 
-func TestPlugin_Send_PostsMessageCard(t *testing.T) {
-	var captured messageCard
+func TestPlugin_Send_PostsAdaptiveCardToWorkflows(t *testing.T) {
+	var captured adaptiveMessage
 	var contentType string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +71,7 @@ func TestPlugin_Send_PostsMessageCard(t *testing.T) {
 		if err := json.Unmarshal(body, &captured); err != nil {
 			t.Errorf("server: unmarshal payload: %v", err)
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -95,17 +103,32 @@ func TestPlugin_Send_PostsMessageCard(t *testing.T) {
 	if contentType != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", contentType)
 	}
-	if captured.Type != "MessageCard" {
-		t.Errorf("card @type = %q, want MessageCard", captured.Type)
+	if captured.Type != "message" || len(captured.Attachments) != 1 {
+		t.Fatalf("envelope = %+v, want one message attachment", captured)
 	}
-	if !strings.Contains(captured.Title, "Alert Triggered: API health") {
-		t.Errorf("title = %q, want prefix 'Alert Triggered: API health'", captured.Title)
+	att := captured.Attachments[0]
+	if att.ContentType != "application/vnd.microsoft.card.adaptive" || att.Content.Type != "AdaptiveCard" {
+		t.Fatalf("attachment = %+v, want an Adaptive Card", att)
 	}
-	if len(captured.Sections) == 0 {
-		t.Fatal("expected at least one section")
+	raw, _ := json.Marshal(att.Content.Body)
+	for _, want := range []string{"Alert Triggered: API health", "timeout after 5s", "Stopped responding"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("card body missing %q: %s", want, raw)
+		}
 	}
-	if len(captured.Sections[0].Facts) < 5 {
-		t.Errorf("expected last_error appended, got facts=%+v", captured.Sections[0].Facts)
+}
+
+func TestIsLegacyConnector(t *testing.T) {
+	for target, want := range map[string]bool{
+		"https://contoso.webhook.office.com/webhookb2/abc":                         true,
+		"https://outlook.office.com/webhook/abc":                                   true,
+		"https://prod-12.westus.logic.azure.com/workflows/abc/triggers/manual/run": false,
+		"https://default123.environment.api.powerplatform.com/powerautomate/abc":   false,
+		"https://webhook.office.com.evil.io/webhookb2/abc":                         false,
+	} {
+		if got := isLegacyConnector(target); got != want {
+			t.Errorf("isLegacyConnector(%q) = %v, want %v", target, got, want)
+		}
 	}
 }
 
@@ -134,19 +157,6 @@ func TestPlugin_Send_MissingWebhookURL(t *testing.T) {
 	}
 }
 
-func TestTitlePrefix(t *testing.T) {
-	for in, want := range map[string]string{
-		"created":  "Alert Triggered",
-		"resolved": "Alert Resolved",
-		"reminder": "Alert Still Active",
-		"unknown":  "Alert",
-	} {
-		if got := titlePrefix(in); got != want {
-			t.Errorf("titlePrefix(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestBuildMessageCard_RootCauseAnnotation(t *testing.T) {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	event := notifications.AlertEvent{
@@ -163,8 +173,8 @@ func TestBuildMessageCard_RootCauseAnnotation(t *testing.T) {
 		},
 	}
 
-	card := buildMessageCard(plugin.DispatchRequest{Event: event})
-	if cardHasFact(card, "Likely Caused By") {
+	card := buildMessageCard(plugin.DispatchRequest{Event: event}.View())
+	if cardHasFact(card, "Likely caused by") {
 		t.Fatal("root-cause fact rendered without a root cause set")
 	}
 
@@ -172,8 +182,8 @@ func TestBuildMessageCard_RootCauseAnnotation(t *testing.T) {
 	downSince := now.Add(-10 * time.Minute)
 	event.Alert.RootCauseMonitorName = &name
 	event.Alert.RootCauseDownSince = &downSince
-	card = buildMessageCard(plugin.DispatchRequest{Event: event})
-	if !cardHasFact(card, "Likely Caused By") {
+	card = buildMessageCard(plugin.DispatchRequest{Event: event}.View())
+	if !cardHasFact(card, "Likely caused by") {
 		t.Fatalf("root-cause fact missing: %+v", card.Sections)
 	}
 }

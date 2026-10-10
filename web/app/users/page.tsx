@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, RefreshCw, Trash2, Users as UsersIcon } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import EmptyState from '@/components/ui/EmptyState';
@@ -85,7 +86,6 @@ export default function UsersPage() {
   const header = (
     <PageHeader
       title="Users"
-      subtitle="Manage platform admin accounts."
       action={
         !apiKeyMode ? (
           <div className="flex items-center gap-2">
@@ -97,7 +97,7 @@ export default function UsersPage() {
             >
               Refresh
             </Button>
-            <Button variant="ghost" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
+            <Button variant="accent" size="sm" icon={<Plus strokeWidth={1.75} />} asChild>
               <Link href="/users/new">Add user</Link>
             </Button>
           </div>
@@ -142,10 +142,7 @@ export default function UsersPage() {
     <div className="space-y-6">
       {header}
 
-      <Panel
-        title="Admin users"
-        subtitle="Create, update, and remove admin accounts."
-      >
+      <Panel>
         {loading ? (
           <p className="text-sm text-slate-500">Loading users…</p>
         ) : error ? (
@@ -169,14 +166,14 @@ export default function UsersPage() {
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-white/[0.06]">
                 <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                  <tr className="text-left text-xs text-slate-500">
                     <th className="px-3 py-2">Username</th>
                     <th className="px-3 py-2">Email</th>
                     <th className="px-3 py-2">Role</th>
                     <th className="px-3 py-2">Sign-in</th>
                     <th className="px-3 py-2">Tenants</th>
                     <th className="px-3 py-2">Last login</th>
-                    <th className="px-3 py-2">Actions</th>
+                    <th className="px-3 py-2"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.04] text-sm text-slate-200">
@@ -203,18 +200,14 @@ export default function UsersPage() {
                       </td>
                       <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(user.last_login_at)}</td>
                       <td className="px-3 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <Button variant="ghost" size="xs" icon={<Pencil strokeWidth={1.75} />} asChild>
-                            <Link href={`/users/${user.id}`}>Edit</Link>
-                          </Button>
-                          <Button
-                            variant="danger"
-                            size="xs"
+                        <div className="flex items-center justify-end gap-0.5">
+                          <IconButton icon={<Pencil strokeWidth={1.75} />} label="Edit" href={`/users/${user.id}`} />
+                          <IconButton
                             icon={<Trash2 strokeWidth={1.75} />}
+                            label="Delete"
                             onClick={() => setPendingDelete(user)}
-                          >
-                            Delete
-                          </Button>
+                            danger
+                          />
                         </div>
                       </td>
                     </tr>

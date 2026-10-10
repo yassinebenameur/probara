@@ -32,7 +32,7 @@ function statusColor(status: string | null | undefined): string {
 
 export default function GroupRow({ group, range, filterTags }: Props) {
   const [open, setOpen] = useState(false);
-  const [sparkline, setSparkline] = useState<number[] | null>(null);
+  const [sparkline, setSparkline] = useState<(number | null)[] | null>(null);
   const [loading, setLoading] = useState(false);
 
   const label = group.tag ?? 'Ungrouped';
@@ -71,8 +71,8 @@ export default function GroupRow({ group, range, filterTags }: Props) {
         <span className="text-xs tabular-nums text-slate-400">
           {group.monitor_count} monitor{group.monitor_count === 1 ? '' : 's'}
         </span>
-        <span className={`text-sm font-medium tabular-nums ${group.monitor_count === 0 ? 'text-slate-500' : group.attention_count > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
-          {group.monitor_count === 0 ? '—' : `${group.uptime.toFixed(2)}%`}
+        <span className={`text-sm font-medium tabular-nums ${group.monitor_count === 0 || group.uptime == null ? 'text-slate-500' : group.attention_count > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+          {group.monitor_count === 0 || group.uptime == null ? '—' : `${group.uptime.toFixed(2)}%`}
         </span>
         <ChevronDown className={`h-4 w-4 text-slate-500 transition-all group-hover:text-slate-300 ${open ? 'rotate-180' : ''}`} strokeWidth={2} />
       </button>
@@ -91,7 +91,9 @@ export default function GroupRow({ group, range, filterTags }: Props) {
                   >
                     {m.monitor_name}
                   </Link>
-                  <span className="tabular-nums text-slate-400">{m.uptime.toFixed(2)}%</span>
+                  <span className={`tabular-nums ${m.uptime == null ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {m.uptime == null ? '—' : `${m.uptime.toFixed(2)}%`}
+                  </span>
                   <span className={`text-xs ${statusColor(m.current_status)}`}>{m.current_status ?? 'paused'}</span>
                 </li>
               ))}

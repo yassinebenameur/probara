@@ -115,7 +115,6 @@ export default function EditUserPage() {
       <PageHeader
         breadcrumb={[{ label: 'Users', href: '/users' }, { label: 'Edit' }]}
         title="Edit user"
-        subtitle="Update identity, roles and tenant memberships."
       />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">

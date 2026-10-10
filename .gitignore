@@ -44,8 +44,10 @@ coverage.html
 .next.old.*
 **/.next.old.*
 
-# Compiled agent binaries
+# Compiled agent/collector binaries
 static/agent/
+static/collector/
+collector/dist/
 agent/uptime-agent
 agent/probara-agent
 status-page/main

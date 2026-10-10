@@ -8,7 +8,6 @@ import {
   Activity,
   FileText,
   AlertTriangle,
-  Send,
   Users,
   Settings,
   LogOut,
@@ -16,10 +15,10 @@ import {
   Workflow,
   Wrench,
   MapPin,
-  Network,
   ScrollText,
+  Target,
 } from 'lucide-react';
-import { getMonitors, getAlertChannels, getStatusPages, getIncidents } from '@/lib/api';
+import { getIncidents } from '@/lib/api';
 import { clearApiKey, hasApiKey } from '@/lib/auth';
 import { TENANT_CHANGED_EVENT, clearSelectedTenantId } from '@/lib/tenant';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
@@ -31,7 +30,9 @@ type NavItem = {
   name: string;
   href: string;
   icon: React.ElementType;
-  countKey?: 'monitors' | 'statusPages' | 'alertChannels' | 'incidents';
+  // Other routes that live under this entry (tabs folded into its page).
+  also?: string[];
+  showOpenIncidents?: boolean;
 };
 
 type NavGroup = {
@@ -49,20 +50,19 @@ const navGroups: NavGroup[] = [
   {
     label: 'Monitoring',
     items: [
-      { name: 'Monitors', href: '/monitors', icon: Activity, countKey: 'monitors' },
-      { name: 'Locations', href: '/locations', icon: MapPin },
-      { name: 'Mesh', href: '/mesh', icon: Network },
+      { name: 'Monitors', href: '/monitors', icon: Activity },
+      { name: 'Locations', href: '/locations', icon: MapPin, also: ['/mesh'] },
       { name: 'Dependencies', href: '/dependencies', icon: Workflow },
       { name: 'Maintenance', href: '/maintenance', icon: Wrench },
-      { name: 'Status Pages', href: '/status-pages', icon: FileText, countKey: 'statusPages' },
+      { name: 'Status Pages', href: '/status-pages', icon: FileText },
+      { name: 'SLAs', href: '/slas', icon: Target },
     ],
   },
   {
     label: 'Alerting',
     items: [
       { name: 'Alerts', href: '/alerts', icon: AlertTriangle },
-      { name: 'Incidents', href: '/incidents', icon: Siren, countKey: 'incidents' },
-      { name: 'Alert Channels', href: '/alert-channels', icon: Send, countKey: 'alertChannels' },
+      { name: 'Incidents', href: '/incidents', icon: Siren, showOpenIncidents: true },
     ],
   },
   {
@@ -70,7 +70,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: 'Users', href: '/users', icon: Users },
       { name: 'Audit Log', href: '/audit', icon: ScrollText },
-      { name: 'Settings', href: '/settings', icon: Settings },
+      { name: 'Settings', href: '/settings', icon: Settings, also: ['/alert-channels'] },
     ],
   },
 ];
@@ -79,12 +79,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [apiKeyMode, setApiKeyMode] = useState(true);
-  const [counts, setCounts] = useState({
-    monitors: 0,
-    statusPages: 0,
-    incidents: 0,
-    alertChannels: 0,
-  });
+  const [openIncidents, setOpenIncidents] = useState(0);
 
   const handleLogout = () => {
     if (hasApiKey()) {
@@ -104,18 +99,8 @@ export default function Sidebar() {
 
   const loadCounts = useCallback(async () => {
     try {
-      const [monitorsRes, pagesRes, incidentsRes, channelsRes] = await Promise.all([
-        getMonitors({ page_size: 1 }),
-        getStatusPages({ page_size: 1 }),
-        getIncidents({ page_size: 1 }),
-        getAlertChannels({ page_size: 1 }),
-      ]);
-      setCounts({
-        monitors: monitorsRes.total || 0,
-        statusPages: pagesRes.total || 0,
-        incidents: incidentsRes.total || 0,
-        alertChannels: channelsRes.total || 0,
-      });
+      const incidentsRes = await getIncidents({ page_size: 1 });
+      setOpenIncidents(incidentsRes.open_total || 0);
     } catch (error) {
       console.error('Failed to load counts:', error);
     }
@@ -134,11 +119,6 @@ export default function Sidebar() {
     window.addEventListener(TENANT_CHANGED_EVENT, handler);
     return () => window.removeEventListener(TENANT_CHANGED_EVENT, handler);
   }, [loadCounts]);
-
-  const getCount = (countKey?: NavItem['countKey']): number | null => {
-    if (!countKey) return null;
-    return counts[countKey] ?? null;
-  };
 
   const { isSuperadmin, role, loading: userLoading } = useCurrentUser();
 
@@ -163,10 +143,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="flex h-14 items-center gap-3 border-b border-white/[0.06] px-4">
         <BrandMark size={32} className="flex-shrink-0" />
-        <div className="min-w-0">
-          <h1 className="truncate text-sm font-semibold text-white">Probara</h1>
-          <p className="truncate text-[0.7rem] text-slate-500">Monitoring Platform</p>
-        </div>
+        <h1 className="truncate text-sm font-semibold text-white">Probara</h1>
       </div>
 
       {/* Navigation */}
@@ -180,8 +157,10 @@ export default function Sidebar() {
               {group.items.map((item) => {
                 const isActive =
                   pathname === item.href ||
-                  (item.href !== '/' && pathname?.startsWith(item.href));
-                const count = getCount(item.countKey);
+                  [item.href, ...(item.also ?? [])].some(
+                    (prefix) => prefix !== '/' && pathname?.startsWith(prefix)
+                  );
+                const count = item.showOpenIncidents ? openIncidents : 0;
                 const Icon = item.icon;
 
                 return (
@@ -203,8 +182,8 @@ export default function Sidebar() {
                       />
                       <span className="font-medium">{item.name}</span>
                     </div>
-                    {count !== null && count > 0 && (
-                      <Pill tone={isActive ? 'info' : 'neutral'} size="xs" className="tabular-nums">
+                    {count > 0 && (
+                      <Pill tone="danger" size="xs" className="tabular-nums">
                         {count}
                       </Pill>
                     )}
@@ -218,14 +197,6 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-white/[0.06] px-4 py-3">
-        <div className="mb-3 flex items-center gap-2">
-          <Activity className="h-3.5 w-3.5 flex-shrink-0 text-cyan-400" strokeWidth={2} />
-          <div className="min-w-0">
-            <p className="truncate text-[0.72rem] font-medium text-slate-300">Monitoring workspace</p>
-            <p className="text-[0.68rem] text-slate-600">{counts.monitors} monitor{counts.monitors !== 1 ? 's' : ''} active</p>
-          </div>
-        </div>
-
         <Button
           variant="subtle"
           size="sm"

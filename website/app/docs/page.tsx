@@ -31,7 +31,7 @@ const paths = [
   },
   {
     title: 'Build your monitor fleet',
-    text: 'Configure all 17 monitor types, locations, quorum, dependencies, agents, and pushes.',
+    text: 'Configure all 18 monitor types, locations, quorum, dependencies, agents, and pushes.',
     href: '/docs/monitors/',
     icon: Stethoscope,
   },

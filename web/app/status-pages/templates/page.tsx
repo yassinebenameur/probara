@@ -13,6 +13,7 @@ import {
 } from '@/lib/api';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 import { useToast } from '@/components/ui/ToastProvider';
 
 function formatBytes(bytes: number): string {
@@ -259,33 +260,25 @@ export default function StatusPageTemplateLibraryPage() {
                   {item.description || '—'} · updated {new Date(item.updated_at).toLocaleString()}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="xs"
+              <div className="flex items-center gap-0.5">
+                <IconButton
                   icon={<Pencil strokeWidth={1.75} />}
+                  label="Rename"
                   onClick={() => handleRename(item)}
                   disabled={busy}
-                >
-                  Rename
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
+                />
+                <IconButton
                   icon={<Download strokeWidth={1.75} />}
+                  label="Download"
                   onClick={() => handleDownload(item)}
-                >
-                  Download
-                </Button>
-                <Button
-                  variant="danger"
-                  size="xs"
+                />
+                <IconButton
                   icon={<Trash2 strokeWidth={1.75} />}
+                  label="Delete"
                   onClick={() => handleDelete(item)}
                   disabled={busy}
-                >
-                  Delete
-                </Button>
+                  danger
+                />
               </div>
             </div>
           ))}

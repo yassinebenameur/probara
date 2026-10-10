@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -381,7 +382,12 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 		if err != nil {
 			return stats, fmt.Errorf("failed to query rollup-backed dashboard stats: %w", err)
 		}
-		stats.OverallUptime = analyticsResult.Summary.SLAPct
+		if analyticsResult.Summary.HasData {
+			// Interval-based availability when the timeline covers the
+			// window (S-U1); the sampled rate otherwise (S-U5).
+			sla := analyticsResult.Summary.AvailabilityPct
+			stats.OverallUptime = &sla
+		}
 		if analyticsResult.Summary.AvgLatencyMS != nil {
 			stats.AvgResponseMS = *analyticsResult.Summary.AvgLatencyMS
 		}
@@ -406,7 +412,7 @@ func (s *Service) getStats(ctx context.Context, tenantID uuid.UUID, dashboardRan
 			  %s
 			GROUP BY cr.monitor_id
 		)
-		SELECT COALESCE(AVG((success_checks::float / NULLIF(total_checks, 0)) * 100.0), 0)
+		SELECT AVG((success_checks::float / NULLIF(total_checks, 0)) * 100.0)
 		FROM per_monitor
 		WHERE total_checks > 0
 	`
@@ -852,9 +858,11 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 	query := `
 		SELECT
 			COUNT(*) FILTER (WHERE a.status = 'active') AS active_alerts,
-			COUNT(*) FILTER (WHERE a.status = 'acknowledged') AS acknowledged_alerts
+			COUNT(*) FILTER (WHERE a.status = 'acknowledged') AS acknowledged_alerts,
+			COUNT(*) FILTER (WHERE ` + alertrouting.SuppressedByDependencyPredicate("a", "m", "te") + `) AS suppressed_alerts
 		FROM alerts a
 		JOIN monitors m ON m.id = a.monitor_id AND m.tenant_id = a.tenant_id
+		JOIN tenants te ON te.id = a.tenant_id
 		WHERE a.tenant_id = $1
 		  AND a.status IN ('active', 'acknowledged')
 		  AND m.deleted_at IS NULL
@@ -864,8 +872,24 @@ func (s *Service) getOpsSummary(ctx context.Context, tenantID uuid.UUID, monitor
 		query += ` AND m.tags @> $2::text[]`
 		args = append(args, pq.Array(tags))
 	}
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&summary.ActiveAlerts, &summary.AcknowledgedAlerts, &summary.SuppressedAlerts); err != nil {
 		return summary, fmt.Errorf("failed to query ops summary alerts: %w", err)
+	}
+
+	unroutedQuery := `
+		SELECT COUNT(*)
+		FROM monitors m
+		WHERE m.tenant_id = $1
+		  AND m.deleted_at IS NULL
+		  AND m.enabled = TRUE
+		  AND ` + alertrouting.UnreachablePredicate("m")
+	unroutedArgs := []interface{}{tenantID}
+	if len(tags) > 0 {
+		unroutedQuery += ` AND m.tags @> $2::text[]`
+		unroutedArgs = append(unroutedArgs, pq.Array(tags))
+	}
+	if err := s.db.QueryRowContext(ctx, unroutedQuery, unroutedArgs...).Scan(&summary.UnroutedMonitors); err != nil {
+		return summary, fmt.Errorf("failed to query unrouted monitors: %w", err)
 	}
 
 	return summary, nil
@@ -892,13 +916,77 @@ func (s *Service) getProblemMonitors(ctx context.Context, tenantID uuid.UUID, da
 		limit = problemMonitorLimit
 	}
 
-	if isDashboardRollupRange(dashboardRange) {
-		return s.getProblemMonitorsLongRange(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	var monitors []models.DashboardProblemMonitor
+	var err error
+	switch {
+	case isDashboardRollupRange(dashboardRange):
+		monitors, err = s.getProblemMonitorsLongRange(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	case dashboardRange == models.DashboardRange24h:
+		monitors, err = s.getProblemMonitors24h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	default:
+		monitors, err = s.getProblemMonitors1h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
 	}
-	if dashboardRange == models.DashboardRange24h {
-		return s.getProblemMonitors24h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+	if err != nil {
+		return nil, err
 	}
-	return s.getProblemMonitors1h(ctx, tenantID, rangeStart, rangeEndExclusive, limit, tags)
+
+	// Rollups carry no error messages, so the latest failure reason is fetched
+	// from raw check_results in one batched probe over the <= limit winners,
+	// keeping the three range variants untouched.
+	if err := s.attachLatestProblemErrors(ctx, tenantID, rangeStart, rangeEndExclusive, monitors); err != nil {
+		return nil, err
+	}
+	return monitors, nil
+}
+
+// attachLatestProblemErrors populates LatestErrorMessage on each problem
+// monitor from its most recent failing check inside the range. Monitors whose
+// failures only exist in rollups (raw rows already purged) keep a nil message.
+func (s *Service) attachLatestProblemErrors(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, monitors []models.DashboardProblemMonitor) error {
+	if len(monitors) == 0 {
+		return nil
+	}
+	monitorIDs := make([]uuid.UUID, 0, len(monitors))
+	for _, m := range monitors {
+		monitorIDs = append(monitorIDs, m.MonitorID)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (cr.monitor_id) cr.monitor_id, cr.error_message
+		FROM check_results cr
+		WHERE cr.tenant_id = $1
+		  AND cr.monitor_id = ANY($2)
+		  AND cr.status IN ('failure', 'error')
+		  AND cr.result_source <> 'platform'
+		  AND cr.created_at >= $3
+		  AND cr.created_at < $4
+		ORDER BY cr.monitor_id, cr.created_at DESC
+	`, tenantID, pq.Array(monitorIDs), rangeStart, rangeEndExclusive)
+	if err != nil {
+		return fmt.Errorf("failed to query latest problem errors: %w", err)
+	}
+	defer rows.Close()
+
+	latest := make(map[uuid.UUID]*string, len(monitors))
+	for rows.Next() {
+		var monitorID uuid.UUID
+		var message sql.NullString
+		if err := rows.Scan(&monitorID, &message); err != nil {
+			return fmt.Errorf("failed to scan latest problem error: %w", err)
+		}
+		if message.Valid && message.String != "" {
+			v := message.String
+			latest[monitorID] = &v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating latest problem errors: %w", err)
+	}
+
+	for i := range monitors {
+		monitors[i].LatestErrorMessage = latest[monitors[i].MonitorID]
+	}
+	return nil
 }
 
 func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
@@ -1665,11 +1753,9 @@ func formatTrendLabel(bucketStart time.Time, rangeValue models.DashboardRange) s
 
 // computeMonitorWeightedUptime returns the monitor-weighted mean uptime % over the
 // given totals: each monitor contributes one data point (its per-monitor success
-// rate); monitors with no data are skipped. Returns 0 on empty input.
-func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) float64 {
-	if len(totals) == 0 {
-		return 0
-	}
+// rate); monitors with no data are skipped. Returns nil when nothing was
+// checked — no data must not read as 0% (S-D1, docs/state-semantics.md).
+func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) *float64 {
 	sum := 0.0
 	n := 0
 	for _, t := range totals {
@@ -1680,9 +1766,10 @@ func computeMonitorWeightedUptime(totals map[uuid.UUID]MonitorRolling24hTotals) 
 		n++
 	}
 	if n == 0 {
-		return 0
+		return nil
 	}
-	return sum / float64(n)
+	u := sum / float64(n)
+	return &u
 }
 
 // computeMonitorWeightedLatency returns the monitor-weighted mean success-latency

@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { EyeOff } from 'lucide-react';
 
 import { getStatusPages } from '@/lib/api';
 import type { IncidentDetail, StatusPage } from '@/lib/types';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
+import IconButton from '@/components/ui/IconButton';
 
 interface IncidentPublicationEditorProps {
   incident: IncidentDetail;
@@ -101,7 +103,6 @@ export default function IncidentPublicationEditor({
     <Panel
       title="Status Page Publication"
       subtitle="Publish or remove the incident from a public status page."
-      dotColor="var(--info)"
     >
       <div className="space-y-4">
         {loading ? (
@@ -128,15 +129,12 @@ export default function IncidentPublicationEditor({
                           /{publication.status_page_slug} · {publicationComponentNames(publication.monitor_ids)}
                         </div>
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
+                      <IconButton
+                        icon={<EyeOff strokeWidth={1.75} />}
+                        label="Unpublish from this status page"
                         onClick={() => onUnpublish(publication.status_page_id)}
                         disabled={saving}
-                      >
-                        Unpublish
-                      </Button>
+                      />
                     </div>
                   </div>
                 ))}

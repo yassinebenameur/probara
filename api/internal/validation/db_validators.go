@@ -241,6 +241,23 @@ func (v *MongoDBConfigValidator) ValidateConfig(configRaw json.RawMessage) error
 		return fmt.Errorf("tls certificates require tls_enabled")
 	}
 
+	// Replication-lag thresholds are only meaningful when the replication
+	// cluster check runs (deliberately not validateLatencyThresholds — its
+	// messages name the latency fields).
+	if (config.MaxReplicationLagSeconds != nil || config.WarnReplicationLagSeconds != nil) && !config.CollectReplication {
+		return fmt.Errorf("replication lag thresholds require collect_replication")
+	}
+	if config.MaxReplicationLagSeconds != nil && *config.MaxReplicationLagSeconds <= 0 {
+		return fmt.Errorf("max_replication_lag_seconds must be greater than 0")
+	}
+	if config.WarnReplicationLagSeconds != nil && *config.WarnReplicationLagSeconds <= 0 {
+		return fmt.Errorf("warn_replication_lag_seconds must be greater than 0")
+	}
+	if config.MaxReplicationLagSeconds != nil && config.WarnReplicationLagSeconds != nil &&
+		*config.WarnReplicationLagSeconds >= *config.MaxReplicationLagSeconds {
+		return fmt.Errorf("warn_replication_lag_seconds must be lower than max_replication_lag_seconds")
+	}
+
 	return validateLatencyThresholds(config.MaxLatencyMs, config.WarnLatencyMs)
 }
 

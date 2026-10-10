@@ -60,8 +60,8 @@ export function ServiceRail({
           <div className="px-4 py-8 text-center">
             <Workflow className="mx-auto h-6 w-6 text-slate-600" strokeWidth={1.5} />
             <p className="mt-2 text-xs text-slate-500">
-              No dependencies yet. Add monitors to the canvas and drag between them, or run the AI
-              suggestions above.
+              No dependencies yet. Add monitors to the canvas and drag between them, or use
+              Suggest with AI.
             </p>
           </div>
         ) : rows.length === 0 ? (
