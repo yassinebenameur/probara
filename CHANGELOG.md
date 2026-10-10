@@ -1,3 +1,11 @@
+# [1.0.0-alpha.77](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.76...v1.0.0-alpha.77) (2026-10-10)
+
+
+### Features
+
+* **web:** consolidate the instrument-glass UI onto shared controls and helpers ([691b157](https://github.com/yassinebenameur/probara/commit/691b1577e0aafdc56f5b30066a6b995c5fd9c9a0))
+* **web:** instrument-glass visual overhaul of the operator UI ([5d60fd8](https://github.com/yassinebenameur/probara/commit/5d60fd8f8a93f2d15989579c2c77bbf4559dea5a))
+
 # [1.0.0-alpha.76](https://github.com/yassinebenameur/probara/compare/v1.0.0-alpha.75...v1.0.0-alpha.76) (2026-09-29)
 
 
