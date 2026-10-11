@@ -90,6 +90,11 @@ func TestAIAnalysisLabelContext(t *testing.T) {
 		t.Fatalf("incident detail context %+v", detail.AIAnalysis)
 	}
 
+	cited := insert("ready", nil, `{"engine":"laya-cpu","outcome":"insufficient_evidence","evidence_references":[{"ref":"`+mine.String()+`/checks","monitor_ref":"`+mine.String()+`","fact":"0 of 0 checks failed in the analysis window."}],"incomplete_evidence":["`+mine.String()+`: configured upstream `+theirs.String()+` unavailable or excluded by monitor limit"]}`)
+	if a := latest(); a.ID != cited || len(a.MonitorNames) != 1 || a.MonitorNames[mine.String()] != "api-gateway" {
+		t.Fatalf("cited monitor names must resolve tenant-scoped: %+v", a.MonitorNames)
+	}
+
 	for _, status := range []string{"pending", "failed"} {
 		insert(status, nil, `{"engine":"laya-cpu","outcome":"failed"}`)
 		if a := latest(); a.LabelContext != nil || string(a.Status) != status {

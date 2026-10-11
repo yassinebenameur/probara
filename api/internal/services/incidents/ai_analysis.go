@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/api/internal/services/ailabels"
@@ -113,7 +115,57 @@ func (s *Service) loadLatestAIAnalysis(ctx context.Context, tenantID, incidentID
 		}
 		analysis.LabelContext = labelContext
 	}
+	names, err := citedMonitorNames(ctx, s.db, tenantID, analysis.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("load ai analysis monitor names: %w", err)
+	}
+	analysis.MonitorNames = names
 	return analysis, nil
+}
+
+var uuidPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// maxCitedMonitors bounds the lookup; analyses select at most 100 monitors.
+const maxCitedMonitors = 200
+
+// citedMonitorNames resolves every UUID in the stored metadata that is a
+// monitor of the tenant. The metadata keeps opaque refs (the model never sees
+// names, and stored text must survive renames), so names are joined here, on
+// read. Other UUIDs in notes (mesh alert and location IDs) simply do not match.
+func citedMonitorNames(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, tenantID uuid.UUID, metadata json.RawMessage) (map[string]string, error) {
+	seen := map[string]bool{}
+	ids := []string{}
+	for _, id := range uuidPattern.FindAllString(string(metadata), -1) {
+		if !seen[id] && len(ids) < maxCitedMonitors {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id::text, name FROM monitors WHERE tenant_id = $1 AND id = ANY($2::uuid[])`, tenantID, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	names := map[string]string{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		names[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	return names, nil
 }
 
 type rowScanner interface {

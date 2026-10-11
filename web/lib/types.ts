@@ -1334,6 +1334,8 @@ export interface IncidentAIAnalysis {
   completed_at?: string;
   /** Present only for ready analyses that recorded their model exchange. */
   label_context?: AILabelContext | null;
+  /** Current names of the monitors the metadata cites, by ID (purged monitors absent). */
+  monitor_names?: Record<string, string>;
 }
 
 // --- AI labels (operator-confirmed answers for retraining the local model) ---

@@ -300,7 +300,9 @@ func buildEvidence(ctx context.Context, dbc *db.Client, tenantID uuid.UUID, subj
 				}
 			}
 			if !found {
-				in.Incomplete = append(in.Incomplete, r.m.Ref+": configured upstream evidence unavailable or excluded by monitor limit")
+				// Name the upstream: one note per missing edge, so two missing
+				// upstreams never read as one duplicated line.
+				in.Incomplete = append(in.Incomplete, r.m.Ref+": configured upstream "+upstream+" unavailable or excluded by monitor limit")
 			}
 		}
 		if r.m.Type == "agent" {

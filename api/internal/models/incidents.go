@@ -159,6 +159,10 @@ type IncidentAIAnalysis struct {
 	// LabelContext drives the operator label control; omitted when the
 	// analysis cannot be labelled (not ready, or no decision snapshot).
 	LabelContext *AILabelContext `json:"label_context,omitempty"`
+	// MonitorNames maps the monitor IDs the metadata cites (evidence
+	// references, incomplete-evidence notes) to current names, resolved on
+	// read. Purged monitors are absent.
+	MonitorNames map[string]string `json:"monitor_names,omitempty"`
 }
 
 // IncidentListResponse represents a paginated list of incidents.

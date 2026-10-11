@@ -647,7 +647,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "A ready analysis that can be labelled also carries `label_context` on the analysis GET and on `GET /incidents/{id}`: `catalogue_version`, the incident-level `predicted` key, the selectable `choices` (`key`, `title`), one entry per monitor decision (`id`, `monitor_id`, `monitor_name`, which is null once the monitor is purged, and `predicted`), and the current `label` or null. It is omitted for pending, failed and legacy analyses, analyses that sent no decisions, and analyses completed before labels existed.",
+            "A ready analysis that can be labelled also carries `label_context` on the analysis GET and on `GET /incidents/{id}`: `catalogue_version`, the incident-level `predicted` key, the selectable `choices` (`key`, `title`), one entry per monitor decision (`id`, `monitor_id`, `monitor_name`, which is null once the monitor is purged, and `predicted`), and the current `label` or null. It is omitted for pending, failed and legacy analyses, analyses that sent no decisions, and analyses completed before labels existed. The analysis GET and `GET /incidents/{id}` also add `monitor_names`, a map from each monitor ID cited in `metadata` (evidence references and incomplete-evidence notes) to the monitor's current name; purged monitors are absent, and the map is omitted when nothing resolves.",
         },
       ],
     },

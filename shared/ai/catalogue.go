@@ -129,8 +129,14 @@ func metadata(model ModelIdentity, h string, score float64, refs []EvidenceRefer
 	if refs == nil {
 		refs = []EvidenceReference{}
 	}
-	if incomplete == nil {
-		incomplete = []string{}
+	// Notes come from several collectors (context, analyzer); show each once.
+	seen := map[string]bool{}
+	unique := []string{}
+	for _, note := range incomplete {
+		if !seen[note] {
+			seen[note] = true
+			unique = append(unique, note)
+		}
 	}
-	return Metadata{Engine: model.Engine, ModelVersion: model.Version, ModelSHA256: model.SHA256, CatalogueVersion: CatalogueVersion, Hypothesis: h, Score: score, Outcome: outcome, Evidence: refs, Incomplete: incomplete}
+	return Metadata{Engine: model.Engine, ModelVersion: model.Version, ModelSHA256: model.SHA256, CatalogueVersion: CatalogueVersion, Hypothesis: h, Score: score, Outcome: outcome, Evidence: refs, Incomplete: unique}
 }
