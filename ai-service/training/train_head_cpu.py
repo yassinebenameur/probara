@@ -12,6 +12,7 @@ tools/convert_candidate.py turns the full-checkpoint layout an earlier copy of
 this script wrote (model.safetensors + configs) into this same layout.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,48 @@ from train_cpu import FrozenCPUEncoder
 from upstream import verify_base, package_notices
 from compose_artifact import CONFIG, check_version, prepare_output, record_composed, save_head, save_json, write_manifest
 from partitions import verify_partitions, verify_rendering
+
+
+def load_init_head(model, path):
+    """Warm start from a previous candidate's head (never encoder tensors).
+
+    Loads module by module: quantized encoder loaders demand their packed keys
+    even under strict=False (same approach as validate_cpu.py).
+    """
+    from safetensors.torch import load_file
+    head = load_file(str(path))
+    if any(k.startswith("encoder.") for k in head):
+        raise ValueError("init head must not contain encoder tensors")
+    loaded = set()
+    for name in ("head", "type_emb", "scorer", "act_head"):
+        module = getattr(model, name, None)
+        if module is None:
+            continue
+        prefix = name + "."
+        part = {k.removeprefix(prefix): v for k, v in head.items() if k.startswith(prefix)}
+        module.load_state_dict(part, strict=True)
+        loaded |= {prefix + k for k in part}
+    if "temperature" in head:
+        model.temperature.copy_(head["temperature"])
+        loaded.add("temperature")
+    if set(head) - loaded:
+        raise ValueError(f"init head has unexpected tensors: {sorted(set(head) - loaded)}")
+    return f"{path.name} sha256 {hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()}"
+
+
+def read_extra_train(data, paths):
+    """Training-only rows (training/augment.py); never calibration/test groups."""
+    if not paths:
+        return []
+    eval_groups = {r["group"] for t in ("rca", "dependency") for part in ("calibration", "test")
+                   for r in read(data / f"{t}-{part}.jsonl")}
+    rows = []
+    for path in paths:
+        extra = read(path)
+        if {r["group"] for r in extra} & eval_groups:
+            raise ValueError(f"{path.name}: augmentation groups overlap calibration/test groups")
+        rows += extra
+    return rows
 
 
 def run(args):
@@ -51,12 +94,17 @@ def run(args):
                           "cuda" if torch.cuda.is_available() else
                           "mps" if torch.backends.mps.is_available() else "cpu")
     model.encoder = FrozenCPUEncoder(model.encoder)
+    initialised_from = "base head"
+    if args.init_head:
+        initialised_from = load_init_head(model, args.init_head)
     rows = sum((read(args.data / f"{task}-train.jsonl") for task in ("rca", "dependency")), [])
+    base_train = len(rows)
+    rows += read_extra_train(args.data, args.extra_train or [])
     for row in rows:
         if len(tok.encode(row["state"], add_special_tokens=False)) > MAX_LEN - HEAD_LEN:
             raise ValueError("state exceeds token budget")
     items, skipped = items_from_rows(tok, rows, MAX_LEN, HEAD_LEN)
-    if skipped or len(items) != 6000:
+    if skipped or base_train != 6000 or len(items) != len(rows):
         raise ValueError("Incomplete training partition")
     config = TrainConfig(epochs=args.epochs, micro_batch=8, grad_accum=4, head_lr=args.lr,
                          freeze_encoder=True, loss="soft-ce", shuffle_options=("choice",),
@@ -81,7 +129,8 @@ def run(args):
     model.float().cpu().eval()
     cfg.update(max_len=MAX_LEN, head_max_len=HEAD_LEN, model_name=args.version, catalogue=VERSION,
                state_format=STATE_FORMAT,
-               training={"fine_tuned_from_checkpoint": False, "initialised_from": "base head",
+               training={"fine_tuned_from_checkpoint": bool(args.init_head), "initialised_from": initialised_from,
+                         "extra_train": [p.name for p in (args.extra_train or [])],
                          "epochs_completed": args.epochs, "encoder_device": "cpu", "head_device": str(device),
                          "seed": config.seed, "loss": config.loss, "freeze_encoder": True, "train_items": len(items)})
     save_head(model, args.output)
@@ -94,7 +143,8 @@ def run(args):
     (args.output / "evaluation.json").write_text(json.dumps(evaluation, indent=2) + "\n")
     (args.output / "training-config.json").write_text(json.dumps({**vars(config), "head_device": str(device),
         "encoder_device": "cpu", "frozen_encoder_cpu_format": CPU_FORMAT, "state_format": STATE_FORMAT,
-        "initialised_from": "base head"}, indent=2) + "\n")
+        "initialised_from": initialised_from,
+        "extra_train": {p.name: hashlib.file_digest(p.open("rb"), "sha256").hexdigest() for p in (args.extra_train or [])}}, indent=2) + "\n")
     # No calibration settings or CPU release report exist yet.
     write_manifest(args.output, args.version, STATE_FORMAT, release_approved=False, cpu_format=CPU_FORMAT)
     record_composed(args.output, args.base, composed)
@@ -113,4 +163,7 @@ if __name__ == "__main__":
     p.add_argument("--seed", type=int, default=20261011)
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--head-device", choices=("auto", "cpu", "mps", "cuda"), default="auto")
+    p.add_argument("--init-head", type=Path, help="warm-start head safetensors (no encoder tensors)")
+    p.add_argument("--extra-train", type=Path, action="append",
+                   help="training-only rows from training/augment.py; groups must not overlap calibration/test")
     run(p.parse_args())

@@ -1,0 +1,35 @@
+{
+  "encoder": "jhu-clsp/mmBERT-base",
+  "head_layers": 2,
+  "max_len": 512,
+  "head_max_len": 256,
+  "max_prefixes": 6,
+  "act_costs": {
+    "escalate": 0.5
+  },
+  "cost_wrong_act": 3.0,
+  "amp_dtype": "bf16",
+  "model_name": "probara-laya-v4",
+  "temperature": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "temperature_by_options": {},
+  "training": {
+    "fine_tuned_from_checkpoint": true,
+    "initialised_from": "head-epoch-3.safetensors sha256 32745c899c9153699521ce37f610b883cf3070e761215a105f79379e05498a3f",
+    "extra_train": [
+      "dependency-train-augment.jsonl"
+    ],
+    "epochs_completed": 3,
+    "encoder_device": "cpu",
+    "head_device": "mps",
+    "seed": 20261011,
+    "loss": "soft-ce",
+    "freeze_encoder": true,
+    "train_items": 8000
+  },
+  "catalogue": "probara-evidence-v1",
+  "state_format": 2
+}

@@ -1,22 +1,23 @@
 # Local AI validation
 
-Status as of 2026-10-11: **no artifact is release-approved.** The shipped
-artifact (`ai-service/Dockerfile` `ARG MODEL_VERSION`) is `probara-laya-v1`,
-which failed its CPU release gates. Until an artifact passes, the local AI
-image cannot be built, `docker-build` pushes no `-local-ai` image, and
-`release.yml` refuses to tag or publish the chart. Default-on Compose and
-Helm installs from source therefore run with AI analysis reported
-unavailable unless an approved image is supplied or local AI is disabled.
+Status as of 2026-10-11: **`probara-laya-v4` is release-approved** and is the
+shipped artifact (`ai-service/Dockerfile` `ARG MODEL_VERSION`). Its CPU
+report was written by `validate_cpu.py` on the developer machine (macOS
+arm64, 4 threads); CI re-scores the held-out partition on linux/amd64 before
+an image is published, and fails if the gate no longer holds there. Every
+other committed artifact stays unapproved and is kept only as a
+reproducibility record.
 
 The gate and the commands are in [local-ai.md](local-ai.md). All numbers
-below come from the artifact's own reports and measure a controlled
+below come from the artifacts' own reports and measure a controlled
 corpus, not real-world incident accuracy.
 
 | Candidate | State format | How it was trained | Result |
 |---|---|---|---|
 | `probara-laya-v1` | 1 | Head tuned on an accelerator, encoder frozen, 2 epochs | Failed CPU gates; kept as a predecessor and reproducibility record, never deployable |
 | v2 | 1 | CPU-feature adaptation of v1 | Lost before validation; no report exists and nothing is claimed for it |
-| `probara-laya-v3` | 2 (catalogue-aligned wording) | Head trained from the base's own head on the deployed CPU-format features, training rows only, corpus `probara-controlled-v3` | Training in progress; calibration and held-out CPU evaluation pending |
+| `probara-laya-v3` | 2 (catalogue-aligned wording) | Head trained from the base's own head on the deployed CPU-format features, training rows only, corpus `probara-controlled-v3` | Failed CPU gates on dependency coverage; kept as v4's predecessor |
+| `probara-laya-v4` | 2 | v3's head, 3 more epochs on the same training rows plus 2,000 training-only dependency rows (`training/augment.py`) | **Passed CPU gates; shipped** |
 
 ## probara-laya-v1
 
@@ -59,13 +60,81 @@ v3 changes two things against v1: the evidence is rendered in state format 2,
 whose wording follows the catalogue descriptions, and the head is trained
 directly on the features the deployed CPU preparation produces instead of
 being adapted after accelerator training. It is trained from the untuned
-base, not from v1. It is unapproved until `validate_cpu.py` writes a passing
-`cpu-evaluation.json`; if it passes, shipping it means committing
-`ai-service/artifacts/probara-laya-v3/` and changing the Dockerfile's
-`MODEL_VERSION`, after which CI re-scores the held-out partition on
-linux/amd64.
+base, not from v1. Corpus `probara-controlled-v3` has the same shape as v1's
+(1,000 held-out cases per task: 610 supported for RCA, 255 for dependency).
 
-## Still to verify with an approved artifact
+Deployment-format CPU evaluation (`cpu-evaluation.json`):
+
+| Task | Coverage | Precision | Unsupported abstention | Accuracy | Rules coverage / accuracy | Outcome |
+|---|---|---|---|---|---|---|
+| RCA | 99.2% | 100% | 100% | 99.5% | 75.9% / 85.3% | Passes |
+| Dependency | 65.5% | 100% | 100% | 91.2% | 74.5% / 93.5% | Fails: coverage and accuracy below the rules |
+
+Most dependency misses were the wrong direction: the head confused "A fails
+before B" with "B fails before A". On the calibration partition 174 of 255
+supported pairs were answered correctly, 57 in the wrong direction and 24
+otherwise (68.2% coverage).
+
+## probara-laya-v4
+
+v4 targets that confusion with more training data and changes nothing else:
+same corpus partitions, state format, calibration, gate and threshold
+search.
+
+- **Training data:** v3's 6,000 training rows plus 2,000 rows from
+  `training/augment.py` (seed 20261111, 400 new scenario groups named
+  `dependency-aug-<n>`, about 70% of them the two directional kinds and the
+  rest near-miss contrasts). The generator is deterministic; the committed
+  script regenerates the file bit for bit (sha256 `2dc8e270…`), and
+  `train_head_cpu.py --extra-train` refuses any group that also appears in
+  calibration or test.
+- **Initialisation:** v3's epoch-3 recovery head (float32, sha256
+  `32745c89…`, recorded in `training-config.json`), 3 further epochs at the
+  same learning rate, head on Apple MPS over int8 CPU-format encoder
+  features. Mean training loss per epoch: 0.293, 0.128, 0.071.
+- **Selection:** on the calibration partition only. `validate_cpu.py
+  --calibration-only` gave dependency coverage 94.5% (rules 72.2%) and RCA
+  99.9% (rules 74.3%), so the held-out partition was scored once, by the
+  full `validate_cpu.py` run that wrote the report below.
+
+Deployment-format CPU evaluation (`cpu-evaluation.json`), the gate that
+decides release:
+
+| Task | Coverage | Precision | Unsupported abstention | Accuracy | Rules coverage / accuracy | Outcome |
+|---|---|---|---|---|---|---|
+| RCA | 99.7% | 100% | 100% | 99.8% | 75.9% / 85.3% | Passes |
+| Dependency | 92.5% | 100% | 100% | 98.1% | 74.5% / 93.5% | Passes |
+
+Calibrated temperature / threshold: RCA 0.992 / 0.96, dependency 0.911 /
+0.55. The untuned base, calibrated to the same precision, covered 81.6%
+(RCA) and 13.3% (dependency).
+
+Disclosures:
+
+- The held-out partition is not pristine for v4. v3's held-out result had
+  been seen, and the direction-confusion diagnosis that motivated the
+  augmentation drew on it as well as on the calibration partition. From
+  that point every choice was made on calibration only, and v4's held-out
+  scores were computed exactly once.
+- Precision and unsupported abstention are 100% by construction: the
+  deterministic guards veto any answer the measured evidence does not
+  support. What the gate actually discriminates is how often the model's
+  supported answer is right.
+- The labels come from the same rules that gate the answers, so these
+  numbers show the model reproducing the rules more often than the
+  conservative rules baseline commits to an answer; they say nothing about
+  real incidents. Operator labels (`POST /ai-labels/export`) are the path
+  to that.
+- v4 was trained by a working copy of `train_head_cpu.py` that wrote the
+  earlier full-checkpoint layout and was converted with
+  `tools/convert_candidate.py`, which verified every encoder tensor against
+  the pinned base. The committed script has the same training options and
+  writes the head-only layout directly. Retraining needs v3's recovery head
+  (not committed; v3's committed `head.safetensors` is its float16 export),
+  and MPS training is not bit-for-bit deterministic, so a retrain is a new
+  candidate that must pass the gate itself.
+
+## Still to verify with the approved artifact
 
 - Network-disabled container inference with the real checkpoint.
 - API → JetStream → worker → persisted RCA, dependency suggestions and

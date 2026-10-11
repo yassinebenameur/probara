@@ -51,7 +51,7 @@ RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip uninstall -y pip
 
 FROM python-base AS artifact
-ARG MODEL_VERSION=probara-laya-v1
+ARG MODEL_VERSION=probara-laya-v4
 ENV PATH=/opt/venv/bin:$PATH HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 USE_TF=0 CUDA_VISIBLE_DEVICES=""
 COPY --from=dependencies /opt/venv /opt/venv
 COPY ai-service/probara_ai /app/probara_ai

@@ -97,7 +97,15 @@ def test_v1_stays_rejected():
     assert manifest["release_approved"] is False and report["release_approved"] is False
 
 
-V1_EVALUATED = "b8ca791b7e57671d01ee86f4cbc832493846557f43bba3a2aef0c4abab0ecb49"
+def test_shipped_artifact_is_approved():
+    """The Dockerfile default is what CI gates and every default-on install runs."""
+    version = re.search(r"^ARG MODEL_VERSION=(\S+)$", (ROOT / "Dockerfile").read_text(), re.MULTILINE)[1]
+    manifest = load_manifest(ROOT / "artifacts" / version)
+    report = json.loads((ROOT / "artifacts" / version / "cpu-evaluation.json").read_text())
+    assert manifest["release_approved"] is True and report["release_approved"] is True and report["device"] == "cpu"
+
+
+V1_EVALUATED ="b8ca791b7e57671d01ee86f4cbc832493846557f43bba3a2aef0c4abab0ecb49"
 
 
 def test_v1_composition_is_recorded():

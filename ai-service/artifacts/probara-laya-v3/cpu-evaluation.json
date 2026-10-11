@@ -1,0 +1,105 @@
+{
+  "release_approved": false,
+  "device": "cpu",
+  "cpu_format": {
+    "encoder": "dynamic-int8-linear",
+    "head": "float32",
+    "backend": "qnnpack",
+    "torch": "2.8.0"
+  },
+  "version": "probara-laya-v3",
+  "state_format": 2,
+  "model_sha256": "04e9dc037cc474e983c8cf5f3d9219548c92b309452cc349e4ab1d81b9cccff2",
+  "platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.13.3",
+    "threads": 4
+  },
+  "scope": "Controlled scenarios only; no real-world accuracy claim.",
+  "tasks": {
+    "rca": {
+      "held_out": {
+        "n": 1000,
+        "supported": 610,
+        "emitted": 605,
+        "correct_emitted": 605,
+        "precision": 1.0,
+        "coverage": 0.9918032786885246,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.995
+      },
+      "conservative_rules": {
+        "precision": 1.0,
+        "coverage": 0.759016393442623,
+        "decision_accuracy": 0.853
+      },
+      "untuned_matched_precision": {
+        "n": 1000,
+        "supported": 610,
+        "emitted": 498,
+        "correct_emitted": 498,
+        "precision": 1.0,
+        "coverage": 0.8163934426229508,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.888
+      },
+      "calibration_precision_target": 1.0,
+      "temperature": 0.787860095500946,
+      "threshold": 0.67,
+      "evidence_guard_rules": {
+        "precision": 1.0,
+        "coverage": 1.0,
+        "decision_accuracy": 1.0
+      }
+    },
+    "dependency": {
+      "held_out": {
+        "n": 1000,
+        "supported": 255,
+        "emitted": 167,
+        "correct_emitted": 167,
+        "precision": 1.0,
+        "coverage": 0.6549019607843137,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.912
+      },
+      "conservative_rules": {
+        "precision": 1.0,
+        "coverage": 0.7450980392156863,
+        "decision_accuracy": 0.935
+      },
+      "untuned_matched_precision": {
+        "n": 1000,
+        "supported": 255,
+        "emitted": 34,
+        "correct_emitted": 34,
+        "precision": 1.0,
+        "coverage": 0.13333333333333333,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.779
+      },
+      "calibration_precision_target": 1.0,
+      "temperature": 0.9705027341842651,
+      "threshold": 0.31,
+      "evidence_guard_rules": {
+        "precision": 1.0,
+        "coverage": 1.0,
+        "decision_accuracy": 1.0
+      }
+    }
+  },
+  "score_cache": null,
+  "training_record": {
+    "release_approved": false,
+    "scope": "Controlled scenarios only; no real-world accuracy claim.",
+    "gate_failure": "Separate CPU calibration and held-out validation required.",
+    "loss_history": [
+      0.8532952748835086,
+      0.38368382830161135,
+      0.2305248972340002
+    ],
+    "training_seconds": 4108.46694625
+  },
+  "gate_failure": "CPU held-out release gates not met."
+}

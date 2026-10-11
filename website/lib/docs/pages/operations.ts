@@ -650,7 +650,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Settings → AI says “unreachable”',
               'The service is not running, its image was never built or pulled, the URL points elsewhere, or a NetworkPolicy blocks the caller',
-              'Check `docker compose ps local-ai` / `kubectl get pods -l app.kubernetes.io/component=local-ai` and its logs. An image build fails on purpose for a checkpoint that is not release-approved; until one ships, run with `LOCAL_AI_DISABLED=true` (Compose) or `localAI.enabled=false` (Helm). Only the API and platform worker pods are admitted by the chart policy.',
+              'Check `docker compose ps local-ai` / `kubectl get pods -l app.kubernetes.io/component=local-ai` and its logs. A local image build fetches the pinned base model from Hugging Face and fails on purpose for a checkpoint that is not release-approved; to run without local AI, set `LOCAL_AI_DISABLED=true` (Compose) or `localAI.enabled=false` (Helm). Only the API and platform worker pods are admitted by the chart policy.',
             ],
             [
               'Settings → AI says “not ready”',

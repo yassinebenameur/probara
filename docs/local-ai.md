@@ -130,7 +130,7 @@ images in stages:
 5. `runtime`: no git, compiler or pip; uid/gid 1000; root-owned code and
    weights; writes only `/tmp`; `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`.
 
-`ARG MODEL_VERSION` (default `probara-laya-v1`) names the artifact directory
+`ARG MODEL_VERSION` (default `probara-laya-v4`) names the artifact directory
 to ship. CI reads the shipped version from that line, so shipping a new
 artifact means committing its directory and changing that default. The
 service also runs `verify_artifact` at startup.
@@ -189,9 +189,25 @@ python ai-service/training/train_head_cpu.py --version probara-laya-v3 \
   --output ai-service/artifacts/probara-laya-v3 \
   --work ai-service/.cache/composed --epochs 3
 
-# Calibrate, score held-out on CPU, write the report and any approval
+# Optional: training-only dependency augmentation (deterministic, seeded) and
+# a warm start from a previous head, as probara-laya-v4 was trained
+python ai-service/training/augment.py --output ai-service/.cache/augment
+python ai-service/training/train_head_cpu.py --version probara-laya-v4 \
+  --base ai-service/.cache/base --data ai-service/artifacts/dataset \
+  --extra-train ai-service/.cache/augment/dependency-train-augment.jsonl \
+  --init-head ai-service/.cache/composed/probara-laya-v3.epochs/head-epoch-3.safetensors \
+  --output ai-service/artifacts/probara-laya-v4 \
+  --work ai-service/.cache/composed --epochs 3
+
+# Select on the calibration partition only (no report, no approval) ...
+python ai-service/training/validate_cpu.py --calibration-only \
+  --artifact ai-service/artifacts/probara-laya-v4 \
+  --base ai-service/.cache/base --data ai-service/artifacts/dataset \
+  --work ai-service/.cache/composed
+
+# ... then calibrate, score held-out on CPU once, write the report and any approval
 python ai-service/training/validate_cpu.py \
-  --artifact ai-service/artifacts/probara-laya-v3 \
+  --artifact ai-service/artifacts/probara-laya-v4 \
   --base ai-service/.cache/base --data ai-service/artifacts/dataset \
   --work ai-service/.cache/composed
 
@@ -206,7 +222,10 @@ predecessor's scenario group roles; pass `--predecessor-data`).
 `tools/convert_candidate.py` converts a full-checkpoint candidate from an
 earlier script into this layout, verifying that every encoder tensor equals
 the base. No training script writes approval. Per-epoch recovery heads go to
-`<work>/<version>.epochs/`, never the artifact.
+`<work>/<version>.epochs/`, never the artifact. `--extra-train` refuses rows
+whose scenario groups appear in the calibration or test partitions, and
+`--init-head` accepts head tensors only; both are recorded in the artifact's
+`training-config.json` with their sha256.
 
 Scenarios use reproducible local checker faults, configured topologies and
 generated telemetry: 5,000 examples per task in 1,000 independent groups,

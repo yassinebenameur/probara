@@ -515,8 +515,9 @@ or imported groups come back empty. Any other path that creates groups through
   image build never blocks the platform; `LOCAL_AI_DISABLED=true` skips it.
   The local-process stack keeps a per-checkout token in the gitignored
   `.dev-local-ai-token`; plain Compose falls back to a fixed, public
-  development token (loopback-only). With no approved artifact the image
-  cannot build, so locally AI reports unavailable. `LLM_*` and tenant
+  development token (loopback-only). If the image cannot be pulled or built
+  (the build fetches the pinned base from Hugging Face), AI reports
+  unavailable and the platform runs on. `LLM_*` and tenant
   provider settings are retired.
 - The start script refuses any Go except the minor on `go.mod`'s `go` line
   (1.26.x). With a newer local Go, prefix the command:

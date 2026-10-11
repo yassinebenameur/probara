@@ -893,8 +893,8 @@ api:
               'Private locations outside the cluster cannot connect without an additional secure exposure.',
             ],
             [
-              'No release-approved local AI image yet',
-              'The image is built and published only from a checkpoint whose manifest and CPU evaluation are release-approved, and the release workflow refuses to tag while none is. A default-on install from source has no `-local-ai` image to pull; set `localAI.enabled=false` or point `externalUrl` at a running service until one ships. `docs/local-ai-validation.md` in the repository records the validation status.',
+              'Local AI accuracy is measured on a controlled corpus only',
+              'The shipped checkpoint passed its CPU release gates on synthetic scenarios whose labels come from the same rules that guard its answers, so no real-world accuracy is claimed. The `-local-ai` image is published only on a release tag, and only from a release-approved checkpoint. `docs/local-ai-validation.md` in the repository records the results and their limits.',
             ],
             [
               'Local AI is a single replica',
