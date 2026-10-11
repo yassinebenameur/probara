@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/yassinebenameur/probara/shared/ai"
 	"net"
 	"os"
 	"path/filepath"
@@ -133,23 +134,14 @@ type APIConfig struct {
 	BaseConfig
 	SMTPConfig
 	NotificationEgressConfig
-	AlertStream        string
-	AlertSubject       string
-	AlertConsumerName  string
-	CheckJobSubject    string
-	CheckJobStream     string
-	CheckResultSubject string
-	AIRCASubject       string
-	AIAnalysisEnabled  bool
-	// LLM_* env defaults — optional global fallback used when a tenant has no
-	// ai_settings row. Mirrors the worker's fields.
-	LLMProvider           string
-	LLMBaseURL            string
-	LLMAPIKey             string
-	LLMModel              string
-	LLMJSONMode           string
-	LLMMaxTokens          int
-	LLMTimeoutSeconds     int
+	AlertStream           string
+	AlertSubject          string
+	AlertConsumerName     string
+	CheckJobSubject       string
+	CheckJobStream        string
+	CheckResultSubject    string
+	AIRCASubject          string
+	LocalAI               ai.Config
 	AdminJWTSecret        string
 	AdminAccessTTLMinutes int
 	AdminRefreshTTLDays   int
@@ -254,19 +246,11 @@ type WorkerConfig struct {
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
 
-	// AI root cause analysis consumer + LLM provider settings. The consumer is
-	// enabled only when LLMBaseURL is set; otherwise the worker skips it and
-	// the feature degrades to "not configured".
+	// Installation-owned local inference configuration; private workers receive none.
 	AIRCAStream       string
 	AIRCASubject      string
 	AIRCAConsumerName string
-	LLMProvider       string
-	LLMBaseURL        string
-	LLMAPIKey         string
-	LLMModel          string
-	LLMJSONMode       string
-	LLMMaxTokens      int
-	LLMTimeoutSeconds int
+	LocalAI           ai.Config
 
 	// Notification dispatch consumer settings — only used when the alerter is
 	// publishing to the NOTIFICATIONS stream (ALERTER_ASYNC_DISPATCH=true).
@@ -439,31 +423,10 @@ func LoadAPIConfig() (*APIConfig, error) {
 		cfg.MeshProbeTimeoutSeconds = n
 	}
 
-	// LLM_* env defaults — optional global fallback. When set, the API can build
-	// an analyzer/advisor and gate AI features even before a tenant configures
-	// its own ai_settings row.
-	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
-	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
-	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
-	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
-	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
-	cfg.LLMMaxTokens = 1024
-	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
-		}
-		cfg.LLMMaxTokens = n
+	cfg.LocalAI, err = loadLocalAIConfig()
+	if err != nil {
+		return nil, err
 	}
-	cfg.LLMTimeoutSeconds = 60
-	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
-		}
-		cfg.LLMTimeoutSeconds = n
-	}
-	cfg.AIAnalysisEnabled = cfg.LLMBaseURL != ""
 
 	// ADMIN_JWT_SECRET
 	adminJWTSecret := os.Getenv("ADMIN_JWT_SECRET")
@@ -1041,31 +1004,12 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
 	cfg.NotificationsConsumerName = envOrDefault("NOTIFICATIONS_CONSUMER_NAME", "notifications-worker")
 
-	// AI root cause analysis — provider-agnostic LLM, wired by env. The
-	// consumer self-disables when LLM_BASE_URL is unset.
 	cfg.AIRCAStream = envOrDefault("AI_RCA_STREAM", "AI_RCA")
 	cfg.AIRCASubject = envOrDefault("AI_RCA_SUBJECT", "ai.rca.jobs")
 	cfg.AIRCAConsumerName = envOrDefault("AI_RCA_CONSUMER_NAME", "ai-rca-workers")
-	cfg.LLMProvider = envOrDefault("LLM_PROVIDER", "openai_compat")
-	cfg.LLMBaseURL = strings.TrimSpace(os.Getenv("LLM_BASE_URL"))
-	cfg.LLMAPIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
-	cfg.LLMModel = strings.TrimSpace(os.Getenv("LLM_MODEL"))
-	cfg.LLMJSONMode = strings.TrimSpace(os.Getenv("LLM_JSON_MODE"))
-	cfg.LLMMaxTokens = 1024
-	if v := strings.TrimSpace(os.Getenv("LLM_MAX_TOKENS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_MAX_TOKENS: %q", v)
-		}
-		cfg.LLMMaxTokens = n
-	}
-	cfg.LLMTimeoutSeconds = 60
-	if v := strings.TrimSpace(os.Getenv("LLM_TIMEOUT_SECONDS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("invalid LLM_TIMEOUT_SECONDS: %q", v)
-		}
-		cfg.LLMTimeoutSeconds = n
+	cfg.LocalAI, err = loadLocalAIConfig()
+	if err != nil {
+		return nil, err
 	}
 
 	// SMTP — only required when the email plugin is registered AND the
@@ -1257,4 +1201,25 @@ func envDurationSeconds(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// loadLocalAIConfig is shared by API and platform worker. Retired LLM_*
+// variables are ignored, including legacy destination and credential values.
+func loadLocalAIConfig() (ai.Config, error) {
+	c := ai.Config{BaseURL: envOrDefault("LOCAL_AI_URL", "http://127.0.0.1:8090"), APIKey: strings.TrimSpace(os.Getenv("LOCAL_AI_TOKEN")), Timeout: 90 * time.Second}
+	if v := os.Getenv("LOCAL_AI_DISABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return c, fmt.Errorf("invalid LOCAL_AI_DISABLED")
+		}
+		c.Disabled = b
+	}
+	if v := os.Getenv("LOCAL_AI_TIMEOUT_SECONDS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 300 {
+			return c, fmt.Errorf("LOCAL_AI_TIMEOUT_SECONDS must be 1..300")
+		}
+		c.Timeout = time.Duration(n) * time.Second
+	}
+	return c, nil
 }

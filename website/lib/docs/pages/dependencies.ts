@@ -106,7 +106,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "With an effective [tenant AI configuration](/docs/administration/#ai-settings), the suggestion endpoint analyzes recent alert co-occurrence and asks the configured model for plausible upstream relationships. The current analysis window is 30 days, co-firing events are paired within 10 minutes, and a candidate pair needs at least two observations.",
+            "With [workspace local AI](/docs/administration/#ai-settings) enabled, at most 50 candidates are prioritized by co-firing alerts, shared service tags/groups, then naming signals. The alert lookback is 30 days, with co-firing measured in fixed 10-minute buckets. Proposals require repeated directional timing, service corroboration and a calibrated score threshold; conflicting directions and known common upstreams abstain. Correlation alone does not prove a dependency.",
         },
         {
           type: "table",
@@ -121,7 +121,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Suggestions include a reason, confidence, model information, and analyzed-pair context. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it.",
+            "Suggestions include measured counts, median timing, corroborating signals, calibrated score, model identity, evidence references and abstained-pair context. Duplicate, existing, self and cycle-producing proposals are rejected, including paths through monitors outside the candidate set. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it.",
         },
         {
           type: "callout",

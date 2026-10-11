@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { getIncidentAIAnalysis, requestIncidentAIAnalysis } from '@/lib/api';
-import type { IncidentAIAnalysis } from '@/lib/types';
+import { getAISettings, getIncidentAIAnalysis, requestIncidentAIAnalysis } from '@/lib/api';
+import type { IncidentAIAnalysis, AISettings } from '@/lib/types';
+import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
 import type { PillTone } from '@/components/ui/Pill';
+import { pollAnalysis } from '@/lib/analysis-polling';
 import { formatDateTime } from '@/lib/format';
 
 const POLL_INTERVAL_MS = 2500;
@@ -40,24 +42,23 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
   const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Poll while an analysis is pending. The effect re-runs each time `analysis`
-  // changes (every poll), scheduling the next tick until the run terminates.
+  const canWrite = useCanWrite();
+  const [availability, setAvailability] = useState<AISettings | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getAISettings().then((s) => { if (!cancelled) setAvailability(s); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [incidentId]);
+
   useEffect(() => {
     if (analysis?.status !== 'pending') return;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const latest = await getIncidentAIAnalysis(incidentId);
-        if (!cancelled && latest) setAnalysis(latest);
-      } catch {
-        // Transient fetch error — keep the current state; next render retries.
-      }
-    }, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [analysis, incidentId]);
+    return pollAnalysis(
+      () => getIncidentAIAnalysis(incidentId),
+      (latest) => { setAnalysis(latest); setError(null); },
+      () => setError('Could not refresh analysis status. Retrying…'),
+      POLL_INTERVAL_MS,
+    );
+  }, [analysis?.id, analysis?.status, incidentId]);
 
   const handleAnalyze = useCallback(async () => {
     setRequesting(true);
@@ -78,25 +79,25 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
   return (
     <Panel
       title="AI root cause analysis"
-      subtitle="LLM diagnosis over the incident's probe evidence"
+      subtitle="Suspected causes selected from recorded monitoring evidence"
       actions={(
         <Button
           variant="ghost"
           size="xs"
           loading={requesting || isPending}
-          disabled={requesting || isPending}
+          disabled={requesting || isPending || !canWrite || availability?.enabled === false || availability?.available === false}
           onClick={handleAnalyze}
         >
           {buttonLabel}
         </Button>
       )}
     >
+      {availability && (!availability.available || !availability.enabled) && <Callout tone="warning" className="mb-4">{!availability.enabled ? 'AI analysis is disabled for this workspace or installation.' : 'Local analysis service is unavailable. Check Settings → AI.'}</Callout>}
       {error && <Callout tone="danger" className="mb-4">{error}</Callout>}
 
       {!analysis && !error && (
         <p className="text-sm text-slate-400">
-          No analysis yet. Run one to get an LLM-generated root cause over the linked monitors,
-          recent checks, and dependency signals.
+          No analysis yet. Run one to assess the linked monitor checks and configured upstream evidence.
         </p>
       )}
 
@@ -114,6 +115,8 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
 
       {analysis?.status === 'ready' && (
         <div className="space-y-5">
+          {(analysis.metadata?.engine === 'legacy-llm' || !analysis.metadata) && <Pill tone="neutral" size="xs">Legacy external-provider result</Pill>}
+          {analysis.metadata?.outcome === 'insufficient_evidence' && <Callout tone="info">The evidence does not support a single cause. Review the observed symptoms and collect missing telemetry.</Callout>}
           {analysis.summary && (
             <p className="text-sm leading-relaxed text-slate-200">{analysis.summary}</p>
           )}
@@ -121,7 +124,7 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
           {analysis.probable_root_cause && (
             <div>
               <div className={`flex items-center gap-2 ${SECTION_LABEL}`}>
-                Probable root cause
+                Suspected cause
                 {analysis.confidence && (
                   <Pill tone={CONFIDENCE_TONE[analysis.confidence] ?? 'neutral'} size="xs">
                     {analysis.confidence} confidence
@@ -154,6 +157,8 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
             </div>
           )}
 
+          {analysis.metadata?.evidence_references?.length ? <div><div className={SECTION_LABEL}>Supporting evidence</div><ul className="space-y-2 text-ui text-slate-300">{analysis.metadata.evidence_references.map((e) => <li key={e.ref}><span className="text-xs text-slate-500">{e.ref}</span><p>{e.fact}</p></li>)}</ul></div> : null}
+          {analysis.metadata?.incomplete_evidence?.length ? <Callout tone="warning"><div className={SECTION_LABEL}>Incomplete evidence</div><ul className="space-y-1">{analysis.metadata.incomplete_evidence.map((e, i) => <li key={i}>{e}</li>)}</ul></Callout> : null}
           <div className="flex flex-wrap gap-x-3 text-xs text-slate-500">
             <span>{analysis.model ? `Generated by ${analysis.model}` : 'Generated'}</span>
             {analysis.completed_at && <span>{formatDateTime(analysis.completed_at)}</span>}

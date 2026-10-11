@@ -27,7 +27,7 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`)
 - `alerter/` — alert evaluation and notification delivery
 - `status-page/` — public status pages (custom template engine)
-- `shared/` — cross-service models, config, secrets, queue, AI provider
+- `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
 - `shared/db/migrations/` — golang-migrate pairs `NNNNNN_name.{up,down}.sql`
   (take the next free number), applied by `cmd/migrate` — from the repo root
   it needs `MIGRATIONS_PATH=./shared/db/migrations`; `make migrate` runs the
@@ -140,6 +140,15 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   both reduce it; never write another interval query. Calendar periods live
   next to it in `period.go`. Issued SLA reports (`sla_reports.data`) are a
   frozen `models.SLAReport` document: add fields, never repurpose them.
+- **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
+  (version `probara-evidence-v1`) is the closed set of hypotheses the model may
+  pick and the only source of analysis/suggestion prose and actions; the
+  inference service validates requests against the same file, so a label or
+  description change is a catalogue version bump on both sides. What reaches
+  the model is the counters-and-booleans allow-list in `shared/ai/evidence.go`
+  (`MonitorEvidence`) plus opaque IDs — never names, URLs, error text, bodies
+  or monitor config. Model answers only count when `Supports` (and the
+  dependency gates in `dependencies.go`) agree with the measured evidence.
 
 ## Monitor import
 
@@ -441,6 +450,13 @@ or imported groups come back empty. Any other path that creates groups through
   instead run the backend in Compose (`docker-compose.yml` defines every
   service). Dex (test OIDC IdP, :5556) is opt-in in either mode:
   `docker compose --profile sso up -d dex`.
+- AI analysis is local only: api and the DB-connected worker call the
+  installation-owned decision service at `LOCAL_AI_URL` with `LOCAL_AI_TOKEN`
+  (`shared/config` `loadLocalAIConfig`); `LOCAL_AI_DISABLED=true` turns it off
+  and absent workspace `ai_settings` rows default enabled. `LLM_*` and tenant
+  provider settings are retired. The `ai-service/` image and its Compose/Helm
+  wiring are not on dev yet, so locally AI reports unavailable unless that
+  service runs (Codex branch `feat/local-ai-laya`).
 - The start script refuses any Go except the minor on `go.mod`'s `go` line
   (1.26.x). With a newer local Go, prefix the command:
   `GOTOOLCHAIN=go1.26.7 make start-all-local`.

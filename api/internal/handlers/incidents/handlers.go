@@ -258,7 +258,7 @@ func (h *Handlers) RequestIncidentAIAnalysis(w http.ResponseWriter, r *http.Requ
 		apierrors.WriteInternalError(w, "failed to check AI analysis configuration")
 		return
 	} else if !enabled {
-		apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "AI analysis is not configured for this workspace")
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "Local AI is disabled for this workspace or installation")
 		return
 	}
 

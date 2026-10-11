@@ -309,45 +309,15 @@ export const ADMINISTRATION_PAGE: DocPage = {
     },
     {
       id: "ai-settings",
-      title: "Tenant AI settings",
+      title: "Workspace local AI settings",
       blocks: [
-        {
-          type: "table",
-          columns: ["Variable", "Meaning"],
-          rows: [
-            ["`enabled`", "Permit tenant AI features"],
-            [
-              "`provider`",
-              "Provider identifier; current default is `openai_compat`",
-            ],
-            [
-              "`base_url`",
-              "OpenAI-compatible API base endpoint",
-            ],
-            ["`model`", "Model name sent to the provider"],
-            ["`json_mode`", "Request structured JSON output where supported"],
-            ["`max_tokens`", "Response token limit"],
-            ["`timeout_seconds`", "Provider request timeout"],
-            [
-              "`api_key`",
-              "Write-only secret: omit to keep, send empty to clear, send a value to replace",
-            ],
-            [
-              "`has_api_key`",
-              "Read-time boolean indicating whether tenant secret material exists",
-            ],
-          ],
-        },
-        {
-          type: "paragraph",
-          text:
-            "Tenant settings override effective environment fallback configuration when present. The API key is encrypted at rest when the [platform master encryption key](/docs/security/#encryption-at-rest) is configured. The connection-test action is compute-only and can be run without saving a new monitor or incident.",
-        },
-        {
-          type: "paragraph",
-          text:
-            "AI configuration enables dependency suggestions and asynchronous incident analysis. It does not automatically apply suggested graph edges or remediation steps.",
-        },
+        { type: "table", columns: ["Field", "Meaning"], rows: [
+          ["`enabled`", "Only writable field; enable dependency suggestions and asynchronous incident analysis"],
+          ["`installation_enabled`", "Installation-level availability switch; overrides workspace enablement"],
+          ["`available` / `model`", "Read-only local-service readiness and model identity"],
+        ] },
+        { type: "paragraph", text: "Settings → AI controls the workspace switch and tests the installation-owned CPU service. Absent workspace settings default enabled; existing enable and disable switches are preserved. Settings updates accept only `enabled`; legacy provider fields return a validation error. The connection test accepts an empty object and cannot accept destinations or credentials." },
+        { type: "paragraph", text: "Model decisions are advisory and explanations cite bounded monitoring evidence. No configuration secrets, bodies, screenshots or arbitrary error text are sent to the model. Suggested edges and troubleshooting actions require operator review. Controlled scenarios do not establish real-world accuracy." },
       ],
     },
     {
@@ -494,7 +464,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "Test OIDC login and local/recovery login after every proxy, issuer, or public-origin change.",
             "Review audit events, inactive users, stale API keys, and tenant memberships on a schedule.",
             "Define both telemetry and audit retention intentionally.",
-            "Treat AI output as advisory and protect provider API keys with platform secret encryption.",
+            "Treat AI hypotheses as advisory and protect the installation-owned local-service token.",
             "Always preview monitor imports and test imported monitors before relying on them for production alerts.",
           ],
         },

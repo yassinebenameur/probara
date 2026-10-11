@@ -571,7 +571,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When an effective [tenant LLM configuration](/docs/administration/#ai-settings) is enabled, an incident analysis request queues asynchronous work. Its result progresses through `pending`, `ready`, or `failed` and can include a summary, probable root cause, contributing factors, recommended actions, confidence, and evidence.",
+            "When [workspace local AI](/docs/administration/#ai-settings) is enabled, incident analysis queues asynchronous work through `AI_RCA`. Evidence spans 15 minutes before the earliest linked alert (incident creation fallback) through 60 minutes after it, capped at analysis request time. Full-window summaries, sampled transitions, configured upstream checks, overlapping maintenance, allowlisted timings/certificate facts and fresh host utilization support monitor-level decisions. Results retain summary, suspected cause, contributing factors, actions, confidence and evidence, with structured model/score/reference metadata. Ambiguous or unsupported incidents complete as `ready` with insufficient evidence; service failures become `failed` with a retry action. Historical provider results remain visible as legacy analyses.",
         },
         {
           type: "callout",

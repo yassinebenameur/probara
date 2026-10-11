@@ -8,6 +8,7 @@ import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import type { PillTone } from '@/components/ui/Pill';
 import Callout from '@/components/ui/Callout';
+import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { useToast } from '@/components/ui/ToastProvider';
 import { suggestDependencies, addMonitorDependency } from '@/lib/api';
 import type { DependencySuggestion } from '@/lib/types';
@@ -23,6 +24,8 @@ const CONFIDENCE_TONE: Record<string, PillTone> = {
 // `renderButton` sizes the trigger for where it sits.
 export function useAISuggestions(onAccepted?: () => void) {
   const { showToast } = useToast();
+  const canWrite = useCanWrite();
+  const [abstained, setAbstained] = useState(0);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
   const [analyzed, setAnalyzed] = useState(0);
@@ -39,6 +42,7 @@ export function useAISuggestions(onAccepted?: () => void) {
       const result = await suggestDependencies();
       setSuggestions(result.suggestions || []);
       setAnalyzed(result.analyzed_pairs || 0);
+      setAbstained(result.abstained_pairs || 0);
       setRan(true);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'request failed';
@@ -78,15 +82,17 @@ export function useAISuggestions(onAccepted?: () => void) {
   const results = !error && !ran ? null : (
     <Panel
       title="AI dependency suggestions"
-      subtitle="Inferred from co-firing alerts, names, tags, and groups. Accepting adds the dependency to the graph."
+      subtitle="Suspected relationships supported by repeated alert timing and service signals. Acceptance validates and updates the graph."
     >
       {error && <Callout tone="danger">{error}</Callout>}
 
       {!error && ran && suggestions.length === 0 && (
         <div className="text-sm text-slate-500">
-          No new dependencies to suggest{analyzed > 0 ? ` (analyzed ${analyzed} co-firing pair${analyzed === 1 ? '' : 's'})` : ''}.
+          No proposals passed the evidence and calibrated score thresholds{analyzed > 0 ? ` (analyzed ${analyzed} candidate pair${analyzed === 1 ? '' : 's'})` : ''}.
         </div>
       )}
+
+      {ran && abstained > 0 && <p className="text-ui text-slate-400">Abstained on {abstained} candidate pairs. Correlation alone does not prove a dependency.</p>}
 
       {suggestions.length > 0 && (
         <div className="-mx-5 -mb-5 divide-y divide-divider">
@@ -105,18 +111,19 @@ export function useAISuggestions(onAccepted?: () => void) {
                   </Pill>
                 </div>
                 {s.reason && <div className="mt-1 text-ui text-slate-400">{s.reason}</div>}
+                {s.metadata?.model_version && <p className="mt-1 text-xs text-slate-500">Local model: {s.metadata.model_version} · {s.metadata.hypothesis}</p>}
               </div>
               <div className="flex flex-shrink-0 items-center gap-2">
                 <Button
                   variant="ghost"
                   size="xs"
                   loading={acceptingKey === keyOf(s)}
-                  disabled={acceptingKey !== null}
+                  disabled={acceptingKey !== null || !canWrite}
                   onClick={() => accept(s)}
                 >
                   Accept
                 </Button>
-                <Button variant="subtle" size="xs" disabled={acceptingKey !== null} onClick={() => dismiss(s)}>
+                <Button variant="subtle" size="xs" disabled={acceptingKey !== null || !canWrite} onClick={() => dismiss(s)}>
                   Dismiss
                 </Button>
               </div>

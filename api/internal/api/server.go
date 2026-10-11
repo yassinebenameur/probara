@@ -66,7 +66,6 @@ import (
 	slaservice "github.com/yassinebenameur/probara/api/internal/services/slas"
 	statuspageservice "github.com/yassinebenameur/probara/api/internal/services/statuspages"
 	tenantservice "github.com/yassinebenameur/probara/api/internal/services/tenants"
-	"github.com/yassinebenameur/probara/shared/ai"
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -248,18 +247,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			metricsQueryService := metricsqueryservice.NewService(dbClient.DB)
 			metricsQueryHandlers := metricsqueryhandlers.NewHandler(metricsQueryService, log)
 
-			// AI settings (per-tenant LLM config). The env LLM_* values are the
-			// global fallback so analysis works before a tenant configures a row.
-			aiEnvConfig := ai.Config{
-				Provider:  cfg.LLMProvider,
-				BaseURL:   cfg.LLMBaseURL,
-				APIKey:    cfg.LLMAPIKey,
-				Model:     cfg.LLMModel,
-				JSONMode:  cfg.LLMJSONMode,
-				MaxTokens: cfg.LLMMaxTokens,
-				Timeout:   time.Duration(cfg.LLMTimeoutSeconds) * time.Second,
-			}
-			aiSettingsSvc := aisettingsservice.NewService(dbClient, secretsEncryptor, aiEnvConfig)
+			// Workspace enablement and installation-owned local service status.
+			aiSettingsSvc := aisettingsservice.NewService(dbClient, cfg.LocalAI)
 
 			// AI dependency suggestions (co-firing alerts -> proposed edges)
 			depSuggestHdlrs := depsuggesthandlers.NewHandlers(depsuggestservice.NewService(dbClient, aiSettingsSvc), log)
@@ -274,7 +263,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			incidentService := incidentservice.NewService(dbClient, statusPublisher)
 			incidentHandlers := incidenthandlers.NewHandlers(incidentService, log)
 			// AI root cause analysis: enqueue jobs onto the AI_RCA subject. The
-			// feature is gated per-tenant (config row or env fallback).
+			// feature uses shared installation/workspace enablement.
 			incidentHandlers.ConfigureAIAnalysis(checkJobQueue, cfg.AIRCASubject, aiSettingsSvc)
 
 			// Alert service and handlers (shared across alerts + dashboard routes)

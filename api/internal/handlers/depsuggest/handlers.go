@@ -42,7 +42,7 @@ func (h *Handlers) Suggest(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.Suggest(r.Context(), tenantUUID)
 	if err != nil {
 		if errors.Is(err, ai.ErrNotConfigured) {
-			apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "AI is not configured. Set it up in Settings → AI root cause analysis.")
+			apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "Local AI is disabled for this workspace or installation. Check Settings → AI analysis.")
 			return
 		}
 		h.logger.WithError(err).Error("Failed to suggest dependencies")

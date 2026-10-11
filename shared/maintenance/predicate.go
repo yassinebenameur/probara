@@ -10,13 +10,19 @@ package maintenance
 // NOW() and uses no bind parameters, so it can be appended to any WHERE clause
 // or SELECT list without renumbering placeholders.
 func InMaintenancePredicate(monAlias string) string {
+	return InMaintenanceAtPredicate(monAlias, "NOW()")
+}
+
+// InMaintenanceAtPredicate uses the same direct/group coverage at a supplied
+// trusted SQL time expression, allowing historical incident analysis.
+func InMaintenanceAtPredicate(monAlias, timeExpr string) string {
 	return `EXISTS (
 		SELECT 1
 		FROM maintenance_window_monitors mwm
 		JOIN maintenance_windows mw ON mw.id = mwm.maintenance_window_id
 		WHERE mw.tenant_id = ` + monAlias + `.tenant_id
-		  AND NOW() >= mw.starts_at
-		  AND NOW() < mw.ends_at
+		  AND ` + timeExpr + ` >= mw.starts_at
+		  AND ` + timeExpr + ` < mw.ends_at
 		  AND (mwm.monitor_id = ` + monAlias + `.id
 		       OR mwm.monitor_id IN (
 		           SELECT mg.group_id FROM monitor_groups mg

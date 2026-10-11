@@ -16,7 +16,7 @@ export const CONFIGURATION_PAGE: DocPage = {
     'OIDC',
     'NATS',
     'SMTP',
-    'LLM',
+    'local AI',
   ],
   sections: [
     {
@@ -55,7 +55,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           tone: 'warning',
           title: 'A populated .env file does not configure every Docker service',
           text:
-            'Compose has no `env_file` declaration. LLM, SMTP, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services.',
+            'Compose has no `env_file` declaration. SMTP, notification, mesh, purge, and many retention variables in your shell or `.env` have no container effect unless `docker-compose.yml` explicitly forwards them. `PROBARA_SECRETS_KEY` is forwarded to the api, scheduler, worker, and alerter services.',
         },
         {
           type: 'callout',
@@ -312,7 +312,7 @@ export const CONFIGURATION_PAGE: DocPage = {
     },
     {
       id: 'api-queue-ai-artifacts',
-      title: 'API queues, AI fallback, mesh, and artifacts',
+      title: 'API queues, local AI, mesh, and artifacts',
       blocks: [
         {
           type: 'table',
@@ -372,25 +372,17 @@ export const CONFIGURATION_PAGE: DocPage = {
         },
         {
           type: 'table',
-          columns: ['Global AI fallback variable', 'Default / validation', 'Notes'],
+          columns: ['Local AI variable', 'Default / validation', 'Notes'],
           rows: [
-            ['`LLM_PROVIDER`', '`openai_compat`', 'Accepted runtime providers: `openai_compat` and `openai`.'],
-            ['`LLM_BASE_URL`', 'Empty', 'Base endpoint for an OpenAI-compatible provider.'],
-            ['`LLM_API_KEY`', 'Empty', 'Provider secret.'],
-            ['`LLM_MODEL`', 'Empty', 'Required when a base URL is configured.'],
-            [
-              '`LLM_JSON_MODE`',
-              'Empty',
-              'Product settings support empty/off, `json_object`, and `json_schema`.',
-            ],
-            ['`LLM_MAX_TOKENS`', '`1024`; positive integer', 'Maximum response tokens.'],
-            ['`LLM_TIMEOUT_SECONDS`', '`60`; positive integer', 'Provider request timeout.'],
+            ['`LOCAL_AI_DISABLED`', '`false`', 'Installation disable overrides all workspace switches.'],
+            ['`LOCAL_AI_URL`', '`http://127.0.0.1:8090`', 'Installation-owned internal inference service. Compose and Helm do not deploy or wire it yet; point this at a running service.'],
+            ['`LOCAL_AI_TOKEN`', 'Required for enabled inference, at least 16 characters', 'Internal bearer token shared only by API, platform worker and CPU service.'],
+            ['`LOCAL_AI_TIMEOUT_SECONDS`', '`90`; 1–300', 'API and worker decision timeout.'],
           ],
         },
         {
           type: 'paragraph',
-          text:
-            'These LLM values are an optional global fallback. Tenant-specific AI settings stored in PostgreSQL take precedence. Compose and Helm do not currently inject the fallback variables into API or worker pods. The API derives an `AIAnalysisEnabled` flag from `LLM_BASE_URL`, but that flag has no present runtime use.',
+          text: 'Local AI uses one evaluated Probara checkpoint, served by the installation-owned decision service, for both tasks. Workspace rows store only effective enablement: explicit enabled/disabled settings are preserved and absent settings default enabled. External providers and `LLM_*` execution are retired; old columns are retained for rollback. Explanations come from measured evidence and maintained templates.',
         },
       ],
     },
@@ -600,7 +592,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The worker uses the same `LLM_*` and `SMTP_*` variables documented on this page. Compose wires neither AI, notification, nor SMTP variables into the worker. Helm wires `SMTP_*` through its `smtp` values block; AI and notification-mode variables still require `extraEnv`.',
+            'The database-connected worker uses the same `LOCAL_AI_*` and `SMTP_*` variables documented on this page. Compose and Helm do not wire them yet. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`; Helm wires SMTP through its `smtp` values block.',
         },
       ],
     },
@@ -947,7 +939,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
             ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
-            ['AI fallback', 'Not wired', 'Not wired'],
+            ['Local AI', 'Not wired', 'Not wired'],
             [
               'SMTP',
               'Not wired',

@@ -3,8 +3,7 @@ package airca
 import (
 	"context"
 	"encoding/json"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/yassinebenameur/probara/shared/ai"
 )
@@ -20,21 +19,26 @@ const (
 	failedStatus  analysisStatus = "failed"
 )
 
-func (c *Consumer) loadStatus(ctx context.Context, id uuid.UUID) (string, error) {
+func (c *Consumer) loadStatus(ctx context.Context, job ai.AnalysisJob) (string, time.Time, error) {
 	var status string
+	var requestedAt time.Time
 	err := c.db.QueryRowContext(ctx, `
-		SELECT status FROM incident_ai_analyses WHERE id = $1`, id).Scan(&status)
-	return status, err
+		SELECT status,created_at FROM incident_ai_analyses WHERE id=$1 AND tenant_id=$2 AND incident_id=$3`, job.AnalysisID, job.TenantID, job.IncidentID).Scan(&status, &requestedAt)
+	return status, requestedAt, err
 }
 
 // markReady transitions a pending row to ready with the analysis result. The
 // status='pending' guard keeps the write idempotent against redelivery.
-func (c *Consumer) markReady(ctx context.Context, id uuid.UUID, result ai.AnalysisResult) error {
+func (c *Consumer) markReady(ctx context.Context, job ai.AnalysisJob, result ai.AnalysisResult) error {
 	factors, err := json.Marshal(emptyIfNil(result.ContributingFactors))
 	if err != nil {
 		return err
 	}
 	actions, err := json.Marshal(emptyIfNil(result.RecommendedActions))
+	if err != nil {
+		return err
+	}
+	metadata, err := json.Marshal(result.Metadata)
 	if err != nil {
 		return err
 	}
@@ -54,19 +58,19 @@ func (c *Consumer) markReady(ctx context.Context, id uuid.UUID, result ai.Analys
 		    confidence = $8,
 		    evidence = $9,
 		    error_message = NULL,
-		    completed_at = NOW()
-		WHERE id = $1 AND status = $10`,
-		id, string(readyStatus), result.Model, result.Summary, result.ProbableRootCause,
-		factors, actions, result.Confidence, nullableJSON(evidence), string(pendingStatus))
+		    completed_at = NOW(),metadata=$11
+		WHERE id = $1 AND status = $10 AND tenant_id=$12 AND incident_id=$13`,
+		job.AnalysisID, string(readyStatus), result.Model, result.Summary, result.ProbableRootCause,
+		factors, actions, result.Confidence, nullableJSON(evidence), string(pendingStatus), metadata, job.TenantID, job.IncidentID)
 	return err
 }
 
-func (c *Consumer) markFailed(ctx context.Context, id uuid.UUID, message string) error {
+func (c *Consumer) markFailed(ctx context.Context, job ai.AnalysisJob, message string) error {
 	_, err := c.db.ExecContext(ctx, `
 		UPDATE incident_ai_analyses
-		SET status = $2, error_message = $3, completed_at = NOW()
-		WHERE id = $1 AND status = $4`,
-		id, string(failedStatus), message, string(pendingStatus))
+		SET status=$2,error_message=$3,completed_at=NOW(),metadata='{"engine":"laya-cpu","outcome":"failed","incomplete_evidence":[],"evidence_references":[]}'::jsonb, recommended_actions='["Check local AI readiness and retry the analysis."]'::jsonb
+ WHERE id=$1 AND status=$4 AND tenant_id=$5 AND incident_id=$6`,
+		job.AnalysisID, string(failedStatus), message, string(pendingStatus), job.TenantID, job.IncidentID)
 	return err
 }
 

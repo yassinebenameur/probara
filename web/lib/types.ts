@@ -1276,6 +1276,7 @@ export interface IncidentDetail {
 export type IncidentAIAnalysisStatus = 'pending' | 'ready' | 'failed';
 
 export interface IncidentAIAnalysis {
+  metadata?: AIAnalysisMetadata;
   id: string;
   tenant_id: string;
   incident_id: string;
@@ -1294,6 +1295,7 @@ export interface IncidentAIAnalysis {
 }
 
 export interface DependencySuggestion {
+  metadata?: AIAnalysisMetadata;
   monitor_id: string;
   monitor_name: string;
   depends_on_id: string;
@@ -1306,37 +1308,29 @@ export interface DependencySuggestionResult {
   suggestions: DependencySuggestion[];
   model?: string;
   analyzed_pairs: number;
+  abstained_pairs: number;
 }
 
 export interface AISettings {
   enabled: boolean;
-  provider: string;
-  base_url: string;
-  model: string;
-  json_mode: string;
-  max_tokens: number;
-  timeout_seconds: number;
-  has_api_key: boolean;
-}
-
-export interface AISettingsUpdate {
-  enabled?: boolean;
-  provider?: string;
-  base_url?: string;
+  installation_enabled: boolean;
+  available: boolean;
   model?: string;
-  json_mode?: string;
-  max_tokens?: number;
-  timeout_seconds?: number;
-  // api_key: omit to leave unchanged, "" to clear, value to set.
-  api_key?: string;
+  message?: string;
 }
 
-export interface AITestRequest {
-  provider: string;
-  base_url: string;
-  model: string;
-  json_mode: string;
-  api_key?: string;
+export interface AISettingsUpdate { enabled: boolean }
+export type AITestRequest = Record<string, never>;
+
+export interface AIAnalysisMetadata {
+  engine: string;
+  model_version?: string;
+  catalogue_version?: string;
+  hypothesis?: string;
+  calibrated_score?: number;
+  outcome: 'supported' | 'insufficient_evidence' | 'failed' | 'legacy';
+  evidence_references: { ref: string; monitor_ref?: string; fact: string }[];
+  incomplete_evidence: string[];
 }
 
 export interface AITestResult {

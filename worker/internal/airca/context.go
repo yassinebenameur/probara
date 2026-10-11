@@ -1,219 +1,301 @@
-// Package airca implements the worker-side consumer that produces AI root
-// cause analyses for incidents. It gathers the incident's probe evidence from
-// the database, hands it to a provider-agnostic ai.RootCauseAnalyzer, and
-// writes the structured result back to incident_ai_analyses.
+// Package airca gathers tenant-scoped monitoring evidence for local decisions.
 package airca
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
-
 	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/db"
+	"github.com/yassinebenameur/probara/shared/maintenance"
+	"github.com/yassinebenameur/probara/shared/monitorstate"
+	"time"
 )
 
-// recentCheckLimit bounds how many recent check_results per monitor are fed to
-// the model — enough to show a failure timeline and timing/cert deltas without
-// bloating the prompt.
-const recentCheckLimit = 15
+const recentCheckLimit = 24
+const maxWindowChecks = 20000
 
-// buildAnalysisInput assembles the evidence bundle for one incident, reusing
-// the same tables the API reads. Tenant scoping is enforced on the incident
-// lookup; all linked rows descend from that incident.
-func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentID uuid.UUID) (ai.AnalysisInput, error) {
+func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentID uuid.UUID, requestedAt time.Time) (ai.AnalysisInput, error) {
 	var in ai.AnalysisInput
-
-	row := dbc.QueryRowContext(ctx, `
-		SELECT title, summary, severity, state, created_at
-		FROM incidents
-		WHERE id = $1 AND tenant_id = $2`, incidentID, tenantID)
-	if err := row.Scan(&in.Incident.Title, &in.Incident.Summary, &in.Incident.Severity, &in.Incident.State, &in.Incident.CreatedAt); err != nil {
-		return ai.AnalysisInput{}, err
-	}
-
-	alerts, err := loadAlerts(ctx, dbc, incidentID)
+	// Free-form title and summary are deliberately not fetched for inference.
+	err := dbc.QueryRowContext(ctx, `SELECT created_at FROM incidents WHERE id=$1 AND tenant_id=$2`, incidentID, tenantID).Scan(&in.Incident.CreatedAt)
 	if err != nil {
-		return ai.AnalysisInput{}, err
+		return in, err
 	}
-	in.Alerts = alerts
-
-	monitors, err := loadMonitors(ctx, dbc, incidentID)
+	var earliest sql.NullTime
+	err = dbc.QueryRowContext(ctx, `SELECT MIN(a.triggered_at) FROM incident_alerts ia
+ JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
+ JOIN monitors m ON m.id=a.monitor_id AND m.tenant_id=$2
+ JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2
+ WHERE ia.incident_id=$1`, incidentID, tenantID).Scan(&earliest)
 	if err != nil {
-		return ai.AnalysisInput{}, err
+		return in, err
 	}
-	in.Monitors = monitors
-
-	maintenance, err := loadMaintenance(ctx, dbc, incidentID)
+	anchor := in.Incident.CreatedAt
+	if earliest.Valid {
+		anchor = earliest.Time
+	}
+	if anchor.After(requestedAt) {
+		anchor = requestedAt
+		in.Incomplete = append(in.Incomplete, "Incident anchor lies after analysis request; capped to request time")
+	}
+	in.WindowStart = anchor.Add(-15 * time.Minute)
+	in.WindowEnd = anchor.Add(60 * time.Minute)
+	if in.WindowEnd.After(requestedAt) {
+		in.WindowEnd = requestedAt
+	}
+	if in.WindowStart.Before(time.Now().UTC().AddDate(0, 0, -monitorstate.CheckResultsRawRetentionDays)) {
+		in.Incomplete = append(in.Incomplete, "Raw check evidence may be expired under the 30-day retention policy")
+	}
+	// Resolve affected monitors, bounded group leaves, configured upstreams and
+	// stored dependency roots, with explicit tenant constraints at every join.
+	rows, err := dbc.QueryContext(ctx, `WITH RECURSIVE affected(id,path,depth) AS (
+ SELECT m.id,ARRAY[m.id],0 FROM monitors m WHERE m.tenant_id=$2 AND m.deleted_at IS NULL AND (
+ EXISTS(SELECT 1 FROM incident_monitors im JOIN incidents i ON i.id=im.incident_id AND i.tenant_id=$2 WHERE im.incident_id=$1 AND im.monitor_id=m.id)
+ OR EXISTS(SELECT 1 FROM incident_alerts ia JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2 JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1 AND a.monitor_id=m.id))
+ UNION ALL
+ SELECT child.id,af.path||child.id,af.depth+1 FROM affected af JOIN monitor_groups mg ON mg.group_id=af.id
+ JOIN monitors child ON child.id=mg.monitor_id AND child.tenant_id=$2 AND child.deleted_at IS NULL
+ WHERE af.depth<8 AND NOT child.id=ANY(af.path)
+ ), selected AS (
+ SELECT DISTINCT id,TRUE AS affected FROM affected
+ UNION SELECT md.depends_on_id,FALSE FROM monitor_dependencies md JOIN affected af ON af.id=md.monitor_id
+ UNION SELECT a.root_cause_monitor_id,FALSE FROM incident_alerts ia JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
+ JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1 AND a.root_cause_monitor_id IS NOT NULL
+ )
+ SELECT m.id,m.name,m.type,COALESCE(m.current_state,'unknown'),BOOL_OR(s.affected),m.interval_seconds,
+ EXISTS(SELECT 1 FROM affected af JOIN monitor_groups mg ON mg.group_id=af.id
+ JOIN monitors child ON child.id=mg.monitor_id AND child.tenant_id=$2 AND child.deleted_at IS NULL
+ WHERE af.depth=8 AND NOT child.id=ANY(af.path))
+ FROM selected s JOIN monitors m ON m.id=s.id AND m.tenant_id=$2 AND m.deleted_at IS NULL
+ WHERE m.type<>'group' GROUP BY m.id ORDER BY BOOL_OR(s.affected) DESC,m.id LIMIT 101`, incidentID, tenantID)
 	if err != nil {
-		return ai.AnalysisInput{}, err
+		return in, err
 	}
-	in.Maintenance = maintenance
-
-	return in, nil
-}
-
-func loadAlerts(ctx context.Context, dbc *db.Client, incidentID uuid.UUID) ([]ai.AlertContext, error) {
-	rows, err := dbc.QueryContext(ctx, `
-		SELECT m.name, a.status, a.failure_count, COALESCE(a.last_error, ''),
-		       a.triggered_at, COALESCE(rcm.name, '')
-		FROM incident_alerts ia
-		JOIN alerts a ON a.id = ia.alert_id
-		JOIN monitors m ON m.id = a.monitor_id
-		LEFT JOIN monitors rcm ON rcm.id = a.root_cause_monitor_id
-		WHERE ia.incident_id = $1
-		ORDER BY a.triggered_at`, incidentID)
-	if err != nil {
-		return nil, err
+	type row struct {
+		m              ai.MonitorContext
+		id             uuid.UUID
+		interval       int
+		groupTruncated bool
 	}
-	defer rows.Close()
-
-	var alerts []ai.AlertContext
+	collected := []row{}
 	for rows.Next() {
-		var a ai.AlertContext
-		if err := rows.Scan(&a.MonitorName, &a.Status, &a.FailureCount, &a.LastError, &a.TriggeredAt, &a.DependencyRootCauseMonitor); err != nil {
-			return nil, err
+		var r row
+		if err := rows.Scan(&r.id, &r.m.Name, &r.m.Type, &r.m.CurrentState, &r.m.Affected, &r.interval, &r.groupTruncated); err != nil {
+			rows.Close()
+			return in, err
 		}
-		alerts = append(alerts, a)
-	}
-	return alerts, rows.Err()
-}
-
-func loadMonitors(ctx context.Context, dbc *db.Client, incidentID uuid.UUID) ([]ai.MonitorContext, error) {
-	rows, err := dbc.QueryContext(ctx, `
-		SELECT m.id, m.name, m.type, COALESCE(m.config, '{}'::jsonb), m.current_state
-		FROM incident_monitors im
-		JOIN monitors m ON m.id = im.monitor_id
-		WHERE im.incident_id = $1
-		ORDER BY m.name`, incidentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	type monitorRow struct {
-		id  uuid.UUID
-		ctx ai.MonitorContext
-	}
-	var collected []monitorRow
-	for rows.Next() {
-		var id uuid.UUID
-		var mc ai.MonitorContext
-		var config []byte
-		if err := rows.Scan(&id, &mc.Name, &mc.Type, &config, &mc.CurrentState); err != nil {
-			return nil, err
-		}
-		mc.Config = json.RawMessage(config)
-		collected = append(collected, monitorRow{id: id, ctx: mc})
+		r.m.Ref = r.id.String()
+		collected = append(collected, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		rows.Close()
+		return in, err
 	}
-
-	monitors := make([]ai.MonitorContext, 0, len(collected))
-	for _, mr := range collected {
-		dependsOn, err := loadDependencyNames(ctx, dbc, mr.id)
-		if err != nil {
-			return nil, err
-		}
-		mr.ctx.DependsOn = dependsOn
-
-		checks, err := loadRecentChecks(ctx, dbc, mr.id)
-		if err != nil {
-			return nil, err
-		}
-		mr.ctx.RecentChecks = checks
-		monitors = append(monitors, mr.ctx)
+	rows.Close()
+	if len(collected) > 0 && collected[0].groupTruncated {
+		in.Incomplete = append(in.Incomplete, "Incident group traversal truncated at depth 8")
 	}
-	return monitors, nil
-}
-
-func loadDependencyNames(ctx context.Context, dbc *db.Client, monitorID uuid.UUID) ([]string, error) {
-	rows, err := dbc.QueryContext(ctx, `
-		SELECT dm.name
-		FROM monitor_dependencies md
-		JOIN monitors dm ON dm.id = md.depends_on_id
-		WHERE md.monitor_id = $1
-		ORDER BY dm.name`, monitorID)
+	if len(collected) > 100 {
+		collected = collected[:100]
+		in.Incomplete = append(in.Incomplete, "Incident monitor/upstream set truncated to 100")
+	}
+	firstFailures := map[string]time.Time{}
+	for _, r := range collected {
+		checks, total, failures, first, err := loadWindowChecks(ctx, dbc, tenantID, r.id, in.WindowStart, in.WindowEnd)
+		if err != nil {
+			return in, err
+		}
+		r.m.Summary = ai.SummarizeChecks(checks)
+		for _, c := range checks {
+			if c.Status == "error" && c.ErrorCategory == "unknown" {
+				in.Incomplete = append(in.Incomplete, r.m.Ref+": checker errors have no supported failure category")
+				break
+			}
+		}
+		if total > len(checks) {
+			in.Incomplete = append(in.Incomplete, fmt.Sprintf("%s: detailed checks truncated (%d of %d rows); full-window count retained", r.m.Ref, len(checks), total))
+			r.m.Summary.Checks = total
+			r.m.Summary.Failures = failures
+			r.m.Summary.Conflict = true // Unseen detail must not produce a diagnosis.
+		}
+		if first.Valid {
+			firstFailures[r.m.Ref] = first.Time
+		}
+		sampled, truncated := ai.SampleTransitions(checks, recentCheckLimit)
+		r.m.RecentChecks = sampled
+		if truncated {
+			in.Incomplete = append(in.Incomplete, r.m.Ref+": check timeline sampled; summary uses full window")
+		}
+		dependencies, err := loadDependencies(ctx, dbc, tenantID, r.id)
+		if err != nil {
+			return in, err
+		}
+		r.m.DependsOn = dependencies
+		for _, upstream := range dependencies {
+			found := false
+			for _, selected := range collected {
+				if selected.m.Ref == upstream {
+					found = true
+					break
+				}
+			}
+			if !found {
+				in.Incomplete = append(in.Incomplete, r.m.Ref+": configured upstream evidence unavailable or excluded by monitor limit")
+			}
+		}
+		if r.m.Type == "agent" {
+			metrics, pressure, err := loadHostMetrics(ctx, dbc, tenantID, r.id, in.WindowStart, in.WindowEnd, r.interval)
+			if err != nil {
+				return in, err
+			}
+			r.m.Summary.HostMetricsAvailable = metrics
+			r.m.Summary.ResourcePressure = pressure
+			if !metrics {
+				in.Incomplete = append(in.Incomplete, r.m.Ref+": host telemetry missing or expired")
+			}
+		}
+		in.Monitors = append(in.Monitors, r.m)
+	}
+	rootRows, err := dbc.QueryContext(ctx, `SELECT DISTINCT a.monitor_id,a.root_cause_monitor_id FROM incident_alerts ia
+ JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
+ JOIN monitors m ON m.id=a.monitor_id AND m.tenant_id=$2
+ JOIN monitors u ON u.id=a.root_cause_monitor_id AND u.tenant_id=$2
+ JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1`, incidentID, tenantID)
 	if err != nil {
-		return nil, err
+		return in, err
+	}
+	for rootRows.Next() {
+		var child, root string
+		if err := rootRows.Scan(&child, &root); err != nil {
+			rootRows.Close()
+			return in, err
+		}
+		for i := range in.Monitors {
+			if in.Monitors[i].Ref == child {
+				in.Monitors[i].DependencyRoots = append(in.Monitors[i].DependencyRoots, root)
+			}
+		}
+	}
+	if err := rootRows.Err(); err != nil {
+		rootRows.Close()
+		return in, err
+	}
+	rootRows.Close()
+	for i := range in.Monitors {
+		m := &in.Monitors[i]
+		failure, ok := firstFailures[m.Ref]
+		if !ok {
+			continue
+		}
+		for _, u := range append(append([]string{}, m.DependsOn...), m.DependencyRoots...) {
+			if t, ok := firstFailures[u]; ok && t.Before(failure) {
+				m.Summary.UpstreamFailedBefore = true
+			}
+		}
+	}
+	ids := []uuid.UUID{}
+	for _, r := range collected {
+		ids = append(ids, r.id)
+	}
+	rows, err = dbc.QueryContext(ctx, `SELECT m.id FROM monitors m
+ WHERE m.tenant_id=$1 AND m.id=ANY($2)
+ AND EXISTS(SELECT 1 FROM check_results cr WHERE cr.tenant_id=$1 AND cr.monitor_id=m.id
+ AND cr.created_at>=$3 AND cr.created_at<=$4
+ AND (cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $5))
+ AND `+maintenance.InMaintenanceAtPredicate("m", "cr.created_at")+`)`, tenantID, pq.Array(ids), in.WindowStart, in.WindowEnd, classifiedErrorPattern)
+	if err != nil {
+		return in, err
 	}
 	defer rows.Close()
-
-	var names []string
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return in, err
 		}
-		names = append(names, name)
+		for i := range in.Monitors {
+			if in.Monitors[i].Ref == id {
+				in.Monitors[i].Summary.MaintenanceOverlap = true
+			}
+		}
 	}
-	return names, rows.Err()
+
+	return in, rows.Err()
 }
 
-func loadRecentChecks(ctx context.Context, dbc *db.Client, monitorID uuid.UUID) ([]ai.CheckContext, error) {
-	rows, err := dbc.QueryContext(ctx, `
-		SELECT status, http_status, latency_ms, COALESCE(error_message, ''), metrics_data, created_at
-		FROM check_results
-		WHERE monitor_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2`, monitorID, recentCheckLimit)
+func loadDependencies(ctx context.Context, dbc *db.Client, tenantID, monitorID uuid.UUID) ([]string, error) {
+	rows, err := dbc.QueryContext(ctx, `SELECT upstream.id FROM monitor_dependencies md
+ JOIN monitors m ON m.id=md.monitor_id AND m.tenant_id=$1
+ JOIN monitors upstream ON upstream.id=md.depends_on_id AND upstream.tenant_id=$1
+ WHERE md.monitor_id=$2 ORDER BY upstream.id`, tenantID, monitorID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	refs := []string{}
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
 
-	var checks []ai.CheckContext
+const classifiedErrorPattern = "no such host|dns lookup|dns resolution|dns error|certificate|tls handshake|x509:|connection refused|network is unreachable|no route to host|connection reset|unexpected status|status code|status_code:|assertion|expected status"
+
+func loadWindowChecks(ctx context.Context, dbc *db.Client, tenantID, monitorID uuid.UUID, start, end time.Time) ([]ai.CheckContext, int, int, sql.NullTime, error) {
+	rows, err := dbc.QueryContext(ctx, `SELECT cr.status,cr.http_status,cr.latency_ms,LEFT(COALESCE(cr.error_message,''),4096),
+ CASE WHEN octet_length(cr.metrics_data::text)<=65536 THEN cr.metrics_data ELSE NULL END,cr.created_at,COUNT(*) OVER(),
+ COUNT(*) FILTER(WHERE cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6)) OVER(),
+ MIN(cr.created_at) FILTER(WHERE cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6)) OVER()
+ FROM check_results cr JOIN monitors m ON m.id=cr.monitor_id AND m.tenant_id=$1
+ WHERE cr.tenant_id=$1 AND cr.monitor_id=$2 AND cr.created_at>=$3 AND cr.created_at<=$4
+ ORDER BY cr.created_at,cr.id LIMIT $5`, tenantID, monitorID, start, end, maxWindowChecks, classifiedErrorPattern)
+	if err != nil {
+		return nil, 0, 0, sql.NullTime{}, err
+	}
+	defer rows.Close()
+	checks := []ai.CheckContext{}
+	total, failures := 0, 0
+	var first sql.NullTime
 	for rows.Next() {
 		var c ai.CheckContext
-		var httpStatus, latency sql.NullInt64
+		var status, latency sql.NullInt64
 		var metrics []byte
-		if err := rows.Scan(&c.Status, &httpStatus, &latency, &c.ErrorMessage, &metrics, &c.CheckedAt); err != nil {
-			return nil, err
+		if err := rows.Scan(&c.Status, &status, &latency, &c.ErrorMessage, &metrics, &c.CheckedAt, &total, &failures, &first); err != nil {
+			return nil, 0, 0, sql.NullTime{}, err
 		}
-		if httpStatus.Valid {
-			v := int(httpStatus.Int64)
+		if status.Valid {
+			v := int(status.Int64)
 			c.HTTPStatus = &v
 		}
 		if latency.Valid {
 			v := int(latency.Int64)
 			c.LatencyMS = &v
 		}
-		if len(metrics) > 0 {
-			c.Metrics = json.RawMessage(metrics)
-		}
+		c.Metrics = metrics
+		c.ErrorCategory = ai.ErrorCategory(c.ErrorMessage)
 		checks = append(checks, c)
 	}
-	return checks, rows.Err()
+	return checks, total, failures, first, rows.Err()
 }
-
-func loadMaintenance(ctx context.Context, dbc *db.Client, incidentID uuid.UUID) ([]ai.MaintenanceContext, error) {
-	rows, err := dbc.QueryContext(ctx, `
-		SELECT mw.title, mw.starts_at, mw.ends_at, array_agg(DISTINCT m.name)
-		FROM maintenance_windows mw
-		JOIN maintenance_window_monitors mwm ON mwm.maintenance_window_id = mw.id
-		JOIN incident_monitors im ON im.monitor_id = mwm.monitor_id
-		JOIN monitors m ON m.id = mwm.monitor_id
-		WHERE im.incident_id = $1
-		  AND NOW() BETWEEN mw.starts_at AND mw.ends_at
-		GROUP BY mw.id, mw.title, mw.starts_at, mw.ends_at`, incidentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var windows []ai.MaintenanceContext
-	for rows.Next() {
-		var w ai.MaintenanceContext
-		var monitorNames pq.StringArray
-		if err := rows.Scan(&w.Title, &w.StartsAt, &w.EndsAt, &monitorNames); err != nil {
-			return nil, err
-		}
-		w.Monitors = []string(monitorNames)
-		windows = append(windows, w)
-	}
-	return windows, rows.Err()
+func loadHostMetrics(ctx context.Context, dbc *db.Client, tenantID, monitorID uuid.UUID, start, end time.Time, interval int) (bool, bool, error) {
+	var available, pressure bool
+	// Only allowlisted native ratio gauges. The sample must overlap a failure,
+	// within the monitor's existing freshness horizon; old high values abstain.
+	horizon := monitorstate.FreshnessHorizonSeconds(interval)
+	err := dbc.QueryRowContext(ctx, `WITH samples AS (SELECT ms.value,EXISTS(
+ SELECT 1 FROM check_results cr WHERE cr.tenant_id=$1 AND cr.monitor_id=$2 AND cr.created_at>=$3 AND cr.created_at<=$4
+ AND cr.created_at>=ms.ts AND cr.created_at<=ms.ts+($5*INTERVAL '1 second')
+ AND (cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6))) AS fresh
+ FROM metric_series s JOIN metric_samples ms ON ms.series_id=s.id
+ WHERE s.tenant_id=$1 AND s.monitor_id=$2 AND s.metric_name IN ('system.cpu.utilization','system.memory.utilization')
+ AND s.metric_type='gauge' AND s.attributes->>'state'='used' AND ms.ts>=$3 AND ms.ts<=$4)
+ SELECT COALESCE(BOOL_OR(fresh),FALSE),COALESCE(BOOL_OR(fresh AND value>0.9 AND value<=1),FALSE)
+ FROM samples`, tenantID, monitorID, start, end, horizon, classifiedErrorPattern).Scan(&available, &pressure)
+	return available, pressure, err
 }

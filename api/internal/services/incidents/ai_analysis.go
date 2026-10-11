@@ -63,10 +63,20 @@ func (s *Service) GetLatestAIAnalysis(ctx context.Context, tenantID, incidentID 
 // loadLatestAIAnalysis fetches the newest analysis row for an incident (no
 // existence check — used internally by GetIncident). Returns nil when absent.
 func (s *Service) loadLatestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error) {
+	// Exhausted delivery or stopped workers must not leave runs pending forever.
+	// Ten minutes exceeds the maximum analysis timeout and delivery headroom.
+	if _, err := s.db.ExecContext(ctx, `UPDATE incident_ai_analyses SET status='failed',completed_at=NOW(),
+ error_message='Analysis delivery timed out. Check local AI and worker readiness, then retry.',
+ recommended_actions='["Retry after checking local AI and worker readiness."]'::jsonb,
+ metadata='{"engine":"laya-cpu","outcome":"failed","evidence_references":[],"incomplete_evidence":[]}'::jsonb
+ WHERE tenant_id=$1 AND incident_id=$2 AND status='pending' AND created_at<NOW()-INTERVAL '10 minutes'`, tenantID, incidentID); err != nil {
+		return nil, err
+	}
+
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, incident_id, status, model, summary, probable_root_cause,
 		       contributing_factors, recommended_actions, confidence, evidence,
-		       error_message, requested_by, created_at, completed_at
+		       error_message, requested_by, created_at, completed_at, metadata
 		FROM incident_ai_analyses
 		WHERE incident_id = $1 AND tenant_id = $2
 		ORDER BY created_at DESC
@@ -100,15 +110,17 @@ func scanAIAnalysis(row rowScanner) (*models.IncidentAIAnalysis, error) {
 		errorMessage        sql.NullString
 		requestedBy         uuid.NullUUID
 		completedAt         sql.NullTime
+		metadata            []byte
 	)
 	if err := row.Scan(
 		&a.ID, &a.TenantID, &a.IncidentID, &status, &model, &summary, &probableRootCause,
 		&contributingFactors, &recommendedActions, &confidence, &evidence,
-		&errorMessage, &requestedBy, &a.CreatedAt, &completedAt,
+		&errorMessage, &requestedBy, &a.CreatedAt, &completedAt, &metadata,
 	); err != nil {
 		return nil, err
 	}
 
+	a.Metadata = metadata
 	a.Status = models.IncidentAIAnalysisStatus(status)
 	a.Model = model.String
 	a.Summary = summary.String

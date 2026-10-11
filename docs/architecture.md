@@ -39,7 +39,7 @@ values for overrides.
 | Worker results | JetStream `CHECK_RESULTS` | `check.results`, with `.loc.<location-id>` variants |
 | Alert events | JetStream `ALERTS` | `alerts.*` |
 | Optional asynchronous notification delivery | JetStream `NOTIFICATIONS` | `alerts.dispatch.<plugin-type>` |
-| Optional incident AI analysis | JetStream `AI_RCA` | `ai.rca.jobs` |
+| Incident AI analysis (enabled by default) | JetStream `AI_RCA` | `ai.rca.jobs` |
 | Status-page/live monitor updates | Core NATS | `statuspage.updates` |
 
 ```mermaid
@@ -144,3 +144,32 @@ working Docker provider for disposable PostgreSQL/NATS instances. For the
 operator UI, run `npm test`, `npm run lint`, `npm run typecheck`, and
 `npm run build` in `web/`; frontend CI runs these checks. Run the corresponding
 lint/typecheck/build checks in `website/` when that application changes.
+
+## Local AI analysis
+
+The API prepares at most 50 dependency candidates from 30-day co-firing
+history, service tags, groups and names. The internal authenticated service
+returns probabilities over supplied closed choices. `shared/ai` validates
+identity, probability sums and evidence support, rejects graph cycles and
+renders measured explanations. Proposals are written only through the existing
+authoritative dependency endpoint after an operator accepts them.
+
+Incident requests reserve a pending row and publish the existing versioned
+`AI_RCA` job. The platform worker gathers tenant-scoped evidence from 15 minutes
+before the earliest linked alert (incident creation fallback) through 60 minutes
+after it, capped at request time. Window summaries precede timeline sampling;
+configured upstreams, linked dependency roots, overlapping maintenance,
+allowlisted HTTP/TLS timings and fresh native host gauges contribute evidence.
+Missing, expired, conflicting and truncated detail is explicit. Decisions are
+batched by affected monitor and aggregated conservatively. Model output selects
+hypotheses; maintained templates supply all prose and troubleshooting actions.
+Unsupported evidence completes with abstention; service/queue failures persist
+a failed run with a retry action. PostgreSQL session locks serialize duplicate
+jobs and tenant/incident/analysis IDs scope every persistence operation.
+
+Inference runs in an installation-owned service at `LOCAL_AI_URL`, called by
+the API (dependency suggestions, readiness) and the database-connected worker
+(incident analysis) only; private-location check execution never needs it.
+Installation disabling overrides preserved workspace switches; missing
+workspace rows default enabled in both API and worker. Migration 000092 retains
+legacy text/provider columns and labels historical analyses.

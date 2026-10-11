@@ -472,7 +472,7 @@ export async function updateAISettings(data: AISettingsUpdate): Promise<AISettin
   return apiRequest<AISettings>('PUT', '/v1/ai-settings', data);
 }
 
-export async function testAISettings(data: AITestRequest): Promise<AITestResult> {
+export async function testAISettings(data: AITestRequest = {}): Promise<AITestResult> {
   return apiRequest<AITestResult>('POST', '/v1/ai-settings/test', data);
 }
 

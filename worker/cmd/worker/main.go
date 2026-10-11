@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -134,30 +133,20 @@ func main() {
 		}()
 	}
 
-	// Start the AI root cause consumer. It always runs (per-tenant ai_settings
-	// rows may configure an LLM even with no env default); the env LLM, when
-	// configured, is the fallback for tenants without their own row.
+	// Only database-connected platform workers resolve local AI; private
+	// workers execute checks independently and never receive its credentials.
 	var envAnalyzer ai.RootCauseAnalyzer
-	switch a, aerr := ai.NewAnalyzer(ai.Config{
-		Provider:  cfg.LLMProvider,
-		BaseURL:   cfg.LLMBaseURL,
-		APIKey:    cfg.LLMAPIKey,
-		Model:     cfg.LLMModel,
-		JSONMode:  cfg.LLMJSONMode,
-		MaxTokens: cfg.LLMMaxTokens,
-		Timeout:   time.Duration(cfg.LLMTimeoutSeconds) * time.Second,
-	}); {
-	case aerr == nil:
-		envAnalyzer = a
-		log.Info("AI root cause analysis: env LLM default configured")
-	case errors.Is(aerr, ai.ErrNotConfigured):
-		log.Info("AI root cause analysis: no env LLM default; tenants may configure their own")
-	default:
-		log.WithError(aerr).Warn("AI root cause analysis: invalid env LLM config; ignoring env default")
+	if dbClient != nil && !cfg.LocalAI.Disabled {
+		a, aerr := ai.NewAnalyzer(cfg.LocalAI)
+		if aerr != nil {
+			log.WithError(aerr).Warn("Local AI configuration unavailable")
+		} else {
+			envAnalyzer = a
+		}
 	}
 
 	if dbClient != nil {
-		aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer, secretsEncryptor)
+		aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer)
 		go func() {
 			ctx := context.Background()
 			if err := aircaConsumer.Start(ctx); err != nil && err != context.Canceled {

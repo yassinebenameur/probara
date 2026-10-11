@@ -146,6 +146,7 @@ type IncidentAIAnalysis struct {
 	ContributingFactors []string                 `json:"contributing_factors,omitempty"`
 	RecommendedActions  []string                 `json:"recommended_actions,omitempty"`
 	Confidence          string                   `json:"confidence,omitempty"`
+	Metadata            json.RawMessage          `json:"metadata,omitempty"`
 	Evidence            json.RawMessage          `json:"evidence,omitempty"`
 	ErrorMessage        string                   `json:"error_message,omitempty"`
 	RequestedBy         *uuid.UUID               `json:"requested_by,omitempty"`

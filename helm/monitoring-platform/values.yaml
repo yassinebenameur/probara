@@ -275,7 +275,8 @@ api:
       cpu: "500m"
       memory: "256Mi"
   # Extra env vars for the API only (Kubernetes EnvVar entries), e.g. SMTP_*,
-  # LLM_*, OIDC tuning, NOTIFY_ASYNC_*.
+  # LOCAL_AI_URL/LOCAL_AI_TOKEN (set on worker.extraEnv too; the chart does
+  # not deploy the local AI service yet), OIDC tuning, NOTIFY_ASYNC_*.
   extraEnv: []
 
 # =============================================================================

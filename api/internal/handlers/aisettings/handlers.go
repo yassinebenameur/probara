@@ -1,9 +1,10 @@
-// Package aisettings exposes per-tenant LLM configuration endpoints, including
+// Package aisettings exposes workspace enablement for local AI endpoints, including
 // a connectivity test used by the settings UI.
 package aisettings
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -62,8 +63,8 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req svc.UpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+	if err := decodeSettings(w, r, &req); err != nil {
+		apierrors.WriteValidationError(w, "Only enabled is accepted for updates; connection tests accept an empty object. External provider fields are retired: "+err.Error())
 		return
 	}
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)
@@ -85,11 +86,23 @@ func (h *Handlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req svc.TestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierrors.WriteValidationError(w, "invalid request body: "+err.Error())
+	if err := decodeSettings(w, r, &req); err != nil {
+		apierrors.WriteValidationError(w, "Only enabled is accepted for updates; connection tests accept an empty object. External provider fields are retired: "+err.Error())
 		return
 	}
 	result := h.service.Test(r.Context(), tenantUUID, req)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+func decodeSettings(w http.ResponseWriter, r *http.Request, out any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
