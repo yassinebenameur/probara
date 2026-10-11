@@ -41,6 +41,12 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   Uptime Kuma over its socket.io API and writes Kuma's own backup shape (Kuma
   2.0 removed the export button). Transport only — all translation lives in
   `api/internal/services/import/kuma.go`
+- `ai-service/` — Python CPU inference service for local AI (FastAPI,
+  `probara_ai/`: `server.py`, `runtime.py` with `verify_artifact`, `gate.py`
+  the release predicate, `contract.py` the evidence contract); committed
+  head-only artifacts in `artifacts/<version>/`, training/validation scripts
+  in `training/`, hash-locked `requirements*.lock`. `docs/local-ai.md` is its
+  guide, `docs/local-ai-validation.md` the current model status
 - `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry;
   "instrument glass" design, surface contract at the top of `app/globals.css`)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
@@ -79,7 +85,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (see `scheduler/internal/scheduler/maintenance_lock.go`), never through
   separate pool calls.
 - Every service keeps `/healthz`, `/readyz` and `/metrics`; keep them intact
-  when touching startup or server wiring.
+  when touching startup or server wiring (ai-service's `/readyz` needs the
+  bearer token, so the chart's readiness probe is an exec).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
 
@@ -154,8 +161,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the
-  inference service validates requests against the same file, so a label or
-  description change is a catalogue version bump on both sides. What reaches
+  inference service validates requests against the same file (the image
+  copies it in) and every artifact manifest pins its version, so a label or
+  description change is a catalogue version bump on both sides and needs a
+  newly trained artifact; a catalogue mismatch makes the service refuse the
+  model and the Go client refuse its answers. What reaches
   the model is the counters-and-booleans allow-list in `shared/ai/evidence.go`
   (`MonitorEvidence`) plus opaque IDs — never names, URLs, error text, bodies
   or monitor config. Model answers only count when `Supports` (and the
@@ -282,9 +292,20 @@ or imported groups come back empty. Any other path that creates groups through
   `go run ./cmd/admin/gen_vapid_keys`; never generate it at startup, and
   rotating it invalidates **every** stored subscription (`statusPage.vapid`
   in `values.yaml` explains both).
-- **Helm `extraEnv`**: top-level (all workloads incl. migrations job) and
-  `<service>.extraEnv`; `worker.extraEnv` also reaches location workers, and
-  `worker.locations[]` entries can carry their own.
+- **Helm `extraEnv`**: top-level (all workloads incl. migrations job, but
+  never the local AI pod, which holds no platform credentials — it has
+  `localAI.extraEnv`) and `<service>.extraEnv`; `worker.extraEnv` also
+  reaches location workers, and `worker.locations[]` entries can carry their
+  own.
+- **Local AI wiring**: `LOCAL_AI_*` reach the api and the DB-connected
+  (platform) worker only — never scheduler, alerter, status page or location
+  workers — via `monitoring-platform.localAIEnv` in Helm and explicit
+  entries in Compose. The service gets only `LOCAL_AI_TOKEN`. Helm's token is
+  canonical key `local_ai_token`; chart-managed and empty, it is derived from
+  `secrets.adminJwtSecret` (stable across renders; never `randAlphaNum` or
+  `lookup`), and `secret.yaml` fails where it cannot be derived (`externalUrl`,
+  or an empty/externally-sourced JWT secret). The clients' reference is
+  `optional` so a pre-local-AI existing Secret never blocks api/worker.
 - **Helm secret sources**: every credential resolves per-field
   `<field>ExistingSecret` → chart-wide `secrets.existingSecret` → the
   chart-managed `<fullname>-secret`, all through
@@ -292,7 +313,8 @@ or imported groups come back empty. Any other path that creates groups through
   as a literal `value:` in a PodSpec and never hardcode the Secret name — the
   canonical keys (`postgres_url`, `nats_url`, `nats_platform_password`,
   `nats_location_auth_issuer_seed`, `admin_jwt_secret`, `probara_secrets_key`,
-  `oidc_client_secret`) are the contract external secret managers fill.
+  `oidc_client_secret`, `local_ai_token`) are the contract external secret
+  managers fill.
   Helm cannot read Secrets, so anything the chart *composes* from a
   credential (the Postgres DSN, the embedded NATS URL) needs the composed
   value externalized too — hence the paired `fail`s in `secret.yaml`.
@@ -459,7 +481,18 @@ or imported groups come back empty. Any other path that creates groups through
   Run the same in whichever one you touched.
 - Helm: `helm lint helm/monitoring-platform` and
   `helm template helm/monitoring-platform` (long output — write it to a file).
+  After touching local AI values, templates, Compose, the Makefile or the
+  start script, run `python .github/workflows/scripts/local_ai_helm_cases.py`
+  and `python3 -I scripts/check-local-ai-packaging.py` (render cases, fail
+  cases and Compose wiring; CI runs both in `local-ai-pr.yml`).
 - Compose: `docker compose config` validates env wiring.
+- ai-service: from the repo root with the hash-locked deps installed
+  (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
+  PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
+  .github/workflows/scripts -q`. Real-base and real-checkpoint tests skip
+  unless `PROBARA_LAYA_BASE` / `LOCAL_AI_ARTIFACT` are set. Never run training,
+  `validate_cpu.py` or the image build casually: they take hours or download
+  the ~650 MB base.
 
 ## Local dev environment
 
@@ -474,13 +507,17 @@ or imported groups come back empty. Any other path that creates groups through
   instead run the backend in Compose (`docker-compose.yml` defines every
   service). Dex (test OIDC IdP, :5556) is opt-in in either mode:
   `docker compose --profile sso up -d dex`.
-- AI analysis is local only: api and the DB-connected worker call the
-  installation-owned decision service at `LOCAL_AI_URL` with `LOCAL_AI_TOKEN`
-  (`shared/config` `loadLocalAIConfig`); `LOCAL_AI_DISABLED=true` turns it off
-  and absent workspace `ai_settings` rows default enabled. `LLM_*` and tenant
-  provider settings are retired. The `ai-service/` image and its Compose/Helm
-  wiring are not on dev yet, so locally AI reports unavailable unless that
-  service runs (Codex branch `feat/local-ai-laya`).
+- AI analysis is local only and default-on: api and the DB-connected worker
+  call `ai-service` at `LOCAL_AI_URL` with `LOCAL_AI_TOKEN` (`shared/config`
+  `loadLocalAIConfig`); absent workspace `ai_settings` rows default enabled.
+  Both `make start-all-local` and the Compose targets run it as the Compose
+  service `local-ai` on `127.0.0.1:8090`, started separately so a failed
+  image build never blocks the platform; `LOCAL_AI_DISABLED=true` skips it.
+  The local-process stack keeps a per-checkout token in the gitignored
+  `.dev-local-ai-token`; plain Compose falls back to a fixed, public
+  development token (loopback-only). With no approved artifact the image
+  cannot build, so locally AI reports unavailable. `LLM_*` and tenant
+  provider settings are retired.
 - The start script refuses any Go except the minor on `go.mod`'s `go` line
   (1.26.x). With a newer local Go, prefix the command:
   `GOTOOLCHAIN=go1.26.7 make start-all-local`.
@@ -554,6 +591,34 @@ or imported groups come back empty. Any other path that creates groups through
   `buildEvidence` in `context.go`; never fork the window/evidence SQL. The
   claim and cap SQL is `relayClaimSQL`; the settings ranges are pinned in
   migration 000094, `aisettings` and `web/lib/ai-triage.ts` together.
+- **Local AI release gate**: `release_approved` comes only from
+  `ai-service/training/validate_cpu.py`; `probara_ai/gate.py` is the
+  predicate and `verify_artifact` recomputes it from `cpu-evaluation.json`,
+  so editing the flag approves nothing. Never set it by hand. The image build
+  fails for an unapproved shipped artifact (`ARG MODEL_VERSION` in
+  `ai-service/Dockerfile`, which CI also reads), `docker-build` skips the
+  `-local-ai` image, and `release.yml` refuses to tag while it is unapproved.
+- **Local AI artifacts are head-only**: `artifacts/<version>/` commits
+  `head.safetensors` plus metadata and `manifest.json`; tokenizer and encoder
+  come from the base pinned in `ai-service/training/base-lock.json` (HF
+  revision + per-file sha256, plus a `normalized` hash for the tokenizer
+  config laya rewrites), fetched at build time by `training/upstream.py` and
+  composed by `training/compose_artifact.py`, which refuses output differing
+  from the manifest's `composed` hashes. Manifest `version`, `catalogue`,
+  `state_format`, `base`, `upstream_commit` and `head_sha256` are immutable:
+  change one and it is a new version.
+- **Git LFS covers only `ai-service/artifacts/*/head.safetensors`**
+  (`.gitattributes`). Every CI checkout uses `lfs: false`; only the
+  `local-ai` job in `build-test.yml` and an approved local-ai image build in
+  `docker-build.yml` / `local-ai-pr.yml` run `git lfs pull --include` with
+  that one pattern (bandwidth is metered). Keep new LFS patterns and pulls
+  equally narrow.
+- **Evidence `state_format` is pinned per artifact**: `contract.py`
+  `STATE_FORMAT` versions the evidence-to-text rendering; the manifest's
+  `state_format` (absent = 1) is what the runtime renders and what the
+  validation corpus must use. Add a new format for any wording change, never
+  edit an existing renderer (`training/history/` regenerates old corpora
+  byte for byte).
 - **`monitor_state_intervals` is SLA history.** Nothing prunes it by time,
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what

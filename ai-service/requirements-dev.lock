@@ -1,0 +1,18 @@
+# Runtime plus test dependencies (pytest, FastAPI TestClient), hash-locked.
+# Install: pip install --require-hashes --only-binary=:all: \
+#            --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-dev.lock
+#          pip install --no-deps -r requirements-laya.txt
+# Edit pins here, then run: python ai-service/tools/lock_hashes.py
+-r requirements.lock
+httpcore==1.0.9 \
+    --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55
+httpx==0.28.1 \
+    --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+iniconfig==2.3.1 \
+    --hash=sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7
+pluggy==1.6.0 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+Pygments==2.21.0 \
+    --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+pytest==8.4.2 \
+    --hash=sha256:872f880de3fc3a5bdc88a11b39c9710c3497a547cfa9320bc3c5e62fbf272e79

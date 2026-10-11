@@ -371,7 +371,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           tone: 'warning',
           title: 'Local AI evidence boundary',
           text:
-            'AI calls use an installation-owned authenticated internal CPU service. Workspace users cannot supply inference destinations or credentials. The service needs no database or broker credentials. Evidence excludes configuration secrets, request/response bodies, screenshots and arbitrary text. [AI training labels](#notifications-integrations-ai) store and export that same evidence and nothing more.',
+            'AI calls go to an installation-owned CPU service (`ai-service/`) that only the API and the database-connected worker are configured to call; private-location workers never receive its URL or token. The service holds only its bearer token, never database, broker or platform credentials, and needs no outbound network: the image carries the model and runs with model-hub access disabled. In Helm it also gets no service-account token, runs non-root on a read-only root filesystem, and its NetworkPolicy denies all egress. Workspace users cannot supply inference destinations or credentials. Evidence excludes configuration secrets, request/response bodies, screenshots and arbitrary text. [AI training labels](#notifications-integrations-ai) store and export that same evidence and nothing more.',
         },
         {
           type: 'paragraph',
@@ -470,7 +470,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             {
               term: 'Local AI token',
               description:
-                '`LOCAL_AI_TOKEN` is installation-owned and shared only by the API, platform worker and CPU service. Workspaces cannot set an inference destination or credential.',
+                '`LOCAL_AI_TOKEN` is installation-owned and shared only by the API, platform worker and CPU service, which compares it in constant time. Workspaces cannot set an inference destination or credential. Plain Compose falls back to a development token that is public in the repository, acceptable only because the port is bound to loopback. When Helm manages it and `secrets.localAiToken` is empty, the token is derived from `secrets.adminJwtSecret`, so it is exactly as secret as that value; set it explicitly or from an existing Secret for production.',
             },
             {
               term: 'AI training labels',
@@ -492,7 +492,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Restrict webhook destinations with egress policy because the worker monitor CIDR guard does not cover the notification plugin.',
             'Use a dedicated SMTP account with send-only permissions and a controlled From domain.',
             'Review alert and RCA payloads before sending them to third-party notification providers; error bodies, URLs, headers, and incident context can be sensitive.',
-            'Keep the local AI service on an internal network reachable only from the API and platform worker, and share label export files only with the people who retrain the model.',
+            'Keep the local AI service reachable only from the API and platform worker. The chart’s NetworkPolicy does this only on a CNI that enforces NetworkPolicy; elsewhere the token is the only barrier. Share label export files only with the people who retrain the model.',
             'Keep asynchronous dispatch stream/consumer permissions separate from check execution permissions.',
           ],
         },

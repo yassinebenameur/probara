@@ -24,17 +24,19 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
 - **Small footprint** — every service is a static, CGO-free Go binary. At
   default Helm resource requests, a complete HA install (two replicas of each
   service plus bundled Postgres and NATS) requests about 1 CPU and 1.4 Gi of
-  memory; one replica of each app service requests 450m / 576Mi. The host
-  agent is a single ~8 MB static binary. The worker image is the one heavy
-  image — it bundles Chromium for browser checks.
+  memory; one replica of each app service requests 450m / 576Mi. The bundled
+  local AI pod, on by default, adds 1 CPU / 2 Gi (limit 4 CPU / 4 Gi), for
+  about 2 CPU / 3.4 Gi in total; `localAI.enabled=false` removes it. The host
+  agent is a single ~8 MB static binary. The worker image (Chromium for
+  browser checks) and the local AI image (model weights) are the heavy ones.
 - **Alerting with context** — consecutive-failure thresholds and latency
   anomaly detection, alert grouping, reminders, and maintenance windows.
   Delivery over email, Slack, Discord, Teams, PagerDuty, Opsgenie / Jira
   Service Management (acknowledgements synced), Telegram, SMS via Twilio, and
-  signed webhooks. Incidents, a
-  service dependency graph, and optional LLM root-cause analysis through any
-  OpenAI-compatible endpoint (configuration only — no hardcoded vendor; local
-  vLLM/Ollama work).
+  signed webhooks. Incidents, a service dependency graph, and local AI
+  incident analysis and dependency suggestions from a bundled CPU model that
+  runs offline next to the platform: no external LLM, no provider keys, and
+  only counters and flags (never names, URLs or bodies) reach it.
 - **Access control** — multi-tenancy, OIDC SSO with group-to-role mapping,
   admin/editor/viewer roles, an audit log, read/write-scoped API keys, monitor
   and channel secrets encrypted at rest, and an SSRF guard applied to every
@@ -60,6 +62,8 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
 - **Alerter** — alert lifecycle, latency anomaly detection, grouping,
   mesh-edge alerts, and notification delivery
 - **Status page** — public uptime pages with live updates
+- **Local AI** (`ai-service/`, Python) — offline CPU inference for incident
+  analysis and dependency suggestions, called only by the API and worker
 - **Web** — Next.js operator UI
 
 ```
@@ -102,13 +106,17 @@ One command — infra in Docker, app services in containers, UI via nvm:
 make start-all
 ```
 
-Or run the Go services as local processes (Docker only for Postgres/NATS):
+Or run the Go services as local processes (Docker only for Postgres, NATS and
+the local AI container):
 
 ```bash
 make start-all-local
 ```
 
-Both bootstrap the database, run migrations, and start the UI. Create or
+Both bootstrap the database, run migrations, start local AI, and start the
+UI. The local AI image builds only from a release-approved model artifact
+(see [`docs/local-ai.md`](docs/local-ai.md)); if it cannot start, the platform
+runs with AI analysis unavailable, and `LOCAL_AI_DISABLED=true` skips it. Create or
 update an admin user (one-time):
 
 ```bash
@@ -124,6 +132,7 @@ Useful local URLs:
 - API: `http://localhost:8080`
 - Status page service: `http://localhost:8082`
 - NATS monitor: `http://localhost:8222`
+- Local AI: `http://127.0.0.1:8090` (`/healthz`; `/readyz` needs the bearer token)
 - Metrics: `:9090` (api), `:9091` (scheduler), `:9092` (worker), `:9093` (status-page), `:9094` (alerter)
 
 To try OIDC SSO locally, Compose ships a Dex identity provider behind a
@@ -132,7 +141,7 @@ profile: `docker compose --profile sso up -d dex`.
 Manual, step-by-step alternative:
 
 ```bash
-make up            # postgres, nats, migrations, api, scheduler, worker, alerter, status-page
+make up            # postgres, nats, migrations, api, scheduler, worker, alerter, status-page, then local-ai
 cd web
 npm ci
 npm run dev
@@ -141,8 +150,9 @@ npm run dev
 ## Kubernetes Deployment (Helm)
 
 Chart: `helm/monitoring-platform` (bundled PostgreSQL and NATS, optional
-external ones, worker HPA, per-location worker fleets, migrations run as a
-`post-install`/`post-upgrade` hook job).
+external ones, worker HPA, per-location worker fleets, default-on local AI
+inference under `localAI`, migrations run as a `post-install`/`post-upgrade`
+hook job).
 
 ```bash
 helm upgrade --install probara ./helm/monitoring-platform \
@@ -161,6 +171,9 @@ image:
 secrets:
   adminJwtSecret: "replace-with-32-plus-char-secret"
   initialApiKey: "replace-with-secure-initial-key"
+  # Bearer token for the default-on local AI (openssl rand -hex 32). Left
+  # empty, the chart derives it from adminJwtSecret.
+  localAiToken: "replace-with-32-plus-char-token"
 
 api:
   # Public URLs used in agent install scripts, push webhook URLs, and
@@ -313,6 +326,18 @@ Retention setting semantics:
 | `SYNTHETIC_BROWSER_ARTIFACTS_DIR` | no | temp dir |
 | `CHROME_BIN` | no | auto-detected |
 | `SIP_LOCALHOST_AS_HOST_GATEWAY` | no | `false` |
+
+### Local AI (api and DB-connected worker)
+
+| Variable | Required | Default |
+| --- | --- | --- |
+| `LOCAL_AI_DISABLED` | no | `false` |
+| `LOCAL_AI_URL` | no | `http://127.0.0.1:8090` |
+| `LOCAL_AI_TOKEN` | yes, unless disabled (16+ chars, same on the service) | none |
+| `LOCAL_AI_TIMEOUT_SECONDS` | no | `90` |
+
+The inference service itself also reads `LOCAL_AI_THREADS`,
+`LOCAL_AI_QUEUE_CAPACITY` and `LOCAL_AI_QUEUE_TIMEOUT_SECONDS`.
 
 ### Alerter
 

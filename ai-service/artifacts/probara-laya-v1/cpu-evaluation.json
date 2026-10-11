@@ -1,0 +1,164 @@
+{
+  "release_approved": false,
+  "device": "cpu",
+  "cpu_format": {
+    "encoder": "dynamic-int8-linear",
+    "head": "float32",
+    "backend": "qnnpack",
+    "torch": "2.8.0"
+  },
+  "scope": "Controlled scenarios only; no real-world accuracy claim.",
+  "tasks": {
+    "rca": {
+      "held_out": {
+        "n": 1000,
+        "supported": 610,
+        "emitted": 370,
+        "correct_emitted": 370,
+        "precision": 1.0,
+        "coverage": 0.6065573770491803,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.76
+      },
+      "conservative_rules": {
+        "precision": 1.0,
+        "coverage": 0.759016393442623,
+        "decision_accuracy": 0.853
+      },
+      "untuned_matched_precision": {
+        "n": 1000,
+        "supported": 610,
+        "emitted": 267,
+        "correct_emitted": 267,
+        "precision": 1.0,
+        "coverage": 0.4377049180327869,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.657
+      },
+      "calibration_precision_target": 1.0,
+      "temperature": 1.791791319847107,
+      "threshold": 0.5,
+      "evidence_guard_rules": {
+        "precision": 1.0,
+        "coverage": 1.0,
+        "decision_accuracy": 1.0
+      }
+    },
+    "dependency": {
+      "held_out": {
+        "n": 1000,
+        "supported": 255,
+        "emitted": 14,
+        "correct_emitted": 14,
+        "precision": 1.0,
+        "coverage": 0.054901960784313725,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.759
+      },
+      "conservative_rules": {
+        "precision": 1.0,
+        "coverage": 0.7372549019607844,
+        "decision_accuracy": 0.933
+      },
+      "untuned_matched_precision": {
+        "n": 1000,
+        "supported": 255,
+        "emitted": 3,
+        "correct_emitted": 3,
+        "precision": 1.0,
+        "coverage": 0.011764705882352941,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.748
+      },
+      "calibration_precision_target": 1.0,
+      "temperature": 1.616626501083374,
+      "threshold": 0.5,
+      "evidence_guard_rules": {
+        "precision": 1.0,
+        "coverage": 1.0,
+        "decision_accuracy": 1.0
+      }
+    }
+  },
+  "accelerator_training_evaluation": {
+    "release_approved": false,
+    "scope": "Controlled scenarios only; no real-world accuracy claim.",
+    "tasks": {
+      "rca": {
+        "held_out": {
+          "n": 1000,
+          "supported": 610,
+          "emitted": 574,
+          "correct_emitted": 574,
+          "precision": 1.0,
+          "coverage": 0.940983606557377,
+          "unsupported_abstention": 1.0,
+          "decision_accuracy": 0.964
+        },
+        "conservative_rules": {
+          "precision": 1.0,
+          "coverage": 0.759016393442623,
+          "decision_accuracy": 0.853
+        },
+        "untuned_at_release_threshold": {
+          "n": 1000,
+          "supported": 610,
+          "emitted": 289,
+          "correct_emitted": 289,
+          "precision": 1.0,
+          "coverage": 0.4737704918032787,
+          "unsupported_abstention": 1.0,
+          "decision_accuracy": 0.679
+        },
+        "evidence_guard_rules": {
+          "precision": 1.0,
+          "coverage": 1.0,
+          "decision_accuracy": 1.0
+        },
+        "temperature": 1.0,
+        "threshold": 0.5
+      },
+      "dependency": {
+        "held_out": {
+          "n": 1000,
+          "supported": 255,
+          "emitted": 124,
+          "correct_emitted": 124,
+          "precision": 1.0,
+          "coverage": 0.48627450980392156,
+          "unsupported_abstention": 1.0,
+          "decision_accuracy": 0.869
+        },
+        "conservative_rules": {
+          "precision": 1.0,
+          "coverage": 0.7372549019607844,
+          "decision_accuracy": 0.933
+        },
+        "untuned_at_release_threshold": {
+          "n": 1000,
+          "supported": 255,
+          "emitted": 5,
+          "correct_emitted": 5,
+          "precision": 1.0,
+          "coverage": 0.0196078431372549,
+          "unsupported_abstention": 1.0,
+          "decision_accuracy": 0.75
+        },
+        "evidence_guard_rules": {
+          "precision": 1.0,
+          "coverage": 1.0,
+          "decision_accuracy": 1.0
+        },
+        "temperature": 1.0,
+        "threshold": 0.5
+      }
+    },
+    "loss_history": [
+      0.8260745804980397,
+      0.44711412749936186
+    ],
+    "training_seconds": 4480.7369005840155,
+    "gate_failure": "Release gates, including superiority over the predeclared conservative rules, not met."
+  },
+  "gate_failure": "CPU held-out release gates not met."
+}

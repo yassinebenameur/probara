@@ -12,3 +12,5 @@ helm
 docs
 *.png
 *.log
+
+ai-service

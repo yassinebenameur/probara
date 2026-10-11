@@ -1,5 +1,27 @@
 .PHONY: help up down restart logs build build-collector-static kuma-export clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
+# Local AI runs beside the platform, never in its way: its image build fails on
+# purpose for an artifact that is not release-approved, and Compose aborts a
+# whole `up`/`build` when any one build fails. So every target below addresses
+# the platform services by name (all Compose services except local-ai, read
+# from `docker compose config`) and runs local-ai in a separate, tolerant
+# command. LOCAL_AI_DISABLED=true skips it, and api/worker then run with the
+# feature off.
+PLATFORM_SERVICES = $$(docker compose config --services | grep -vx local-ai)
+# $(call local_ai,<compose subcommand and flags>,<what failed>). Docker
+# refuses a container whose --cpus exceeds the host's CPU count, so unless set
+# explicitly LOCAL_AI_CPUS defaults to min(host CPUs, 4) and LOCAL_AI_THREADS
+# to min(LOCAL_AI_CPUS, 4); the model is CPU-validated at 4 threads.
+local_ai = if [ "$${LOCAL_AI_DISABLED:-false}" != "true" ]; then \
+	cpus="$${LOCAL_AI_CPUS:-$$(docker info --format '{{.NCPU}}' 2>/dev/null)}"; \
+	[ "$$cpus" -ge 1 ] 2>/dev/null || cpus=4; \
+	[ -n "$${LOCAL_AI_CPUS:-}" ] || [ "$$cpus" -le 4 ] || cpus=4; \
+	threads="$${LOCAL_AI_THREADS:-$$cpus}"; \
+	[ -n "$${LOCAL_AI_THREADS:-}" ] || [ "$$threads" -le 4 ] || threads=4; \
+	LOCAL_AI_CPUS="$$cpus" LOCAL_AI_THREADS="$$threads" docker compose $(1) local-ai \
+	|| echo "WARNING: local-ai $(2) failed; the platform runs with AI analysis unavailable (LOCAL_AI_DISABLED=true to skip)"; \
+	fi
+
 # Default target
 help:
 	@echo "Probara - Docker Compose Management"
@@ -18,8 +40,8 @@ help:
 	@echo "  make healthcheck - Check health of all services"
 	@echo "  make migrate     - Run database migrations"
 	@echo "  make scale-workers N=3 - Scale worker service to N instances"
-	@echo "  make start-all-local - Start infra in Docker and app services locally"
-	@echo "  make stop-all-local - Stop local app services, UI, and infra"
+	@echo "  make start-all-local - Start infra + local AI in Docker and app services locally"
+	@echo "  make stop-all-local - Stop local app services, local AI, UI, and infra"
 	@echo "  make restart-all-local - Restart local app services, UI, and infra"
 	@echo "  make start-all   - Start infra, Docker app services, and UI"
 	@echo "  make stop-all    - Stop Docker app services and UI"
@@ -45,7 +67,8 @@ help:
 
 # Start all services
 up:
-	docker compose up -d
+	services="$(PLATFORM_SERVICES)" && docker compose up -d $$services
+	@$(call local_ai,up -d,start)
 
 # Stop all services
 down:
@@ -73,7 +96,8 @@ logs-status:
 
 # Build images
 build:
-	docker compose build
+	services="$(PLATFORM_SERVICES)" && docker compose build $$services
+	@$(call local_ai,build,build)
 
 build-collector-static:
 	@bash scripts/build-collector.sh
@@ -84,7 +108,8 @@ kuma-export:
 
 # Rebuild and restart
 rebuild:
-	docker compose up -d --build
+	services="$(PLATFORM_SERVICES)" && docker compose up -d --build $$services
+	@$(call local_ai,up -d --build,rebuild)
 
 # Clean up (remove volumes)
 clean:
@@ -121,7 +146,8 @@ migrate:
 # Scale workers
 scale-workers:
 	@if [ -z "$(N)" ]; then echo "Usage: make scale-workers N=3"; exit 1; fi
-	docker compose up -d --scale worker=$(N)
+	services="$(PLATFORM_SERVICES)" && docker compose up -d --scale worker=$(N) $$services
+	@$(call local_ai,up -d,start)
 
 # Database commands
 db-shell:
@@ -149,7 +175,7 @@ dev-start:
 	@echo "✅ Infrastructure ready for local development"
 
 dev-stop:
-	docker compose stop postgres nats
+	docker compose stop local-ai postgres nats
 
 # Start everything (backend + UI with nvm LTS)
 start-all:
@@ -162,6 +188,7 @@ start-all:
 	@echo "Running database migrations..."
 	docker compose run --rm migrations
 	@echo "Starting application services..."
+	@$(call local_ai,up -d,start)
 	docker compose up -d api scheduler worker status-page alerter
 	@echo "Waiting for services to be healthy..."
 	@sleep 10
@@ -244,7 +271,7 @@ stop-all-local:
 		pkill -f "[n]ext dev --hostname 0.0.0.0 --port 3000" || true; \
 	fi
 	@echo "Stopping infrastructure..."
-	docker compose stop postgres nats
+	docker compose stop local-ai postgres nats
 	@echo "Local stack stopped."
 
 # Restart local services, UI, and infrastructure

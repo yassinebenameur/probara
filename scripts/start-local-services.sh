@@ -148,6 +148,39 @@ if [[ "${1:-}" == "check-go" ]]; then
   exit 0
 fi
 
+# Local AI is default-on: inference runs in its CPU-only container (Compose
+# service local-ai, loopback-bound on :8090) even when the Go services run as
+# local processes. The bearer token is per checkout, kept in the gitignored
+# .dev-local-ai-token next to .dev-secrets.key, and exported so both the
+# container (Compose interpolation) and the api/worker processes (inherited
+# env) agree on it. LOCAL_AI_DISABLED=true skips the container and turns the
+# feature off in api/worker. A failed start (for example an image build without
+# the model weights) is logged and does not block the platform.
+if [[ "${LOCAL_AI_DISABLED:-false}" != "true" ]]; then
+  AI_TOKEN_FILE="$ROOT_DIR/.dev-local-ai-token"
+  if [[ -z "${LOCAL_AI_TOKEN:-}" ]]; then
+    if [[ ! -s "$AI_TOKEN_FILE" ]]; then
+      (umask 077; openssl rand -hex 32 > "$AI_TOKEN_FILE")
+    fi
+    LOCAL_AI_TOKEN="$(cat "$AI_TOKEN_FILE")"
+  fi
+  export LOCAL_AI_TOKEN
+  export LOCAL_AI_URL="${LOCAL_AI_URL:-http://127.0.0.1:8090}"
+  # Docker refuses a --cpus above the host's CPU count; unless set explicitly,
+  # size the container to min(host CPUs, 4) and threads to min(CPUs, 4), the
+  # same defaults the Makefile's local_ai macro applies.
+  ai_cpus="${LOCAL_AI_CPUS:-$(docker info --format '{{.NCPU}}' 2>/dev/null || true)}"
+  [[ "$ai_cpus" =~ ^[0-9]+$ && "$ai_cpus" -ge 1 ]] || ai_cpus=4
+  [[ -n "${LOCAL_AI_CPUS:-}" || "$ai_cpus" -le 4 ]] || ai_cpus=4
+  ai_threads="${LOCAL_AI_THREADS:-$ai_cpus}"
+  [[ -n "${LOCAL_AI_THREADS:-}" || "$ai_threads" -le 4 ]] || ai_threads=4
+  export LOCAL_AI_CPUS="$ai_cpus" LOCAL_AI_THREADS="$ai_threads"
+  log "Starting local AI container (docker compose service local-ai)"
+  if ! (cd "$ROOT_DIR" && docker compose up -d local-ai) >>"$STARTUP_LOG" 2>&1; then
+    log "WARNING: local AI container failed to start; AI analysis will report the model unavailable. See $STARTUP_LOG, or set LOCAL_AI_DISABLED=true."
+  fi
+fi
+
 start_service api ./api/cmd/api 8080 9090 \
   ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-your-secret-key-change-in-production}" \
   ADMIN_ACCESS_TTL_MINUTES="${ADMIN_ACCESS_TTL_MINUTES:-15}" \

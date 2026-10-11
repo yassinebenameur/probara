@@ -67,6 +67,7 @@ spec:
           containerPort: {{ .Values.worker.httpPort }}
           protocol: TCP
         env:
+        {{- include "monitoring-platform.localAIEnv" . | nindent 8 }}
         - name: SERVICE_NAME
           value: "worker"
         - name: HTTP_PORT

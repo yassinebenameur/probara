@@ -1,0 +1,163 @@
+name: Local AI
+
+# PR-time checks for the bundled local AI service and its packaging: the
+# chart's local AI render cases and Compose wiring, and the image build (only
+# from a release-approved checkpoint). build-test.yml runs the Python tests
+# and composes + verifies the committed artifacts; docker-build.yml publishes
+# the image.
+on:
+  pull_request:
+    branches: [dev, staging, main]
+    paths:
+      - 'ai-service/**'
+      - 'shared/ai/catalogue.json'
+      - 'helm/**'
+      - 'docker-compose.yml'
+      # check-local-ai-packaging.py's check_dev_wiring reads these three.
+      - 'Makefile'
+      - 'scripts/start-local-services.sh'
+      - '.gitignore'
+      - 'scripts/check-local-ai-packaging.py'
+      - '.github/workflows/local-ai-pr.yml'
+      - '.github/workflows/scripts/local_ai_*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-ai-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  helm:
+    name: Helm and Compose local AI cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13.3'
+
+      - name: Install PyYAML
+        run: python -m pip install pyyaml==6.0.2
+
+      - name: Lint chart
+        run: helm lint helm/monitoring-platform
+
+      # default (bundled, derived token), localAI.enabled=false,
+      # localAI.externalUrl, existing-Secret sources (each also linted), and
+      # the combinations the chart must reject, each by its own error.
+      - name: Render local AI cases
+        run: python .github/workflows/scripts/local_ai_helm_cases.py
+
+      - name: Compose wiring
+        run: docker compose config --quiet
+
+      - name: Rendered packaging boundaries (Helm and Compose)
+        run: python scripts/check-local-ai-packaging.py
+
+  image:
+    name: Local AI image (amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # No LFS at checkout: the gate below decides whether the head weights
+      # are needed at all, and pulls them only then (LFS bandwidth is metered).
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Check release gate
+        id: gate
+        run: python3 .github/workflows/scripts/local_ai_artifact.py gate
+
+      # The image build would fail at its verify_artifact step by design, so
+      # an unapproved checkpoint is reported, not built. build-test.yml still
+      # proves the gate refuses it on the composed weights.
+      - name: Report release gate (unapproved checkpoint)
+        if: steps.gate.outputs.approved != 'true'
+        env:
+          VERSION: ${{ steps.gate.outputs.version }}
+          REASON: ${{ steps.gate.outputs.reason }}
+        run: |
+          echo "::notice title=Local AI image not built::$VERSION is not release-approved: $REASON The image is built only when manifest.json and cpu-evaluation.json say release_approved true on cpu."
+          {
+            echo "### Local AI image not built"
+            echo "Checkpoint \`$VERSION\` is not release-approved, so the image build (which runs \`verify_artifact\`) is skipped."
+            echo "- cpu-evaluation.json: $REASON"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Pull Git LFS head weights
+        if: steps.gate.outputs.approved == 'true'
+        run: git lfs pull --include 'ai-service/artifacts/*/head.safetensors'
+
+      - name: Free runner disk
+        if: steps.gate.outputs.approved == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Set up Docker Buildx
+        if: steps.gate.outputs.approved == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # The Dockerfile fetches the pinned base by revision and sha256,
+      # composes the committed head onto it, and fails unless verify_artifact
+      # accepts the result: the release gate is part of the build.
+      - name: Build local AI image
+        if: steps.gate.outputs.approved == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./ai-service/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: probara-local-ai:pr
+          cache-from: type=gha,scope=local-ai
+          cache-to: type=gha,scope=local-ai,mode=min
+
+      # Air-gapped smoke test, hardened like the chart's pod (no network,
+      # read-only root, /tmp only): authenticated readiness and one real
+      # decision through the bundled weights.
+      - name: Smoke-test the image offline
+        if: steps.gate.outputs.approved == 'true'
+        run: |
+          docker run -d --name local-ai --network none --read-only --tmpfs /tmp:rw,size=256m \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -e LOCAL_AI_TOKEN=pr-smoke-test-local-ai-token probara-local-ai:pr
+          trap 'docker logs local-ai 2>&1 | tail -n 50; docker rm -f local-ai >/dev/null' EXIT
+          docker exec -i local-ai python - <<'PY'
+          import json, time, urllib.request
+          from probara_ai.contract import options
+          base, token = "http://127.0.0.1:8090", "pr-smoke-test-local-ai-token"
+          def call(path, body=None):
+              request = urllib.request.Request(base + path, data=body and json.dumps(body).encode(),
+                                               headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+              return json.load(urllib.request.urlopen(request, timeout=120))
+          for _ in range(120):
+              try:
+                  call("/readyz"); break
+              except Exception:
+                  time.sleep(2)
+          else:
+              raise SystemExit("local AI never became ready")
+          result = call("/v1/decisions", {"decisions": [{"id": "smoke", "task": "rca", "choices": options("rca"),
+                                                         "evidence": {"checks": 12, "failures": 4, "dns_failures": 4}}]})
+          assert result["model"]["engine"] == "laya-cpu", result
+          assert [r["id"] for r in result["results"]] == ["smoke"], result
+          print(json.dumps(result["model"]))
+          PY

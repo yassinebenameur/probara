@@ -67,6 +67,7 @@ spec:
           containerPort: {{ .Values.api.metricsPort }}
           protocol: TCP
         env:
+        {{- include "monitoring-platform.localAIEnv" . | nindent 8 }}
         - name: SERVICE_NAME
           value: "api"
         - name: HTTP_PORT

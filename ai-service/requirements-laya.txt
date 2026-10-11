@@ -1,0 +1,6 @@
+# laya pinned to the training-interface commit in training/base-lock.json
+# (tests/test_packaging.py enforces equality). Pip cannot hash a VCS checkout,
+# so install it separately and without dependencies after a lock file:
+#   pip install --no-deps -r requirements-laya.txt
+# The image instead builds a wheel from a verified checkout of that commit.
+laya @ git+https://github.com/NandhaKishorM/laya.git@68804629e8ccd9d616d48a40e87de9fabbeae069

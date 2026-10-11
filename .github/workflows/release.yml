@@ -33,6 +33,30 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
 
+      # semantic-release tags v* and publishes the chart, which deploys the
+      # bundled local AI by default from <prefix>-local-ai:<tag>. docker-build
+      # pushes that image only from a release-approved checkpoint, so an
+      # unapproved one must stop the release here: otherwise the tag and chart
+      # go out and every default install pulls an image that was never pushed.
+      # Stdlib only, no Git LFS (reads manifest.json + cpu-evaluation.json).
+      - name: Check local AI release gate
+        id: local-ai
+        run: python3 .github/workflows/scripts/local_ai_artifact.py gate
+
+      - name: Refuse to release an unapproved local AI checkpoint
+        if: steps.local-ai.outputs.approved != 'true'
+        env:
+          VERSION: ${{ steps.local-ai.outputs.version }}
+          REASON: ${{ steps.local-ai.outputs.reason }}
+        run: |
+          echo "::error title=Release blocked: local AI checkpoint not release-approved::$VERSION: $REASON No tag or chart is published until manifest.json and cpu-evaluation.json say release_approved true on cpu."
+          {
+            echo "### Release blocked: local AI checkpoint not release-approved"
+            echo "The chart deploys the bundled local AI by default, and its image is built only from an approved checkpoint, so no tag or chart was published."
+            echo "- \`$VERSION\`: $REASON"
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit 1
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:

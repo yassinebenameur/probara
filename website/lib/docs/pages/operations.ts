@@ -58,6 +58,11 @@ export const OPERATIONS_PAGE: DocPage = {
               'Static shell may load, but authenticated product workflows fail when API is unreachable.',
             ],
             [
+              'Local AI service',
+              'None: no database, NATS or network egress; only its token and the bundled model',
+              'When it is down or saturated, API and worker report local AI unavailable, incident analyses retry and then fail with a retry action, and dependency suggestions fail. Check execution, alerting and status pages are unaffected.',
+            ],
+            [
               'Collector agent (`probara-collector`)',
               'Reachable HTTPS API and valid API key',
               'Scrapes host metrics locally but cannot export while disconnected; there is no remote disable — uninstall is operator-run.',
@@ -156,6 +161,12 @@ kubectl -n probara rollout status deployment/probara-worker`,
               'PostgreSQL responds within five seconds.',
             ],
             [
+              'Local AI',
+              '`http://127.0.0.1:8090`',
+              '`/healthz`, unauthenticated: the process answers.',
+              '`/readyz` requires `Authorization: Bearer <LOCAL_AI_TOKEN>` (401 otherwise) and returns the model identity; 503 while the model loads, when `LOCAL_AI_DISABLED=true`, or during shutdown.',
+            ],
+            [
               'NATS',
               '`http://localhost:8222/healthz`',
               'Broker monitor endpoint.',
@@ -173,6 +184,7 @@ curl -fsS http://localhost:9091/readyz
 curl -fsS http://localhost:9092/readyz
 curl -fsS http://localhost:9093/readyz
 curl -fsS http://localhost:9094/readyz
+curl -fsS -H "Authorization: Bearer $LOCAL_AI_TOKEN" http://127.0.0.1:8090/readyz
 
 make healthcheck`,
         },
@@ -243,6 +255,11 @@ make healthcheck`,
               '`probara_status_page_sse_subscriber_connected`',
               'Zero when low-latency status invalidation is expected.',
             ],
+            [
+              'Local AI service (port 8090, plain-text exposition)',
+              '`probara_ai_ready`, `probara_ai_admitted`, `probara_ai_completed_total`, `probara_ai_rejected_total`, `probara_ai_failed_total`, `probara_ai_inference_seconds_sum`',
+              '`ready` at 0, growth in `rejected_total` (429 saturation) or `failed_total`, and `admitted` pinned at queue capacity + 1. Divide `inference_seconds_sum` by `completed_total` for mean batch time.',
+            ],
           ],
         },
         {
@@ -252,7 +269,13 @@ make healthcheck`,
           code: `curl -fsS http://localhost:8080/metrics | grep '^probara_'
 curl -fsS http://localhost:9091/metrics | grep '^probara_scheduler_'
 curl -fsS http://localhost:9092/metrics | grep '^probara_worker_'
-curl -fsS http://localhost:9093/metrics | grep '^probara_status_page_'`,
+curl -fsS http://localhost:9093/metrics | grep '^probara_status_page_'
+curl -fsS http://127.0.0.1:8090/metrics`,
+        },
+        {
+          type: 'paragraph',
+          text:
+            'The local AI service runs one batch at a time and admits at most `LOCAL_AI_QUEUE_CAPACITY` more. A batch beyond that, or one that waits longer than `LOCAL_AI_QUEUE_TIMEOUT_SECONDS` for the executing slot, gets HTTP 429 with `Retry-After: 5`. The worker treats that as transient: an incident analysis is redelivered after 10 s and again after 30 s, and the third failed delivery records a failed analysis whose action is to check readiness and retry. Bodies over 512 KiB get 413 and evidence outside the allowlist 422. The chart does not annotate this pod for scraping; see [local AI values](/docs/deployment/#helm-values-local-ai).',
         },
         {
           type: 'callout',
@@ -618,6 +641,31 @@ helm lint ./helm/monitoring-platform \\
               'Frontend links point to old origin',
               '`NEXT_PUBLIC_*` changed only at runtime',
               'Rebuild the frontend client bundle with the desired public values or use stable relative routing.',
+            ],
+            [
+              'Settings → AI says “not configured correctly”',
+              '`LOCAL_AI_TOKEN` missing or shorter than 16 characters on the API, or an invalid `LOCAL_AI_URL`',
+              'Compare the API and worker environment with the service’s. In Helm, an existing Secret without `local_ai_token` leaves API and worker without a token by design; add the key or set `secrets.localAiTokenExistingSecret`.',
+            ],
+            [
+              'Settings → AI says “unreachable”',
+              'The service is not running, its image was never built or pulled, the URL points elsewhere, or a NetworkPolicy blocks the caller',
+              'Check `docker compose ps local-ai` / `kubectl get pods -l app.kubernetes.io/component=local-ai` and its logs. An image build fails on purpose for a checkpoint that is not release-approved; until one ships, run with `LOCAL_AI_DISABLED=true` (Compose) or `localAI.enabled=false` (Helm). Only the API and platform worker pods are admitted by the chart policy.',
+            ],
+            [
+              'Settings → AI says “not ready”',
+              'Model still loading, `LOCAL_AI_DISABLED=true` on the service only, a token mismatch (401), or a model whose catalogue version differs from the API’s',
+              'Probe `/readyz` with the token. A mismatch needs the same token on API, worker and service and a restart of all three. The readiness result is cached for about 30 seconds per API replica; the Settings test probes afresh.',
+            ],
+            [
+              'Local AI pod in `CreateContainerConfigError` after upgrade',
+              '`secrets.existingSecret` lacks the `local_ai_token` key',
+              'Add a token of at least 16 characters (`openssl rand -hex 32`) under that key, set `secrets.localAiTokenExistingSecret`, or set `localAI.enabled=false`.',
+            ],
+            [
+              'Incident analyses fail during load',
+              'Inference saturation: 429 responses exhausted the worker’s three deliveries',
+              'Watch `probara_ai_rejected_total` and `probara_ai_admitted`. Raise `localAI.queueCapacity` or the queue timeout, give the pod more CPU up to 4 threads, or retry the analysis later.',
             ],
             [
               'Prometheus cannot scrape API on 9090',

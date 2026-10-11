@@ -16,6 +16,7 @@ website (`website/`) are separate applications.
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
 | `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
 | `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
+| `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
 | `web/` | Authenticated operator UI and `/api` proxy, including cookies and SSE streams | Go API |
 | `website/` | Statically exported public product website and documentation | No application database |
 
@@ -130,10 +131,21 @@ freezes the report document in `sla_reports` (see
 
 ## Deployment and verification
 
-Docker Compose provides local PostgreSQL/NATS and optional service containers;
-`helm/monitoring-platform` defines Kubernetes deployment assets. Use
-`make start-all-local` for local Go services, or `make start-all` for the
-Docker-backed stack, with the corresponding stop/restart commands.
+Docker Compose provides local PostgreSQL/NATS, the `local-ai` container and
+optional service containers; `helm/monitoring-platform` defines Kubernetes
+deployment assets. Use `make start-all-local` for local Go services, or
+`make start-all` for the Docker-backed stack, with the corresponding
+stop/restart commands.
+
+Local AI is on by default in both. Compose runs `local-ai` on loopback port
+8090 and wires the API and worker to it; the Make targets start it separately
+so a failed image build never blocks the platform. Helm's `localAI` values
+deploy one `Recreate` replica (1 CPU/2 GiB request, 4 CPU/4 GiB limit), a
+ClusterIP Service and a NetworkPolicy admitting only the API and worker pods
+with no egress, and render `LOCAL_AI_*` into the API and platform worker only.
+`localAI.externalUrl` replaces the bundled service with an operator-run one;
+`localAI.enabled=false` without it renders `LOCAL_AI_DISABLED=true`. The token
+is the chart credential `local_ai_token`.
 
 Operational endpoints `/healthz`, `/readyz`, and `/metrics` expose process
 health, dependency readiness, and Prometheus metrics. Inspect scheduler
@@ -180,10 +192,13 @@ returns. The consumer and the sweep restart with capped backoff, and the
 consumer re-creates its durable if it disappears from the server. A publish
 failure in the API records the run as failed immediately.
 
-Inference runs in an installation-owned service at `LOCAL_AI_URL`, called by
-the API (dependency suggestions, readiness) and the database-connected platform
-worker (incident analysis, alert triage) only; private-location workers, the
-scheduler and the alerter never call it.
+Inference runs in the installation-owned `ai-service` at `LOCAL_AI_URL`,
+called with `LOCAL_AI_TOKEN` by the API (dependency suggestions, readiness)
+and the database-connected platform worker (incident analysis, alert triage)
+only; private-location workers, the scheduler and the alerter never call it.
+It runs one batch at a time behind a bounded queue and answers 429 when
+saturated, which the worker retries like any transient error. See
+[local-ai.md](local-ai.md) for the artifact, build and release gate.
 Installation disabling overrides preserved workspace switches; missing
 workspace rows default enabled in both API and worker. Migration 000092 retains
 legacy text/provider columns and labels historical analyses.

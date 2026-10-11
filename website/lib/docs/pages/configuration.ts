@@ -372,17 +372,21 @@ export const CONFIGURATION_PAGE: DocPage = {
         },
         {
           type: 'table',
-          columns: ['Local AI variable', 'Default / validation', 'Notes'],
+          columns: ['Local AI variable', 'Default / validation', 'Read by and deployment wiring'],
           rows: [
-            ['`LOCAL_AI_DISABLED`', '`false`', 'Installation disable overrides all workspace switches.'],
-            ['`LOCAL_AI_URL`', '`http://127.0.0.1:8090`', 'Installation-owned internal inference service. Compose and Helm do not deploy or wire it yet; point this at a running service.'],
-            ['`LOCAL_AI_TOKEN`', 'Required for enabled inference, at least 16 characters', 'Internal bearer token shared only by API, platform worker and CPU service.'],
-            ['`LOCAL_AI_TIMEOUT_SECONDS`', '`90`; 1–300', 'API and worker decision timeout.'],
+            ['`LOCAL_AI_DISABLED`', '`false`', 'API, worker and the inference service. `true` overrides every workspace switch, and the service then loads no model (readiness answers 503). Compose forwards the shell value to all three; Helm renders `true` on API and worker when `localAI.enabled=false` and no `localAI.externalUrl` is set.'],
+            ['`LOCAL_AI_URL`', '`http://127.0.0.1:8090`; `http(s)://host[:port]` with no path, query or credentials', 'API and worker. Compose sets `http://local-ai:8090`; Helm sets `http://<release>-local-ai:8090` or `localAI.externalUrl`; the local-process stack uses the default (the container is published on loopback).'],
+            ['`LOCAL_AI_TOKEN`', 'At least 16 characters', 'API, worker and the inference service, which must all hold the same value. The service refuses to start without a valid token; API and worker start anyway and report local AI as not configured correctly. See [token handling](/docs/deployment/#helm-values-local-ai) for Compose, local and Helm defaults.'],
+            ['`LOCAL_AI_TIMEOUT_SECONDS`', '`90`; 1–300', 'API and worker request timeout. An out-of-range value stops startup. Helm: `localAI.timeoutSeconds`.'],
+            ['`LOCAL_AI_THREADS`', '`4`; 1–4', 'Inference service only: CPU threads for the single inference process. The model is CPU-validated at 4. Compose defaults to 4 and the Make targets to min(host CPUs, 4); Helm: `localAI.threads`.'],
+            ['`LOCAL_AI_QUEUE_CAPACITY`', '`4`; 1–32', 'Inference service only: batches allowed to wait behind the one executing; beyond that the service answers 429. Helm: `localAI.queueCapacity`.'],
+            ['`LOCAL_AI_QUEUE_TIMEOUT_SECONDS`', '`5`; above 0, at most 30', 'Inference service only: how long a waiting batch may wait for the executing slot before a 429. Not wired by Compose; set it in Helm through `localAI.extraEnv`.'],
+            ['`LOCAL_AI_IMAGE`, `LOCAL_AI_CPUS`', '`ghcr.io/yassinebenameur/probara-local-ai:latest`; `4`', 'Compose interpolation only: the image to pull (built from `ai-service/` when the pull fails) and the container CPU limit, which Docker requires to be at most the host CPU count. The Make targets and `scripts/start-local-services.sh` default it to min(host CPUs, 4).'],
           ],
         },
         {
           type: 'paragraph',
-          text: 'Local AI uses one evaluated Probara checkpoint, served by the installation-owned decision service, for both tasks. Workspace rows store only effective enablement: explicit enabled/disabled settings are preserved and absent settings default enabled. External providers and `LLM_*` execution are retired; old columns are retained for rollback. Explanations come from measured evidence and maintained templates.',
+          text: 'Local AI uses one evaluated Probara checkpoint, served by the installation-owned inference service (`ai-service/`), for both tasks. Range errors in the service variables stop the service at startup; Helm checks `threads`, `queueCapacity` and `timeoutSeconds` at render time instead. Workspace rows store only effective enablement: explicit enabled/disabled settings are preserved and absent settings default enabled. External providers and `LLM_*` execution are retired; old columns are retained for rollback. Explanations come from measured evidence and maintained templates.',
         },
       ],
     },
@@ -608,7 +612,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The database-connected worker uses the same `LOCAL_AI_*` and `SMTP_*` variables documented on this page. Compose and Helm do not wire them yet. The `AI_RCA_*` and `AI_TRIAGE_*` variables are not wired either, so their code defaults apply; set them through `extraEnv` only to rename the streams. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`; Helm wires SMTP through its `smtp` values block.',
+            'The database-connected worker uses the same `LOCAL_AI_*` client variables as the API; Compose and Helm wire them to both, and Helm wires `SMTP_*` through its `smtp` values block. The `AI_RCA_*` and `AI_TRIAGE_*` variables are not wired, so their code defaults apply; set them through `extraEnv` only to rename the streams. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`.',
         },
       ],
     },
@@ -955,7 +959,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
             ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
-            ['Local AI', 'Not wired', 'Not wired'],
+            ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only'],
             [
               'SMTP',
               'Not wired',

@@ -44,6 +44,31 @@ AUTHENTICATION:
   IMPORTANT: Change this key in production by setting:
     --set secrets.initialApiKey=your-secure-api-key
 
+LOCAL AI:
+{{- if .Values.localAI.enabled }}
+  Bundled CPU inference runs as {{ include "monitoring-platform.fullname" . }}-local-ai; only the api
+  and the platform worker are configured to call it.
+  {{- if and (not .Values.secrets.localAiToken) (include "monitoring-platform.chartManagedSecret" (dict "ctx" . "secret" .Values.secrets.localAiTokenExistingSecret)) }}
+  Its bearer token is derived from secrets.adminJwtSecret. Set secrets.localAiToken
+  (or secrets.localAiTokenExistingSecret) to manage it independently.
+  {{- end }}
+  {{- if .Values.localAI.networkPolicy.enabled }}
+  Its NetworkPolicy only takes effect if your CNI enforces NetworkPolicy.
+  {{- end }}
+  {{- if and .Values.secrets.existingSecret (not .Values.secrets.localAiTokenExistingSecret) }}
+
+  UPGRADE NOTE: secrets.existingSecret ({{ .Values.secrets.existingSecret }}) must carry the key
+  local_ai_token (at least 16 characters; openssl rand -hex 32). Until it does,
+  the local-ai pod stays in CreateContainerConfigError and the api and worker
+  run with AI analysis unavailable. Alternatively set
+  secrets.localAiTokenExistingSecret, or localAI.enabled=false.
+  {{- end }}
+{{- else if .Values.localAI.externalUrl }}
+  api and worker call the operator-run service at {{ .Values.localAI.externalUrl }}.
+{{- else }}
+  Disabled (localAI.enabled=false): AI analysis is off for every workspace.
+{{- end }}
+
 CHECKING STATUS:
 
   View all pods:

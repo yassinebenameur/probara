@@ -1,0 +1,58 @@
+{
+  "calibration_only": true,
+  "release_approved": false,
+  "tasks": {
+    "rca": {
+      "calibration": {
+        "n": 1000,
+        "supported": 685,
+        "emitted": 432,
+        "correct_emitted": 432,
+        "precision": 1.0,
+        "coverage": 0.6306569343065693,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.747
+      },
+      "rules": {
+        "precision": 1.0,
+        "coverage": 0.743065693430657,
+        "decision_accuracy": 0.824
+      },
+      "temperature": 1.791791319847107,
+      "threshold": 0.22,
+      "precision_target": 1.0
+    },
+    "dependency": {
+      "calibration": {
+        "n": 1000,
+        "supported": 255,
+        "emitted": 51,
+        "correct_emitted": 51,
+        "precision": 1.0,
+        "coverage": 0.2,
+        "unsupported_abstention": 1.0,
+        "decision_accuracy": 0.796
+      },
+      "rules": {
+        "precision": 1.0,
+        "coverage": 0.7254901960784313,
+        "decision_accuracy": 0.93
+      },
+      "temperature": 1.616626501083374,
+      "threshold": 0.23,
+      "precision_target": 1.0
+    }
+  },
+  "model_sha256": "b8ca791b7e57671d01ee86f4cbc832493846557f43bba3a2aef0c4abab0ecb49",
+  "platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.13.3",
+    "threads": 4
+  },
+  "scope": "Calibration partition only; not a release or held-out result.",
+  "threshold_range": [
+    0.01,
+    0.99
+  ]
+}

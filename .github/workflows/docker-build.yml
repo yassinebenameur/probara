@@ -11,13 +11,60 @@ env:
   IMAGE_PREFIX: ${{ github.repository_owner }}/probara
 
 jobs:
+  # Release rule: the local-ai image is built only from a checkpoint whose
+  # manifest.json and cpu-evaluation.json say release_approved on cpu (the
+  # Dockerfile's verify_artifact enforces the same, on the composed weights).
+  # Every image needs this job, so on a release tag an unapproved checkpoint
+  # pushes nothing at all: the chart deploys the bundled service by default,
+  # and a tag whose api/worker/... images exist without its local-ai image is
+  # a broken release, not a partial one. release.yml refuses to create such a
+  # tag in the first place; this covers tags pushed by other means. On a
+  # branch push (which pushes no image) the local-ai build is just skipped.
+  local-ai-gate:
+    name: Local AI release gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      approved: ${{ steps.gate.outputs.approved }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        # Stdlib only: reads manifest.json and cpu-evaluation.json.
+        lfs: false
+
+    - name: Check local AI release gate
+      id: gate
+      run: python3 .github/workflows/scripts/local_ai_artifact.py gate
+
+    - name: Refuse to release an unapproved local AI checkpoint
+      if: steps.gate.outputs.approved != 'true' && startsWith(github.ref, 'refs/tags/v')
+      env:
+        VERSION: ${{ steps.gate.outputs.version }}
+        REASON: ${{ steps.gate.outputs.reason }}
+      run: |
+        echo "::error title=Local AI checkpoint not release-approved::$VERSION: $REASON A release needs manifest.json and cpu-evaluation.json with release_approved true on cpu; no image is pushed for this tag."
+        exit 1
+
+    - name: Skip unapproved local AI checkpoint
+      if: steps.gate.outputs.approved != 'true' && !startsWith(github.ref, 'refs/tags/v')
+      env:
+        VERSION: ${{ steps.gate.outputs.version }}
+        REASON: ${{ steps.gate.outputs.reason }}
+      run: echo "::notice title=Local AI image not built::$VERSION is not release-approved ($REASON); the local-ai image is skipped on branch pushes."
+
   build:
+    needs: local-ai-gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
 
     strategy:
+      # Independent images: one failing build must not cancel the others
+      # mid-push (the local AI release gate runs before any of them).
+      fail-fast: false
       matrix:
         include:
           - image_suffix: api
@@ -38,6 +85,13 @@ jobs:
           - image_suffix: frontend
             dockerfile: ./web/Dockerfile
             context: ./web
+          # Carries the model weights (air-gapped at runtime), so it is the
+          # only entry that pulls Git LFS and the only large image: mode=min
+          # keeps its GHA cache to the final image's layers.
+          - image_suffix: local-ai
+            dockerfile: ./ai-service/Dockerfile
+            context: .
+            cache_mode: min
           - image_suffix: migrations
             dockerfile: ./Dockerfile.migrations
             context: .
@@ -45,12 +99,31 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
+      with:
+        # LFS bandwidth is metered: only an approved local-ai build pulls the
+        # head weights, after the local-ai-gate job approves it.
+        lfs: false
+
+    - name: Pull Git LFS head weights
+      if: matrix.image_suffix == 'local-ai' && needs.local-ai-gate.outputs.approved == 'true'
+      run: git lfs pull --include 'ai-service/artifacts/*/head.safetensors'
+
+    # The image holds torch, the composed checkpoint and its build stages
+    # (pinned base, laya wheel); the stock runner disk is too tight for that.
+    - name: Free runner disk for the local AI image
+      if: matrix.image_suffix == 'local-ai' && needs.local-ai-gate.outputs.approved == 'true'
+      run: |
+        df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        df -h /
 
     - name: Set up Docker Buildx
+      if: matrix.image_suffix != 'local-ai' || needs.local-ai-gate.outputs.approved == 'true'
       uses: docker/setup-buildx-action@v3
 
     - name: Log in to Container Registry
-      if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      if: ${{ startsWith(github.ref, 'refs/tags/v') && (matrix.image_suffix != 'local-ai' || needs.local-ai-gate.outputs.approved == 'true') }}
       uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY }}
@@ -59,6 +132,7 @@ jobs:
 
     - name: Extract metadata
       id: meta
+      if: matrix.image_suffix != 'local-ai' || needs.local-ai-gate.outputs.approved == 'true'
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.image_suffix }}
@@ -72,6 +146,7 @@ jobs:
           type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
 
     - name: Build and push Docker image
+      if: matrix.image_suffix != 'local-ai' || needs.local-ai-gate.outputs.approved == 'true'
       uses: docker/build-push-action@v5
       with:
         context: ${{ matrix.context }}
@@ -79,7 +154,9 @@ jobs:
         push: ${{ startsWith(github.ref, 'refs/tags/v') }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        # One cache scope per image: a shared scope makes every matrix entry
+        # overwrite the others' cache manifest.
+        cache-from: type=gha,scope=${{ matrix.image_suffix }}
+        cache-to: type=gha,scope=${{ matrix.image_suffix }},mode=${{ matrix.cache_mode || 'max' }}
         build-args: |
           BUILDKIT_INLINE_CACHE=1

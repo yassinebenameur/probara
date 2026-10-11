@@ -82,7 +82,9 @@ Secret carrying postgres_url / nats_url / admin_jwt_secret / probara_secrets_key
 nats_location_auth_issuer_seed satisfies the whole install.
 
 Args (dict): ctx (root context), name (env var), key (canonical key),
-secret (per-field existingSecret), secretKey (per-field existingSecretKey).
+secret (per-field existingSecret), secretKey (per-field existingSecretKey),
+optional (true only for a credential whose absence the consumer tolerates;
+a missing key then leaves the variable unset instead of blocking the pod).
 */}}
 {{- define "monitoring-platform.secretEnv" -}}
 {{- $external := default .ctx.Values.secrets.existingSecret .secret -}}
@@ -91,6 +93,9 @@ secret (per-field existingSecret), secretKey (per-field existingSecretKey).
     secretKeyRef:
       name: {{ $external | default (include "monitoring-platform.secretName" .ctx) | quote }}
       key: {{ ternary (default .key .secretKey) .key (not (empty $external)) | quote }}
+      {{- if .optional }}
+      optional: true
+      {{- end }}
 {{- end }}
 
 {{/*
@@ -195,4 +200,67 @@ smtp.host nor appBaseURL is set.
 {{- end }}
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{/*
+URL the api and platform worker call for local AI: the bundled Service when
+localAI.enabled, else localAI.externalUrl, else empty (local AI off).
+*/}}
+{{- define "monitoring-platform.localAIUrl" -}}
+{{- if .Values.localAI.enabled -}}
+{{- printf "http://%s-local-ai:8090" (include "monitoring-platform.fullname" .) -}}
+{{- else -}}
+{{- .Values.localAI.externalUrl -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Local AI client env for the api and the PLATFORM worker only (never location
+workers, scheduler, alerter or status page). Without a URL it renders
+LOCAL_AI_DISABLED=true and nothing else, which overrides every workspace
+setting; with one, LOCAL_AI_TOKEN resolves through secretEnv like every other
+credential (secrets.localAiToken / localAiTokenExistingSecret / chart-wide
+secrets.existingSecret, canonical key local_ai_token). The token's presence is
+enforced in secret.yaml where Helm can see it, not guarded here.
+
+On the clients the reference is optional: an existing Secret that predates
+local AI (chart-wide secrets.existingSecret without local_ai_token) must not
+put the api and worker in CreateContainerConfigError on upgrade. Without the
+token they start and report AI unavailable; only the local-ai pod, whose
+reference stays required, waits for the key.
+*/}}
+{{- define "monitoring-platform.localAIEnv" -}}
+{{- $url := include "monitoring-platform.localAIUrl" . -}}
+- name: LOCAL_AI_DISABLED
+  value: {{ empty $url | quote }}
+{{- if $url }}
+- name: LOCAL_AI_URL
+  value: {{ $url | quote }}
+- name: LOCAL_AI_TIMEOUT_SECONDS
+  value: {{ .Values.localAI.timeoutSeconds | quote }}
+{{ include "monitoring-platform.localAITokenEnv" (dict "ctx" . "optional" true) }}
+{{- end }}
+{{- end -}}
+
+{{/*
+LOCAL_AI_TOKEN env var, shared by the clients (optional reference, see
+localAIEnv) and the local AI pod (required). Args (dict): ctx, optional.
+*/}}
+{{- define "monitoring-platform.localAITokenEnv" -}}
+{{- $s := .ctx.Values.secrets -}}
+{{- include "monitoring-platform.secretEnv" (dict "ctx" .ctx "name" "LOCAL_AI_TOKEN" "key" "local_ai_token" "secret" $s.localAiTokenExistingSecret "secretKey" $s.localAiTokenExistingSecretKey "optional" .optional) }}
+{{- end }}
+
+{{/*
+Value of local_ai_token in the chart-managed Secret: the literal when set,
+otherwise derived from secrets.adminJwtSecret (see values.yaml for why it is
+derived rather than generated). Only called when the token is chart-managed;
+the fail cases for an underivable token live in secret.yaml.
+*/}}
+{{- define "monitoring-platform.localAIToken" -}}
+{{- if .Values.secrets.localAiToken -}}
+{{- .Values.secrets.localAiToken -}}
+{{- else -}}
+{{- sha256sum (printf "probara/local-ai-token/v1:%s" .Values.secrets.adminJwtSecret) -}}
+{{- end -}}
 {{- end }}

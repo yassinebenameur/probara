@@ -1,0 +1,22 @@
+{
+  "seed": 20261010,
+  "examples_per_task": 5000,
+  "group_count_per_task": 1000,
+  "variations_per_group": 5,
+  "split": [
+    0.6,
+    0.2,
+    0.2
+  ],
+  "source": "worker/internal/worker/ai_fault_fixture_test.go",
+  "limitations": "Controlled synthetic variations of real loopback checker outputs and metric/topology fixtures; no real-world accuracy claim.",
+  "partition_sha256": {
+    "rca-train.jsonl": "da94f91f19115026f2889897629daf9158c1fa6507db4ccbf416812d434d9d34",
+    "dependency-calibration.jsonl": "1d14e0a52d981a515261c0b7c9103d792832d84f76549d23dae7be4f595ce034",
+    "rca-test.jsonl": "4063ba30d99dd1f63f9b77f945c6957a900e85bda4b1a60dd4bf23f8572c1827",
+    "rca-calibration.jsonl": "97fd4037c229cc9e8b7b0ff3e7e9a8a98f93f3dd47b4f8dd8e54c33cfca7dc25",
+    "dependency-test.jsonl": "71cb9acfef257e367011a69a0e6f638df897752cec73efd16e019a4f7f1dc404",
+    "dependency-train.jsonl": "917fa294f64ef8ccc20e151089ffad7ad2deff052534e56aee6868bd0832d664"
+  },
+  "checker_fixture_sha256": "33f5c6f5efdd47ecfb6a0bb457eb985e8afc6d83f3ed2baff948c57779cfb47c"
+}

@@ -1,0 +1,5 @@
+# Build backend for the laya wheel (pip wheel --no-build-isolation), hash-locked.
+# Pins must equal requirements.lock (tests/test_packaging.py enforces it).
+# Edit pins here, then run: python ai-service/tools/lock_hashes.py
+setuptools==84.0.0 \
+    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670

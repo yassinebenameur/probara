@@ -289,7 +289,8 @@ export default function HomePage() {
                 <h3>Context for the failure, not just the symptom.</h3>
                 <p>
                   Model service dependencies, annotate downstream alerts, explore
-                  co-firing signals, and ask the configured LLM for incident root causes.
+                  co-firing signals, and get suspected incident causes from a bundled
+                  local model that runs offline.
                 </p>
                 <div className="feature-card__visual location-map" aria-hidden="true">
                   {[
