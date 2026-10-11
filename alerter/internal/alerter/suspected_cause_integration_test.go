@@ -11,7 +11,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lib/pq"
+
 	"github.com/yassinebenameur/probara/shared/ai"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/testutil"
@@ -583,5 +586,159 @@ func TestSuspectedCausesLeaveRecoveryBudget(t *testing.T) {
 	}
 	if suspectedCauseSentAt(ctx, t, db, c.alertID, c.channelID) != nil {
 		t.Fatal("a send cut off by the budget must release its claim for the next tick")
+	}
+}
+
+// Unrouted (alert, channel) pairs never claim, so they must be dropped in SQL
+// before the batch LIMIT: a full batch of them (here a channel set removed
+// from routing on an alert whose triage is older) must not hide a routed
+// pair of another workspace.
+func TestSuspectedCausesUnroutedPairsDoNotFillTheBatch(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	stale := newCauseCase(ctx, t, db, followUpStubType)
+	for i := 0; i < suspectedCauseBatch; i++ {
+		insertTypedChannel(ctx, t, db, stale.tenantID, followUpStubType)
+	}
+	if err := newIntegrationAlerter(db).dispatchOpenAlerts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	backdatePage(ctx, t, db, stale.alertID, uuid.Nil, 5*time.Minute)
+	mustExec(ctx, t, db, `DELETE FROM tenant_default_channels WHERE tenant_id = $1`, stale.tenantID)
+
+	fresh := newCauseCase(ctx, t, db, followUpStubType)
+	mustExec(ctx, t, db, `UPDATE alert_triage SET completed_at = NOW() - INTERVAL '10 seconds' WHERE id = $1`, fresh.triageID)
+
+	rec := &causeRecorder{}
+	a := newIntegrationAlerter(db)
+	a.sendFunc = rec.send
+	if err := a.dispatchSuspectedCauses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.count("suspected_cause", stale.alertID); got != 0 {
+		t.Fatalf("unrouted follow-ups = %d, want 0", got)
+	}
+	if got := rec.count("suspected_cause", fresh.alertID); got != 1 {
+		t.Fatalf("routed follow-up behind a batch of unrouted pairs = %d, want 1", got)
+	}
+}
+
+// RoutesToChannelPredicate is TargetsSQL correlated per row: for every
+// (monitor, channel) pair, across custom and default routing and two
+// workspaces, it must agree with TargetsSQL's channel set.
+func TestRoutesToChannelPredicateMatchesTargetsSQL(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	var monitors []uuid.UUID
+	tenants := map[uuid.UUID]uuid.UUID{} // monitor -> tenant
+	for i := 0; i < 2; i++ {
+		tenant := testutil.InsertTenant(ctx, t, db, "")
+		d1 := insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		insertTypedChannel(ctx, t, db, tenant, followUpStubType)
+		def := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "default")
+		custom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom")
+		emptyCustom := testutil.InsertHTTPMonitor(ctx, t, db, tenant, "custom-empty")
+		mustExec(ctx, t, db, `UPDATE monitors SET notification_mode = 'custom' WHERE id = ANY($1)`, pq.Array([]uuid.UUID{custom, emptyCustom}))
+		mustExec(ctx, t, db, `INSERT INTO monitor_channels (monitor_id, channel_id) VALUES ($1, $2)`, custom, d1)
+		// A custom assignment on a default-mode monitor is ignored.
+		mustExec(ctx, t, db, `INSERT INTO monitor_channels (monitor_id, channel_id) VALUES ($1, $2)`, def, d1)
+		for _, m := range []uuid.UUID{def, custom, emptyCustom} {
+			monitors = append(monitors, m)
+			tenants[m] = tenant
+		}
+	}
+
+	pairs := 0
+	for _, m := range monitors {
+		want := map[uuid.UUID]bool{}
+		rows, err := db.QueryContext(ctx, `SELECT channel_id FROM (`+alertrouting.TargetsSQL()+`) x`, tenants[m], pq.Array([]uuid.UUID{m}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			want[id] = true
+		}
+		rows.Close()
+
+		rows, err = db.QueryContext(ctx, `
+			SELECT ac.id, `+alertrouting.RoutesToChannelPredicate("m", "ac.id")+`
+			FROM monitors m CROSS JOIN alert_channels ac WHERE m.id = $1`, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id uuid.UUID
+			var routed bool
+			if err := rows.Scan(&id, &routed); err != nil {
+				t.Fatal(err)
+			}
+			if routed != want[id] {
+				t.Errorf("monitor %s channel %s: predicate %v, TargetsSQL %v", m, id, routed, want[id])
+			}
+			pairs++
+		}
+		rows.Close()
+	}
+	if pairs != len(monitors)*4 {
+		t.Fatalf("compared %d pairs, want %d", pairs, len(monitors)*4)
+	}
+}
+
+// A provider that hangs until the phase's budget runs out is not retried
+// first on every tick: the batch rotates past it, so other follow-ups still
+// go out, and the hanging pair gets its turn again once the rest are done.
+func TestSuspectedCausesRotatePastAHangingProvider(t *testing.T) {
+	ctx := context.Background()
+	db, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	first := newCauseCase(ctx, t, db, followUpStubType)
+	second := newCauseCase(ctx, t, db, followUpStubType)
+
+	var mu sync.Mutex
+	var hanging uuid.UUID
+	attempts := map[uuid.UUID]int{}
+	delivered := map[uuid.UUID]int{}
+	a := newIntegrationAlerter(db)
+	a.suspectedCauseBudget = 500 * time.Millisecond
+	a.sendFunc = func(ctx context.Context, _ alertChannel, eventType string, _ policyBinding, alert *alertRecord, _ *groupDetail, _ time.Time) error {
+		mu.Lock()
+		if hanging == uuid.Nil {
+			hanging = alert.ID // whichever pair the batch tries first
+		}
+		attempts[alert.ID]++
+		hang := alert.ID == hanging
+		if !hang {
+			delivered[alert.ID]++
+		}
+		mu.Unlock()
+		if hang {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+	for tick := 0; tick < 3; tick++ {
+		if err := a.runSuspectedCauses(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := first.alertID
+	if hanging == first.alertID {
+		other = second.alertID
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if delivered[other] != 1 {
+		t.Fatalf("follow-up behind a hanging provider delivered %d times, want 1 (attempts %v)", delivered[other], attempts)
+	}
+	if attempts[hanging] < 2 {
+		t.Fatalf("hanging pair attempted %d times, want it retried after the rotation", attempts[hanging])
 	}
 }

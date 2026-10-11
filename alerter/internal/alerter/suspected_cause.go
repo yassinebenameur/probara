@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/shared/ai"
+	"github.com/yassinebenameur/probara/shared/alertrouting"
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
@@ -32,6 +33,12 @@ const (
 	// of up to its HTTP timeout, and advisory traffic must not eat the tick.
 	defaultSuspectedCauseBudget = 5 * time.Second
 )
+
+// suspectedCauseCursor is the last (alert, channel) pair this replica tried
+// to send a follow-up for; the next tick starts after it.
+type suspectedCauseCursor struct {
+	alertID, channelID uuid.UUID
+}
 
 func (a *Alerter) suspectedCauseTimeBudget() time.Duration {
 	if a.suspectedCauseBudget > 0 {
@@ -82,7 +89,8 @@ func (a *Alerter) runSuspectedCauses(ctx context.Context) error {
 //     alert_notification_states row, not resolved), at least
 //     suspectedCauseSettle ago, the triage or that page is younger than
 //     suspectedCauseMaxAge, and current routing still reaches the channel
-//     (the same resolveChannelTargets path reminders use);
+//     (alertrouting.RoutesToChannelPredicate, the TargetsSQL union that
+//     resolveChannelTargets uses for reminders, correlated per row);
 //   - the channel is active and its plugin advertises
 //     plugin.CapabilityFollowUp (paging tools do not);
 //   - the alert is not muted: openAlertDispatchablePredicate, shared with
@@ -134,11 +142,19 @@ func (a *Alerter) dispatchSuspectedCauses(ctx context.Context) error {
 		  AND ac.type = ANY($3)
 		  AND ans.created_at <= NOW() - make_interval(secs => $4)
 		  AND GREATEST(tr.completed_at, ans.created_at) >= NOW() - make_interval(secs => $5)
+		  -- Current routing still reaches the channel, filtered here and not
+		  -- after the LIMIT: unrouted pairs never claim, so filtering them in
+		  -- Go would let a batch of them hide routed ones until they aged out.
+		  AND `+alertrouting.RoutesToChannelPredicate("m", "ac.id")+`
 		  AND `+openAlertDispatchablePredicate()+`
-		ORDER BY tr.completed_at, al.id, ac.id
+		-- Round robin from the pair after the last one attempted: a provider
+		-- that hangs until the budget runs out must not be retried first
+		-- every tick, hiding every other workspace's follow-ups behind it.
+		ORDER BY (al.id, ac.id) <= ($7::uuid, $8::uuid), al.id, ac.id
 		LIMIT $6
 	`, pq.Array(ai.NamedCauses()), pq.Array(ai.ConfidentLevels()), pq.Array(types),
-		suspectedCauseSettle.Seconds(), suspectedCauseMaxAge.Seconds(), suspectedCauseBatch)
+		suspectedCauseSettle.Seconds(), suspectedCauseMaxAge.Seconds(), suspectedCauseBatch,
+		a.suspectedCauseCursor.alertID, a.suspectedCauseCursor.channelID)
 	if err != nil {
 		return fmt.Errorf("query suspected-cause follow-ups: %w", err)
 	}
@@ -187,32 +203,13 @@ func (a *Alerter) dispatchSuspectedCauses(ctx context.Context) error {
 		return fmt.Errorf("read suspected-cause follow-ups: %w", err)
 	}
 
-	// Current routing per alert, resolved once: a channel removed from the
-	// monitor's routing after the page stops getting reminders, and gets no
-	// follow-up either.
-	routed := map[uuid.UUID]map[uuid.UUID]bool{}
 	now := time.Now()
 	for i := range todo {
-		p := &todo[i]
 		if err := ctx.Err(); err != nil {
 			return nil // out of budget; the unclaimed rest goes next tick
 		}
-		channels, seen := routed[p.record.ID]
-		if !seen {
-			targets, err := a.resolveChannelTargets(ctx, p.record.TenantID, p.record.MonitorID)
-			if err != nil {
-				a.logger.WithError(err).WithFields(map[string]interface{}{"alert_id": p.record.ID}).Error("Failed to resolve channels")
-				continue
-			}
-			channels = make(map[uuid.UUID]bool, len(targets))
-			for _, t := range targets {
-				channels[t.channel.ID] = true
-			}
-			routed[p.record.ID] = channels
-		}
-		if !channels[p.channel.ID] {
-			continue
-		}
+		p := &todo[i]
+		a.suspectedCauseCursor = suspectedCauseCursor{alertID: p.record.ID, channelID: p.channel.ID}
 		a.fireChannel(ctx, "suspected_cause", p.binding, &p.record, p.channel, now, 0)
 	}
 	return nil

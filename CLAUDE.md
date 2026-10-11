@@ -81,7 +81,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   follow-up per already-paged, still-routed channel, claimed on
   `alert_notification_states.suspected_cause_sent_at`, muted by the same
   `openAlertDispatchablePredicate` as reminders, on its own time budget
-  ahead of the recovery sweep. Cause predicates (`ai.IsNamedCause`,
+  ahead of the recovery sweep, with a round-robin batch so one hanging
+  provider cannot hold the others back. Cause predicates (`ai.IsNamedCause`,
   `ai.IsConfident`, `ai.RCAInsufficientEvidence`) live in `shared/ai`; reuse
   them. Never let triage gate or alter a page.
 - Durable work goes through JetStream (`shared/queue`). Core NATS
@@ -133,7 +134,10 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   notified" and "what the UI reports" cannot disagree — always use the
   fragment, never re-derive a rule. `UnreachablePredicate` is the SQL twin of
   `Classify().Reachable`; change them together
-  (`TestUnreachablePredicateMatchesClassify` pins the pair). Escalation delays
+  (`TestUnreachablePredicateMatchesClassify` pins the pair).
+  `RoutesToChannelPredicate` is `TargetsSQL`'s own union correlated per row,
+  for batch queries that must drop unrouted pairs before a `LIMIT`
+  (`TestRoutesToChannelPredicateMatchesTargetsSQL`). Escalation delays
   count from `DispatchEligibleSinceExpr` (the end of a cleared root cause's
   grace period, else `triggered_at`). Known asymmetry: member suppression
   ignores the group's `enabled` flag, so a paused `group`-rollup group
