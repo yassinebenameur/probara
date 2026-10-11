@@ -582,7 +582,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a display-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
+            "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a read-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
         },
       ],
     },
@@ -920,11 +920,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/ai-settings`",
-              "Authenticated; workspace switch, installation switch, cached local-service readiness, and the auto-triage settings (`auto_triage_enabled`, `triage_delay_seconds`, `triage_cooldown_seconds`, `triage_max_per_hour`)",
+              "Authenticated; workspace switch, installation switch, cached local-service readiness, and the auto-triage settings (`auto_triage_enabled`, `triage_delay_seconds`, `triage_cooldown_seconds`, `triage_max_per_hour`, `triage_notifications_enabled`)",
             ],
             [
               "`PUT /api/v1/ai-settings`",
-              "Authorized write; partial update of `enabled` and the four auto-triage fields (at least one; ranges in [AI settings](/docs/administration/#ai-settings)); unknown fields are rejected",
+              "Authorized write; partial update of `enabled` and the five auto-triage fields (at least one; ranges in [AI settings](/docs/administration/#ai-settings)); unknown fields are rejected",
             ],
             [
               "`POST /api/v1/ai-settings/test`",

@@ -9,6 +9,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// defaultRecoveryRetryBudget bounds one recovery retry sweep. Earlier,
+// advisory phases (dispatchSuspectedCauses) stop early enough to leave it
+// this much of the tick's deadline.
+const defaultRecoveryRetryBudget = 15 * time.Second
+
+func (a *Alerter) recoveryRetryBudget() time.Duration {
+	if a.recoveryBudget > 0 {
+		return a.recoveryBudget
+	}
+	return defaultRecoveryRetryBudget
+}
+
 // dispatchPendingRecoveries uses the resolved alert and its fired-channel
 // states as durable delivery intent. A crash after resolving, a failed Send,
 // or a failed queue publish leaves last_event_type unchanged and is retried.
@@ -19,7 +31,7 @@ func (a *Alerter) dispatchPendingRecoveries(ctx context.Context) error {
 		return nil
 	}
 	defer a.recoveryMu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, a.recoveryRetryBudget())
 	defer cancel()
 	const batchSize = 100
 	rows, err := a.db.QueryContext(ctx, `

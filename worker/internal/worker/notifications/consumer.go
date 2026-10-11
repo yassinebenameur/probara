@@ -285,8 +285,8 @@ func ackOvertaken(m plugin.Manifest, eventType, alertStatus string) bool {
 // eventSuperseded reports whether envelope describes an alert state the
 // alert has since left: any non-resolve event for an alert that is now
 // resolved (or deleted). JetStream redelivers failed messages on a backoff,
-// so a created/reminder/acknowledged message can outlive the resolve the
-// alerter published after it; delivering it then would reopen the alert on
+// so a created/reminder/acknowledged/suspected_cause message can outlive the
+// resolve the alerter published after it; delivering it then would reopen the alert on
 // the provider side. Resolves always go through (tx is nil for them). For
 // every other event it reads the status FOR SHARE inside tx, and the caller
 // keeps tx open until the send returns.

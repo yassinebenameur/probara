@@ -3,9 +3,9 @@ import Pill from '@/components/ui/Pill';
 import { triagePresentation } from '@/lib/ai-triage';
 import type { AlertTriage } from '@/lib/types';
 
-// Automatic alert triage, as one pill. Display only: it reflects the last
-// fetch (the live alert stream never carries triage) and never stands for a
-// notification or routing change. Renders nothing when there is no triage or
+// Automatic alert triage, as one pill. It reflects the last fetch (the live
+// alert stream never carries triage) and never stands for a paging or routing
+// change. Renders nothing when there is no triage or
 // the alert is of a kind triage does not model.
 export default function TriagePill({ triage }: { triage: AlertTriage | null | undefined }) {
   const view = triagePresentation(triage);

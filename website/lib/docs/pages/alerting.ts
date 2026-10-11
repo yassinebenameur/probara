@@ -270,7 +270,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
+            "Every channel renders the same wording — headline, one-sentence summary, measurement, failing locations, likely root cause and blast radius — so a page, a chat message and an email about one alert never disagree. The opt-in [suspected-cause follow-up](#ai-triage) is worded the same way on every channel that receives it. Deep links into the operator UI appear on every channel when `APP_BASE_URL` is set and are omitted when it is not.",
         },
         {
           type: "table",
@@ -279,13 +279,14 @@ export const ALERTING_PAGE: DocPage = {
             ["`created`", "Message", "Trigger / create"],
             ["`reminder`", "Message at the reminder interval", "Skipped — the provider escalates and re-notifies on its own"],
             ["`acknowledged`", "Not sent", "Acknowledge, once per paged channel"],
+            ["`suspected_cause`", "One follow-up message per paged channel when triage names a cause ([opt-in](#ai-triage))", "Not sent: their APIs add content by re-triggering, and an advisory hint must never re-page"],
             ["`resolved`", "Message", "Resolve / close"],
           ],
         },
         {
           type: "paragraph",
           text:
-            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
+            "Generic webhooks include `X-Probara-Event-Type` and `X-Probara-Idempotency-Key`. The event type is `created`, `reminder`, `resolved` or, when a workspace opts in, `suspected_cause`, whose body adds `alert.suspected_cause` (`triage_id`, `key`, `title`, `confidence`, `actions`) and keeps `alert.status` at the alert's own `active` or `acknowledged`. Branch on the event type, not the status, and ignore event types you do not handle. When an HMAC secret is configured they also include `X-Probara-Signature` in `sha256=...` form. Receivers should verify the signature against the raw body and deduplicate by the idempotency key. Custom headers cannot set these three in any letter case: saving such a channel is rejected, and a configuration stored before that check delivers without them.",
         },
         {
           type: "list",
@@ -329,7 +330,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
+            'Set `APP_BASE_URL` to the public origin of the operator UI and every alert email carries an "open the monitor" button (mesh-edge alerts link to the mesh matrix instead; a suspected-cause follow-up links to that one alert on the Alerts page, in its workspace). Without it the button is omitted rather than pointing at a guessed host. `SMTP_FROM_NAME` sets the From display name and defaults to `Probara Alerts`.',
         },
         {
           type: "table",
@@ -352,7 +353,7 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Templates receive the raw alert fields (`monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out and the error is logged.",
+            "Templates receive the raw alert fields (`event_type`, `monitor_name`, `status`, `kind`, `failure_count`, `last_error`, `triggered_at`, `resolved_at`, `tenant_id`, `metric_name`, `metric_value`, `threshold_value`, `baseline_latency_ms`, `observed_latency_ms`, `anomaly_score`, `root_cause_monitor_name`, `source_location_name`, `target_location_name`, `failing_locations`) plus the presentation values the built-in email uses, so an override can reuse the same wording: `label`, `status_label`, `summary`, `duration`, `triggered_at_human`, `resolved_at_human`, `action_url`, `action_label`, and `accent_color`. A template that fails to parse or execute falls back to the built-in rendering — the alert still goes out and the error is logged. Overrides apply to pages only: a [suspected-cause follow-up](#ai-triage) always uses the built-in rendering and the subject `[Suspected Cause] <monitor>`, so a template written for outages (status is still `active` on a follow-up) never turns it into a second DOWN email.",
         },
       ],
     },
@@ -592,14 +593,14 @@ export const ALERTING_PAGE: DocPage = {
       id: "ai-triage",
       title: "Automatic alert triage",
       intro:
-        "With **Automatic alert triage** turned on in [Settings → AI](/docs/administration/#ai-settings), each new open alert gets one suspected cause from the same local model, catalogue and evidence checks as [incident analysis](#ai-analysis). Triage is shown next to the alert and nowhere else.",
+        "With **Automatic alert triage** turned on in [Settings → AI](/docs/administration/#ai-settings), each new open alert gets one suspected cause from the same local model, catalogue and evidence checks as [incident analysis](#ai-analysis). Triage is shown next to the alert, and can optionally be sent once to the channels already paged for it (see suspected-cause follow-ups below).",
       blocks: [
         {
           type: "callout",
           tone: "warning",
-          title: "Triage is display only",
+          title: "Triage never changes paging",
           text:
-            "Triage never pages, suppresses, delays or re-routes a notification, never changes an alert's severity or status, and adds nothing to notification content. The alerter never reads it, so turning it on or off cannot change who is notified or when. If local AI is down, the triage is recorded as failed and alerting carries on unchanged. Validate a suspected cause like any other evidence before acting on it.",
+            "Triage never delays, routes, suppresses or re-prioritises a page, and never changes an alert's severity or status. Created, reminder, acknowledged and resolved notifications are identical with triage on or off. The only thing it can send is the opt-in follow-up below, at most once per alert per channel. If local AI is down, the triage is recorded as failed and alerting carries on unchanged. Validate a suspected cause like any other evidence before acting on it.",
         },
         {
           type: "paragraph",
@@ -632,7 +633,34 @@ export const ALERTING_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Editors and admins can label a ready triage from the alert's row menu (⋮): **Confirm cause** or **Correct cause…**, or **Confirm no cause** and **Name the cause…** when the model abstained. Once labelled, the menu offers **Change label…**. Correcting opens the same per-monitor control as incident labels. The label stores the evidence the model saw, copied server-side, is included in the [training export](/docs/administration/#ai-settings), and shares a split group with the earliest incident that links the alert. A triage that sent no decisions cannot be labelled. Labels never change the alert. See [AI label endpoints](/docs/api/#ai-labels).",
+            "**Suspected-cause follow-ups.** With **Send suspected causes to alert channels** also on (it needs auto-triage and workspace AI), the alerter sends one advisory follow-up per channel that was already paged for the alert, after the page went out. Pages are never held back for it. The table lists when it is sent and when it is not.",
+        },
+        {
+          type: "table",
+          columns: ["Condition", "Follow-up"],
+          rows: [
+            ["Ready triage naming a catalogue cause with medium or high confidence, completed after the workspace turned follow-ups on", "Sent once per channel"],
+            ["No clear cause (abstention), low confidence, or a cause the running catalogue does not know", "Not sent; the pill still shows it"],
+            ["An operator corrected the cause before it went out", "Not sent; confirming keeps it"],
+            ["Channel not paged for the alert (unrouted, still inside its escalation delay, or suppressed from the start), no longer routed to the monitor, or inactive", "Not sent. A later escalation tier gets its own follow-up once its page goes out"],
+            ["Less than 3 minutes since that channel's page", "Waits, so it reads as a follow-up"],
+            ["Triage and the channel's page both more than an hour old", "Not sent"],
+            ["Alert resolved, monitor in maintenance, member of a roll-up group, or dependency-suppressed (muted exactly like a reminder)", "Not sent"],
+            ["Alert acknowledged", "Sent: the hint helps whoever is working it"],
+            ["Mesh-edge alert, or triage skipped (cooldown, resolved)", "Not sent: there is no ready triage"],
+            ["`LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` on the alerter", "Not sent, including from triages that were already ready"],
+            ["PagerDuty or Opsgenie / JSM channel", "Not sent (chat, email, SMS and webhook channels get it)"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The follow-up is titled **Suspected Cause: <monitor>** and says which page it follows up on (for example 'Down alert' or 'CPU Usage High', so two host-metric alerts on one host stay distinct), the suspected cause, its confidence, the catalogue's suggested first check, the trigger time and how long the alert has been open, plus the dependency root cause when one is known. It ends with a link to that alert on the Alerts page when `APP_BASE_URL` is set. Email follow-ups are separate messages with the subject `[Suspected Cause] <monitor>`, never threaded replies, and ignore channel template overrides. SMS channels send it as one more text per recipient. Reminders, acknowledgements and the resolve keep their own schedule. Under asynchronous dispatch the order is best effort: a page still on the delivery worker's retry backoff after 3 minutes can arrive after its follow-up, and a page the worker dropped for good still counts as paged.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Editors and admins can label a ready triage from the alert's row menu (⋮): **Confirm cause** or **Correct cause…**, or **Confirm no cause** and **Name the cause…** when the model abstained. Once labelled, the menu offers **Change label…**. Correcting opens the same per-monitor control as incident labels. The label stores the evidence the model saw, copied server-side, is included in the [training export](/docs/administration/#ai-settings), and shares a split group with the earliest incident that links the alert. A triage that sent no decisions cannot be labelled. Labels never change the alert; a correction made before the follow-up went out cancels it. See [AI label endpoints](/docs/api/#ai-labels).",
         },
       ],
     },

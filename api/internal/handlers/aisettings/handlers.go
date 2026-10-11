@@ -108,7 +108,7 @@ func (h *Handlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 
 // updateFieldsHint prefixes a PUT decode error. Unknown fields (the retired
 // external provider's base_url, api_key, provider, model) are rejected.
-const updateFieldsHint = "Updates accept enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds and triage_max_per_hour; external provider fields are retired: "
+const updateFieldsHint = "Updates accept enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour and triage_notifications_enabled; external provider fields are retired: "
 
 func decodeSettings(w http.ResponseWriter, r *http.Request, out any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))

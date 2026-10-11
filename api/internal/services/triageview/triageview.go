@@ -3,8 +3,10 @@
 // incident detail's alert summaries append Columns and Join to their alert
 // query and scan through Scan, so every surface reports triage identically.
 //
-// Triage is display-only: nothing here, nor any reader of it, feeds routing,
-// severity or notifications.
+// Triage never changes paging: nothing here feeds routing, suppression,
+// severity or the page events. The alerter's opt-in suspected-cause
+// follow-up (alerter dispatchSuspectedCauses) is the only other reader of
+// alert_triage.
 package triageview
 
 import (

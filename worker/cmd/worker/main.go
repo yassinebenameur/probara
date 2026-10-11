@@ -171,8 +171,9 @@ func main() {
 			})
 		}()
 
-		// Automatic alert triage (display only): the relay claims open alerts
-		// and publishes AI_TRIAGE jobs; the triage consumer analyses them.
+		// Automatic alert triage (never changes paging): the relay claims
+		// open alerts and publishes AI_TRIAGE jobs; the triage consumer
+		// analyses them.
 		// Platform workers only. Both keep running with AI_TRIAGE_ENABLED=false
 		// or LOCAL_AI_DISABLED=true so already-claimed rows drain (skipped,
 		// without a model call) instead of showing as pending forever.

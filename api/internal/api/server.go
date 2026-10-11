@@ -415,7 +415,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", alertHandlers.GetAlert)
 				r.Post("/{id}/acknowledge", alertHandlers.AcknowledgeAlert)
 				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)
-				// Display-only triage label (audited write; not in postReadPaths).
+				// Triage training label (audited write; not in postReadPaths).
+				// A corrected label also stops the alert's pending
+				// suspected-cause follow-ups.
 				r.Post("/{id}/triage/label", aiLabelHdlrs.LabelAlertTriage)
 			})
 

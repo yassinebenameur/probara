@@ -26,12 +26,19 @@ type Settings struct {
 	Available           bool   `json:"available"`
 	Model               string `json:"model,omitempty"`
 	Message             string `json:"message,omitempty"`
-	// Automatic, display-only alert triage (ai_settings columns, migration
-	// 000094). Values are the row's, or the column defaults without a row.
+	// Automatic alert triage (ai_settings columns, migration 000094).
+	// Values are the row's, or the column defaults without a row. Triage
+	// never changes paging.
 	AutoTriageEnabled     bool `json:"auto_triage_enabled"`
 	TriageDelaySeconds    int  `json:"triage_delay_seconds"`
 	TriageCooldownSeconds int  `json:"triage_cooldown_seconds"`
 	TriageMaxPerHour      int  `json:"triage_max_per_hour"`
+	// TriageNotificationsEnabled opts the workspace into the alerter's
+	// suspected-cause follow-ups (migration 000095): one advisory message per
+	// already-paged channel. Effective only with Enabled and
+	// AutoTriageEnabled; turning it on stamps triage_notifications_enabled_at
+	// so only triages completed afterwards are sent.
+	TriageNotificationsEnabled bool `json:"triage_notifications_enabled"`
 }
 
 // UpdateRequest is the PUT body: every field optional, at least one present.
@@ -42,6 +49,8 @@ type UpdateRequest struct {
 	TriageDelaySeconds    *int  `json:"triage_delay_seconds,omitempty"`
 	TriageCooldownSeconds *int  `json:"triage_cooldown_seconds,omitempty"`
 	TriageMaxPerHour      *int  `json:"triage_max_per_hour,omitempty"`
+
+	TriageNotificationsEnabled *bool `json:"triage_notifications_enabled,omitempty"`
 }
 
 // Triage setting defaults and ranges. They mirror the ai_settings column
@@ -66,7 +75,7 @@ func (e *ValidationError) Error() string { return e.Msg }
 // Validate checks the update against the pinned ranges.
 func (r UpdateRequest) Validate() error {
 	if r.Enabled == nil && r.AutoTriageEnabled == nil && r.TriageDelaySeconds == nil &&
-		r.TriageCooldownSeconds == nil && r.TriageMaxPerHour == nil {
+		r.TriageCooldownSeconds == nil && r.TriageMaxPerHour == nil && r.TriageNotificationsEnabled == nil {
 		return &ValidationError{Msg: "at least one setting is required"}
 	}
 	if v := r.TriageDelaySeconds; v != nil && (*v < 0 || *v > MaxTriageDelaySeconds) {
@@ -195,9 +204,11 @@ func (s *Service) load(ctx context.Context, id uuid.UUID) (*Settings, error) {
 		TriageMaxPerHour:      DefaultTriageMaxPerHour,
 	}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour
+		SELECT enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour,
+			triage_notifications_enabled
 		FROM ai_settings WHERE tenant_id = $1`, id).Scan(&settings.Enabled, &settings.AutoTriageEnabled,
-		&settings.TriageDelaySeconds, &settings.TriageCooldownSeconds, &settings.TriageMaxPerHour)
+		&settings.TriageDelaySeconds, &settings.TriageCooldownSeconds, &settings.TriageMaxPerHour,
+		&settings.TriageNotificationsEnabled)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("load workspace AI settings: %w", err)
 	}
@@ -208,24 +219,36 @@ func (s *Service) load(ctx context.Context, id uuid.UUID) (*Settings, error) {
 }
 
 // Update applies a partial update. Range errors are *ValidationError;
-// anything else is a server error. Turning auto-triage on while the
-// workspace switch is off is accepted: the relay only claims for workspaces
-// with both on.
+// anything else is a server error. Turning auto-triage (or suspected-cause
+// notifications) on while a switch it depends on is off is accepted: the
+// relay and the alerter only act for workspaces with every switch on.
+// triage_notifications_enabled_at is stamped when the flag turns on and
+// cleared when it turns off; re-saving it while on keeps the stamp.
 func (s *Service) Update(ctx context.Context, id uuid.UUID, req UpdateRequest) (*Settings, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO ai_settings (tenant_id, enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour)
-		VALUES ($1, COALESCE($2::boolean, TRUE), COALESCE($3::boolean, FALSE), COALESCE($4::int, 60), COALESCE($5::int, 900), COALESCE($6::int, 60))
+		INSERT INTO ai_settings (tenant_id, enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour,
+			triage_notifications_enabled, triage_notifications_enabled_at)
+		VALUES ($1, COALESCE($2::boolean, TRUE), COALESCE($3::boolean, FALSE), COALESCE($4::int, 60), COALESCE($5::int, 900), COALESCE($6::int, 60),
+			COALESCE($7::boolean, FALSE), CASE WHEN $7::boolean THEN NOW() END)
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			enabled = COALESCE($2::boolean, ai_settings.enabled),
 			auto_triage_enabled = COALESCE($3::boolean, ai_settings.auto_triage_enabled),
 			triage_delay_seconds = COALESCE($4::int, ai_settings.triage_delay_seconds),
 			triage_cooldown_seconds = COALESCE($5::int, ai_settings.triage_cooldown_seconds),
 			triage_max_per_hour = COALESCE($6::int, ai_settings.triage_max_per_hour),
+			triage_notifications_enabled = COALESCE($7::boolean, ai_settings.triage_notifications_enabled),
+			triage_notifications_enabled_at = CASE
+				WHEN $7::boolean IS NULL THEN ai_settings.triage_notifications_enabled_at
+				WHEN NOT $7::boolean THEN NULL
+				WHEN ai_settings.triage_notifications_enabled THEN ai_settings.triage_notifications_enabled_at
+				ELSE NOW()
+			END,
 			updated_at = NOW()`,
-		id, req.Enabled, req.AutoTriageEnabled, req.TriageDelaySeconds, req.TriageCooldownSeconds, req.TriageMaxPerHour)
+		id, req.Enabled, req.AutoTriageEnabled, req.TriageDelaySeconds, req.TriageCooldownSeconds, req.TriageMaxPerHour,
+		req.TriageNotificationsEnabled)
 	if err != nil {
 		return nil, fmt.Errorf("update workspace AI settings: %w", err)
 	}

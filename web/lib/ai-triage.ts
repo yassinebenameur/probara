@@ -2,10 +2,12 @@ import type { Alert, AlertTriage, AlertTriageLabelRequest, AlertTriageSkipReason
 import { aiConfidenceTone } from './status-tones';
 import type { StatusTone } from './status-tones';
 
-// Pure helpers for automatic alert triage. Triage is display only: it never
-// changes notifications, routing or severity, and the pill copy says so.
+// Pure helpers for automatic alert triage. Triage never changes paging: it
+// never delays, routes, suppresses or re-prioritises a notification or changes
+// severity, and the pill copy says so. The only message it can cause is the
+// opt-in suspected-cause follow-up (triage_notifications_enabled).
 
-export const TRIAGE_DISPLAY_ONLY_NOTE = 'Display only: notifications are unaffected.';
+export const TRIAGE_PAGING_NOTE = 'Never delays, routes or suppresses a page.';
 
 /** The catalogue key the model uses when it abstains. */
 export const TRIAGE_ABSTAIN = 'insufficient_evidence';
@@ -41,7 +43,7 @@ export function triagePresentation(t: AlertTriage | null | undefined): TriagePre
           visible: true,
           label: 'No clear cause',
           tone: 'neutral',
-          tooltip: joinTooltip(t.summary, TRIAGE_DISPLAY_ONLY_NOTE),
+          tooltip: joinTooltip(t.summary, TRIAGE_PAGING_NOTE),
           muted: false,
         };
       }
@@ -50,12 +52,12 @@ export function triagePresentation(t: AlertTriage | null | undefined): TriagePre
         visible: true,
         label: `Suspected ${title}${t.confidence ? ` · ${t.confidence}` : ''}`,
         tone: aiConfidenceTone(t.confidence),
-        tooltip: joinTooltip(t.summary, TRIAGE_DISPLAY_ONLY_NOTE),
+        tooltip: joinTooltip(t.summary, TRIAGE_PAGING_NOTE),
         muted: false,
       };
     }
     case 'pending':
-      return { visible: true, label: 'Triaging…', tone: 'neutral', tooltip: `Automatic triage is running. ${TRIAGE_DISPLAY_ONLY_NOTE}`, muted: true };
+      return { visible: true, label: 'Triaging…', tone: 'neutral', tooltip: `Automatic triage is running. ${TRIAGE_PAGING_NOTE}`, muted: true };
     case 'failed':
       return { visible: true, label: 'Triage failed', tone: 'neutral', tooltip: t.error_message || 'Automatic triage failed.', muted: true };
     case 'skipped': {
@@ -156,6 +158,7 @@ export function validateTriageSettings(values: TriageSettingsValues): TriageSett
 
 export interface TriageSettingsPayload extends TriageSettingsValues {
   auto_triage_enabled: boolean;
+  triage_notifications_enabled: boolean;
 }
 
 /**
@@ -172,6 +175,7 @@ export function triageSettingsForSave(
 ): { payload: TriageSettingsPayload; errors: TriageSettingsErrors } {
   const pick = (s: TriageSettingsPayload): TriageSettingsPayload => ({
     auto_triage_enabled: s.auto_triage_enabled,
+    triage_notifications_enabled: s.triage_notifications_enabled,
     triage_delay_seconds: s.triage_delay_seconds,
     triage_cooldown_seconds: s.triage_cooldown_seconds,
     triage_max_per_hour: s.triage_max_per_hour,

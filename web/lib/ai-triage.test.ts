@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  TRIAGE_DISPLAY_ONLY_NOTE, buildTriageLabelRequest, markTriageLabelled, mergeAlertUpdate, parseSettingInput,
+  TRIAGE_PAGING_NOTE, buildTriageLabelRequest, markTriageLabelled, mergeAlertUpdate, parseSettingInput,
   triageMenuCopy, triagePresentation, triageSettingsForSave, validateTriageSettings,
 } from './ai-triage';
 import { labelErrorMessage } from './ai-labels';
@@ -62,15 +62,15 @@ test('ready supported triage names the suspected cause with its confidence', () 
     visible: true,
     label: 'Suspected DNS resolution failure · high',
     tone: 'success',
-    tooltip: `DNS lookups failed from every location.\n\n${TRIAGE_DISPLAY_ONLY_NOTE}`,
+    tooltip: `DNS lookups failed from every location.\n\n${TRIAGE_PAGING_NOTE}`,
     muted: false,
   });
   assert.equal(triagePresentation(triage({ confidence: 'medium' })).tone, 'info');
   assert.equal(triagePresentation(triage({ confidence: 'low' })).tone, 'neutral');
   // A missing title falls back to the catalogue key; a missing confidence drops the suffix.
   assert.equal(triagePresentation(triage({ title: null, confidence: null })).label, 'Suspected dns_failure');
-  // No summary: the tooltip is just the display-only note.
-  assert.equal(triagePresentation(triage({ summary: null })).tooltip, TRIAGE_DISPLAY_ONLY_NOTE);
+  // No summary: the tooltip is just the paging note.
+  assert.equal(triagePresentation(triage({ summary: null })).tooltip, TRIAGE_PAGING_NOTE);
 });
 
 test('ready abstention reads as no clear cause', () => {
@@ -192,14 +192,18 @@ test('triageMenuCopy does not offer to confirm a cause for an abstention', () =>
 });
 
 test('triageSettingsForSave skips locked fields and sends the server values', () => {
-  const server = { auto_triage_enabled: true, triage_delay_seconds: 60, triage_cooldown_seconds: 900, triage_max_per_hour: 60 };
-  const broken = { auto_triage_enabled: false, triage_delay_seconds: 60, triage_cooldown_seconds: 900, triage_max_per_hour: parseSettingInput('') };
+  const server = { auto_triage_enabled: true, triage_notifications_enabled: true, triage_delay_seconds: 60, triage_cooldown_seconds: 900, triage_max_per_hour: 60 };
+  const broken = { auto_triage_enabled: false, triage_notifications_enabled: false, triage_delay_seconds: 60, triage_cooldown_seconds: 900, triage_max_per_hour: parseSettingInput('') };
   // Locked (AI draft toggle off): the uneditable draft neither blocks nor leaks.
   assert.deepEqual(triageSettingsForSave(true, broken, server), { payload: server, errors: {} });
   // Unlocked: the draft is validated and sent.
   assert.ok(triageSettingsForSave(false, broken, server).errors.triage_max_per_hour);
   const draft = { ...server, triage_delay_seconds: 120 };
   assert.deepEqual(triageSettingsForSave(false, draft, server), { payload: draft, errors: {} });
+  // The follow-up opt-in travels with the draft, and locked keeps the server's.
+  const optOut = { ...server, triage_notifications_enabled: false };
+  assert.equal(triageSettingsForSave(false, optOut, server).payload.triage_notifications_enabled, false);
+  assert.equal(triageSettingsForSave(true, optOut, server).payload.triage_notifications_enabled, true);
   // Extra server fields (the full AISettings object) are not forwarded.
   const wide = { ...server, enabled: true, model: 'm' };
   assert.deepEqual(Object.keys(triageSettingsForSave(true, draft, wide).payload).sort(), Object.keys(server).sort());

@@ -1017,13 +1017,13 @@ export interface Alert {
   // How many open downstream alerts this alert's monitor is the suppressed
   // root cause of (its notification lists them under "also affecting").
   impacted_count?: number;
-  // Automatic, display-only triage. Absent from REST responses when the alert
+  // Automatic triage (read-only; never changes paging). Absent from REST responses when the alert
   // has no triage row; always absent (= unknown) on live stream events, which
   // are built from core NATS, so merge those with mergeAlertUpdate.
   triage?: AlertTriage;
 }
 
-// --- Automatic alert triage (display only: never changes notifications) ---
+// --- Automatic alert triage (never delays, routes or suppresses a page) ---
 
 export type AlertTriageStatus = 'pending' | 'ready' | 'failed' | 'skipped';
 export type AlertTriageSkipReason = 'resolved' | 'cooldown' | 'not_modeled' | 'disabled';
@@ -1434,11 +1434,18 @@ export interface AISettings {
   triage_cooldown_seconds: number;
   /** 1..600. */
   triage_max_per_hour: number;
+  /**
+   * Send one suspected-cause follow-up to each channel already paged for an
+   * alert (medium/high named causes only; not PagerDuty or Opsgenie). Takes
+   * effect only with `enabled` and `auto_triage_enabled`.
+   */
+  triage_notifications_enabled: boolean;
 }
 
 export type AISettingsUpdate = Partial<{
   enabled: boolean;
   auto_triage_enabled: boolean;
+  triage_notifications_enabled: boolean;
   triage_delay_seconds: number;
   triage_cooldown_seconds: number;
   triage_max_per_hour: number;
@@ -1554,7 +1561,7 @@ export type PluginFieldType =
   | 'bool'
   | 'select';
 
-export type PluginCapability = 'testable' | 'acknowledge';
+export type PluginCapability = 'testable' | 'acknowledge' | 'follow_up';
 
 export interface PluginFieldOption {
   value: string;

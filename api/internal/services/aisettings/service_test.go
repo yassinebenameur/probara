@@ -363,6 +363,7 @@ func TestUpdateRequestValidateRanges(t *testing.T) {
 		"empty":            {UpdateRequest{}, "at least one setting is required"},
 		"enabled only":     {UpdateRequest{Enabled: b(false)}, ""},
 		"auto only":        {UpdateRequest{AutoTriageEnabled: b(true)}, ""},
+		"notify only":      {UpdateRequest{TriageNotificationsEnabled: b(true)}, ""},
 		"delay low":        {UpdateRequest{TriageDelaySeconds: i(-1)}, "triage_delay_seconds must be between 0 and 3600"},
 		"delay edges":      {UpdateRequest{TriageDelaySeconds: i(0)}, ""},
 		"delay max":        {UpdateRequest{TriageDelaySeconds: i(3600)}, ""},

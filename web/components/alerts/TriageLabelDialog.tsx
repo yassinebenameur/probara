@@ -69,7 +69,7 @@ export default function TriageLabelDialog({ alert, initialMode, onClose, onLabel
                   <TriagePill triage={triage} />
                   {triage.summary && <p className="text-ui leading-relaxed text-slate-300">{triage.summary}</p>}
                   <p className="text-xs text-slate-500">
-                    Labels are kept for retraining the local model. Triage is display only: notifications are unaffected.
+                    Labels are kept for retraining the local model. Triage never changes who is paged or when; correcting the cause stops any follow-up not sent yet.
                   </p>
                 </div>
                 <AILabelControl

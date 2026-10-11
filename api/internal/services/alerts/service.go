@@ -35,7 +35,7 @@ func NewService(db *db.Client, incidents incidentAutomation) *Service {
 // alertDetailSelect is the shared projection for AlertWithDetails. Monitors
 // are LEFT JOINed because mesh_edge alerts have no monitor — their subject is
 // a directed location pair (sl → tl). The trailing triage columns and join
-// come from triageview (display-only, never read by the alerter).
+// come from triageview (read-only; triage never changes paging).
 var alertDetailSelect = `
 	SELECT a.id, a.tenant_id, a.monitor_id, a.alert_policy_id, a.status,
 		a.triggered_at, a.acknowledged_at, a.resolved_at, a.failure_count,

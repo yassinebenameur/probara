@@ -4,8 +4,11 @@ import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
-import { getAlerts } from '@/lib/api';
+import { getAlert, getAlerts, getTenants } from '@/lib/api';
 import { markTriageLabelled, mergeAlertUpdate } from '@/lib/ai-triage';
+import { focusTenantSwitch, parseAlertFocus, withoutAlertFocus } from '@/lib/alert-links';
+import { emitTenantChange, setSelectedTenantId } from '@/lib/tenant';
+import { useSelectedTenantId } from '@/components/providers/TenantProvider';
 import { RANGES, RangeId, rangeStart } from '@/lib/format';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import AlertTable from '@/components/alerts/AlertTable';
@@ -68,6 +71,13 @@ function AlertsView() {
   const searchParams = useSearchParams();
   const statusFilter = parseStatus(searchParams.get('status'));
   const windowFilter = parseWindow(searchParams.get('range'));
+  // A notification's deep link (`?alert=&tenant=`, lib/alert-links.ts) shows
+  // that one alert, in its own workspace, instead of the list.
+  const focus = parseAlertFocus(searchParams);
+  const focusAlertId = focus?.alertId ?? null;
+  const focusTenantId = focus?.tenantId ?? null;
+  const selectedTenantId = useSelectedTenantId();
+  const [focused, setFocused] = useState<{ id: string; alert: Alert | null; error: string } | null>(null);
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,6 +125,7 @@ function AlertsView() {
   }, []);
 
   const loadAlerts = useCallback(async () => {
+    if (focusAlertId) return;
     const request = ++requestRef.current;
     try {
       setLoading(true);
@@ -154,11 +165,50 @@ function AlertsView() {
     } finally {
       if (request === requestRef.current) setLoading(false);
     }
-  }, [page, statusFilter, windowFilter]);
+  }, [page, statusFilter, windowFilter, focusAlertId]);
 
   useEffect(() => {
     loadAlerts();
   }, [loadAlerts]);
+
+  // Focused view: switch to the link's workspace first when the viewer can
+  // see it (TenantScope then remounts this page under it), else load the
+  // alert in the current one.
+  useEffect(() => {
+    if (!focusAlertId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (focusTenantId && selectedTenantId && focusTenantId !== selectedTenantId) {
+          const tenants = await getTenants().catch(() => null);
+          const target = focusTenantSwitch(
+            { alertId: focusAlertId, tenantId: focusTenantId },
+            selectedTenantId,
+            (tenants?.items ?? []).map((t) => t.id)
+          );
+          if (target) {
+            setSelectedTenantId(target);
+            emitTenantChange();
+            return;
+          }
+        }
+        const alert = await getAlert(focusAlertId);
+        if (!cancelled) setFocused({ id: focusAlertId, alert, error: '' });
+      } catch {
+        if (!cancelled) {
+          setFocused({ id: focusAlertId, alert: null, error: 'This alert is not in the current workspace, or it no longer exists.' });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [focusAlertId, focusTenantId, selectedTenantId]);
+
+  const clearFocus = () => {
+    const query = withoutAlertFocus(new URLSearchParams(searchParams.toString())).toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
 
   useEffect(() => {
     loadCounts();
@@ -194,6 +244,9 @@ function AlertsView() {
   useEffect(() => {
     return subscribe((event) => {
       handleAlertUpdate(event.alert);
+      setFocused((f) =>
+        f?.alert && f.alert.id === event.alert.id ? { ...f, alert: mergeAlertUpdate(f.alert, event.alert) } : f
+      );
       loadCounts();
     });
   }, [handleAlertUpdate, subscribe, loadCounts]);
@@ -216,6 +269,33 @@ function AlertsView() {
   };
 
   const windowApplies = statusFilter === 'resolved' || statusFilter === 'all';
+
+  if (focusAlertId) {
+    const current = focused?.id === focusAlertId ? focused : null;
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Alerts" />
+        <Callout
+          tone="info"
+          action={<Button variant="subtle" size="xs" onClick={clearFocus}>Show all alerts</Button>}
+        >
+          Showing one alert from a notification link.
+        </Callout>
+        {current?.error && <Callout tone="warning">{current.error}</Callout>}
+        <AlertTable
+          alerts={current?.alert ? [current.alert] : []}
+          onAlertUpdate={(alert) =>
+            setFocused((f) => (f?.alert && f.alert.id === alert.id ? { ...f, alert: mergeAlertUpdate(f.alert, alert) } : f))
+          }
+          onTriageLabelled={(alertId) =>
+            setFocused((f) => (f?.alert ? { ...f, alert: markTriageLabelled([f.alert], alertId)[0] } : f))
+          }
+          loading={!current}
+          emptyTitle="Alert not found"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

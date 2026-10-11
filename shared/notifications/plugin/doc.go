@@ -31,6 +31,13 @@
 // so the alerter sends them "acknowledged" once per channel it paged, and
 // return nil for reminders: the provider escalates on its own schedule.
 //
+// Every other plugin advertises CapabilityFollowUp and renders the advisory
+// "suspected_cause" follow-up from View like any other event. Paging plugins
+// leave it off and are never sent one: the alerter selects follow-up targets
+// by capability, so a new paging plugin is excluded without code. A plugin
+// that switches on req.Type() must return nil for event types it does not
+// handle.
+//
 // A plugin that fans out to several recipients must not return a mixed
 // errors.Join. IsPermanent walks the joined children, so one permanent child
 // would stop the retry for every other recipient. Return Permanent only when

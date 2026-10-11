@@ -41,7 +41,7 @@ values for overrides.
 | Alert events | JetStream `ALERTS` | `alerts.*` |
 | Optional asynchronous notification delivery | JetStream `NOTIFICATIONS` | `alerts.dispatch.<plugin-type>` |
 | Incident AI analysis (enabled by default) | JetStream `AI_RCA` | `ai.rca.jobs` |
-| Automatic alert triage (worker-internal, display only; 1 h max age, 30 min duplicate window, durable `ai-triage-workers`) | JetStream `AI_TRIAGE` | `ai.triage.jobs` |
+| Automatic alert triage (worker-internal, never changes paging; 1 h max age, 30 min duplicate window, durable `ai-triage-workers`) | JetStream `AI_TRIAGE` | `ai.triage.jobs` |
 | Status-page/live monitor updates | Core NATS | `statuspage.updates` |
 
 ```mermaid
@@ -83,7 +83,10 @@ evaluation, including nested groups. No participating leaves means unknown.
 An empty group's old availability alert is resolved; group timeline integration
 remains a separate limitation documented in the state specification.
 
-Notification claims are serialized in PostgreSQL. Failed recovery delivery
+Notification claims are serialized in PostgreSQL. One-shot advisory events
+(`acknowledged` to paging channels, `suspected_cause` to paged chat, email, SMS
+and webhook channels) claim their own columns and never move reminder timing.
+Failed recovery delivery
 is retried from durable resolved-alert and channel-state records, including
 after an alerter restart. Optional worker dispatch uses delayed retries and
 an acknowledgement timeout longer than the delivery deadline. Delivery to
@@ -205,9 +208,20 @@ legacy text/provider columns and labels historical analyses.
 
 ### Automatic alert triage
 
-Triage is display only: it writes `alert_triage` (migration 000094) and
-nothing else, and the alerter, `shared/alertrouting` and notification payloads
-never read it. Workspaces opt in through `ai_settings.auto_triage_enabled`
+Triage never changes paging: it writes `alert_triage` (migration 000094) and
+nothing else, and routing (`shared/alertrouting`), suppression, severity and
+the created/reminder/acknowledged/resolved events never read it. The alerter
+reads it in one place, the opt-in `dispatchSuspectedCauses` phase
+(`ai_settings.triage_notifications_enabled`, migration 000095): one
+`suspected_cause` follow-up per channel already paged and still routed, for a
+ready triage naming a catalogue cause at medium or high confidence that no
+operator corrected, sent through `deliverNotification` with a one-shot claim on
+`alert_notification_states.suspected_cause_sent_at`. It is muted by the same
+predicate as reminders, targets only plugins advertising `CapabilityFollowUp`
+(not PagerDuty or Opsgenie), runs last in the tick on its own time budget so
+the recovery sweep keeps its share, and stops under `LOCAL_AI_DISABLED=true` or
+`AI_TRIAGE_ENABLED=false`. The alerter reads the catalogue only and never calls
+local AI. Workspaces opt in through `ai_settings.auto_triage_enabled`
 with a delay, a per-monitor cooldown and an hourly cap.
 
 The relay (`worker/internal/airca/relay.go`) is a transactional outbox in each

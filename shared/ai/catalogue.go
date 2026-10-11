@@ -8,6 +8,10 @@ import (
 
 const CatalogueVersion = "probara-evidence-v1"
 
+// RCAInsufficientEvidence is the rca key the model answers when it abstains.
+// It is a catalogue entry like any other, but never a named cause.
+const RCAInsufficientEvidence = "insufficient_evidence"
+
 //go:embed catalogue.json
 var catalogueJSON []byte
 
@@ -72,8 +76,8 @@ func ChoiceOptions(task string) []ChoiceOption {
 		out = append(out, ChoiceOption{Key: k, Title: ChoiceTitle(task, k)})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if (out[i].Key == "insufficient_evidence") != (out[j].Key == "insufficient_evidence") {
-			return out[j].Key == "insufficient_evidence"
+		if (out[i].Key == RCAInsufficientEvidence) != (out[j].Key == RCAInsufficientEvidence) {
+			return out[j].Key == RCAInsufficientEvidence
 		}
 		if out[i].Title != out[j].Title {
 			return out[i].Title < out[j].Title
@@ -82,6 +86,57 @@ func ChoiceOptions(task string) []ChoiceOption {
 	})
 	return out
 }
+
+// IsNamedCause reports whether key is an rca cause the running catalogue
+// knows, other than the abstention. Every consumer that acts on a triage or
+// analysis hypothesis (suspected-cause notifications, and anything that
+// groups or reports by cause) gates on it, so an unknown key from an older
+// catalogue or an abstention is never presented as a cause.
+func IsNamedCause(key string) bool {
+	if key == RCAInsufficientEvidence {
+		return false
+	}
+	_, ok := catalogue.RCA[key]
+	return ok
+}
+
+// NamedCauses lists every key IsNamedCause accepts, sorted, for SQL filters
+// (`hypothesis = ANY($n)`).
+func NamedCauses() []string {
+	out := make([]string, 0, len(catalogue.RCA))
+	for k := range catalogue.RCA {
+		if IsNamedCause(k) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RCAChoice returns a named cause's operator-facing title and a copy of its
+// suggested actions; ok is false for the abstention and for keys the running
+// catalogue does not know.
+func RCAChoice(key string) (title string, actions []string, ok bool) {
+	if !IsNamedCause(key) {
+		return "", nil, false
+	}
+	e := catalogue.RCA[key]
+	title = e.Title
+	if title == "" {
+		title = key
+	}
+	return title, append([]string(nil), e.Actions...), true
+}
+
+// IsConfident reports whether a confidence level is "medium" or "high", i.e.
+// a calibrated score of at least 0.7 (see confidence). Low-confidence leads
+// stay on the alert's pill and never interrupt anyone.
+func IsConfident(level string) bool {
+	return level == "medium" || level == "high"
+}
+
+// ConfidentLevels lists the levels IsConfident accepts, for SQL filters.
+func ConfidentLevels() []string { return []string{"medium", "high"} }
 
 func best(r DecisionResult) (string, float64) {
 	key := ""
@@ -123,8 +178,8 @@ type Metadata struct {
 
 func metadata(model ModelIdentity, h string, score float64, refs []EvidenceReference, incomplete []string) Metadata {
 	outcome := "supported"
-	if h == "insufficient_evidence" {
-		outcome = "insufficient_evidence"
+	if h == RCAInsufficientEvidence {
+		outcome = RCAInsufficientEvidence
 	}
 	if refs == nil {
 		refs = []EvidenceReference{}

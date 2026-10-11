@@ -11,14 +11,17 @@ validation results are in [local-ai-validation.md](local-ai-validation.md).
 ## Deployment and settings
 
 Local AI is on by default. Only the API (dependency suggestions, readiness)
-and the database-connected worker (incident analysis) call the service, over
-`POST /v1/decisions` with a bearer token. The service receives only that
+and the database-connected worker (incident analysis, automatic alert triage)
+call the service, over `POST /v1/decisions` with a bearer token. The alerter
+never calls it: it reads ready triages for the opt-in suspected-cause
+follow-up, and `LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` stops
+those follow-ups too. The service receives only that
 token: no database, NATS or platform credentials. Private-location workers
 never receive its URL or token and run checks without it.
 
 | Setting | Default | Read by | Meaning |
 |---|---|---|---|
-| `LOCAL_AI_DISABLED` | `false` | API, worker, service | Installation override; disables analysis and suggestions for every workspace |
+| `LOCAL_AI_DISABLED` | `false` | API, worker, alerter, service | Installation override; disables analysis, triage, suggestions and suspected-cause follow-ups for every workspace |
 | `LOCAL_AI_URL` | `http://127.0.0.1:8090` | API, worker | `http(s)://host[:port]`, no path, query or credentials |
 | `LOCAL_AI_TOKEN` | none | API, worker, service | Shared bearer token, at least 16 characters |
 | `LOCAL_AI_TIMEOUT_SECONDS` | `90` | API, worker | Request timeout, 1–300 seconds |
@@ -52,7 +55,10 @@ never receive its URL or token and run checks without it.
 
 Workspace Settings → AI shows enablement and readiness. Explicit workspace
 switches are preserved and absent settings default enabled; the installation
-disable overrides them. Settings updates accept only `enabled`. The test
+disable overrides them. Settings updates accept `enabled` and the automatic
+alert triage fields, including `triage_notifications_enabled` (the opt-in
+suspected-cause follow-up; triage itself never delays, routes, suppresses or
+re-prioritises a page). The test
 endpoint accepts `{}` and probes the configured service.
 
 The service exposes `/healthz` (unauthenticated), `/readyz` (bearer token;

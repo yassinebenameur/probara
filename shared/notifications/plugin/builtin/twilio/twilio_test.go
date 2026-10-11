@@ -287,3 +287,36 @@ func TestSend_TextsRecipientsConcurrently(t *testing.T) {
 		t.Fatalf("peak concurrent sends = %d, want recipients texted in parallel", peak.Load())
 	}
 }
+
+func TestSend_SuspectedCauseTextsShortForm(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(raw))
+		mu.Lock()
+		bodies = append(bodies, form.Get("Body"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	event := sampleEvent()
+	event.Type = "suspected_cause"
+	event.Alert.SuspectedCause = &notifications.SuspectedCause{Key: "dns_failure", Title: "DNS resolution failure", Confidence: "medium"}
+	p := New()
+	p.base = srv.URL
+	if err := p.Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: config(nil)}, Event: event, EventType: "suspected_cause",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("texts = %d, want one per recipient", len(bodies))
+	}
+	b := bodies[0]
+	if !strings.HasPrefix(b, "AI TRIAGE · Suspected Cause: API health") || !strings.Contains(b, "DNS resolution failure (medium confidence)") ||
+		!strings.Contains(b, "https://probara.example.com/alerts?alert=a-1&tenant=tenant-1") {
+		t.Fatalf("Body = %q", b)
+	}
+}

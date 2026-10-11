@@ -7,10 +7,15 @@
 // chat, paging, SMS — picks it up; plugins decide only layout. Plugins reach
 // it through plugin.DispatchRequest.View, which supplies the configured
 // operator-UI origin.
+//
+// Event types: created, reminder, resolved, acknowledged (paging channels
+// only) and suspected_cause, the opt-in follow-up carrying a local AI
+// triage's named cause (channels advertising plugin.CapabilityFollowUp).
 package present
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,6 +29,10 @@ const (
 	EventReminder     = "reminder"
 	EventResolved     = "resolved"
 	EventAcknowledged = "acknowledged"
+	// EventSuspectedCause is the advisory follow-up sent once per paged
+	// channel when an alert's automatic triage names a cause. It never
+	// changes the alert; its wording lives here like every other event's.
+	EventSuspectedCause = "suspected_cause"
 )
 
 // Tone is the semantic colour of one notification. Plugins map it onto their
@@ -131,16 +140,21 @@ func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message
 	m.Title = m.Label + ": " + m.MonitorName
 	m.Summary = summaryFor(alert, eventType, resolved, elapsed)
 	m.Metric = metricFor(alert, resolved)
+	if eventType == EventSuspectedCause && !resolved {
+		// A follow-up to a page already delivered: it keeps what tells the
+		// recipient which page it follows (the kind-aware metric, the root
+		// cause annotation, the timing) and drops what the page already
+		// carried at length (last error, locations, blast radius).
+		m.RootCause = rootCauseLine(alert)
+		m.Rows = suspectedCauseRows(alert, elapsed)
+		m.ActionURL, m.ActionLabel = suspectedCauseAction(event, appBaseURL)
+		return m
+	}
 
 	if alert.LastError != nil {
 		m.LastError = strings.TrimSpace(*alert.LastError)
 	}
-	if alert.RootCauseMonitorName != nil && strings.TrimSpace(*alert.RootCauseMonitorName) != "" {
-		m.RootCause = strings.TrimSpace(*alert.RootCauseMonitorName)
-		if alert.RootCauseDownSince != nil {
-			m.RootCause = fmt.Sprintf("%s — down since %s", m.RootCause, HumanTime(*alert.RootCauseDownSince))
-		}
-	}
+	m.RootCause = rootCauseLine(alert)
 	for _, loc := range alert.FailingLocations {
 		line := Location{Name: loc.Name}
 		if line.Name == "" {
@@ -163,6 +177,68 @@ func Build(event notifications.AlertEvent, eventType, appBaseURL string) Message
 	m.Rows = detailRows(alert, elapsed)
 	m.ActionURL, m.ActionLabel = actionFor(alert, appBaseURL)
 	return m
+}
+
+// rootCauseLine renders the dependency root-cause annotation, or "".
+func rootCauseLine(alert notifications.AlertDetails) string {
+	if alert.RootCauseMonitorName == nil || strings.TrimSpace(*alert.RootCauseMonitorName) == "" {
+		return ""
+	}
+	line := strings.TrimSpace(*alert.RootCauseMonitorName)
+	if alert.RootCauseDownSince != nil {
+		line = fmt.Sprintf("%s — down since %s", line, HumanTime(*alert.RootCauseDownSince))
+	}
+	return line
+}
+
+// suspectedCauseRows are the detail rows of a suspected_cause follow-up.
+// "Follows up on" names the page (kind-aware, so two open host-metric alerts
+// on one host stay distinguishable), then the cause, then the timing rows.
+func suspectedCauseRows(alert notifications.AlertDetails, elapsed string) []Row {
+	rows := []Row{{Label: "Follows up on", Value: followedUpPage(alert)}}
+	if sc := alert.SuspectedCause; sc != nil {
+		if sc.Title != "" {
+			rows = append(rows, Row{Label: "Suspected cause", Value: sc.Title})
+		}
+		if sc.Confidence != "" {
+			rows = append(rows, Row{Label: "Confidence", Value: capitalize(sc.Confidence)})
+		}
+		if len(sc.Actions) > 0 && strings.TrimSpace(sc.Actions[0]) != "" {
+			rows = append(rows, Row{Label: "Suggested first check", Value: strings.TrimSpace(sc.Actions[0])})
+		}
+	}
+	if !alert.TriggeredAt.IsZero() {
+		rows = append(rows, Row{Label: "Triggered", Value: HumanTime(alert.TriggeredAt)})
+	}
+	if elapsed != "" {
+		rows = append(rows, Row{Label: "Open for", Value: elapsed})
+	}
+	return rows
+}
+
+// followedUpPage names the page a follow-up refers to: the kind-aware
+// headline the page itself carried, e.g. "CPU Usage High".
+func followedUpPage(alert notifications.AlertDetails) string {
+	if alert.IsMeshEdge() || alert.IsLatencyAnomaly() || alert.IsHostMetric() || alert.IsTLSExpiry() {
+		return labelFor(alert, EventCreated)
+	}
+	return "Down alert"
+}
+
+// suspectedCauseAction links the follow-up to the one alert it is about on
+// the Alerts page (which shows the triage pill and its label controls), in
+// the alert's own workspace.
+func suspectedCauseAction(event notifications.AlertEvent, appBaseURL string) (string, string) {
+	base := strings.TrimRight(strings.TrimSpace(appBaseURL), "/")
+	id := strings.TrimSpace(event.Alert.ID)
+	if base == "" || id == "" {
+		return "", ""
+	}
+	q := url.Values{"alert": {id}}
+	if tenant := strings.TrimSpace(event.TenantID); tenant != "" {
+		q.Set("tenant", tenant)
+	}
+	return base + "/alerts?" + q.Encode(), "Review the triage"
 }
 
 // Severity maps the tone onto the three-level scale paging providers use.
@@ -271,6 +347,11 @@ func toneFor(alert notifications.AlertDetails, eventType string, resolved bool) 
 	if eventType == EventAcknowledged {
 		return ToneInfo, "ACKNOWLEDGED"
 	}
+	if eventType == EventSuspectedCause {
+		// Not "SUSPECTED CAUSE": Short() prints StatusWord · Title, and the
+		// title already starts with the label.
+		return ToneInfo, "AI TRIAGE"
+	}
 	// Degradations that are not hard outages read as warnings, not failures.
 	switch {
 	case alert.IsLatencyAnomaly():
@@ -300,6 +381,9 @@ func Label(event notifications.AlertEvent) string {
 func labelFor(alert notifications.AlertDetails, eventType string) string {
 	if eventType == EventAcknowledged {
 		return "Alert Acknowledged"
+	}
+	if eventType == EventSuspectedCause {
+		return "Suspected Cause"
 	}
 	switch {
 	case alert.IsLatencyAnomaly():
@@ -340,6 +424,16 @@ func summaryFor(alert notifications.AlertDetails, eventType string, resolved boo
 			return fmt.Sprintf("Someone is on it — acknowledged %s after it opened.", outage)
 		}
 		return "Someone is on it — the alert was acknowledged."
+	}
+	if eventType == EventSuspectedCause && !resolved {
+		if sc := alert.SuspectedCause; sc != nil && sc.Title != "" {
+			conf := ""
+			if sc.Confidence != "" {
+				conf = fmt.Sprintf(" (%s confidence)", sc.Confidence)
+			}
+			return fmt.Sprintf("Local AI triage points to %s%s. It is a lead from recorded checks, not a confirmed cause: verify before acting.", sc.Title, conf)
+		}
+		return "Local AI triage finished for this alert."
 	}
 	switch {
 	case alert.IsLatencyAnomaly():

@@ -17,10 +17,11 @@ import (
 	"github.com/yassinebenameur/probara/shared/queue"
 )
 
-// Automatic alert triage is DISPLAY ONLY: it writes alert_triage and nothing
-// else. It never reads or writes alert status, severity, routing or
+// Automatic alert triage NEVER CHANGES PAGING: it writes alert_triage and
+// nothing else. It never reads or writes alert status, severity, routing or
 // notification state, so a model outage or a bug here cannot change who is
-// paged or when. The relay (relay.go) claims rows and publishes TriageJob;
+// paged or when. The alerter may read a ready row afterwards to send its
+// opt-in suspected_cause follow-up (alerter dispatchSuspectedCauses). The relay (relay.go) claims rows and publishes TriageJob;
 // this consumer runs the same analyzer as incident analyses over
 // single-monitor evidence (buildAlertInput).
 

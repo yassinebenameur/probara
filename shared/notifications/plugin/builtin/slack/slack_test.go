@@ -222,3 +222,30 @@ func TestEscapeTruncate_LimitAppliesAfterEscaping(t *testing.T) {
 		t.Fatalf("short input = %q, want untouched escape", got)
 	}
 }
+
+func TestSend_SuspectedCauseRendersHint(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	event := sampleEvent()
+	event.Type = "suspected_cause"
+	event.Alert.SuspectedCause = &notifications.SuspectedCause{
+		Key: "dns_failure", Title: "DNS resolution failure", Confidence: "high",
+		Actions: []string{"Query the record from the affected location."},
+	}
+	if err := New().Send(context.Background(), plugin.DispatchRequest{
+		Channel: plugin.ChannelRef{Config: map[string]any{"webhook_url": srv.URL}}, Event: event, EventType: "suspected_cause",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	body := string(gotBody)
+	for _, want := range []string{"Suspected Cause: API health", "DNS resolution failure (high confidence)", "Suggested first check"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("payload missing %q: %s", want, body)
+		}
+	}
+}

@@ -478,6 +478,11 @@ go run ./cmd/admin/encrypt_existing_channels`,
                 'A label is copied server-side from the decision snapshot the worker stored when the analysis or alert triage completed (dependency pairs: evidence recomputed at labelling time); client-supplied evidence is rejected. It holds the evidence counters and booleans, catalogue keys, opaque decision IDs, the monitor and incident IDs the UI names decisions with, and the labelling user ID. It never holds names or free text. Labels are kept until the workspace is deleted: `data_retention_days` does not prune them, and they survive monitor purges and incident deletion.',
             },
             {
+              term: 'Suspected-cause follow-ups',
+              description:
+                'When a workspace opts in, the alerter sends the [alert triage](/docs/alerting/#ai-triage) result to the notification providers already paged for the alert: the catalogue key, title and suggested first checks, the confidence level and the triage ID, alongside the usual alert fields (webhooks receive them as `alert.suspected_cause`). No evidence, model output text or summary leaves the installation this way, and PagerDuty and Opsgenie never receive it. The alerter only reads the catalogue; it never calls local AI.',
+            },
+            {
               term: 'Label export',
               description:
                 'Export rows carry evidence, catalogue answers and provenance, and never monitor, incident, analysis, decision, user or tenant identifiers or names. Row and group IDs are HMACs keyed by a per-workspace random salt that is never exported, so they stay stable across exports without revealing the subject. Treat the files as workspace operational data.',

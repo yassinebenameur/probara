@@ -19,7 +19,7 @@ import (
 
 // The triage relay turns open alerts into AI_TRIAGE jobs. It runs only in
 // DB-connected platform workers and touches only alert_triage: claiming an
-// alert never changes it, its routing or its notifications (display only).
+// alert never changes it, its routing or its pages.
 
 const (
 	// RelayInterval is how often the relay ticks.

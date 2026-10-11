@@ -28,6 +28,11 @@ type Alerter struct {
 	recoveryMu     sync.Mutex
 	recoveryCursor uuid.UUID
 
+	// Phase time budgets; zero means the production default. Tests shrink
+	// them (recoveryRetryBudget, suspectedCauseTimeBudget).
+	recoveryBudget       time.Duration
+	suspectedCauseBudget time.Duration
+
 	// sendFunc dispatches one channel notification. It defaults to
 	// sendChannelNotification and is swapped in tests so the lifecycle can be
 	// exercised without hitting real channel plugins.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/present"
 )
 
 const pluginType = "email"
@@ -82,6 +83,7 @@ func (p *Plugin) Manifest() plugin.Manifest {
 		Version:     "1.0.0",
 		Capabilities: []plugin.Capability{
 			plugin.CapabilityTestable,
+			plugin.CapabilityFollowUp,
 		},
 		Fields: []plugin.Field{
 			{
@@ -166,9 +168,23 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	}, cfg.To)
 }
 
+// effectiveTemplates drops the channel's override templates for events they
+// were never written for. Overrides model a page (created/reminder/resolved;
+// status is still "active" on a follow-up), so a subject like
+// "{{.monitor_name}} is DOWN" would make the advisory suspected_cause
+// follow-up read as a second outage email. Follow-ups always use the
+// built-in rendering.
+func effectiveTemplates(event notifications.AlertEvent, templates Templates) Templates {
+	if event.Type == present.EventSuspectedCause {
+		return Templates{}
+	}
+	return templates
+}
+
 // RenderSubject computes the email subject line for an event, applying the
 // override template if present. Exposed for use by Mailer implementations.
 func RenderSubject(event notifications.AlertEvent, templates Templates, appBaseURL string) (string, error) {
+	templates = effectiveTemplates(event, templates)
 	fallback := DefaultSubject(event)
 	if strings.TrimSpace(templates.Subject) == "" {
 		return fallback, nil
@@ -179,6 +195,7 @@ func RenderSubject(event notifications.AlertEvent, templates Templates, appBaseU
 // RenderBody computes the plain-text email body for an event, applying the
 // override template if present. Exposed for use by Mailer implementations.
 func RenderBody(event notifications.AlertEvent, templates Templates, appBaseURL string) (string, error) {
+	templates = effectiveTemplates(event, templates)
 	fallback := DefaultBodyWithLinks(event, appBaseURL)
 	if strings.TrimSpace(templates.Body) == "" {
 		return fallback, nil
@@ -191,6 +208,7 @@ func RenderBody(event notifications.AlertEvent, templates Templates, appBaseURL 
 // an HTML one: that operator asked for a specific text message, and pairing it
 // with unrelated generated markup would send two different emails in one.
 func RenderHTML(event notifications.AlertEvent, templates Templates, appBaseURL string) (string, error) {
+	templates = effectiveTemplates(event, templates)
 	if strings.TrimSpace(templates.HTML) != "" {
 		return renderHTMLTemplate(templates.HTML, templateData(event, appBaseURL))
 	}

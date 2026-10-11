@@ -14,9 +14,11 @@ const (
 	AlertTriageStatusSkipped = "skipped"
 )
 
-// AlertTriage is the compact, display-only view of an alert's automatic
-// triage (alert_triage, written by the worker's relay and triage consumer).
-// It never influences routing, severity or notifications. Nullable fields are
+// AlertTriage is the compact, read-only view of an alert's automatic triage
+// (alert_triage, written by the worker's relay and triage consumer). It never
+// influences routing, suppression, severity or the page events; the alerter
+// reads alert_triage only to send the opt-in suspected_cause follow-up.
+// Nullable fields are
 // emitted as null, not omitted; the whole object is absent when the alert has
 // no triage row (and on SSE events, which are built from NATS and never carry
 // it).

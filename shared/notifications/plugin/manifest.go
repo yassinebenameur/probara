@@ -31,6 +31,15 @@ const (
 	// tools (PagerDuty, Opsgenie) use it to stop their own escalation. Chat
 	// and email channels leave it off so an ack does not post a new message.
 	CapabilityAcknowledge Capability = "acknowledge"
+
+	// CapabilityFollowUp means the plugin accepts advisory follow-up events
+	// for an alert it was already paged for: today "suspected_cause", the
+	// opt-in local AI triage hint. The alerter targets follow-ups by this
+	// capability, so a plugin without it is never claimed or sent one.
+	// Chat, email, SMS and webhook channels advertise it; paging tools
+	// (PagerDuty, Opsgenie) leave it off, because their APIs add content by
+	// re-triggering and advisory content must never re-page anyone.
+	CapabilityFollowUp Capability = "follow_up"
 )
 
 // Option is one choice of a FieldTypeSelect field.

@@ -14,6 +14,7 @@ import PageHeader from '@/components/ui/PageHeader';
 const CAPABILITY_LABELS: Record<string, string> = {
   testable: 'Test from UI',
   acknowledge: 'Syncs acknowledgements',
+  follow_up: 'AI follow-ups',
 };
 
 export default function AlertChannelCatalogPage() {

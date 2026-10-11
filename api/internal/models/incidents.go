@@ -88,7 +88,7 @@ type IncidentAlertSummary struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 	MonitorName    string     `json:"monitor_name"`
 	PolicyName     *string    `json:"policy_name,omitempty"`
-	// Triage is the alert's display-only AI triage (no label_context here).
+	// Triage is the alert's read-only AI triage (no label_context here).
 	Triage *AlertTriage `json:"triage,omitempty"`
 }
 

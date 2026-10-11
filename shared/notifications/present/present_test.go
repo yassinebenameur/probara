@@ -130,3 +130,88 @@ func TestHumanDuration(t *testing.T) {
 		}
 	}
 }
+
+func suspectedCauseSample() notifications.AlertEvent {
+	ev := sample()
+	ev.Type = EventSuspectedCause
+	ev.Timestamp = ev.Alert.TriggeredAt.Add(9 * time.Minute)
+	rc := "Core DNS"
+	ev.Alert.RootCauseMonitorName = &rc
+	ev.Alert.FailingLocations = []notifications.FailingLocation{{ID: "l1", Name: "eu-west"}}
+	ev.Alert.ImpactedMonitors = []notifications.ImpactedMonitor{{ID: "m2", Name: "web"}}
+	ev.Alert.SuspectedCause = &notifications.SuspectedCause{
+		TriageID: "t-1", Key: "dns_failure", Title: "DNS resolution failure", Confidence: "medium",
+		Actions: []string{"Query the record from the affected location.", "Compare answers."},
+	}
+	return ev
+}
+
+func TestBuildSuspectedCause(t *testing.T) {
+	m := Build(suspectedCauseSample(), "", "https://probara.example.com/")
+	if m.Label != "Suspected Cause" || m.Title != "Suspected Cause: API health" || m.Tone != ToneInfo || m.StatusWord != "AI TRIAGE" {
+		t.Fatalf("got label=%q title=%q tone=%q status=%q", m.Label, m.Title, m.Tone, m.StatusWord)
+	}
+	if want := "Local AI triage points to DNS resolution failure (medium confidence). It is a lead from recorded checks, not a confirmed cause: verify before acting."; m.Summary != want {
+		t.Fatalf("summary = %q", m.Summary)
+	}
+	var labels []string
+	for _, r := range m.Rows {
+		labels = append(labels, r.Label+"="+r.Value)
+	}
+	want := []string{
+		"Follows up on=Down alert",
+		"Suspected cause=DNS resolution failure",
+		"Confidence=Medium",
+		"Suggested first check=Query the record from the affected location.",
+		"Triggered=24 May 2026, 12:00 UTC",
+		"Open for=9m",
+	}
+	if strings.Join(labels, "|") != strings.Join(want, "|") {
+		t.Fatalf("rows = %q, want %q", labels, want)
+	}
+	if m.LastError != "" || len(m.Locations) != 0 || len(m.Impacted) != 0 || m.Metric != nil {
+		t.Fatalf("follow-up must not repeat the page's detail: err=%q loc=%v impacted=%v metric=%v", m.LastError, m.Locations, m.Impacted, m.Metric)
+	}
+	if !strings.HasPrefix(m.RootCause, "Core DNS") {
+		t.Fatalf("root cause annotation dropped: %q", m.RootCause)
+	}
+	if m.ActionURL != "https://probara.example.com/alerts?alert=a-1&tenant=tenant-1" || m.ActionLabel != "Review the triage" {
+		t.Fatalf("action = %q %q", m.ActionURL, m.ActionLabel)
+	}
+	short := m.Short()
+	if !strings.HasPrefix(short, "AI TRIAGE · Suspected Cause: API health\n") || strings.Contains(strings.ToLower(short), "suspected cause · suspected cause") {
+		t.Fatalf("Short = %q", short)
+	}
+
+	if m := Build(suspectedCauseSample(), "", ""); m.ActionURL != "" {
+		t.Fatalf("no base URL must mean no link, got %q", m.ActionURL)
+	}
+	ev := suspectedCauseSample()
+	ev.Alert.SuspectedCause = nil
+	if m := Build(ev, "", ""); m.Summary != "Local AI triage finished for this alert." {
+		t.Fatalf("fallback summary = %q", m.Summary)
+	}
+}
+
+// Two open host-metric alerts on one host must produce follow-ups that say
+// which page each refers to.
+func TestBuildSuspectedCauseKeepsKindAwareIdentity(t *testing.T) {
+	build := func(metric string, value float64) Message {
+		ev := suspectedCauseSample()
+		ev.Alert.Kind = notifications.KindHostMetric
+		ev.Alert.MetricName = &metric
+		ev.Alert.MetricValue = &value
+		return Build(ev, "", "")
+	}
+	cpu := build("system.cpu.utilization", 0.97)
+	mem := build("system.memory.utilization", 0.93)
+	if cpu.Title != mem.Title {
+		t.Fatalf("titles differ unexpectedly: %q vs %q", cpu.Title, mem.Title)
+	}
+	if cpu.Rows[0].Value == mem.Rows[0].Value || cpu.Metric == nil || mem.Metric == nil || cpu.Metric.Label == mem.Metric.Label {
+		t.Fatalf("host-metric follow-ups are indistinguishable: %q/%v vs %q/%v", cpu.Rows[0].Value, cpu.Metric, mem.Rows[0].Value, mem.Metric)
+	}
+	if cpu.Rows[0].Label != "Follows up on" || !strings.Contains(cpu.Rows[0].Value, "CPU") {
+		t.Fatalf("first row = %+v", cpu.Rows[0])
+	}
+}

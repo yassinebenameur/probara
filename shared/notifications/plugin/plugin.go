@@ -52,7 +52,9 @@ type DispatchRequest struct {
 }
 
 // Type returns the event type being delivered: "created", "reminder",
-// "resolved" or "acknowledged".
+// "resolved", "acknowledged" (only to plugins advertising
+// CapabilityAcknowledge) or "suspected_cause" (only to plugins advertising
+// CapabilityFollowUp).
 func (r DispatchRequest) Type() string {
 	if r.EventType != "" {
 		return r.EventType

@@ -238,6 +238,8 @@ services:
       NATS_CONSUMER_NAME: "worker"
       WORKER_CONCURRENCY: "10"
       CHROME_BIN: "/usr/bin/chromium-browser"
+      # Automatic alert triage kill switch (the alerter reads it too).
+      AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       SIP_LOCALHOST_AS_HOST_GATEWAY: "true"
     ports:
@@ -361,6 +363,10 @@ services:
       ALERT_REMINDER_INTERVAL_SECONDS: "3600"
       ALERT_GROUP_WINDOW_SECONDS: "60"
       ALERT_GROUP_MAX_CHILDREN: "5"
+      # Local AI kill switches. The alerter never calls local AI; with either
+      # switch off it stops sending suspected-cause follow-ups.
+      LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
+      AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
     ports:
       - "9094:9094"
     depends_on:

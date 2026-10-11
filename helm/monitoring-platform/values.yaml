@@ -545,10 +545,10 @@ securityContext:
 # Default-on. The image carries the fine-tuned model weights, so the pod needs
 # no network egress at runtime (air-gapped). Only the api and the platform
 # worker receive LOCAL_AI_URL/LOCAL_AI_TOKEN; scheduler, alerter, status page
-# and location workers never do. The service gets no database or NATS
-# credentials. Its bearer token is secrets.localAiToken (see there).
+# and location workers never do (the alerter gets only LOCAL_AI_DISABLED and
+# AI_TRIAGE_ENABLED). The service gets no database or NATS credentials. Its bearer token is secrets.localAiToken (see there).
 localAI:
-  # false = no local AI workload; api/worker run with LOCAL_AI_DISABLED=true,
+  # false = no local AI workload; api/worker/alerter run with LOCAL_AI_DISABLED=true,
   # which overrides every workspace setting -- unless externalUrl is set.
   enabled: true
   # Operator-run service speaking the same /v1/decisions protocol, e.g.
@@ -571,6 +571,11 @@ localAI:
   # Client-side request timeout on api/worker (LOCAL_AI_TIMEOUT_SECONDS, 1-300).
   # All three ranges are enforced at render time.
   timeoutSeconds: 90
+  # AI_TRIAGE_ENABLED on the platform worker and the alerter: false stops new
+  # automatic alert triages (queued ones drain as skipped) and every
+  # suspected-cause follow-up, whatever the workspace settings say. The
+  # alerter also stops follow-ups when local AI is off (no enabled/externalUrl).
+  triageEnabled: true
   resources:
     requests:
       cpu: "1"

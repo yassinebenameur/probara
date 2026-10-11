@@ -233,3 +233,44 @@ func TestLoadWorkerConfig_AITriageRejectsBadValues(t *testing.T) {
 		t.Fatalf("shared subject accepted: %v", err)
 	}
 }
+
+// The alerter honours the installation's local AI kill switches for its
+// suspected-cause follow-ups, so disabling AI also stops follow-ups from
+// triages that were already ready.
+func TestLoadAlerterConfig_SuspectedCauseKillSwitches(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8084")
+	t.Setenv("METRICS_PORT", "9094")
+	cases := []struct {
+		localAIDisabled, triageEnabled string
+		wantDisabled                   bool
+	}{
+		{"", "", false},
+		{"false", "true", false},
+		{"true", "", true},
+		{"", "false", true},
+		{"true", "false", true},
+	}
+	for _, tc := range cases {
+		t.Setenv("LOCAL_AI_DISABLED", tc.localAIDisabled)
+		t.Setenv("AI_TRIAGE_ENABLED", tc.triageEnabled)
+		cfg, err := LoadAlerterConfig()
+		if err != nil {
+			t.Fatalf("LOCAL_AI_DISABLED=%q AI_TRIAGE_ENABLED=%q: %v", tc.localAIDisabled, tc.triageEnabled, err)
+		}
+		if cfg.SuspectedCausesDisabled != tc.wantDisabled {
+			t.Fatalf("LOCAL_AI_DISABLED=%q AI_TRIAGE_ENABLED=%q: disabled=%t, want %t",
+				tc.localAIDisabled, tc.triageEnabled, cfg.SuspectedCausesDisabled, tc.wantDisabled)
+		}
+	}
+
+	t.Setenv("LOCAL_AI_DISABLED", "")
+	t.Setenv("AI_TRIAGE_ENABLED", "sometimes")
+	if _, err := LoadAlerterConfig(); err == nil || !strings.Contains(err.Error(), "invalid AI_TRIAGE_ENABLED") {
+		t.Fatalf("invalid AI_TRIAGE_ENABLED accepted: %v", err)
+	}
+	t.Setenv("AI_TRIAGE_ENABLED", "")
+	t.Setenv("LOCAL_AI_DISABLED", "maybe")
+	if _, err := LoadAlerterConfig(); err == nil || !strings.Contains(err.Error(), "invalid LOCAL_AI_DISABLED") {
+		t.Fatalf("invalid LOCAL_AI_DISABLED accepted: %v", err)
+	}
+}

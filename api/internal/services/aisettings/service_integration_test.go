@@ -165,3 +165,79 @@ func TestTriageSettingsDefaultsAndPartialUpdates(t *testing.T) {
 		t.Fatalf("empty: %v", err)
 	}
 }
+
+// Suspected-cause notifications default off, round-trip, survive partial
+// updates, and stamp triage_notifications_enabled_at only when they turn on.
+func TestTriageNotificationsSetting(t *testing.T) {
+	ctx := context.Background()
+	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, dbc, "")
+	fresh := testutil.InsertTenant(ctx, t, dbc, "")
+	s := NewService(dbc, ai.Config{Disabled: true})
+
+	got, err := s.Get(ctx, tenant)
+	if err != nil || got.TriageNotificationsEnabled {
+		t.Fatalf("default: %+v %v", got, err)
+	}
+	stamp := func(id uuid.UUID) (bool, *time.Time) {
+		t.Helper()
+		var on bool
+		var at *time.Time
+		if err := dbc.QueryRowContext(ctx, `SELECT triage_notifications_enabled, triage_notifications_enabled_at
+			FROM ai_settings WHERE tenant_id = $1`, id).Scan(&on, &at); err != nil {
+			t.Fatal(err)
+		}
+		return on, at
+	}
+	yes, no, d := true, false, 30
+
+	// A row created by another field keeps the flag off and unstamped.
+	if _, err := s.Update(ctx, tenant, UpdateRequest{TriageDelaySeconds: &d}); err != nil {
+		t.Fatal(err)
+	}
+	if on, at := stamp(tenant); on || at != nil {
+		t.Fatalf("after unrelated write: %v %v", on, at)
+	}
+
+	// Turning it on (accepted with auto-triage off) stamps the opt-in time.
+	got, err = s.Update(ctx, tenant, UpdateRequest{TriageNotificationsEnabled: &yes})
+	if err != nil || !got.TriageNotificationsEnabled || got.AutoTriageEnabled {
+		t.Fatalf("enable: %+v %v", got, err)
+	}
+	on, first := stamp(tenant)
+	if !on || first == nil {
+		t.Fatalf("enable did not stamp: %v %v", on, first)
+	}
+	// Re-saving it on, or a partial update of another field, keeps the stamp.
+	if _, err := s.Update(ctx, tenant, UpdateRequest{TriageNotificationsEnabled: &yes, AutoTriageEnabled: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(ctx, tenant, UpdateRequest{TriageDelaySeconds: &d}); err != nil {
+		t.Fatal(err)
+	}
+	if on, at := stamp(tenant); !on || at == nil || !at.Equal(*first) {
+		t.Fatalf("stamp moved: %v %v (was %v)", on, at, first)
+	}
+	// Off clears it; on again restamps.
+	if _, err := s.Update(ctx, tenant, UpdateRequest{TriageNotificationsEnabled: &no}); err != nil {
+		t.Fatal(err)
+	}
+	if on, at := stamp(tenant); on || at != nil {
+		t.Fatalf("disable: %v %v", on, at)
+	}
+	if _, err := s.Update(ctx, tenant, UpdateRequest{TriageNotificationsEnabled: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	if on, at := stamp(tenant); !on || at == nil || at.Before(*first) {
+		t.Fatalf("re-enable: %v %v", on, at)
+	}
+
+	// First write through the flag creates the row stamped.
+	if _, err := s.Update(ctx, fresh, UpdateRequest{TriageNotificationsEnabled: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	if on, at := stamp(fresh); !on || at == nil {
+		t.Fatalf("first write: %v %v", on, at)
+	}
+}

@@ -374,7 +374,7 @@ export const CONFIGURATION_PAGE: DocPage = {
           type: 'table',
           columns: ['Local AI variable', 'Default / validation', 'Read by and deployment wiring'],
           rows: [
-            ['`LOCAL_AI_DISABLED`', '`false`', 'API, worker and the inference service. `true` overrides every workspace switch, and the service then loads no model (readiness answers 503). Compose forwards the shell value to all three; Helm renders `true` on API and worker when `localAI.enabled=false` and no `localAI.externalUrl` is set.'],
+            ['`LOCAL_AI_DISABLED`', '`false`', 'API, worker, alerter and the inference service. `true` overrides every workspace switch, and the service then loads no model (readiness answers 503); the alerter only reads it to stop [suspected-cause follow-ups](/docs/alerting/#ai-triage). Compose forwards the shell value to all four; Helm renders `true` on API, worker and alerter when `localAI.enabled=false` and no `localAI.externalUrl` is set.'],
             ['`LOCAL_AI_URL`', '`http://127.0.0.1:8090`; `http(s)://host[:port]` with no path, query or credentials', 'API and worker. Compose sets `http://local-ai:8090`; Helm sets `http://<release>-local-ai:8090` or `localAI.externalUrl`; the local-process stack uses the default (the container is published on loopback).'],
             ['`LOCAL_AI_TOKEN`', 'At least 16 characters', 'API, worker and the inference service, which must all hold the same value. The service refuses to start without a valid token; API and worker start anyway and report local AI as not configured correctly. See [token handling](/docs/deployment/#helm-values-local-ai) for Compose, local and Helm defaults.'],
             ['`LOCAL_AI_TIMEOUT_SECONDS`', '`90`; 1–300', 'API and worker request timeout. An out-of-range value stops startup. Helm: `localAI.timeoutSeconds`.'],
@@ -578,7 +578,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`AI_TRIAGE_ENABLED`',
               '`true`; boolean, invalid values fail startup',
-              'Platform kill switch for [automatic alert triage](/docs/alerting/#ai-triage). `false` stops new claims only; queued triages finish as skipped without calling the model.',
+              'Platform kill switch for [automatic alert triage](/docs/alerting/#ai-triage), read by the worker and the alerter. On the worker `false` stops new claims only; queued triages finish as skipped without calling the model. On the alerter `false` stops every suspected-cause follow-up, including from triages that were already ready. Compose forwards the shell value to both; Helm renders `localAI.triageEnabled` into both.',
             ],
             [
               '`AI_TRIAGE_STREAM`',
@@ -612,7 +612,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The database-connected worker uses the same `LOCAL_AI_*` client variables as the API; Compose and Helm wire them to both, and Helm wires `SMTP_*` through its `smtp` values block. The `AI_RCA_*` and `AI_TRIAGE_*` variables are not wired, so their code defaults apply; set them through `extraEnv` only to rename the streams. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`.',
+            'The database-connected worker uses the same `LOCAL_AI_*` client variables as the API; Compose and Helm wire them to both, and Helm wires `SMTP_*` through its `smtp` values block. The `AI_RCA_*` variables and the `AI_TRIAGE_*` stream names are not wired, so their code defaults apply; set them through `extraEnv` only to rename the streams. `AI_TRIAGE_ENABLED` is wired to the worker and the alerter. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`.',
         },
       ],
     },
@@ -660,6 +660,11 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`ALERTER_ASYNC_DISPATCH`',
               '`false`; boolean',
               'Publishes channel dispatch jobs to NATS instead of sending synchronously.',
+            ],
+            [
+              '`LOCAL_AI_DISABLED` / `AI_TRIAGE_ENABLED`',
+              '`false` / `true`; boolean, invalid values fail startup',
+              'The local AI kill switches. The alerter never calls local AI; with `LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` it sends no [suspected-cause follow-ups](/docs/alerting/#ai-triage), whatever the workspace settings say.',
             ],
             ['`NOTIFICATIONS_STREAM`', '`NOTIFICATIONS`', 'Must match worker.'],
             [
@@ -959,7 +964,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
             ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
-            ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only'],
+            ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`)'],
             [
               'SMTP',
               'Not wired',

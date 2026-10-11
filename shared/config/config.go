@@ -252,9 +252,11 @@ type WorkerConfig struct {
 	AIRCAConsumerName string
 	LocalAI           ai.Config
 
-	// Automatic, display-only alert triage (worker/internal/airca relay and
-	// triage consumer). Read only by DB-connected platform workers; the API
-	// never publishes triage jobs, so it does not load these.
+	// Automatic alert triage (worker/internal/airca relay and triage
+	// consumer). Read only by DB-connected platform workers; the API never
+	// publishes triage jobs, so it does not load these. Triage never changes
+	// paging; the alerter honours the same kill switch for its opt-in
+	// suspected-cause follow-ups (AlerterConfig.SuspectedCausesDisabled).
 	AITriageEnabled      bool   // AI_TRIAGE_ENABLED, default true; kill switch: no new claims, queued rows drain as skipped
 	AITriageStream       string // AI_TRIAGE_STREAM, default "AI_TRIAGE"
 	AITriageSubject      string // AI_TRIAGE_SUBJECT, default "ai.triage.jobs"
@@ -289,6 +291,13 @@ type AlerterConfig struct {
 	AsyncDispatch            bool
 	NotificationsStream      string
 	NotificationsSubjectGlob string
+
+	// SuspectedCausesDisabled turns off the opt-in suspected-cause follow-ups
+	// (alerter dispatchSuspectedCauses) for the whole installation. It is set
+	// by the local AI kill switches, LOCAL_AI_DISABLED=true or
+	// AI_TRIAGE_ENABLED=false, so disabling AI also stops follow-ups from
+	// triages that were already ready. The zero value sends them.
+	SuspectedCausesDisabled bool
 }
 
 // StatusPageConfig contains configuration for the status page service
@@ -1020,13 +1029,9 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		return nil, err
 	}
 
-	cfg.AITriageEnabled = true
-	if v := strings.TrimSpace(os.Getenv("AI_TRIAGE_ENABLED")); v != "" {
-		enabled, err := strconv.ParseBool(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid AI_TRIAGE_ENABLED: %w", err)
-		}
-		cfg.AITriageEnabled = enabled
+	cfg.AITriageEnabled, err = loadAITriageEnabled()
+	if err != nil {
+		return nil, err
 	}
 	cfg.AITriageStream = envOrDefault("AI_TRIAGE_STREAM", "AI_TRIAGE")
 	cfg.AITriageSubject = envOrDefault("AI_TRIAGE_SUBJECT", "ai.triage.jobs")
@@ -1175,7 +1180,45 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 	cfg.NotificationsStream = envOrDefault("NOTIFICATIONS_STREAM", "NOTIFICATIONS")
 	cfg.NotificationsSubjectGlob = envOrDefault("NOTIFICATIONS_SUBJECT_GLOB", "alerts.dispatch.>")
 
+	// The alerter never calls local AI; it reads only the two kill switches.
+	localAIDisabled, err := loadLocalAIDisabled()
+	if err != nil {
+		return nil, err
+	}
+	triageEnabled, err := loadAITriageEnabled()
+	if err != nil {
+		return nil, err
+	}
+	cfg.SuspectedCausesDisabled = localAIDisabled || !triageEnabled
+
 	return cfg, nil
+}
+
+// loadAITriageEnabled parses AI_TRIAGE_ENABLED (default true), the platform
+// kill switch for automatic alert triage, shared by the worker and alerter.
+func loadAITriageEnabled() (bool, error) {
+	v := strings.TrimSpace(os.Getenv("AI_TRIAGE_ENABLED"))
+	if v == "" {
+		return true, nil
+	}
+	enabled, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("invalid AI_TRIAGE_ENABLED: %w", err)
+	}
+	return enabled, nil
+}
+
+// loadLocalAIDisabled parses LOCAL_AI_DISABLED (default false).
+func loadLocalAIDisabled() (bool, error) {
+	v := os.Getenv("LOCAL_AI_DISABLED")
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("invalid LOCAL_AI_DISABLED")
+	}
+	return b, nil
 }
 
 // LoadStatusPageConfig loads status page service configuration
@@ -1232,13 +1275,11 @@ func envDurationSeconds(key string, def time.Duration) time.Duration {
 // variables are ignored, including legacy destination and credential values.
 func loadLocalAIConfig() (ai.Config, error) {
 	c := ai.Config{BaseURL: envOrDefault("LOCAL_AI_URL", "http://127.0.0.1:8090"), APIKey: strings.TrimSpace(os.Getenv("LOCAL_AI_TOKEN")), Timeout: 90 * time.Second}
-	if v := os.Getenv("LOCAL_AI_DISABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return c, fmt.Errorf("invalid LOCAL_AI_DISABLED")
-		}
-		c.Disabled = b
+	disabled, err := loadLocalAIDisabled()
+	if err != nil {
+		return c, err
 	}
+	c.Disabled = disabled
 	if v := os.Getenv("LOCAL_AI_TIMEOUT_SECONDS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 300 {

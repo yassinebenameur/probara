@@ -243,6 +243,27 @@ reference stays required, waits for the key.
 {{- end -}}
 
 {{/*
+Automatic alert triage kill switch (AI_TRIAGE_ENABLED), rendered into the
+platform worker (relay + triage consumer) and the alerter (suspected-cause
+follow-ups).
+*/}}
+{{- define "monitoring-platform.aiTriageEnv" -}}
+- name: AI_TRIAGE_ENABLED
+  value: {{ .Values.localAI.triageEnabled | quote }}
+{{- end -}}
+
+{{/*
+The alerter never calls local AI, so it gets only the two kill switches: with
+LOCAL_AI_DISABLED=true or AI_TRIAGE_ENABLED=false it sends no suspected-cause
+follow-ups. LOCAL_AI_DISABLED follows the same rule as localAIEnv.
+*/}}
+{{- define "monitoring-platform.alerterAIEnv" -}}
+- name: LOCAL_AI_DISABLED
+  value: {{ empty (include "monitoring-platform.localAIUrl" .) | quote }}
+{{ include "monitoring-platform.aiTriageEnv" . }}
+{{- end -}}
+
+{{/*
 LOCAL_AI_TOKEN env var, shared by the clients (optional reference, see
 localAIEnv) and the local AI pod (required). Args (dict): ctx, optional.
 */}}

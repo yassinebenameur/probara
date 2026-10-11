@@ -47,6 +47,9 @@ func TestHandle_DropsEventsSupersededByResolve(t *testing.T) {
 		{"created", "", false},
 		{"created", "active", true},
 		{"acknowledged", "acknowledged", true},
+		{"suspected_cause", "resolved", false},
+		{"suspected_cause", "acknowledged", true},
+		{"suspected_cause", "active", true},
 		{"resolved", "resolved", true}, // resolves are never superseded
 	}
 	for _, tc := range cases {

@@ -77,6 +77,26 @@ type AlertDetails struct {
 	SourceLocationName *string `json:"source_location_name,omitempty"`
 	TargetLocationID   *string `json:"target_location_id,omitempty"`
 	TargetLocationName *string `json:"target_location_name,omitempty"`
+
+	// SuspectedCause is set only on the "suspected_cause" event: the opt-in
+	// follow-up the alerter sends once per paged channel when the alert's
+	// automatic triage names a cause with medium or high confidence. Resolved
+	// from alert_triage plus the shared/ai catalogue at send time, so webhook
+	// receivers get the full hint without a second request. Status keeps the
+	// alert's own value (active or acknowledged): receivers branch on the
+	// event type, never on status.
+	SuspectedCause *SuspectedCause `json:"suspected_cause,omitempty"`
+}
+
+// SuspectedCause is a triage's named cause as a follow-up carries it.
+type SuspectedCause struct {
+	TriageID string `json:"triage_id"`
+	// Key is the shared/ai catalogue rca key; Title and Actions are that
+	// entry's operator-facing title and suggested first checks.
+	Key        string   `json:"key"`
+	Title      string   `json:"title"`
+	Confidence string   `json:"confidence"` // "medium" or "high"
+	Actions    []string `json:"actions,omitempty"`
 }
 
 // FailingLocation is one down vantage point of a multi-location monitor.

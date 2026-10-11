@@ -75,6 +75,7 @@ func TestUpdateSettingsValidation(t *testing.T) {
 		`{"triage_max_per_hour":0}`:          "triage_max_per_hour must be between 1 and 600",
 		`{"triage_max_per_hour":601}`:        "triage_max_per_hour must be between 1 and 600",
 		`{"enabled":true,"model":"x"}`:       "Updates accept enabled, auto_triage_enabled",
+		`{"triage_notify":true}`:             "triage_max_per_hour and triage_notifications_enabled",
 		`{"enabled":true} {"enabled":false}`: "external provider fields are retired",
 		`{"triage_delay_seconds":"60"}`:      "Updates accept enabled",
 	} {
@@ -98,14 +99,14 @@ func TestUpdateSettingsDatabaseErrorIs500(t *testing.T) {
 }
 
 func TestUpdateSettingsEdgesAccepted(t *testing.T) {
-	cols := []string{"enabled", "auto_triage_enabled", "triage_delay_seconds", "triage_cooldown_seconds", "triage_max_per_hour"}
+	cols := []string{"enabled", "auto_triage_enabled", "triage_delay_seconds", "triage_cooldown_seconds", "triage_max_per_hour", "triage_notifications_enabled"}
 	w := putSettings(t, func(m sqlmock.Sqlmock) {
 		m.ExpectExec(regexp.QuoteMeta(`INSERT INTO ai_settings`)).
-			WithArgs(sqlmock.AnyArg(), nil, true, 0, 86400, 600).
+			WithArgs(sqlmock.AnyArg(), nil, true, 0, 86400, 600, true).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		m.ExpectQuery(regexp.QuoteMeta(`FROM ai_settings WHERE tenant_id = $1`)).
-			WillReturnRows(sqlmock.NewRows(cols).AddRow(true, true, 0, 86400, 600))
-	}, `{"auto_triage_enabled":true,"triage_delay_seconds":0,"triage_cooldown_seconds":86400,"triage_max_per_hour":600}`)
+			WillReturnRows(sqlmock.NewRows(cols).AddRow(true, true, 0, 86400, 600, true))
+	}, `{"auto_triage_enabled":true,"triage_delay_seconds":0,"triage_cooldown_seconds":86400,"triage_max_per_hour":600,"triage_notifications_enabled":true}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
@@ -115,7 +116,7 @@ func TestUpdateSettingsEdgesAccepted(t *testing.T) {
 	}
 	// Installation disabled forces enabled=false; the triage values round-trip.
 	if got.Enabled || got.InstallationEnabled || !got.AutoTriageEnabled || got.TriageDelaySeconds != 0 ||
-		got.TriageCooldownSeconds != 86400 || got.TriageMaxPerHour != 600 {
+		got.TriageCooldownSeconds != 86400 || got.TriageMaxPerHour != 600 || !got.TriageNotificationsEnabled {
 		t.Fatalf("settings %+v", got)
 	}
 }

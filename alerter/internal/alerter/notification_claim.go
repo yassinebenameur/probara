@@ -110,6 +110,10 @@ func (a *Alerter) deliverNotification(
 //   - acknowledged: update wins once (acknowledged_sent_at IS NULL) on an
 //     existing, unresolved row; it leaves last_event_type alone so reminders
 //     and the resolve still flow.
+//   - suspected_cause: the same one-shot shape on suspected_cause_sent_at.
+//
+// The one-shot columns never touch last_event_type or last_sent_at, so the
+// created/reminder/resolved timing is identical with or without them.
 //
 // Returns true when a row came back, i.e. the caller owns the send.
 func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uuid.UUID, eventType string, now time.Time, reminderInterval time.Duration) (bool, error) {
@@ -152,6 +156,16 @@ func claimNotificationTx(ctx context.Context, tx *sql.Tx, alertID, channelID uui
 			SET acknowledged_sent_at = $3::timestamptz, updated_at = NOW()
 			WHERE alert_id = $1 AND channel_id = $2
 			  AND acknowledged_sent_at IS NULL
+			  AND last_event_type <> 'resolved'
+			RETURNING alert_id`
+	case "suspected_cause":
+		// Advisory follow-up: one-shot, and only for a channel that was
+		// paged for this still-open alert (see dispatchSuspectedCauses).
+		query = `
+			UPDATE alert_notification_states
+			SET suspected_cause_sent_at = $3::timestamptz, updated_at = NOW()
+			WHERE alert_id = $1 AND channel_id = $2
+			  AND suspected_cause_sent_at IS NULL
 			  AND last_event_type <> 'resolved'
 			RETURNING alert_id`
 	default:

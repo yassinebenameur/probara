@@ -45,6 +45,7 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [settings, setSettings] = useState<AISettings | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [autoTriage, setAutoTriage] = useState(false);
+  const [notifyCauses, setNotifyCauses] = useState(false);
   const [draft, setDraft] = useState<TriageDraft>({ triage_delay_seconds: '60', triage_cooldown_seconds: '900', triage_max_per_hour: '60' });
   const [fieldErrors, setFieldErrors] = useState<TriageSettingsErrors>({});
   const [saving, setSaving] = useState(false);
@@ -57,6 +58,7 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
     setSettings(s);
     setEnabled(s.enabled);
     setAutoTriage(s.auto_triage_enabled);
+    setNotifyCauses(s.triage_notifications_enabled);
     setDraft(triageDraft(s));
     setFieldErrors({});
   }, []);
@@ -71,6 +73,7 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
     if (!settings) return;
     const { payload, errors } = triageSettingsForSave(triageLocked, {
       auto_triage_enabled: autoTriage,
+      triage_notifications_enabled: notifyCauses,
       triage_delay_seconds: parseSettingInput(draft.triage_delay_seconds),
       triage_cooldown_seconds: parseSettingInput(draft.triage_cooldown_seconds),
       triage_max_per_hour: parseSettingInput(draft.triage_max_per_hour),
@@ -135,12 +138,19 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
           <div className="glass-well space-y-3 p-4">
             <div>
               <h3 className="text-sm font-medium text-slate-200">Automatic alert triage</h3>
-              <p className="mt-1 text-ui text-slate-400">Display only: triage never changes notifications, routing or severity. Waits at least two check intervals.</p>
+              <p className="mt-1 text-ui text-slate-400">Triage never delays, routes, suppresses or re-prioritises a page. Waits at least two check intervals.</p>
             </div>
             <label className="flex items-center gap-3 text-sm text-slate-200">
               <input type="checkbox" checked={autoTriage} onChange={(e) => setAutoTriage(e.target.checked)} disabled={triageLocked} className="h-4 w-4 accent-cyan-500" />
               Triage new alerts automatically
             </label>
+            <div>
+              <label className="flex items-center gap-3 text-sm text-slate-200">
+                <input type="checkbox" checked={notifyCauses} onChange={(e) => setNotifyCauses(e.target.checked)} disabled={triageLocked || !autoTriage} className="h-4 w-4 accent-cyan-500" />
+                Send suspected causes to alert channels
+              </label>
+              <p className="mt-1 pl-7 text-ui text-slate-400">When triage names a cause with medium or high confidence, each channel already paged for the alert gets one follow-up message. Pages are never delayed. PagerDuty and Opsgenie get nothing.</p>
+            </div>
             <div className="grid gap-3 sm:grid-cols-3">
               {TRIAGE_FIELDS.map(({ key, label }) => (
                 <Input

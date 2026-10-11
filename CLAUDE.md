@@ -73,11 +73,17 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   the triage relay and consumer also need `LocationID == ""`. The relay
   (`worker/internal/airca/relay.go`) reads/writes Postgres and publishes
   `AI_TRIAGE`; the triage consumer (`triage.go`) writes only `alert_triage`.
-- **Alert triage is display only.** The alerter, `shared/alertrouting`,
-  notification payloads and `alert_notification_states` never read
-  `alert_triage`, and triage never writes an alert's status or severity. It
-  reaches operators only through the API's `triageview` projection. Never let
-  it feed routing or suppression.
+- **Alert triage never changes paging.** `shared/alertrouting`, suppression,
+  severity and the created/reminder/acknowledged/resolved events never read
+  `alert_triage`, and triage never writes an alert. Its one reader outside the
+  API's `triageview` is the alerter's opt-in `dispatchSuspectedCauses`
+  (`alerter/internal/alerter/suspected_cause.go`): one `suspected_cause`
+  follow-up per already-paged, still-routed channel, claimed on
+  `alert_notification_states.suspected_cause_sent_at`, muted by the same
+  `openAlertDispatchablePredicate` as reminders, on its own time budget
+  ahead of the recovery sweep. Cause predicates (`ai.IsNamedCause`,
+  `ai.IsConfident`, `ai.RCAInsufficientEvidence`) live in `shared/ai`; reuse
+  them. Never let triage gate or alter a page.
 - Durable work goes through JetStream (`shared/queue`). Core NATS
   (`shared/statusupdates`, `statuspage.updates`) is live fan-out only;
   nothing persistent may depend on a core-NATS subscriber.
@@ -300,7 +306,11 @@ or imported groups come back empty. Any other path that creates groups through
 - **Local AI wiring**: `LOCAL_AI_*` reach the api and the DB-connected
   (platform) worker only — never scheduler, alerter, status page or location
   workers — via `monitoring-platform.localAIEnv` in Helm and explicit
-  entries in Compose. The service gets only `LOCAL_AI_TOKEN`. Helm's token is
+  entries in Compose. The exception is the two kill switches: the alerter
+  also gets `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` (Helm
+  `alerterAIEnv`/`aiTriageEnv`, value `localAI.triageEnabled`; Compose shell
+  passthrough), which stop suspected-cause follow-ups
+  (`AlerterConfig.SuspectedCausesDisabled`). The service gets only `LOCAL_AI_TOKEN`. Helm's token is
   canonical key `local_ai_token`; chart-managed and empty, it is derived from
   `secrets.adminJwtSecret` (stable across renders; never `randAlphaNum` or
   `lookup`), and `secret.yaml` fails where it cannot be derived (`externalUrl`,
@@ -334,6 +344,8 @@ or imported groups come back empty. Any other path that creates groups through
   without leader election. The claim
   predicates in `claimNotificationTx` and the in-memory pre-filter
   `shouldSendNotification` encode the same due rules; change them together.
+  The one-shot event columns (`acknowledged_sent_at`, `suspected_cause_sent_at`)
+  never touch `last_event_type`/`last_sent_at`, so they cannot move reminders.
   A lost `resolveAlert` race returns `errAlertAlreadyResolved` and the loser
   skips notifications, so it is not an error to log.
 - **Delivery ordering rests on row locks — keep them.** The async worker
@@ -357,7 +369,10 @@ or imported groups come back empty. Any other path that creates groups through
   doc (`shared/notifications/plugin/doc.go`): the egress-guarded client and
   `PostJSON`/`Post`, `Permanent` errors, `HostMatches` host checks, test
   sends that leave no provider state, the acknowledge capability, and
-  multi-recipient errors.
+  multi-recipient errors. The alerter targets advisory follow-ups
+  (`suspected_cause`) by `CapabilityFollowUp`, never by plugin type: paging
+  plugins (PagerDuty, Opsgenie) leave it off, everything else advertises it.
+  Email follow-ups ignore channel template overrides (`effectiveTemplates`).
 
 ## Status pages
 
@@ -443,6 +458,9 @@ or imported groups come back empty. Any other path that creates groups through
   `?routing=unrouted`, `?sort=name`) are parsed and written only by
   `parseMonitorListParams`/`formatMonitorListParams` in `lib/monitor-list.ts`;
   link to the filtered list rather than adding page-local query handling.
+  Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
+  carry (built in `present.suspectedCauseAction`) is parsed only by
+  `lib/alert-links.ts`.
 - **Alert counts**: "active" = `status=active` only (sidebar fleet health,
   dashboard tile); "open" = active + acknowledged (the alerts page's default
   view). Keep the words matched to what is counted.
