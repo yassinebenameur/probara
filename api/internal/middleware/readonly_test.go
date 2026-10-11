@@ -60,12 +60,20 @@ func TestRequireWriteMatrix(t *testing.T) {
 		{"viewer POST import NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/monitors/import", http.StatusForbidden},
 		{"viewer POST run NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/monitors/x/run", http.StatusForbidden},
 		{"viewer POST alert-channel test NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/alert-channels/x/test", http.StatusForbidden},
+		{"viewer POST incident AI label NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/incidents/x/ai-analysis/label", http.StatusForbidden},
+		{"viewer POST dependency label NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", http.StatusForbidden},
+		{"viewer POST AI label export NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/ai-labels/export", http.StatusForbidden},
+		{"editor POST incident AI label", memberCtx("editor"), http.MethodPost, "/api/v1/incidents/x/ai-analysis/label", http.StatusOK},
+		{"editor POST dependency label", memberCtx("editor"), http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", http.StatusOK},
 
 		{"write key POST", apiKeyCtx("write"), http.MethodPost, "/api/v1/monitors", http.StatusOK},
 		{"read key GET", apiKeyCtx("read"), http.MethodGet, "/api/v1/monitors", http.StatusOK},
 		{"read key POST", apiKeyCtx("read"), http.MethodPost, "/api/v1/monitors", http.StatusForbidden},
 		{"read key POST test allowlisted", apiKeyCtx("read"), http.MethodPost, "/api/v1/monitors/test", http.StatusOK},
 		{"read key DELETE", apiKeyCtx("read"), http.MethodDelete, "/api/v1/monitors/x", http.StatusForbidden},
+		{"read key POST incident AI label", apiKeyCtx("read"), http.MethodPost, "/api/v1/incidents/x/ai-analysis/label", http.StatusForbidden},
+		{"read key POST dependency label", apiKeyCtx("read"), http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", http.StatusForbidden},
+		{"write key POST dependency label", apiKeyCtx("write"), http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", http.StatusOK},
 	}
 
 	handler := RequireWrite(okHandler())
@@ -152,6 +160,20 @@ func TestPostReadAllowlistDrift(t *testing.T) {
 		// parameterized patterns ({id} matches the [^/]+ segment).
 		if !isPostReadPath(route) {
 			t.Errorf("POST route %s looks compute-only but is missing from postReadPaths (or add it to writeGatedExceptions)", route)
+		}
+	}
+}
+
+// TestAILabelRoutesAreWrites pins that label and export POSTs persist state
+// and therefore stay out of the compute-only allowlist.
+func TestAILabelRoutesAreWrites(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label",
+		"/api/v1/monitors/dependency-suggestions/label",
+		"/api/v1/ai-labels/export",
+	} {
+		if isPostReadPath(path) {
+			t.Errorf("%s must not be in postReadPaths", path)
 		}
 	}
 }

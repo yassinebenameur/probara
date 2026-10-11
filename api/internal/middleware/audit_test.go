@@ -20,6 +20,9 @@ func TestDeriveAction(t *testing.T) {
 		{http.MethodPut, "/api/v1/notification-settings", "notification-setting.update"},
 		{http.MethodPatch, "/api/v1/tenant-settings", "tenant-setting.update"},
 		{http.MethodPost, "/api/v1/status-pages", "status-page.create"},
+		{http.MethodPost, "/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label", "incident.label"},
+		{http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", "monitor.label"},
+		{http.MethodPost, "/api/v1/ai-labels/export", "ai-label.export"},
 	}
 
 	for _, tc := range cases {
@@ -36,6 +39,11 @@ func TestDeriveResource(t *testing.T) {
 	}
 	if resourceID != "3f2a6c1e-0000-0000-0000-000000000001" {
 		t.Errorf("resourceID = %q, want first UUID", resourceID)
+	}
+
+	resourceType, resourceID = deriveResource("/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label")
+	if resourceType != "incident" || resourceID != "3f2a6c1e-0000-0000-0000-000000000001" {
+		t.Errorf("incident label route: got (%q, %q)", resourceType, resourceID)
 	}
 
 	resourceType, resourceID = deriveResource("/api/v1/monitors")

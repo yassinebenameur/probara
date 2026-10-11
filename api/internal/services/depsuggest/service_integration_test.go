@@ -2,6 +2,7 @@ package depsuggest
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/google/uuid"
 	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/testutil"
@@ -93,5 +94,49 @@ func TestCoFiringTenantIsolationAndFullGraph(t *testing.T) {
 		if len(m.Groups) != 0 {
 			t.Fatal("foreign group leaked")
 		}
+	}
+}
+
+type offConfig struct{}
+
+func (offConfig) EffectiveConfig(context.Context, uuid.UUID) (ai.Config, bool, error) {
+	return ai.Config{}, false, nil
+}
+
+// PairDecision serves operator labels: it needs no local AI, resolves the pair
+// through the same input as Suggest, and refuses non-candidates.
+func TestPairDecision(t *testing.T) {
+	ctx := context.Background()
+	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, dbc, "pairs")
+	other := testutil.InsertTenant(ctx, t, dbc, "other")
+	a := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "billing-db")
+	b := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "billing-api")
+	group := testutil.InsertGroupMonitor(ctx, t, dbc, tenant, "billing-group")
+	foreign := testutil.InsertHTTPMonitor(ctx, t, dbc, other, "billing-foreign")
+	s := NewService(dbc, offConfig{})
+	if _, err := s.Suggest(ctx, tenant); err != ai.ErrNotConfigured {
+		t.Fatalf("Suggest must still require local AI: %v", err)
+	}
+	d, err := s.PairDecision(ctx, tenant, b, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Task != "dependency" || d.Pair == nil || (d.Pair.A != a.String() && d.Pair.A != b.String()) || d.Pair.A == d.Pair.B {
+		t.Fatalf("%+v", d)
+	}
+	var e ai.PairEvidence
+	if err := json.Unmarshal(d.Evidence, &e); err != nil || !e.NamingSignal || e.CoFires != 0 {
+		t.Fatalf("evidence %s %v", d.Evidence, err)
+	}
+	if _, err := s.PairDecision(ctx, tenant, a, group); err != ErrPairUnavailable {
+		t.Fatalf("group: %v", err)
+	}
+	if _, err := s.PairDecision(ctx, tenant, a, foreign); err != ErrMonitorNotFound {
+		t.Fatalf("foreign: %v", err)
+	}
+	if _, err := s.PairDecision(ctx, tenant, a, a); err != ErrMonitorNotFound {
+		t.Fatalf("self: %v", err)
 	}
 }

@@ -386,6 +386,11 @@ make db-restore`,
                 'Monitor state intervals (the timeline behind time-based availability and [SLA reports](/docs/slas/)) are not pruned by time; they are removed only with a monitor’s history or when a deleted monitor is purged. Issued SLA reports are kept until their SLA is deleted and survive monitor purges.',
             },
             {
+              term: 'AI training labels',
+              description:
+                'Operator labels on AI analyses and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
+            },
+            {
               term: 'Audit retention',
               description:
                 '`AUDIT_RETENTION_DAYS` is a separate compliance control, defaults to 365 days, and uses `0` to retain forever.',

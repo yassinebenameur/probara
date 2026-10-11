@@ -90,4 +90,8 @@ type AnalysisResult struct {
 	RecommendedActions  []string        `json:"recommended_actions"`
 	Confidence          string          `json:"confidence"`
 	Evidence            json.RawMessage `json:"evidence,omitempty"`
+	// Snapshot is the exact model exchange behind this result, persisted to
+	// incident_ai_analyses.decision_snapshot for operator labels. nil when no
+	// decision was sent.
+	Snapshot *DecisionSnapshot `json:"-"`
 }

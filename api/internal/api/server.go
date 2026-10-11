@@ -13,6 +13,7 @@ import (
 	callout "github.com/synadia-io/callout.go"
 
 	agenthandlers "github.com/yassinebenameur/probara/api/internal/handlers/agent"
+	ailabelshandlers "github.com/yassinebenameur/probara/api/internal/handlers/ailabels"
 	aisettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/aisettings"
 	alertchannelhandlers "github.com/yassinebenameur/probara/api/internal/handlers/alertchannels"
 	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
@@ -40,6 +41,7 @@ import (
 	adminauthservice "github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
 	agentservice "github.com/yassinebenameur/probara/api/internal/services/agent"
+	ailabelsservice "github.com/yassinebenameur/probara/api/internal/services/ailabels"
 	aisettingsservice "github.com/yassinebenameur/probara/api/internal/services/aisettings"
 	alertchannelservice "github.com/yassinebenameur/probara/api/internal/services/alertchannels"
 	alertservice "github.com/yassinebenameur/probara/api/internal/services/alerts"
@@ -251,7 +253,11 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			aiSettingsSvc := aisettingsservice.NewService(dbClient, cfg.LocalAI)
 
 			// AI dependency suggestions (co-firing alerts -> proposed edges)
-			depSuggestHdlrs := depsuggesthandlers.NewHandlers(depsuggestservice.NewService(dbClient, aiSettingsSvc), log)
+			depSuggestSvc := depsuggestservice.NewService(dbClient, aiSettingsSvc)
+			depSuggestHdlrs := depsuggesthandlers.NewHandlers(depSuggestSvc, log)
+			// Operator verdicts on AI output (writes: NOT in postReadPaths) and
+			// their training export. No model call, so local AI may be off.
+			aiLabelHdlrs := ailabelshandlers.NewHandlers(ailabelsservice.NewService(dbClient, depSuggestSvc), log)
 			aiSettingsHdlrs := aisettingshandlers.NewHandlers(aiSettingsSvc, log)
 			r.Route("/ai-settings", func(r chi.Router) {
 				r.Get("/", aiSettingsHdlrs.GetSettings)
@@ -346,6 +352,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				// Dependency graph (must be before /{id} to avoid conflicts)
 				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
 				r.Post("/dependency-suggestions", depSuggestHdlrs.Suggest)
+				r.Post("/dependency-suggestions/label", aiLabelHdlrs.LabelDependencySuggestion)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
 				r.Get("/{id}/analytics", monitorHandlers.GetMonitorAnalytics)
 				r.Get("/{id}/results", monitorHandlers.GetMonitorResults)
@@ -426,6 +433,13 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Delete("/{id}/status-pages/{statusPageId}", incidentHandlers.UnpublishIncidentFromStatusPage)
 				r.Post("/{id}/ai-analysis", incidentHandlers.RequestIncidentAIAnalysis)
 				r.Get("/{id}/ai-analysis", incidentHandlers.GetIncidentAIAnalysis)
+				r.Post("/{id}/ai-analysis/label", aiLabelHdlrs.LabelIncidentAnalysis)
+			})
+
+			// AI label training export (tenant admins and superadmins only).
+			r.Route("/ai-labels", func(r chi.Router) {
+				r.Use(apimiddleware.RequireTenantAdmin)
+				r.Post("/export", aiLabelHdlrs.Export)
 			})
 
 			// Alert policies — retired; all endpoints return 410 Gone.

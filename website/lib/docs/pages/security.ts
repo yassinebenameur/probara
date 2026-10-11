@@ -371,7 +371,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           tone: 'warning',
           title: 'Local AI evidence boundary',
           text:
-            'AI calls use an installation-owned authenticated internal CPU service. Workspace users cannot supply inference destinations or credentials. The service needs no database or broker credentials. Evidence excludes configuration secrets, request/response bodies, screenshots and arbitrary text.',
+            'AI calls use an installation-owned authenticated internal CPU service. Workspace users cannot supply inference destinations or credentials. The service needs no database or broker credentials. Evidence excludes configuration secrets, request/response bodies, screenshots and arbitrary text. [AI training labels](#notifications-integrations-ai) store and export that same evidence and nothing more.',
         },
         {
           type: 'paragraph',
@@ -468,9 +468,19 @@ go run ./cmd/admin/encrypt_existing_channels`,
                 '`SMTP_USE_TLS=true` performs direct implicit TLS. It does not issue STARTTLS, so verify protocol and port with the provider.',
             },
             {
-              term: 'Tenant AI key',
+              term: 'Local AI token',
               description:
-                'Encrypted at rest when platform secret encryption is configured and never returned to clients; only a “has key” indicator is exposed.',
+                '`LOCAL_AI_TOKEN` is installation-owned and shared only by the API, platform worker and CPU service. Workspaces cannot set an inference destination or credential.',
+            },
+            {
+              term: 'AI training labels',
+              description:
+                'A label is copied server-side from the decision snapshot the worker stored when the analysis completed (dependency pairs: evidence recomputed at labelling time); client-supplied evidence is rejected. It holds the evidence counters and booleans, catalogue keys, opaque decision IDs, the monitor and incident IDs the UI names decisions with, and the labelling user ID. It never holds names or free text. Labels are kept until the workspace is deleted: `data_retention_days` does not prune them, and they survive monitor purges and incident deletion.',
+            },
+            {
+              term: 'Label export',
+              description:
+                'Export rows carry evidence, catalogue answers and provenance, and never monitor, incident, analysis, decision, user or tenant identifiers or names. Row and group IDs are HMACs keyed by a per-workspace random salt that is never exported, so they stay stable across exports without revealing the subject. Treat the files as workspace operational data.',
             },
           ],
         },
@@ -482,7 +492,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             'Restrict webhook destinations with egress policy because the worker monitor CIDR guard does not cover the notification plugin.',
             'Use a dedicated SMTP account with send-only permissions and a controlled From domain.',
             'Review alert and RCA payloads before sending them to third-party notification providers; error bodies, URLs, headers, and incident context can be sensitive.',
-            'Allowlist AI provider origins and use a model/account with retention and data-processing terms appropriate for your environment.',
+            'Keep the local AI service on an internal network reachable only from the API and platform worker, and share label export files only with the people who retrain the model.',
             'Keep asynchronous dispatch stream/consumer permissions separate from check execution permissions.',
           ],
         },

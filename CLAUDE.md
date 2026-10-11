@@ -149,6 +149,18 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (`MonitorEvidence`) plus opaque IDs — never names, URLs, error text, bodies
   or monitor config. Model answers only count when `Supports` (and the
   dependency gates in `dependencies.go`) agree with the measured evidence.
+- **AI label export format**: `shared/ai/labelexport.go` (`WriteLabelExport`,
+  `StateText`) is the Go twin of ai-service `probara_ai/contract.py`
+  (`training_row`/`state_text`/`validate_evidence`), pinned by
+  `shared/ai/testdata/label-export-v1.jsonl` (`TestLabelExportFixture`,
+  regenerate with `-update`); the ai-service training reader must test the
+  same file, so change both sides together. Labels copy evidence server-side,
+  never from the client: `incident_ai_analyses.decision_snapshot` is written
+  by the worker's `markReady` and read by `api/internal/services/ailabels`
+  (change the `DecisionSnapshot` shape on both together); pairs come from
+  `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
+  cascades only on tenant delete. The label routes are writes (never in
+  `postReadPaths`); export is `RequireTenantAdmin`.
 
 ## Monitor import
 

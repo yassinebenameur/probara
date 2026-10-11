@@ -1292,6 +1292,73 @@ export interface IncidentAIAnalysis {
   requested_by?: string;
   created_at: string;
   completed_at?: string;
+  /** Present only for ready analyses that recorded their model exchange. */
+  label_context?: AILabelContext | null;
+}
+
+// --- AI labels (operator-confirmed answers for retraining the local model) ---
+
+export type AILabelVerdict = 'confirmed' | 'corrected' | 'rejected';
+export type AILabelAnswerSource = 'operator' | 'confirmed' | 'propagated';
+export type AILabelSubjectType = 'incident_analysis' | 'dependency_pair';
+
+export interface AILabel {
+  subject_type: AILabelSubjectType;
+  subject_id?: string;
+  verdict: AILabelVerdict;
+  incident_label?: string;
+  answers: Record<string, { label: string; source: AILabelAnswerSource }>;
+  catalogue_version: string;
+  model_version?: string;
+  labeled_by?: string | null;
+  labeled_at: string;
+}
+
+export interface AILabelChoice { key: string; title: string }
+
+export interface AILabelDecision {
+  id: string;
+  monitor_id?: string | null;
+  monitor_name?: string | null;
+  predicted: string;
+}
+
+export interface AILabelContext {
+  catalogue_version: string;
+  predicted: string;
+  choices: AILabelChoice[];
+  decisions: AILabelDecision[];
+  label: AILabel | null;
+}
+
+export interface IncidentAILabelRequest {
+  analysis_id: string;
+  verdict: 'confirmed' | 'corrected';
+  incident_label?: string;
+  answers?: Record<string, string>;
+}
+
+export type DependencyLabelCorrection = 'reversed' | 'shared_upstream' | 'no_dependency' | 'insufficient_evidence';
+
+export interface DependencyLabelRequest {
+  monitor_id: string;
+  depends_on_id: string;
+  verdict: 'confirmed' | 'rejected';
+  corrected?: DependencyLabelCorrection;
+}
+
+export interface AILabelExportFilter {
+  since?: string;
+  until?: string;
+  subject_types?: AILabelSubjectType[];
+}
+
+// rows/skipped are null when the export headers are missing.
+export interface AILabelExportResult {
+  blob: Blob;
+  filename: string;
+  rows: number | null;
+  skipped: number | null;
 }
 
 export interface DependencySuggestion {

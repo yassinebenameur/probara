@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/ailabels"
 )
 
 // RequestAIAnalysis verifies the incident belongs to the tenant and inserts a
@@ -91,7 +92,8 @@ func (s *Service) loadLatestAIAnalysis(ctx context.Context, tenantID, incidentID
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, incident_id, status, model, summary, probable_root_cause,
 		       contributing_factors, recommended_actions, confidence, evidence,
-		       error_message, requested_by, created_at, completed_at, metadata
+		       error_message, requested_by, created_at, completed_at, metadata,
+		       decision_snapshot
 		FROM incident_ai_analyses
 		WHERE incident_id = $1 AND tenant_id = $2
 		ORDER BY created_at DESC
@@ -103,6 +105,13 @@ func (s *Service) loadLatestAIAnalysis(ctx context.Context, tenantID, incidentID
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load ai analysis: %w", err)
+	}
+	if analysis.Status == models.IncidentAIAnalysisStatusReady && len(analysis.DecisionSnapshot) > 0 {
+		labelContext, err := ailabels.LoadIncidentContext(ctx, s.db, tenantID, analysis.ID, analysis.DecisionSnapshot)
+		if err != nil {
+			return nil, fmt.Errorf("load ai label context: %w", err)
+		}
+		analysis.LabelContext = labelContext
 	}
 	return analysis, nil
 }
@@ -126,16 +135,21 @@ func scanAIAnalysis(row rowScanner) (*models.IncidentAIAnalysis, error) {
 		requestedBy         uuid.NullUUID
 		completedAt         sql.NullTime
 		metadata            []byte
+		decisionSnapshot    []byte
 	)
 	if err := row.Scan(
 		&a.ID, &a.TenantID, &a.IncidentID, &status, &model, &summary, &probableRootCause,
 		&contributingFactors, &recommendedActions, &confidence, &evidence,
 		&errorMessage, &requestedBy, &a.CreatedAt, &completedAt, &metadata,
+		&decisionSnapshot,
 	); err != nil {
 		return nil, err
 	}
 
 	a.Metadata = metadata
+	if len(decisionSnapshot) > 0 {
+		a.DecisionSnapshot = json.RawMessage(decisionSnapshot)
+	}
 	a.Status = models.IncidentAIAnalysisStatus(status)
 	a.Model = model.String
 	a.Summary = summary.String

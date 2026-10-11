@@ -119,7 +119,42 @@ func naming(a, b string) bool {
 	}
 	return false
 }
+
+// maxCandidatePairs is the per-request decision budget of SuggestDependencies.
+const maxCandidatePairs = 50
+
+// CandidatePairs returns the pairs the advisor sends, best evidence first,
+// capped at the decision budget. Pairs are oriented a < b by ref.
 func CandidatePairs(in DependencyInput) []candidate {
+	out := allCandidatePairs(in)
+	if len(out) > maxCandidatePairs {
+		out = out[:maxCandidatePairs]
+	}
+	return out
+}
+
+// PairDecisionFor returns the evidence the advisor would send for the pair
+// {refX, refY}, oriented as CandidatePairs orients it (a < b by ref), without
+// the 50-pair budget. ok=false when the pair is not a candidate.
+func PairDecisionFor(in DependencyInput, refX, refY string) (aRef, bRef string, e PairEvidence, ok bool) {
+	if refX == refY {
+		return "", "", PairEvidence{}, false
+	}
+	if refX > refY {
+		refX, refY = refY, refX
+	}
+	for _, c := range allCandidatePairs(in) {
+		if c.a == refX && c.b == refY {
+			return c.a, c.b, c.e, true
+		}
+	}
+	return "", "", PairEvidence{}, false
+}
+
+// allCandidatePairs is CandidatePairs without the budget. Operator labels
+// (PairDecisionFor) resolve through it so a pair ranked past the budget gets
+// the same evidence the advisor would compute for it.
+func allCandidatePairs(in DependencyInput) []candidate {
 	refs := map[string]DependencyMonitorRef{}
 	for _, m := range in.Monitors {
 		refs[m.Ref] = m
@@ -209,9 +244,6 @@ func CandidatePairs(in DependencyInput) []candidate {
 		}
 		return a.b < b.b
 	})
-	if len(out) > 50 {
-		out = out[:50]
-	}
 	return out
 }
 func WouldCycle(edges []DependencyEdgeRef, monitor, upstream string) bool {

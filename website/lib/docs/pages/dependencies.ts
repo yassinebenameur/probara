@@ -124,6 +124,11 @@ export const DEPENDENCIES_PAGE: DocPage = {
             "Suggestions include measured counts, median timing, corroborating signals, calibrated score, model identity, evidence references and abstained-pair context. Duplicate, existing, self and cycle-producing proposals are rejected, including paths through monitors outside the candidate set. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it.",
         },
         {
+          type: "paragraph",
+          text:
+            "Each operator decision on a suggestion is recorded as a training label for the local model. **Accept and add dependency** saves the edge first, then records a confirmed label; if the edge cannot be saved, nothing is recorded. **Dismiss** records a rejection as not a dependency, and the row menu offers the reasons wrong direction, shared upstream explains both, and not enough evidence. The server recomputes the pair's evidence when the label is saved, so it is what the advisor would send at that moment rather than anything from the browser; a pair that is no longer a candidate cannot be labelled. Viewers cannot accept or dismiss. See [AI label endpoints](/docs/api/#ai-labels).",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Correlation is not topology",

@@ -152,6 +152,11 @@ type IncidentAIAnalysis struct {
 	RequestedBy         *uuid.UUID               `json:"requested_by,omitempty"`
 	CreatedAt           time.Time                `json:"created_at"`
 	CompletedAt         *time.Time               `json:"completed_at,omitempty"`
+	// DecisionSnapshot is the stored model exchange (never serialized).
+	DecisionSnapshot json.RawMessage `json:"-"`
+	// LabelContext drives the operator label control; omitted when the
+	// analysis cannot be labelled (not ready, or no decision snapshot).
+	LabelContext *AILabelContext `json:"label_context,omitempty"`
 }
 
 // IncidentListResponse represents a paginated list of incidents.

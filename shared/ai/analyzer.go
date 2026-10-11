@@ -12,6 +12,7 @@ func (a *localAnalyzer) Analyze(ctx context.Context, in AnalysisInput) (Analysis
 	// Model requests contain only measured summaries and opaque correlation IDs.
 	// Monitor names and incident free text stay local to the process.
 	decisions := []Decision{}
+	snapshot := DecisionSnapshot{V: DecisionSnapshotVersion, Catalogue: CatalogueVersion}
 	monitors := []MonitorContext{}
 	incomplete := append([]string{}, in.Incomplete...)
 	for _, m := range in.Monitors {
@@ -33,7 +34,11 @@ func (a *localAnalyzer) Analyze(ctx context.Context, in AnalysisInput) (Analysis
 			incomplete = append(incomplete, m.Ref+": missing host metrics")
 		}
 		monitors = append(monitors, m)
-		decisions = append(decisions, Decision{ID: uuid.NewString(), Task: "rca", Evidence: e, Choices: choices("rca")})
+		d := Decision{ID: uuid.NewString(), Task: "rca", Evidence: e, Choices: choices("rca")}
+		decisions = append(decisions, d)
+		// The snapshot records the same id, evidence and choices value that
+		// go on the wire, so operator labels replay exactly what was sent.
+		snapshot.Decisions = append(snapshot.Decisions, SnapshotDecision{ID: d.ID, Task: d.Task, MonitorRef: m.Ref, Evidence: mustMarshalEvidence(e), Choices: d.Choices})
 	}
 	result := AnalysisResult{Summary: "Insufficient evidence to select a supported cause.", ProbableRootCause: "Insufficient evidence", ContributingFactors: []string{}, RecommendedActions: catalogue.RCA["insufficient_evidence"].Actions, Confidence: "low"}
 	if len(decisions) == 0 {
@@ -60,11 +65,14 @@ func (a *localAnalyzer) Analyze(ctx context.Context, in AnalysisInput) (Analysis
 	scores := map[string]float64{}
 	for i, r := range out.Results {
 		h, score := best(r)
+		snapshot.Decisions[i].Probabilities = r.Probabilities
+		snapshot.Decisions[i].Predicted = h
 		e := monitors[i].Summary
 		refs = append(refs, EvidenceFacts(monitors[i].Ref, e)...)
 		if score < out.Thresholds["rca"] || !e.Supports(h) {
 			h = "insufficient_evidence"
 		}
+		snapshot.Decisions[i].Final = h
 		votes[h]++
 		scores[h] += score
 		if h != "insufficient_evidence" {
@@ -102,5 +110,10 @@ func (a *localAnalyzer) Analyze(ctx context.Context, in AnalysisInput) (Analysis
 		return AnalysisResult{}, err
 	}
 	result.Evidence = b
+	snapshot.Model = out.Model
+	snapshot.Thresholds = out.Thresholds
+	snapshot.Hypothesis = h
+	snapshot.Score = score
+	result.Snapshot = &snapshot
 	return result, nil
 }

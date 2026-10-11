@@ -94,6 +94,11 @@ export const ADMINISTRATION_PAGE: DocPage = {
             "Viewer and read-key compute-only POST routes include monitor test, import preview, dependency suggestions, mesh probe, and AI connection test. Persisted operations such as `Run now`, channel test, acknowledgement, or configuration updates require [write authorization](/docs/security/#roles-scopes-tenancy).",
         },
         {
+          type: "paragraph",
+          text:
+            "AI training labels are writes, not diagnostics: confirming or correcting an [incident analysis](/docs/alerting/#ai-analysis) and accepting or dismissing a [dependency suggestion](/docs/dependencies/#suggestions) need an editor, admin, superadmin, or write API key, and viewers and read keys get HTTP 403. Only tenant admins and superadmins, signed in, can [export labels](#ai-settings); every API key is refused, write scope included.",
+        },
+        {
           type: "callout",
           tone: "warning",
           title: "Write scope is not tenant admin",
@@ -318,6 +323,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           ["`message`", "One of four fixed readiness strings (disabled, not configured correctly, unreachable, not ready); details are only in the API logs"],
         ] },
         { type: "paragraph", text: "Settings → AI controls the workspace switch and tests the installation-owned CPU service. Absent workspace settings default enabled; existing enable and disable switches are preserved. Settings updates accept only `enabled`; legacy provider fields return a validation error. The connection test accepts an empty object, cannot accept destinations or credentials, always probes afresh and refreshes the readiness cache of the API replica that serves it." },
+        { type: "paragraph", text: "Tenant admins also see **Training labels** under Settings → AI. **Export labels** downloads every label in the workspace as JSONL training rows (`POST /api/v1/ai-labels/export`, which also accepts a `since`/`until` window and subject types). A row carries evidence counters, catalogue answers and provenance, with no monitor names or IDs (see [AI training labels](/docs/security/#notifications-integrations-ai)). Labelling and export never call the model, so they work while local AI is disabled." },
         { type: "paragraph", text: "Model decisions are advisory and explanations cite bounded monitoring evidence. No configuration secrets, bodies, screenshots or arbitrary error text are sent to the model. Suggested edges and troubleshooting actions require operator review. Controlled scenarios do not establish real-world accuracy." },
       ],
     },
@@ -340,6 +346,11 @@ export const ADMINISTRATION_PAGE: DocPage = {
             ["`from` / `to`", "RFC 3339 time bounds"],
             ["`page` / `page_size`", "Paginated results"],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "AI labels record as `incident.label` (resource `incident/{id}`), `monitor.label` (dependency suggestions), and `ai-label.export`. A viewer's refused label attempt is recorded as `denied`.",
         },
         {
           type: "paragraph",

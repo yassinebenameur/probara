@@ -1,11 +1,13 @@
 // Package depsuggest produces AI-suggested monitor dependency edges from
-// co-firing alert history. It's a live, read-only advisory: nothing is
-// persisted until the user accepts a suggestion (which goes through the normal
-// add-dependency path).
+// co-firing alert history. It's a live advisory: suggestions are not
+// persisted (accepting one goes through the normal add-dependency path);
+// operator verdicts are stored as AI labels (ailabels), whose evidence
+// PairDecision recomputes here.
 package depsuggest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -86,85 +88,14 @@ func (s *Service) Suggest(ctx context.Context, tenantID uuid.UUID) (*Result, err
 		return nil, ai.ErrNotConfigured
 	}
 
-	pairs, err := s.coFiringPairs(ctx, tenantID)
+	set, err := s.buildInput(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Monitors that co-fired are the highest-signal candidates; load them first,
-	// then fill with the rest (so name/tag/group inference works beyond
-	// co-firing), capped to keep candidate collection bounded.
-	involvedOrder := make([]uuid.UUID, 0, len(pairs)*2)
-	involved := map[uuid.UUID]bool{}
-	for _, p := range pairs {
-		for _, id := range [2]uuid.UUID{p.earlier, p.later} {
-			if !involved[id] {
-				involved[id] = true
-				involvedOrder = append(involvedOrder, id)
-			}
-		}
+	if len(set.input.Monitors) == 0 {
+		return &Result{Suggestions: []Suggestion{}, Analyzed: set.coFiring}, nil
 	}
-	monitors, err := s.loadMonitors(ctx, tenantID, involvedOrder)
-	if err != nil {
-		return nil, err
-	}
-	if len(monitors) == 0 {
-		return &Result{Suggestions: []Suggestion{}, Analyzed: len(pairs)}, nil
-	}
-
-	idByRef := map[string]uuid.UUID{}
-	refByID := map[uuid.UUID]string{}
-	names := map[uuid.UUID]string{}
-	ids := make([]uuid.UUID, 0, len(monitors))
-	for i, m := range monitors {
-		ref := "m" + strconv.Itoa(i)
-		refByID[m.id] = ref
-		idByRef[ref] = m.id
-		names[m.id] = m.name
-		ids = append(ids, m.id)
-	}
-
-	groups, err := s.loadGroups(ctx, tenantID, ids)
-	if err != nil {
-		return nil, err
-	}
-	existing, err := s.existingEdges(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	refFor := func(id uuid.UUID) string {
-		if ref, ok := refByID[id]; ok {
-			return ref
-		}
-		return id.String()
-	}
-	input := ai.DependencyInput{}
-	for _, m := range monitors {
-		input.Monitors = append(input.Monitors, ai.DependencyMonitorRef{
-			Ref:    refByID[m.id],
-			Name:   m.name,
-			Type:   m.typ,
-			Tags:   m.tags,
-			Groups: groups[m.id],
-		})
-	}
-	for _, e := range existing {
-		input.ExistingDependencies = append(input.ExistingDependencies, ai.DependencyEdgeRef{
-			Monitor:   refFor(e.monitor),
-			DependsOn: refFor(e.dependsOn),
-		})
-	}
-	for _, p := range pairs {
-		// Co-firing monitors are always in the set (loaded first), so refs exist.
-		input.CoFiringAlerts = append(input.CoFiringAlerts, ai.CoFiringPair{
-			Earlier:           refByID[p.earlier],
-			Later:             refByID[p.later],
-			TimesCoFired:      p.count,
-			MedianLeadSeconds: p.lead,
-			ReverseCoFires:    p.reverse,
-		})
-	}
+	input, idByRef, names, existing := set.input, set.idByRef, set.names, set.existing
 
 	advisor, err := s.advisor(cfg)
 	if err != nil {
@@ -205,6 +136,139 @@ func (s *Service) Suggest(ctx context.Context, tenantID uuid.UUID) (*Result, err
 		})
 	}
 	return result, nil
+}
+
+// inputSet is the advisor input for a tenant plus the maps that resolve its
+// opaque refs back to monitors.
+type inputSet struct {
+	input    ai.DependencyInput
+	idByRef  map[string]uuid.UUID
+	refByID  map[uuid.UUID]string
+	names    map[uuid.UUID]string
+	existing []edge
+	coFiring int // co-firing pairs found, before ref resolution
+}
+
+// buildInput is the single builder of the advisor input. Suggest and
+// PairDecision both go through it, so a label's evidence is exactly what
+// Suggest would send for that pair at the same moment.
+func (s *Service) buildInput(ctx context.Context, tenantID uuid.UUID) (*inputSet, error) {
+	pairs, err := s.coFiringPairs(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	set := &inputSet{idByRef: map[string]uuid.UUID{}, refByID: map[uuid.UUID]string{}, names: map[uuid.UUID]string{}, coFiring: len(pairs)}
+
+	// Monitors that co-fired are the highest-signal candidates; load them first,
+	// then fill with the rest (so name/tag/group inference works beyond
+	// co-firing), capped to keep candidate collection bounded.
+	involvedOrder := make([]uuid.UUID, 0, len(pairs)*2)
+	involved := map[uuid.UUID]bool{}
+	for _, p := range pairs {
+		for _, id := range [2]uuid.UUID{p.earlier, p.later} {
+			if !involved[id] {
+				involved[id] = true
+				involvedOrder = append(involvedOrder, id)
+			}
+		}
+	}
+	monitors, err := s.loadMonitors(ctx, tenantID, involvedOrder)
+	if err != nil {
+		return nil, err
+	}
+	if len(monitors) == 0 {
+		return set, nil
+	}
+
+	ids := make([]uuid.UUID, 0, len(monitors))
+	for i, m := range monitors {
+		ref := "m" + strconv.Itoa(i)
+		set.refByID[m.id] = ref
+		set.idByRef[ref] = m.id
+		set.names[m.id] = m.name
+		ids = append(ids, m.id)
+	}
+
+	groups, err := s.loadGroups(ctx, tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	set.existing, err = s.existingEdges(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	refFor := func(id uuid.UUID) string {
+		if ref, ok := set.refByID[id]; ok {
+			return ref
+		}
+		return id.String()
+	}
+	for _, m := range monitors {
+		set.input.Monitors = append(set.input.Monitors, ai.DependencyMonitorRef{
+			Ref:    set.refByID[m.id],
+			Name:   m.name,
+			Type:   m.typ,
+			Tags:   m.tags,
+			Groups: groups[m.id],
+		})
+	}
+	for _, e := range set.existing {
+		set.input.ExistingDependencies = append(set.input.ExistingDependencies, ai.DependencyEdgeRef{
+			Monitor:   refFor(e.monitor),
+			DependsOn: refFor(e.dependsOn),
+		})
+	}
+	for _, p := range pairs {
+		// Co-firing monitors are loaded first; a disabled or capped-out one
+		// resolves to "" and ai.CandidatePairs drops the pair.
+		set.input.CoFiringAlerts = append(set.input.CoFiringAlerts, ai.CoFiringPair{
+			Earlier:           set.refByID[p.earlier],
+			Later:             set.refByID[p.later],
+			TimesCoFired:      p.count,
+			MedianLeadSeconds: p.lead,
+			ReverseCoFires:    p.reverse,
+		})
+	}
+	return set, nil
+}
+
+var (
+	// ErrMonitorNotFound: a monitor of the pair is not a live monitor of the tenant.
+	ErrMonitorNotFound = errors.New("monitor not found")
+	// ErrPairUnavailable: the pair is not currently a dependency candidate
+	// (disabled monitor, group, outside the monitor cap, or no signal).
+	ErrPairUnavailable = errors.New("pair evidence unavailable")
+)
+
+// PairDecision recomputes, through the same input builder as Suggest, the
+// pair evidence for (monitorID, dependsOnID). Does not call the model and does
+// not require local AI to be enabled. The decision is oriented like the
+// advisor's (a < b by ref), and its Pair carries the monitor UUIDs.
+func (s *Service) PairDecision(ctx context.Context, tenantID, monitorID, dependsOnID uuid.UUID) (ai.SnapshotDecision, error) {
+	var live int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM monitors WHERE tenant_id=$1 AND deleted_at IS NULL AND id=ANY($2)`,
+		tenantID, pq.Array([]uuid.UUID{monitorID, dependsOnID})).Scan(&live); err != nil {
+		return ai.SnapshotDecision{}, fmt.Errorf("pair monitors query: %w", err)
+	}
+	if monitorID == dependsOnID || live != 2 {
+		return ai.SnapshotDecision{}, ErrMonitorNotFound
+	}
+	set, err := s.buildInput(ctx, tenantID)
+	if err != nil {
+		return ai.SnapshotDecision{}, err
+	}
+	refX, okX := set.refByID[monitorID]
+	refY, okY := set.refByID[dependsOnID]
+	if !okX || !okY {
+		return ai.SnapshotDecision{}, ErrPairUnavailable
+	}
+	aRef, bRef, e, ok := ai.PairDecisionFor(set.input, refX, refY)
+	if !ok {
+		return ai.SnapshotDecision{}, ErrPairUnavailable
+	}
+	return ai.PairSnapshotDecision(set.idByRef[aRef].String(), set.idByRef[bRef].String(), e), nil
 }
 
 func (s *Service) coFiringPairs(ctx context.Context, tenantID uuid.UUID) ([]coFire, error) {

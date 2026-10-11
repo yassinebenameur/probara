@@ -4,7 +4,7 @@ import { createContext, KeyboardEvent, ReactNode, useContext, useEffect, useLayo
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import { MoreVertical } from 'lucide-react';
-import { ICON_BUTTON_CLASS } from './IconButton';
+import { ICON_BUTTON_CLASS, ICON_BUTTON_SM_CLASS } from './IconButton';
 
 const CloseContext = createContext<() => void>(() => {});
 
@@ -23,7 +23,19 @@ const ITEM_SELECTOR = 'button:not([disabled]), a[href]';
 // through the items; Escape and Tab close it and return focus to the ⋮
 // trigger. The portal puts the menu at the end of <body>, so without this
 // the items would be unreachable by Tab.
-export default function RowMenu({ label, children }: { label: string; children: ReactNode }) {
+export default function RowMenu({
+  label,
+  children,
+  disabled = false,
+  size = 'md',
+}: {
+  label: string;
+  children: ReactNode;
+  /** Disables the ⋮ trigger, matching the row's IconButtons. */
+  disabled?: boolean;
+  /** Matches IconButton `size` so the trigger lines up with them. */
+  size?: 'sm' | 'md';
+}) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -105,7 +117,8 @@ export default function RowMenu({ label, children }: { label: string; children: 
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={Boolean(anchor)}
-        className={ICON_BUTTON_CLASS}
+        disabled={disabled}
+        className={`${ICON_BUTTON_CLASS} ${size === 'sm' ? ICON_BUTTON_SM_CLASS : ''}`}
       >
         <MoreVertical strokeWidth={1.75} />
       </button>

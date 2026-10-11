@@ -1,5 +1,6 @@
 import { getApiKey, clearApiKey } from './auth';
 import { slaReportQueryString } from './sla';
+import { parseExportCount } from './ai-labels';
 import {
   clearSelectedTenantId,
   emitTenantChange,
@@ -70,6 +71,11 @@ import type {
   AITestRequest,
   AITestResult,
   IncidentAIAnalysis,
+  IncidentAILabelRequest,
+  AILabel,
+  AILabelExportFilter,
+  AILabelExportResult,
+  DependencyLabelRequest,
   IncidentDetail,
   CreateIncidentRequest,
   UpdateIncidentRequest,
@@ -425,6 +431,12 @@ export async function suggestDependencies(): Promise<DependencySuggestionResult>
   return apiRequest<DependencySuggestionResult>('POST', '/v1/monitors/dependency-suggestions');
 }
 
+// Records the operator's verdict on a dependency suggestion as a training
+// label. The server recomputes the pair evidence; only the verdict is sent.
+export async function labelDependencySuggestion(req: DependencyLabelRequest): Promise<AILabel> {
+  return apiRequest<AILabel>('POST', '/v1/monitors/dependency-suggestions/label', req);
+}
+
 export async function removeMonitorDependency(id: string, dependsOnId: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/monitors/${id}/dependencies/${dependsOnId}`);
 }
@@ -460,6 +472,26 @@ export async function requestIncidentAIAnalysis(id: string): Promise<IncidentAIA
 // getIncidentAIAnalysis returns the latest analysis, or null when none exists.
 export async function getIncidentAIAnalysis(id: string): Promise<IncidentAIAnalysis | null> {
   return apiRequest<IncidentAIAnalysis | null>('GET', `/v1/incidents/${id}/ai-analysis`);
+}
+
+// Confirms or corrects a ready analysis as a training label (a write: viewers
+// and read-scope keys get 403). 409 when the analysis is not labelable.
+export async function labelIncidentAIAnalysis(incidentId: string, req: IncidentAILabelRequest): Promise<AILabel> {
+  return apiRequest<AILabel>('POST', `/v1/incidents/${incidentId}/ai-analysis/label`, req);
+}
+
+// Downloads the workspace's labels as JSONL training rows (tenant admins only).
+// rows/skipped come from X-Probara-Export-Rows/-Skipped (null when absent):
+// an empty export is a 200 with a 0-byte body, so the counts are the only
+// way the UI can tell "nothing to export" from a real file.
+export async function exportAILabels(filter: AILabelExportFilter = {}): Promise<AILabelExportResult> {
+  const { blob, filename, headers } = await apiDownload('/v1/ai-labels/export', 'probara-ai-labels.jsonl', { method: 'POST', body: filter });
+  return {
+    blob,
+    filename,
+    rows: parseExportCount(headers.get('x-probara-export-rows')),
+    skipped: parseExportCount(headers.get('x-probara-export-skipped')),
+  };
 }
 
 // --- AI settings (per-tenant LLM config) ---
@@ -1246,16 +1278,21 @@ export async function exportMonitors(): Promise<{ blob: Blob; filename: string }
   return apiDownload('/v1/monitors/export', 'monitors-export.yaml');
 }
 
-// GETs a file attachment with the same auth, tenant and refresh handling as
+// Fetches a file attachment (GET by default; POST with a JSON body for exports
+// that take filters) with the same auth, tenant and refresh handling as
 // apiRequest, and returns it with the server's Content-Disposition filename.
-async function apiDownload(path: string, fallbackFilename: string): Promise<{ blob: Blob; filename: string }> {
+async function apiDownload(
+  path: string,
+  fallbackFilename: string,
+  init: { method?: 'GET' | 'POST'; body?: unknown } = {}
+): Promise<{ blob: Blob; filename: string; headers: Headers }> {
   const apiKey = getApiKey();
   if (!apiKey) {
     await ensureTenantSelected();
   }
 
   const makeRequest = async (): Promise<Response> => {
-    const headers: HeadersInit = {};
+    const headers: Record<string, string> = {};
 
     if (apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
@@ -1266,10 +1303,16 @@ async function apiDownload(path: string, fallbackFilename: string): Promise<{ bl
       }
     }
 
+    const hasBody = init.body !== undefined;
+    if (hasBody) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     return fetch(getApiUrl(path), {
-      method: 'GET',
+      method: init.method ?? 'GET',
       headers,
       credentials: 'include',
+      body: hasBody ? JSON.stringify(init.body) : undefined,
     });
   };
 
@@ -1312,6 +1355,7 @@ async function apiDownload(path: string, fallbackFilename: string): Promise<{ bl
   return {
     blob: await response.blob(),
     filename: filenameMatch?.[1] || fallbackFilename,
+    headers: response.headers,
   };
 }
 

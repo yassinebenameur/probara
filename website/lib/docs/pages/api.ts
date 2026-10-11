@@ -170,7 +170,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only.",
+            "Compute-only POST exceptions include `/monitors/test`, `/monitors/import/preview`, `/monitors/dependency-suggestions`, `/mesh/probe`, and `/ai-settings/test`. They do not persist monitor/result/graph state. Channel test sends a real outbound notification and therefore is not read-only. The [AI label routes](#ai-labels) persist operator verdicts, so they are writes: viewers and read keys get HTTP 403.",
         },
       ],
     },
@@ -330,6 +330,10 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/monitors/dependency-suggestions`",
               "Compute advisory AI suggestions without saving edges",
+            ],
+            [
+              "`POST /api/v1/monitors/dependency-suggestions/label`",
+              "Write; record an operator verdict on a suggestion as an [AI label](#ai-labels)",
             ],
             [
               "`POST /api/v1/monitors/bulk/alerting`",
@@ -625,7 +629,74 @@ export const API_PAGE: DocPage = {
               "`GET /api/v1/incidents/{id}/ai-analysis`",
               "Read pending, ready, or failed analysis state",
             ],
+            [
+              "`POST /api/v1/incidents/{id}/ai-analysis/label`",
+              "Write; confirm or correct a ready analysis as an [AI label](#ai-labels)",
+            ],
           ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "A ready analysis that can be labelled also carries `label_context` on the analysis GET and on `GET /incidents/{id}`: `catalogue_version`, the incident-level `predicted` key, the selectable `choices` (`key`, `title`), one entry per monitor decision (`id`, `monitor_id`, `monitor_name`, which is null once the monitor is purged, and `predicted`), and the current `label` or null. It is omitted for pending, failed and legacy analyses, analyses that sent no decisions, and analyses completed before labels existed.",
+        },
+      ],
+    },
+    {
+      id: "ai-labels",
+      title: "AI label endpoints",
+      blocks: [
+        {
+          type: "table",
+          columns: ["Method and path", "Who and purpose"],
+          rows: [
+            [
+              "`POST /api/v1/incidents/{id}/ai-analysis/label`",
+              "Editor, admin, superadmin or write key; label an incident analysis",
+            ],
+            [
+              "`POST /api/v1/monitors/dependency-suggestions/label`",
+              "Editor, admin, superadmin or write key; label a dependency suggestion",
+            ],
+            [
+              "`POST /api/v1/ai-labels/export`",
+              "Tenant admin or superadmin session only (no API key); download training rows",
+            ],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "Bodies are strict JSON up to 64 KiB, and unknown fields are rejected with `validation_error`, so evidence can never be supplied: the server copies it from the stored decision snapshot or recomputes it. Labelling never calls the model and works with local AI disabled. A label is one row per analysis or unordered monitor pair; sending again replaces the verdict and answers (latest wins). Both label routes return the label: `subject_type`, `subject_id` (analyses only), `verdict`, `incident_label`, `answers` keyed by opaque decision ID (`label`, plus `source`: `operator`, `confirmed` or `propagated`), `catalogue_version`, `model_version`, `labeled_by` (null for API keys) and `labeled_at`.",
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Incident analysis label",
+          code:
+            '{\n  "analysis_id": "<optional; defaults to the newest ready analysis>",\n  "verdict": "corrected",\n  "incident_label": "dns_failure",\n  "answers": { "<decision id>": "insufficient_evidence" }\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "`verdict` is `confirmed` or `corrected`. Confirming keeps every decision's shown answer and accepts `incident_label` only when it equals the prediction; correcting requires an `incident_label` from the analysis's choices. Optional `answers` override single decisions. Errors: `400 validation_error` (bad verdict, a cause or override that is not a choice of that decision, unknown decision ID), `404 not_found` (incident or `analysis_id` not in this tenant), `409 analysis_not_ready` (pending, failed, or no ready analysis), `409 analysis_not_labelable` (legacy, no-decision, or pre-label analysis).",
+        },
+        {
+          type: "code",
+          language: "json",
+          title: "Dependency suggestion label",
+          code:
+            '{\n  "monitor_id": "<dependent monitor>",\n  "depends_on_id": "<suggested upstream>",\n  "verdict": "rejected",\n  "corrected": "reversed"\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "`verdict` is `confirmed` or `rejected`; `corrected` is allowed only with `rejected` and is `reversed`, `shared_upstream`, `insufficient_evidence` or `no_dependency` (the default). Either orientation addresses the same pair. Errors: `400 validation_error` (identical or malformed IDs, bad verdict), `404 not_found` (a monitor is not a live monitor of this tenant), `409 pair_evidence_unavailable` (the pair is no longer a candidate: disabled, a group, outside the 250-monitor set, or no shared signal left).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Export takes an optional body with `since` and `until` (RFC 3339, a half-open window on the label's last update) and `subject_types` (`incident_analysis`, `dependency_pair`); an empty body exports everything, and an inverted window or unknown type is a `validation_error`. It returns `application/x-ndjson` as `probara-ai-labels-YYYYMMDD.jsonl` with `X-Probara-Export-Rows` and `X-Probara-Export-Skipped` headers: one training row per decision, and rows whose stored evidence fails validation are skipped and counted. More than 5,000 labels or 20,000 rows returns `400 export_too_large`; narrow the window. Rows contain no identifiers (see [security](/docs/security/#notifications-integrations-ai)).",
         },
       ],
     },

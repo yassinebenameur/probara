@@ -5,7 +5,9 @@ import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
-import { getAISettings, updateAISettings, testAISettings } from '@/lib/api';
+import { useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
+import { getAISettings, updateAISettings, testAISettings, exportAILabels } from '@/lib/api';
+import { labelErrorMessage, labelExportOutcome } from '@/lib/ai-labels';
 import type { AISettings, AITestResult } from '@/lib/types';
 
 export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
@@ -16,6 +18,8 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<AITestResult | null>(null);
+  const isTenantAdmin = useIsTenantAdmin();
+  const [exporting, setExporting] = useState(false);
   const load = useCallback(async () => {
     try { const s = await getAISettings(); setSettings(s); setEnabled(s.enabled); }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not load AI settings'); }
@@ -32,6 +36,31 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
     try { const p = await testAISettings(); setProbe(p); setSettings((s) => s ? { ...s, available: p.ok, model: p.model, message: p.message } : s); }
     catch (err) { setProbe({ ok: false, message: err instanceof Error ? err.message : 'Local service unavailable' }); }
     finally { setTesting(false); }
+  };
+  // Same download path as the monitor export (app/monitors/page.tsx).
+  const exportLabels = async () => {
+    setExporting(true);
+    try {
+      const { blob, filename, rows, skipped } = await exportAILabels();
+      const outcome = labelExportOutcome(rows, skipped);
+      if (!outcome.download) {
+        showToast(outcome.message, outcome.tone);
+        return;
+      }
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      showToast(outcome.message, outcome.tone);
+    } catch (err) {
+      showToast(labelErrorMessage(err, 'Could not export training labels'), 'error');
+    } finally {
+      setExporting(false);
+    }
   };
   return (
     <Panel title="Local AI analysis" subtitle="CPU analysis of monitoring evidence for dependency suggestions and suspected incident causes.">
@@ -55,6 +84,17 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
             {!readOnly && <Button variant="accent" size="sm" loading={saving} disabled={saving || !settings.installation_enabled} onClick={save}>Save</Button>}
           </div>
         </>}
+        {isTenantAdmin && (
+          <div className="space-y-3 border-t border-divider pt-4">
+            <div>
+              <h3 className="text-sm font-medium text-slate-200">Training labels</h3>
+              <p className="mt-1 text-ui text-slate-400">Download operator-confirmed answers as JSONL for retraining the local model. Rows contain evidence counters and catalogue labels only, with no monitor names or IDs.</p>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="ghost" size="sm" loading={exporting} disabled={exporting} onClick={exportLabels}>Export labels</Button>
+            </div>
+          </div>
+        )}
       </div>
     </Panel>
   );

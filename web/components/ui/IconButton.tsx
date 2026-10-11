@@ -24,6 +24,8 @@ export const ICON_BUTTON_CLASS =
   'hover:bg-well-hover hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ' +
   'disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:h-4 [&_svg]:w-4';
 
+export const ICON_BUTTON_SM_CLASS = '!h-7 !w-7 [&_svg]:!h-3.5 [&_svg]:!w-3.5';
+
 const DANGER_CLASS = 'hover:!bg-rose-500/10 hover:!text-rose-300';
 
 // Row action for tables and lists: icon only, named by its tooltip. Use up to
@@ -39,7 +41,7 @@ export default function IconButton({
   size = 'md',
   className: extra = '',
 }: IconButtonProps) {
-  const className = `${ICON_BUTTON_CLASS} ${size === 'sm' ? '!h-7 !w-7 [&_svg]:!h-3.5 [&_svg]:!w-3.5' : ''} ${danger ? DANGER_CLASS : ''} ${extra}`;
+  const className = `${ICON_BUTTON_CLASS} ${size === 'sm' ? ICON_BUTTON_SM_CLASS : ''} ${danger ? DANGER_CLASS : ''} ${extra}`;
   const content = loading ? <Loader2 className="animate-spin" aria-hidden="true" /> : icon;
   if (href) {
     return (

@@ -3,6 +3,7 @@ package ai
 import (
 	_ "embed"
 	"encoding/json"
+	"sort"
 )
 
 const CatalogueVersion = "probara-evidence-v1"
@@ -38,6 +39,50 @@ func choices(task string) map[string]string {
 	}
 	return out
 }
+
+// Choices returns the running catalogue's choice keys and descriptions for a
+// task ("rca" or "dependency"), as sent in Decision.Choices.
+func Choices(task string) map[string]string { return choices(task) }
+
+// ChoiceTitle is the operator-facing title of a choice. RCA entries carry
+// titles; dependency entries do not, so they fall back to the key, as does
+// any key the running catalogue does not know.
+func ChoiceTitle(task, key string) string {
+	entries := catalogue.RCA
+	if task == "dependency" {
+		entries = catalogue.Dependency
+	}
+	if e, ok := entries[key]; ok && e.Title != "" {
+		return e.Title
+	}
+	return key
+}
+
+// ChoiceOption is one selectable answer for an operator label form.
+type ChoiceOption struct {
+	Key   string `json:"key"`
+	Title string `json:"title"`
+}
+
+// ChoiceOptions lists a task's choices sorted by title, with
+// "insufficient_evidence" last.
+func ChoiceOptions(task string) []ChoiceOption {
+	out := []ChoiceOption{}
+	for k := range choices(task) {
+		out = append(out, ChoiceOption{Key: k, Title: ChoiceTitle(task, k)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i].Key == "insufficient_evidence") != (out[j].Key == "insufficient_evidence") {
+			return out[j].Key == "insufficient_evidence"
+		}
+		if out[i].Title != out[j].Title {
+			return out[i].Title < out[j].Title
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
+
 func best(r DecisionResult) (string, float64) {
 	key := ""
 	score := 0.0

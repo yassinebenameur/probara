@@ -58,6 +58,14 @@ func (c *Consumer) markReady(ctx context.Context, job ai.AnalysisJob, result ai.
 	if len(result.Evidence) > 0 {
 		evidence = result.Evidence
 	}
+	// The exact model exchange, kept for operator labels (api ailabels). NULL
+	// when no decision was sent; failure paths never write it.
+	var snapshot []byte
+	if result.Snapshot != nil {
+		if snapshot, err = json.Marshal(result.Snapshot); err != nil {
+			return false, err
+		}
+	}
 
 	res, err := c.db.ExecContext(ctx, `
 		UPDATE incident_ai_analyses
@@ -70,10 +78,12 @@ func (c *Consumer) markReady(ctx context.Context, job ai.AnalysisJob, result ai.
 		    confidence = $8,
 		    evidence = $9,
 		    error_message = NULL,
-		    completed_at = NOW(),metadata=$11
+		    completed_at = NOW(),metadata=$11,
+		    decision_snapshot = $14
 		WHERE id = $1 AND status = $10 AND tenant_id=$12 AND incident_id=$13`,
 		job.AnalysisID, string(readyStatus), result.Model, result.Summary, result.ProbableRootCause,
-		factors, actions, result.Confidence, nullableJSON(evidence), string(pendingStatus), metadata, job.TenantID, job.IncidentID)
+		factors, actions, result.Confidence, nullableJSON(evidence), string(pendingStatus), metadata, job.TenantID, job.IncidentID,
+		nullableJSON(snapshot))
 	return rowUpdated(res, err)
 }
 
