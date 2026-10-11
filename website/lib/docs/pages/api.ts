@@ -510,14 +510,14 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
               "`GET /api/v1/alerts/stream`",
               "Authenticated server-sent event stream",
             ],
-            ["`GET /api/v1/alerts/{id}`", "Alert detail"],
+            ["`GET /api/v1/alerts/{id}`", "Alert detail; a labelable `triage` also carries `label_context`"],
             [
               "`POST /api/v1/alerts/{id}/acknowledge`",
               "Mark an open condition acknowledged",
@@ -525,6 +525,10 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alerts/{id}/resolve`",
               "Manually close an alert lifecycle",
+            ],
+            [
+              "`POST /api/v1/alerts/{id}/triage/label`",
+              "Write; confirm or correct a ready triage as an [AI label](#ai-labels)",
             ],
             [
               "`GET /api/v1/alert-channels`",
@@ -574,6 +578,11 @@ export const API_PAGE: DocPage = {
           title: "Alert policies are gone",
           text:
             "All `/api/v1/alert-policies` methods return HTTP `410 Gone`. The policy-count compatibility endpoints under `/alerts/counts/...` should not be used as a supported policy-management model. See [retired alert policies](/docs/alerting/#retired-policies).",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Alert reads (list, detail, recent alerts, and the acknowledge and resolve responses) and the `alerts[]` of `GET /incidents/{id}` include a display-only `triage` object when the alert has a triage row. The object is omitted when there is no row, and stream events never carry it. Fields that do not apply are `null`: `id`, `status` (`pending`, `ready`, `failed`, `skipped`), `hypothesis` (catalogue key) and `title`, `confidence` (`low`, `medium`, `high`) and `summary` when ready, `skip_reason` (`resolved`, `cooldown`, `not_modeled`, `disabled`) when skipped, `error_message` (a fixed string) when failed, `created_at` (claim time), `completed_at`, `labelled`, and `labelable` (ready and at least one decision was sent to the model). Only `GET /alerts/{id}` adds `label_context`, in the same shape as an incident analysis's, when the triage is labelable.",
         },
       ],
     },
@@ -655,6 +664,10 @@ export const API_PAGE: DocPage = {
               "Editor, admin, superadmin or write key; label an incident analysis",
             ],
             [
+              "`POST /api/v1/alerts/{id}/triage/label`",
+              "Editor, admin, superadmin or write key; label an alert's automatic triage",
+            ],
+            [
               "`POST /api/v1/monitors/dependency-suggestions/label`",
               "Editor, admin, superadmin or write key; label a dependency suggestion",
             ],
@@ -667,7 +680,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Bodies are strict JSON up to 64 KiB, and unknown fields are rejected with `validation_error`, so evidence can never be supplied: the server copies it from the stored decision snapshot or recomputes it. Labelling never calls the model and works with local AI disabled. A label is one row per analysis or unordered monitor pair; sending again replaces the verdict and answers (latest wins). Both label routes return the label: `subject_type`, `subject_id` (analyses only), `verdict`, `incident_label`, `answers` keyed by opaque decision ID (`label`, plus `source`: `operator`, `confirmed` or `propagated`), `catalogue_version`, `model_version`, `labeled_by` (null for API keys) and `labeled_at`.",
+            "Bodies are strict JSON up to 64 KiB, and unknown fields are rejected with `validation_error`, so evidence can never be supplied: the server copies it from the stored decision snapshot or recomputes it. Labelling never calls the model and works with local AI disabled. A label is one row per analysis, triage or unordered monitor pair; sending again replaces the verdict and answers (latest wins). Every label route returns the label: `subject_type`, `subject_id` (analyses and triages only), `verdict`, `incident_label` (for a triage, its alert-level cause), `answers` keyed by opaque decision ID (`label`, plus `source`: `operator`, `confirmed` or `propagated`), `catalogue_version`, `model_version`, `labeled_by` (null for API keys) and `labeled_at`.",
         },
         {
           type: "code",
@@ -684,6 +697,18 @@ export const API_PAGE: DocPage = {
         {
           type: "code",
           language: "json",
+          title: "Alert triage label",
+          code:
+            '{\n  "verdict": "corrected",\n  "label": "dns_failure",\n  "answers": { "<decision id>": "insufficient_evidence" }\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "The triage label works like the incident analysis label, with `label` in place of `incident_label`. Confirming accepts `label` only when it equals the triage's hypothesis, and correcting requires one of its choices. The label is stored with subject type `alert_triage`, and its evidence comes from the triage's stored decision snapshot. Errors: `400 validation_error` (bad verdict, a cause or override that is not a choice, unknown decision ID, unknown fields), `404 not_found` (alert not in this tenant), `409 triage_not_ready` (no triage, or one that is pending, failed or skipped), `409 triage_not_labelable` (the triage sent no decisions).",
+        },
+        {
+          type: "code",
+          language: "json",
           title: "Dependency suggestion label",
           code:
             '{\n  "monitor_id": "<dependent monitor>",\n  "depends_on_id": "<suggested upstream>",\n  "verdict": "rejected",\n  "corrected": "reversed"\n}',
@@ -696,7 +721,7 @@ export const API_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Export takes an optional body with `since` and `until` (RFC 3339, a half-open window on the label's last update) and `subject_types` (`incident_analysis`, `dependency_pair`); an empty body exports everything, and an inverted window or unknown type is a `validation_error`. It returns `application/x-ndjson` as `probara-ai-labels-YYYYMMDD.jsonl` with `X-Probara-Export-Rows` and `X-Probara-Export-Skipped` headers: one training row per decision, and rows whose stored evidence fails validation are skipped and counted. More than 5,000 labels or 20,000 rows returns `400 export_too_large`; narrow the window. Rows contain no identifiers (see [security](/docs/security/#notifications-integrations-ai)).",
+            "Export takes an optional body with `since` and `until` (RFC 3339, a half-open window on the label's last update) and `subject_types` (`incident_analysis`, `alert_triage`, `dependency_pair`); an empty body exports everything, and an inverted window or unknown type is a `validation_error`. It returns `application/x-ndjson` as `probara-ai-labels-YYYYMMDD.jsonl` with `X-Probara-Export-Rows` and `X-Probara-Export-Skipped` headers: one training row per decision, and rows whose stored evidence fails validation are skipped and counted. Triage rows share a split group with the earliest incident that links the alert, or form their own group when none does. More than 5,000 labels or 20,000 rows returns `400 export_too_large`; narrow the window. Rows contain no identifiers (see [security](/docs/security/#notifications-integrations-ai)).",
         },
       ],
     },
@@ -895,11 +920,11 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/ai-settings`",
-              "Authenticated; workspace switch, installation switch and cached local-service readiness",
+              "Authenticated; workspace switch, installation switch, cached local-service readiness, and the auto-triage settings (`auto_triage_enabled`, `triage_delay_seconds`, `triage_cooldown_seconds`, `triage_max_per_hour`)",
             ],
             [
               "`PUT /api/v1/ai-settings`",
-              "Authorized write; accepts only `enabled`",
+              "Authorized write; partial update of `enabled` and the four auto-triage fields (at least one; ranges in [AI settings](/docs/administration/#ai-settings)); unknown fields are rejected",
             ],
             [
               "`POST /api/v1/ai-settings/test`",

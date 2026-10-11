@@ -22,6 +22,7 @@ func TestDeriveAction(t *testing.T) {
 		{http.MethodPost, "/api/v1/status-pages", "status-page.create"},
 		{http.MethodPost, "/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label", "incident.label"},
 		{http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", "monitor.label"},
+		{http.MethodPost, "/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/triage/label", "alert.label"},
 		{http.MethodPost, "/api/v1/ai-labels/export", "ai-label.export"},
 	}
 
@@ -44,6 +45,11 @@ func TestDeriveResource(t *testing.T) {
 	resourceType, resourceID = deriveResource("/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label")
 	if resourceType != "incident" || resourceID != "3f2a6c1e-0000-0000-0000-000000000001" {
 		t.Errorf("incident label route: got (%q, %q)", resourceType, resourceID)
+	}
+
+	resourceType, resourceID = deriveResource("/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/triage/label")
+	if resourceType != "alert" || resourceID != "3f2a6c1e-0000-0000-0000-000000000001" {
+		t.Errorf("alert triage label route: got (%q, %q)", resourceType, resourceID)
 	}
 
 	resourceType, resourceID = deriveResource("/api/v1/monitors")

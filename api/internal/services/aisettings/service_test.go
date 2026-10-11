@@ -352,3 +352,40 @@ func TestProbeErrorsAreSanitized(t *testing.T) {
 		}
 	})
 }
+
+func TestUpdateRequestValidateRanges(t *testing.T) {
+	i := func(v int) *int { return &v }
+	b := func(v bool) *bool { return &v }
+	for name, c := range map[string]struct {
+		req  UpdateRequest
+		want string
+	}{
+		"empty":            {UpdateRequest{}, "at least one setting is required"},
+		"enabled only":     {UpdateRequest{Enabled: b(false)}, ""},
+		"auto only":        {UpdateRequest{AutoTriageEnabled: b(true)}, ""},
+		"delay low":        {UpdateRequest{TriageDelaySeconds: i(-1)}, "triage_delay_seconds must be between 0 and 3600"},
+		"delay edges":      {UpdateRequest{TriageDelaySeconds: i(0)}, ""},
+		"delay max":        {UpdateRequest{TriageDelaySeconds: i(3600)}, ""},
+		"delay high":       {UpdateRequest{TriageDelaySeconds: i(3601)}, "triage_delay_seconds must be between 0 and 3600"},
+		"cooldown low":     {UpdateRequest{TriageCooldownSeconds: i(-1)}, "triage_cooldown_seconds must be between 0 and 86400"},
+		"cooldown zero":    {UpdateRequest{TriageCooldownSeconds: i(0)}, ""},
+		"cooldown max":     {UpdateRequest{TriageCooldownSeconds: i(86400)}, ""},
+		"cooldown high":    {UpdateRequest{TriageCooldownSeconds: i(86401)}, "triage_cooldown_seconds must be between 0 and 86400"},
+		"max per hour 0":   {UpdateRequest{TriageMaxPerHour: i(0)}, "triage_max_per_hour must be between 1 and 600"},
+		"max per hour 1":   {UpdateRequest{TriageMaxPerHour: i(1)}, ""},
+		"max per hour 600": {UpdateRequest{TriageMaxPerHour: i(600)}, ""},
+		"max per hour 601": {UpdateRequest{TriageMaxPerHour: i(601)}, "triage_max_per_hour must be between 1 and 600"},
+	} {
+		err := c.req.Validate()
+		if c.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			continue
+		}
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Msg != c.want {
+			t.Errorf("%s: got %v, want %q", name, err, c.want)
+		}
+	}
+}

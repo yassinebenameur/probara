@@ -1,6 +1,6 @@
 // Package ailabels exposes the AI label routes: operator verdicts on incident
-// analyses and dependency suggestions (writes, behind RequireWrite) and the
-// tenant-admin training export.
+// analyses, alert triages and dependency suggestions (writes, behind
+// RequireWrite) and the tenant-admin training export.
 package ailabels
 
 import (
@@ -55,6 +55,29 @@ func (h *Handlers) LabelIncidentAnalysis(w http.ResponseWriter, r *http.Request)
 	label, err := h.service.LabelIncidentAnalysis(r.Context(), tenantID, incidentID, req, labeledBy(r))
 	if err != nil {
 		h.writeError(w, err, "failed to save the analysis label")
+		return
+	}
+	writeJSON(w, label)
+}
+
+// LabelAlertTriage handles POST /api/v1/alerts/{id}/triage/label.
+func (h *Handlers) LabelAlertTriage(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantFromContext(w, r)
+	if !ok {
+		return
+	}
+	alertID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		apierrors.WriteValidationError(w, "invalid alert ID")
+		return
+	}
+	var req models.AlertTriageLabelRequest
+	if !decodeBody(w, r, &req, false) {
+		return
+	}
+	label, err := h.service.LabelAlertTriage(r.Context(), tenantID, alertID, req, labeledBy(r))
+	if err != nil {
+		h.writeError(w, err, "failed to save the triage label")
 		return
 	}
 	writeJSON(w, label)
@@ -117,6 +140,10 @@ func (h *Handlers) writeError(w http.ResponseWriter, err error, internal string)
 		apierrors.WriteError(w, http.StatusConflict, "analysis_not_ready", "This incident has no completed analysis to label yet.")
 	case errors.Is(err, svc.ErrAnalysisNotLabelable):
 		apierrors.WriteError(w, http.StatusConflict, "analysis_not_labelable", "This analysis was produced before labels were recorded, or sent no decisions to the model, so it cannot be labelled. Run a new analysis to label it.")
+	case errors.Is(err, svc.ErrTriageNotReady):
+		apierrors.WriteError(w, http.StatusConflict, "triage_not_ready", "This alert has no completed triage to label yet.")
+	case errors.Is(err, svc.ErrTriageNotLabelable):
+		apierrors.WriteError(w, http.StatusConflict, "triage_not_labelable", "This triage sent no decisions to the model, so it cannot be labelled.")
 	case errors.Is(err, svc.ErrPairUnavailable):
 		apierrors.WriteError(w, http.StatusConflict, "pair_evidence_unavailable", "These monitors are no longer a dependency candidate (disabled, a group, or no remaining shared signal), so the suggestion cannot be recorded.")
 	case errors.Is(err, svc.ErrExportTooLarge):

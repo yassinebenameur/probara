@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func setRequiredAPIEnv(t *testing.T) {
 	t.Helper()
@@ -188,5 +191,45 @@ func TestLoadNotificationEgressConfig(t *testing.T) {
 	t.Setenv("NOTIFICATION_BLOCK_PRIVATE_IPS", "maybe")
 	if _, err := loadNotificationEgressConfig(); err == nil {
 		t.Fatal("an invalid boolean must fail startup")
+	}
+}
+
+func TestLoadWorkerConfig_AITriageDefaults(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8083")
+	t.Setenv("METRICS_PORT", "9092")
+	cfg, err := LoadWorkerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AITriageEnabled || cfg.AITriageStream != "AI_TRIAGE" || cfg.AITriageSubject != "ai.triage.jobs" || cfg.AITriageConsumerName != "ai-triage-workers" {
+		t.Fatalf("unexpected triage defaults: enabled=%t stream=%q subject=%q consumer=%q",
+			cfg.AITriageEnabled, cfg.AITriageStream, cfg.AITriageSubject, cfg.AITriageConsumerName)
+	}
+
+	t.Setenv("AI_TRIAGE_ENABLED", "false")
+	if cfg, err = LoadWorkerConfig(); err != nil || cfg.AITriageEnabled {
+		t.Fatalf("AI_TRIAGE_ENABLED=false: enabled=%t err=%v", cfg != nil && cfg.AITriageEnabled, err)
+	}
+}
+
+func TestLoadWorkerConfig_AITriageRejectsBadValues(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8083")
+	t.Setenv("METRICS_PORT", "9092")
+
+	t.Setenv("AI_TRIAGE_ENABLED", "sometimes")
+	if _, err := LoadWorkerConfig(); err == nil || !strings.Contains(err.Error(), "invalid AI_TRIAGE_ENABLED") {
+		t.Fatalf("invalid AI_TRIAGE_ENABLED accepted: %v", err)
+	}
+	t.Setenv("AI_TRIAGE_ENABLED", "")
+
+	const clash = "AI_TRIAGE_STREAM/AI_TRIAGE_SUBJECT must differ from AI_RCA_STREAM/AI_RCA_SUBJECT"
+	t.Setenv("AI_TRIAGE_STREAM", "AI_RCA")
+	if _, err := LoadWorkerConfig(); err == nil || err.Error() != clash {
+		t.Fatalf("shared stream accepted: %v", err)
+	}
+	t.Setenv("AI_TRIAGE_STREAM", "")
+	t.Setenv("AI_TRIAGE_SUBJECT", "ai.rca.jobs")
+	if _, err := LoadWorkerConfig(); err == nil || err.Error() != clash {
+		t.Fatalf("shared subject accepted: %v", err)
 	}
 }

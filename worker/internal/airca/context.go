@@ -4,6 +4,7 @@ package airca
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -21,12 +22,80 @@ const maxWindowChecks = 20000
 // any remainder is summarized by count.
 const maxMeshEdgeNotes = 10
 
+// errNotModeled reports a subject the decision model has no evidence shape
+// for: a mesh_edge alert (its subject is a location pair, not a monitor) or
+// any alert without a monitor.
+var errNotModeled = errors.New("subject is not modeled by the local decision engine")
+
+// evidenceSubject is what an analysis is about, resolved to monitor seeds. An
+// incident and an alert differ only here; buildEvidence turns either into the
+// same window and per-monitor evidence.
+type evidenceSubject struct {
+	anchor  time.Time   // window anchor before capping
+	capNote string      // Incomplete note if the anchor is after requestedAt
+	seeds   []uuid.UUID // affected monitors; groups expand to leaves in the CTE
+	roots   []rootLink  // (monitor, dependency root) from the subject's alerts, both tenant-checked
+}
+
+// rootLink is one stored dependency root (alerts.root_cause_monitor_id) of an
+// affected monitor.
+type rootLink struct{ monitor, root uuid.UUID }
+
+// rootIDs returns the distinct roots, in first-seen order.
+func (s evidenceSubject) rootIDs() []uuid.UUID {
+	seen := map[uuid.UUID]bool{}
+	ids := []uuid.UUID{}
+	for _, l := range s.roots {
+		if !seen[l.root] {
+			seen[l.root] = true
+			ids = append(ids, l.root)
+		}
+	}
+	return ids
+}
+
 func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentID uuid.UUID, requestedAt time.Time) (ai.AnalysisInput, error) {
 	var in ai.AnalysisInput
-	// Free-form title and summary are deliberately not fetched for inference.
-	err := dbc.QueryRowContext(ctx, `SELECT created_at FROM incidents WHERE id=$1 AND tenant_id=$2`, incidentID, tenantID).Scan(&in.Incident.CreatedAt)
+	subj, createdAt, err := resolveIncidentSubject(ctx, dbc, tenantID, incidentID)
 	if err != nil {
 		return in, err
+	}
+	in.Incident.CreatedAt = createdAt
+	if err := buildEvidence(ctx, dbc, tenantID, subj, requestedAt, &in); err != nil {
+		return in, err
+	}
+	if err := noteMeshEdgeAlerts(ctx, dbc, tenantID, incidentID, &in); err != nil {
+		return in, err
+	}
+	return in, nil
+}
+
+// buildAlertInput is the single-alert twin of buildAnalysisInput (automatic
+// triage): the alert's monitor is the only seed and its triggered_at anchors
+// the window. It returns sql.ErrNoRows when the alert is not in the tenant and
+// errNotModeled for mesh_edge or monitorless alerts.
+func buildAlertInput(ctx context.Context, dbc *db.Client, tenantID, alertID uuid.UUID, requestedAt time.Time) (ai.AnalysisInput, error) {
+	var in ai.AnalysisInput
+	subj, triggeredAt, err := resolveAlertSubject(ctx, dbc, tenantID, alertID)
+	if err != nil {
+		return in, err
+	}
+	in.Incident.CreatedAt = triggeredAt
+	if err := buildEvidence(ctx, dbc, tenantID, subj, requestedAt, &in); err != nil {
+		return in, err
+	}
+	return in, nil
+}
+
+// resolveIncidentSubject returns the incident's evidence subject and its
+// created_at. Free-form title and summary are deliberately not fetched for
+// inference.
+func resolveIncidentSubject(ctx context.Context, dbc *db.Client, tenantID, incidentID uuid.UUID) (evidenceSubject, time.Time, error) {
+	var subj evidenceSubject
+	var createdAt time.Time
+	err := dbc.QueryRowContext(ctx, `SELECT created_at FROM incidents WHERE id=$1 AND tenant_id=$2`, incidentID, tenantID).Scan(&createdAt)
+	if err != nil {
+		return subj, createdAt, err
 	}
 	// The window bounds monitor checks, so only monitor alerts anchor it. The
 	// inner join on monitors drops mesh_edge alerts (monitor_id IS NULL) on
@@ -40,15 +109,93 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
  JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2
  WHERE ia.incident_id=$1`, incidentID, tenantID).Scan(&earliest)
 	if err != nil {
-		return in, err
+		return subj, createdAt, err
 	}
-	anchor := in.Incident.CreatedAt
+	subj.anchor = createdAt
 	if earliest.Valid {
-		anchor = earliest.Time
+		subj.anchor = earliest.Time
 	}
+	subj.capNote = "Incident anchor lies after analysis request; capped to request time"
+
+	// Affected monitors: attached directly or through a linked alert, with
+	// explicit tenant constraints at every join.
+	rows, err := dbc.QueryContext(ctx, `SELECT m.id FROM monitors m WHERE m.tenant_id=$2 AND m.deleted_at IS NULL AND (
+ EXISTS(SELECT 1 FROM incident_monitors im JOIN incidents i ON i.id=im.incident_id AND i.tenant_id=$2 WHERE im.incident_id=$1 AND im.monitor_id=m.id)
+ OR EXISTS(SELECT 1 FROM incident_alerts ia JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2 JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1 AND a.monitor_id=m.id))
+ ORDER BY m.id`, incidentID, tenantID)
+	if err != nil {
+		return subj, createdAt, err
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return subj, createdAt, err
+		}
+		subj.seeds = append(subj.seeds, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return subj, createdAt, err
+	}
+	rows.Close()
+
+	// Dependency roots attach to monitor evidence only, so the inner joins on
+	// monitors are intended here: a mesh_edge alert has no monitor to attach a
+	// root to and is reported separately by noteMeshEdgeAlerts.
+	rootRows, err := dbc.QueryContext(ctx, `SELECT DISTINCT a.monitor_id,a.root_cause_monitor_id FROM incident_alerts ia
+ JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
+ JOIN monitors m ON m.id=a.monitor_id AND m.tenant_id=$2
+ JOIN monitors u ON u.id=a.root_cause_monitor_id AND u.tenant_id=$2
+ JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1`, incidentID, tenantID)
+	if err != nil {
+		return subj, createdAt, err
+	}
+	defer rootRows.Close()
+	for rootRows.Next() {
+		var l rootLink
+		if err := rootRows.Scan(&l.monitor, &l.root); err != nil {
+			return subj, createdAt, err
+		}
+		subj.roots = append(subj.roots, l)
+	}
+	return subj, createdAt, rootRows.Err()
+}
+
+// resolveAlertSubject returns one alert's evidence subject and its
+// triggered_at. The stored dependency root is kept only when it is a monitor
+// of the same tenant.
+func resolveAlertSubject(ctx context.Context, dbc *db.Client, tenantID, alertID uuid.UUID) (evidenceSubject, time.Time, error) {
+	var subj evidenceSubject
+	var triggeredAt time.Time
+	var kind string
+	var monitorID, rootID uuid.NullUUID
+	err := dbc.QueryRowContext(ctx, `SELECT a.triggered_at,a.kind,a.monitor_id,u.id
+ FROM alerts a
+ LEFT JOIN monitors u ON u.id=a.root_cause_monitor_id AND u.tenant_id=$2
+ WHERE a.id=$1 AND a.tenant_id=$2`, alertID, tenantID).Scan(&triggeredAt, &kind, &monitorID, &rootID)
+	if err != nil {
+		return subj, triggeredAt, err
+	}
+	if kind == "mesh_edge" || !monitorID.Valid {
+		return subj, triggeredAt, errNotModeled
+	}
+	subj.anchor = triggeredAt
+	subj.capNote = "Alert anchor lies after triage request; capped to request time"
+	subj.seeds = []uuid.UUID{monitorID.UUID}
+	if rootID.Valid {
+		subj.roots = []rootLink{{monitor: monitorID.UUID, root: rootID.UUID}}
+	}
+	return subj, triggeredAt, nil
+}
+
+// buildEvidence fills WindowStart/End, Monitors and Incomplete from a subject.
+// It is the one evidence path for incident analyses and alert triage.
+func buildEvidence(ctx context.Context, dbc *db.Client, tenantID uuid.UUID, subj evidenceSubject, requestedAt time.Time, in *ai.AnalysisInput) error {
+	anchor := subj.anchor
 	if anchor.After(requestedAt) {
 		anchor = requestedAt
-		in.Incomplete = append(in.Incomplete, "Incident anchor lies after analysis request; capped to request time")
+		in.Incomplete = append(in.Incomplete, subj.capNote)
 	}
 	in.WindowStart = anchor.Add(-15 * time.Minute)
 	in.WindowEnd = anchor.Add(60 * time.Minute)
@@ -58,12 +205,14 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 	if in.WindowStart.Before(time.Now().UTC().AddDate(0, 0, -monitorstate.CheckResultsRawRetentionDays)) {
 		in.Incomplete = append(in.Incomplete, "Raw check evidence may be expired under the 30-day retention policy")
 	}
-	// Resolve affected monitors, bounded group leaves, configured upstreams and
-	// stored dependency roots, with explicit tenant constraints at every join.
+	seeds := subj.seeds
+	if seeds == nil {
+		seeds = []uuid.UUID{}
+	}
+	// Resolve the seeds, bounded group leaves, configured upstreams and stored
+	// dependency roots. The final join re-checks the tenant for every id.
 	rows, err := dbc.QueryContext(ctx, `WITH RECURSIVE affected(id,path,depth) AS (
- SELECT m.id,ARRAY[m.id],0 FROM monitors m WHERE m.tenant_id=$2 AND m.deleted_at IS NULL AND (
- EXISTS(SELECT 1 FROM incident_monitors im JOIN incidents i ON i.id=im.incident_id AND i.tenant_id=$2 WHERE im.incident_id=$1 AND im.monitor_id=m.id)
- OR EXISTS(SELECT 1 FROM incident_alerts ia JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2 JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1 AND a.monitor_id=m.id))
+ SELECT m.id,ARRAY[m.id],0 FROM monitors m WHERE m.tenant_id=$2 AND m.deleted_at IS NULL AND m.id=ANY($1)
  UNION ALL
  SELECT child.id,af.path||child.id,af.depth+1 FROM affected af JOIN monitor_groups mg ON mg.group_id=af.id
  JOIN monitors child ON child.id=mg.monitor_id AND child.tenant_id=$2 AND child.deleted_at IS NULL
@@ -71,17 +220,16 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
  ), selected AS (
  SELECT DISTINCT id,TRUE AS affected FROM affected
  UNION SELECT md.depends_on_id,FALSE FROM monitor_dependencies md JOIN affected af ON af.id=md.monitor_id
- UNION SELECT a.root_cause_monitor_id,FALSE FROM incident_alerts ia JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
- JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1 AND a.root_cause_monitor_id IS NOT NULL
+ UNION SELECT r,FALSE FROM unnest($3::uuid[]) r
  )
  SELECT m.id,m.name,m.type,COALESCE(m.current_state,'unknown'),BOOL_OR(s.affected),m.interval_seconds,
  EXISTS(SELECT 1 FROM affected af JOIN monitor_groups mg ON mg.group_id=af.id
  JOIN monitors child ON child.id=mg.monitor_id AND child.tenant_id=$2 AND child.deleted_at IS NULL
  WHERE af.depth=8 AND NOT child.id=ANY(af.path))
  FROM selected s JOIN monitors m ON m.id=s.id AND m.tenant_id=$2 AND m.deleted_at IS NULL
- WHERE m.type<>'group' GROUP BY m.id ORDER BY BOOL_OR(s.affected) DESC,m.id LIMIT 101`, incidentID, tenantID)
+ WHERE m.type<>'group' GROUP BY m.id ORDER BY BOOL_OR(s.affected) DESC,m.id LIMIT 101`, pq.Array(seeds), tenantID, pq.Array(subj.rootIDs()))
 	if err != nil {
-		return in, err
+		return err
 	}
 	type row struct {
 		m              ai.MonitorContext
@@ -94,14 +242,14 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 		var r row
 		if err := rows.Scan(&r.id, &r.m.Name, &r.m.Type, &r.m.CurrentState, &r.m.Affected, &r.interval, &r.groupTruncated); err != nil {
 			rows.Close()
-			return in, err
+			return err
 		}
 		r.m.Ref = r.id.String()
 		collected = append(collected, r)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return in, err
+		return err
 	}
 	rows.Close()
 	if len(collected) > 0 && collected[0].groupTruncated {
@@ -115,7 +263,7 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 	for _, r := range collected {
 		checks, total, failures, first, err := loadWindowChecks(ctx, dbc, tenantID, r.id, in.WindowStart, in.WindowEnd)
 		if err != nil {
-			return in, err
+			return err
 		}
 		r.m.Summary = ai.SummarizeChecks(checks)
 		for _, c := range checks {
@@ -140,7 +288,7 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 		}
 		dependencies, err := loadDependencies(ctx, dbc, tenantID, r.id)
 		if err != nil {
-			return in, err
+			return err
 		}
 		r.m.DependsOn = dependencies
 		for _, upstream := range dependencies {
@@ -158,7 +306,7 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 		if r.m.Type == "agent" {
 			metrics, pressure, err := loadHostMetrics(ctx, dbc, tenantID, r.id, in.WindowStart, in.WindowEnd, r.interval)
 			if err != nil {
-				return in, err
+				return err
 			}
 			r.m.Summary.HostMetricsAvailable = metrics
 			r.m.Summary.ResourcePressure = pressure
@@ -168,37 +316,14 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 		}
 		in.Monitors = append(in.Monitors, r.m)
 	}
-	if err := noteMeshEdgeAlerts(ctx, dbc, tenantID, incidentID, &in); err != nil {
-		return in, err
-	}
-	// Dependency roots attach to monitor evidence only, so the inner joins on
-	// monitors are intended here: a mesh_edge alert has no monitor to attach a
-	// root to and is reported separately by noteMeshEdgeAlerts.
-	rootRows, err := dbc.QueryContext(ctx, `SELECT DISTINCT a.monitor_id,a.root_cause_monitor_id FROM incident_alerts ia
- JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
- JOIN monitors m ON m.id=a.monitor_id AND m.tenant_id=$2
- JOIN monitors u ON u.id=a.root_cause_monitor_id AND u.tenant_id=$2
- JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2 WHERE ia.incident_id=$1`, incidentID, tenantID)
-	if err != nil {
-		return in, err
-	}
-	for rootRows.Next() {
-		var child, root string
-		if err := rootRows.Scan(&child, &root); err != nil {
-			rootRows.Close()
-			return in, err
-		}
+	for _, l := range subj.roots {
+		child, root := l.monitor.String(), l.root.String()
 		for i := range in.Monitors {
 			if in.Monitors[i].Ref == child {
 				in.Monitors[i].DependencyRoots = append(in.Monitors[i].DependencyRoots, root)
 			}
 		}
 	}
-	if err := rootRows.Err(); err != nil {
-		rootRows.Close()
-		return in, err
-	}
-	rootRows.Close()
 	for i := range in.Monitors {
 		m := &in.Monitors[i]
 		failure, ok := firstFailures[m.Ref]
@@ -224,13 +349,13 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
  AND (cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $5))
  AND `+maintenance.InMaintenanceAtPredicate("m", "cr.created_at")+`)`, tenantID, pq.Array(ids), in.WindowStart, in.WindowEnd, classifiedErrorPattern)
 	if err != nil {
-		return in, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return in, err
+			return err
 		}
 		for i := range in.Monitors {
 			if in.Monitors[i].Ref == id {
@@ -238,8 +363,7 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 			}
 		}
 	}
-
-	return in, rows.Err()
+	return rows.Err()
 }
 
 func loadDependencies(ctx context.Context, dbc *db.Client, tenantID, monitorID uuid.UUID) ([]string, error) {

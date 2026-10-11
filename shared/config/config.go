@@ -252,6 +252,14 @@ type WorkerConfig struct {
 	AIRCAConsumerName string
 	LocalAI           ai.Config
 
+	// Automatic, display-only alert triage (worker/internal/airca relay and
+	// triage consumer). Read only by DB-connected platform workers; the API
+	// never publishes triage jobs, so it does not load these.
+	AITriageEnabled      bool   // AI_TRIAGE_ENABLED, default true; kill switch: no new claims, queued rows drain as skipped
+	AITriageStream       string // AI_TRIAGE_STREAM, default "AI_TRIAGE"
+	AITriageSubject      string // AI_TRIAGE_SUBJECT, default "ai.triage.jobs"
+	AITriageConsumerName string // AI_TRIAGE_CONSUMER_NAME, default "ai-triage-workers"
+
 	// Notification dispatch consumer settings — only used when the alerter is
 	// publishing to the NOTIFICATIONS stream (ALERTER_ASYNC_DISPATCH=true).
 	NotificationsEnabled      bool
@@ -1010,6 +1018,23 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 	cfg.LocalAI, err = loadLocalAIConfig()
 	if err != nil {
 		return nil, err
+	}
+
+	cfg.AITriageEnabled = true
+	if v := strings.TrimSpace(os.Getenv("AI_TRIAGE_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid AI_TRIAGE_ENABLED: %w", err)
+		}
+		cfg.AITriageEnabled = enabled
+	}
+	cfg.AITriageStream = envOrDefault("AI_TRIAGE_STREAM", "AI_TRIAGE")
+	cfg.AITriageSubject = envOrDefault("AI_TRIAGE_SUBJECT", "ai.triage.jobs")
+	cfg.AITriageConsumerName = envOrDefault("AI_TRIAGE_CONSUMER_NAME", "ai-triage-workers")
+	// Sharing a stream or subject would hand triage jobs to the RCA consumer
+	// (and the reverse), which drops them as unknown payloads.
+	if cfg.AITriageStream == cfg.AIRCAStream || cfg.AITriageSubject == cfg.AIRCASubject {
+		return nil, fmt.Errorf("AI_TRIAGE_STREAM/AI_TRIAGE_SUBJECT must differ from AI_RCA_STREAM/AI_RCA_SUBJECT")
 	}
 
 	// SMTP — only required when the email plugin is registered AND the

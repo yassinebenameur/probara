@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/api/internal/services/triageview"
 	"github.com/yassinebenameur/probara/api/internal/validation"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/statusupdates"
@@ -1208,11 +1209,13 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.id, a.monitor_id, a.alert_policy_id, a.status, a.triggered_at,
 			a.acknowledged_at, a.resolved_at, a.failure_count, a.last_error, a.created_at, a.updated_at,
-			m.name, ap.name
+			m.name, ap.name,
+			`+triageview.Columns+`
 		FROM incident_alerts ia
 		JOIN alerts a ON a.id = ia.alert_id
 		JOIN monitors m ON m.id = a.monitor_id
 		LEFT JOIN alert_policies ap ON ap.id = a.alert_policy_id
+		`+triageview.Join+`
 		WHERE ia.incident_id = $1 AND a.tenant_id = $2 AND m.deleted_at IS NULL
 		ORDER BY a.triggered_at DESC, a.id DESC
 	`, incidentID, tenantID)
@@ -1228,11 +1231,12 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		var resolvedAt sql.NullTime
 		var lastError sql.NullString
 		var policyName sql.NullString
-		if err := rows.Scan(
+		var triage triageview.Scan
+		if err := rows.Scan(append([]any{
 			&item.ID, &item.MonitorID, &item.AlertPolicyID, &item.Status, &item.TriggeredAt,
 			&acknowledgedAt, &resolvedAt, &item.FailureCount, &lastError, &item.CreatedAt, &item.UpdatedAt,
 			&item.MonitorName, &policyName,
-		); err != nil {
+		}, triage.Dest()...)...); err != nil {
 			return nil, fmt.Errorf("scan incident alert: %w", err)
 		}
 		if acknowledgedAt.Valid {
@@ -1250,6 +1254,7 @@ func (s *Service) loadIncidentAlerts(ctx context.Context, tenantID, incidentID u
 		if policyName.Valid {
 			item.PolicyName = &policyName.String
 		}
+		item.Triage = triage.Build()
 		alerts = append(alerts, item)
 	}
 	if err := rows.Err(); err != nil {

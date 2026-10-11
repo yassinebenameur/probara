@@ -11,6 +11,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/testutil"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -413,5 +414,94 @@ func TestPlatformRowsAreNotEvidenceAndMeshAlertsArePersisted(t *testing.T) {
 	available, pressure, err := loadHostMetrics(ctx, dbc, tenant, host, anchor.Add(-20*time.Minute), anchor.Add(time.Minute), 30)
 	if err != nil || available || pressure {
 		t.Fatalf("platform failure produced host evidence %t %t %v", available, pressure, err)
+	}
+}
+
+// The incident and alert paths share buildEvidence: an incident holding only
+// one alert and that alert analysed on its own, at the same request time,
+// produce identical monitors and windows (including upstreams, stored
+// dependency roots, maintenance overlap and the anchor cap).
+func TestIncidentAndAlertEvidenceParity(t *testing.T) {
+	ctx := context.Background()
+	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, dbc, "parity")
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := dbc.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "api")
+	up := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "db")
+	root := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "dns")
+	exec(`INSERT INTO monitor_dependencies(monitor_id,depends_on_id) VALUES($1,$2)`, m, up)
+	anchor := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Microsecond)
+	for i := -20; i < 70; i++ {
+		at := anchor.Add(time.Duration(i) * time.Minute)
+		status, msg := "success", ""
+		if i >= 0 && i < 30 {
+			status, msg = "failure", "dns lookup failed: no such host"
+		}
+		exec(`INSERT INTO check_results(monitor_id,tenant_id,job_id,status,error_message,created_at,started_at,completed_at) VALUES($1,$2,$3,$4,$5,$6,$6,$6)`, m, tenant, uuid.New(), status, msg, at)
+		exec(`INSERT INTO check_results(monitor_id,tenant_id,job_id,status,error_message,created_at,started_at,completed_at) VALUES($1,$2,$3,'failure','connection refused',$4,$4,$4)`, root, tenant, uuid.New(), at.Add(-30*time.Second))
+	}
+	mw := uuid.New()
+	exec(`INSERT INTO maintenance_windows(id,tenant_id,title,starts_at,ends_at) VALUES($1,$2,'mw',$3,$4)`, mw, tenant, anchor.Add(5*time.Minute), anchor.Add(10*time.Minute))
+	exec(`INSERT INTO maintenance_window_monitors(maintenance_window_id,monitor_id) VALUES($1,$2)`, mw, m)
+	alert := uuid.New()
+	exec(`INSERT INTO alerts(id,tenant_id,monitor_id,root_cause_monitor_id,triggered_at,failure_count) VALUES($1,$2,$3,$4,$5,1)`, alert, tenant, m, root, anchor)
+	incident := uuid.New()
+	exec(`INSERT INTO incidents(id,tenant_id,title,created_at) VALUES($1,$2,'parity',$3)`, incident, tenant, anchor.Add(2*time.Minute))
+	exec(`INSERT INTO incident_alerts(incident_id,alert_id) VALUES($1,$2)`, incident, alert)
+
+	for _, requested := range []time.Time{anchor.Add(40 * time.Minute), anchor.Add(2 * time.Hour), anchor.Add(-time.Minute)} {
+		fromIncident, err := buildAnalysisInput(ctx, dbc, tenant, incident, requested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fromAlert, err := buildAlertInput(ctx, dbc, tenant, alert, requested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fromIncident.WindowStart.Equal(fromAlert.WindowStart) || !fromIncident.WindowEnd.Equal(fromAlert.WindowEnd) {
+			t.Fatalf("requested %s: windows differ: incident %s-%s alert %s-%s", requested, fromIncident.WindowStart, fromIncident.WindowEnd, fromAlert.WindowStart, fromAlert.WindowEnd)
+		}
+		if !reflect.DeepEqual(fromIncident.Monitors, fromAlert.Monitors) {
+			t.Fatalf("requested %s: monitors differ:\nincident %+v\nalert    %+v", requested, fromIncident.Monitors, fromAlert.Monitors)
+		}
+		if len(fromAlert.Monitors) != 3 {
+			t.Fatalf("expected alert monitor, upstream and root: %+v", fromAlert.Monitors)
+		}
+		capped := requested.Before(anchor)
+		if capped != strings.Contains(strings.Join(fromAlert.Incomplete, "\n"), "Alert anchor lies after triage request") {
+			t.Fatalf("requested %s: cap note %q", requested, fromAlert.Incomplete)
+		}
+		for _, mc := range fromAlert.Monitors {
+			if !capped && mc.Ref == m.String() && (len(mc.DependencyRoots) != 1 || mc.DependencyRoots[0] != root.String() || !mc.Summary.UpstreamFailedBefore || !mc.Summary.MaintenanceOverlap) {
+				t.Fatalf("alert monitor evidence %+v", mc)
+			}
+		}
+		if !fromAlert.Incident.CreatedAt.Equal(anchor) {
+			t.Fatalf("alert input anchor %s", fromAlert.Incident.CreatedAt)
+		}
+	}
+
+	// Foreign tenants cannot read the alert; mesh alerts are not modeled.
+	other := testutil.InsertTenant(ctx, t, dbc, "other")
+	if _, err := buildAlertInput(ctx, dbc, other, alert, anchor); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("foreign alert readable: %v", err)
+	}
+	var src, dst uuid.UUID
+	if err := dbc.QueryRowContext(ctx, `INSERT INTO locations(tenant_id,name,slug) VALUES($1,'a','a') RETURNING id`, tenant).Scan(&src); err != nil {
+		t.Fatal(err)
+	}
+	if err := dbc.QueryRowContext(ctx, `INSERT INTO locations(tenant_id,name,slug) VALUES($1,'b','b') RETURNING id`, tenant).Scan(&dst); err != nil {
+		t.Fatal(err)
+	}
+	mesh := uuid.New()
+	exec(`INSERT INTO alerts(id,tenant_id,kind,source_location_id,target_location_id,triggered_at,failure_count) VALUES($1,$2,'mesh_edge',$3,$4,$5,1)`, mesh, tenant, src, dst, anchor)
+	if _, err := buildAlertInput(ctx, dbc, tenant, mesh, anchor); !errors.Is(err, errNotModeled) {
+		t.Fatalf("mesh alert: %v", err)
 	}
 }

@@ -14,6 +14,7 @@ export const ALERTING_PAGE: DocPage = {
     "maintenance",
     "incidents",
     "latency anomaly",
+    "alert triage",
   ],
   sections: [
     {
@@ -584,6 +585,54 @@ export const ALERTING_PAGE: DocPage = {
           title: "Analysis is advisory",
           text:
             "Generated findings are not a state transition or remediation action. Operators must validate them against result history, dependency evidence, deployment events, and system telemetry before acting.",
+        },
+      ],
+    },
+    {
+      id: "ai-triage",
+      title: "Automatic alert triage",
+      intro:
+        "With **Automatic alert triage** turned on in [Settings → AI](/docs/administration/#ai-settings), each new open alert gets one suspected cause from the same local model, catalogue and evidence checks as [incident analysis](#ai-analysis). Triage is shown next to the alert and nowhere else.",
+      blocks: [
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Triage is display only",
+          text:
+            "Triage never pages, suppresses, delays or re-routes a notification, never changes an alert's severity or status, and adds nothing to notification content. The alerter never reads it, so turning it on or off cannot change who is notified or when. If local AI is down, the triage is recorded as failed and alerting carries on unchanged. Validate a suspected cause like any other evidence before acting on it.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Database-connected platform workers run a relay every 15 seconds. It claims alerts that are open (`active` or `acknowledged`, so acknowledging in the first minute still gets a triage), triggered within the last 6 hours, and older than the settle wait. The settle wait is the workspace delay, but at least two check intervals of the alert's monitor, so the alert's own failing checks are part of the evidence. The two-interval part is capped at one hour, so monitors that check less often than every 30 minutes are triaged an hour after the alert opens. An alert that resolves within the wait is never triaged, and alerts from before auto-triage was turned on are not triaged once they are more than 6 hours old. Claiming is oldest alert first. Each workspace has an hourly cap on triages, counted over the last hour with skipped ones excluded. All workspaces also share a platform-wide limit of 200 queued triages, so an alert storm cannot queue more work than the local AI can process before the jobs expire.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Evidence covers the alert's monitor (a group alert expands to its members), its configured upstreams, and the dependency root that suppressed it, if any. The window runs from 15 minutes before the alert triggered to 60 minutes after, capped at claim time. Window, sampling and exclusion rules are the same as for incident analysis. Each alert has one triage. It is not re-run while the alert stays open, and a reopened condition is a new alert.",
+        },
+        {
+          type: "table",
+          columns: ["Status", "Shown as", "Meaning"],
+          rows: [
+            ["`pending`", "Triaging… (muted)", "Claimed and queued, or running"],
+            ["`ready`", "Suspected <cause> · <confidence>, or No clear cause", "A catalogue hypothesis with low/medium/high confidence, or the model abstained (insufficient evidence). The tooltip holds the summary"],
+            ["`failed`", "Triage failed (muted)", "The local AI was unavailable or returned invalid decisions, the run failed after repeated errors, the run was still pending 30 minutes after a worker started it, or no worker started it within 70 minutes of the claim (queued jobs expire after an hour)"],
+            ["`skipped` / `resolved`", "Not triaged (muted)", "The alert resolved before the triage ran; the model is not called"],
+            ["`skipped` / `cooldown`", "Not triaged (muted)", "The same monitor had a ready triage within the workspace cooldown"],
+            ["`skipped` / `disabled`", "Not triaged (muted)", "Auto-triage, workspace AI or installation AI was turned off (or `AI_TRIAGE_ENABLED=false`) while the job was queued"],
+            ["`skipped` / `not_modeled`", "Hidden", "Mesh-edge alerts have no monitor to analyse"],
+          ],
+        },
+        {
+          type: "paragraph",
+          text:
+            "The Alerts table shows the triage as a pill in the monitor cell, and incident detail shows it next to each linked alert. Pills update the next time the list loads, not live: the alert stream carries alert changes only. Triage runs only while auto-triage and workspace AI are both on. Turning it off, setting `AI_TRIAGE_ENABLED=false`, or setting `LOCAL_AI_DISABLED=true` stops new claims, and triages already queued finish as skipped without calling the model. A job that never reached the queue is published again up to twice, 3 minutes apart. Two alerts of different kinds on one monitor triaged at the same moment can both run, because the cooldown only counts triages that are already ready.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Editors and admins can label a ready triage from the alert's row menu (⋮): **Confirm cause** or **Correct cause…**, or **Confirm no cause** and **Name the cause…** when the model abstained. Once labelled, the menu offers **Change label…**. Correcting opens the same per-monitor control as incident labels. The label stores the evidence the model saw, copied server-side, is included in the [training export](/docs/administration/#ai-settings), and shares a split group with the earliest incident that links the alert. A triage that sent no decisions cannot be labelled. Labels never change the alert. See [AI label endpoints](/docs/api/#ai-labels).",
         },
       ],
     },

@@ -70,6 +70,7 @@ func router(h *Handlers, recorder *audit.Recorder) http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/monitors/dependency-suggestions/label", h.LabelDependencySuggestion)
 		r.Post("/incidents/{id}/ai-analysis/label", h.LabelIncidentAnalysis)
+		r.Post("/alerts/{id}/triage/label", h.LabelAlertTriage)
 		r.Route("/ai-labels", func(r chi.Router) {
 			r.Use(apimiddleware.RequireTenantAdmin)
 			r.Post("/export", h.Export)
@@ -205,7 +206,10 @@ func TestLabelRoutesAuthorizationAndAudit(t *testing.T) {
 	if w := do("admin", exportPath, `{"since":"2026-11-01T00:00:00Z","until":"2026-10-01T00:00:00Z"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("inverted window: %d %s", w.Code, w.Body)
 	}
-	if w := do("admin", exportPath, `{"subject_types":["alert_triage"]}`); w.Code != http.StatusBadRequest {
+	if w := do("admin", exportPath, `{"subject_types":["alert_triage"]}`); w.Code != http.StatusOK {
+		t.Fatalf("alert_triage subject: %d %s", w.Code, w.Body)
+	}
+	if w := do("admin", exportPath, `{"subject_types":["incident"]}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown subject: %d %s", w.Code, w.Body)
 	}
 
@@ -217,7 +221,113 @@ func TestLabelRoutesAuthorizationAndAudit(t *testing.T) {
 		FROM audit_log WHERE tenant_id=$1`, tenant).Scan(&denied, &exported); err != nil {
 		t.Fatal(err)
 	}
-	if denied != 4 || exported != 3 {
+	if denied != 4 || exported != 4 {
 		t.Fatalf("audit: denied=%d exported=%d", denied, exported)
+	}
+}
+
+func TestAlertTriageLabelRoute(t *testing.T) {
+	ctx := context.Background()
+	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, dbc, "triage label route")
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := dbc.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	openAlert := func(name string) uuid.UUID {
+		t.Helper()
+		monitor := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, name)
+		id := uuid.New()
+		exec(`INSERT INTO alerts (id, tenant_id, monitor_id, status, triggered_at, failure_count, created_at, updated_at)
+			VALUES ($1,$2,$3,'active',NOW(),1,NOW(),NOW())`, id, tenant, monitor)
+		return id
+	}
+	monitorAlert := openAlert("checkout-api")
+	var monitor uuid.UUID
+	_ = dbc.QueryRowContext(ctx, `SELECT monitor_id FROM alerts WHERE id=$1`, monitorAlert).Scan(&monitor)
+	ev, _ := json.Marshal(ai.MonitorEvidence{Checks: 10, Failures: 4, DNSFailures: 4})
+	snap, _ := json.Marshal(ai.DecisionSnapshot{V: 1, Catalogue: ai.CatalogueVersion, Hypothesis: "dns_failure",
+		Model:     ai.ModelIdentity{Engine: "laya-cpu", Version: "probara-laya-v1", SHA256: strings.Repeat("f", 64), Catalogue: ai.CatalogueVersion},
+		Decisions: []ai.SnapshotDecision{{ID: uuid.NewString(), Task: "rca", MonitorRef: monitor.String(), Evidence: ev, Choices: ai.Choices("rca"), Predicted: "dns_failure", Final: "dns_failure"}}})
+	triage := uuid.New()
+	exec(`INSERT INTO alert_triage (id, tenant_id, alert_id, status, hypothesis, decision_snapshot, completed_at)
+		VALUES ($1,$2,$3,'ready','dns_failure',$4,NOW())`, triage, tenant, monitorAlert, snap)
+	pendingAlert := openAlert("billing")
+	exec(`INSERT INTO alert_triage (tenant_id, alert_id, status) VALUES ($1,$2,'pending')`, tenant, pendingAlert)
+	noSnapAlert := openAlert("search")
+	exec(`INSERT INTO alert_triage (tenant_id, alert_id, status, completed_at) VALUES ($1,$2,'ready',NOW())`, tenant, noSnapAlert)
+
+	log := logger.New("test", "error")
+	recorder := audit.NewRecorder(dbc, log)
+	recorder.Start()
+	srv := router(NewHandlers(ailabels.NewService(dbc, depsuggest.NewService(dbc, noAI{})), log), recorder)
+	path := func(alert string) string { return "/api/v1/alerts/" + alert + "/triage/label" }
+	do := func(kind, p, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, p, strings.NewReader(body))
+		req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, identity(tenant, kind)))
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		return w
+	}
+	confirm := `{"verdict":"confirmed"}`
+
+	for _, c := range []struct {
+		kind, path, body string
+		want             int
+		code             string
+	}{
+		{"viewer", path(monitorAlert.String()), confirm, http.StatusForbidden, ""},
+		{"read-key", path(monitorAlert.String()), confirm, http.StatusForbidden, ""},
+		{"editor", path(monitorAlert.String()), `{"verdict":"confirmed","evidence":{"checks":1}}`, http.StatusBadRequest, "validation_error"},
+		{"editor", path(monitorAlert.String()), `{"verdict":"confirmed"} {}`, http.StatusBadRequest, "validation_error"},
+		{"editor", path(monitorAlert.String()), `{"verdict":"maybe"}`, http.StatusBadRequest, "validation_error"},
+		{"editor", path(monitorAlert.String()), `{"verdict":"corrected","label":"made_up"}`, http.StatusBadRequest, "validation_error"},
+		{"editor", path("not-a-uuid"), confirm, http.StatusBadRequest, "validation_error"},
+		{"editor", path(uuid.NewString()), confirm, http.StatusNotFound, ""},
+		{"editor", path(pendingAlert.String()), confirm, http.StatusConflict, "triage_not_ready"},
+		{"editor", path(openAlert("no-row").String()), confirm, http.StatusConflict, "triage_not_ready"},
+		{"editor", path(noSnapAlert.String()), confirm, http.StatusConflict, "triage_not_labelable"},
+	} {
+		w := do(c.kind, c.path, c.body)
+		if w.Code != c.want || !strings.Contains(w.Body.String(), c.code) {
+			t.Fatalf("%s %s %s: %d %s", c.kind, c.path, c.body, w.Code, w.Body)
+		}
+	}
+	var n int
+	_ = dbc.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_labels`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("rejected requests wrote %d labels", n)
+	}
+
+	w := do("editor", path(monitorAlert.String()), `{"verdict":"corrected","label":"connection_failure"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("editor label: %d %s", w.Code, w.Body)
+	}
+	var label map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &label)
+	if label["subject_type"] != "alert_triage" || label["subject_id"] != triage.String() || label["incident_label"] != "connection_failure" ||
+		label["labeled_by"] != "00000000-0000-0000-0000-00000000000b" {
+		t.Fatalf("label response %s", w.Body)
+	}
+	if w := do("write-key", path(monitorAlert.String()), confirm); w.Code != http.StatusOK {
+		t.Fatalf("write key relabel: %d %s", w.Code, w.Body)
+	}
+
+	recorder.Stop()
+	var denied, ok int
+	var resourceID string
+	if err := dbc.QueryRowContext(ctx, `SELECT
+		COUNT(*) FILTER (WHERE outcome='denied'),
+		COUNT(*) FILTER (WHERE outcome='success'),
+		COALESCE(MAX(resource_id) FILTER (WHERE outcome='success' AND resource_type='alert'), '')
+		FROM audit_log WHERE tenant_id=$1 AND action='alert.label'`, tenant).Scan(&denied, &ok, &resourceID); err != nil {
+		t.Fatal(err)
+	}
+	if denied != 2 || ok != 2 || resourceID != monitorAlert.String() {
+		t.Fatalf("audit: denied=%d success=%d resource=%q", denied, ok, resourceID)
 	}
 }

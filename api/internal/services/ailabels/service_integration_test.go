@@ -490,7 +490,7 @@ func TestExportIsolationRetentionAndSalt(t *testing.T) {
 	if _, err := f.svc.Export(f.ctx, tenant, models.AILabelExportFilter{Since: &after, Until: &updated}); !errors.As(err, &ve) {
 		t.Fatalf("since >= until: %v", err)
 	}
-	if _, err := f.svc.Export(f.ctx, tenant, models.AILabelExportFilter{SubjectTypes: []string{"alert_triage"}}); !errors.As(err, &ve) {
+	if _, err := f.svc.Export(f.ctx, tenant, models.AILabelExportFilter{SubjectTypes: []string{"incident"}}); !errors.As(err, &ve) {
 		t.Fatalf("unknown subject: %v", err)
 	}
 

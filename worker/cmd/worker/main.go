@@ -44,8 +44,8 @@ func main() {
 	metricsRegistry := metrics.NewRegistry(cfg.ServiceName)
 
 	// Initialize database client — optional. The check path publishes results
-	// over NATS and never touches Postgres; only the notifications and AI-RCA
-	// side consumers need a DB. Remote location workers run without one.
+	// over NATS and never touches Postgres; only the notifications, AI-RCA and
+	// AI triage side consumers need a DB. Remote location workers run without one.
 	var dbClient *db.Client
 	if cfg.PostgresURL != "" {
 		dbClient, err = db.NewClient(cfg.PostgresURL)
@@ -54,7 +54,7 @@ func main() {
 		}
 		defer dbClient.Close()
 	} else {
-		log.Info("POSTGRES_URL not set; notifications and AI-RCA consumers disabled (expected for location workers)")
+		log.Info("POSTGRES_URL not set; notifications, AI-RCA and AI triage consumers disabled (expected for location workers)")
 	}
 
 	// Initialize NATS queue client
@@ -170,6 +170,25 @@ func main() {
 				return airca.RunStaleSweep(ctx, log, dbClient, airca.SweepInterval)
 			})
 		}()
+
+		// Automatic alert triage (display only): the relay claims open alerts
+		// and publishes AI_TRIAGE jobs; the triage consumer analyses them.
+		// Platform workers only. Both keep running with AI_TRIAGE_ENABLED=false
+		// or LOCAL_AI_DISABLED=true so already-claimed rows drain (skipped,
+		// without a model call) instead of showing as pending forever.
+		if cfg.LocationID == "" {
+			triage := airca.NewTriageConsumer(cfg, log, dbClient, queueClient, envAnalyzer)
+			relay := airca.NewRelay(cfg, log, dbClient, queueClient)
+			aiWG.Add(2)
+			go func() {
+				defer aiWG.Done()
+				airca.RunWithRestart(aiCtx, log, "ai-triage-consumer", airca.DefaultRestartPolicy(), triage.Start)
+			}()
+			go func() {
+				defer aiWG.Done()
+				airca.RunWithRestart(aiCtx, log, "ai-triage-relay", airca.DefaultRestartPolicy(), relay.Run)
+			}()
+		}
 	}
 
 	// Start minimal HTTP server for health/metrics

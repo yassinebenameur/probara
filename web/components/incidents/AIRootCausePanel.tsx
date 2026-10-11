@@ -2,17 +2,18 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { getAISettings, getIncidentAIAnalysis, requestIncidentAIAnalysis } from '@/lib/api';
+import { getAISettings, getIncidentAIAnalysis, labelIncidentAIAnalysis, requestIncidentAIAnalysis } from '@/lib/api';
 import type { AILabel, IncidentAIAnalysis, AISettings } from '@/lib/types';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Pill from '@/components/ui/Pill';
-import type { PillTone } from '@/components/ui/Pill';
 import AILabelControl from '@/components/incidents/AILabelControl';
+import { buildIncidentLabelRequest } from '@/lib/ai-labels';
 import { pollAnalysis } from '@/lib/analysis-polling';
 import { formatDateTime } from '@/lib/format';
+import { aiConfidenceTone } from '@/lib/status-tones';
 
 const POLL_INTERVAL_MS = 2500;
 
@@ -31,12 +32,6 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 
 const SECTION_LABEL = 'mb-1.5 text-xs font-medium text-slate-400';
-
-const CONFIDENCE_TONE: Record<string, PillTone> = {
-  high: 'success',
-  medium: 'info',
-  low: 'neutral',
-};
 
 export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePanelProps) {
   const [analysis, setAnalysis] = useState<IncidentAIAnalysis | null>(initial ?? null);
@@ -131,7 +126,7 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
               <div className={`flex items-center gap-2 ${SECTION_LABEL}`}>
                 Suspected cause
                 {analysis.confidence && (
-                  <Pill tone={CONFIDENCE_TONE[analysis.confidence] ?? 'neutral'} size="xs">
+                  <Pill tone={aiConfidenceTone(analysis.confidence)} size="xs">
                     {analysis.confidence} confidence
                   </Pill>
                 )}
@@ -171,9 +166,9 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
           {analysis.label_context && (
             <AILabelControl
               key={analysis.id}
-              incidentId={incidentId}
-              analysisId={analysis.id}
               context={analysis.label_context}
+              submit={(verdict, cause, overrides) =>
+                labelIncidentAIAnalysis(incidentId, buildIncidentLabelRequest(analysis.id, verdict, cause, overrides))}
               onLabelled={handleLabelled}
             />
           )}

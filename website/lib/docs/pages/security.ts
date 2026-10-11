@@ -475,7 +475,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
             {
               term: 'AI training labels',
               description:
-                'A label is copied server-side from the decision snapshot the worker stored when the analysis completed (dependency pairs: evidence recomputed at labelling time); client-supplied evidence is rejected. It holds the evidence counters and booleans, catalogue keys, opaque decision IDs, the monitor and incident IDs the UI names decisions with, and the labelling user ID. It never holds names or free text. Labels are kept until the workspace is deleted: `data_retention_days` does not prune them, and they survive monitor purges and incident deletion.',
+                'A label is copied server-side from the decision snapshot the worker stored when the analysis or alert triage completed (dependency pairs: evidence recomputed at labelling time); client-supplied evidence is rejected. It holds the evidence counters and booleans, catalogue keys, opaque decision IDs, the monitor and incident IDs the UI names decisions with, and the labelling user ID. It never holds names or free text. Labels are kept until the workspace is deleted: `data_retention_days` does not prune them, and they survive monitor purges and incident deletion.',
             },
             {
               term: 'Label export',

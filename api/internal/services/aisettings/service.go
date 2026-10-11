@@ -1,8 +1,10 @@
-// Package aisettings manages workspace enablement for bundled local AI.
+// Package aisettings manages workspace enablement for bundled local AI and
+// the workspace's automatic alert triage settings (read by the worker relay).
 package aisettings
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -24,10 +26,61 @@ type Settings struct {
 	Available           bool   `json:"available"`
 	Model               string `json:"model,omitempty"`
 	Message             string `json:"message,omitempty"`
+	// Automatic, display-only alert triage (ai_settings columns, migration
+	// 000094). Values are the row's, or the column defaults without a row.
+	AutoTriageEnabled     bool `json:"auto_triage_enabled"`
+	TriageDelaySeconds    int  `json:"triage_delay_seconds"`
+	TriageCooldownSeconds int  `json:"triage_cooldown_seconds"`
+	TriageMaxPerHour      int  `json:"triage_max_per_hour"`
 }
+
+// UpdateRequest is the PUT body: every field optional, at least one present.
+// An absent field keeps the stored value (or the default on first write).
 type UpdateRequest struct {
-	Enabled *bool `json:"enabled"`
+	Enabled               *bool `json:"enabled,omitempty"`
+	AutoTriageEnabled     *bool `json:"auto_triage_enabled,omitempty"`
+	TriageDelaySeconds    *int  `json:"triage_delay_seconds,omitempty"`
+	TriageCooldownSeconds *int  `json:"triage_cooldown_seconds,omitempty"`
+	TriageMaxPerHour      *int  `json:"triage_max_per_hour,omitempty"`
 }
+
+// Triage setting defaults and ranges. They mirror the ai_settings column
+// defaults and CHECK constraints of migration 000094 and the web form's
+// validation; change all three together.
+const (
+	DefaultTriageDelaySeconds    = 60
+	DefaultTriageCooldownSeconds = 900
+	DefaultTriageMaxPerHour      = 60
+
+	MaxTriageDelaySeconds    = 3600
+	MaxTriageCooldownSeconds = 86400
+	MinTriageMaxPerHour      = 1
+	MaxTriageMaxPerHour      = 600
+)
+
+// ValidationError is a rejected update (400 validation_error).
+type ValidationError struct{ Msg string }
+
+func (e *ValidationError) Error() string { return e.Msg }
+
+// Validate checks the update against the pinned ranges.
+func (r UpdateRequest) Validate() error {
+	if r.Enabled == nil && r.AutoTriageEnabled == nil && r.TriageDelaySeconds == nil &&
+		r.TriageCooldownSeconds == nil && r.TriageMaxPerHour == nil {
+		return &ValidationError{Msg: "at least one setting is required"}
+	}
+	if v := r.TriageDelaySeconds; v != nil && (*v < 0 || *v > MaxTriageDelaySeconds) {
+		return &ValidationError{Msg: "triage_delay_seconds must be between 0 and 3600"}
+	}
+	if v := r.TriageCooldownSeconds; v != nil && (*v < 0 || *v > MaxTriageCooldownSeconds) {
+		return &ValidationError{Msg: "triage_cooldown_seconds must be between 0 and 86400"}
+	}
+	if v := r.TriageMaxPerHour; v != nil && (*v < MinTriageMaxPerHour || *v > MaxTriageMaxPerHour) {
+		return &ValidationError{Msg: "triage_max_per_hour must be between 1 and 600"}
+	}
+	return nil
+}
+
 type TestRequest struct{}
 type TestResult struct {
 	OK      bool   `json:"ok"`
@@ -115,11 +168,10 @@ func (s *Service) EffectiveConfig(ctx context.Context, id uuid.UUID) (ai.Config,
 	return s.config, enabled, err
 }
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Settings, error) {
-	enabled, err := s.EffectiveEnabled(ctx, id)
+	settings, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	settings := &Settings{Enabled: enabled, InstallationEnabled: !s.config.Disabled}
 	if s.config.Disabled {
 		settings.Message = MessageDisabled
 		return settings, nil
@@ -130,14 +182,52 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Settings, error) {
 	settings.Message = probe.Message
 	return settings, nil
 }
-func (s *Service) Update(ctx context.Context, id uuid.UUID, req UpdateRequest) (*Settings, error) {
-	if req.Enabled == nil {
-		return nil, fmt.Errorf("enabled is required; external provider fields are retired")
+
+// load reads the workspace row, falling back to the column defaults. Enabled
+// follows ai.EffectiveEnabled: installation disabling wins, then the row,
+// then true.
+func (s *Service) load(ctx context.Context, id uuid.UUID) (*Settings, error) {
+	settings := &Settings{
+		Enabled:               true,
+		InstallationEnabled:   !s.config.Disabled,
+		TriageDelaySeconds:    DefaultTriageDelaySeconds,
+		TriageCooldownSeconds: DefaultTriageCooldownSeconds,
+		TriageMaxPerHour:      DefaultTriageMaxPerHour,
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO ai_settings (tenant_id,enabled) VALUES ($1,$2)
- ON CONFLICT (tenant_id) DO UPDATE SET enabled=EXCLUDED.enabled,updated_at=NOW()`, id, *req.Enabled)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour
+		FROM ai_settings WHERE tenant_id = $1`, id).Scan(&settings.Enabled, &settings.AutoTriageEnabled,
+		&settings.TriageDelaySeconds, &settings.TriageCooldownSeconds, &settings.TriageMaxPerHour)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("load workspace AI settings: %w", err)
+	}
+	if s.config.Disabled {
+		settings.Enabled = false
+	}
+	return settings, nil
+}
+
+// Update applies a partial update. Range errors are *ValidationError;
+// anything else is a server error. Turning auto-triage on while the
+// workspace switch is off is accepted: the relay only claims for workspaces
+// with both on.
+func (s *Service) Update(ctx context.Context, id uuid.UUID, req UpdateRequest) (*Settings, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO ai_settings (tenant_id, enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds, triage_max_per_hour)
+		VALUES ($1, COALESCE($2::boolean, TRUE), COALESCE($3::boolean, FALSE), COALESCE($4::int, 60), COALESCE($5::int, 900), COALESCE($6::int, 60))
+		ON CONFLICT (tenant_id) DO UPDATE SET
+			enabled = COALESCE($2::boolean, ai_settings.enabled),
+			auto_triage_enabled = COALESCE($3::boolean, ai_settings.auto_triage_enabled),
+			triage_delay_seconds = COALESCE($4::int, ai_settings.triage_delay_seconds),
+			triage_cooldown_seconds = COALESCE($5::int, ai_settings.triage_cooldown_seconds),
+			triage_max_per_hour = COALESCE($6::int, ai_settings.triage_max_per_hour),
+			updated_at = NOW()`,
+		id, req.Enabled, req.AutoTriageEnabled, req.TriageDelaySeconds, req.TriageCooldownSeconds, req.TriageMaxPerHour)
 	if err != nil {
-		return nil, fmt.Errorf("update workspace AI enablement: %w", err)
+		return nil, fmt.Errorf("update workspace AI settings: %w", err)
 	}
 	return s.Get(ctx, id)
 }

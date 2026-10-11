@@ -60,7 +60,18 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   state advancement.
 - Check execution needs NATS only, never Postgres — private-location workers
   get neither the database nor the platform key. Only the worker's optional
-  notification/AI consumers touch the database.
+  notification/AI consumers and the AI triage relay touch the database.
+- Local AI decision calls come only from the api and DB-connected workers —
+  never from location workers, the scheduler or the alerter. In
+  `worker/cmd/worker/main.go` the AI_RCA consumer needs `dbClient != nil`;
+  the triage relay and consumer also need `LocationID == ""`. The relay
+  (`worker/internal/airca/relay.go`) reads/writes Postgres and publishes
+  `AI_TRIAGE`; the triage consumer (`triage.go`) writes only `alert_triage`.
+- **Alert triage is display only.** The alerter, `shared/alertrouting`,
+  notification payloads and `alert_notification_states` never read
+  `alert_triage`, and triage never writes an alert's status or severity. It
+  reaches operators only through the API's `triageview` projection. Never let
+  it feed routing or suppression.
 - Durable work goes through JetStream (`shared/queue`). Core NATS
   (`shared/statusupdates`, `statuspage.updates`) is live fan-out only;
   nothing persistent may depend on a core-NATS subscriber.
@@ -155,8 +166,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `shared/ai/testdata/label-export-v1.jsonl` (`TestLabelExportFixture`,
   regenerate with `-update`); the ai-service training reader must test the
   same file, so change both sides together. Labels copy evidence server-side,
-  never from the client: `incident_ai_analyses.decision_snapshot` is written
-  by the worker's `markReady` and read by `api/internal/services/ailabels`
+  never from the client: `incident_ai_analyses.decision_snapshot` (worker
+  `markReady`) and `alert_triage.decision_snapshot` (`markTriageReady`) are
+  read by `api/internal/services/ailabels`
   (change the `DecisionSnapshot` shape on both together); pairs come from
   `depsuggest.PairDecision`, the same input builder as `Suggest`. `ai_labels`
   cascades only on tenant delete. The label routes are writes (never in
@@ -531,6 +543,17 @@ or imported groups come back empty. Any other path that creates groups through
   guard there pins the pair, so raise both together. Analysis failure messages
   carry no trailing period or retry instruction: `AIRootCausePanel` renders
   "Analysis failed: <message>. Try again.".
+- **AI triage timing**: the relay/consumer windows live as constants with
+  compile-time guards in `worker/internal/airca/relay.go` and `triage.go`
+  (15 s tick, 6 h lookback, claim wait `GREATEST(delay, LEAST(2×interval,
+  1 h))`, 3 min republish, 30 min run timeout from `started_at`, not-started
+  timeout = stream max age 1 h + 10 min). Republishes must land inside the
+  `AI_TRIAGE` Duplicates window (30 min), and the relay and consumer must
+  provision the stream through the same `triageSpec`/`ensureStream`, or one
+  side's restart resets that window. Incident and alert evidence share
+  `buildEvidence` in `context.go`; never fork the window/evidence SQL. The
+  claim and cap SQL is `relayClaimSQL`; the settings ranges are pinned in
+  migration 000094, `aisettings` and `web/lib/ai-triage.ts` together.
 - **`monitor_state_intervals` is SLA history.** Nothing prunes it by time,
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what

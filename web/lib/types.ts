@@ -1017,6 +1017,44 @@ export interface Alert {
   // How many open downstream alerts this alert's monitor is the suppressed
   // root cause of (its notification lists them under "also affecting").
   impacted_count?: number;
+  // Automatic, display-only triage. Absent from REST responses when the alert
+  // has no triage row; always absent (= unknown) on live stream events, which
+  // are built from core NATS, so merge those with mergeAlertUpdate.
+  triage?: AlertTriage;
+}
+
+// --- Automatic alert triage (display only: never changes notifications) ---
+
+export type AlertTriageStatus = 'pending' | 'ready' | 'failed' | 'skipped';
+export type AlertTriageSkipReason = 'resolved' | 'cooldown' | 'not_modeled' | 'disabled';
+
+export interface AlertTriage {
+  id: string;
+  status: AlertTriageStatus;
+  /** Catalogue rca key; ready only. */
+  hypothesis: string | null;
+  /** Catalogue title of the hypothesis; ready only. */
+  title: string | null;
+  confidence: 'low' | 'medium' | 'high' | null;
+  summary: string | null;
+  skip_reason: AlertTriageSkipReason | null;
+  /** Fixed operator strings; failed only. */
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+  labelled: boolean;
+  /** Ready and the model saw at least one decision. */
+  labelable: boolean;
+  /** GET /alerts/{id} only, when labelable. */
+  label_context?: AILabelContext | null;
+}
+
+export interface AlertTriageLabelRequest {
+  verdict: 'confirmed' | 'corrected';
+  /** Alert-level catalogue key: required for corrected. */
+  label?: string;
+  /** Per-decision overrides (decision id -> catalogue key). */
+  answers?: Record<string, string>;
 }
 
 export interface AlertListResponse {
@@ -1214,6 +1252,8 @@ export interface IncidentAlertSummary {
   updated_at: string;
   monitor_name: string;
   policy_name?: string;
+  /** Compact automatic triage (never carries label_context here). */
+  triage?: AlertTriage;
 }
 
 export interface IncidentMonitorSummary {
@@ -1300,12 +1340,13 @@ export interface IncidentAIAnalysis {
 
 export type AILabelVerdict = 'confirmed' | 'corrected' | 'rejected';
 export type AILabelAnswerSource = 'operator' | 'confirmed' | 'propagated';
-export type AILabelSubjectType = 'incident_analysis' | 'dependency_pair';
+export type AILabelSubjectType = 'incident_analysis' | 'dependency_pair' | 'alert_triage';
 
 export interface AILabel {
   subject_type: AILabelSubjectType;
   subject_id?: string;
   verdict: AILabelVerdict;
+  /** Incident-level key; for alert_triage labels, the alert-level key. */
   incident_label?: string;
   answers: Record<string, { label: string; source: AILabelAnswerSource }>;
   catalogue_version: string;
@@ -1384,9 +1425,22 @@ export interface AISettings {
   available: boolean;
   model?: string;
   message?: string;
+  auto_triage_enabled: boolean;
+  /** 0..3600; triage still waits at least two check intervals. */
+  triage_delay_seconds: number;
+  /** 0..86400; 0 = no cooldown. */
+  triage_cooldown_seconds: number;
+  /** 1..600. */
+  triage_max_per_hour: number;
 }
 
-export interface AISettingsUpdate { enabled: boolean }
+export type AISettingsUpdate = Partial<{
+  enabled: boolean;
+  auto_triage_enabled: boolean;
+  triage_delay_seconds: number;
+  triage_cooldown_seconds: number;
+  triage_max_per_hour: number;
+}>;
 export type AITestRequest = Record<string, never>;
 
 export interface AIAnalysisMetadata {

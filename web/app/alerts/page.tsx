@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 import { Alert, AlertStatus } from '@/lib/types';
 import { getAlerts } from '@/lib/api';
+import { markTriageLabelled, mergeAlertUpdate } from '@/lib/ai-triage';
 import { RANGES, RangeId, rangeStart } from '@/lib/format';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
 import AlertTable from '@/components/alerts/AlertTable';
@@ -171,12 +172,13 @@ function AlertsView() {
   // Live updates: rows already on screen change in place (so a row does not
   // jump away mid-scan); an alert not listed yet whose new status matches the
   // filter (created, or newly acknowledged/resolved) is added on page 1, so
-  // the list keeps up with the chip counts.
+  // the list keeps up with the chip counts. Stream events never carry triage
+  // (core NATS), so a listed row keeps its pill until the next fetch.
   const handleAlertUpdate = useCallback((alert: Alert) => {
     setAlerts(prev => {
       const exists = prev.find(a => a.id === alert.id);
       if (exists) {
-        return prev.map(a => a.id === alert.id ? alert : a);
+        return prev.map(a => a.id === alert.id ? mergeAlertUpdate(a, alert) : a);
       }
       const matches =
         statusFilter === 'all' ||
@@ -197,8 +199,12 @@ function AlertsView() {
   }, [handleAlertUpdate, subscribe, loadCounts]);
 
   const handleAlertTableUpdate = (alert: Alert) => {
-    setAlerts(prev => prev.map(a => a.id === alert.id ? alert : a));
+    setAlerts(prev => prev.map(a => a.id === alert.id ? mergeAlertUpdate(a, alert) : a));
     loadCounts();
+  };
+
+  const handleTriageLabelled = (alertId: string) => {
+    setAlerts(prev => markTriageLabelled(prev, alertId));
   };
 
   const chipCount = (value: StatusFilter): number | undefined => {
@@ -277,6 +283,7 @@ function AlertsView() {
       <AlertTable
         alerts={alerts}
         onAlertUpdate={handleAlertTableUpdate}
+        onTriageLabelled={handleTriageLabelled}
         loading={loading}
         emptyTitle={
           statusFilter === 'open' ? 'No open alerts' : statusFilter === 'active' ? 'No active alerts' : 'No alerts found'

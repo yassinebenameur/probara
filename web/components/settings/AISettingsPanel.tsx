@@ -4,31 +4,85 @@ import { useCallback, useEffect, useState } from 'react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
+import Input from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { getAISettings, updateAISettings, testAISettings, exportAILabels } from '@/lib/api';
 import { labelErrorMessage, labelExportOutcome } from '@/lib/ai-labels';
+import { TRIAGE_SETTING_RANGES, parseSettingInput, triageSettingsForSave } from '@/lib/ai-triage';
+import type { TriageSettingsErrors, TriageSettingsValues } from '@/lib/ai-triage';
 import type { AISettings, AITestResult } from '@/lib/types';
+
+// Number inputs hold text so a field can be cleared while typing; the values
+// are parsed and range-checked on save (skipped while the controls are locked).
+type TriageDraft = Record<keyof TriageSettingsValues, string>;
+
+function triageDraft(s: AISettings): TriageDraft {
+  return {
+    triage_delay_seconds: String(s.triage_delay_seconds),
+    triage_cooldown_seconds: String(s.triage_cooldown_seconds),
+    triage_max_per_hour: String(s.triage_max_per_hour),
+  };
+}
+
+const TRIAGE_FIELDS: { key: keyof TriageSettingsValues; label: string }[] = [
+  { key: 'triage_delay_seconds', label: 'Wait before triage (s)' },
+  { key: 'triage_cooldown_seconds', label: 'Cooldown per monitor (s)' },
+  { key: 'triage_max_per_hour', label: 'Max triages per hour' },
+];
+
+// API errors are thrown as plain `{error, message}` objects, not Error instances.
+function errorText(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object' && 'message' in err) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === 'string' && m) return m;
+  }
+  return fallback;
+}
 
 export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const { showToast } = useToast();
   const [settings, setSettings] = useState<AISettings | null>(null);
   const [enabled, setEnabled] = useState(true);
+  const [autoTriage, setAutoTriage] = useState(false);
+  const [draft, setDraft] = useState<TriageDraft>({ triage_delay_seconds: '60', triage_cooldown_seconds: '900', triage_max_per_hour: '60' });
+  const [fieldErrors, setFieldErrors] = useState<TriageSettingsErrors>({});
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<AITestResult | null>(null);
   const isTenantAdmin = useIsTenantAdmin();
   const [exporting, setExporting] = useState(false);
-  const load = useCallback(async () => {
-    try { const s = await getAISettings(); setSettings(s); setEnabled(s.enabled); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Could not load AI settings'); }
+  const apply = useCallback((s: AISettings) => {
+    setSettings(s);
+    setEnabled(s.enabled);
+    setAutoTriage(s.auto_triage_enabled);
+    setDraft(triageDraft(s));
+    setFieldErrors({});
   }, []);
+  const load = useCallback(async () => {
+    try { apply(await getAISettings()); }
+    catch (err) { setError(errorText(err, 'Could not load AI settings')); }
+  }, [apply]);
   useEffect(() => { void load(); }, [load]);
+  // Triage needs AI on for the workspace; the toggle above is the draft value.
+  const triageLocked = readOnly || !settings?.installation_enabled || !enabled;
   const save = async () => {
+    if (!settings) return;
+    const { payload, errors } = triageSettingsForSave(triageLocked, {
+      auto_triage_enabled: autoTriage,
+      triage_delay_seconds: parseSettingInput(draft.triage_delay_seconds),
+      triage_cooldown_seconds: parseSettingInput(draft.triage_cooldown_seconds),
+      triage_max_per_hour: parseSettingInput(draft.triage_max_per_hour),
+    }, settings);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     setSaving(true); setError(null);
-    try { const s = await updateAISettings({ enabled }); setSettings(s); setEnabled(s.enabled); showToast('AI settings saved', 'success'); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Could not save AI settings'); }
+    try {
+      apply(await updateAISettings({ enabled, ...payload }));
+      showToast('AI settings saved', 'success');
+    }
+    catch (err) { setError(errorText(err, 'Could not save AI settings')); }
     finally { setSaving(false); }
   };
   const test = async () => {
@@ -63,7 +117,7 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
     }
   };
   return (
-    <Panel title="Local AI analysis" subtitle="CPU analysis of monitoring evidence for dependency suggestions and suspected incident causes.">
+    <Panel title="Local AI analysis" subtitle="CPU analysis of monitoring evidence for dependency suggestions, suspected incident causes and alert triage.">
       <div className="space-y-4">
         {error && <Callout tone="danger">{error}</Callout>}
         {!settings && !error && <p className="text-sm text-slate-400">Loading…</p>}
@@ -78,6 +132,37 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
             Enable AI analysis for this workspace
           </label>
           <p className="text-ui text-slate-400">Explanations cite recorded checks and maintained troubleshooting guidance. The model selects a suspected cause and abstains when evidence is insufficient. Controlled-scenario validation does not establish real-world accuracy.</p>
+          <div className="glass-well space-y-3 p-4">
+            <div>
+              <h3 className="text-sm font-medium text-slate-200">Automatic alert triage</h3>
+              <p className="mt-1 text-ui text-slate-400">Display only: triage never changes notifications, routing or severity. Waits at least two check intervals.</p>
+            </div>
+            <label className="flex items-center gap-3 text-sm text-slate-200">
+              <input type="checkbox" checked={autoTriage} onChange={(e) => setAutoTriage(e.target.checked)} disabled={triageLocked} className="h-4 w-4 accent-cyan-500" />
+              Triage new alerts automatically
+            </label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {TRIAGE_FIELDS.map(({ key, label }) => (
+                <Input
+                  key={key}
+                  label={label}
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={TRIAGE_SETTING_RANGES[key].min}
+                  max={TRIAGE_SETTING_RANGES[key].max}
+                  value={draft[key]}
+                  onChange={(e) => {
+                    const text = e.target.value;
+                    setDraft((d) => ({ ...d, [key]: text }));
+                    setFieldErrors((errs) => ({ ...errs, [key]: undefined }));
+                  }}
+                  disabled={triageLocked}
+                  error={fieldErrors[key]}
+                />
+              ))}
+            </div>
+          </div>
           {probe && <Callout tone={probe.ok ? 'success' : 'danger'}>{probe.ok ? 'Local CPU service is ready.' : probe.message}</Callout>}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" loading={testing} disabled={testing || !settings.installation_enabled} onClick={test}>Test local service</Button>

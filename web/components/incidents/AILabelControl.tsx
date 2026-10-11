@@ -9,50 +9,74 @@ import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import Select from '@/components/ui/Select';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite, useCurrentUser } from '@/components/providers/CurrentUserProvider';
-import { labelIncidentAIAnalysis } from '@/lib/api';
-import { buildIncidentLabelRequest, labelControlHasContent, labelErrorMessage, labelSummary } from '@/lib/ai-labels';
+import { labelControlHasContent, labelErrorMessage, labelSummary } from '@/lib/ai-labels';
 import { formatRelativeTime } from '@/lib/format';
 import type { AILabel, AILabelContext } from '@/lib/types';
 
 const ABSTAIN = 'insufficient_evidence';
 
-interface AILabelControlProps {
-  incidentId: string;
-  analysisId: string;
-  context: AILabelContext;
-  onLabelled: (label: AILabel) => void;
-}
+/**
+ * Stores the verdict. `cause` and `overrides` are set only for corrected
+ * (overrides may hold '' for "Follow the actual cause"); the caller builds
+ * its endpoint's request from them.
+ */
+export type AILabelSubmit = (
+  verdict: 'confirmed' | 'corrected',
+  cause?: string,
+  overrides?: Record<string, string>,
+) => Promise<AILabel>;
 
 type Mode = 'idle' | 'prompt' | 'correct';
 
-// Confirm/Correct for a ready analysis. The verdict is stored as a training
-// label: the server copies the evidence the model saw from its own snapshot,
-// so this control only ever sends catalogue keys.
-export default function AILabelControl({ incidentId, analysisId, context, onLabelled }: AILabelControlProps) {
+interface AILabelControlProps {
+  context: AILabelContext;
+  submit: AILabelSubmit;
+  onLabelled: (label: AILabel) => void;
+  /** What is being labelled, in the prompt and viewer note. */
+  noun?: string;
+  /** 'correct' opens straight on the correction form (the alert row menu). */
+  initialMode?: 'prompt' | 'correct';
+  /** Drops the top divider, for use inside a dialog. */
+  bare?: boolean;
+}
+
+// Where a correction starts: the stored correction when changing a label,
+// else the prediction unless the model abstained (abstaining is rarely the
+// answer someone who clicked "Correct" means).
+function correctionStart(context: AILabelContext): { cause: string; overrides: Record<string, string> } {
+  const label = context.label;
+  const initial = label?.incident_label ?? (context.predicted !== ABSTAIN ? context.predicted : '');
+  const overrides: Record<string, string> = {};
+  for (const [id, a] of Object.entries(label?.answers ?? {})) {
+    if (a.source === 'operator') overrides[id] = a.label;
+  }
+  return { cause: context.choices.some((c) => c.key === initial) ? initial : '', overrides };
+}
+
+// Confirm/Correct for a ready analysis or alert triage. The verdict is stored
+// as a training label: the server copies the evidence the model saw from its
+// own snapshot, so this control only ever sends catalogue keys.
+export default function AILabelControl({
+  context, submit: send, onLabelled, noun = 'analysis', initialMode, bare = false,
+}: AILabelControlProps) {
   const { showToast } = useToast();
   const canWrite = useCanWrite();
   const { user, loading: userLoading } = useCurrentUser();
   const label = context.label;
-  const choiceKeys = new Set(context.choices.map((c) => c.key));
 
-  // Unlabelled analyses open on the prompt; "Change" reopens it on a labelled one.
-  const [mode, setMode] = useState<Mode>(label ? 'idle' : 'prompt');
-  const [cause, setCause] = useState('');
-  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  // Unlabelled subjects open on the prompt; "Change" reopens it on a labelled one.
+  const [mode, setMode] = useState<Mode>(initialMode ?? (label ? 'idle' : 'prompt'));
+  const [cause, setCause] = useState(() => (initialMode === 'correct' ? correctionStart(context).cause : ''));
+  const [overrides, setOverrides] = useState<Record<string, string>>(
+    () => (initialMode === 'correct' ? correctionStart(context).overrides : {}),
+  );
   const [saving, setSaving] = useState<'confirmed' | 'corrected' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const openCorrect = () => {
-    // Start from the stored correction when changing a label, else from the
-    // prediction unless the model abstained (abstaining is rarely the answer
-    // someone who clicked "Correct" means).
-    const initial = label?.incident_label ?? (context.predicted !== ABSTAIN ? context.predicted : '');
-    setCause(choiceKeys.has(initial) ? initial : '');
-    const stored: Record<string, string> = {};
-    for (const [id, a] of Object.entries(label?.answers ?? {})) {
-      if (a.source === 'operator') stored[id] = a.label;
-    }
-    setOverrides(stored);
+    const start = correctionStart(context);
+    setCause(start.cause);
+    setOverrides(start.overrides);
     setError(null);
     setMode('correct');
   };
@@ -61,10 +85,7 @@ export default function AILabelControl({ incidentId, analysisId, context, onLabe
     setSaving(verdict);
     setError(null);
     try {
-      const req = verdict === 'confirmed'
-        ? buildIncidentLabelRequest(analysisId, 'confirmed')
-        : buildIncidentLabelRequest(analysisId, 'corrected', cause, overrides);
-      const saved = await labelIncidentAIAnalysis(incidentId, req);
+      const saved = verdict === 'confirmed' ? await send('confirmed') : await send('corrected', cause, overrides);
       onLabelled(saved);
       setMode('idle');
       showToast('Label saved', 'success');
@@ -85,7 +106,7 @@ export default function AILabelControl({ incidentId, analysisId, context, onLabe
   if (!labelControlHasContent(Boolean(label), canWrite, userLoading)) return null;
 
   return (
-    <div className="space-y-3 border-t border-divider pt-4">
+    <div className={bare ? 'space-y-3' : 'space-y-3 border-t border-divider pt-4'}>
       {error && <Callout tone="danger">{error}</Callout>}
 
       {label && mode !== 'correct' && (
@@ -102,7 +123,7 @@ export default function AILabelControl({ incidentId, analysisId, context, onLabe
 
       {showPrompt && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="text-ui text-slate-300">Was this analysis right?</span>
+          <span className="text-ui text-slate-300">Was this {noun} right?</span>
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
@@ -175,7 +196,7 @@ export default function AILabelControl({ incidentId, analysisId, context, onLabe
       )}
 
       {!canWrite && !userLoading && !label && (
-        <p className="text-ui text-slate-500">Not labelled yet. Editors can confirm or correct this analysis for retraining.</p>
+        <p className="text-ui text-slate-500">Not labelled yet. Editors can confirm or correct this {noun} for retraining.</p>
       )}
     </div>
   );

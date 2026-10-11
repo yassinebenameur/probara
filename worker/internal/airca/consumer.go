@@ -3,13 +3,10 @@ package airca
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 
 	"github.com/yassinebenameur/probara/shared/ai"
@@ -43,10 +40,6 @@ const (
 	finalDeliveryFailureMessage = "the analysis failed after repeated errors"
 )
 
-// errAnalysisBusy reports that another delivery of the same analysis holds its
-// advisory lock. It is the one handler error that is not a failure of this run.
-var errAnalysisBusy = errors.New("analysis already being processed")
-
 // Consumer runs AI root cause analyses pulled from the AI_RCA stream. The
 // workspace enablement is resolved per job; the installation-owned analyzer
 // handles every enabled workspace.
@@ -69,110 +62,16 @@ func New(cfg *config.WorkerConfig, log *logger.Logger, dbClient *db.Client, queu
 		heartbeatEvery: heartbeatInterval, deliveryHeadroom: ackWaitHeadroom, consumerCheckEvery: consumerCheckInterval}
 }
 
+// rcaSpec names the AI_RCA stream and durable.
+func rcaSpec(cfg *config.WorkerConfig) streamSpec {
+	return streamSpec{Stream: cfg.AIRCAStream, Subject: cfg.AIRCASubject, Consumer: cfg.AIRCAConsumerName, Label: "AI RCA", MaxAge: 24 * time.Hour}
+}
+
 // Start ensures the AI_RCA stream + consumer exist, then blocks on Consume
 // until ctx is cancelled. It returns on any Consume failure; callers run it
 // under RunWithRestart.
 func (c *Consumer) Start(ctx context.Context) error {
-	stream := c.cfg.AIRCAStream
-	subject := c.cfg.AIRCASubject
-	consumerName := c.cfg.AIRCAConsumerName
-
-	streamHandle, err := c.queue.EnsureWorkQueueStream(ctx, stream, []string{subject}, 24*time.Hour)
-	if err != nil {
-		return fmt.Errorf("ensure ai rca stream: %w", err)
-	}
-
-	// AckWait must outlast a single analysis (local AI round-trip) plus headroom so
-	// JetStream doesn't redeliver while we're still calling the model. The
-	// handler's InProgress heartbeat also resets it while a job is running.
-	ackWait := c.cfg.LocalAI.Timeout + ackWaitHeadroom
-	opts := queue.ConsumerOptions{
-		AckWait:    ackWait,
-		MaxDeliver: maxDeliver,
-		BackOff:    []time.Duration{ackWait, 2 * ackWait},
-	}
-	consumer, err := c.queue.CreateConsumerWithOptions(ctx, stream, consumerName, opts)
-	if err != nil {
-		return fmt.Errorf("create ai rca consumer: %w", err)
-	}
-	// queue.Client caches consumer handles and hands the cached one back
-	// without asking the server, so after the durable was deleted (nats
-	// consumer rm, a broker that lost its store) a restart would pull from a
-	// consumer that no longer exists. Those pulls fail only with statuses the
-	// iterator retries silently, so Consume would block forever. Confirm the
-	// durable on the server and re-create it with the same options if it is
-	// gone; the handle addresses the consumer by name, so the cached one
-	// works again once the durable exists.
-	if _, err := consumer.Info(ctx); isConsumerMissing(err) {
-		c.logger.WithField("consumer", consumerName).Warn("AI RCA durable missing on the server; re-creating it")
-		consumer, err = streamHandle.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-			Name:       consumerName,
-			Durable:    consumerName,
-			AckPolicy:  jetstream.AckExplicitPolicy,
-			AckWait:    opts.AckWait,
-			MaxDeliver: opts.MaxDeliver,
-			BackOff:    opts.BackOff,
-		})
-		if err != nil {
-			return fmt.Errorf("re-create ai rca consumer: %w", err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("inspect ai rca consumer: %w", err)
-	}
-
-	c.logger.WithFields(logrus.Fields{
-		"stream":   stream,
-		"subject":  subject,
-		"consumer": consumerName,
-	}).Info("AI root cause consumer started")
-
-	// The run context also ends when watchConsumer finds the durable gone, so
-	// RunWithRestart re-runs Start (which re-creates it). Handlers keep the
-	// outer ctx: only a real shutdown may cut an analysis short.
-	runCtx, stopRun := context.WithCancelCause(ctx)
-	defer stopRun(nil)
-	go c.watchConsumer(runCtx, stopRun, consumer)
-	err = c.queue.Consume(runCtx, consumer, func(msg *queue.Message) error {
-		return c.handle(ctx, msg)
-	})
-	if ctx.Err() == nil {
-		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) {
-			return cause
-		}
-	}
-	return err
-}
-
-// errConsumerMissing ends a Start run whose durable vanished from the server.
-var errConsumerMissing = errors.New("ai rca consumer no longer exists on the server")
-
-// watchConsumer polls the durable's info and stops the run once the server
-// reports it (or its stream) missing. A broker that restarts with an empty
-// store sends no ErrConsumerDeleted, and pulls against a missing consumer are
-// retried silently by the iterator, so without this check Consume would block
-// forever on a queue nobody serves. Other errors (reconnects, timeouts) are
-// left to the next tick.
-func (c *Consumer) watchConsumer(ctx context.Context, stop context.CancelCauseFunc, consumer jetstream.Consumer) {
-	if c.consumerCheckEvery <= 0 {
-		return
-	}
-	ticker := time.NewTicker(c.consumerCheckEvery)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if _, err := consumer.Info(ctx); isConsumerMissing(err) {
-				stop(fmt.Errorf("%w: %w", errConsumerMissing, err))
-				return
-			}
-		}
-	}
-}
-
-func isConsumerMissing(err error) bool {
-	return errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound)
+	return runConsumer(ctx, c.queue, c.logger, c.cfg.LocalAI.Timeout, c.consumerCheckEvery, rcaSpec(c.cfg), c.handle)
 }
 
 // handle decodes one job, runs it under an InProgress heartbeat, and turns the
@@ -211,121 +110,26 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) error {
 	return c.settle(ctx, entry, msg, job, err)
 }
 
-// settle maps a process error onto the queue outcome.
+// settle maps a process error onto the queue outcome; on the final delivery
+// the analysis is recorded failed with finalDeliveryFailureMessage.
 func (c *Consumer) settle(ctx context.Context, entry *logrus.Entry, msg *queue.Message, job ai.AnalysisJob, err error) error {
-	if err == nil {
-		return nil
-	}
-	final := msg.NumDelivered >= maxDeliver
-	if ctx.Err() != nil {
-		// Worker shutdown, not a failure of the analysis: never record one.
-		// A non-final delivery is redelivered to another replica; on the
-		// final one the row stays pending and the stale-pending sweep fails
-		// it with its timeout message instead of "repeated errors".
-		entry.WithError(err).Info("Worker shutting down mid-analysis; leaving it to redelivery or the stale-pending sweep")
-		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
-	}
-	if errors.Is(err, errAnalysisBusy) {
-		if final {
-			// The lock holder (another delivery, or the stale sweep) finalizes
-			// the row; the sweep is the backstop if that holder dies.
-			entry.Info("Final delivery found analysis locked by another run; dropping")
-			return nil
-		}
-		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
-	}
-	if !final {
-		entry.WithError(err).Warn("Analysis hit a transient error; retrying")
-		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
-	}
-
-	// JetStream will not redeliver after this attempt. Record the failure so
-	// the panel stops polling. ctx is live here (shutdown returned above).
-	markCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	entry.WithError(err).Error("Analysis failed on its final delivery; marking failed")
-	updated, merr := c.markFailed(markCtx, job, finalDeliveryFailureMessage)
-	if merr != nil {
-		// Dropped with the row still pending: the stale-pending sweep fails it.
-		entry.WithError(merr).Error("Failed to persist final-delivery failure; leaving it to the stale-pending sweep")
-		return merr
-	}
-	if !updated {
-		logLostRace(entry, "failed")
-	}
-	return nil
-}
-
-// retryDelay spaces transient retries: a quick second attempt, then a longer
-// pause so a database blip has time to clear before the last delivery.
-func retryDelay(numDelivered uint64) time.Duration {
-	if numDelivered <= 1 {
-		return 10 * time.Second
-	}
-	return 30 * time.Second
-}
-
-// startHeartbeat calls msg.InProgress every interval until ctx ends or the
-// returned stop function is called. stop waits for the ticker goroutine to
-// exit, so no InProgress can race the Ack/Nak that Consume sends after the
-// handler.
-func startHeartbeat(ctx context.Context, msg *queue.Message, interval time.Duration, entry *logrus.Entry) (stop func()) {
-	if msg.InProgress == nil || interval <= 0 {
-		return func() {}
-	}
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	go func() {
-		defer close(exited)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := msg.InProgress(); err != nil {
-					entry.WithError(err).Debug("Failed to extend AI RCA ack deadline")
-				}
-			}
-		}
-	}()
-	return func() {
-		close(done)
-		<-exited
-	}
+	return settleDelivery(ctx, entry, msg, err, func(markCtx context.Context) (bool, error) {
+		return c.markFailed(markCtx, job, finalDeliveryFailureMessage)
+	})
 }
 
 // process runs one analysis. Any returned error is transient (retry) except
 // errAnalysisBusy; terminal outcomes are recorded on the row and return nil.
 func (c *Consumer) process(ctx context.Context, entry *logrus.Entry, job ai.AnalysisJob) error {
 	// Bind queued IDs to one tenant/incident before gathering any evidence.
-	// Serialize duplicate deliveries with an advisory lock on one pinned connection.
-	// The stale-pending sweep takes the same lock key (analysisLockKeySQL), so
-	// it can never fail a row while a run holds it.
-	conn, err := c.db.DB.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	var claimed bool
-	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(`+analysisLockKeySQL("$1")+`)`, job.AnalysisID.String()).Scan(&claimed); err != nil {
-		return err
-	}
-	if !claimed {
-		return errAnalysisBusy
-	}
-	defer func() {
-		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var unlocked bool
-		if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock(`+analysisLockKeySQL("$1")+`)`, job.AnalysisID.String()).Scan(&unlocked); err != nil || !unlocked {
-			entry.WithError(err).Warn("Failed to release analysis lock; discarding database session")
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		}
-	}()
+	// Serialize duplicate deliveries with an advisory lock on one pinned
+	// connection. The stale-pending sweep takes the same lock key
+	// (jobLockKeySQL), so it can never fail a row while a run holds it.
+	return withJobLock(ctx, c.db, job.AnalysisID, entry, func() error { return c.processLocked(ctx, entry, job) })
+}
+
+// processLocked is process under the analysis lock.
+func (c *Consumer) processLocked(ctx context.Context, entry *logrus.Entry, job ai.AnalysisJob) error {
 	status, requestedAt, err := c.loadStatus(ctx, job)
 	if errors.Is(err, sql.ErrNoRows) {
 		entry.Warn("Analysis row no longer exists; dropping")
@@ -402,11 +206,4 @@ func (c *Consumer) finishFailed(ctx context.Context, entry *logrus.Entry, job ai
 		logLostRace(entry, "failed")
 	}
 	return nil
-}
-
-// logLostRace records a guarded write that matched no pending row: another
-// delivery or the stale-pending sweep finalized it first. Not an error — the
-// row already holds a terminal status.
-func logLostRace(entry *logrus.Entry, wanted string) {
-	entry.WithField("wanted_status", wanted).Info("Analysis was already finalized (another run or the stale-pending sweep); discarding this result")
 }

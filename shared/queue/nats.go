@@ -128,14 +128,31 @@ func (c *Client) EnsureStream(ctx context.Context, streamName string, subjects [
 
 // EnsureWorkQueueStream ensures a stream exists with work-queue retention.
 func (c *Client) EnsureWorkQueueStream(ctx context.Context, streamName string, subjects []string, maxAge time.Duration) (jetstream.Stream, error) {
+	return c.EnsureWorkQueueStreamWithOptions(ctx, streamName, subjects, WorkQueueStreamOptions{MaxAge: maxAge})
+}
+
+// WorkQueueStreamOptions configures EnsureWorkQueueStreamWithOptions.
+type WorkQueueStreamOptions struct {
+	MaxAge time.Duration
+	// Duplicates is the Nats-Msg-Id de-duplication window. Zero keeps the
+	// server default (2 minutes, or MaxAge when shorter); it may not exceed
+	// MaxAge. Every caller ensuring one stream must pass the same value: the
+	// last create-or-update wins.
+	Duplicates time.Duration
+}
+
+// EnsureWorkQueueStreamWithOptions is EnsureWorkQueueStream with the
+// optional stream settings in opts.
+func (c *Client) EnsureWorkQueueStreamWithOptions(ctx context.Context, streamName string, subjects []string, opts WorkQueueStreamOptions) (jetstream.Stream, error) {
 	cfg := jetstream.StreamConfig{
-		Name:      streamName,
-		Subjects:  subjects,
-		Retention: jetstream.WorkQueuePolicy,
-		Discard:   jetstream.DiscardOld,
-		MaxAge:    maxAge,
-		Storage:   jetstream.FileStorage,
-		Replicas:  1,
+		Name:       streamName,
+		Subjects:   subjects,
+		Retention:  jetstream.WorkQueuePolicy,
+		Discard:    jetstream.DiscardOld,
+		MaxAge:     opts.MaxAge,
+		Duplicates: opts.Duplicates,
+		Storage:    jetstream.FileStorage,
+		Replicas:   1,
 	}
 
 	stream, err := c.js.CreateOrUpdateStream(ctx, cfg)
@@ -147,6 +164,17 @@ func (c *Client) EnsureWorkQueueStream(ctx context.Context, streamName string, s
 	c.streams[streamName] = stream
 	c.mu.Unlock()
 	return stream, nil
+}
+
+// MsgIDHeader is JetStream's de-duplication header (jetstream.MsgIDHeader):
+// a stream stores one message per id within its Duplicates window (2 minutes
+// unless the stream config sets one).
+const MsgIDHeader = jetstream.MsgIDHeader
+
+// MsgIDHeaders returns Publish headers carrying a JetStream message id, so
+// callers never hard-code the header name.
+func MsgIDHeaders(id string) map[string][]string {
+	return map[string][]string{MsgIDHeader: {id}}
 }
 
 // Publish publishes a message to the given subject

@@ -61,15 +61,6 @@ func ValidateSweepWindow(localAITimeout time.Duration) error {
 	return nil
 }
 
-// analysisLockKeySQL is the advisory-lock key for one analysis, given a SQL
-// expression yielding its id as canonical uuid text. The consumer (session
-// lock, pinned connection) and the sweep (transaction lock) must use the same
-// key: session and transaction advisory locks on one key conflict, which is
-// what keeps the sweep off rows a consumer is processing.
-func analysisLockKeySQL(idText string) string {
-	return "hashtextextended(" + idText + ",0)"
-}
-
 // sweepStaleSQL fails stale pending analyses across all tenants (maintenance,
 // like retention cleanup: it updates by primary key and never reads tenant
 // data). Safe with several worker replicas: FOR UPDATE SKIP LOCKED splits the
@@ -88,7 +79,7 @@ WITH candidates AS (
 ), unclaimed AS (
 	SELECT id FROM candidates
 	WHERE created_at < NOW() - make_interval(secs => $6)
-	   OR pg_try_advisory_xact_lock(` + analysisLockKeySQL("id::text") + `)
+	   OR pg_try_advisory_xact_lock(` + jobLockKeySQL("id::text") + `)
 )
 UPDATE incident_ai_analyses a
 SET status = 'failed', error_message = $3, completed_at = NOW(),

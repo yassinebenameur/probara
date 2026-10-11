@@ -41,7 +41,7 @@ func TestSweepStaleFailsOnlyOldUnclaimedPendingRows(t *testing.T) {
 	defer conn.Close()
 	var claimed bool
 	for _, id := range []uuid.UUID{held, heldPastCeiling} {
-		if err := conn.QueryRowContext(f.ctx, `SELECT pg_try_advisory_lock(`+analysisLockKeySQL("$1")+`)`, id.String()).Scan(&claimed); err != nil || !claimed {
+		if err := conn.QueryRowContext(f.ctx, `SELECT pg_try_advisory_lock(`+jobLockKeySQL("$1")+`)`, id.String()).Scan(&claimed); err != nil || !claimed {
 			t.Fatalf("lock held row: %t %v", claimed, err)
 		}
 	}
@@ -94,10 +94,10 @@ func TestSweepStaleFailsOnlyOldUnclaimedPendingRows(t *testing.T) {
 	// The consumer's own lock attempt is not blocked by a finished sweep, and
 	// once it lets go, the next sweep picks the row up.
 	var unlocked bool
-	if err := conn.QueryRowContext(f.ctx, `SELECT pg_advisory_unlock(`+analysisLockKeySQL("$1")+`)`, held.String()).Scan(&unlocked); err != nil || !unlocked {
+	if err := conn.QueryRowContext(f.ctx, `SELECT pg_advisory_unlock(`+jobLockKeySQL("$1")+`)`, held.String()).Scan(&unlocked); err != nil || !unlocked {
 		t.Fatalf("unlock: %t %v", unlocked, err)
 	}
-	if err := conn.QueryRowContext(f.ctx, `SELECT pg_advisory_unlock(`+analysisLockKeySQL("$1")+`)`, heldPastCeiling.String()).Scan(&unlocked); err != nil || !unlocked {
+	if err := conn.QueryRowContext(f.ctx, `SELECT pg_advisory_unlock(`+jobLockKeySQL("$1")+`)`, heldPastCeiling.String()).Scan(&unlocked); err != nil || !unlocked {
 		t.Fatalf("unlock past-ceiling row: %t %v", unlocked, err)
 	}
 	n, err := SweepStale(f.ctx, f.dbc)

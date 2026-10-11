@@ -173,9 +173,9 @@ func stateText(task string, fields map[string]any) string {
 
 // LabelRecord is one stored label as the exporter needs it.
 type LabelRecord struct {
-	SubjectType string            // incident_analysis | dependency_pair
+	SubjectType string            // incident_analysis | alert_triage | dependency_pair
 	SubjectKey  string            // row-id input
-	GroupKey    string            // "incident:<incident uuid>" | "pair:<lo>:<hi>"
+	GroupKey    string            // "incident:<incident uuid>" | "triage:<triage uuid>" | "pair:<lo>:<hi>"
 	Verdict     string            //
 	Request     DecisionSnapshot  // WithoutPredictions()
 	Predicted   *DecisionSnapshot // nil for pairs; only Decisions[].ID/Predicted/Final/Probabilities read

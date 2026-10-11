@@ -11,12 +11,15 @@ import (
 // AI label subject types (ai_labels.subject_type).
 const (
 	AILabelSubjectIncidentAnalysis = "incident_analysis"
+	AILabelSubjectAlertTriage      = "alert_triage"
 	AILabelSubjectDependencyPair   = "dependency_pair"
 )
 
 // AILabel is an operator's verdict on one AI subject, as returned by the label
 // routes and embedded in AILabelContext. Answers are keyed by the opaque
-// decision id of the stored snapshot.
+// decision id of the stored snapshot. For alert_triage labels IncidentLabel
+// holds the alert-level catalogue key (the triage's hypothesis or its
+// correction), and SubjectID is the alert_triage row id.
 type AILabel struct {
 	SubjectType      string                    `json:"subject_type"`
 	SubjectID        *uuid.UUID                `json:"subject_id,omitempty"`
@@ -44,8 +47,9 @@ type AILabelDecision struct {
 	Predicted   string     `json:"predicted"`
 }
 
-// AILabelContext is what the incident panel needs to render the label
-// control. Present only on ready analyses with a decision snapshot.
+// AILabelContext is what the incident panel (and the alert triage label
+// dialog) needs to render the label control. Present only on ready analyses
+// or triages with a decision snapshot.
 type AILabelContext struct {
 	CatalogueVersion string            `json:"catalogue_version"`
 	Predicted        string            `json:"predicted"`

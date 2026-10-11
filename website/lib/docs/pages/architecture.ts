@@ -105,7 +105,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
             {
               term: "NATS JetStream",
               description:
-                "Provides durable streams for check jobs, check results, alert events, and optional asynchronous analysis jobs.",
+                "Provides durable streams for check jobs, check results, alert events, and asynchronous local AI jobs (incident analysis and alert triage).",
             },
             {
               term: "Core NATS",

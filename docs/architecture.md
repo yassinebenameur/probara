@@ -13,7 +13,7 @@ website (`website/`) are separate applications.
 | `api/` | Tenant-scoped monitor CRUD, sessions/OIDC/RBAC, API keys, imports, incidents, maintenance, SLA definitions and reports (live, issued, PDF/CSV), notification configuration, templates, locations, push and OTLP ingestion | PostgreSQL and NATS |
 | `scheduler/` | Claim due monitors, publish check jobs, detect missing passive reports, schedule mesh probes, maintain rollups, retention, and soft-delete purging | PostgreSQL and NATS |
 | `scheduler/internal/ingest/` | Persist results idempotently; advance location/quorum and monitor state; update timelines, metrics, and dirty rollup buckets; publish live changes | Runs in the scheduler process; PostgreSQL and NATS |
-| `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers also use PostgreSQL |
+| `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
 | `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
 | `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
 | `web/` | Authenticated operator UI and `/api` proxy, including cookies and SSE streams | Go API |
@@ -40,6 +40,7 @@ values for overrides.
 | Alert events | JetStream `ALERTS` | `alerts.*` |
 | Optional asynchronous notification delivery | JetStream `NOTIFICATIONS` | `alerts.dispatch.<plugin-type>` |
 | Incident AI analysis (enabled by default) | JetStream `AI_RCA` | `ai.rca.jobs` |
+| Automatic alert triage (worker-internal, display only; 1 h max age, 30 min duplicate window, durable `ai-triage-workers`) | JetStream `AI_TRIAGE` | `ai.triage.jobs` |
 | Status-page/live monitor updates | Core NATS | `statuspage.updates` |
 
 ```mermaid
@@ -180,8 +181,42 @@ consumer re-creates its durable if it disappears from the server. A publish
 failure in the API records the run as failed immediately.
 
 Inference runs in an installation-owned service at `LOCAL_AI_URL`, called by
-the API (dependency suggestions, readiness) and the database-connected worker
-(incident analysis) only; private-location check execution never needs it.
+the API (dependency suggestions, readiness) and the database-connected platform
+worker (incident analysis, alert triage) only; private-location workers, the
+scheduler and the alerter never call it.
 Installation disabling overrides preserved workspace switches; missing
 workspace rows default enabled in both API and worker. Migration 000092 retains
 legacy text/provider columns and labels historical analyses.
+
+### Automatic alert triage
+
+Triage is display only: it writes `alert_triage` (migration 000094) and
+nothing else, and the alerter, `shared/alertrouting` and notification payloads
+never read it. Workspaces opt in through `ai_settings.auto_triage_enabled`
+with a delay, a per-monitor cooldown and an hourly cap.
+
+The relay (`worker/internal/airca/relay.go`) is a transactional outbox in each
+DB-connected platform worker. Every 15 seconds it opens one transaction, takes
+a transaction-scoped advisory lock (one tick across replicas, so the caps are
+exact), claims open alerts (`active` or `acknowledged`) with
+`INSERT … ON CONFLICT (alert_id) DO NOTHING`, re-arms queued rows that no
+delivery has started, and fails stale pending rows. It publishes `TriageJob`
+to `AI_TRIAGE` only after commit, with the triage ID as `Nats-Msg-Id`. An alert
+is claimed once it has been open for the workspace delay, and at least two
+monitor intervals (that part capped at 1 h), when it triggered within the last
+6 h. Claims stay within the workspace's hourly cap (skipped rows excluded) and
+a platform bound of 200 pending rows. A republish (at most twice, 3 min apart)
+lands inside the stream's 30 min duplicate window, so it restores only a
+publish that never reached the stream. Rows still pending 30 min after their
+first delivery, or 70 min after the claim with no delivery, become `failed`.
+
+The triage consumer has the same hardening as the `AI_RCA` consumer (shared in
+`jobrun.go`): heartbeat, one delivery deadline, per-job session lock,
+`RetryAfter`, final-delivery failure, lost-race detection and restart
+supervision. It skips resolved alerts, monitors still in cooldown, mesh-edge
+alerts and workspaces that turned triage off. Otherwise it builds
+single-monitor evidence anchored at the alert's `triggered_at`, through the
+same `buildEvidence` path as incident analysis (`context.go`), and runs the
+same analyzer. Every write is guarded by tenant, alert and `status='pending'`.
+A model outage records `failed`. `AI_TRIAGE_ENABLED=false` or
+`LOCAL_AI_DISABLED=true` stops claims, while queued rows drain as skipped.

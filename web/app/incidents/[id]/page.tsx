@@ -18,6 +18,7 @@ import {
 } from '@/lib/api';
 import type { Alert, IncidentDetail, IncidentState, Monitor } from '@/lib/types';
 import AIRootCausePanel from '@/components/incidents/AIRootCausePanel';
+import TriagePill from '@/components/alerts/TriagePill';
 import IncidentPublicationEditor from '@/components/incidents/IncidentPublicationEditor';
 import IncidentTimeline from '@/components/incidents/IncidentTimeline';
 import Panel from '@/components/ui/Panel';
@@ -339,8 +340,9 @@ export default function IncidentDetailPage() {
                   <div key={alert.id} className="flex items-center justify-between gap-3 py-2.5">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-white">{alert.monitor_name || alert.id}</div>
-                      <div className="mt-1 flex items-center gap-2 text-xs tabular-nums text-slate-500">
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs tabular-nums text-slate-500">
                         <Pill size="xs" dot tone={alertStatusTone(alert.status)}>{ALERT_STATUS_LABEL[alert.status]}</Pill>
+                        <TriagePill triage={alert.triage} />
                         <span>{pluralize(alert.failure_count, 'failure')}</span>
                       </div>
                     </div>

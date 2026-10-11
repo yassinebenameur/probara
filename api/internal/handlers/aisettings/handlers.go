@@ -4,6 +4,7 @@ package aisettings
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -69,13 +70,18 @@ func (h *Handlers) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	var req svc.UpdateRequest
 	if err := decodeSettings(w, r, &req); err != nil {
-		apierrors.WriteValidationError(w, "Only enabled is accepted for updates; connection tests accept an empty object. External provider fields are retired: "+err.Error())
+		apierrors.WriteValidationError(w, updateFieldsHint+err.Error())
 		return
 	}
 	settings, err := h.service.Update(r.Context(), tenantUUID, req)
 	if err != nil {
-		// Validation-style errors surface to the user; everything else is 500.
-		apierrors.WriteValidationError(w, err.Error())
+		var validation *svc.ValidationError
+		if errors.As(err, &validation) {
+			apierrors.WriteValidationError(w, validation.Msg)
+			return
+		}
+		h.logger.WithError(err).Error("Failed to update AI settings")
+		apierrors.WriteInternalError(w, "failed to update AI settings")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -92,13 +98,17 @@ func (h *Handlers) TestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	var req svc.TestRequest
 	if err := decodeSettings(w, r, &req); err != nil {
-		apierrors.WriteValidationError(w, "Only enabled is accepted for updates; connection tests accept an empty object. External provider fields are retired: "+err.Error())
+		apierrors.WriteValidationError(w, "Connection tests accept an empty object: "+err.Error())
 		return
 	}
 	result := h.service.Test(r.Context(), tenantUUID, req)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
 }
+
+// updateFieldsHint prefixes a PUT decode error. Unknown fields (the retired
+// external provider's base_url, api_key, provider, model) are rejected.
+const updateFieldsHint = "Updates accept enabled, auto_triage_enabled, triage_delay_seconds, triage_cooldown_seconds and triage_max_per_hour; external provider fields are retired: "
 
 func decodeSettings(w http.ResponseWriter, r *http.Request, out any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))

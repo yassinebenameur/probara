@@ -3,8 +3,8 @@
 //
 // A label never accepts client evidence: the request half is copied
 // server-side from the decision snapshot the worker persisted
-// (incident_ai_analyses.decision_snapshot) or recomputed for a dependency pair
-// through depsuggest.PairDecision. The export row format lives in
+// (incident_ai_analyses.decision_snapshot, alert_triage.decision_snapshot) or
+// recomputed for a dependency pair through depsuggest.PairDecision. The export row format lives in
 // shared/ai (WriteLabelExport). ai_labels only cascades on tenant delete, so
 // monitor purges and incident deletion keep labels exportable.
 package ailabels
@@ -44,6 +44,8 @@ var (
 	ErrNotFound             = errors.New("not found")
 	ErrAnalysisNotReady     = errors.New("analysis not ready")
 	ErrAnalysisNotLabelable = errors.New("analysis not labelable")
+	ErrTriageNotReady       = errors.New("triage not ready")
+	ErrTriageNotLabelable   = errors.New("triage not labelable")
 	ErrPairUnavailable      = errors.New("pair evidence unavailable")
 	ErrExportTooLarge       = errors.New("export too large")
 )
@@ -59,7 +61,7 @@ type pairDecider interface {
 	PairDecision(ctx context.Context, tenantID, monitorID, dependsOnID uuid.UUID) (ai.SnapshotDecision, error)
 }
 
-// Querier is the read access LoadIncidentContext needs.
+// Querier is the read access LoadLabelContext needs.
 type Querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -159,6 +161,95 @@ func (s *Service) LabelIncidentAnalysis(ctx context.Context, tenantID, incidentI
 	return label, nil
 }
 
+// LabelAlertTriage records the operator verdict on an alert's automatic
+// triage. The request half is the triage's stored decision snapshot; req.Label
+// is the alert-level key and lands in AILabel.IncidentLabel. The label joins
+// the export group of the earliest incident linking the alert, so triage and
+// incident labels of one outage share a split group.
+func (s *Service) LabelAlertTriage(ctx context.Context, tenantID, alertID uuid.UUID, req models.AlertTriageLabelRequest, labeledBy *uuid.UUID) (*models.AILabel, error) {
+	if req.Verdict != ai.LabelVerdictConfirmed && req.Verdict != ai.LabelVerdictCorrected {
+		return nil, &ValidationError{Msg: `verdict must be "confirmed" or "corrected"`}
+	}
+	var (
+		triageID uuid.NullUUID
+		status   sql.NullString
+		snapshot []byte
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tr.id, tr.status, tr.decision_snapshot FROM alerts a
+		LEFT JOIN alert_triage tr ON tr.alert_id = a.id AND tr.tenant_id = a.tenant_id
+		WHERE a.id = $1 AND a.tenant_id = $2`, alertID, tenantID).Scan(&triageID, &status, &snapshot)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("alert %w", ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load alert triage: %w", err)
+	}
+	if !triageID.Valid || status.String != models.AlertTriageStatusReady {
+		return nil, ErrTriageNotReady
+	}
+	snap, ok := decodeSnapshot(snapshot)
+	if !ok {
+		return nil, ErrTriageNotLabelable
+	}
+	answers, alertLabel, err := ai.ResolveIncidentAnswers(snap, req.Verdict, req.Label, req.Answers)
+	if errors.Is(err, ai.ErrSnapshotNotLabelable) {
+		return nil, ErrTriageNotLabelable
+	}
+	if err != nil {
+		return nil, triageLabelError(err)
+	}
+
+	var incidentID uuid.NullUUID
+	err = s.db.QueryRowContext(ctx, `
+		SELECT ia.incident_id FROM incident_alerts ia
+		JOIN incidents i ON i.id = ia.incident_id AND i.tenant_id = $2
+		WHERE ia.alert_id = $1
+		ORDER BY ia.created_at, ia.incident_id LIMIT 1`, alertID, tenantID).Scan(&incidentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("load alert incident: %w", err)
+	}
+	var group *uuid.UUID
+	if incidentID.Valid {
+		group = &incidentID.UUID
+	}
+
+	id := triageID.UUID
+	label := &models.AILabel{
+		SubjectType:      models.AILabelSubjectAlertTriage,
+		SubjectID:        &id,
+		Verdict:          req.Verdict,
+		IncidentLabel:    alertLabel,
+		Answers:          answers,
+		CatalogueVersion: snap.Catalogue,
+		ModelVersion:     snap.Model.Version,
+		LabeledBy:        labeledBy,
+	}
+	predicted := ai.SnapshotPredictions(snap)
+	if err := s.upsert(ctx, tenantID, id.String(), &id, group, label, snap.WithoutPredictions(), &predicted, snap.Model); err != nil {
+		return nil, err
+	}
+	return label, nil
+}
+
+// triageLabelError rewrites ResolveIncidentAnswers' validation messages for
+// the triage endpoint: they name the incident endpoint's incident_label field
+// and "analysis", but the triage body field is label. The wording is pinned by
+// TestTriageLabelErrorNamesTriageField, so a reworded shared/ai message fails
+// there instead of leaking incident wording to triage clients.
+func triageLabelError(err error) error {
+	var ve *ai.LabelValidationError
+	if !errors.As(err, &ve) {
+		return err
+	}
+	msg := strings.NewReplacer(
+		"incident_label", "label",
+		"an analysis", "a triage",
+		"this analysis", "this triage",
+	).Replace(ve.Msg)
+	return &ai.LabelValidationError{Msg: msg}
+}
+
 // LabelDependencySuggestion records the operator verdict on a dependency
 // suggestion. Evidence is recomputed now through depsuggest, never taken from
 // the request.
@@ -245,11 +336,18 @@ func (s *Service) upsert(ctx context.Context, tenantID uuid.UUID, subjectKey str
 	).Scan(&label.LabeledAt)
 }
 
-// LoadIncidentContext builds the label control context for a ready analysis.
-// It returns nil (no control) when the snapshot carries no labelable
-// decision. Monitor names are tenant-scoped and include soft-deleted
-// monitors; a purged monitor has a null name.
+// LoadIncidentContext builds the label control context for a ready incident
+// analysis (LoadLabelContext for incident_analysis).
 func LoadIncidentContext(ctx context.Context, q Querier, tenantID, analysisID uuid.UUID, snapshot json.RawMessage) (*models.AILabelContext, error) {
+	return LoadLabelContext(ctx, q, tenantID, models.AILabelSubjectIncidentAnalysis, analysisID, snapshot)
+}
+
+// LoadLabelContext builds the label control context for a snapshot-backed
+// subject (an incident analysis or an alert triage). It returns nil (no
+// control) when the snapshot carries no labelable decision. Monitor names are
+// tenant-scoped and include soft-deleted monitors; a purged monitor has a
+// null name.
+func LoadLabelContext(ctx context.Context, q Querier, tenantID uuid.UUID, subjectType string, subjectID uuid.UUID, snapshot json.RawMessage) (*models.AILabelContext, error) {
 	snap, ok := decodeSnapshot(snapshot)
 	if !ok {
 		return nil, nil
@@ -306,7 +404,7 @@ func LoadIncidentContext(ctx context.Context, q Querier, tenantID, analysisID uu
 		}
 		out.Decisions = append(out.Decisions, dec)
 	}
-	label, err := loadLabel(ctx, q, tenantID, models.AILabelSubjectIncidentAnalysis, analysisID.String())
+	label, err := loadLabel(ctx, q, tenantID, subjectType, subjectID.String())
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +451,7 @@ func loadLabel(ctx context.Context, q Querier, tenantID uuid.UUID, subjectType, 
 
 var exportableSubjects = map[string]bool{
 	models.AILabelSubjectIncidentAnalysis: true,
+	models.AILabelSubjectAlertTriage:      true,
 	models.AILabelSubjectDependencyPair:   true,
 }
 
@@ -372,7 +471,7 @@ func (s *Service) Export(ctx context.Context, tenantID uuid.UUID, f models.AILab
 	}
 	subjects := f.SubjectTypes
 	if len(subjects) == 0 {
-		subjects = []string{models.AILabelSubjectIncidentAnalysis, models.AILabelSubjectDependencyPair}
+		subjects = []string{models.AILabelSubjectIncidentAnalysis, models.AILabelSubjectAlertTriage, models.AILabelSubjectDependencyPair}
 	}
 	for _, t := range subjects {
 		if !exportableSubjects[t] {
@@ -444,6 +543,14 @@ func (s *Service) Export(ctx context.Context, tenantID uuid.UUID, f models.AILab
 				continue
 			}
 			rec.GroupKey = "incident:" + incidentID.UUID.String()
+		case models.AILabelSubjectAlertTriage:
+			// A triage linked to an incident shares that incident's split
+			// group; an unlinked one is its own group.
+			if incidentID.Valid {
+				rec.GroupKey = "incident:" + incidentID.UUID.String()
+			} else {
+				rec.GroupKey = "triage:" + rec.SubjectKey
+			}
 		default:
 			rec.GroupKey = "pair:" + rec.SubjectKey
 		}

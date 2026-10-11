@@ -53,9 +53,20 @@ export function dependencyLabelRequest(
   return req;
 }
 
+// Operator copy for the triage label endpoint's 409 codes, so the dialog
+// reads the same even if a proxy strips the server's message.
+const LABEL_ERROR_COPY: Record<string, string> = {
+  triage_not_ready: 'This alert has no completed triage to label yet.',
+  triage_not_labelable: 'This triage sent no decisions to the model, so it cannot be labelled.',
+};
+
 // API errors are thrown as plain `{error, message}` objects, not Error
 // instances; the label endpoints' 409 messages are written for operators.
 export function labelErrorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object' && 'error' in err) {
+    const code = (err as { error?: unknown }).error;
+    if (typeof code === 'string' && LABEL_ERROR_COPY[code]) return LABEL_ERROR_COPY[code];
+  }
   if (err && typeof err === 'object' && 'message' in err) {
     const m = (err as { message?: unknown }).message;
     if (typeof m === 'string' && m) return m;

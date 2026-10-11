@@ -72,6 +72,7 @@ import type {
   AITestResult,
   IncidentAIAnalysis,
   IncidentAILabelRequest,
+  AlertTriageLabelRequest,
   AILabel,
   AILabelExportFilter,
   AILabelExportResult,
@@ -586,6 +587,18 @@ export async function getRecentAlerts(limit = 10): Promise<Alert[]> {
   const queryParams = new URLSearchParams();
   queryParams.append('limit', String(limit));
   return apiRequest<Alert[]>('GET', `/v1/alerts/recent?${queryParams.toString()}`);
+}
+
+// One alert; carries triage.label_context when its triage is labelable.
+export async function getAlert(id: string): Promise<Alert> {
+  return apiRequest<Alert>('GET', `/v1/alerts/${id}`);
+}
+
+// Confirms or corrects an alert's ready triage as a training label (a write:
+// viewers and read-scope keys get 403). 409 when the triage is not ready or
+// sent the model no decisions.
+export async function labelAlertTriage(alertId: string, req: AlertTriageLabelRequest): Promise<AILabel> {
+  return apiRequest<AILabel>('POST', `/v1/alerts/${alertId}/triage/label`, req);
 }
 
 export async function acknowledgeAlert(id: string): Promise<Alert> {

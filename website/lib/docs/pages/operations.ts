@@ -386,9 +386,14 @@ make db-restore`,
                 'Monitor state intervals (the timeline behind time-based availability and [SLA reports](/docs/slas/)) are not pruned by time; they are removed only with a monitor’s history or when a deleted monitor is purged. Issued SLA reports are kept until their SLA is deleted and survive monitor purges.',
             },
             {
+              term: 'Alert triage',
+              description:
+                'Each `alert_triage` row lives as long as its alert: it is deleted with the alert (monitor purge or history deletion) or with its workspace, and is not pruned by time or by `data_retention_days`. Labels on a triage outlive it, like other AI labels.',
+            },
+            {
               term: 'AI training labels',
               description:
-                'Operator labels on AI analyses and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
+                'Operator labels on AI analyses, alert triages and dependency suggestions are not pruned by time or by `data_retention_days`, and survive monitor purges and incident deletion; they are removed only with their workspace.',
             },
             {
               term: 'Audit retention',
@@ -451,6 +456,7 @@ make db-restore`,
             ['`ALERTS` / `alerts`', 'Alert event stream/subject', 'Alerter publishes; API live subscriber consumes.'],
             ['`NOTIFICATIONS` / `alerts.dispatch.>`', 'Optional work queue', 'Async alerter-to-worker dispatch.'],
             ['`AI_RCA` / `ai.rca.jobs`', 'AI work queue', 'API publishes tenant RCA work; DB-connected workers consume, restart the consumer with capped backoff (re-creating the durable if it disappears), and fail analyses pending for over 10 minutes.'],
+            ['`AI_TRIAGE` / `ai.triage.jobs`', 'Alert triage work queue (1-hour max age, 30-minute duplicate window)', 'Worker-internal and display only. The triage relay in DB-connected platform workers claims alerts every 15 seconds and publishes one job per claim, using the triage ID as `Nats-Msg-Id`. It republishes a job no worker has started up to twice, 3 minutes apart (duplicates are dropped), and fails triages still pending 30 minutes after a worker started them or 70 minutes after the claim when none did. The durable `ai-triage-workers` consumer restarts like `AI_RCA`. One relay tick runs at a time across replicas (a PostgreSQL advisory lock).'],
             ['Core NATS `statuspage.updates`', 'Non-JetStream fan-out', 'Cache/status update invalidation.'],
           ],
         },

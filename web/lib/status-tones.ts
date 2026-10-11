@@ -271,6 +271,25 @@ export function incidentSeverityLabel(severity: IncidentSeverity | string | null
   return INCIDENT_SEVERITY_LABEL[severity as IncidentSeverity] ?? (severity || 'Unknown');
 }
 
+// ── AI ───────────────────────────────────────────────────────────────────
+
+export type AIConfidence = 'low' | 'medium' | 'high';
+
+/**
+ * Tone of an AI confidence level (incident analysis, alert triage). Never
+ * danger or warning: a confident suspected cause is not a worse state, and
+ * low confidence is a hint, not an error.
+ */
+export const AI_CONFIDENCE_TONE: Record<AIConfidence, StatusTone> = {
+  high: 'success',
+  medium: 'info',
+  low: 'neutral',
+};
+
+export function aiConfidenceTone(confidence: AIConfidence | string | null | undefined): StatusTone {
+  return AI_CONFIDENCE_TONE[confidence as AIConfidence] ?? 'neutral';
+}
+
 // ── Tone → classes ───────────────────────────────────────────────────────
 
 /** Text colour per tone, for figures that carry a state without a pill. */

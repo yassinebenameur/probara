@@ -2,9 +2,11 @@
 
 import { ReactNode, useState } from 'react';
 import Link from 'next/link';
-import { Bell, BellOff, CircleCheck, Network, UserCheck } from 'lucide-react';
+import { Bell, BellOff, Check, CircleCheck, Network, PencilLine, Tag, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
-import { acknowledgeAlert, resolveAlert } from '@/lib/api';
+import { acknowledgeAlert, labelAlertTriage, resolveAlert } from '@/lib/api';
+import { labelErrorMessage } from '@/lib/ai-labels';
+import { buildTriageLabelRequest, triageMenuCopy, triagePresentation } from '@/lib/ai-triage';
 import { formatDateTime, formatDateTimeFull, formatDurationBetween, pluralize } from '@/lib/format';
 import { formatAlertValue, formatSeriesLabel } from '@/lib/metrics';
 import { shortFailureReason } from '@/lib/monitor-utils';
@@ -13,12 +15,21 @@ import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import IconButton from '@/components/ui/IconButton';
 import EmptyState from '@/components/ui/EmptyState';
 import Pill from '@/components/ui/Pill';
+import RowMenu, { RowMenuItem } from '@/components/ui/RowMenu';
+import TriagePill from '@/components/alerts/TriagePill';
+import TriageLabelDialog from '@/components/alerts/TriageLabelDialog';
 import TableSkeleton from '@/components/ui/TableSkeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 
 interface AlertTableProps {
   alerts: Alert[];
   onAlertUpdate?: (alert: Alert) => void;
+  /**
+   * A triage label was saved for this alert. The owner flips the row's
+   * `labelled` flag on its current list (`markTriageLabelled`); passing an id
+   * rather than a row keeps a live update made meanwhile.
+   */
+  onTriageLabelled?: (alertId: string) => void;
   /** A fetch is in flight: skeleton on the first load, dimmed rows after. */
   loading?: boolean;
   emptyTitle?: string;
@@ -39,8 +50,9 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
-export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle = 'No alerts found' }: AlertTableProps) {
-  const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' } | null>(null);
+export default function AlertTable({ alerts, onAlertUpdate, onTriageLabelled, loading, emptyTitle = 'No alerts found' }: AlertTableProps) {
+  const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' | 'label' } | null>(null);
+  const [labelling, setLabelling] = useState<{ alert: Alert; mode: 'prompt' | 'correct' } | null>(null);
   const canWrite = useCanWrite();
   const { showToast } = useToast();
 
@@ -70,6 +82,29 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
     }
   };
 
+  // Pills reflect the last fetch only; a saved label flips this row's
+  // `labelled` flag rather than refetching the page. Only the id goes up:
+  // this closure's `alerts` is the render the action started in, so sending
+  // a row from it would overwrite a live update that landed meanwhile.
+  const handleConfirmTriage = async (alert: Alert) => {
+    try {
+      setProcessing({ id: alert.id, action: 'label' });
+      await labelAlertTriage(alert.id, buildTriageLabelRequest('confirmed'));
+      onTriageLabelled?.(alert.id);
+      showToast('Label saved', 'success');
+    } catch (err) {
+      showToast(labelErrorMessage(err, 'Could not save the label'), 'error');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  // AILabelControl already toasts "Label saved".
+  const handleDialogLabelled = () => {
+    if (labelling) onTriageLabelled?.(labelling.alert.id);
+    setLabelling(null);
+  };
+
   // The skeleton is for the first load only; a refetch keeps the rows on
   // screen (dimmed) so the page neither jumps nor loses its scroll.
   if (alerts.length === 0) {
@@ -84,8 +119,12 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
   }
 
   // No actions column when nothing listed can be acted on (the Resolved
-  // view): two empty slots per row would only squeeze the monitor column.
-  const showActions = canWrite && alerts.some((alert) => alert.status !== 'resolved');
+  // view without labelable triage): empty slots would only squeeze the
+  // monitor column. Each slot shows only when some row uses it, and rows
+  // without that action keep an empty slot so the columns stay aligned.
+  const anyOpen = alerts.some((alert) => alert.status !== 'resolved');
+  const anyLabelable = alerts.some((alert) => alert.triage?.labelable);
+  const showActions = canWrite && (anyOpen || anyLabelable);
 
   return (
     <div
@@ -195,8 +234,9 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
                   </p>
                   {((alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id) ||
                     (alert.suppression_reason === 'dependency' && !alert.root_cause_monitor_name) ||
-                    (alert.impacted_count ?? 0) > 0) && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
+                    (alert.impacted_count ?? 0) > 0 ||
+                    triagePresentation(alert.triage).visible) && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1">
                       {alert.root_cause_monitor_name && alert.root_cause_monitor_id !== alert.monitor_id && (
                         <Link
                           href={`/monitors/${alert.root_cause_monitor_id}`}
@@ -234,6 +274,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
                           Affects {pluralize(alert.impacted_count ?? 0, 'monitor')}
                         </span>
                       )}
+                      <TriagePill triage={alert.triage} />
                     </div>
                   )}
                 </td>
@@ -261,10 +302,11 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
                 </td>
                 {showActions && (
                   <td className="text-right">
-                    {/* Two fixed slots, acknowledge then resolve, so Resolve
-                        lines up down the column whatever the row's state. */}
+                    {/* Fixed slots, acknowledge, resolve, then the triage
+                        label menu, so each lines up down the column
+                        whatever the row's state. */}
                     <div className="flex items-center justify-end gap-1">
-                      {alert.status === 'active' ? (
+                      {!anyOpen ? null : alert.status === 'active' ? (
                         <IconButton
                           icon={<UserCheck strokeWidth={1.75} />}
                           label="Acknowledge"
@@ -283,7 +325,7 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
                       ) : (
                         <span className="h-8 w-8" aria-hidden="true" />
                       )}
-                      {alert.status !== 'resolved' ? (
+                      {!anyOpen ? null : alert.status !== 'resolved' ? (
                         <IconButton
                           icon={<CircleCheck strokeWidth={1.75} />}
                           label="Resolve"
@@ -291,6 +333,32 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
                           disabled={processing?.id === alert.id}
                           loading={processing?.id === alert.id && processing.action === 'resolve'}
                         />
+                      ) : (
+                        <span className="h-8 w-8" aria-hidden="true" />
+                      )}
+                      {!anyLabelable ? null : alert.triage?.labelable ? (
+                        <RowMenu label="Label suspected cause" disabled={processing?.id === alert.id}>
+                          {alert.triage.labelled ? (
+                            <RowMenuItem
+                              icon={<Tag strokeWidth={1.75} />}
+                              onSelect={() => setLabelling({ alert, mode: 'prompt' })}
+                            >
+                              {triageMenuCopy(alert.triage).change}
+                            </RowMenuItem>
+                          ) : (
+                            <>
+                              <RowMenuItem icon={<Check strokeWidth={1.75} />} onSelect={() => void handleConfirmTriage(alert)}>
+                                {triageMenuCopy(alert.triage).confirm}
+                              </RowMenuItem>
+                              <RowMenuItem
+                                icon={<PencilLine strokeWidth={1.75} />}
+                                onSelect={() => setLabelling({ alert, mode: 'correct' })}
+                              >
+                                {triageMenuCopy(alert.triage).correct}
+                              </RowMenuItem>
+                            </>
+                          )}
+                        </RowMenu>
                       ) : (
                         <span className="h-8 w-8" aria-hidden="true" />
                       )}
@@ -302,6 +370,14 @@ export default function AlertTable({ alerts, onAlertUpdate, loading, emptyTitle 
           </tbody>
         </table>
       </div>
+      {labelling && (
+        <TriageLabelDialog
+          alert={labelling.alert}
+          initialMode={labelling.mode}
+          onClose={() => setLabelling(null)}
+          onLabelled={handleDialogLabelled}
+        />
+      )}
     </div>
   );
 }

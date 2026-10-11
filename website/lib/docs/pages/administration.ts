@@ -96,7 +96,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "AI training labels are writes, not diagnostics: confirming or correcting an [incident analysis](/docs/alerting/#ai-analysis) and accepting or dismissing a [dependency suggestion](/docs/dependencies/#suggestions) need an editor, admin, superadmin, or write API key, and viewers and read keys get HTTP 403. Only tenant admins and superadmins, signed in, can [export labels](#ai-settings); every API key is refused, write scope included.",
+            "AI training labels are writes, not diagnostics: confirming or correcting an [incident analysis](/docs/alerting/#ai-analysis) or an [alert triage](/docs/alerting/#ai-triage) and accepting or dismissing a [dependency suggestion](/docs/dependencies/#suggestions) need an editor, admin, superadmin, or write API key, and viewers and read keys get HTTP 403. Only tenant admins and superadmins, signed in, can [export labels](#ai-settings); every API key is refused, write scope included.",
         },
         {
           type: "callout",
@@ -317,12 +317,16 @@ export const ADMINISTRATION_PAGE: DocPage = {
       title: "Workspace local AI settings",
       blocks: [
         { type: "table", columns: ["Field", "Meaning"], rows: [
-          ["`enabled`", "Only writable field; enable dependency suggestions and asynchronous incident analysis"],
+          ["`enabled`", "Writable; enable dependency suggestions, asynchronous incident analysis and alert triage for the workspace"],
           ["`installation_enabled`", "Installation-level availability switch; overrides workspace enablement"],
           ["`available` / `model`", "Read-only local-service readiness and model identity. Each API process caches the result for about 30 seconds, failures included, so a just-fixed service can read as unavailable until the cache expires."],
           ["`message`", "One of four fixed readiness strings (disabled, not configured correctly, unreachable, not ready); details are only in the API logs"],
+          ["`auto_triage_enabled`", "Writable, default `false`; [triage new alerts automatically](/docs/alerting/#ai-triage). Takes effect only while `enabled` is also on"],
+          ["`triage_delay_seconds`", "Writable, default `60`, 0–3600; how long an alert must stay open before it is triaged. The wait is never shorter than two check intervals of the alert's monitor (that part capped at one hour), so `0` still waits for them"],
+          ["`triage_cooldown_seconds`", "Writable, default `900`, 0–86400; skip an alert's triage when its monitor already has a ready triage completed within this time. `0` turns the cooldown off"],
+          ["`triage_max_per_hour`", "Writable, default `60`, 1–600; triages claimed per rolling hour in this workspace, skipped ones not counted"],
         ] },
-        { type: "paragraph", text: "Settings → AI controls the workspace switch and tests the installation-owned CPU service. Absent workspace settings default enabled; existing enable and disable switches are preserved. Settings updates accept only `enabled`; legacy provider fields return a validation error. The connection test accepts an empty object, cannot accept destinations or credentials, always probes afresh and refreshes the readiness cache of the API replica that serves it." },
+        { type: "paragraph", text: "Settings → AI controls the workspace switch and tests the installation-owned CPU service. Absent workspace settings default enabled, with auto-triage off and the triage defaults above; existing enable and disable switches are preserved. Settings updates are partial: any of the five writable fields, at least one, and an omitted field keeps its stored value. Out-of-range numbers and legacy provider fields return a validation error. Editors, admins, superadmins and write API keys can change these settings; viewers see them read-only. The **Automatic alert triage** block (**Triage new alerts automatically**, **Wait before triage (s)**, **Cooldown per monitor (s)**, **Max triages per hour**) is locked while local AI is disabled for the installation or the workspace switch is off. The API still accepts `auto_triage_enabled` with AI off, and no alert is triaged until both are on. The connection test accepts an empty object, cannot accept destinations or credentials, always probes afresh and refreshes the readiness cache of the API replica that serves it." },
         { type: "paragraph", text: "Tenant admins also see **Training labels** under Settings → AI. **Export labels** downloads every label in the workspace as JSONL training rows (`POST /api/v1/ai-labels/export`, which also accepts a `since`/`until` window and subject types). A row carries evidence counters, catalogue answers and provenance, with no monitor names or IDs (see [AI training labels](/docs/security/#notifications-integrations-ai)). Labelling and export never call the model, so they work while local AI is disabled." },
         { type: "paragraph", text: "Model decisions are advisory and explanations cite bounded monitoring evidence. No configuration secrets, bodies, screenshots or arbitrary error text are sent to the model. Suggested edges and troubleshooting actions require operator review. Controlled scenarios do not establish real-world accuracy." },
       ],
@@ -350,7 +354,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "AI labels record as `incident.label` (resource `incident/{id}`), `monitor.label` (dependency suggestions), and `ai-label.export`. A viewer's refused label attempt is recorded as `denied`.",
+            "AI labels record as `incident.label` (resource `incident/{id}`), `alert.label` (alert triage, resource `alert/{id}`), `monitor.label` (dependency suggestions), and `ai-label.export`; AI settings changes record as `ai-setting.update`. A viewer's refused label attempt is recorded as `denied`.",
         },
         {
           type: "paragraph",

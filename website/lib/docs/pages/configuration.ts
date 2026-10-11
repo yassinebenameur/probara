@@ -572,6 +572,22 @@ export const CONFIGURATION_PAGE: DocPage = {
             ['`AI_RCA_SUBJECT`', '`ai.rca.jobs`', 'Must match API.'],
             ['`AI_RCA_CONSUMER_NAME`', '`ai-rca-workers`', 'Durable AI consumer.'],
             [
+              '`AI_TRIAGE_ENABLED`',
+              '`true`; boolean, invalid values fail startup',
+              'Platform kill switch for [automatic alert triage](/docs/alerting/#ai-triage). `false` stops new claims only; queued triages finish as skipped without calling the model.',
+            ],
+            [
+              '`AI_TRIAGE_STREAM`',
+              '`AI_TRIAGE`',
+              'Alert triage work-queue stream (1-hour max age). Must differ from `AI_RCA_STREAM`, or startup fails.',
+            ],
+            [
+              '`AI_TRIAGE_SUBJECT`',
+              '`ai.triage.jobs`',
+              'Worker-internal: the relay publishes and the triage consumer reads it, so the API does not need it. Must differ from `AI_RCA_SUBJECT`, or startup fails.',
+            ],
+            ['`AI_TRIAGE_CONSUMER_NAME`', '`ai-triage-workers`', 'Durable triage consumer.'],
+            [
               '`NOTIFICATIONS_ENABLED`',
               '`false`',
               'Starts the worker notification consumer only when PostgreSQL is also configured.',
@@ -592,7 +608,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The database-connected worker uses the same `LOCAL_AI_*` and `SMTP_*` variables documented on this page. Compose and Helm do not wire them yet. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`; Helm wires SMTP through its `smtp` values block.',
+            'The database-connected worker uses the same `LOCAL_AI_*` and `SMTP_*` variables documented on this page. Compose and Helm do not wire them yet. The `AI_RCA_*` and `AI_TRIAGE_*` variables are not wired either, so their code defaults apply; set them through `extraEnv` only to rename the streams. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`; Helm wires SMTP through its `smtp` values block.',
         },
       ],
     },

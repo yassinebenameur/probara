@@ -70,6 +70,9 @@ type AlertWithDetails struct {
 	// ImpactedCount is how many open downstream alerts this alert's monitor is
 	// the suppressed root cause of — the blast radius its notification lists.
 	ImpactedCount int `json:"impacted_count,omitempty"`
+	// Triage is the alert's automatic, display-only AI triage. Absent when
+	// the alert has no triage row, and always absent on SSE events.
+	Triage *AlertTriage `json:"triage,omitempty"`
 }
 
 // AlertListResponse represents a paginated list of alerts

@@ -63,6 +63,10 @@ func TestRequireWriteMatrix(t *testing.T) {
 		{"viewer POST incident AI label NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/incidents/x/ai-analysis/label", http.StatusForbidden},
 		{"viewer POST dependency label NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", http.StatusForbidden},
 		{"viewer POST AI label export NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/ai-labels/export", http.StatusForbidden},
+		{"viewer POST alert triage label NOT allowlisted", memberCtx("viewer"), http.MethodPost, "/api/v1/alerts/x/triage/label", http.StatusForbidden},
+		{"editor POST alert triage label", memberCtx("editor"), http.MethodPost, "/api/v1/alerts/x/triage/label", http.StatusOK},
+		{"read key POST alert triage label", apiKeyCtx("read"), http.MethodPost, "/api/v1/alerts/x/triage/label", http.StatusForbidden},
+		{"write key POST alert triage label", apiKeyCtx("write"), http.MethodPost, "/api/v1/alerts/x/triage/label", http.StatusOK},
 		{"editor POST incident AI label", memberCtx("editor"), http.MethodPost, "/api/v1/incidents/x/ai-analysis/label", http.StatusOK},
 		{"editor POST dependency label", memberCtx("editor"), http.MethodPost, "/api/v1/monitors/dependency-suggestions/label", http.StatusOK},
 
@@ -170,6 +174,7 @@ func TestAILabelRoutesAreWrites(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/incidents/3f2a6c1e-0000-0000-0000-000000000001/ai-analysis/label",
 		"/api/v1/monitors/dependency-suggestions/label",
+		"/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/triage/label",
 		"/api/v1/ai-labels/export",
 	} {
 		if isPostReadPath(path) {
