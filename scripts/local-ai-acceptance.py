@@ -122,7 +122,7 @@ def run():
     assert proposal,suggestions
     request('POST',scoped(f"/api/v1/monitors/{state['dependent']}/dependencies"),{'depends_on_id':state['upstream']})
     try:request('POST',scoped(f"/api/v1/monitors/{state['upstream']}/dependencies"),{'depends_on_id':state['dependent']});raise AssertionError('Cycle accepted')
-    except urllib.error.HTTPError as error:assert error.code==400,error.code
+    except urllib.error.HTTPError as error:assert error.code==409,error.code  # dependency_cycle
     report['suggestions']={'analyzed_pairs':suggestions['analyzed_pairs'],'proposals':len(suggestions['suggestions']),'accepted':True,'cycle_rejected':True}
     request('PUT',scoped('/api/v1/ai-settings'),{'enabled':False})
     try:request('POST',scoped(f"/api/v1/incidents/{state['incident']}/ai-analysis"),{});raise AssertionError('Disabled workspace analyzed')
