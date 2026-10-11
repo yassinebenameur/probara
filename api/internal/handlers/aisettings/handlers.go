@@ -23,6 +23,11 @@ type Handlers struct {
 
 // NewHandlers creates a new AI settings handler.
 func NewHandlers(service *svc.Service, log *logger.Logger) *Handlers {
+	// The service logs detailed probe errors (internal dial addresses) that
+	// never reach a response; give it the API logger.
+	if service != nil {
+		service.SetLogger(log)
+	}
 	return &Handlers{service: service, logger: log}
 }
 

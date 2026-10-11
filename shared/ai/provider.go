@@ -53,6 +53,19 @@ type localAnalyzer struct {
 }
 
 func NewAnalyzer(cfg Config) (RootCauseAnalyzer, error) {
+	a, err := newLocalAnalyzer(cfg)
+	if err != nil {
+		// Return a literal nil, not a nil *localAnalyzer: wrapping a typed nil
+		// pointer would give callers a non-nil interface on the error path.
+		return nil, err
+	}
+	return a, nil
+}
+
+// newLocalAnalyzer is the one place the client is validated and built.
+// NewAnalyzer, NewDependencyAdvisor and Probe all go through it, so none of
+// them needs to type-assert the interface NewAnalyzer returns.
+func newLocalAnalyzer(cfg Config) (*localAnalyzer, error) {
 	if cfg.Disabled {
 		return nil, ErrNotConfigured
 	}
@@ -168,14 +181,14 @@ func (a *localAnalyzer) decide(ctx context.Context, decisions []Decision) (Batch
 }
 
 func Probe(ctx context.Context, cfg Config) (string, error) {
-	analyzer, err := NewAnalyzer(cfg)
+	analyzer, err := newLocalAnalyzer(cfg)
 	if err != nil {
 		return "", err
 	}
 	var out struct {
 		Model ModelIdentity `json:"model"`
 	}
-	if err := analyzer.(*localAnalyzer).call(ctx, "GET", "/readyz", nil, &out); err != nil {
+	if err := analyzer.call(ctx, "GET", "/readyz", nil, &out); err != nil {
 		return "", err
 	}
 	if out.Model.Engine != "laya-cpu" || out.Model.Version == "" || out.Model.Catalogue != CatalogueVersion {

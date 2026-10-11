@@ -2,9 +2,17 @@ package aisettings
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/testutil"
-	"testing"
 )
 
 func TestWorkspaceEnablementPreservesLegacySwitch(t *testing.T) {
@@ -44,5 +52,38 @@ func TestWorkspaceEnablementPreservesLegacySwitch(t *testing.T) {
 	enabled, err = disabled.EffectiveEnabled(ctx, tenant)
 	if err != nil || enabled {
 		t.Fatal("installation disable ignored")
+	}
+}
+
+func TestGetCachesReadinessAcrossConcurrentRequests(t *testing.T) {
+	ctx := context.Background()
+	dbc, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+	tenant := testutil.InsertTenant(ctx, t, dbc, "AI readiness cache")
+	s := NewService(dbc, ai.Config{BaseURL: "http://10.20.30.40:8090", APIKey: "0123456789abcdef-token"})
+	var calls atomic.Int32
+	s.probe = func(ctx context.Context, cfg ai.Config) (string, error) {
+		calls.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		return "", fmt.Errorf("local AI unavailable: %w", &url.Error{Op: "Get", URL: cfg.BaseURL + "/readyz", Err: errors.New("connection refused")})
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := s.Get(ctx, tenant)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if got.Available || got.Message != MessageUnreachable || strings.Contains(got.Message, "10.20.30.40") {
+				t.Errorf("settings %+v", got)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("probe calls = %d, want 1", n)
 	}
 }

@@ -288,9 +288,10 @@ func (a *localAnalyzer) SuggestDependencies(ctx context.Context, in DependencyIn
 	return out, nil
 }
 func NewDependencyAdvisor(cfg Config) (DependencyAdvisor, error) {
-	a, err := NewAnalyzer(cfg)
+	a, err := newLocalAnalyzer(cfg)
 	if err != nil {
+		// Literal nil keeps the interface nil on error (see NewAnalyzer).
 		return nil, err
 	}
-	return a.(*localAnalyzer), nil
+	return a, nil
 }

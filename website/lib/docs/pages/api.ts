@@ -619,7 +619,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/incidents/{id}/ai-analysis`",
-              "Queue tenant-configured asynchronous analysis",
+              "Queue asynchronous local AI analysis; a queueing failure records the run as failed",
             ],
             [
               "`GET /api/v1/incidents/{id}/ai-analysis`",
@@ -824,15 +824,15 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/ai-settings`",
-              "Authenticated; effective tenant-safe settings",
+              "Authenticated; workspace switch, installation switch and cached local-service readiness",
             ],
             [
               "`PUT /api/v1/ai-settings`",
-              "Authorized write; replace tenant AI configuration",
+              "Authorized write; accepts only `enabled`",
             ],
             [
               "`POST /api/v1/ai-settings/test`",
-              "Compute-only provider connection test",
+              "Fresh local-service readiness probe; refreshes this replica's readiness cache",
             ],
             [
               "`GET /api/v1/users`",

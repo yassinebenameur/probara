@@ -3,11 +3,19 @@ package aisettings
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"sync"
+	"time"
+
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
+
 	"github.com/yassinebenameur/probara/shared/ai"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
-	"time"
+	"github.com/yassinebenameur/probara/shared/logger"
 )
 
 type Settings struct {
@@ -26,14 +34,79 @@ type TestResult struct {
 	Model   string `json:"model,omitempty"`
 	Message string `json:"message,omitempty"`
 }
+
+// User-facing readiness messages. Probe errors wrap *url.Error, which names
+// the internal LOCAL_AI_URL dial address, and POST /ai-settings/test is
+// viewer-callable (postReadPaths), so only these fixed strings ever reach a
+// response; the detailed error is logged server-side.
+const (
+	MessageDisabled      = "Local AI is disabled for this installation."
+	MessageMisconfigured = "Local AI is not configured correctly for this installation."
+	MessageUnreachable   = "Local AI service is unreachable."
+	MessageNotReady      = "Local AI service is not ready."
+)
+
+const (
+	// readinessTTL bounds how stale GET /ai-settings may report the service.
+	// The incident page loads settings on every visit, so without the cache
+	// each page view paid a synchronous probe (up to probeTimeout when down).
+	readinessTTL = 30 * time.Second
+	probeTimeout = 3 * time.Second
+)
+
 type Service struct {
 	db     *shareddb.Client
 	config ai.Config
+	log    logrus.FieldLogger
+
+	// probe and now are seams for tests; production uses ai.Probe/time.Now.
+	probe func(context.Context, ai.Config) (string, error)
+	now   func() time.Time
+
+	// Readiness cache, process-local. inflight is the probe GETs join
+	// (single-flight); seq orders probes so a slower, older probe finishing
+	// after a newer one (e.g. a forced Test) cannot overwrite its result.
+	//
+	// Forced probes are coalesced too: at most one runs (forcing) and at most
+	// one waits behind it (forceNext), which every Test arriving during the
+	// running one joins. Probes run detached from the request and Test is
+	// viewer-callable, so without this a client firing and aborting Tests
+	// would pile up one outbound probe per request.
+	mu        sync.Mutex
+	cached    TestResult
+	cachedSeq uint64
+	expires   time.Time
+	inflight  *probeCall
+	forcing   *probeCall
+	forceNext *probeCall
+	seq       uint64
+}
+
+type probeCall struct {
+	seq    uint64 // assigned when the probe starts
+	ctx    context.Context
+	done   chan struct{}
+	result TestResult
 }
 
 func NewService(db *shareddb.Client, config ai.Config) *Service {
-	return &Service{db: db, config: config}
+	return &Service{
+		db:     db,
+		config: config,
+		log:    logrus.StandardLogger(),
+		probe:  ai.Probe,
+		now:    time.Now,
+	}
 }
+
+// SetLogger routes the detailed (unsanitized) probe errors to the service
+// logger. Call it during wiring, before the service handles requests.
+func (s *Service) SetLogger(l *logger.Logger) {
+	if l != nil {
+		s.log = l.WithField("component", "aisettings")
+	}
+}
+
 func (s *Service) EffectiveEnabled(ctx context.Context, id uuid.UUID) (bool, error) {
 	return ai.EffectiveEnabled(ctx, s.db, id, s.config.Disabled)
 }
@@ -48,10 +121,10 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Settings, error) {
 	}
 	settings := &Settings{Enabled: enabled, InstallationEnabled: !s.config.Disabled}
 	if s.config.Disabled {
-		settings.Message = "Local AI is disabled for this installation"
+		settings.Message = MessageDisabled
 		return settings, nil
 	}
-	probe := s.Test(ctx, id, TestRequest{})
+	probe := s.readiness(ctx, false)
 	settings.Available = probe.OK
 	settings.Model = probe.Model
 	settings.Message = probe.Message
@@ -68,16 +141,116 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, req UpdateRequest) (
 	}
 	return s.Get(ctx, id)
 }
-func (s *Service) Test(ctx context.Context, id uuid.UUID, _ TestRequest) TestResult {
+
+// Test probes the installation's service regardless of the workspace enable
+// switch. It always runs a fresh probe (bypassing the readiness cache) and
+// stores the result, so an operator who just fixed the service sees it on the
+// next GET too.
+func (s *Service) Test(ctx context.Context, _ uuid.UUID, _ TestRequest) TestResult {
 	if s.config.Disabled {
-		return TestResult{Message: "Local AI is disabled for this installation"}
+		return TestResult{Message: MessageDisabled}
 	}
-	// Test the installation's service regardless of the workspace enable switch.
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	return s.readiness(ctx, true)
+}
+
+// readiness returns the cached probe result while fresh; otherwise it joins
+// the in-flight probe or starts one. force skips the cache and never joins a
+// probe that was already running when the caller arrived (it may predate the
+// caller's fix): it starts a probe, or joins the single one queued to start
+// when the running forced probe finishes.
+//
+// The probe runs on its own goroutine with a context detached from the
+// caller, so one cancelled request cannot fail the probe other requests are
+// waiting on; the caller still stops waiting when its own context ends.
+func (s *Service) readiness(ctx context.Context, force bool) TestResult {
+	s.mu.Lock()
+	if !force && s.cachedSeq > 0 && s.now().Before(s.expires) {
+		r := s.cached
+		s.mu.Unlock()
+		return r
+	}
+	var call *probeCall
+	switch {
+	case !force && s.inflight != nil:
+		call = s.inflight
+	case force && s.forcing != nil:
+		if s.forceNext == nil {
+			s.forceNext = newProbeCall(ctx)
+		}
+		call = s.forceNext
+	default:
+		call = newProbeCall(ctx)
+		s.startLocked(call, force)
+	}
+	s.mu.Unlock()
+
+	select {
+	case <-call.done:
+		return call.result
+	case <-ctx.Done():
+		return TestResult{Message: MessageUnreachable}
+	}
+}
+
+func newProbeCall(ctx context.Context) *probeCall {
+	return &probeCall{ctx: context.WithoutCancel(ctx), done: make(chan struct{})}
+}
+
+// startLocked launches call; s.mu must be held.
+func (s *Service) startLocked(call *probeCall, force bool) {
+	s.seq++
+	call.seq = s.seq
+	s.inflight = call
+	if force {
+		s.forcing = call
+	}
+	go s.runProbe(call.ctx, call)
+}
+
+func (s *Service) runProbe(ctx context.Context, call *probeCall) {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	model, err := ai.Probe(ctx, s.config)
+	model, err := s.probe(ctx, s.config)
+	result := TestResult{OK: true, Model: model}
 	if err != nil {
-		return TestResult{Message: err.Error()}
+		result = TestResult{Message: s.classify(err)}
+		s.log.WithError(err).Warn("Local AI readiness probe failed")
 	}
-	return TestResult{OK: true, Model: model}
+
+	s.mu.Lock()
+	call.result = result
+	if call.seq > s.cachedSeq {
+		s.cached, s.cachedSeq, s.expires = result, call.seq, s.now().Add(readinessTTL)
+	}
+	if s.inflight == call {
+		s.inflight = nil
+	}
+	if s.forcing == call {
+		s.forcing = nil
+		if next := s.forceNext; next != nil {
+			s.forceNext = nil
+			s.startLocked(next, true)
+		}
+	}
+	s.mu.Unlock()
+	close(call.done)
+}
+
+// classify maps a probe error to one of the fixed user-facing messages.
+func (s *Service) classify(err error) string {
+	if errors.Is(err, ai.ErrNotConfigured) {
+		return MessageDisabled
+	}
+	// Probe builds its client through NewAnalyzer, so a config it rejects
+	// (bad LOCAL_AI_URL, short LOCAL_AI_TOKEN) fails here the same way.
+	if _, cfgErr := ai.NewAnalyzer(s.config); cfgErr != nil {
+		return MessageMisconfigured
+	}
+	var urlErr *url.Error
+	var netErr net.Error
+	if errors.As(err, &urlErr) || errors.As(err, &netErr) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return MessageUnreachable
+	}
+	return MessageNotReady
 }

@@ -17,6 +17,10 @@ import (
 const recentCheckLimit = 24
 const maxWindowChecks = 20000
 
+// maxMeshEdgeNotes bounds the per-alert mesh-edge lines in incomplete_evidence;
+// any remainder is summarized by count.
+const maxMeshEdgeNotes = 10
+
 func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentID uuid.UUID, requestedAt time.Time) (ai.AnalysisInput, error) {
 	var in ai.AnalysisInput
 	// Free-form title and summary are deliberately not fetched for inference.
@@ -24,6 +28,11 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 	if err != nil {
 		return in, err
 	}
+	// The window bounds monitor checks, so only monitor alerts anchor it. The
+	// inner join on monitors drops mesh_edge alerts (monitor_id IS NULL) on
+	// purpose: they reach incidents only by manual attach, stay open per edge
+	// for days, and anchoring on one would pull the window off the attached
+	// monitors' failures. They are listed by noteMeshEdgeAlerts instead.
 	var earliest sql.NullTime
 	err = dbc.QueryRowContext(ctx, `SELECT MIN(a.triggered_at) FROM incident_alerts ia
  JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
@@ -159,6 +168,12 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 		}
 		in.Monitors = append(in.Monitors, r.m)
 	}
+	if err := noteMeshEdgeAlerts(ctx, dbc, tenantID, incidentID, &in); err != nil {
+		return in, err
+	}
+	// Dependency roots attach to monitor evidence only, so the inner joins on
+	// monitors are intended here: a mesh_edge alert has no monitor to attach a
+	// root to and is reported separately by noteMeshEdgeAlerts.
 	rootRows, err := dbc.QueryContext(ctx, `SELECT DISTINCT a.monitor_id,a.root_cause_monitor_id FROM incident_alerts ia
  JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
  JOIN monitors m ON m.id=a.monitor_id AND m.tenant_id=$2
@@ -200,9 +215,11 @@ func buildAnalysisInput(ctx context.Context, dbc *db.Client, tenantID, incidentI
 	for _, r := range collected {
 		ids = append(ids, r.id)
 	}
+	// S-E1: platform rows (job expired before a worker observed the target)
+	// are not evidence, so they cannot place a failure inside maintenance.
 	rows, err = dbc.QueryContext(ctx, `SELECT m.id FROM monitors m
  WHERE m.tenant_id=$1 AND m.id=ANY($2)
- AND EXISTS(SELECT 1 FROM check_results cr WHERE cr.tenant_id=$1 AND cr.monitor_id=m.id
+ AND EXISTS(SELECT 1 FROM check_results cr WHERE cr.tenant_id=$1 AND cr.monitor_id=m.id AND cr.result_source='monitor'
  AND cr.created_at>=$3 AND cr.created_at<=$4
  AND (cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $5))
  AND `+maintenance.InMaintenanceAtPredicate("m", "cr.created_at")+`)`, tenantID, pq.Array(ids), in.WindowStart, in.WindowEnd, classifiedErrorPattern)
@@ -247,13 +264,17 @@ func loadDependencies(ctx context.Context, dbc *db.Client, tenantID, monitorID u
 
 const classifiedErrorPattern = "no such host|dns lookup|dns resolution|dns error|certificate|tls handshake|x509:|connection refused|network is unreachable|no route to host|connection reset|unexpected status|status code|status_code:|assertion|expected status"
 
+// loadWindowChecks reads only result_source='monitor' rows (S-E1,
+// docs/state-semantics.md): platform rows record that a job expired before any
+// worker observed the target, so counting them would report scheduler or
+// queue trouble as target failures.
 func loadWindowChecks(ctx context.Context, dbc *db.Client, tenantID, monitorID uuid.UUID, start, end time.Time) ([]ai.CheckContext, int, int, sql.NullTime, error) {
 	rows, err := dbc.QueryContext(ctx, `SELECT cr.status,cr.http_status,cr.latency_ms,LEFT(COALESCE(cr.error_message,''),4096),
  CASE WHEN octet_length(cr.metrics_data::text)<=65536 THEN cr.metrics_data ELSE NULL END,cr.created_at,COUNT(*) OVER(),
  COUNT(*) FILTER(WHERE cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6)) OVER(),
  MIN(cr.created_at) FILTER(WHERE cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6)) OVER()
  FROM check_results cr JOIN monitors m ON m.id=cr.monitor_id AND m.tenant_id=$1
- WHERE cr.tenant_id=$1 AND cr.monitor_id=$2 AND cr.created_at>=$3 AND cr.created_at<=$4
+ WHERE cr.tenant_id=$1 AND cr.monitor_id=$2 AND cr.result_source='monitor' AND cr.created_at>=$3 AND cr.created_at<=$4
  ORDER BY cr.created_at,cr.id LIMIT $5`, tenantID, monitorID, start, end, maxWindowChecks, classifiedErrorPattern)
 	if err != nil {
 		return nil, 0, 0, sql.NullTime{}, err
@@ -287,9 +308,11 @@ func loadHostMetrics(ctx context.Context, dbc *db.Client, tenantID, monitorID uu
 	var available, pressure bool
 	// Only allowlisted native ratio gauges. The sample must overlap a failure,
 	// within the monitor's existing freshness horizon; old high values abstain.
+	// Only monitor-sourced failures count (S-E1): a platform row is not an
+	// observation of the host.
 	horizon := monitorstate.FreshnessHorizonSeconds(interval)
 	err := dbc.QueryRowContext(ctx, `WITH samples AS (SELECT ms.value,EXISTS(
- SELECT 1 FROM check_results cr WHERE cr.tenant_id=$1 AND cr.monitor_id=$2 AND cr.created_at>=$3 AND cr.created_at<=$4
+ SELECT 1 FROM check_results cr WHERE cr.tenant_id=$1 AND cr.monitor_id=$2 AND cr.result_source='monitor' AND cr.created_at>=$3 AND cr.created_at<=$4
  AND cr.created_at>=ms.ts AND cr.created_at<=ms.ts+($5*INTERVAL '1 second')
  AND (cr.status='failure' OR (cr.status='error' AND LEFT(cr.error_message,4096) ~* $6))) AS fresh
  FROM metric_series s JOIN metric_samples ms ON ms.series_id=s.id
@@ -298,4 +321,47 @@ func loadHostMetrics(ctx context.Context, dbc *db.Client, tenantID, monitorID uu
  SELECT COALESCE(BOOL_OR(fresh),FALSE),COALESCE(BOOL_OR(fresh AND value>0.9 AND value<=1),FALSE)
  FROM samples`, tenantID, monitorID, start, end, horizon, classifiedErrorPattern).Scan(&available, &pressure)
 	return available, pressure, err
+}
+
+// noteMeshEdgeAlerts records linked mesh_edge alerts in the persisted
+// incomplete_evidence list. Their subject is a directed location pair, not a
+// monitor, so they have no MonitorEvidence and are deliberately never sent to
+// the decision service (its request shape is a fixed training contract);
+// listing them keeps the analysis honest that part of the incident was not
+// modeled. Only opaque alert and location IDs are written, never names.
+func noteMeshEdgeAlerts(ctx context.Context, dbc *db.Client, tenantID, incidentID uuid.UUID, in *ai.AnalysisInput) error {
+	rows, err := dbc.QueryContext(ctx, `SELECT a.id,a.source_location_id,a.target_location_id,COUNT(*) OVER()
+ FROM incident_alerts ia
+ JOIN alerts a ON a.id=ia.alert_id AND a.tenant_id=$2
+ JOIN incidents i ON i.id=ia.incident_id AND i.tenant_id=$2
+ WHERE ia.incident_id=$1 AND a.kind='mesh_edge' AND a.monitor_id IS NULL
+ ORDER BY a.triggered_at,a.id LIMIT $3`, incidentID, tenantID, maxMeshEdgeNotes)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	total, listed := 0, 0
+	for rows.Next() {
+		var id uuid.UUID
+		var source, target uuid.NullUUID
+		if err := rows.Scan(&id, &source, &target, &total); err != nil {
+			return err
+		}
+		in.Incomplete = append(in.Incomplete, fmt.Sprintf("%s: linked mesh-edge alert (location %s -> %s) not modeled; location connectivity is outside monitor evidence", id, nullableRef(source), nullableRef(target)))
+		listed++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if total > listed {
+		in.Incomplete = append(in.Incomplete, fmt.Sprintf("%d more linked mesh-edge alerts not modeled", total-listed))
+	}
+	return nil
+}
+
+func nullableRef(id uuid.NullUUID) string {
+	if !id.Valid {
+		return "unknown"
+	}
+	return id.UUID.String()
 }

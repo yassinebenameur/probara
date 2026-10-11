@@ -2,6 +2,7 @@ package airca
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -27,27 +28,38 @@ func (c *Consumer) loadStatus(ctx context.Context, job ai.AnalysisJob) (string, 
 	return status, requestedAt, err
 }
 
+// failedAnalysisMetadata and failedAnalysisActions are written on every
+// failure path (consumer and stale-pending sweep) so the panel renders all
+// failures alike.
+const (
+	failedAnalysisMetadata = `{"engine":"laya-cpu","outcome":"failed","incomplete_evidence":[],"evidence_references":[]}`
+	failedAnalysisActions  = `["Check local AI readiness and retry the analysis."]`
+)
+
 // markReady transitions a pending row to ready with the analysis result. The
-// status='pending' guard keeps the write idempotent against redelivery.
-func (c *Consumer) markReady(ctx context.Context, job ai.AnalysisJob, result ai.AnalysisResult) error {
+// status='pending' guard keeps the write idempotent against redelivery; it
+// reports false when the row was no longer pending (finalized by another
+// delivery or failed by the stale-pending sweep), which callers treat as a
+// lost race, not an error.
+func (c *Consumer) markReady(ctx context.Context, job ai.AnalysisJob, result ai.AnalysisResult) (bool, error) {
 	factors, err := json.Marshal(emptyIfNil(result.ContributingFactors))
 	if err != nil {
-		return err
+		return false, err
 	}
 	actions, err := json.Marshal(emptyIfNil(result.RecommendedActions))
 	if err != nil {
-		return err
+		return false, err
 	}
 	metadata, err := json.Marshal(result.Metadata)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var evidence []byte
 	if len(result.Evidence) > 0 {
 		evidence = result.Evidence
 	}
 
-	_, err = c.db.ExecContext(ctx, `
+	res, err := c.db.ExecContext(ctx, `
 		UPDATE incident_ai_analyses
 		SET status = $2,
 		    model = $3,
@@ -62,16 +74,30 @@ func (c *Consumer) markReady(ctx context.Context, job ai.AnalysisJob, result ai.
 		WHERE id = $1 AND status = $10 AND tenant_id=$12 AND incident_id=$13`,
 		job.AnalysisID, string(readyStatus), result.Model, result.Summary, result.ProbableRootCause,
 		factors, actions, result.Confidence, nullableJSON(evidence), string(pendingStatus), metadata, job.TenantID, job.IncidentID)
-	return err
+	return rowUpdated(res, err)
 }
 
-func (c *Consumer) markFailed(ctx context.Context, job ai.AnalysisJob, message string) error {
-	_, err := c.db.ExecContext(ctx, `
+// markFailed transitions a pending row to failed. Same guard and lost-race
+// reporting as markReady.
+func (c *Consumer) markFailed(ctx context.Context, job ai.AnalysisJob, message string) (bool, error) {
+	res, err := c.db.ExecContext(ctx, `
 		UPDATE incident_ai_analyses
-		SET status=$2,error_message=$3,completed_at=NOW(),metadata='{"engine":"laya-cpu","outcome":"failed","incomplete_evidence":[],"evidence_references":[]}'::jsonb, recommended_actions='["Check local AI readiness and retry the analysis."]'::jsonb
+		SET status=$2,error_message=$3,completed_at=NOW(),metadata=$7::jsonb, recommended_actions=$8::jsonb
  WHERE id=$1 AND status=$4 AND tenant_id=$5 AND incident_id=$6`,
-		job.AnalysisID, string(failedStatus), message, string(pendingStatus), job.TenantID, job.IncidentID)
-	return err
+		job.AnalysisID, string(failedStatus), message, string(pendingStatus), job.TenantID, job.IncidentID,
+		failedAnalysisMetadata, failedAnalysisActions)
+	return rowUpdated(res, err)
+}
+
+func rowUpdated(res sql.Result, err error) (bool, error) {
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func emptyIfNil(s []string) []string {

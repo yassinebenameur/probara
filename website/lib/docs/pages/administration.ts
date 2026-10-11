@@ -314,9 +314,10 @@ export const ADMINISTRATION_PAGE: DocPage = {
         { type: "table", columns: ["Field", "Meaning"], rows: [
           ["`enabled`", "Only writable field; enable dependency suggestions and asynchronous incident analysis"],
           ["`installation_enabled`", "Installation-level availability switch; overrides workspace enablement"],
-          ["`available` / `model`", "Read-only local-service readiness and model identity"],
+          ["`available` / `model`", "Read-only local-service readiness and model identity. Each API process caches the result for about 30 seconds, failures included, so a just-fixed service can read as unavailable until the cache expires."],
+          ["`message`", "One of four fixed readiness strings (disabled, not configured correctly, unreachable, not ready); details are only in the API logs"],
         ] },
-        { type: "paragraph", text: "Settings → AI controls the workspace switch and tests the installation-owned CPU service. Absent workspace settings default enabled; existing enable and disable switches are preserved. Settings updates accept only `enabled`; legacy provider fields return a validation error. The connection test accepts an empty object and cannot accept destinations or credentials." },
+        { type: "paragraph", text: "Settings → AI controls the workspace switch and tests the installation-owned CPU service. Absent workspace settings default enabled; existing enable and disable switches are preserved. Settings updates accept only `enabled`; legacy provider fields return a validation error. The connection test accepts an empty object, cannot accept destinations or credentials, always probes afresh and refreshes the readiness cache of the API replica that serves it." },
         { type: "paragraph", text: "Model decisions are advisory and explanations cite bounded monitoring evidence. No configuration secrets, bodies, screenshots or arbitrary error text are sent to the model. Suggested edges and troubleshooting actions require operator review. Controlled scenarios do not establish real-world accuracy." },
       ],
     },

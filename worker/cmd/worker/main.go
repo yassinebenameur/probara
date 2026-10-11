@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -145,13 +146,29 @@ func main() {
 		}
 	}
 
+	// AI-RCA consumer and its stale-pending sweep run on DB-connected workers
+	// under RunWithRestart, so a Consume error or a dropped stream restarts
+	// them with backoff instead of leaving the queue silently unconsumed.
+	// Cancelled on shutdown; aiWG lets main wait for them (bounded) before
+	// its deferred DB/NATS Close calls, so an in-flight NAK or write lands.
+	aiCtx, aiCancel := context.WithCancel(context.Background())
+	defer aiCancel()
+	var aiWG sync.WaitGroup
 	if dbClient != nil {
+		if err := airca.ValidateSweepWindow(cfg.LocalAI.Timeout); err != nil {
+			log.WithError(err).Fatal("Invalid local AI timeout")
+		}
 		aircaConsumer := airca.New(cfg, log, dbClient, queueClient, envAnalyzer)
+		aiWG.Add(2)
 		go func() {
-			ctx := context.Background()
-			if err := aircaConsumer.Start(ctx); err != nil && err != context.Canceled {
-				log.WithError(err).Error("AI root cause consumer exited with error")
-			}
+			defer aiWG.Done()
+			airca.RunWithRestart(aiCtx, log, "ai-rca-consumer", airca.DefaultRestartPolicy(), aircaConsumer.Start)
+		}()
+		go func() {
+			defer aiWG.Done()
+			airca.RunWithRestart(aiCtx, log, "ai-rca-stale-sweep", airca.DefaultRestartPolicy(), func(ctx context.Context) error {
+				return airca.RunStaleSweep(ctx, log, dbClient, airca.SweepInterval)
+			})
 		}()
 	}
 
@@ -232,6 +249,7 @@ func main() {
 	<-quit
 
 	log.Info("Shutting down worker...")
+	aiCancel()
 
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -240,6 +258,17 @@ func main() {
 	if err := w.Shutdown(ctx); err != nil {
 		log.WithError(err).Error("Worker forced to shutdown")
 		os.Exit(1)
+	}
+
+	aiDone := make(chan struct{})
+	go func() {
+		aiWG.Wait()
+		close(aiDone)
+	}()
+	select {
+	case <-aiDone:
+	case <-ctx.Done():
+		log.Warn("AI RCA consumer did not stop within the shutdown window")
 	}
 
 	log.Info("Worker exited")

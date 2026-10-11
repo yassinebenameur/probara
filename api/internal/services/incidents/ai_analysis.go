@@ -45,6 +45,28 @@ func (s *Service) RequestAIAnalysis(ctx context.Context, tenantID, incidentID uu
 	}, nil
 }
 
+// aiAnalysisFailedMetadata mirrors the metadata the worker writes on a failed
+// run (worker/internal/airca/store.go) so the panel renders both the same way.
+const aiAnalysisFailedMetadata = `{"engine":"laya-cpu","outcome":"failed","incomplete_evidence":[],"evidence_references":[]}`
+
+// FailPendingAIAnalysis marks a still-pending analysis row failed with a
+// user-facing message. It is guarded by status='pending' so it can never
+// overwrite a result the worker already wrote, and it reports no error when
+// the row has moved on (or belongs to another tenant) — there is nothing left
+// to fail in either case.
+func (s *Service) FailPendingAIAnalysis(ctx context.Context, tenantID, analysisID uuid.UUID, message string) error {
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE incident_ai_analyses
+		SET status = 'failed', error_message = $3, completed_at = NOW(),
+		    metadata = $4::jsonb,
+		    recommended_actions = '["Retry the analysis."]'::jsonb
+		WHERE id = $1 AND tenant_id = $2 AND status = 'pending'`,
+		analysisID, tenantID, message, aiAnalysisFailedMetadata); err != nil {
+		return fmt.Errorf("fail pending ai analysis: %w", err)
+	}
+	return nil
+}
+
 // GetLatestAIAnalysis returns the most recent analysis for an incident, or nil
 // when none has been requested. The incident must belong to the tenant.
 func (s *Service) GetLatestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error) {
@@ -63,16 +85,9 @@ func (s *Service) GetLatestAIAnalysis(ctx context.Context, tenantID, incidentID 
 // loadLatestAIAnalysis fetches the newest analysis row for an incident (no
 // existence check — used internally by GetIncident). Returns nil when absent.
 func (s *Service) loadLatestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error) {
-	// Exhausted delivery or stopped workers must not leave runs pending forever.
-	// Ten minutes exceeds the maximum analysis timeout and delivery headroom.
-	if _, err := s.db.ExecContext(ctx, `UPDATE incident_ai_analyses SET status='failed',completed_at=NOW(),
- error_message='Analysis delivery timed out. Check local AI and worker readiness, then retry.',
- recommended_actions='["Retry after checking local AI and worker readiness."]'::jsonb,
- metadata='{"engine":"laya-cpu","outcome":"failed","evidence_references":[],"incomplete_evidence":[]}'::jsonb
- WHERE tenant_id=$1 AND incident_id=$2 AND status='pending' AND created_at<NOW()-INTERVAL '10 minutes'`, tenantID, incidentID); err != nil {
-		return nil, err
-	}
-
+	// Read-only on purpose: GET /incidents/{id} and the panel's poll both land
+	// here, so a write would turn every read into an UPDATE. Pending rows whose
+	// delivery was exhausted are failed by the worker-side sweep instead.
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, incident_id, status, model, summary, probable_root_cause,
 		       contributing_factors, recommended_actions, confidence, evidence,

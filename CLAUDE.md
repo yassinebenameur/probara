@@ -513,6 +513,12 @@ or imported groups come back empty. Any other path that creates groups through
   loopback targets to `host.docker.internal` (compose worker only).
 - `alert_policies` are retired (API returns 410); workspace alert config
   lives on tenants via `/notification-settings`.
+- **AI analysis timing**: the worker's stale-pending sweep
+  (`worker/internal/airca/sweep.go`, 10 min, 30 min lock ceiling) must outlast
+  one delivery (`LOCAL_AI_TIMEOUT_SECONDS` max 300 s + 30 s); a compile-time
+  guard there pins the pair, so raise both together. Analysis failure messages
+  carry no trailing period or retry instruction: `AIRootCausePanel` renders
+  "Analysis failed: <message>. Try again.".
 - **`monitor_state_intervals` is SLA history.** Nothing prunes it by time,
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -295,6 +296,7 @@ func (h *Handlers) RequestIncidentAIAnalysis(w http.ResponseWriter, r *http.Requ
 			"error":       err.Error(),
 			"analysis_id": analysis.ID.String(),
 		}).Error("Failed to enqueue AI analysis job")
+		h.failUnqueuedAIAnalysis(r.Context(), tenantUUID, analysis.ID)
 		apierrors.WriteError(w, http.StatusServiceUnavailable, "enqueue_failed", "failed to enqueue AI analysis")
 		return
 	}
@@ -302,6 +304,29 @@ func (h *Handlers) RequestIncidentAIAnalysis(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(analysis)
+}
+
+// aiEnqueueFailedMessage is what the panel shows for a run whose job never
+// reached the queue. The panel renders "Analysis failed: <msg>. Try again.",
+// so it carries no trailing period and no retry instruction of its own.
+const aiEnqueueFailedMessage = "the analysis job could not be queued"
+
+// failUnqueuedAIAnalysis fails the pending row reserved for a job that could
+// not be published, so the panel (which polls only pending runs) stops waiting
+// on a run no worker will ever pick up. It runs on a context detached from the
+// request because a cancelled request is a common cause of the publish error.
+// If the publish actually landed despite the error, the worker's own write is
+// guarded by status='pending' and drops its result; the user retries.
+func (h *Handlers) failUnqueuedAIAnalysis(ctx context.Context, tenantID, analysisID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := h.service.FailPendingAIAnalysis(ctx, tenantID, analysisID, aiEnqueueFailedMessage); err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":       err.Error(),
+			"tenant_id":   tenantID.String(),
+			"analysis_id": analysisID.String(),
+		}).Error("Failed to mark unqueued AI analysis failed")
+	}
 }
 
 // GetIncidentAIAnalysis handles GET /api/v1/incidents/{id}/ai-analysis,

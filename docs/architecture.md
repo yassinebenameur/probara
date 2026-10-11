@@ -166,6 +166,18 @@ hypotheses; maintained templates supply all prose and troubleshooting actions.
 Unsupported evidence completes with abstention; service/queue failures persist
 a failed run with a retry action. PostgreSQL session locks serialize duplicate
 jobs and tenant/incident/analysis IDs scope every persistence operation.
+Platform result rows (S-E1) are never evidence, and linked mesh-edge alerts are
+recorded as incomplete evidence rather than modeled.
+
+Each delivery runs under one deadline (`LOCAL_AI_TIMEOUT_SECONDS` + 30s) with a
+15s `InProgress` heartbeat; transient errors retry with a delay, and the final
+delivery records a failure except on worker shutdown. DB-connected workers fail
+pending analyses older than 10 minutes, skipping rows locked by an active run
+unless they are older than 30 minutes; this replaces the API read-path timeout.
+With no DB-connected worker running, pending analyses stay pending until one
+returns. The consumer and the sweep restart with capped backoff, and the
+consumer re-creates its durable if it disappears from the server. A publish
+failure in the API records the run as failed immediately.
 
 Inference runs in an installation-owned service at `LOCAL_AI_URL`, called by
 the API (dependency suggestions, readiness) and the database-connected worker

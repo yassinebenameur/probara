@@ -94,6 +94,75 @@ func TestHandlers_RequestIncidentAIAnalysis_Success(t *testing.T) {
 	}
 }
 
+func TestHandlers_RequestIncidentAIAnalysis_PublishFailureFailsPendingRow(t *testing.T) {
+	incidentID := uuid.New()
+	analysisID := uuid.New()
+	var (
+		failCalls    int
+		failedTenant uuid.UUID
+		failedID     uuid.UUID
+		failedMsg    string
+		failCtxErr   error
+	)
+	svc := &mockIncidentService{
+		requestAIFn: func(ctx context.Context, tenantID, incID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error) {
+			return &models.IncidentAIAnalysis{ID: analysisID, IncidentID: incID, Status: models.IncidentAIAnalysisStatusPending}, nil
+		},
+		failPendingAIFn: func(ctx context.Context, tenantID, id uuid.UUID, message string) error {
+			failCalls++
+			failedTenant, failedID, failedMsg = tenantID, id, message
+			failCtxErr = ctx.Err()
+			return nil
+		},
+	}
+	pub := &fakeAIPublisher{err: errors.New("nats: timeout")}
+	h := NewHandlers(svc, logger.New("test", "debug"))
+	h.ConfigureAIAnalysis(pub, "ai.rca.jobs", &fakeAIChecker{enabled: true})
+
+	// A cancelled request is a typical cause of the publish error; the row must
+	// still be failed, so the write runs on a detached context.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/incidents/x/ai-analysis", nil).WithContext(ctx)
+	req = withIncidentID(withTenantID(req), incidentID)
+	w := httptest.NewRecorder()
+
+	h.RequestIncidentAIAnalysis(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (%s)", w.Code, w.Body.String())
+	}
+	if failCalls != 1 || failedID != analysisID || failedMsg != aiEnqueueFailedMessage {
+		t.Fatalf("fail calls = %d id = %s msg = %q", failCalls, failedID, failedMsg)
+	}
+	if reqTenant, _ := ctxpkg.GetTenantID(req.Context()); failedTenant.String() != reqTenant {
+		t.Fatalf("failed row in tenant %s, request tenant %s", failedTenant, reqTenant)
+	}
+	if failCtxErr != nil {
+		t.Fatalf("fail write ran on a cancelled context: %v", failCtxErr)
+	}
+}
+
+func TestHandlers_RequestIncidentAIAnalysis_SuccessLeavesRowPending(t *testing.T) {
+	svc := &mockIncidentService{
+		requestAIFn: func(ctx context.Context, tenantID, incID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error) {
+			return &models.IncidentAIAnalysis{ID: uuid.New(), IncidentID: incID, Status: models.IncidentAIAnalysisStatusPending}, nil
+		},
+		failPendingAIFn: func(context.Context, uuid.UUID, uuid.UUID, string) error {
+			t.Fatal("published run must not be failed")
+			return nil
+		},
+	}
+	h := NewHandlers(svc, logger.New("test", "debug"))
+	h.ConfigureAIAnalysis(&fakeAIPublisher{}, "ai.rca.jobs", &fakeAIChecker{enabled: true})
+	req := withIncidentID(withTenantID(httptest.NewRequest(http.MethodPost, "/api/v1/incidents/x/ai-analysis", nil)), uuid.New())
+	w := httptest.NewRecorder()
+	h.RequestIncidentAIAnalysis(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+}
+
 func TestHandlers_GetIncidentAIAnalysis_Null(t *testing.T) {
 	svc := &mockIncidentService{
 		getLatestAIFn: func(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error) {
@@ -131,6 +200,14 @@ type mockIncidentService struct {
 	unpublishFn      func(ctx context.Context, tenantID, incidentID, statusPageID uuid.UUID) (*models.IncidentDetail, error)
 	requestAIFn      func(ctx context.Context, tenantID, incidentID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error)
 	getLatestAIFn    func(ctx context.Context, tenantID, incidentID uuid.UUID) (*models.IncidentAIAnalysis, error)
+	failPendingAIFn  func(ctx context.Context, tenantID, analysisID uuid.UUID, message string) error
+}
+
+func (m *mockIncidentService) FailPendingAIAnalysis(ctx context.Context, tenantID, analysisID uuid.UUID, message string) error {
+	if m.failPendingAIFn != nil {
+		return m.failPendingAIFn(ctx, tenantID, analysisID, message)
+	}
+	return nil
 }
 
 func (m *mockIncidentService) RequestAIAnalysis(ctx context.Context, tenantID, incidentID uuid.UUID, requestedBy *uuid.UUID) (*models.IncidentAIAnalysis, error) {
