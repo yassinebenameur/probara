@@ -780,6 +780,8 @@ func typeLabel(kind string) string {
 		return "WebSocket"
 	case "prometheus":
 		return "Prometheus"
+	case "vault":
+		return "Vault"
 	default:
 		return strings.ToUpper(kind)
 	}

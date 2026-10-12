@@ -95,6 +95,7 @@ func NewDefaultValidatorRegistry() *ValidatorRegistry {
 	registry.Register(models.MonitorTypeTCP, &TCPConfigValidator{})
 	registry.Register(models.MonitorTypeMySQL, &MySQLConfigValidator{})
 	registry.Register(models.MonitorTypeWebSocket, &WebSocketConfigValidator{})
+	registry.Register(models.MonitorTypeVault, &VaultConfigValidator{})
 
 	return registry
 }

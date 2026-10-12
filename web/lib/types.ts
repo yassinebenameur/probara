@@ -216,7 +216,8 @@ export type MonitorType =
   | "tcp"
   | "mysql"
   | "websocket"
-  | "prometheus";
+  | "prometheus"
+  | "vault";
 
 // Secret config fields (passwords, connection strings) are write-only: the
 // API returns "***" in their place, and submitting "***" back keeps the
@@ -342,6 +343,43 @@ export interface PrometheusMetrics {
   values: number[];
   sample_count: number;
   failed_count: number;
+}
+
+// Vault / OpenBao. `token` and `tls_client_key_pem` are secret (write-only).
+// With a token the checker also makes an audited lookup-self request, which
+// is what catches Vault failing closed on a broken audit device.
+export interface VaultMonitorConfig {
+  url: string;
+  namespace?: string;
+  token?: string;
+  require_active?: boolean;
+  token_min_ttl_seconds?: number;
+  max_latency_ms?: number;
+  tls_skip_verify?: boolean;
+  tls_server_name?: string;
+  tls_ca_pem?: string;
+  tls_client_cert_pem?: string;
+  tls_client_key_pem?: string;
+}
+
+export interface VaultMetrics {
+  health_http_status?: number;
+  health_latency_ms: number;
+  role?: 'active' | 'standby' | 'performance_standby' | 'dr_secondary';
+  initialized?: boolean;
+  sealed?: boolean;
+  version?: string;
+  cluster_name?: string;
+  replication_performance_mode?: string;
+  replication_dr_mode?: string;
+  token_probe?: {
+    http_status: number;
+    latency_ms: number;
+    ok: boolean;
+    ttl_seconds?: number;
+    expire_time?: string;
+    renewable?: boolean;
+  };
 }
 
 export interface TCPMonitorConfig {
@@ -656,7 +694,8 @@ export type MonitorConfig =
   | RabbitMQMonitorConfig
   | MySQLMonitorConfig
   | WebSocketMonitorConfig
-  | PrometheusMonitorConfig;
+  | PrometheusMonitorConfig
+  | VaultMonitorConfig;
 
 export type NotificationMode = 'default' | 'custom';
 

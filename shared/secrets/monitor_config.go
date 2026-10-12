@@ -21,6 +21,7 @@ var MonitorSecretFields = map[string][]string{
 	"rabbitmq":   {"password", "connection_string", "tls_client_key_pem"},
 	"mysql":      {"password", "connection_string", "tls_client_key_pem"},
 	"sip":        {"password"},
+	"vault":      {"token", "tls_client_key_pem"},
 	// Older push forms persisted a redundant copy of the webhook credential
 	// in config as well as monitors.push_token. Protect that copy on exports
 	// and all config reads too; the dedicated push-info endpoint owns access.

@@ -37,7 +37,7 @@ import { SiteHeader } from '@/components/SiteHeader';
 
 const dataPlate = [
   ['Type', 'Self-hosted blackbox monitor'],
-  ['Protocols', '18 monitor types'],
+  ['Protocols', '19 monitor types'],
   ['Transport', 'NATS JetStream'],
   ['State', 'PostgreSQL'],
   ['Deploy', 'Docker Compose · Helm'],
@@ -84,6 +84,7 @@ const monitorGroups = [
       { name: 'Host agent', icon: Server },
       { name: 'Push heartbeat', icon: Webhook },
       { name: 'Prometheus query', icon: Activity },
+      { name: 'Vault', icon: KeyRound },
       { name: 'Group roll-up', icon: Workflow },
     ],
   },
@@ -150,7 +151,7 @@ export default function HomePage() {
         <section className="signal-strip" aria-label="Platform highlights">
           <div className="signal-strip__inner">
             <div className="signal-stat">
-              <strong>17</strong>
+              <strong>19</strong>
               <span>monitor types across web, network, data, hosts, and journeys</span>
             </div>
             <div className="signal-stat">
@@ -352,7 +353,7 @@ export default function HomePage() {
         <section className="monitor-section" id="monitoring">
           <div className="section-shell monitor-layout">
             <div className="monitor-layout__sticky">
-              <span className="section-kicker">18 monitor types</span>
+              <span className="section-kicker">19 monitor types</span>
               <h2 className="section-heading">
                 Check the protocol, <em>not a proxy for it.</em>
               </h2>

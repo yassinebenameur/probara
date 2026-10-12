@@ -1,6 +1,7 @@
 'use client';
 
 import PrometheusDetails from '@/components/monitors/PrometheusDetails';
+import VaultDetails from '@/components/monitors/VaultDetails';
 import { createContext, Suspense, useCallback, useContext, useState, useEffect, useMemo, useRef, type CSSProperties, type MouseEvent } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -1143,6 +1144,13 @@ function DetailPanel({
           <div>
             <h4 className={sectionTitle}>Prometheus query</h4>
             <PrometheusDetails monitor={monitor} result={results[0]} size="compact" />
+          </div>
+        )}
+
+        {monitor.type === 'vault' && (
+          <div>
+            <h4 className={sectionTitle}>Vault</h4>
+            <VaultDetails monitor={monitor} result={results[0]} size="compact" />
           </div>
         )}
 

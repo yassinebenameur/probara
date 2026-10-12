@@ -509,3 +509,36 @@ func TestPrometheusSecretsLifecycle(t *testing.T) {
 		t.Fatal("explicit clear preserved secrets")
 	}
 }
+
+func TestVaultSecretsLifecycle(t *testing.T) {
+	enc := monitorTestEncryptor(t)
+	raw := json.RawMessage(`{"url":"https://vault.example.com:8200","token":"hvs.token-secret","tls_client_key_pem":"key-secret"}`)
+	encrypted, err := EncryptMonitorConfig(enc, "vault", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := configMap(t, encrypted)
+	for _, key := range []string{"token", "tls_client_key_pem"} {
+		if !LooksLikeEnvelope(fields[key].(string)) {
+			t.Fatalf("%s not encrypted", key)
+		}
+	}
+	masked, err := MaskMonitorConfig("vault", encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields = configMap(t, masked); fields["token"] != "***" || fields["tls_client_key_pem"] != "***" {
+		t.Fatal("secrets not masked")
+	}
+	merged, err := MergeMonitorConfigSecrets("vault", masked, encrypted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decrypted, err := DecryptMonitorConfig(enc, "vault", merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields = configMap(t, decrypted); fields["token"] != "hvs.token-secret" || fields["tls_client_key_pem"] != "key-secret" {
+		t.Fatal("update lost secrets")
+	}
+}

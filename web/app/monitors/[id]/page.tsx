@@ -1,6 +1,7 @@
 'use client';
 
 import PrometheusDetails from '@/components/monitors/PrometheusDetails';
+import VaultDetails from '@/components/monitors/VaultDetails';
 import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import Image from 'next/image';
@@ -811,11 +812,14 @@ export default function EditMonitorPage() {
     <>
       {isGroup && <GroupMembersCard groupId={monitor.id} />}
 
-      {(monitor.type === 'prometheus' || serverRows.length > 0) && (
-        <Panel title={monitor.type === 'prometheus' ? 'Query' : 'Server'}>
+      {(monitor.type === 'prometheus' || monitor.type === 'vault' || serverRows.length > 0) && (
+        <Panel title={monitor.type === 'prometheus' ? 'Query' : monitor.type === 'vault' ? 'Vault' : 'Server'}>
           <div className="space-y-2.5 text-sm">
             {monitor.type === 'prometheus' && (
               <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
+            )}
+            {monitor.type === 'vault' && (
+              <VaultDetails monitor={monitor} result={results?.results?.[0]} />
             )}
             {serverRows}
           </div>

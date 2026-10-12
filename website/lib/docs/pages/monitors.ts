@@ -5,7 +5,7 @@ export const MONITORS_PAGE: DocPage = {
   group: "Use Probara",
   title: "Monitors",
   description:
-    "Configure active, passive, grouped, database, broker, WebSocket, Prometheus query, and synthetic monitors.",
+    "Configure active, passive, grouped, database, broker, WebSocket, Prometheus query, Vault, and synthetic monitors.",
   eyebrow: "Product guide",
   readingTime: "35 min read",
   keywords: [
@@ -117,6 +117,7 @@ export const MONITORS_PAGE: DocPage = {
             ["`sip`", "SIP `OPTIONS` ping or `REGISTER` auth probe", "Yes"],
             ["`websocket`", "WebSocket upgrade and optional message exchange", "Yes"],
             ["`prometheus`", "PromQL instant query compared against a numeric threshold", "Yes"],
+            ["`vault`", "Vault/OpenBao seal and role state plus an audited, authenticated request", "Yes"],
             ["`redis`", "Redis authentication, `PING`, and optional role", "Yes"],
             ["`postgres`", "PostgreSQL connect and optional query assertion", "Yes"],
             ["`mysql`", "MySQL connect and optional query assertion", "Yes"],
@@ -409,6 +410,66 @@ export const MONITORS_PAGE: DocPage = {
       ],
     },
     {
+      id: "vault",
+      title: "Vault monitors",
+      intro:
+        "A Vault monitor checks a HashiCorp Vault or OpenBao server the way its clients experience it. It reads `/v1/sys/health`, then, when a token is configured, makes an authenticated `GET /v1/auth/token/lookup-self` that passes through Vault's audit broker.",
+      blocks: [
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Why an HTTP check on sys/health is not enough",
+          text:
+            "`sys/health` is unauthenticated and never audited. When every enabled audit device fails — a full disk under a `file` device, an unwritable path, a dead socket or syslog target — Vault fails closed and answers **every** authenticated request with HTTP 500, while `sys/health` keeps returning 200. Only an audited request can see that outage, so configure a token.",
+        },
+        {
+          type: "table",
+          columns: ["Field", "Purpose"],
+          rows: [
+            ["`url`", "Required `http://` or `https://` Vault address (what clients use as `VAULT_ADDR`), without `/v1`. A reverse-proxy path prefix is allowed; credentials, query parameters, and fragments are rejected."],
+            ["`token`", "Optional but recommended secret. Enables the audited `lookup-self` probe. The built-in `default` policy already allows it, so a dedicated low-privilege periodic or long-TTL token is enough."],
+            ["`namespace`", "Optional Vault Enterprise / HCP namespace, sent as `X-Vault-Namespace` on the token probe only"],
+            ["`require_active`", "When `true`, a standby, performance standby, or DR secondary reports down. Leave `false` (default) when monitoring an individual cluster member; set it for a load-balancer address that must always reach the active node."],
+            ["`token_min_ttl_seconds`", "Optional. Reports down when the monitor token's remaining TTL drops below this value, before the monitor itself goes blind. Tokens without a TTL are never flagged. Requires `token`."],
+            ["`max_latency_ms`", "Optional threshold on the total time of both requests"],
+            ["`tls_ca_pem`, `tls_server_name`, `tls_skip_verify`", "TLS verification for a private CA, an SNI override, or (discouraged) skipping verification. HTTPS only."],
+            ["`tls_client_cert_pem`, `tls_client_key_pem`", "Client certificate pair for listeners that require one. HTTPS only."],
+          ],
+        },
+        {
+          type: "table",
+          columns: ["Observation", "Result"],
+          rows: [
+            ["Not initialized, sealed, or removed from the Raft cluster", "Down"],
+            ["Standby, performance standby, or DR secondary", "Up, or down with `require_active`"],
+            ["`sys/health` answers without a Vault health body (proxy error page, other JSON)", "Down"],
+            ["Token probe HTTP 500 while health is fine", "Down — the audit fail-closed signature; check audit devices"],
+            ["Token probe HTTP 503 or 429", "Down — sealed or no reachable active node, or a rate-limit quota rejecting requests"],
+            ["Token probe HTTP 403", "Error — the monitor token is invalid, expired, revoked, or lacks `lookup-self`"],
+            ["Token probe redirect", "Error — a standby without request forwarding; redirects are never followed, so the token never leaves the configured host"],
+            ["Token TTL below `token_min_ttl_seconds`", "Down"],
+          ],
+        },
+        {
+          type: "list",
+          items: [
+            "The health body is evaluated rather than its status code, so the custom codes (429, 472, 473, 501, 503, 530) need no query parameters.",
+            "The token is sent only on the probe request, never on `sys/health`. It is stored encrypted and returned as `***`; Vault error strings are attached to results, never the token.",
+            "Each check with a token writes one request/response pair to Vault's audit log.",
+            "Check results record the node role, seal state, version, cluster name, replication modes, and the probe's status, latency, and remaining token TTL.",
+            "The worker's SSRF policy and allowed CIDRs apply. Pick a private location whose worker can reach Vault when it is internal.",
+          ],
+        },
+        {
+          type: "callout",
+          tone: "info",
+          title: "Catch the full disk before Vault does",
+          text:
+            "The Vault monitor detects the outage; it cannot see disk usage. For early warning, add a host metric rule on the audit volume's filesystem utilization (agent monitor) or a Prometheus monitor on `node_filesystem_avail_bytes` for that mount. With Vault telemetry scraped, a Prometheus monitor on `vault_audit_log_request_failure` also catches a single failing device while others keep Vault serving.",
+        },
+      ],
+    },
+    {
       id: "data-services",
       title: "Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ",
       intro:
@@ -632,7 +693,7 @@ export const MONITORS_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password`, the Prometheus `password` and `bearer_token`, plus every WebSocket header value. API reads replace protected values with `***`.",
+            "When `PROBARA_SECRETS_KEY` is configured, verified monitor secret handling covers `password`, `connection_string`, and `tls_client_key_pem` for Redis, PostgreSQL, MySQL, MongoDB, and RabbitMQ, the SIP digest `password`, the Prometheus `password` and `bearer_token`, the Vault `token` and `tls_client_key_pem`, plus every WebSocket header value. API reads replace protected values with `***`.",
         },
         {
           type: "list",

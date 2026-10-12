@@ -31,7 +31,7 @@ import {
   SyntheticBrowserStepConfig,
   Location,
 } from '@/lib/types';
-import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame, ChevronUp, ChevronDown, Trash2, X, Plus, Eye, EyeOff, type LucideIcon } from 'lucide-react';
+import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Lock, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame, KeyRound, ChevronUp, ChevronDown, Trash2, X, Plus, Eye, EyeOff, type LucideIcon } from 'lucide-react';
 import { getMonitorResults, runMonitorNow } from '@/lib/api';
 import FormSection from '@/components/ui/FormSection';
 import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
@@ -49,6 +49,7 @@ import SipForm from './SipForm';
 import GrpcForm from './GrpcForm';
 import TcpForm from './TcpForm';
 import PrometheusForm from './PrometheusForm';
+import VaultForm from './VaultForm';
 import WebsocketForm from './WebsocketForm';
 import DatabaseForm, { type DatabaseMonitorType } from './DatabaseForm';
 import HttpMonitorForm, { MethodUrlRow, sectionsWithErrors } from './HttpMonitorForm';
@@ -280,6 +281,7 @@ const MONITOR_TYPE_META: MonitorTypeMeta[] = [
   typeMeta('mongodb', { description: 'Connect, auth and ping', icon: Leaf, category: 'Databases & brokers', namePlaceholder: 'Mongo cluster' }),
   typeMeta('rabbitmq', { description: 'AMQP connect and auth', icon: MessageSquare, category: 'Databases & brokers', namePlaceholder: 'RabbitMQ production' }),
   typeMeta('prometheus', { description: 'PromQL with thresholds', icon: Flame, category: 'Infrastructure & grouping', namePlaceholder: 'API error rate' }),
+  typeMeta('vault', { description: 'Seal, role and audited requests', icon: KeyRound, category: 'Infrastructure & grouping', namePlaceholder: 'Vault production' }),
   typeMeta('agent', { description: 'Host metrics from a collector', icon: Server, category: 'Infrastructure & grouping', namePlaceholder: 'Production server' }),
   typeMeta('push', { description: 'Heartbeat sent by your service', icon: Webhook, category: 'Infrastructure & grouping', namePlaceholder: 'My service health' }),
   typeMeta('group', { description: 'Roll monitors up into one status', icon: Folder, category: 'Infrastructure & grouping', namePlaceholder: 'Production services' }),
@@ -2166,6 +2168,10 @@ export default function MonitorForm({
 
   if (monitorType === 'prometheus') {
     return shell(<PrometheusForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
+  }
+
+  if (monitorType === 'vault') {
+    return shell(<VaultForm monitor={monitor} initialData={initialData} onSubmit={onSubmit} onCancel={onCancel} loading={loading} />);
   }
 
   if (monitorType === 'tcp') {

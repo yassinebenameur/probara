@@ -176,13 +176,17 @@ or imported groups come back empty. Any other path that creates groups through
    `shared/models/` (one file per newer type, e.g. `prometheus.go`; older types
    sit in `check_job_payload.go`). The API validator and the worker both consume
    the shared struct, so put `Validate()` on it rather than duplicating rules
-2. Validator in `api/internal/validation/` + register in `registry.go`
+2. Validator in `api/internal/validation/` + register in `registry.go`; a
+   scheduled type also goes in `activeCheckTypes` (`validation.go`), and the
+   type count in `registry_test.go` moves with it
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
-   `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`
+   `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`;
+   a type with secrets needs a case in `web/lib/monitor-clone.ts` that drops the
+   `***` placeholders (a clone must not submit them as new credentials)
 6. Docs: `website/lib/docs/pages/monitors.ts` (type table + protocol passage +
    secrets coverage) — import/export support is automatic via the registry
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
@@ -190,7 +194,8 @@ or imported groups come back empty. Any other path that creates groups through
    `SUPPORTED_TYPES` in `web/app/monitors/import/page.tsx`, `TYPE_LABELS` in
    `web/lib/monitor-type-labels.ts` (every operator-UI type label and its ≤ 5-char
    `badge`), and the type count + `monitorGroups` on the
-   landing page (`website/app/page.tsx`, `website/app/docs/page.tsx`, README)
+   landing page (`website/app/page.tsx` — data plate, section kicker and the
+   signal-strip stat — `website/app/docs/page.tsx`, README)
 
 ## Cross-service contracts
 

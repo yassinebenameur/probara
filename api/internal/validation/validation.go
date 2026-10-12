@@ -154,6 +154,7 @@ var activeCheckTypes = map[models.MonitorType]bool{
 	models.MonitorTypeTCP:              true,
 	models.MonitorTypeMySQL:            true,
 	models.MonitorTypeWebSocket:        true,
+	models.MonitorTypeVault:            true,
 }
 
 // IsActiveCheckType reports whether the monitor type is actively scheduled by

@@ -166,6 +166,7 @@ export function monitorTargetLabel(type?: MonitorType | string): string {
     case 'synthetic_api':
     case 'synthetic_browser':
     case 'prometheus':
+    case 'vault':
     case 'websocket':
       return 'URL';
     case 'ping':

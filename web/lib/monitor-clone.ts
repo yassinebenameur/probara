@@ -21,6 +21,7 @@ import {
   SyntheticBrowserMonitorConfig,
   TCPMonitorConfig,
   PrometheusMonitorConfig,
+  VaultMonitorConfig,
 } from './types';
 
 function cloneObject<T>(value: T): T {
@@ -111,6 +112,14 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
       const cfg = cloneObject(monitor.config as PrometheusMonitorConfig);
       if (cfg.password === MASKED_SECRET) delete cfg.password;
       if (cfg.bearer_token === MASKED_SECRET) delete cfg.bearer_token;
+      return cfg;
+    }
+    case 'vault': {
+      // The token and client key come back masked; a clone must not submit
+      // the placeholder as a new monitor's credential.
+      const cfg = cloneObject(monitor.config as VaultMonitorConfig);
+      if (cfg.token === MASKED_SECRET) delete cfg.token;
+      if (cfg.tls_client_key_pem === MASKED_SECRET) delete cfg.tls_client_key_pem;
       return cfg;
     }
     case 'websocket': {
