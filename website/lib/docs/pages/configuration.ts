@@ -552,7 +552,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`SIP_LOCALHOST_AS_HOST_GATEWAY`',
               '`false`',
-              'Truthy values are `1`, `true`, `yes`, and `on`. Compose/local set it for host-gateway development.',
+              'Rewrites a SIP monitor whose host is `localhost` or a loopback IP to dial `host.docker.internal`, so a containerized worker can reach a SIP server on the developer machine. Truthy values are `1`, `true`, `yes`, and `on`. The Compose worker and `make start-all-local` (local-process workers) both turn it on; leave it off in production.',
             ],
           ],
         },
