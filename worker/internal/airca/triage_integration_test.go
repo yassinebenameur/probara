@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -455,6 +456,41 @@ func TestTriageTransientErrorsFailOnFinalDelivery(t *testing.T) {
 		t.Fatalf("final delivery must ack, got %v", err)
 	}
 	if s := f.state(job.TriageID); s.status != "failed" || s.message != triageFinalDeliveryMessage || !s.completed {
+		t.Fatalf("final delivery row %+v", s)
+	}
+}
+
+// A local AI that is saturated, loading or restarting (ai.ErrUnavailable)
+// is retried, not recorded: nothing else ever retries a triage. The final
+// delivery records it as unavailable.
+func TestTriageUnavailableLocalAIRetries(t *testing.T) {
+	f := newTriageFixture(t)
+	now := time.Now().UTC()
+	job := f.alertWithTriage(f.monitor, "availability", now.Add(-10*time.Minute), now.Add(-5*time.Minute))
+	a := &recordingAnalyzer{err: fmt.Errorf("decide: %w", ai.ErrUnavailable)}
+	c := f.consumer(a)
+	err := f.handle(c, job, 1)
+	if !errors.Is(err, ai.ErrUnavailable) || errors.Unwrap(err) == nil {
+		t.Fatalf("delivery 1: want a RetryAfter around ErrUnavailable, got %v", err)
+	}
+	if s := f.state(job.TriageID); s.status != "pending" {
+		t.Fatalf("delivery 1 left %+v", s)
+	}
+	a.err = nil
+	if err := f.handle(c, job, 2); err != nil {
+		t.Fatalf("delivery 2: %v", err)
+	}
+	if s := f.state(job.TriageID); s.status != "ready" || a.calls() != 2 {
+		t.Fatalf("delivery 2 row %+v after %d calls", s, a.calls())
+	}
+
+	// Still unavailable on the last delivery: failed, with the unavailable message.
+	job2 := f.alertWithTriage(testutil.InsertHTTPMonitor(f.ctx, t, f.dbc, f.tenant, "second"), "availability", now.Add(-10*time.Minute), now.Add(-5*time.Minute))
+	a.err = fmt.Errorf("decide: %w", ai.ErrUnavailable)
+	if err := f.handle(c, job2, maxDeliver); err != nil {
+		t.Fatalf("final delivery must ack, got %v", err)
+	}
+	if s := f.state(job2.TriageID); s.status != "failed" || s.message != triageUnavailableMessage || !s.completed {
 		t.Fatalf("final delivery row %+v", s)
 	}
 }

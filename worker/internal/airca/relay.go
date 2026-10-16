@@ -44,7 +44,8 @@ const (
 	// old and that is still pending. Invariant: it exceeds the longest
 	// delivery chain — the AckWait BackOff gaps (1x and 2x
 	// maxLocalAITimeout+ackWaitHeadroom) plus a last full run, with the retry
-	// delays, ≈22.7m. Queue wait does not count (triageNotStartedAfter
+	// delays (at most unavailableRetryMax each, for a local AI that is
+	// loading or saturated), ≈26m. Queue wait does not count (triageNotStartedAfter
 	// covers it). The consumer's guarded writes treat a row failed here as a
 	// lost race, so the relay takes no per-job lock.
 	triageFailAfter = 30 * time.Minute
@@ -94,7 +95,7 @@ const (
 // a build error, when one breaks). Counted in seconds to stay within int on
 // 32-bit targets.
 var (
-	_ [(triageFailAfter-4*(maxLocalAITimeout+ackWaitHeadroom)-40*time.Second)/time.Second - 1]struct{}
+	_ [(triageFailAfter-4*(maxLocalAITimeout+ackWaitHeadroom)-(maxDeliver-1)*unavailableRetryMax)/time.Second - 1]struct{}
 	_ [(triageNotStartedAfter-triageMaxAge-(maxTriageAttempts-1)*triageRepublishAfter-RelayInterval)/time.Second - 1]struct{}
 	_ [(triageDuplicatesWindow-(maxTriageAttempts-1)*triageRepublishAfter-2*RelayInterval)/time.Second - 1]struct{}
 	_ [(triageMaxAge-triageDuplicatesWindow)/time.Second + 1]struct{} // JetStream: Duplicates <= MaxAge

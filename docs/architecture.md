@@ -179,8 +179,10 @@ allowlisted HTTP/TLS timings and fresh native host gauges contribute evidence.
 Missing, expired, conflicting and truncated detail is explicit. Decisions are
 batched by affected monitor and aggregated conservatively. Model output selects
 hypotheses; maintained templates supply all prose and troubleshooting actions.
-Unsupported evidence completes with abstention; service/queue failures persist
-a failed run with a retry action. PostgreSQL session locks serialize duplicate
+Unsupported evidence completes with abstention; a temporarily unavailable
+service (`ai.ErrUnavailable`) is redelivered, and other service failures (or
+an unavailable service on the final delivery) persist a failed run with a
+retry action. PostgreSQL session locks serialize duplicate
 jobs and tenant/incident/analysis IDs scope every persistence operation.
 Platform result rows (S-E1) are never evidence, and linked mesh-edge alerts are
 recorded as incomplete evidence rather than modeled.
@@ -253,5 +255,9 @@ alerts and workspaces that turned triage off. Otherwise it builds
 single-monitor evidence anchored at the alert's `triggered_at`, through the
 same `buildEvidence` path as incident analysis (`context.go`), and runs the
 same analyzer. Every write is guarded by tenant, alert and `status='pending'`.
-A model outage records `failed`. `AI_TRIAGE_ENABLED=false` or
+A local AI that is temporarily unavailable (`ai.ErrUnavailable`: 429/502/503/504,
+refused or reset connections) is NAKed for up to 3 deliveries (1 then 2 min,
+or its `Retry-After`, capped at 2 min) by both job consumers; still
+unavailable on the final delivery, or any other model failure, records
+`failed`. `AI_TRIAGE_ENABLED=false` or
 `LOCAL_AI_DISABLED=true` stops claims, while queued rows drain as skipped.

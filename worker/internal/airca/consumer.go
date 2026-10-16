@@ -16,8 +16,9 @@ import (
 	"github.com/yassinebenameur/probara/shared/queue"
 )
 
-// Max delivery covers transient persistence failures; service failures are
-// recorded once with an operator retry action.
+// Max delivery covers transient persistence failures and a local AI that is
+// temporarily unavailable (ai.ErrUnavailable); other analyzer failures are
+// recorded once (incident analyses then offer an operator retry).
 const maxDeliver = 3
 
 // ackWaitHeadroom is added to the local AI timeout to form the consumer's
@@ -38,6 +39,7 @@ const (
 	// The web panel renders "Analysis failed: <message>. Try again.", so
 	// failure messages carry no trailing period or retry instruction.
 	finalDeliveryFailureMessage = "the analysis failed after repeated errors"
+	analysisUnavailableMessage  = "Local AI service unavailable or returned invalid decisions; check service readiness"
 )
 
 // Consumer runs AI root cause analyses pulled from the AI_RCA stream. The
@@ -111,10 +113,15 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) error {
 }
 
 // settle maps a process error onto the queue outcome; on the final delivery
-// the analysis is recorded failed with finalDeliveryFailureMessage.
+// the analysis is recorded failed with finalDeliveryFailureMessage, or
+// analysisUnavailableMessage when the local AI was still unavailable.
 func (c *Consumer) settle(ctx context.Context, entry *logrus.Entry, msg *queue.Message, job ai.AnalysisJob, err error) error {
 	return settleDelivery(ctx, entry, msg, err, func(markCtx context.Context) (bool, error) {
-		return c.markFailed(markCtx, job, finalDeliveryFailureMessage)
+		message := finalDeliveryFailureMessage
+		if errors.Is(err, ai.ErrUnavailable) {
+			message = analysisUnavailableMessage
+		}
+		return c.markFailed(markCtx, job, message)
 	})
 }
 
@@ -170,15 +177,20 @@ func (c *Consumer) processLocked(ctx context.Context, entry *logrus.Entry, job a
 	defer cancel()
 	result, err := analyzer.Analyze(analysisCtx, input)
 	if err != nil {
-		// Analyzer failures (service outage, queue saturation, invalid responses) are terminal
-		// for this run; the operator retries from the UI.
 		if ctx.Err() != nil {
 			// Shutdown or the delivery deadline cut the call short; that says
 			// nothing about the local AI, so retry rather than record a verdict.
 			return ctx.Err()
 		}
+		if errors.Is(err, ai.ErrUnavailable) {
+			// Queue full, model loading or the pod restarting: retried with
+			// deliveryRetryDelay so a restart needs no operator click.
+			return err
+		}
+		// Other analyzer failures (invalid responses, a model that timed
+		// out) are terminal for this run; the operator retries from the UI.
 		entry.WithError(err).Warn("Analysis failed")
-		return c.finishFailed(ctx, entry, job, "Local AI service unavailable or returned invalid decisions; check service readiness")
+		return c.finishFailed(ctx, entry, job, analysisUnavailableMessage)
 	}
 
 	updated, err := c.markReady(ctx, job, result)

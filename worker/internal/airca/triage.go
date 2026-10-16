@@ -138,7 +138,11 @@ func (c *TriageConsumer) handle(ctx context.Context, msg *queue.Message) error {
 	stopHeartbeat()
 	cancel()
 	return settleDelivery(ctx, entry, msg, err, func(markCtx context.Context) (bool, error) {
-		return c.markTriageFailed(markCtx, job, triageFinalDeliveryMessage)
+		message := triageFinalDeliveryMessage
+		if errors.Is(err, ai.ErrUnavailable) {
+			message = triageUnavailableMessage
+		}
+		return c.markTriageFailed(markCtx, job, message)
 	})
 }
 
@@ -256,6 +260,13 @@ func (c *TriageConsumer) processTriageLocked(ctx context.Context, entry *logrus.
 			// Shutdown or the delivery deadline cut the call short; that says
 			// nothing about the local AI, so retry rather than record a verdict.
 			return ctx.Err()
+		}
+		if errors.Is(err, ai.ErrUnavailable) {
+			// Queue full, model loading or the pod restarting: nothing else
+			// ever retries a triage (the relay claims an alert once), so NAK
+			// it with deliveryRetryDelay. The final delivery records
+			// triageUnavailableMessage (see handle).
+			return err
 		}
 		entry.WithError(err).Warn("Triage analysis failed")
 		return c.finishTriageFailed(ctx, entry, job, triageUnavailableMessage)

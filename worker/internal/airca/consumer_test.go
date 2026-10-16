@@ -127,7 +127,7 @@ func TestLockCeilingCoversLongestDeliveryChain(t *testing.T) {
 	}
 	chain := time.Duration(maxDeliver) * delivery
 	for n := uint64(1); n < maxDeliver; n++ {
-		chain += retryDelay(n)
+		chain += longestRetryDelay(n)
 	}
 	if lockCeiling <= chain {
 		t.Fatalf("lockCeiling %s must exceed a full delivery chain (%s)", lockCeiling, chain)

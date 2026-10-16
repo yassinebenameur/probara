@@ -607,6 +607,11 @@ or imported groups come back empty. Any other path that creates groups through
   guard there pins the pair, so raise both together. Analysis failure messages
   carry no trailing period or retry instruction: `AIRootCausePanel` renders
   "Analysis failed: <message>. Try again.".
+  A local AI that cannot take a call right now returns `ai.ErrUnavailable`
+  (`shared/ai/provider.go`: 429/502/503/504, refused/reset/DNS — not a
+  model timeout); both job consumers NAK it with `deliveryRetryDelay`
+  (`jobrun.go`, capped by `unavailableRetryMax`, which the relay's
+  `triageFailAfter` guard counts) instead of recording a verdict.
 - **AI triage timing**: the relay/consumer windows live as constants with
   compile-time guards in `worker/internal/airca/relay.go` and `triage.go`
   (15 s tick, 6 h lookback — the value is `ai.TriageLookback` in

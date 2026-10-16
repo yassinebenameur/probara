@@ -3,19 +3,96 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
 var ErrNotConfigured = errors.New("local AI is disabled")
+
+// ErrUnavailable marks a call the local AI service could not take right now:
+// it refused or reset the connection, its name did not resolve, or it
+// answered 429 (queue full), 502, 503 (model loading, shutting down) or 504.
+// A later attempt may succeed, so job consumers retry it instead of
+// recording a verdict. A model that ran past the timeout, an auth or
+// validation failure, and an invalid response are not ErrUnavailable.
+// Match with errors.Is; RetryAfterHint returns the service's Retry-After.
+var ErrUnavailable = errors.New("local AI temporarily unavailable")
+
+// unavailableError is an ErrUnavailable with its cause and Retry-After hint.
+// The cause stays reachable (errors.As *url.Error still works for readiness
+// classification); the text carries no more detail than before.
+type unavailableError struct {
+	msg        string
+	cause      error
+	retryAfter time.Duration
+}
+
+func (e *unavailableError) Error() string        { return e.msg }
+func (e *unavailableError) Unwrap() error        { return e.cause }
+func (e *unavailableError) Is(target error) bool { return target == ErrUnavailable }
+
+// RetryAfterHint returns the Retry-After the service sent with an
+// ErrUnavailable answer, or 0 when there was none.
+func RetryAfterHint(err error) time.Duration {
+	var u *unavailableError
+	if errors.As(err, &u) {
+		return u.retryAfter
+	}
+	return 0
+}
+
+// transientTransport reports whether a transport error (the request's own
+// context still live) means the service is unreachable for now. A dial
+// failure is, even when it timed out; a request that timed out after
+// connecting is a slow model, not an unavailable one, and retrying it would
+// spend the inference slot again; a certificate the client rejects will not
+// fix itself.
+func transientTransport(err error) bool {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "dial" {
+		return true
+	}
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return false
+	}
+	return true
+}
+
+// parseRetryAfter reads a Retry-After header: delay-seconds or an HTTP date.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		if n < 0 {
+			return 0
+		}
+		return time.Duration(n) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
 
 // Config is installation-owned. No tenant can supply an inference destination.
 type Config struct {
@@ -103,11 +180,19 @@ func (a *localAnalyzer) call(ctx context.Context, method, path string, body any,
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.client.Do(req)
 	if err != nil {
+		if ctx.Err() == nil && transientTransport(err) {
+			return &unavailableError{msg: "local AI unavailable: " + err.Error(), cause: err}
+		}
 		return fmt.Errorf("local AI unavailable: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("local AI service returned HTTP %d; retry after checking service readiness", resp.StatusCode)
+		msg := fmt.Sprintf("local AI service returned HTTP %d; retry after checking service readiness", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return &unavailableError{msg: msg, retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+		}
+		return errors.New(msg)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024+1))
 	if err != nil {

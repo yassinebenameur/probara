@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func TestTriageRelayTimingInvariants(t *testing.T) {
 	// delivery chain before the relay fails it.
 	chain := time.Duration(maxTriageAttempts-1)*triageRepublishAfter + time.Duration(maxDeliver)*(maxLocalAITimeout+ackWaitHeadroom)
 	for n := uint64(1); n < maxDeliver; n++ {
-		chain += retryDelay(n)
+		chain += longestRetryDelay(n)
 	}
 	if triageFailAfter <= chain {
 		t.Fatalf("triageFailAfter %s must exceed the longest pending life (%s)", triageFailAfter, chain)
@@ -133,5 +134,37 @@ func TestTriageMessagesHaveNoTrailingPeriod(t *testing.T) {
 	var meta ai.Metadata
 	if err := json.Unmarshal([]byte(failedAnalysisMetadata), &meta); err != nil || meta.Outcome != "failed" {
 		t.Fatalf("failed metadata %s: %v", failedAnalysisMetadata, err)
+	}
+}
+
+// longestRetryDelay is the longest NAK delay settleDelivery can pick for
+// delivery n: an unavailable local AI with a huge Retry-After.
+func longestRetryDelay(n uint64) time.Duration {
+	return max(retryDelay(n), unavailableRetryDelay(n, 24*time.Hour))
+}
+
+// An unavailable local AI waits longer than a database blip, honours
+// Retry-After up to unavailableRetryMax, and other errors keep retryDelay.
+func TestDeliveryRetryDelay(t *testing.T) {
+	unavailable := fmt.Errorf("decide: %w", ai.ErrUnavailable)
+	for _, tc := range []struct {
+		n    uint64
+		err  error
+		want time.Duration
+	}{
+		{1, errors.New("db down"), 10 * time.Second},
+		{2, errors.New("db down"), 30 * time.Second},
+		{1, unavailable, time.Minute},
+		{2, unavailable, 2 * time.Minute},
+	} {
+		if got := deliveryRetryDelay(tc.n, tc.err); got != tc.want {
+			t.Fatalf("deliveryRetryDelay(%d, %v) = %s, want %s", tc.n, tc.err, got, tc.want)
+		}
+	}
+	if got := unavailableRetryDelay(1, 90*time.Second); got != 90*time.Second {
+		t.Fatalf("Retry-After above the base must win, got %s", got)
+	}
+	if got := unavailableRetryDelay(1, time.Hour); got != unavailableRetryMax {
+		t.Fatalf("Retry-After must be capped, got %s", got)
 	}
 }

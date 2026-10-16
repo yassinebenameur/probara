@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sirupsen/logrus"
 
+	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/queue"
@@ -220,7 +221,7 @@ func settleDelivery(ctx context.Context, entry *logrus.Entry, msg *queue.Message
 	}
 	if !final {
 		entry.WithError(err).Warn("Job hit a transient error; retrying")
-		return queue.RetryAfter(err, retryDelay(msg.NumDelivered))
+		return queue.RetryAfter(err, deliveryRetryDelay(msg.NumDelivered, err))
 	}
 
 	// JetStream will not redeliver after this attempt. Record the failure so
@@ -248,6 +249,30 @@ func retryDelay(numDelivered uint64) time.Duration {
 		return 10 * time.Second
 	}
 	return 30 * time.Second
+}
+
+// unavailableRetryMax caps the wait before retrying a job the local AI could
+// not take (ai.ErrUnavailable: queue full, model loading, pod restarting).
+// The relay's triageFailAfter guard counts (maxDeliver-1) of these.
+const unavailableRetryMax = 2 * time.Minute
+
+// unavailableRetryDelay spaces retries of ai.ErrUnavailable longer than
+// retryDelay, since a model load outlasts a database blip: 1 minute, then 2,
+// or the service's Retry-After when longer, never past unavailableRetryMax.
+func unavailableRetryDelay(numDelivered uint64, hint time.Duration) time.Duration {
+	d := time.Minute
+	if numDelivered > 1 {
+		d = 2 * time.Minute
+	}
+	return min(max(d, hint), unavailableRetryMax)
+}
+
+// deliveryRetryDelay is the NAK delay for a run that failed with err.
+func deliveryRetryDelay(numDelivered uint64, err error) time.Duration {
+	if errors.Is(err, ai.ErrUnavailable) {
+		return unavailableRetryDelay(numDelivered, ai.RetryAfterHint(err))
+	}
+	return retryDelay(numDelivered)
 }
 
 // startHeartbeat calls msg.InProgress every interval until ctx ends or the

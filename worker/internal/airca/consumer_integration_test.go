@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,6 +155,39 @@ func TestConsumerTransientErrorRetriesThenFailsOnFinalDelivery(t *testing.T) {
 	status, message := f.status(job.AnalysisID)
 	if status != "failed" || message != finalDeliveryFailureMessage {
 		t.Fatalf("final delivery: %s %q", status, message)
+	}
+}
+
+// An unavailable local AI is retried without an operator click; on the
+// final delivery the analysis records the unavailable message.
+func TestConsumerUnavailableLocalAIRetries(t *testing.T) {
+	f := newAnalysisFixture(t)
+	a := &recordingAnalyzer{err: fmt.Errorf("decide: %w", ai.ErrUnavailable)}
+	c := New(&config.WorkerConfig{LocalAI: ai.Config{Timeout: 10 * time.Second}}, logger.New("test", "error"), f.dbc, nil, a)
+
+	job := f.pending()
+	err := c.handle(f.ctx, &queue.Message{Data: payload(t, job), NumDelivered: 1})
+	if !errors.Is(err, ai.ErrUnavailable) || errors.Unwrap(err) == nil {
+		t.Fatalf("delivery 1: want a RetryAfter around ErrUnavailable, got %v", err)
+	}
+	if status, _ := f.status(job.AnalysisID); status != "pending" {
+		t.Fatalf("delivery 1 left %s", status)
+	}
+	if err := c.handle(f.ctx, &queue.Message{Data: payload(t, job), NumDelivered: maxDeliver}); err != nil {
+		t.Fatalf("final delivery must ack, got %v", err)
+	}
+	if status, message := f.status(job.AnalysisID); status != "failed" || message != analysisUnavailableMessage {
+		t.Fatalf("final delivery: %s %q", status, message)
+	}
+
+	// A non-transient analyzer error stays terminal on the first delivery.
+	a.err = errors.New("invalid local AI model identity or batch size")
+	bad := f.pending()
+	if err := c.handle(f.ctx, &queue.Message{Data: payload(t, bad), NumDelivered: 1}); err != nil {
+		t.Fatalf("terminal analyzer error must ack, got %v", err)
+	}
+	if status, message := f.status(bad.AnalysisID); status != "failed" || message != analysisUnavailableMessage {
+		t.Fatalf("terminal failure: %s %q", status, message)
 	}
 }
 
