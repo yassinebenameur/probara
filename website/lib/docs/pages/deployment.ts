@@ -858,6 +858,13 @@ api:
           text:
             'The migration hook changes shared PostgreSQL state. Keep backups and review migration compatibility before upgrading; never assume an application rollback will undo schema or data changes.',
         },
+        {
+          type: 'callout',
+          tone: 'info',
+          title: 'Upgrading from 1.0.x: AI is local and on by default',
+          text:
+            'The external LLM path is gone: `LLM_*` variables and workspace provider settings are no longer read (the old columns stay for rollback), and workspaces without an explicit AI setting are enabled. The chart now deploys `<release>-local-ai` (1 CPU/2 GiB request) and wires API and worker to it (the alerter gets only its kill switches); with `secrets.existingSecret`, add a `local_ai_token` key (see [local AI values](/docs/deployment/#helm-values-local-ai)). Deployments that do not use this chart need the `probara-local-ai` workload plus `LOCAL_AI_URL` and `LOCAL_AI_TOKEN` on API and worker, or `LOCAL_AI_DISABLED=true` on API, worker and alerter; otherwise analyses and alert triages fail with local AI reported unavailable, while alerting and paging are unaffected. Set `localAI.enabled=false` to opt out.',
+        },
       ],
     },
     {
