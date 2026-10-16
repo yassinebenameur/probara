@@ -46,15 +46,23 @@ type outageCause struct {
 }
 
 // loadCauseAlerts returns the members' availability alerts that overlap the
-// window (plus the match slack), with their effective causes.
+// window (plus the match slack), with their effective causes. Under the
+// installation's triage kill switch nothing is claimable, so an alert without
+// a triage row is untriaged rather than pending.
 func (s *Service) loadCauseAlerts(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, window sharedanalytics.TimeRange, now time.Time) ([]causeAlert, error) {
+	args := []any{tenantID, pq.Array(monitorIDs), window.Start.UTC(), window.End.Add(causeMatchSlack).UTC()}
+	claimable := "FALSE"
+	if !s.aiTriageOff {
+		claimable = triageview.ClaimableExpr("$5")
+		args = append(args, now.Add(-ai.TriageLookback).UTC())
+	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT a.id, a.monitor_id, a.triggered_at, a.resolved_at, `+triageview.CauseColumns+`, `+triageview.ClaimableExpr("$5")+`
+		SELECT a.id, a.monitor_id, a.triggered_at, a.resolved_at, `+triageview.CauseColumns+`, `+claimable+`
 		FROM alerts a`+triageview.CauseJoin+`
 		WHERE a.tenant_id = $1 AND a.kind = 'availability' AND a.monitor_id = ANY($2)
 		  AND a.triggered_at < $4 AND (a.resolved_at IS NULL OR a.resolved_at > $3)
 		ORDER BY a.monitor_id, a.triggered_at, a.id
-	`, tenantID, pq.Array(monitorIDs), window.Start.UTC(), window.End.Add(causeMatchSlack).UTC(), now.Add(-ai.TriageLookback).UTC())
+	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load SLA cause alerts: %w", err)
 	}

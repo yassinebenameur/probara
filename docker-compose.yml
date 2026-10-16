@@ -124,6 +124,8 @@ services:
       LOCAL_AI_URL: "http://local-ai:8090"
       LOCAL_AI_TOKEN: "${LOCAL_AI_TOKEN:-probara-local-development-token}"
       LOCAL_AI_TIMEOUT_SECONDS: "${LOCAL_AI_TIMEOUT_SECONDS:-90}"
+      # Triage kill switch: SLA reports list no alert as "Triage pending" while it is off.
+      AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
       HTTP_PORT: "8080"
       METRICS_PORT: "9090"
       LOG_LEVEL: "info"
@@ -238,7 +240,7 @@ services:
       NATS_CONSUMER_NAME: "worker"
       WORKER_CONCURRENCY: "10"
       CHROME_BIN: "/usr/bin/chromium-browser"
-      # Automatic alert triage kill switch (the alerter reads it too).
+      # Automatic alert triage kill switch (the alerter and the api read it too).
       AI_TRIAGE_ENABLED: "${AI_TRIAGE_ENABLED:-true}"
       SYNTHETIC_BROWSER_ARTIFACTS_DIR: "/artifacts/synthetic-browser"
       SIP_LOCALHOST_AS_HOST_GATEWAY: "true"

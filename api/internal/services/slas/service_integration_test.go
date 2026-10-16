@@ -45,7 +45,7 @@ func TestSLAService(t *testing.T) {
 	otherTenant := testutil.InsertTenant(ctx, t, dbClient, "sla-other")
 	foreign := testutil.InsertHTTPMonitor(ctx, t, dbClient, otherTenant, "foreign")
 
-	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
+	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient), false)
 	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 

@@ -110,7 +110,7 @@ export const SLAS_PAGE: DocPage = {
           rows: [
             ["Suspected cause (`suspected`)", "A named catalogue cause, from a ready triage or an operator's label on it. One row per cause, largest downtime first."],
             ["Inconclusive (`inconclusive`)", "The triage ran and found no supported cause, or an operator labelled it insufficient evidence."],
-            ["Triage pending (`pending`)", "The triage was queued or running, or the alert was still open, within the 6-hour triage lookback and in a workspace with auto-triage on, when the report was computed. The report adds a note saying how many outages were pending."],
+            ["Triage pending (`pending`)", "The triage was queued or running, or the alert was still open, within the 6-hour triage lookback and in a workspace with auto-triage on, when the report was computed. With the installation's triage switched off (`AI_TRIAGE_ENABLED=false` or `LOCAL_AI_DISABLED=true`) an alert with no triage is never pending. The report adds a note saying how many outages were pending."],
             ["Not triaged (`untriaged`)", "The overlapping alerts were never triaged: no triage (auto-triage off at the time, resolved within the settle wait, cooldown, hourly cap or backlog), a failed triage, a skipped one, or an open alert older than the 6-hour lookback."],
             ["No alert (`no_alert`)", "No availability alert of the monitor overlapped the outage."],
           ],

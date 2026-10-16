@@ -122,14 +122,14 @@ var relayTimeoutsSQL = []string{
 // in the window; alerts that resolve within it are never claimed. Mesh
 // alerts (no monitor) are claimed and skipped by the consumer as not
 // modeled; alerts of deleted monitors are not claimed. Skipped rows do not
-// count against the cap. The eligibility clause (open, within the lookback,
-// live monitor, workspace AI and auto-triage on) has an API twin,
-// api/internal/services/triageview.ClaimableExpr, which splits SLA report
-// outages into pending vs. untriaged; change them together.
+// count against the cap. Eligibility (open, within the lookback, live
+// monitor, workspace AI and auto-triage on) is built from the shared/ai
+// fragments TriageClaimableAlertSQL and TriageSettingsEnabledSQL, which the
+// API's SLA "Triage pending" bucket (triageview.ClaimableExpr) uses too.
 var relayClaimSQL = `
 WITH settings AS (
-    SELECT tenant_id, triage_delay_seconds, triage_max_per_hour
-    FROM ai_settings WHERE enabled AND auto_triage_enabled
+    SELECT ais.tenant_id, ais.triage_delay_seconds, ais.triage_max_per_hour
+    FROM ai_settings ais WHERE ` + ai.TriageSettingsEnabledSQL("ais") + `
 ), used AS (
     SELECT t.tenant_id, COUNT(*) AS n
     FROM alert_triage t JOIN settings s ON s.tenant_id = t.tenant_id
@@ -143,11 +143,9 @@ WITH settings AS (
     JOIN settings s ON s.tenant_id = a.tenant_id
     LEFT JOIN used u ON u.tenant_id = a.tenant_id
     LEFT JOIN monitors m ON m.id = a.monitor_id AND m.tenant_id = a.tenant_id
-    WHERE a.status IN ('active','acknowledged') AND a.resolved_at IS NULL
-      AND a.triggered_at >= NOW() - make_interval(secs => $1)
+    WHERE ` + ai.TriageClaimableAlertSQL("a", "NOW() - make_interval(secs => $1)") + `
       AND a.triggered_at <= NOW() - make_interval(secs =>
             GREATEST(s.triage_delay_seconds, LEAST(2 * COALESCE(m.interval_seconds, 0), $3::int)))
-      AND (a.monitor_id IS NULL OR (m.id IS NOT NULL AND m.deleted_at IS NULL))
       AND NOT EXISTS (SELECT 1 FROM alert_triage x WHERE x.alert_id = a.id)
 )
 INSERT INTO alert_triage (tenant_id, alert_id, monitor_id, status, enqueued_at, attempts)

@@ -578,7 +578,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`AI_TRIAGE_ENABLED`',
               '`true`; boolean, invalid values fail startup',
-              'Platform kill switch for [automatic alert triage](/docs/alerting/#ai-triage), read by the worker and the alerter. On the worker `false` stops new claims only; queued triages finish as skipped without calling the model. On the alerter `false` stops every suspected-cause follow-up, including from triages that were already ready. Compose forwards the shell value to both; Helm renders `localAI.triageEnabled` into both.',
+              'Platform kill switch for [automatic alert triage](/docs/alerting/#ai-triage), read by the worker, the alerter and the API. On the worker `false` stops new claims only; queued triages finish as skipped without calling the model. On the alerter `false` stops every suspected-cause follow-up, including from triages that were already ready. On the API `false` (or `LOCAL_AI_DISABLED=true`) keeps [SLA reports](/docs/slas/#suspected-causes) from listing an alert with no triage as Triage pending. Compose forwards the shell value to all three; Helm renders `localAI.triageEnabled` into all three.',
             ],
             [
               '`AI_TRIAGE_STREAM`',
@@ -612,7 +612,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         {
           type: 'paragraph',
           text:
-            'The database-connected worker uses the same `LOCAL_AI_*` client variables as the API; Compose and Helm wire them to both, and Helm wires `SMTP_*` through its `smtp` values block. The `AI_RCA_*` variables and the `AI_TRIAGE_*` stream names are not wired, so their code defaults apply; set them through `extraEnv` only to rename the streams. `AI_TRIAGE_ENABLED` is wired to the worker and the alerter. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`.',
+            'The database-connected worker uses the same `LOCAL_AI_*` client variables as the API; Compose and Helm wire them to both, and Helm wires `SMTP_*` through its `smtp` values block. The `AI_RCA_*` variables and the `AI_TRIAGE_*` stream names are not wired, so their code defaults apply; set them through `extraEnv` only to rename the streams. `AI_TRIAGE_ENABLED` is wired to the worker, the alerter and the API. Only database-connected platform workers read `AI_TRIAGE_*`: they run the triage relay and consumer, and location workers never do. Private-location workers receive no database or AI credentials and execute checks independently. Notification-mode variables still require `extraEnv`.',
         },
       ],
     },
@@ -964,7 +964,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             ],
             ['OIDC', 'Development Dex-oriented variables wired', 'Primary OIDC values and client Secret wired'],
             ['Encryption keyring', 'Not wired', 'Base key wired to API/worker/alerter, but not scheduler; rotation keys not exposed'],
-            ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`)'],
+            ['Local AI', '`local-ai` service (loopback port 8090) wired to API and worker, `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` also to the alerter, `AI_TRIAGE_ENABLED` also to the API; fixed public development token unless `LOCAL_AI_TOKEN` is set in the shell or `.env`', '`localAI` values: bundled Deployment, Service and NetworkPolicy, or `externalUrl`; token in `local_ai_token`; API and platform worker only (the alerter gets only `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED`; `AI_TRIAGE_ENABLED` also reaches the API)'],
             [
               'SMTP',
               'Not wired',

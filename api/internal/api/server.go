@@ -323,7 +323,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			})
 
 			// SLAs and their reports (live, issued, exported)
-			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo), Log: log}
+			slaHandlers := &slahandlers.Handlers{Service: slaservice.NewService(dbClient, analyticsRepo, cfg.LocalAI.Disabled || !cfg.AITriageEnabled), Log: log}
 			r.Route("/slas", slaHandlers.Routes)
 			r.Route("/sla-reports", slaHandlers.ReportRoutes)
 

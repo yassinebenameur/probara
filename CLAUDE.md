@@ -317,7 +317,8 @@ or imported groups come back empty. Any other path that creates groups through
   also gets `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` (Helm
   `alerterAIEnv`/`aiTriageEnv`, value `localAI.triageEnabled`; Compose shell
   passthrough), which stop suspected-cause follow-ups
-  (`AlerterConfig.SuspectedCausesDisabled`). The service gets only `LOCAL_AI_TOKEN`. Helm's token is
+  (`AlerterConfig.SuspectedCausesDisabled`); `AI_TRIAGE_ENABLED` also reaches
+  worker and api (`aiTriageEnv`; the api's SLA reports read it). The service gets only `LOCAL_AI_TOKEN`. Helm's token is
   canonical key `local_ai_token`; chart-managed and empty, it is derived from
   `secrets.adminJwtSecret` (stable across renders; never `randAlphaNum` or
   `lookup`), and `secret.yaml` fails where it cannot be derived (`externalUrl`,
@@ -618,9 +619,12 @@ or imported groups come back empty. Any other path that creates groups through
   `buildEvidence` in `context.go`; never fork the window/evidence SQL. The
   claim and cap SQL is `relayClaimSQL`; the settings ranges are pinned in
   migration 000094, `aisettings` and `web/lib/ai-triage.ts` together.
-  `triageview.ClaimableExpr` (api/internal/services/triageview) is the API
-  twin of `relayClaimSQL`'s eligibility clause and drives the SLA report's
-  pending vs. untriaged split; change them together.
+  Triage eligibility (open, lookback, live monitor, workspace AI +
+  auto-triage on) is `ai.TriageClaimableAlertSQL`/`ai.TriageSettingsEnabledSQL`
+  in `shared/ai/settings.go`; `relayClaimSQL` and `triageview.ClaimableExpr`
+  (the SLA report's pending vs. untriaged split) both build from them — never
+  re-type the clause. The SLA service takes the kill switches
+  (`aiTriageOff`) and uses `FALSE` for claimable under them.
 - **Local AI release gate**: `release_approved` comes only from
   `ai-service/training/validate_cpu.py`; `probara_ai/gate.py` is the
   predicate and `verify_artifact` recomputes it from `cpu-evaluation.json`,

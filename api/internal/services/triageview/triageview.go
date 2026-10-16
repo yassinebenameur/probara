@@ -48,26 +48,22 @@ const CauseJoin = Join + `LEFT JOIN ai_labels trl ON trl.tenant_id = tr.tenant_i
 	AND trl.subject_type = '` + models.AILabelSubjectAlertTriage + `' AND trl.subject_key = tr.id::text `
 
 // CauseColumns are the CauseInput fields, in order: triage status and
-// hypothesis, label verdict and label key. Append ClaimableExpr for
-// CauseInput.Claimable.
+// hypothesis, label verdict and label key. Append ClaimableExpr (or FALSE
+// under a kill switch) for CauseInput.Claimable.
 const CauseColumns = `tr.status, tr.hypothesis, trl.verdict, trl.incident_label`
 
 // ClaimableExpr is true when the alert has no triage row yet but the relay
-// may still claim it: open, triggered at or after lookbackParam (now -
-// ai.TriageLookback), its monitor (if any) not deleted, and the workspace has
-// AI and auto-triage on. It is the API twin of the eligibility clause of
-// worker/internal/airca relayClaimSQL; change them together. The hourly cap,
-// the platform backlog bound and the settle wait only delay a claim, so they
-// are left out. The installation kill switches (AI_TRIAGE_ENABLED,
-// LOCAL_AI_DISABLED) are not visible here, so under them an open alert still
-// reads as claimable.
+// may still claim it: the shared eligibility of worker/internal/airca
+// relayClaimSQL (ai.TriageClaimableAlertSQL with lookbackParam = now -
+// ai.TriageLookback, and ai.TriageSettingsEnabledSQL for the workspace). The
+// hourly cap, the platform backlog bound and the settle wait only delay a
+// claim, so they are left out. The installation kill switches
+// (AI_TRIAGE_ENABLED=false, LOCAL_AI_DISABLED=true) stop all claims; callers
+// that know them use FALSE in place of this expression (see the SLA service).
 func ClaimableExpr(lookbackParam string) string {
-	return `(tr.id IS NULL AND a.resolved_at IS NULL AND a.status IN ('active','acknowledged')
-		AND a.triggered_at >= ` + lookbackParam + `
-		AND (a.monitor_id IS NULL OR EXISTS (SELECT 1 FROM monitors clm WHERE clm.id = a.monitor_id
-			AND clm.tenant_id = a.tenant_id AND clm.deleted_at IS NULL))
+	return `(tr.id IS NULL AND ` + ai.TriageClaimableAlertSQL("a", lookbackParam) + `
 		AND EXISTS (SELECT 1 FROM ai_settings ais WHERE ais.tenant_id = a.tenant_id
-			AND ais.enabled AND ais.auto_triage_enabled))`
+			AND ` + ai.TriageSettingsEnabledSQL("ais") + `))`
 }
 
 // CauseInput is one alert's CauseColumns + ClaimableExpr scan.

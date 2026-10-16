@@ -244,8 +244,8 @@ reference stays required, waits for the key.
 
 {{/*
 Automatic alert triage kill switch (AI_TRIAGE_ENABLED), rendered into the
-platform worker (relay + triage consumer) and the alerter (suspected-cause
-follow-ups).
+platform worker (relay + triage consumer), the alerter (suspected-cause
+follow-ups) and the API (SLA reports' "Triage pending" bucket).
 */}}
 {{- define "monitoring-platform.aiTriageEnv" -}}
 - name: AI_TRIAGE_ENABLED

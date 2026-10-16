@@ -571,9 +571,10 @@ localAI:
   # Client-side request timeout on api/worker (LOCAL_AI_TIMEOUT_SECONDS, 1-300).
   # All three ranges are enforced at render time.
   timeoutSeconds: 90
-  # AI_TRIAGE_ENABLED on the platform worker and the alerter: false stops new
-  # automatic alert triages (queued ones drain as skipped) and every
-  # suspected-cause follow-up, whatever the workspace settings say. The
+  # AI_TRIAGE_ENABLED on the platform worker, the alerter and the api: false
+  # stops new automatic alert triages (queued ones drain as skipped) and every
+  # suspected-cause follow-up, whatever the workspace settings say, and SLA
+  # reports then list no alert as "Triage pending". The
   # alerter also stops follow-ups when local AI is off (no enabled/externalUrl).
   triageEnabled: true
   resources:

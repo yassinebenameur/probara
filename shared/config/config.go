@@ -134,14 +134,18 @@ type APIConfig struct {
 	BaseConfig
 	SMTPConfig
 	NotificationEgressConfig
-	AlertStream           string
-	AlertSubject          string
-	AlertConsumerName     string
-	CheckJobSubject       string
-	CheckJobStream        string
-	CheckResultSubject    string
-	AIRCASubject          string
-	LocalAI               ai.Config
+	AlertStream        string
+	AlertSubject       string
+	AlertConsumerName  string
+	CheckJobSubject    string
+	CheckJobStream     string
+	CheckResultSubject string
+	AIRCASubject       string
+	LocalAI            ai.Config
+	// AITriageEnabled is AI_TRIAGE_ENABLED (default true). The API never
+	// publishes triage jobs; it reads the kill switch so SLA reports do not
+	// list alerts as "Triage pending" while the relay claims nothing.
+	AITriageEnabled       bool
 	AdminJWTSecret        string
 	AdminAccessTTLMinutes int
 	AdminRefreshTTLDays   int
@@ -254,7 +258,8 @@ type WorkerConfig struct {
 
 	// Automatic alert triage (worker/internal/airca relay and triage
 	// consumer). Read only by DB-connected platform workers; the API never
-	// publishes triage jobs, so it does not load these. Triage never changes
+	// publishes triage jobs and reads only the kill switch
+	// (APIConfig.AITriageEnabled). Triage never changes
 	// paging; the alerter honours the same kill switch for its opt-in
 	// suspected-cause follow-ups (AlerterConfig.SuspectedCausesDisabled).
 	AITriageEnabled      bool   // AI_TRIAGE_ENABLED, default true; kill switch: no new claims, queued rows drain as skipped
@@ -441,6 +446,10 @@ func LoadAPIConfig() (*APIConfig, error) {
 	}
 
 	cfg.LocalAI, err = loadLocalAIConfig()
+	if err != nil {
+		return nil, err
+	}
+	cfg.AITriageEnabled, err = loadAITriageEnabled()
 	if err != nil {
 		return nil, err
 	}
@@ -1195,7 +1204,8 @@ func LoadAlerterConfig() (*AlerterConfig, error) {
 }
 
 // loadAITriageEnabled parses AI_TRIAGE_ENABLED (default true), the platform
-// kill switch for automatic alert triage, shared by the worker and alerter.
+// kill switch for automatic alert triage, shared by the worker, the alerter
+// and the API (SLA cause breakdown).
 func loadAITriageEnabled() (bool, error) {
 	v := strings.TrimSpace(os.Getenv("AI_TRIAGE_ENABLED"))
 	if v == "" {
