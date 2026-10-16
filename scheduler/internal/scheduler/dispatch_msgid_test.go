@@ -31,7 +31,7 @@ func TestPublishMonitorJobs_SlotMsgID(t *testing.T) {
 		ID: uuid.New(), TenantID: uuid.New(), Type: "sip",
 		Config:          []byte(`{"host":"trunk.example.com","method":"invite","call":{"number":"100"}}`),
 		IntervalSeconds: 60, TimeoutSeconds: 15,
-		DueAt:           sql.NullTime{Time: due, Valid: true},
+		DueAt: sql.NullTime{Time: due, Valid: true},
 	}
 
 	for range 2 { // the failed tick, then its retry
