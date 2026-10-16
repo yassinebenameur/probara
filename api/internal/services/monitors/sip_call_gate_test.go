@@ -136,6 +136,27 @@ func TestSIPCallGate_CaseVariantKeys(t *testing.T) {
 	}
 }
 
+// Dependency edges are outside the test-call gate (as on the edge routes):
+// an editor's PATCH carrying only depends_on_ids passes the service (the
+// handler syncs the edges), while anything touching the monitor's row is
+// still refused.
+func TestUpdateMonitor_SIPCallDependenciesNotGated(t *testing.T) {
+	repo := NewMockRepository()
+	svc := &Service{repo: repo, encryptor: secrets.NoOpEncryptor{}}
+	tenantID, callID := uuid.New(), uuid.New()
+	repo.monitors[callID] = &models.Monitor{ID: callID, TenantID: tenantID, Type: models.MonitorTypeSIP, Config: json.RawMessage(gateCallConfig), IntervalSeconds: 60, TimeoutSeconds: 15, Enabled: true}
+	editor := callerContexts()["tenant editor"].ctx
+
+	deps := []string{uuid.NewString()}
+	if _, err := svc.UpdateMonitor(editor, tenantID, callID, &models.UpdateMonitorRequest{DependsOnIDs: &deps}); err != nil {
+		t.Fatalf("UpdateMonitor(depends_on_ids) = %v, want success for an editor", err)
+	}
+	paused := false
+	if _, err := svc.UpdateMonitor(editor, tenantID, callID, &models.UpdateMonitorRequest{Enabled: &paused}); !errors.Is(err, ErrCallMonitorForbidden) {
+		t.Fatalf("UpdateMonitor(enabled) = %v, want ErrCallMonitorForbidden", err)
+	}
+}
+
 // updateCountingRepo records which monitors reached Repository.Update.
 type updateCountingRepo struct {
 	*MockRepository

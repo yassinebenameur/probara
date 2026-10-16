@@ -418,23 +418,6 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 		return nil, err
 	}
 
-	// Any change to a test-call monitor, or one that would make a monitor
-	// one, is a tenant admin's (pausing included: resuming starts calls
-	// again). Validation separately refuses switching between the two.
-	updatedType, updatedConfig := existing.Type, existing.Config
-	if req.Type != nil {
-		updatedType = *req.Type
-	}
-	if len(req.Config) > 0 {
-		updatedConfig = req.Config
-	}
-	if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
-		return nil, err
-	}
-	if err := RequireCallPermission(ctx, updatedType, updatedConfig); err != nil {
-		return nil, err
-	}
-
 	// Build update query dynamically
 	setParts := []string{}
 	args := []interface{}{}
@@ -610,8 +593,30 @@ func (s *Service) UpdateMonitor(ctx context.Context, tenantID, monitorID uuid.UU
 	}
 
 	if len(setParts) == 0 && req.NotificationChannels == nil && req.Enabled == nil && req.LocationIDs == nil {
-		// No fields to update, return existing
+		// No fields to update, return existing. A PATCH carrying only
+		// depends_on_ids ends here (the handler syncs the edges after):
+		// dependency edges are deliberately outside the test-call gate
+		// below, as on the edge routes (mutateDependencyEdge), since they
+		// place no call and change nothing a call does.
 		return existing, nil
+	}
+
+	// Any change to a test-call monitor's row, or one that would make a
+	// monitor one, is a tenant admin's (pausing included: resuming starts
+	// calls again). Validation separately refuses switching between the two.
+	// Nothing above wrote anything: building setParts only reads.
+	updatedType, updatedConfig := existing.Type, existing.Config
+	if req.Type != nil {
+		updatedType = *req.Type
+	}
+	if len(req.Config) > 0 {
+		updatedConfig = req.Config
+	}
+	if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
+		return nil, err
+	}
+	if err := RequireCallPermission(ctx, updatedType, updatedConfig); err != nil {
+		return nil, err
 	}
 
 	// Create a monitor with ID and TenantID for the update
