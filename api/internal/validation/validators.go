@@ -618,24 +618,24 @@ func (v *PushConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 type SIPConfigValidator struct{}
 
 // ValidateConfig validates SIP monitor config
+// It parses with ParseSIPMonitorConfig, which refuses a key spelled in
+// another case ("Method" next to "method"), so the config it validates is
+// the config that gets stored, whatever the JSON round trip does to it.
 func (v *SIPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
-	var config sharedmodels.SIPMonitorConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil {
+	config, err := sharedmodels.ParseSIPMonitorConfig(configRaw)
+	if err != nil {
 		return fmt.Errorf("invalid SIP config: %w", err)
 	}
 	return config.Validate()
 }
 
 // ValidateSchedule bounds a test call's interval and timeout
-// (SIPMonitorConfig.ValidateSchedule); OPTIONS and REGISTER have no extra
-// schedule rules. A config that does not parse is ValidateConfig's to report
-// (a type-only PATCH carries the old type's config here, as it always has).
+// (sharedmodels.ValidateSIPSchedule, which treats anything that may place
+// calls as a call); OPTIONS and REGISTER have no extra schedule rules. A
+// config that does not parse is ValidateConfig's to report (a type-only
+// PATCH carries the old type's config here, as it always has).
 func (v *SIPConfigValidator) ValidateSchedule(configRaw json.RawMessage, intervalSeconds, timeoutSeconds int) error {
-	var config sharedmodels.SIPMonitorConfig
-	if err := json.Unmarshal(configRaw, &config); err != nil {
-		return nil
-	}
-	return config.ValidateSchedule(intervalSeconds, timeoutSeconds)
+	return sharedmodels.ValidateSIPSchedule(configRaw, intervalSeconds, timeoutSeconds)
 }
 
 // SyntheticAPIConfigValidator validates synthetic API monitor configuration.

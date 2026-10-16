@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 )
 
@@ -59,17 +60,100 @@ func (c SIPMonitorConfig) IsCall() bool {
 }
 
 // IsSIPCallConfig reports whether a monitor of monitorType with this config
-// places calls (SIPMonitorConfig.IsCall). Anything that is not a parseable
-// sip config is not a call.
+// places calls (SIPMonitorConfig.IsCall). It errs towards "call": besides
+// the struct decode it scans the raw keys, and any spelling of "call" with a
+// non-null value or of "method" set to invite counts. encoding/json matches
+// keys case-insensitively and the last one wins, so a payload carrying both
+// "method":"invite" and "Method":"options" decodes as OPTIONS here, yet once
+// stored through a map (keys re-sorted, the lowercase ones last) reads back
+// as INVITE: the tenant-admin gate, the schedule floor and the worker's
+// at-most-once delivery must all see a call in it. (The API also refuses such
+// a payload outright: ParseSIPMonitorConfig.)
 func IsSIPCallConfig(monitorType string, config json.RawMessage) bool {
 	if monitorType != "sip" || len(config) == 0 {
 		return false
 	}
 	var cfg SIPMonitorConfig
-	if err := json.Unmarshal(config, &cfg); err != nil {
+	if err := json.Unmarshal(config, &cfg); err == nil && cfg.IsCall() {
+		return true
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(config, &fields); err != nil {
 		return false
 	}
-	return cfg.IsCall()
+	for key, value := range fields {
+		switch {
+		case strings.EqualFold(key, "call"):
+			if v := strings.TrimSpace(string(value)); v != "" && v != "null" {
+				return true
+			}
+		case strings.EqualFold(key, "method"):
+			var method string
+			if json.Unmarshal(value, &method) == nil && strings.EqualFold(strings.TrimSpace(method), SIPMethodInvite) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ParseSIPMonitorConfig decodes a sip config for validation, refusing any key
+// spelled in another case than its field's (top level and inside "call").
+// encoding/json would take "Method" for "method" and keep whichever came
+// last, so a payload could be validated as one thing and, once stored through
+// a map, read back as another; the API validates what it parses here, so
+// what it checks is what is stored. Unknown keys are left alone.
+func ParseSIPMonitorConfig(raw json.RawMessage) (SIPMonitorConfig, error) {
+	var config SIPMonitorConfig
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err == nil {
+		if err := checkCanonicalKeys(fields, sipConfigKeys); err != nil {
+			return config, err
+		}
+		if call, ok := fields["call"]; ok {
+			var callFields map[string]json.RawMessage
+			if err := json.Unmarshal(call, &callFields); err == nil {
+				if err := checkCanonicalKeys(callFields, sipCallKeys); err != nil {
+					return config, fmt.Errorf("call: %w", err)
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return config, err
+	}
+	return config, nil
+}
+
+// The json keys of the two structs, read from their tags so they cannot
+// drift from the fields.
+var (
+	sipConfigKeys = jsonFieldNames(reflect.TypeOf(SIPMonitorConfig{}))
+	sipCallKeys   = jsonFieldNames(reflect.TypeOf(SIPCallConfig{}))
+)
+
+func jsonFieldNames(t reflect.Type) []string {
+	names := make([]string, 0, t.NumField())
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// checkCanonicalKeys refuses a key that is not exactly one of names but
+// matches one ignoring case.
+func checkCanonicalKeys(fields map[string]json.RawMessage, names []string) error {
+	for key := range fields {
+		for _, name := range names {
+			if key != name && strings.EqualFold(key, name) {
+				return fmt.Errorf("config key %q must be spelled %q", key, name)
+			}
+		}
+	}
+	return nil
 }
 
 // SIP address resolution modes.

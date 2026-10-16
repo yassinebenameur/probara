@@ -105,6 +105,37 @@ func TestUpdateMonitor_SIPCallRequiresTenantAdmin(t *testing.T) {
 	}
 }
 
+// A payload that decodes as OPTIONS but carries the call under another key
+// spelling (sharedmodels.IsSIPCallConfig) is a call to the gate: refused for
+// editors and API keys on create and on a PATCH of an OPTIONS monitor.
+func TestSIPCallGate_CaseVariantKeys(t *testing.T) {
+	const sneaky = `{"host":"trunk.example.com","method":"invite","call":{"number":"+33123"},"Method":"options","Call":null}`
+	for _, name := range []string{"tenant editor", "write API key", "admin-role key"} {
+		caller := callerContexts()[name]
+		t.Run(name, func(t *testing.T) {
+			if err := RequireCallPermission(caller.ctx, models.MonitorTypeSIP, json.RawMessage(sneaky)); !errors.Is(err, ErrCallMonitorForbidden) {
+				t.Fatalf("RequireCallPermission() = %v, want ErrCallMonitorForbidden", err)
+			}
+			repo := NewMockRepository()
+			svc := &Service{repo: repo, encryptor: secrets.NoOpEncryptor{}}
+			tenantID := uuid.New()
+			_, err := svc.CreateMonitor(caller.ctx, tenantID, &models.CreateMonitorRequest{
+				Name: "call", Type: models.MonitorTypeSIP, Config: json.RawMessage(sneaky),
+				IntervalSeconds: 60, TimeoutSeconds: 15,
+			})
+			if !errors.Is(err, ErrCallMonitorForbidden) {
+				t.Fatalf("CreateMonitor() = %v, want ErrCallMonitorForbidden", err)
+			}
+			probeID := uuid.New()
+			repo.monitors[probeID] = &models.Monitor{ID: probeID, TenantID: tenantID, Type: models.MonitorTypeSIP, Config: json.RawMessage(gateOptionsConfig), IntervalSeconds: 60, TimeoutSeconds: 15, Enabled: true}
+			_, err = svc.UpdateMonitor(caller.ctx, tenantID, probeID, &models.UpdateMonitorRequest{Config: json.RawMessage(sneaky)})
+			if !errors.Is(err, ErrCallMonitorForbidden) {
+				t.Fatalf("UpdateMonitor(probe → sneaky call) = %v, want ErrCallMonitorForbidden", err)
+			}
+		})
+	}
+}
+
 // updateCountingRepo records which monitors reached Repository.Update.
 type updateCountingRepo struct {
 	*MockRepository

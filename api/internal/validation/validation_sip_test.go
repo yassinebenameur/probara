@@ -38,6 +38,26 @@ func TestSIPConfigValidatorDelegatesToSharedConfig(t *testing.T) {
 	}
 }
 
+// A key spelled in another case would be validated as one config and
+// stored as another (sharedmodels.ParseSIPMonitorConfig): refused, at the
+// top level and inside call, and the schedule floor applies whatever the
+// struct decode says.
+func TestSIPConfigValidatorRejectsCaseVariantKeys(t *testing.T) {
+	for _, raw := range []string{
+		`{"host":"trunk.example.com","method":"invite","call":{"number":"+33123"},"Method":"options","Call":null}`,
+		`{"host":"trunk.example.com","method":"invite","call":{"number":"+33123","Number":"+44999"}}`,
+	} {
+		err := DefaultRegistry.Validate("sip", json.RawMessage(raw))
+		if err == nil || !strings.Contains(err.Error(), "must be spelled") {
+			t.Errorf("%s: Validate() = %v, want a case-variant key refused", raw, err)
+		}
+	}
+	err := (&SIPConfigValidator{}).ValidateSchedule(json.RawMessage(`{"host":"trunk.example.com","method":"invite","call":{"number":"1"},"Method":"options","Call":null}`), 30, 10)
+	if err == nil || !strings.Contains(err.Error(), "at least 60") {
+		t.Errorf("ValidateSchedule() = %v, want the call floor", err)
+	}
+}
+
 func TestSIPConfigValidatorRejectsMalformedJSON(t *testing.T) {
 	err := (&SIPConfigValidator{}).ValidateConfig(json.RawMessage(`{"host":42}`))
 	if err == nil {

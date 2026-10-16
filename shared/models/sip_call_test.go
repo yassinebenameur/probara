@@ -161,10 +161,70 @@ func TestIsSIPCallConfig(t *testing.T) {
 		{"sip", `not json`, false},
 		{"http", `{"method":"invite"}`, false},
 		{"sip", ``, false},
+		// Case variants: the struct decode keeps the last spelling, the
+		// stored form may keep another; any spelling of a call counts.
+		{"sip", caseVariantCall, true},
+		{"sip", `{"host":"x","method":"options","METHOD":" invite "}`, true},
+		{"sip", `{"host":"x","Call":{"number":"1"},"call":null}`, true},
+		{"sip", `{"host":"x","Call":null}`, false},
+		{"sip", `{"host":42,"Method":"invite"}`, true}, // struct decode fails, the key scan still sees it
 	}
 	for _, c := range cases {
 		if got := IsSIPCallConfig(c.typ, json.RawMessage(c.config)); got != c.want {
 			t.Errorf("IsSIPCallConfig(%s, %s) = %v, want %v", c.typ, c.config, got, c.want)
+		}
+	}
+}
+
+// caseVariantCall decodes straight into SIPMonitorConfig as an OPTIONS probe
+// (the later "Method"/"Call" win), but reads back as a test call once stored
+// through a map, as the secrets transform stores configs.
+const caseVariantCall = `{"host":"trunk.example.com","method":"invite","call":{"number":"+33123"},"Method":"options","Call":null}`
+
+func TestCaseVariantKeysRoundTripToACall(t *testing.T) {
+	var direct SIPMonitorConfig
+	if err := json.Unmarshal([]byte(caseVariantCall), &direct); err != nil {
+		t.Fatal(err)
+	}
+	if direct.IsCall() {
+		t.Fatalf("direct decode = %+v; the premise is that it reads as a probe", direct)
+	}
+	var asMap map[string]any
+	if err := json.Unmarshal([]byte(caseVariantCall), &asMap); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := json.Marshal(asMap)
+	var readBack SIPMonitorConfig
+	if err := json.Unmarshal(stored, &readBack); err != nil {
+		t.Fatal(err)
+	}
+	if !readBack.IsCall() {
+		t.Fatalf("stored form %s reads back as %+v; the premise is that it reads as a call", stored, readBack)
+	}
+	// So the API refuses it up front, and every gate treats it as a call.
+	if _, err := ParseSIPMonitorConfig(json.RawMessage(caseVariantCall)); err == nil || !strings.Contains(err.Error(), `config key "Method" must be spelled "method"`) &&
+		!strings.Contains(err.Error(), `config key "Call" must be spelled "call"`) {
+		t.Fatalf("ParseSIPMonitorConfig() = %v, want a case-variant key refused", err)
+	}
+	if err := ValidateSIPSchedule(json.RawMessage(caseVariantCall), 30, 10); err == nil || !strings.Contains(err.Error(), "at least 60") {
+		t.Fatalf("ValidateSIPSchedule() = %v, want the call floor", err)
+	}
+}
+
+func TestParseSIPMonitorConfig(t *testing.T) {
+	for _, tc := range []struct {
+		config, wantErr string
+	}{
+		{`{"host":"x.example.com","method":"options","x_unknown":1}`, ""},
+		{`{"host":"x.example.com","method":"invite","call":{"number":"1"}}`, ""},
+		{`{"host":"x.example.com","Host":"y.example.com"}`, `config key "Host" must be spelled "host"`},
+		{`{"host":"x.example.com","TLS_SERVER_NAME":"y"}`, `config key "TLS_SERVER_NAME" must be spelled "tls_server_name"`},
+		{`{"host":"x.example.com","method":"invite","call":{"number":"1","Number":"2"}}`, `call: config key "Number" must be spelled "number"`},
+		{`{"host":42}`, "cannot unmarshal"},
+	} {
+		_, err := ParseSIPMonitorConfig(json.RawMessage(tc.config))
+		if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("ParseSIPMonitorConfig(%s) = %v, want %q", tc.config, err, tc.wantErr)
 		}
 	}
 }

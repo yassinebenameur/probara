@@ -70,6 +70,23 @@ func TestTestMonitorConfig_SIPCallRequiresTenantAdmin(t *testing.T) {
 	}
 }
 
+// A test-check payload that hides the call behind a case-variant key never
+// reaches a worker: validation refuses the key (400) before the gate, which
+// would refuse it too (403, sharedmodels.IsSIPCallConfig).
+func TestTestMonitorConfig_SIPCallCaseVariantKeys(t *testing.T) {
+	const sneaky = `{"host":"trunk.example.com","method":"invite","call":{"number":"+33123"},"Method":"options","Call":null}`
+	h := NewHandlers(NewMockMonitorService(), nil, nil, logger.New("test", "error"), t.TempDir())
+	queue := &testCheckRequester{}
+	h.jobRequester = queue
+	ctx := sipCallCallers(uuid.NewString())["tenant editor"].ctx
+	w := httptest.NewRecorder()
+	h.TestMonitorConfig(w, httptest.NewRequest(http.MethodPost, "/api/v1/monitors/test",
+		strings.NewReader(`{"type":"sip","timeout_seconds":10,"config":`+sneaky+`}`)).WithContext(ctx))
+	if (w.Code != http.StatusBadRequest && w.Code != http.StatusForbidden) || queue.calls != 0 {
+		t.Fatalf("status %d, worker calls %d; want 400 or 403 and no call: %s", w.Code, queue.calls, w.Body.String())
+	}
+}
+
 // Run-now of a test-call monitor places a call from every selected location.
 func TestRunMonitorNow_SIPCallRequiresTenantAdmin(t *testing.T) {
 	tenantID := uuid.New()

@@ -220,6 +220,24 @@ func (c SIPMonitorConfig) ValidateSchedule(intervalSeconds, timeoutSeconds int) 
 	if !c.IsCall() {
 		return nil
 	}
+	return c.validateCallSchedule(intervalSeconds, timeoutSeconds)
+}
+
+// ValidateSIPSchedule is ValidateSchedule for a raw config, deciding "call"
+// with IsSIPCallConfig, which errs towards a call: a schedule check that
+// reaches a config no config validation saw (an interval-only or type-only
+// PATCH) still applies the call floor to anything that may place calls. A
+// config that does not decode is the config validator's to report.
+func ValidateSIPSchedule(raw json.RawMessage, intervalSeconds, timeoutSeconds int) error {
+	if !IsSIPCallConfig("sip", raw) {
+		return nil
+	}
+	var c SIPMonitorConfig
+	_ = json.Unmarshal(raw, &c) // only call.hold_ms is read
+	return c.validateCallSchedule(intervalSeconds, timeoutSeconds)
+}
+
+func (c SIPMonitorConfig) validateCallSchedule(intervalSeconds, timeoutSeconds int) error {
 	if intervalSeconds < SIPCallMinIntervalSeconds {
 		return fmt.Errorf("interval_seconds must be at least %d for a SIP test call (each check places a real call)", SIPCallMinIntervalSeconds)
 	}
