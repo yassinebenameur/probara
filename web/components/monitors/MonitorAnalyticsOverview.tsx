@@ -37,7 +37,7 @@ import {
 } from '@/lib/status-tones';
 import { isPlatformResult, shortFailureReason } from '@/lib/monitor-utils';
 import Pill from '@/components/ui/Pill';
-import { CHART_AXIS_TICK, CHART_CURSOR, CHART_TOOLTIP_CLASS } from './metric-chart';
+import { CHART_AXIS_TICK, CHART_CURSOR, CHART_TOOLTIP_CLASS, isolatedDot } from './metric-chart';
 
 // Latency is not a status, so it takes a calm series colour, never the
 // orange reserved for actions.
@@ -598,18 +598,7 @@ export default function MonitorAnalyticsOverview({
                         connectNulls={false}
                         // A bucket between two empty ones has no segment to
                         // draw, so it gets a dot; the trace shows it too.
-                        dot={(props: { cx?: number; cy?: number; index?: number }) => {
-                          const i = props.index ?? -1;
-                          const isolated =
-                            typeof chartData[i]?.latency === 'number' &&
-                            typeof chartData[i - 1]?.latency !== 'number' &&
-                            typeof chartData[i + 1]?.latency !== 'number';
-                          return isolated && props.cx !== undefined && props.cy !== undefined ? (
-                            <circle key={i} cx={props.cx} cy={props.cy} r={2.5} fill={LATENCY_COLOR} />
-                          ) : (
-                            <g key={i} />
-                          );
-                        }}
+                        dot={isolatedDot(chartData, 'latency', LATENCY_COLOR)}
                         isAnimationActive={false}
                         name="Latency"
                       />

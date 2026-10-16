@@ -51,8 +51,29 @@ export const CHART_AXIS_TICK = { fill: 'var(--text-muted)', fontSize: 11 };
 export const CHART_CURSOR = { stroke: 'var(--glass-edge-strong)', strokeWidth: 1 };
 
 // A unified chart row keyed by timestamp; missing buckets have null values so
-// Recharts (connectNulls={false}) breaks the area across reporting gaps.
+// Recharts (connectNulls={false}) breaks the area across reporting gaps. A
+// bucket isolated between two gaps has no segment to draw, so it is drawn as
+// a dot (isolatedDot).
 export type ChartRow = Record<string, number | null> & { ts: number };
+
+/**
+ * The `dot` renderer for an area with gaps: a non-null bucket between two
+ * empty ones (or alone) has no line segment, so it gets a dot; every other
+ * point draws nothing, so dense series look the same.
+ */
+export function isolatedDot(rows: ReadonlyArray<Record<string, unknown> | undefined>, key: string, color: string) {
+  const IsolatedDot = (props: { cx?: number; cy?: number; index?: number }) => {
+    const i = props.index ?? -1;
+    const isNum = (row?: Record<string, unknown>) => typeof row?.[key] === 'number';
+    const isolated = isNum(rows[i]) && !isNum(rows[i - 1]) && !isNum(rows[i + 1]);
+    return isolated && props.cx !== undefined && props.cy !== undefined ? (
+      <circle key={`${key}-${i}`} cx={props.cx} cy={props.cy} r={2.5} fill={color} />
+    ) : (
+      <g key={`${key}-${i}`} />
+    );
+  };
+  return IsolatedDot;
+}
 
 export interface ChartSeries {
   key: string;
@@ -237,7 +258,7 @@ export function MetricChart({
               strokeWidth={2}
               fill={`url(#agentGradient-${s.key})`}
               connectNulls={false}
-              dot={false}
+              dot={isolatedDot(data, s.key, s.color)}
               isAnimationActive={false}
             />
           ))}
