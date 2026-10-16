@@ -70,7 +70,9 @@ export default function SipCallPanels({
       headline:
         latest.pdd_ms !== undefined
           ? `${formatLatency(latest.pdd_ms)}${latest.pdd_source ? ` (${latest.pdd_source})` : ''}`
-          : 'no ringing on the last call',
+          : latest.teardown === 'no_provisional'
+            ? 'no response on the last call'
+            : 'no ringing on the last call',
       rows: buildChartRows(
         [
           { key: 'pdd', points: series.pdd },
