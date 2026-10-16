@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -116,10 +115,7 @@ func newSIPCallTarget(config *models.SIPMonitorConfig) (sipCallTarget, error) {
 			hostPort = sipHostPort(u.Host, u.Port)
 		}
 		t.toURI = u.Scheme + ":" + u.User + "@" + hostPort
-		t.user = u.User
-		if decoded, err := url.PathUnescape(u.User); err == nil {
-			t.user = decoded
-		}
+		t.user = u.DecodedUser
 	} else {
 		scheme := "sip"
 		if strings.EqualFold(config.Transport, "tls") {
@@ -248,9 +244,13 @@ func (c *SIPChecker) checkInvite(ctx context.Context, config *models.SIPMonitorC
 		metrics.Call = &sipCallMetrics{Mode: mode, HoldMs: hold.Milliseconds(), Teardown: "none"}
 		attemptStart := time.Now()
 
-		// A call fails over on a transport failure only (or a 503 before any
-		// provisional, below): an address that connects is never given up
-		// on for silence, since it may already be ringing someone. Each
+		// A call fails over only when the connection cannot be established
+		// (dial, refusal, policy block, TLS handshake) or on a 503 before
+		// any provisional (below). Once connected and the INVITE is sent, an
+		// address is never given up on, neither for silence nor for an error
+		// on the connection (such as a UDP port unreachable): the INVITE may
+		// already be ringing someone, and a second address would place a
+		// second call. Each
 		// address but the last gets a share of the budget to connect,
 		// whatever the resolution mode.
 		connectBudget := sipConnectBudget(callCtx, models.SIPResolutionA, candidates, i)
@@ -792,10 +792,19 @@ func (s *sipCall) handle(ev sipCallEvent) {
 	case sipCallEvAnswered:
 		s.onAnswered(ev.txn, ev.dialog, ev.in)
 	case sipCallEvRemoteBye:
-		if ev.dialog == s.primary && s.phase == sipCallHolding {
-			s.cm.Teardown = "remote_bye"
-			s.cm.TeardownStatus = 0
-			s.phase = sipCallTerminating
+		// The callee hung up the answered call first. Whatever the phase
+		// (holding, or already terminating: ring mode answered, a final
+		// mismatch, the hold just over), that ends the primary dialog and
+		// labels the teardown, unless a label is already set (our own BYE's
+		// outcome, or answered_after_cancel). byeAll then skips the dialog.
+		if ev.dialog == s.primary {
+			if s.cm.Teardown == "none" || s.cm.Teardown == "" {
+				s.cm.Teardown = "remote_bye"
+				s.cm.TeardownStatus = 0
+			}
+			if s.phase == sipCallHolding {
+				s.phase = sipCallTerminating
+			}
 		}
 	}
 }
@@ -1018,6 +1027,7 @@ func (s *sipCall) teardown(ctx context.Context) {
 			s.decide("error", 0, time.Time{}, fmt.Sprintf("internal: SIP teardown aborted: %v", r))
 		}
 	}()
+	s.hook("teardown")
 	if s.phase == sipCallCancelling {
 		s.settleInvite(ctx)
 	}

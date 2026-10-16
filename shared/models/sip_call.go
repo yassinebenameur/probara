@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -75,6 +76,14 @@ const (
 // dial strings use (digits, letters, + * #) plus RFC 3261 unreserved marks.
 // Nothing that needs quoting or could end the URI.
 var sipCallUserPattern = regexp.MustCompile(`^[0-9A-Za-z+*#._~-]{1,64}$`)
+
+// sipCallURIUserRaw is how a target_uri user part may be written: the
+// unescaped characters of sipCallUserPattern ('#' must be escaped in a SIP
+// user part, RFC 3261 §25.1) or percent-escapes. No ';' (user parameters
+// such as phone-context, which change what the far end dials) and no ':'
+// (a password): the user part is exactly the dialled string, so the worker's
+// SIP_CALL_ALLOWED_DESTINATIONS check sees everything the proxy acts on.
+var sipCallURIUserRaw = regexp.MustCompile(`^(?:[0-9A-Za-z+*._~-]|%[0-9A-Fa-f]{2})+$`)
 
 // sipTelephoneNumber is a number that gets ;user=phone.
 var sipTelephoneNumber = regexp.MustCompile(`^\+?[0-9]+$`)
@@ -231,15 +240,20 @@ func (c SIPMonitorConfig) ValidateSchedule(intervalSeconds, timeoutSeconds int) 
 type SIPCallURI struct {
 	Scheme string // sip or sips, lowercase
 	User   string // as written (may be percent-encoded)
-	Host   string // IPv6 without brackets
-	Port   int    // 0 when absent
-	Params string // the URI parameters, starting with ';' when present
+	// DecodedUser is User percent-decoded: the dialled string, which the
+	// worker's destination allow-list matches.
+	DecodedUser string
+	Host        string // IPv6 without brackets
+	Port        int    // 0 when absent
+	Params      string // the URI parameters, starting with ';' when present
 }
 
 // ParseSIPCallURI parses a call target URI: sip: or sips:, a user part, a
 // valid host, an optional port and parameters. It refuses what would let the
 // URI do more than name the callee: headers (?…) and maddr (which names
-// another server to send to), and anything over 512 bytes.
+// another server to send to), anything over 512 bytes, and a user part that
+// is more than the dialled string (user parameters, a password, or decoded
+// characters outside the number/from_user charset).
 func ParseSIPCallURI(raw string) (SIPCallURI, error) {
 	var u SIPCallURI
 	if len(raw) > sipCallMaxURIBytes {
@@ -262,14 +276,18 @@ func ParseSIPCallURI(raw string) (SIPCallURI, error) {
 	if strings.Contains(hostPart, "@") {
 		return u, fmt.Errorf("must have a single @")
 	}
-	// A user part may carry its own ;params (RFC 3261 §19.1.1); only the
-	// user itself is kept.
-	userOnly, _, _ := strings.Cut(user, ";")
-	userOnly, _, _ = strings.Cut(userOnly, ":") // drop a password, never sent
-	if userOnly == "" {
-		return u, fmt.Errorf("must have a user part (sip:user@host)")
+	// The whole userinfo is sent as written, so it must be nothing but the
+	// dialled string: the allow-list cannot judge a ;phone-context or a
+	// :password it never sees.
+	if strings.ContainsAny(user, ";:") {
+		return u, fmt.Errorf("user part must not carry ;parameters or a :password")
 	}
-	u.User = userOnly
+	decoded, err := url.PathUnescape(user)
+	if err != nil || !sipCallURIUserRaw.MatchString(user) || !sipCallUserPattern.MatchString(decoded) {
+		return u, fmt.Errorf("user part must be 1-64 characters of digits, letters and + * # . _ ~ - (# written %%23)")
+	}
+	u.User = user
+	u.DecodedUser = decoded
 
 	hostPort, params, _ := strings.Cut(hostPart, ";")
 	if params != "" {

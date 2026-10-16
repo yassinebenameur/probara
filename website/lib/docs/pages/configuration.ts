@@ -562,7 +562,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`SIP_CALL_ALLOWED_DESTINATIONS`',
               'Empty (every destination)',
-              'Comma-separated regular expressions; a test call is placed only when the called user part (`call.number`, or the decoded user of `call.target_uri`) matches one in full (each is anchored), else it fails with `policy: destination not allowed by worker policy` before sending anything. An invalid expression fails startup.',
+              'Comma-separated regular expressions; a test call is placed only when the called user part (`call.number`, or the decoded user part of `call.target_uri`, which may carry no `;parameters` or `:password`) matches one in full (each is anchored), else it fails with `policy: destination not allowed by worker policy` before sending anything. An invalid expression fails startup.',
             ],
           ],
         },

@@ -105,16 +105,42 @@ func TestUpdateMonitor_SIPCallRequiresTenantAdmin(t *testing.T) {
 	}
 }
 
-// Bulk alerting edits go through UpdateMonitor and keep the sentinel, so the
-// handler can answer 403.
+// updateCountingRepo records which monitors reached Repository.Update.
+type updateCountingRepo struct {
+	*MockRepository
+	updated []uuid.UUID
+}
+
+func (r *updateCountingRepo) Update(ctx context.Context, monitor *models.Monitor, setParts []string, args []interface{}) error {
+	r.updated = append(r.updated, monitor.ID)
+	return r.MockRepository.Update(ctx, monitor, setParts, args)
+}
+
+// Bulk alerting edits keep the sentinel, so the handler can answer 403, and
+// refuse the whole edit before writing anything: a probe listed before the
+// call monitor is left as it was.
 func TestBulkUpdateAlerting_SIPCallKeepsForbiddenError(t *testing.T) {
-	repo := NewMockRepository()
+	repo := &updateCountingRepo{MockRepository: NewMockRepository()}
 	svc := &Service{repo: repo, encryptor: secrets.NoOpEncryptor{}}
-	tenantID, callID := uuid.New(), uuid.New()
+	tenantID, probeID, callID := uuid.New(), uuid.New(), uuid.New()
+	repo.monitors[probeID] = &models.Monitor{ID: probeID, TenantID: tenantID, Type: models.MonitorTypeSIP, Config: json.RawMessage(gateOptionsConfig), IntervalSeconds: 60, TimeoutSeconds: 15, Enabled: true}
 	repo.monitors[callID] = &models.Monitor{ID: callID, TenantID: tenantID, Type: models.MonitorTypeSIP, Config: json.RawMessage(gateCallConfig), IntervalSeconds: 60, TimeoutSeconds: 15, Enabled: true}
 	threshold := 3
-	_, err := svc.BulkUpdateAlerting(callerContexts()["tenant editor"].ctx, tenantID, []uuid.UUID{callID}, &threshold, nil, nil)
+	editor := callerContexts()["tenant editor"].ctx
+
+	_, err := svc.BulkUpdateAlerting(editor, tenantID, []uuid.UUID{probeID, callID}, &threshold, nil, nil)
 	if !errors.Is(err, ErrCallMonitorForbidden) {
-		t.Fatalf("BulkUpdateAlerting() = %v, want ErrCallMonitorForbidden", err)
+		t.Fatalf("BulkUpdateAlerting(probe, call) = %v, want ErrCallMonitorForbidden", err)
+	}
+	if len(repo.updated) != 0 {
+		t.Fatalf("a refused bulk edit wrote monitors %v, want none", repo.updated)
+	}
+
+	// Without the call monitor the same editor's edit goes through.
+	if n, err := svc.BulkUpdateAlerting(editor, tenantID, []uuid.UUID{probeID}, &threshold, nil, nil); err != nil || n != 1 {
+		t.Fatalf("BulkUpdateAlerting(probe) = %d, %v, want 1, nil", n, err)
+	}
+	if len(repo.updated) != 1 || repo.updated[0] != probeID {
+		t.Fatalf("updated = %v, want [%s]", repo.updated, probeID)
 	}
 }

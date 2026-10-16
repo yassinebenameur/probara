@@ -172,6 +172,16 @@ func (c SIPMonitorConfig) Validate() error {
 		if err := c.Call.validate(c.ExpectedStatus); err != nil {
 			return err
 		}
+		// A sips: Request-URI asks for TLS on every hop (RFC 3261 §26.2),
+		// and the worker sends a sips: Contact with it: over UDP or TCP the
+		// far end refuses the call (416 or 400) for a reason that reads like
+		// an outage. Explicit TLS only: rfc3263 with transport unset may
+		// pick any transport NAPTR offers.
+		if c.Call.TargetURI != "" && !strings.EqualFold(c.Transport, "tls") {
+			if u, err := ParseSIPCallURI(c.Call.TargetURI); err == nil && u.Scheme == "sips" {
+				return fmt.Errorf("call.target_uri: a sips: URI requires transport tls")
+			}
+		}
 	}
 
 	// The checker trims the override before using it as the SNI and

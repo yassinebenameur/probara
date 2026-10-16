@@ -17,6 +17,7 @@ func TestSIPCallConfigValidate(t *testing.T) {
 		{name: "extension with letters and marks", config: `{` + base + `,"call":{"number":"ivr-test_1.a~*#"}}`},
 		{name: "target uri", config: `{` + base + `,"call":{"target_uri":"sip:+33123456789@carrier.example.com;user=phone"}}`},
 		{name: "sips target uri with port", config: `{` + base + `,"transport":"tls","call":{"target_uri":"sips:echo@carrier.example.com:5061"}}`},
+		{name: "target uri escaped hash", config: `{` + base + `,"call":{"target_uri":"sip:ivr%23@carrier.example.com"}}`},
 		{name: "ipv6 target uri", config: `{` + base + `,"call":{"target_uri":"sip:100@[2001:db8::1]:5060"}}`},
 		{name: "method is case-insensitive", config: `{"host":"trunk.example.com","method":"INVITE","call":{"number":"100"}}`},
 		{name: "caller id", config: `{` + base + `,"call":{"number":"100","from_user":"+15550100","from_display":"Probara probe","from_domain":"probes.example.com"}}`},
@@ -40,6 +41,14 @@ func TestSIPCallConfigValidate(t *testing.T) {
 		{name: "target uri bad host", config: `{` + base + `,"call":{"target_uri":"sip:100@bad_host"}}`, errContains: "host must be a valid hostname or IP address"},
 		{name: "target uri bad port", config: `{` + base + `,"call":{"target_uri":"sip:100@example.com:0"}}`, errContains: "port must be between 1 and 65535"},
 		{name: "target uri too long", config: `{` + base + `,"call":{"target_uri":"sip:100@` + strings.Repeat("a.", 260) + `com"}}`, errContains: "at most 512 bytes"},
+		{name: "target uri phone-context user param", config: `{` + base + `,"call":{"target_uri":"sip:0123;phone-context=+44@carrier.example.com"}}`, errContains: "must not carry ;parameters or a :password"},
+		{name: "target uri password", config: `{` + base + `,"call":{"target_uri":"sip:+33123:+449999@carrier.example.com"}}`, errContains: "must not carry ;parameters or a :password"},
+		{name: "target uri escaped semicolon", config: `{` + base + `,"call":{"target_uri":"sip:0123%3Bphone-context=+44@carrier.example.com"}}`, errContains: "user part must be 1-64 characters"},
+		{name: "target uri raw hash", config: `{` + base + `,"call":{"target_uri":"sip:100#@carrier.example.com"}}`, errContains: "user part must be 1-64 characters"},
+		{name: "target uri bad escape", config: `{` + base + `,"call":{"target_uri":"sip:100%2@carrier.example.com"}}`, errContains: "user part must be 1-64 characters"},
+		{name: "sips target uri over udp", config: `{` + base + `,"transport":"udp","call":{"target_uri":"sips:echo@carrier.example.com"}}`, errContains: "a sips: URI requires transport tls"},
+		{name: "sips target uri with transport unset", config: `{` + base + `,"call":{"target_uri":"sips:echo@carrier.example.com"}}`, errContains: "a sips: URI requires transport tls"},
+		{name: "sips target uri under rfc3263 auto transport", config: `{` + base + `,"resolution":"rfc3263","call":{"target_uri":"sips:echo@carrier.example.com"}}`, errContains: "a sips: URI requires transport tls"},
 		{name: "from user bad charset", config: `{` + base + `,"call":{"number":"100","from_user":"a b"}}`, errContains: "call.from_user must be"},
 		{name: "from display with quote", config: `{` + base + `,"call":{"number":"100","from_display":"a\"b"}}`, errContains: "call.from_display must be printable"},
 		{name: "from display with backslash", config: `{` + base + `,"call":{"number":"100","from_display":"a\\b"}}`, errContains: "call.from_display must be printable"},
@@ -161,17 +170,24 @@ func TestIsSIPCallConfig(t *testing.T) {
 }
 
 func TestParseSIPCallURI(t *testing.T) {
-	u, err := ParseSIPCallURI("SIPS:+331234:pw;isub=1@[2001:db8::1]:5061;user=phone;transport=tcp")
+	u, err := ParseSIPCallURI("SIPS:%2B331234@[2001:db8::1]:5061;user=phone;transport=tcp")
 	if err != nil {
 		t.Fatalf("ParseSIPCallURI() error = %v", err)
 	}
-	if u.Scheme != "sips" || u.User != "+331234" || u.Host != "2001:db8::1" || u.Port != 5061 || u.Params != ";user=phone;transport=tcp" {
+	if u.Scheme != "sips" || u.User != "%2B331234" || u.DecodedUser != "+331234" || u.Host != "2001:db8::1" || u.Port != 5061 || u.Params != ";user=phone;transport=tcp" {
 		t.Fatalf("ParseSIPCallURI() = %+v", u)
 	}
-	if _, err := ParseSIPCallURI("sip:100@example.com:5060:1"); err == nil {
-		t.Fatal("ParseSIPCallURI(two ports) = nil, want error")
-	}
-	if _, err := ParseSIPCallURI("sip:100@[192.0.2.1]"); err == nil {
-		t.Fatal("ParseSIPCallURI(bracketed IPv4) = nil, want error")
+	for _, raw := range []string{
+		"sip:100@example.com:5060:1", // two ports
+		"sip:100@[192.0.2.1]",        // bracketed IPv4
+		// The userinfo is sent as written, so what the allow-list matches
+		// (DecodedUser) must be all of it: no user parameters, no password.
+		"sip:0123;phone-context=+44@trunk.example.com",
+		"sip:+33123:+449999@trunk.example.com",
+		"sip:%3Bx@trunk.example.com", // an escaped ';' decodes outside the charset
+	} {
+		if _, err := ParseSIPCallURI(raw); err == nil {
+			t.Errorf("ParseSIPCallURI(%q) = nil, want error", raw)
+		}
 	}
 }

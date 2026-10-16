@@ -1013,6 +1013,48 @@ func TestSIPInvite_RemoteBye(t *testing.T) {
 	}
 }
 
+// The callee's BYE labels the teardown remote_bye outside the hold too: here
+// the 200 fails the check (486 expected), so the call is already
+// terminating when the callee hangs up, before the probe's own BYE.
+func TestSIPInvite_RemoteByeWhileTerminating(t *testing.T) {
+	var invites branchSet
+	u := startFakeUAS(t, "udp", func(u *fakeUAS, msg string) {
+		switch fMethod(msg) {
+		case "INVITE":
+			if invites.first(msg) {
+				u.send(uasReply(msg, 200, "OK", "srv1", uasSDPAnswer, u.contact()))
+			}
+		case "ACK":
+			u.send(uasBye(u.requests("INVITE")[0].raw, "srv1", ""))
+		}
+	})
+	c := newInviteTestChecker()
+	c.callHook = func(stage string) {
+		if stage != "teardown" {
+			return
+		}
+		// Hold teardown until the probe has answered the callee's BYE, so
+		// the BYE is pending as an event when byeAll starts.
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, r := range u.responses() {
+				if strings.Contains(sipTestHeader(r.raw, "CSeq"), "BYE") {
+					return
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	result, m := runInvite(t, c, inviteConfig(u, map[string]any{"number": "100"}, map[string]any{"expected_status": 486}), 5)
+	requireStatus(t, result, "failure", "status: 200 OK (expected 486)")
+	if m.Call.Teardown != "remote_bye" {
+		t.Fatalf("teardown = %q, want remote_bye", m.Call.Teardown)
+	}
+	if n := len(u.requests("BYE")); n != 0 {
+		t.Fatalf("the probe sent %d BYEs after the callee hung up", n)
+	}
+}
+
 // 13. A challenged BYE is answered once, counting up the nonce (nc=2) with
 // the cnonce the INVITE used.
 func TestSIPInvite_ChallengedBye(t *testing.T) {
@@ -1173,6 +1215,16 @@ func TestSIPInvite_WorkerPolicy(t *testing.T) {
 	result, _ = runInvite(t, restricted, inviteConfig(u, map[string]any{"number": "+4930123"}, nil), 5)
 	requireStatus(t, result, "error", "policy: destination not allowed by worker policy")
 	result, _ = runInvite(t, restricted, inviteConfig(u, map[string]any{"target_uri": "sip:%2B4930123@carrier.example.com"}, nil), 5)
+	requireStatus(t, result, "error", "policy: destination not allowed by worker policy")
+	// A user parameter could change what the far end dials (here to a UK
+	// number) behind a user part the allow-list accepts, and so could a
+	// ":password" part: both are refused before the policy is even asked.
+	for _, uri := range []string{"sip:+33123;phone-context=+44@carrier.example.com", "sip:+33123:+449999@carrier.example.com"} {
+		result, _ = runInvite(t, restricted, inviteConfig(u, map[string]any{"target_uri": uri}, nil), 5)
+		requireStatus(t, result, "error", "call.target_uri: user part must not carry ;parameters or a :password")
+	}
+	// The allow-list sees the decoded user part, all of it.
+	result, _ = runInvite(t, restricted, inviteConfig(u, map[string]any{"target_uri": "sip:%2B4930123@carrier.example.com;user=phone"}, nil), 5)
 	requireStatus(t, result, "error", "policy: destination not allowed by worker policy")
 
 	time.Sleep(100 * time.Millisecond)

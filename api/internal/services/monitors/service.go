@@ -870,6 +870,20 @@ func (s *Service) BulkUpdateAlerting(
 		return 0, err
 	}
 
+	// The updates below are one UpdateMonitor each, with no transaction, so
+	// the test-call gate UpdateMonitor applies would only stop the edit at
+	// the first call monitor, after the earlier rows were written. Refuse
+	// the whole edit up front instead: a 403 then means nothing changed.
+	for _, monitorID := range monitorIDs {
+		existing, err := s.repo.GetByID(ctx, tenantID, monitorID)
+		if err != nil {
+			return 0, err
+		}
+		if err := RequireCallPermission(ctx, existing.Type, existing.Config); err != nil {
+			return 0, err
+		}
+	}
+
 	for _, monitorID := range monitorIDs {
 		req := &models.UpdateMonitorRequest{
 			ConsecutiveFailuresThreshold: threshold,
