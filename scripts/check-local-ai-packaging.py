@@ -7,7 +7,8 @@ Usage (from anywhere; paths resolve from this file):
 Needs helm on PATH, PyYAML, and (unless --skip-compose) docker compose.
 Asserts the service boundary (only api + platform worker get the LOCAL_AI_*
 client env, the alerter only the LOCAL_AI_DISABLED kill switch, the local AI
-pod only its token and service settings), the token convention (stable derived
+pod only its token and service settings), AI_TRIAGE_ENABLED reaching api,
+platform worker and alerter with one value, the token convention (stable derived
 default, literal, per-field and chart-wide existing Secret), the external URL
 mode, scheduling/image/extraEnv knobs (top-level extraEnv never reaches the
 local AI pod), the optional client token reference, the NetworkPolicy toggle,
@@ -108,10 +109,17 @@ def assert_clients(objects, url, ref):
         assert not leaked, f'{name} must not receive local AI env: {leaked}'
 
 
+def assert_triage_switch(objects, value):
+    """localAI.triageEnabled reaches the platform worker, the api and the alerter alike."""
+    for name in (FULL + '-api', FULL + '-worker', FULL + '-alerter'):
+        assert env_of(objects, 'Deployment', name)['AI_TRIAGE_ENABLED']['value'] == value, name
+
+
 def check_default():
     objects, text = render(*LOCATION)
     _, again = render(*LOCATION)
     assert text == again, 'default render is not stable: the derived local_ai_token must not change between renders'
+    assert_triage_switch(objects, 'true')
     spec = pod(objects, 'Deployment', FULL + '-local-ai')
     container = spec['containers'][0]
     # Empty image.tag = the chart's appVersion, the tag docker-build pushes for
@@ -226,6 +234,8 @@ def check_knobs():
     objects, _ = render('--set', 'localAI.networkPolicy.extraIngress[0].from[0].namespaceSelector.matchLabels.team=monitoring')
     ingress = find(objects, 'NetworkPolicy', FULL + '-local-ai')['spec']['ingress']
     assert len(ingress) == 2 and ingress[1]['from'][0]['namespaceSelector']['matchLabels'] == {'team': 'monitoring'}
+    objects, _ = render('--set', 'localAI.triageEnabled=false')
+    assert_triage_switch(objects, 'false')
 
 
 FAILURES = [
@@ -292,6 +302,10 @@ def check_compose():
     alerter = {k: v for k, v in alerter_env.items() if k.startswith('LOCAL_AI_')}
     assert alerter == {'LOCAL_AI_DISABLED': ai['environment']['LOCAL_AI_DISABLED']}, alerter
     assert 'AI_TRIAGE_ENABLED' in alerter_env, 'compose alerter must receive AI_TRIAGE_ENABLED'
+    for name in ('api', 'worker'):
+        # One shell switch stops claims (worker), the pending bucket (api) and
+        # follow-ups (alerter) together.
+        assert services[name]['environment']['AI_TRIAGE_ENABLED'] == alerter_env['AI_TRIAGE_ENABLED'], name
     for name in ('scheduler', 'status-page'):
         leaked = [k for k in services[name].get('environment', {}) if k.startswith('LOCAL_AI_')]
         assert not leaked, f'compose {name} must not receive local AI env: {leaked}'
