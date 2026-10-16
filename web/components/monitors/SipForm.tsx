@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { CheckCircle2, Loader2, PhoneCall, PlugZap, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, PhoneCall, PlugZap, XCircle } from 'lucide-react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment, Location } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
 import {
@@ -17,7 +17,7 @@ import {
   SIP_CALL_MAX_TIMEOUT_SECONDS,
   SIP_CALL_MIN_INTERVAL_SECONDS,
 } from '@/lib/sip-config';
-import { sipCallSummary } from '@/lib/sip-metrics';
+import { sipCallSummary, sipTestWarnings } from '@/lib/sip-metrics';
 import { formatLatency, pluralize } from '@/lib/format';
 import { useCurrentUser, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import Button from '@/components/ui/Button';
@@ -359,6 +359,10 @@ export default function SipForm({
   const methodOptionDisabled = (m: SipMethod) => isEditMode && (storedIsCall ? m !== 'invite' : m === 'invite');
   const testResultSummary =
     test.phase === 'done' && test.result.status === 'success' ? sipCallSummary(test.result.metrics_data?.sip?.call) : '';
+  // A pass can still carry what the operator must see: a ring-mode call that
+  // was answered (billable), an unconfirmed BYE or CANCEL, a warn threshold.
+  const testWarnings =
+    test.phase === 'done' && test.result.status === 'success' ? sipTestWarnings(test.result.metrics_data?.sip) : [];
 
   const thresholdInput = (
     key: 'call_warn_pdd_ms' | 'call_max_pdd_ms' | 'call_warn_answer_ms' | 'call_max_answer_ms',
@@ -595,11 +599,25 @@ export default function SipForm({
               </p>
             )}
             {test.phase === 'done' && test.result.status === 'success' && (
-              <p className="flex items-center gap-1.5 text-xs text-emerald-300">
-                <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-                Passed{typeof test.result.latency_ms === 'number' ? ` in ${formatLatency(test.result.latency_ms)}` : ''}
-                {testResultSummary ? `: ${testResultSummary}` : ''}
-              </p>
+              <div className="min-w-0">
+                <p
+                  className={`flex items-center gap-1.5 text-xs ${testWarnings.length > 0 ? 'text-amber-300' : 'text-emerald-300'}`}
+                >
+                  {testWarnings.length > 0 ? (
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                  ) : (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                  )}
+                  {testWarnings.length > 0 ? 'Passed with warnings' : 'Passed'}
+                  {typeof test.result.latency_ms === 'number' ? ` in ${formatLatency(test.result.latency_ms)}` : ''}
+                  {testResultSummary ? `: ${testResultSummary}` : ''}
+                </p>
+                {testWarnings.length > 0 && (
+                  <p className="truncate text-xs text-amber-300" title={testWarnings.join('; ')}>
+                    {testWarnings.join('; ')}
+                  </p>
+                )}
+              </div>
             )}
             {test.phase === 'done' && test.result.status !== 'success' && (
               <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-300">

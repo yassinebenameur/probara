@@ -8,6 +8,7 @@ import {
   sipCallFacts,
   sipCallSeries,
   sipCallSummary,
+  sipTestWarnings,
   sipCallThresholdLines,
   sipFacts,
   sipResponseLabel,
@@ -252,6 +253,16 @@ test('ring mode and the teardown wording', () => {
   assert.equal(sipTeardownLabel({ ...answeredCall, teardown: 'bye_503' }), 'BYE answered 503');
   assert.equal(sipTeardownLabel({ ...answeredCall, teardown: 'none' }), '');
   assert.equal(sipTeardownLabel({ ...answeredCall, teardown: 'remote_bye' }), 'the callee hung up first');
+});
+
+test('sipTestWarnings keeps what a green Passed would hide', () => {
+  assert.deepEqual(sipTestWarnings(undefined), []);
+  assert.deepEqual(sipTestWarnings({ ...base }), []);
+  assert.deepEqual(
+    sipTestWarnings({ ...base, warnings: ['answered in ring mode — billable', 'teardown: BYE unconfirmed'] }),
+    ['answered in ring mode — billable', 'teardown: BYE unconfirmed'],
+  );
+  assert.deepEqual(sipTestWarnings({ ...base, latency_warn_ms: 3000 }), ['over the 3.0 s warning threshold']);
 });
 
 test('sipCallSummary for a Test result', () => {

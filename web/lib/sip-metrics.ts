@@ -217,6 +217,19 @@ export function sipCallSummary(call: SIPCallMetrics | undefined): string {
 }
 
 /**
+ * The warnings a Test result should not hide behind a green "Passed": the
+ * worker's own (a ring-mode call that was answered and is billable, an
+ * unconfirmed BYE or CANCEL, a warn threshold), else the warn threshold
+ * alone, as sipFacts reads latency_warn_ms. Empty for a clean pass.
+ */
+export function sipTestWarnings(m: SIPMetrics | undefined): string[] {
+  const warnings = m?.warnings ?? [];
+  if (warnings.length > 0) return warnings;
+  if (m?.latency_warn_ms !== undefined) return [`over the ${formatLatency(m.latency_warn_ms)} warning threshold`];
+  return [];
+}
+
+/**
  * `203.0.113.7:5061 (sbc2.example.com via SRV, after failover)`: the address
  * that decided the check, and how DNS led there when it was not the
  * monitor's own host (an SRV target, reached through NAPTR or not; a
