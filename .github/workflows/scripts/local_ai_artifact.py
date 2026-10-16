@@ -9,6 +9,13 @@ gate     Stdlib only, no Git LFS needed. Writes approved/version/reason for
          cpu, and the report's held-out metrics meet probara_ai.gate. The
          image's verify_artifact enforces the same rule (and more); this
          decides whether a release or an image build may go ahead.
+sources  Stdlib, git and network, no Git LFS. Checks that the image build's
+         two third-party sources still serve their pins: a shallow fetch of
+         base-lock.json's upstream_commit from LAYA_GIT_URL, and the Hugging
+         Face revision (HF_ENDPOINT, BASE_MODEL_REPO/BASE_MODEL_REVISION, else
+         the lock) listing every locked file. release.yml runs it before
+         tagging, since a source that vanished would otherwise fail only the
+         tag's local-ai image build, after the chart is already published.
 verify   Needs the ai-service dependencies, the LFS head weights and a
          verified pinned base (--base). Composes every committed artifact
          directory exactly as the image does (compose_artifact.compose, which
@@ -34,10 +41,14 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
+import tempfile
+import urllib.request
 
 ARTIFACTS = Path("ai-service/artifacts")
 DOCKERFILE = Path("ai-service/Dockerfile")
+BASE_LOCK = Path("ai-service/training/base-lock.json")
 # probara_ai.gate is stdlib only, so `gate` still runs without the ai-service
 # dependencies; it is the one release-gate predicate (validator, verify_artifact).
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "ai-service"))
@@ -84,6 +95,63 @@ def gate(args):
         sys.exit(f"::error title=Local AI::the Dockerfile ships {version} but {artifact}/manifest.json does not exist")
     approved, reason = approval(artifact)
     write_outputs({"approved": str(approved).lower(), "version": version, "reason": "" if approved else reason})
+
+
+def dockerfile_default(name):
+    match = re.search(rf"^ARG {name}=(\S+)\s*$", DOCKERFILE.read_text(), re.MULTILINE)
+    return match[1] if match else ""
+
+
+def commit_error(url, commit):
+    """None when `url` still serves `commit` (a shallow fetch by full id, as the image build does)."""
+    with tempfile.TemporaryDirectory() as work:
+        subprocess.run(["git", "init", "-q", work], check=True)
+        result = subprocess.run(["git", "-C", work, "fetch", "-q", "--depth", "1", url, commit],
+                                capture_output=True, text=True, timeout=300)
+        if result.returncode:
+            return " ".join(result.stderr.split()) or f"git fetch exited {result.returncode}"
+        head = subprocess.run(["git", "-C", work, "rev-parse", "FETCH_HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        return None if head == commit else f"fetched {head} instead"
+
+
+def revision_files(endpoint, repo, revision):
+    """(sha, file names) the Hub serves for repo at revision."""
+    url = f"{endpoint.rstrip('/')}/api/models/{repo}/revision/{revision}"
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - fixed https endpoint by default
+        info = json.load(response)
+    return info.get("sha"), {s.get("rfilename") for s in info.get("siblings", [])}
+
+
+def sources(args):
+    lock = json.loads(args.lock.read_text())
+    laya = os.environ.get("LAYA_GIT_URL") or dockerfile_default("LAYA_GIT_URL")
+    endpoint = os.environ.get("HF_ENDPOINT") or "https://huggingface.co"
+    repo = os.environ.get("BASE_MODEL_REPO") or lock["repo"]
+    revision = os.environ.get("BASE_MODEL_REVISION") or lock["revision"]
+    errors = []
+    error = commit_error(laya, lock["upstream_commit"])
+    if error:
+        errors.append(f"laya commit {lock['upstream_commit']} is not fetchable from {laya}: {error}")
+    else:
+        print(f"laya {lock['upstream_commit']} fetchable from {laya}")
+    try:
+        sha, files = revision_files(endpoint, repo, revision)
+        missing = sorted(set(lock["files"]) - files)
+        if missing:
+            errors.append(f"{endpoint} {repo}@{revision} lacks locked files: {', '.join(missing)}")
+        elif revision == lock["revision"] and sha != revision:
+            errors.append(f"{endpoint} {repo}@{revision} resolves to {sha}")
+        else:
+            print(f"base {repo}@{revision} on {endpoint} lists every locked file")
+    except Exception as error:  # noqa: BLE001 - reported as unreachable
+        errors.append(f"{endpoint} {repo}@{revision} is not reachable: {error}")
+    for error in errors:
+        print(f"::error title=Local AI build source unavailable::{error} The tag's local-ai image could not "
+              "be built; restore the source or point LAYA_GIT_URL / HF_ENDPOINT / BASE_MODEL_REPO at a mirror "
+              "(docs/local-ai.md, Release gate).")
+    if errors:
+        sys.exit(1)
 
 
 def verify(args):
@@ -236,6 +304,9 @@ if __name__ == "__main__":
     parser.add_argument("--artifacts", type=Path, default=ARTIFACTS)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("gate").set_defaults(run=gate)
+    source_checker = commands.add_parser("sources")
+    source_checker.add_argument("--lock", type=Path, default=BASE_LOCK)
+    source_checker.set_defaults(run=sources)
     verifier = commands.add_parser("verify")
     verifier.add_argument("--base", type=Path, required=True, help="verified pinned base checkpoint directory")
     verifier.add_argument("--work", type=Path, required=True, help="empty directory for the composed checkpoints")

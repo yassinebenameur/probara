@@ -98,9 +98,19 @@ jobs:
             echo "- cpu-evaluation.json: $REASON"
           } >>"$GITHUB_STEP_SUMMARY"
 
+      # Only the shipped checkpoint's head: the Dockerfile copies nothing
+      # else, and the other heads are reproducibility records.
       - name: Pull Git LFS head weights
         if: steps.gate.outputs.approved == 'true'
-        run: git lfs pull --include 'ai-service/artifacts/*/head.safetensors'
+        env:
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          head="ai-service/artifacts/$VERSION/head.safetensors"
+          git lfs pull --include "$head"
+          if [ "$(stat -c%s "$head")" -le 1024 ]; then
+            echo "::error title=Local AI head weights missing::$head is still a Git LFS pointer after git lfs pull."
+            exit 1
+          fi
 
       - name: Free runner disk
         if: steps.gate.outputs.approved == 'true'
@@ -127,6 +137,10 @@ jobs:
           load: true
           push: false
           tags: probara-local-ai:pr
+          # Mirrors of the third-party build sources, as docker-build.yml.
+          build-args: |
+            LAYA_GIT_URL=${{ vars.LAYA_GIT_URL || 'https://github.com/NandhaKishorM/laya.git' }}
+            HF_ENDPOINT=${{ vars.HF_ENDPOINT || 'https://huggingface.co' }}
           cache-from: type=gha,scope=local-ai
           cache-to: type=gha,scope=local-ai,mode=min
 

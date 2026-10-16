@@ -57,6 +57,16 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
           exit 1
 
+      # The tag's local-ai image build fetches laya (pinned commit) and the
+      # base model (pinned Hugging Face revision) from third parties. If
+      # either is gone, that build fails after the chart is published, and
+      # default installs pull an image that does not exist. Seconds, no LFS.
+      - name: Check local AI build sources
+        env:
+          LAYA_GIT_URL: ${{ vars.LAYA_GIT_URL }}
+          HF_ENDPOINT: ${{ vars.HF_ENDPOINT }}
+        run: python3 .github/workflows/scripts/local_ai_artifact.py sources
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:

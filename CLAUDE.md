@@ -639,6 +639,15 @@ or imported groups come back empty. Any other path that creates groups through
   fails for an unapproved shipped artifact (`ARG MODEL_VERSION` in
   `ai-service/Dockerfile`, which CI also reads), `docker-build` skips the
   `-local-ai` image, and `release.yml` refuses to tag while it is unapproved.
+  `docker-build` builds `-local-ai` on release tags only, and after each
+  tagged push checks the image is anonymously pullable (a new GHCR package
+  starts private; `docs/local-ai.md` has the one-time fix). `release.yml`
+  first runs `local_ai_artifact.py sources` (laya commit + HF revision still
+  served); mirrors go in the `LAYA_GIT_URL` / `HF_ENDPOINT` build args.
+- **Helm image tags default to the chart's `appVersion`**
+  (`monitoring-platform.imageTag`, used by every Probara image): releases
+  push each image under its version, while `latest` exists only for stable
+  releases. Never default a tag to `latest`.
 - **Local AI artifacts are head-only**: `artifacts/<version>/` commits
   `head.safetensors` plus metadata and `manifest.json`; tokenizer and encoder
   come from the base pinned in `ai-service/training/base-lock.json` (HF
@@ -650,10 +659,10 @@ or imported groups come back empty. Any other path that creates groups through
   change one and it is a new version.
 - **Git LFS covers only `ai-service/artifacts/*/head.safetensors`**
   (`.gitattributes`). Every CI checkout uses `lfs: false`; only the
-  `local-ai` job in `build-test.yml` and an approved local-ai image build in
-  `docker-build.yml` / `local-ai-pr.yml` run `git lfs pull --include` with
-  that one pattern (bandwidth is metered). Keep new LFS patterns and pulls
-  equally narrow.
+  `local-ai` job in `build-test.yml` (every head, cached) and an approved
+  local-ai image build in `docker-build.yml` (tags) / `local-ai-pr.yml` (the
+  shipped checkpoint's head only) run `git lfs pull --include` (bandwidth is
+  metered). Keep new LFS patterns and pulls equally narrow.
 - **Evidence `state_format` is pinned per artifact**: `contract.py`
   `STATE_FORMAT` versions the evidence-to-text rendering; the manifest's
   `state_format` (absent = 1) is what the runtime renders and what the

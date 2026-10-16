@@ -51,6 +51,20 @@ def test_lfs_tracks_only_head_weights():
     assert all(re.fullmatch(r"artifacts/[^/]+/head\.safetensors", w) for w in weights), weights
 
 
+def test_image_build_sources_are_overridable_but_pinned():
+    """Mirrors may replace the fetch locations, never the pins they are checked against."""
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    laya = [l for l in (ROOT / "requirements-laya.txt").read_text().splitlines() if l.startswith("laya @")][0]
+    default = re.search(r"^ARG LAYA_GIT_URL=(\S+)$", dockerfile, re.MULTILINE)[1]
+    assert laya.startswith(f"laya @ git+{default}@")
+    stage = dockerfile[dockerfile.index("AS laya-wheel"):dockerfile.index("AS base-model")]
+    assert 'fetch -q --depth 1 "$LAYA_GIT_URL" "$commit"' in stage
+    assert 'test "$(git -C /build/laya rev-parse HEAD)" = "$commit"' in stage
+    base = dockerfile[dockerfile.index("AS base-model"):dockerfile.index("AS dependencies")]
+    assert "ARG HF_ENDPOINT=https://huggingface.co" in base
+    assert '--repo "$BASE_MODEL_REPO" --revision "$BASE_MODEL_REVISION"' in base
+
+
 def test_image_hardening():
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert re.search(r"python:3\.13\.\d+-slim@sha256:[0-9a-f]{64}", dockerfile)

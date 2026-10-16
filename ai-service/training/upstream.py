@@ -56,24 +56,34 @@ def package_notices(base, output):
     (output / "upstream.json").write_text(json.dumps(notice, indent=2) + "\n")
 
 
-def fetch(output):
+def fetch(output, repo=None, revision=None, lock=LOCK):
+    """Download the locked files and verify each one's sha256.
+
+    repo/revision default to the lock; a mirror (another repo id, or another
+    endpoint through HF_ENDPOINT) is accepted only if it serves the same bytes.
+    Attribution (package_notices) always names the locked upstream.
+    """
     output = Path(output)
     if output.exists() and any(output.iterdir()):
         raise ValueError("Base download requires an empty output directory")
     # Network access is confined to this explicit build-time command. Neither
     # the inference process nor the runtime image contains this downloader.
     from huggingface_hub import snapshot_download
-    snapshot_download(LOCK["repo"], revision=LOCK["revision"], local_dir=output,
-                      allow_patterns=list(LOCK["files"]))
+    snapshot_download(repo or lock["repo"], revision=revision or lock["revision"], local_dir=output,
+                      allow_patterns=list(lock["files"]))
     shutil.rmtree(output / ".cache", ignore_errors=True)
-    for name, digest in LOCK["files"].items():
-        if sha256(output / name) != digest:
+    for name, digest in lock["files"].items():
+        path = output / name
+        if not path.is_file() or sha256(path) != digest:
             raise ValueError(f"Downloaded base file does not match pinned revision: {name}")
-    normalize_base(output)
-    verify_base(output)
+    normalize_base(output, lock)
+    verify_base(output, lock)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=Path, required=True)
-    fetch(parser.parse_args().output)
+    parser.add_argument("--repo", default="", help="mirror repo id (empty = base-lock.json)")
+    parser.add_argument("--revision", default="", help="mirror revision (empty = base-lock.json)")
+    args = parser.parse_args()
+    fetch(args.output, args.repo or None, args.revision or None)

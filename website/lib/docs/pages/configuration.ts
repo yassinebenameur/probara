@@ -924,6 +924,7 @@ export const CONFIGURATION_PAGE: DocPage = {
               'Required GitHub Actions secret for release workflow',
               'Used as semantic-release, GHCR/Helm registry, `GH_TOKEN`, and `GITHUB_TOKEN` credential. Scope it to the repository/packages required by the workflow.',
             ],
+            ['`LAYA_GIT_URL`, `HF_ENDPOINT`, `BASE_MODEL_REPO`, `BASE_MODEL_REVISION`', '`https://github.com/NandhaKishorM/laya.git`, `https://huggingface.co`, empty, empty (= `base-lock.json`)', 'Build args of `ai-service/Dockerfile` naming where the pinned laya commit and base model are fetched from, for a mirror; the pinned commit and every locked sha256 are still checked. CI reads the first two from repository variables of the same name, and `release.yml` checks those sources still serve the pins before tagging.'],
             ['`API`', '`http://localhost:8080`', '`scripts/verify-auth.sh`.'],
             ['`ADMIN_USER`', '`admin`', 'Authentication verification helper.'],
             ['`ADMIN_PASS`', '`change-me`', 'Authentication verification helper only; never a production default.'],

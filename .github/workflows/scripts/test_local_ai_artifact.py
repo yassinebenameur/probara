@@ -150,3 +150,67 @@ def test_reproduce_fails_when_the_gate_breaks_on_this_platform(reproduction, cap
         reproduction(reproduced)
     assert exit_info.value.code == 1
     assert "the CPU release gate fails for rca on" in capsys.readouterr().out
+
+
+LOCK = {"repo": "upstream/base", "revision": "a" * 40, "upstream_commit": "c" * 40,
+        "files": {"model.safetensors": "0" * 64, "tokenizer/tokenizer.json": "1" * 64}}
+
+
+@pytest.fixture
+def source_check(tmp_path, monkeypatch):
+    """sources() with git and the Hub faked; returns the calls each saw."""
+    lock = tmp_path / "base-lock.json"
+    lock.write_text(json.dumps(LOCK))
+    seen = {}
+    for name in ("LAYA_GIT_URL", "HF_ENDPOINT", "BASE_MODEL_REPO", "BASE_MODEL_REVISION"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(ROOT)
+
+    def run(commit_error=None, sha="a" * 40, files=frozenset(LOCK["files"])):
+        def fake_commit(url, commit):
+            seen["git"] = (url, commit)
+            return commit_error
+
+        def fake_files(endpoint, repo, revision):
+            seen["hub"] = (endpoint, repo, revision)
+            if isinstance(files, Exception):
+                raise files
+            return sha, set(files)
+
+        monkeypatch.setattr(ci, "commit_error", fake_commit)
+        monkeypatch.setattr(ci, "revision_files", fake_files)
+        ci.sources(types.SimpleNamespace(lock=lock))
+        return seen
+
+    return run
+
+
+def test_sources_checks_the_pins_at_the_dockerfile_defaults(source_check, capsys):
+    seen = source_check()
+    assert seen == {"git": ("https://github.com/NandhaKishorM/laya.git", "c" * 40),
+                    "hub": ("https://huggingface.co", "upstream/base", "a" * 40)}
+    assert "::error" not in capsys.readouterr().out
+
+
+def test_sources_follows_mirror_overrides(source_check, monkeypatch):
+    monkeypatch.setenv("LAYA_GIT_URL", "https://git.example/laya.git")
+    monkeypatch.setenv("HF_ENDPOINT", "https://hf.example")
+    monkeypatch.setenv("BASE_MODEL_REPO", "mirror/base")
+    monkeypatch.setenv("BASE_MODEL_REVISION", "b" * 40)
+    seen = source_check(sha="b" * 40)
+    assert seen == {"git": ("https://git.example/laya.git", "c" * 40),
+                    "hub": ("https://hf.example", "mirror/base", "b" * 40)}
+
+
+@pytest.mark.parametrize("kwargs,message", [
+    ({"commit_error": "fatal: remote error: upload-pack: not our ref"}, "is not fetchable from"),
+    ({"files": {"model.safetensors"}}, "lacks locked files: tokenizer/tokenizer.json"),
+    ({"sha": "d" * 40}, "resolves to"),
+    ({"files": OSError("HTTP Error 404: Not Found")}, "is not reachable: HTTP Error 404"),
+])
+def test_sources_fails_when_a_pin_is_no_longer_served(source_check, capsys, kwargs, message):
+    with pytest.raises(SystemExit) as exit_info:
+        source_check(**kwargs)
+    assert exit_info.value.code == 1
+    out = capsys.readouterr().out
+    assert "::error title=Local AI build source unavailable::" in out and message in out

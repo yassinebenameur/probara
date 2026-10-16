@@ -151,6 +151,15 @@ to ship. CI reads the shipped version from that line, so shipping a new
 artifact means committing its directory and changing that default. The
 service also runs `verify_artifact` at startup.
 
+Two stages fetch from third parties, and both locations are build args so a
+mirror can stand in if upstream disappears: `LAYA_GIT_URL` (default
+`https://github.com/NandhaKishorM/laya.git`) for the laya commit, and
+`HF_ENDPOINT` plus optional `BASE_MODEL_REPO`/`BASE_MODEL_REVISION` (empty =
+`base-lock.json`) for the base. The pins stay the authority: the checkout must
+be the locked `upstream_commit`, and every base file must match its locked
+sha256, so a mirror only has to serve the same bytes. CI passes the
+repository variables `vars.LAYA_GIT_URL` and `vars.HF_ENDPOINT` when set.
+
 ## Release gate
 
 `release_approved` is written only by `training/validate_cpu.py`, after it
@@ -175,10 +184,40 @@ composes every committed artifact and requires the gate to accept exactly the
 approved ones; on an approved shipped artifact it also re-scores the held-out
 partition on linux/amd64, where the QNNPACK kernels differ from the
 developer machine, and fails unless the gate still holds there. `docker-build`
-builds and pushes the `-local-ai` image only for an approved artifact, and
+builds and pushes the `-local-ai` image only on release tags and only for an
+approved artifact (branch pushes leave it to `local-ai-pr.yml` and
+`build-test`), pulling just the shipped checkpoint's head from Git LFS, and
 `release.yml` refuses to tag or publish the chart while the shipped artifact
 is unapproved, because the chart deploys local AI by default. Never set
 approval by hand.
+
+`release.yml` also runs `local_ai_artifact.py sources` before tagging: a
+shallow fetch of the pinned laya commit and a Hugging Face check that the
+pinned revision still lists every locked file. Either source vanishing would
+otherwise fail only the tag's local-ai image build, after the chart is
+published. If that happens anyway, point the `LAYA_GIT_URL` / `HF_ENDPOINT`
+repository variables at a mirror and re-run only the failed `local-ai` leg
+of `docker-build`; until it succeeds, installs can pin `localAI.image.tag` to
+the last good release.
+
+### Image visibility (one-time)
+
+Every tagged image must be pullable anonymously, because the chart deploys
+them without pull secrets by default. A new GHCR package in a personal
+account starts **private**, so the first release that pushes
+`probara-local-ai` creates it private, and `docker-build`'s "Check the image
+is publicly pullable" step then fails that leg. Once:
+
+1. Open github.com/users/yassinebenameur/packages/container/probara-local-ai/settings.
+2. Set visibility to **Public** and link the package to the probara
+   repository, like the other `probara-*` packages.
+3. Verify anonymously: `docker logout ghcr.io && docker manifest inspect
+   ghcr.io/yassinebenameur/probara-local-ai:<tag>`, then re-run the failed
+   leg (its image is already pushed; the check passes).
+
+Ideally do it before the first tag that ships local AI: push one approved
+image under the account by hand, make the package public, and the release is
+pullable as soon as it is published.
 
 ## Training and validation
 

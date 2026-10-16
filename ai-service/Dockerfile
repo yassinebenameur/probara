@@ -17,6 +17,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1
 
 FROM python-base AS laya-wheel
+# Where to fetch laya from. A mirror (CI sets vars.LAYA_GIT_URL) only has to
+# serve the pinned commit: the check below rejects any other tree.
+ARG LAYA_GIT_URL=https://github.com/NandhaKishorM/laya.git
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY ai-service/requirements-build.lock /build/requirements-build.lock
 COPY ai-service/training/base-lock.json /build/base-lock.json
@@ -27,18 +30,26 @@ RUN python -m pip install --require-hashes --only-binary=:all: -r /build/require
 RUN set -eu; \
     commit="$(python -c 'import json; print(json.load(open("/build/base-lock.json"))["upstream_commit"])')"; \
     git init -q /build/laya; \
-    git -C /build/laya fetch -q --depth 1 https://github.com/NandhaKishorM/laya.git "$commit"; \
+    git -C /build/laya fetch -q --depth 1 "$LAYA_GIT_URL" "$commit"; \
     git -C /build/laya checkout -q --detach FETCH_HEAD; \
     test "$(git -C /build/laya rev-parse HEAD)" = "$commit"; \
     python -m pip wheel --no-deps --no-build-isolation --wheel-dir /wheels /build/laya
 
 FROM python-base AS base-model
+# Hugging Face endpoint (read by huggingface_hub) and an optional mirror repo
+# and revision. Empty repo/revision = base-lock.json. Whatever the source, the
+# sha256 of every locked file is the authority, so a mirror must serve the
+# same bytes.
+ARG HF_ENDPOINT=https://huggingface.co
+ARG BASE_MODEL_REPO=""
+ARG BASE_MODEL_REVISION=""
 COPY ai-service/requirements-fetch.lock /build/requirements-fetch.lock
 RUN python -m pip install --require-hashes --only-binary=:all: -r /build/requirements-fetch.lock
 COPY ai-service/training/upstream.py ai-service/training/base-lock.json ai-service/UPSTREAM-LICENSE /build/fetch/
 # snapshot_download(revision=<commit sha>), then sha256 of every locked file
 # (weights, tokenizer, encoder config, model card) before anything uses them.
-RUN HF_HUB_DISABLE_TELEMETRY=1 python /build/fetch/upstream.py --output /base
+RUN HF_HUB_DISABLE_TELEMETRY=1 python /build/fetch/upstream.py --output /base \
+      --repo "$BASE_MODEL_REPO" --revision "$BASE_MODEL_REVISION"
 
 FROM python-base AS dependencies
 COPY ai-service/requirements.lock /build/requirements.lock
