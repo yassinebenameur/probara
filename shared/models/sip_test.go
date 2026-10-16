@@ -29,6 +29,12 @@ func TestSIPMonitorConfigValidate(t *testing.T) {
 		{name: "blank tls server name means default", config: `{"host":"sip.example.com","tls_server_name":"  "}`},
 		{name: "tls min days valid over tls", config: `{"host":"sip.example.com","transport":"tls","tls_min_days_valid":14}`},
 		{name: "tls min days valid zero", config: `{"host":"sip.example.com","transport":"TLS","tls_min_days_valid":0}`},
+		{name: "resolution a", config: `{"host":"sip.example.com","resolution":"a"}`},
+		{name: "resolution rfc3263 without port or transport", config: `{"host":"example.com","resolution":"rfc3263"}`},
+		{name: "resolution is case-insensitive", config: `{"host":"example.com","resolution":"RFC3263"}`},
+		{name: "rfc3263 with nameserver", config: `{"host":"example.com","resolution":"rfc3263","nameserver":"10.0.0.2:5353"}`},
+		{name: "rfc3263 with ipv6 nameserver", config: `{"host":"example.com","resolution":"rfc3263","nameserver":"fd00::2"}`},
+		{name: "blank nameserver without rfc3263", config: `{"host":"example.com","nameserver":"  "}`},
 		{name: "tls min days valid with skip verify", config: `{"host":"sip.example.com","transport":"tls","tls_skip_verify":true,"tls_min_days_valid":7}`},
 
 		{name: "missing host", config: `{"transport":"udp"}`, errContains: "host is required"},
@@ -48,6 +54,12 @@ func TestSIPMonitorConfigValidate(t *testing.T) {
 		{name: "tls min days valid over udp", config: `{"host":"sip.example.com","transport":"udp","tls_min_days_valid":14}`, errContains: "tls_min_days_valid requires transport tls"},
 		{name: "tls min days valid over tcp", config: `{"host":"sip.example.com","transport":"tcp","tls_min_days_valid":14}`, errContains: "tls_min_days_valid requires transport tls"},
 		{name: "tls min days valid needs an explicit transport", config: `{"host":"sip.example.com","port":5061,"tls_min_days_valid":14}`, errContains: "set transport tls"},
+		{name: "unknown resolution", config: `{"host":"example.com","resolution":"naptr"}`, errContains: "resolution must be 'a' or 'rfc3263'"},
+		{name: "nameserver without rfc3263", config: `{"host":"example.com","nameserver":"10.0.0.2"}`, errContains: "nameserver requires resolution rfc3263"},
+		{name: "nameserver with resolution a", config: `{"host":"example.com","resolution":"a","nameserver":"10.0.0.2"}`, errContains: "nameserver requires resolution rfc3263"},
+		{name: "invalid nameserver", config: `{"host":"example.com","resolution":"rfc3263","nameserver":"not a host"}`, errContains: "nameserver must be a valid IP address or hostname"},
+		{name: "nameserver bad port", config: `{"host":"example.com","resolution":"rfc3263","nameserver":"10.0.0.2:0"}`, errContains: "nameserver port must be between 1 and 65535"},
+		{name: "rfc3263 tls min days valid still needs transport tls", config: `{"host":"example.com","resolution":"rfc3263","tls_min_days_valid":14}`, errContains: "set transport tls"},
 		{name: "tls server name invalid", config: `{"host":"sip.example.com","transport":"tls","tls_server_name":"bad name"}`, errContains: "tls_server_name must be a valid hostname or IP address"},
 	}
 
@@ -83,6 +95,8 @@ func TestSIPMonitorConfigValidateRejectsInjectionCharacters(t *testing.T) {
 			Password:      "secret",
 			Domain:        "example.com",
 			TLSServerName: "sbc.example.com",
+			Resolution:    "rfc3263",
+			Nameserver:    "10.0.0.2",
 		}
 	}
 	if err := base().Validate(); err != nil {
@@ -97,6 +111,8 @@ func TestSIPMonitorConfigValidateRejectsInjectionCharacters(t *testing.T) {
 		"password":        func(c *SIPMonitorConfig, v string) { c.Password += v },
 		"domain":          func(c *SIPMonitorConfig, v string) { c.Domain += v },
 		"tls_server_name": func(c *SIPMonitorConfig, v string) { c.TLSServerName += v },
+		"resolution":      func(c *SIPMonitorConfig, v string) { c.Resolution += v },
+		"nameserver":      func(c *SIPMonitorConfig, v string) { c.Nameserver += v },
 	}
 	for field, set := range fields {
 		for _, bad := range []string{"\r", "\n", "\x00", "\r\nX-Injected: 1"} {

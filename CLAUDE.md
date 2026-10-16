@@ -620,12 +620,17 @@ or imported groups come back empty. Any other path that creates groups through
 - `expected_status` etc. reuse `HTTPStatus` fields for non-HTTP protocols
   (SIP status codes ride in `http_status`).
 - SIP dev against the host: `SIP_LOCALHOST_AS_HOST_GATEWAY=true` rewrites
-  loopback targets to `host.docker.internal`; the Compose worker and
+  each loopback target host (configured host or SRV target) to
+  `host.docker.internal` before resolving it; the Compose worker and
   `start-local-services.sh` (local-process workers) both default it on.
-- SIP signalling rides one flow: every request, response and answer to a
-  server-sent request goes over the connection `dialSIP` opened through
-  `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a Contact,
-  Via, Record-Route or SDP address. Requests are client transactions in
+- SIP resolves its own targets (`sip_resolve.go`: A/AAAA, or opt-in RFC
+  3263 SRV with failover) into IP-literal candidates; each attempt dials
+  one through `dialGuard`. SIP TLS identity is `tls_server_name` or the
+  configured host, never an SRV target.
+- SIP signalling rides one flow per attempt: every request, response and
+  answer to a server-sent request goes over the connection `dialSIP` opened
+  through `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a
+  Contact, Via, Record-Route or SDP address. Requests are client transactions in
   `sip_txn.go` (Timer E on UDP, matched by Via branch + CSeq method).
 - `alert_policies` are retired (API returns 410); workspace alert config
   lives on tenants via `/notification-settings`.

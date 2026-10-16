@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"syscall"
@@ -101,4 +102,33 @@ func isSIPTLSError(err error) bool {
 		errors.As(err, &recordErr) ||
 		errors.As(err, &echRejectErr) ||
 		errors.As(err, &systemRootErr)
+}
+
+// sipSRVIdentityError is a certificate name mismatch at an address that came
+// from SRV. The certificate is checked against the configured domain, never
+// the SRV target (RFC 5922), and some providers' certificates name only
+// their servers; the hint says which name was checked and how to override
+// it. It unwraps to the handshake error, so it still classifies as tls.
+type sipSRVIdentityError struct {
+	err        error
+	serverName string
+	target     string
+}
+
+func (e *sipSRVIdentityError) Error() string {
+	// Never "; " — that separates assertion failures in a result.
+	return fmt.Sprintf("%v (checked against %s, the domain that was resolved, not SRV target %s: set tls_server_name if the provider's certificate names its servers)",
+		e.err, e.serverName, e.target)
+}
+
+func (e *sipSRVIdentityError) Unwrap() error { return e.err }
+
+// withSIPSRVIdentityHint adds the hint to a hostname mismatch at an SRV
+// target when no tls_server_name override is configured.
+func withSIPSRVIdentityHint(err error, candidate sipCandidate, serverName string, overridden bool) error {
+	var hostnameErr x509.HostnameError
+	if candidate.via != "srv" || overridden || !errors.As(err, &hostnameErr) {
+		return err
+	}
+	return &sipSRVIdentityError{err: err, serverName: serverName, target: candidate.host}
 }

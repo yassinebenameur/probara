@@ -17,15 +17,19 @@ import (
 // SIPChecker implements Checker for SIP monitors. It supports OPTIONS
 // availability pings and contact-less REGISTER checks (which exercise the
 // registrar's digest authentication path without mutating any bindings),
-// over UDP, TCP, or TLS. Dialing goes through dialGuard so SIP probes
-// inherit the worker's private-IP (SSRF) policy, and every message of the
-// check rides that one flow (sip_flow.go). Requests run as RFC 3261 client
-// transactions (sip_txn.go): retransmitted on UDP, matched to their
-// responses by Via branch and CSeq method; requests the server sends us are
-// answered by sip_uas.go.
+// over UDP, TCP, or TLS. The host is resolved to IP literals first
+// (sip_resolve.go: A/AAAA, or RFC 3263 SRV when the monitor opts in), and
+// each is dialed through dialGuard so SIP probes inherit the worker's
+// private-IP (SSRF) policy; every message of an attempt rides that one flow
+// (sip_flow.go). Requests run as RFC 3261 client transactions (sip_txn.go):
+// retransmitted on UDP, matched to their responses by Via branch and CSeq
+// method; requests the server sends us are answered by sip_uas.go.
 type SIPChecker struct {
 	blockPrivateIPs bool
 	allowedCIDRs    []*net.IPNet
+	// resolver replaces DNS in tests; nil uses the worker's resolver, or
+	// one pinned to the monitor's nameserver.
+	resolver sipResolver
 }
 
 // NewSIPChecker creates a new SIP checker
@@ -34,6 +38,18 @@ func NewSIPChecker(blockPrivateIPs bool, allowedCIDRs []*net.IPNet) *SIPChecker 
 		blockPrivateIPs: blockPrivateIPs,
 		allowedCIDRs:    allowedCIDRs,
 	}
+}
+
+// sipMinAttemptBudget is the floor of one address's share of the budget
+// under rfc3263 failover: below it a UDP request gets too few
+// retransmissions to tell a dead server from a lost datagram.
+const sipMinAttemptBudget = 1500 * time.Millisecond
+
+// sipAttemptResult is how one address answered.
+type sipAttemptResult struct {
+	resp          *sipMessage // the final response, when one arrived
+	authAttempted bool
+	err           error
 }
 
 // Check performs a SIP check according to the configured method.
@@ -56,19 +72,9 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			ErrorMessage: &errMsg,
 		}
 	}
+	config.Host = strings.TrimSpace(config.Host)
+	mode := config.ResolutionMode()
 
-	// Set defaults
-	transport := strings.ToLower(config.Transport)
-	if transport == "" {
-		transport = "udp"
-	}
-	if config.Port == 0 {
-		if transport == "tls" {
-			config.Port = 5061
-		} else {
-			config.Port = 5060
-		}
-	}
 	method := strings.ToLower(config.Method)
 	if method == "" {
 		method = "options"
@@ -76,43 +82,57 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	methodUpper := strings.ToUpper(method)
 
 	startTime := time.Now()
-	// The check budget is the dial, every transaction and every
-	// retransmission (Timer F).
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	// The check budget is resolution, every dial, every transaction and
+	// every retransmission (Timer F).
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	targetHost := resolveSIPTargetHost(config.Host)
 
 	domain := strings.TrimSpace(config.Domain)
 	if domain == "" {
 		domain = config.Host
 	}
-	fromUser := strings.TrimSpace(config.Username)
-	if fromUser == "" {
-		fromUser = "probe"
-	}
 
-	var requestURI string
-	if method == "register" {
+	// The Request-URI names what is being probed. Under "a" it is the host
+	// and port dialed, as it always was; under rfc3263 it is the SIP URI
+	// being resolved (RFC 3263 §4): the domain, with the port only when one
+	// is configured, since an SRV-chosen port belongs to the server, not to
+	// the URI.
+	var requestURI, toURI string
+	switch {
+	case method == "register":
 		requestURI = "sip:" + domain
-	} else {
-		requestURI = fmt.Sprintf("sip:%s:%d", config.Host, config.Port)
+	case mode == models.SIPResolutionA:
+		port := config.Port
+		if port == 0 {
+			port = sipDefaultPort(strings.ToLower(config.Transport))
+		}
+		requestURI = fmt.Sprintf("sip:%s:%d", config.Host, port)
+		toURI = fmt.Sprintf("sip:probe@%s:%d", config.Host, port)
+	default:
+		target := domain
+		if strings.TrimSpace(config.Domain) == "" && config.Port != 0 {
+			target = sipHostPort(config.Host, config.Port)
+		}
+		requestURI = "sip:" + sipURIHost(target)
+		toURI = "sip:probe@" + sipURIHost(target)
 	}
 
 	// From here on every result carries the metrics_data envelope
-	// (sip_metrics.go): a check that fails to dial still records where it
-	// went and how long transport setup took.
+	// (sip_metrics.go): a check that fails to resolve or dial still records
+	// where it went and how far it got.
+	transport := strings.ToLower(config.Transport)
+	if transport == "" && mode == models.SIPResolutionA {
+		transport = "udp"
+	}
 	metrics := &sipMetrics{
 		Method:     methodUpper,
 		Transport:  transport,
 		RequestURI: requestURI,
-		Target:     newSIPTargetMetrics(targetHost),
+		Target:     newSIPTargetMetrics(resolveSIPTargetHost(config.Host)),
 	}
-	var endpoint *sipEndpoint
 	finish := func(result CheckResult) CheckResult {
 		latencyMs := time.Since(startTime).Milliseconds()
-		if endpoint != nil {
-			metrics.recordEndpoint(endpoint)
-		}
 		result = applySIPCertificateRule(&config, metrics, result)
 		result.LatencyMs = &latencyMs
 		result.MetricsData = metrics.marshal(latencyMs)
@@ -122,48 +142,129 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		errMsg := fmt.Sprintf("%s: %v", classifySIPError(err), err)
 		return finish(CheckResult{Status: "error", ErrorMessage: &errMsg})
 	}
-	failure := func(resp *sipMessage, errMsg string) CheckResult {
-		return finish(CheckResult{Status: "failure", HTTPStatus: &resp.StatusCode, ErrorMessage: &errMsg})
+
+	resolver, err := c.newSIPResolver(&config, timeout)
+	if err != nil {
+		return errorResult(err)
+	}
+	dnsStart := time.Now()
+	candidates, resolution, err := resolveSIPTargets(ctx, &config, resolver)
+	metrics.Resolution = resolution
+	if resolution.lookedUp {
+		metrics.Timing.DNSMs = sipDurationMs(time.Since(dnsStart))
+	}
+	if err != nil {
+		return errorResult(err)
 	}
 
-	flow, err := c.dialSIP(ctx, transport, targetHost, config.Port, &config)
+	serverName := sipTLSServerName(&config)
+	overridden := strings.TrimSpace(config.TLSServerName) != ""
+	// The last address tried decides the check, and the envelope describes
+	// that attempt; resolution.attempts keeps the earlier ones.
+	var last sipAttemptResult
+	for i := 0; i < len(candidates); i++ {
+		candidate := candidates[i]
+		metrics.startAttempt(candidate, i > 0)
+
+		// Under rfc3263 an unanswered address is given up on so the next
+		// can be tried (RFC 3263 §4.3), so each one gets a share of what
+		// is left. Under "a" every address may use the whole budget: only
+		// a transport failure moves on, as dialing a hostname always did.
+		attemptCtx, attemptCancel := ctx, context.CancelFunc(func() {})
+		if mode == models.SIPResolutionRFC3263 && i < len(candidates)-1 {
+			if deadline, ok := ctx.Deadline(); ok {
+				slice := max(time.Until(deadline)/time.Duration(len(candidates)-i), sipMinAttemptBudget)
+				attemptCtx, attemptCancel = context.WithTimeout(ctx, slice)
+			}
+		}
+		attemptStart := time.Now()
+		last = c.runNonInviteAttempt(attemptCtx, candidate, &config, sipAttemptParams{
+			method:     methodUpper,
+			requestURI: requestURI,
+			toURI:      toURI,
+			domain:     domain,
+		}, metrics)
+		attemptCancel()
+		if last.err != nil && candidate.transport == "tls" {
+			last.err = withSIPSRVIdentityHint(last.err, candidate, serverName, overridden)
+		}
+		metrics.Resolution.addAttempt(sipAttemptMetrics{
+			Address:   candidate.address(),
+			Transport: candidate.transport,
+			Outcome:   sipAttemptOutcome(last),
+			Ms:        time.Since(attemptStart).Milliseconds(),
+		})
+
+		next := sipFailoverTarget(ctx, mode, last, candidates, i)
+		if next < 0 {
+			break
+		}
+		i = next - 1
+	}
+
+	if last.err != nil && last.resp == nil {
+		return errorResult(last.err)
+	}
+	return finish(sipFinalResult(&config, last))
+}
+
+// sipAttemptParams is what every attempt of a check sends the same way.
+type sipAttemptParams struct {
+	method     string
+	requestURI string
+	toURI      string // OPTIONS only
+	domain     string
+}
+
+// runNonInviteAttempt runs an OPTIONS or REGISTER, with the digest retry,
+// against one address. It records the attempt in metrics as it goes.
+func (c *SIPChecker) runNonInviteAttempt(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, p sipAttemptParams, metrics *sipMetrics) sipAttemptResult {
+	flow, err := c.dialSIP(ctx, candidate, config)
 	if err != nil {
 		var dialErr *sipDialError
 		if errors.As(err, &dialErr) {
 			metrics.recordDialTiming(dialErr.timing)
 		}
-		return errorResult(err)
+		return sipAttemptResult{err: err}
 	}
-	metrics.recordFlow(flow, sipTLSServerName(&config))
-	endpoint = newSIPEndpoint(flow)
-	defer endpoint.Close()
+	metrics.recordFlow(flow, sipTLSServerName(config))
+	endpoint := newSIPEndpoint(flow)
+	defer func() {
+		endpoint.Close()
+		metrics.recordEndpoint(endpoint)
+	}()
+
+	fromUser := strings.TrimSpace(config.Username)
+	if fromUser == "" {
+		fromUser = "probe"
+	}
 
 	// REGISTER uses the configured AOR and sends no Contact header, making
 	// it a query-style registration check that never creates, refreshes, or
 	// removes bindings. OPTIONS keeps the probe@monitor.local identity.
-	params := sipRequestParams{
-		Method:     methodUpper,
-		RequestURI: requestURI,
+	req := sipRequestParams{
+		Method:     p.method,
+		RequestURI: p.requestURI,
 		FromTag:    sipRandomToken(4),
 		CallID:     uuid.New().String() + "@monitor.local",
 		CSeq:       1,
 	}
-	metrics.CallID = params.CallID
-	if method == "register" {
-		aor := fmt.Sprintf("<sip:%s@%s>", fromUser, domain)
-		params.From, params.To = aor, aor
+	metrics.CallID = req.CallID
+	if p.method == "REGISTER" {
+		aor := fmt.Sprintf("<sip:%s@%s>", fromUser, p.domain)
+		req.From, req.To = aor, aor
 	} else {
-		params.From = "<sip:probe@monitor.local>"
-		params.To = fmt.Sprintf("<sip:probe@%s:%d>", config.Host, config.Port)
-		params.Contact = flow.contactValue(requestURI)
-		params.Extra = []sipHeader{{Name: "Accept", Value: "application/sdp"}}
+		req.From = "<sip:probe@monitor.local>"
+		req.To = "<" + p.toURI + ">"
+		req.Contact = flow.contactValue(p.requestURI)
+		req.Extra = []sipHeader{{Name: "Accept", Value: "application/sdp"}}
 	}
 
 	// firstSent anchors first_response_ms (and auth_ms); each send
 	// re-anchors response_ms on the request it measures.
 	var firstSent, firstResponse time.Time
 	send := func() (*sipMessage, error) {
-		params.Via = flow.viaValue(newSIPBranch())
+		req.Via = flow.viaValue(newSIPBranch())
 		sent := time.Now()
 		if firstSent.IsZero() {
 			firstSent = sent
@@ -175,7 +276,7 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			}
 		}
 		metrics.clearFinal()
-		in, err := endpoint.roundTripNonInvite(ctx, buildSIPRequest(params), func(p sipInbound) { seeResponse(p.at) })
+		in, err := endpoint.roundTripNonInvite(ctx, buildSIPRequest(req), func(p sipInbound) { seeResponse(p.at) })
 		if err != nil {
 			return nil, err
 		}
@@ -187,13 +288,12 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 
 	resp, err := send()
 	if err != nil {
-		return errorResult(err)
+		return sipAttemptResult{err: err}
 	}
 
 	// Answer a digest challenge when credentials are configured. The retry
 	// is a new transaction (new branch) that keeps the Call-ID and From tag
 	// and increments CSeq, per RFC 3261 §8.1.3.5.
-	authAttempted := false
 	if resp.StatusCode == 401 || resp.StatusCode == 407 {
 		metrics.Auth = &sipAuthMetrics{Challenge: resp.StatusCode}
 	}
@@ -205,53 +305,127 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			challengeValue = resp.Get("Proxy-Authenticate")
 		}
 		if challengeValue == "" {
-			return failure(resp, fmt.Sprintf("server returned %d without an authentication challenge", resp.StatusCode))
+			return sipAttemptResult{resp: resp, err: fmt.Errorf("server returned %d without an authentication challenge", resp.StatusCode)}
 		}
 
 		challenge, parseErr := parseSIPDigestChallenge(challengeValue)
 		var credentials string
 		if parseErr == nil {
 			metrics.Auth.Algorithm = sipDigestAlgorithmName(challenge.Algorithm)
-			credentials, parseErr = buildSIPDigestAuthorization(challenge, config.Username, config.Password, methodUpper, requestURI)
+			credentials, parseErr = buildSIPDigestAuthorization(challenge, config.Username, config.Password, p.method, p.requestURI)
 		}
 		if parseErr != nil {
-			return failure(resp, fmt.Sprintf("cannot answer authentication challenge: %v", parseErr))
+			return sipAttemptResult{resp: resp, err: fmt.Errorf("cannot answer authentication challenge: %v", parseErr)}
 		}
 
-		params.CSeq = 2
-		params.Extra = append(params.Extra, sipHeader{Name: authHeaderName, Value: credentials})
+		req.CSeq = 2
+		req.Extra = append(req.Extra, sipHeader{Name: authHeaderName, Value: credentials})
 		metrics.Auth.Rounds = 1
 		metrics.Auth.AuthMs = sipDurationMs(time.Since(firstSent))
 		resp, err = send()
 		if err != nil {
-			return errorResult(err)
+			return sipAttemptResult{err: err, authAttempted: true}
 		}
-		authAttempted = true
+		return sipAttemptResult{resp: resp, authAttempted: true}
+	}
+	return sipAttemptResult{resp: resp}
+}
+
+// sipAttemptOutcome is an attempt's entry in resolution.attempts.
+func sipAttemptOutcome(a sipAttemptResult) string {
+	switch {
+	case a.resp != nil && a.resp.StatusCode == 503:
+		return "503"
+	case a.resp != nil:
+		return "ok"
+	default:
+		return classifySIPError(a.err)
+	}
+}
+
+// sipFailoverTarget is the index of the candidate to try after attempt i, or
+// -1 to stop (RFC 3263 §4.3, both modes unless noted):
+//   - a transport failure (refused, unreachable, reset, or an address the
+//     network policy refuses) moves to the next address;
+//   - a TLS handshake failure moves to the next address of a different host
+//     only: another address of the same host presents the same certificate;
+//   - rfc3263 only: nothing within the attempt's share of the budget (no
+//     response, or a dial or handshake that hangs), or a 503, moves to the
+//     next address.
+//
+// Nothing moves on once the check's own budget is spent or it was cancelled.
+func sipFailoverTarget(ctx context.Context, mode string, a sipAttemptResult, candidates []sipCandidate, i int) int {
+	if i+1 >= len(candidates) || ctx.Err() != nil {
+		return -1
+	}
+	if a.resp != nil {
+		if a.resp.StatusCode == 503 && mode == models.SIPResolutionRFC3263 {
+			return i + 1
+		}
+		return -1
+	}
+	switch classifySIPError(a.err) {
+	case "refused", "connect", "ssrf_blocked":
+		return i + 1
+	case "tls":
+		for j := i + 1; j < len(candidates); j++ {
+			if !strings.EqualFold(candidates[j].host, candidates[i].host) {
+				return j
+			}
+		}
+		return -1
+	case "timeout":
+		// The attempt's share ran out (no response, or a dial or handshake
+		// into a black hole); the check's own budget did not.
+		if mode == models.SIPResolutionRFC3263 {
+			return i + 1
+		}
+		return -1
+	default:
+		return -1
+	}
+}
+
+// sipFinalResult judges the deciding attempt's final response.
+func sipFinalResult(config *models.SIPMonitorConfig, a sipAttemptResult) CheckResult {
+	resp := a.resp
+	failure := func(errMsg string) CheckResult {
+		// HTTPStatus carries the SIP status.
+		return CheckResult{Status: "failure", HTTPStatus: &resp.StatusCode, ErrorMessage: &errMsg}
+	}
+	if a.err != nil {
+		// A challenge the attempt could not answer.
+		return failure(a.err.Error())
 	}
 
 	expectedStatus := 200
 	if config.ExpectedStatus != nil {
 		expectedStatus = *config.ExpectedStatus
 	}
-
 	if resp.StatusCode != expectedStatus {
-		var errMsg string
 		switch {
-		case authAttempted && (resp.StatusCode == 401 || resp.StatusCode == 407):
-			errMsg = fmt.Sprintf("authentication failed: %d %s", resp.StatusCode, resp.Reason)
-		case !authAttempted && (resp.StatusCode == 401 || resp.StatusCode == 407):
-			errMsg = fmt.Sprintf("server requires authentication (%d %s) but no credentials are configured", resp.StatusCode, resp.Reason)
+		case a.authAttempted && (resp.StatusCode == 401 || resp.StatusCode == 407):
+			return failure(fmt.Sprintf("authentication failed: %d %s", resp.StatusCode, resp.Reason))
+		case !a.authAttempted && (resp.StatusCode == 401 || resp.StatusCode == 407):
+			return failure(fmt.Sprintf("server requires authentication (%d %s) but no credentials are configured", resp.StatusCode, resp.Reason))
 		default:
-			errMsg = fmt.Sprintf("unexpected SIP status: got %d, expected %d", resp.StatusCode, expectedStatus)
+			return failure(fmt.Sprintf("unexpected SIP status: got %d, expected %d", resp.StatusCode, expectedStatus))
 		}
-		// HTTPStatus carries the SIP status.
-		return failure(resp, errMsg)
 	}
+	return CheckResult{Status: "success", HTTPStatus: &resp.StatusCode}
+}
 
-	return finish(CheckResult{
-		Status:     "success",
-		HTTPStatus: &resp.StatusCode,
-	})
+// sipURIHost brackets a bare IPv6 literal for use as a SIP URI host.
+func sipURIHost(host string) string {
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		return "[" + host + "]"
+	}
+	return host
+}
+
+// sipHostPort is host:port for a SIP URI, an IPv6 host bracketed.
+func sipHostPort(host string, port int) string {
+	return net.JoinHostPort(host, fmt.Sprint(port))
 }
 
 // applySIPCertificateRule enforces tls_min_days_valid's one check-side rule.

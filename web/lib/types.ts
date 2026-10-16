@@ -380,8 +380,15 @@ export interface PushMonitorConfig {
 
 export interface SIPMonitorConfig {
   host: string;
+  // 0: 5060 (5061 over TLS), or from SRV under resolution 'rfc3263'.
   port: number;
-  transport: "udp" | "tcp" | "tls";
+  // '' is UDP, or left to SRV under resolution 'rfc3263'.
+  transport: "" | "udp" | "tcp" | "tls";
+  // 'rfc3263' locates the server through SRV with failover; absent or 'a'
+  // dials the host's A/AAAA records.
+  resolution?: "a" | "rfc3263";
+  // DNS server for rfc3263 lookups (host or host:port); rfc3263 only.
+  nameserver?: string;
   method?: "options" | "register";
   username?: string;
   password?: string; // write-only; API reads return the masked placeholder
@@ -1912,14 +1919,16 @@ export interface WebSocketMetrics {
 }
 
 // SIP metrics (worker sip_metrics.go). Written on success, failure and error
-// whenever the check dialed; timing anchors are documented on the Go struct.
+// once the check got as far as resolving its host; timing anchors are
+// documented on the Go struct.
 export interface SIPMetricsEnvelope {
   sip?: SIPMetrics;
 }
 
 export interface SIPMetrics {
   method: string;
-  transport: string;
+  // Absent only when rfc3263 left the transport to DNS and DNS failed.
+  transport?: string;
   request_uri?: string;
   call_id?: string;
   status_code?: number;
@@ -1928,6 +1937,7 @@ export interface SIPMetrics {
   warning?: string;
   reason_header?: SIPReasonHeader;
   target?: SIPTargetMetrics;
+  resolution?: SIPResolutionMetrics;
   timing: SIPTimingInfo;
   retransmissions: number;
   stray_messages: number;
@@ -1945,10 +1955,20 @@ export interface SIPReasonHeader {
 export interface SIPTargetMetrics {
   host: string;
   address?: string;
-  resolved_via: 'literal' | 'a';
+  resolved_via: 'literal' | 'a' | 'srv';
+  // An earlier address was tried first and given up on.
+  failover?: boolean;
+}
+
+export interface SIPResolutionMetrics {
+  mode: 'a' | 'rfc3263';
+  srv?: { target: string; port: number; priority: number; weight: number }[];
+  // Every address tried, in order: outcome is ok, 503 or the error class.
+  attempts?: { address: string; transport: string; outcome: string; ms: number }[];
 }
 
 export interface SIPTimingInfo {
+  dns_ms?: number;
   connect_ms?: number;
   tls_handshake_ms?: number;
   first_response_ms?: number;

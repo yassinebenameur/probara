@@ -13,8 +13,8 @@ import (
 
 // sipMetricsEnvelope is a SIP check's metrics_data: {"sip": {…}}. It is
 // written on success, failure and error alike whenever the check got as far
-// as dialing, so a failed check still says where it went, how far it got and
-// what the server said. The web detail page reads it (SIPMetricsEnvelope in
+// as resolving its host, so a failed check still says where it went, how far
+// it got and what the server said. The web detail page reads it (SIPMetricsEnvelope in
 // web/lib/types.ts) and /metrics-snapshots serves it like any other type.
 //
 // Durations are integer milliseconds. Strings copied from the server are
@@ -25,8 +25,10 @@ type sipMetricsEnvelope struct {
 }
 
 type sipMetrics struct {
-	Method     string `json:"method"`    // OPTIONS, REGISTER
-	Transport  string `json:"transport"` // udp, tcp, tls
+	Method string `json:"method"` // OPTIONS, REGISTER
+	// Transport is the deciding attempt's: udp, tcp or tls. Empty only when
+	// rfc3263 resolution left it to DNS and DNS failed before choosing one.
+	Transport  string `json:"transport,omitempty"`
 	RequestURI string `json:"request_uri,omitempty"`
 	// CallID is set once a request has been sent: it is what to search for
 	// in the server's own logs.
@@ -40,8 +42,9 @@ type sipMetrics struct {
 	Warning      string           `json:"warning,omitempty"` // Warning header (RFC 3261 §20.43)
 	ReasonHeader *sipReasonHeader `json:"reason_header,omitempty"`
 
-	Target *sipTargetMetrics `json:"target,omitempty"`
-	Timing sipTimingMetrics  `json:"timing"`
+	Target     *sipTargetMetrics     `json:"target,omitempty"`
+	Resolution *sipResolutionMetrics `json:"resolution,omitempty"`
+	Timing     sipTimingMetrics      `json:"timing"`
 
 	// Retransmissions counts UDP resends under Timer E; StrayMessages counts
 	// responses that matched no transaction of this check and were ignored.
@@ -70,17 +73,57 @@ type sipReasonHeader struct {
 	Text     string `json:"text,omitempty"`
 }
 
-// sipTargetMetrics is the peer the check dialed. Host is the name dialed
-// (after the SIP_LOCALHOST_AS_HOST_GATEWAY rewrite), Address the IP:port the
-// flow connected to, ResolvedVia how Host became that address: "literal" for
-// an IP, "a" for an A/AAAA lookup.
+// sipTargetMetrics is the peer that decided the check (the last one tried).
+// Host is the name it came from — the configured host, or the SRV target —
+// after the SIP_LOCALHOST_AS_HOST_GATEWAY rewrite; Address the IP:port the
+// flow connected to; ResolvedVia how Host became that address: "literal" for
+// an IP, "a" for an A/AAAA lookup, "srv" for an SRV target. Failover is set
+// when an earlier address was tried first and given up on.
 type sipTargetMetrics struct {
 	Host        string `json:"host"`
 	Address     string `json:"address,omitempty"`
 	ResolvedVia string `json:"resolved_via"`
+	Failover    bool   `json:"failover,omitempty"`
 }
 
-// sipTimingMetrics reuses the HTTP timing names. Anchors:
+// sipResolutionMetrics is how the check found its addresses (sip_resolve.go)
+// and what happened at each one. Mode is "a" or "rfc3263"; SRV lists the
+// records of the transport that was used, in the order they were tried;
+// Attempts lists every address tried (or SRV target that did not resolve),
+// in order, with its outcome: ok (a final response decided the check), 503,
+// or the error class (refused, timeout, tls, ssrf_blocked, connect, dns, …).
+type sipResolutionMetrics struct {
+	Mode     string              `json:"mode"`
+	SRV      []sipSRVMetrics     `json:"srv,omitempty"`
+	Attempts []sipAttemptMetrics `json:"attempts,omitempty"`
+
+	lookedUp bool // a DNS query was made: dns_ms is meaningful
+}
+
+type sipSRVMetrics struct {
+	Target   string `json:"target"`
+	Port     int    `json:"port"`
+	Priority int    `json:"priority"`
+	Weight   int    `json:"weight"`
+}
+
+type sipAttemptMetrics struct {
+	Address   string `json:"address"`
+	Transport string `json:"transport"`
+	Outcome   string `json:"outcome"`
+	Ms        int64  `json:"ms"`
+}
+
+func (r *sipResolutionMetrics) addAttempt(a sipAttemptMetrics) {
+	if len(r.Attempts) < sipMaxResolutionList {
+		r.Attempts = append(r.Attempts, a)
+	}
+}
+
+// sipTimingMetrics reuses the HTTP timing names. dns_ms and total_ms cover
+// the whole check; the others describe the attempt that decided it (after a
+// failover, the last address tried). Anchors:
+//   - dns_ms: every SRV and A/AAAA lookup; absent for an IP literal.
 //   - connect_ms: dial (UDP: socket setup; TCP/TLS: TCP connect).
 //   - tls_handshake_ms: the TLS handshake on top of it.
 //   - first_response_ms: first request sent → the first response to it of
@@ -89,6 +132,7 @@ type sipTargetMetrics struct {
 //     challenged) sent → its final response.
 //   - total_ms: check start → end; equals latency_ms.
 type sipTimingMetrics struct {
+	DNSMs           *int64 `json:"dns_ms,omitempty"`
 	ConnectMs       *int64 `json:"connect_ms,omitempty"`
 	TLSHandshakeMs  *int64 `json:"tls_handshake_ms,omitempty"`
 	FirstResponseMs *int64 `json:"first_response_ms,omitempty"`
@@ -136,13 +180,28 @@ func sipDurationMs(d time.Duration) *int64 {
 	return &ms
 }
 
-// newSIPTargetMetrics describes the dialed host before the dial completes.
+// newSIPTargetMetrics describes the configured host before resolution and
+// the dial complete.
 func newSIPTargetMetrics(host string) *sipTargetMetrics {
 	via := "a"
 	if net.ParseIP(strings.Trim(host, "[]")) != nil {
 		via = "literal"
 	}
 	return &sipTargetMetrics{Host: host, ResolvedVia: via}
+}
+
+// startAttempt points the envelope at a new candidate and forgets what the
+// previous attempt recorded, so the per-attempt fields (timing, final
+// response, auth, certificate) all describe the attempt that decides the
+// check. Retransmission and stray counts accumulate over the check.
+func (m *sipMetrics) startAttempt(c sipCandidate, failover bool) {
+	m.Transport = c.transport
+	m.Target = &sipTargetMetrics{Host: c.host, ResolvedVia: c.via, Failover: failover}
+	m.CallID = ""
+	m.clearFinal()
+	m.Timing.ConnectMs, m.Timing.TLSHandshakeMs, m.Timing.FirstResponseMs = nil, nil, nil
+	m.Auth = nil
+	m.TLS = nil
 }
 
 // recordFlow copies what the dial learned: the connected address, the
@@ -188,10 +247,11 @@ func (m *sipMetrics) recordFinal(resp *sipMessage) {
 	m.ReasonHeader = parseSIPReasonHeader(resp.Values("Reason"))
 }
 
-// recordEndpoint copies the transaction layer's counters.
+// recordEndpoint adds one attempt's transaction-layer counters; they sum
+// over every address a check tried.
 func (m *sipMetrics) recordEndpoint(e *sipEndpoint) {
-	m.Retransmissions = e.retransmissions.Load()
-	m.StrayMessages = e.stray.Load()
+	m.Retransmissions += e.retransmissions.Load()
+	m.StrayMessages += e.stray.Load()
 }
 
 // marshal finishes the envelope at the check's end. total is the check's

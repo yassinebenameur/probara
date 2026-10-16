@@ -11,9 +11,9 @@ import (
 // both unmarshal into it and call Validate, so a rule added here holds on
 // both sides of the queue.
 type SIPMonitorConfig struct {
-	Host           string `json:"host"`                      // SIP server hostname/IP
-	Port           int    `json:"port"`                      // Default 5060 (5061 for TLS)
-	Transport      string `json:"transport"`                 // "udp", "tcp", or "tls" (default: udp)
+	Host           string `json:"host"`                      // SIP server hostname/IP; the RFC 3263 domain under resolution rfc3263
+	Port           int    `json:"port"`                      // 0: 5060 (5061 for TLS), or from SRV under rfc3263
+	Transport      string `json:"transport"`                 // "udp", "tcp", or "tls"; "" is udp, or SRV-discovered under rfc3263
 	Method         string `json:"method,omitempty"`          // "options" (default) or "register"
 	Username       string `json:"username,omitempty"`        // AOR user + digest auth username
 	Password       string `json:"password,omitempty"`        // Digest auth secret (encrypted at rest)
@@ -24,6 +24,31 @@ type SIPMonitorConfig struct {
 	// TLSMinDaysValid opens a tls_expiry alert when the server certificate
 	// has fewer days left (alerter tls_expiry.go); the check itself passes.
 	TLSMinDaysValid *int `json:"tls_min_days_valid,omitempty"`
+	// Resolution picks how host becomes addresses: "" or "a" dials host's
+	// A/AAAA records at the configured or default port, exactly as before
+	// the field existed; "rfc3263" locates the server like a SIP client
+	// (RFC 3263): SRV records when no port is set (and no transport, every
+	// transport's), with failover between the targets. Opt-in, because the
+	// form always sent port and transport and an implicit SRV lookup would
+	// silently re-target existing monitors.
+	Resolution string `json:"resolution,omitempty"`
+	// Nameserver pins the DNS server for rfc3263 lookups (host[:port], the
+	// DNS monitor's grammar). Blank uses the worker's resolver.
+	Nameserver string `json:"nameserver,omitempty"`
+}
+
+// SIP address resolution modes.
+const (
+	SIPResolutionA       = "a"
+	SIPResolutionRFC3263 = "rfc3263"
+)
+
+// ResolutionMode is the effective resolution mode: "a" or "rfc3263".
+func (c SIPMonitorConfig) ResolutionMode() string {
+	if strings.EqualFold(strings.TrimSpace(c.Resolution), SIPResolutionRFC3263) {
+		return SIPResolutionRFC3263
+	}
+	return SIPResolutionA
 }
 
 // Validate checks the config. The worker calls it too, so it must accept a
@@ -42,6 +67,8 @@ func (c SIPMonitorConfig) Validate() error {
 		{"password", c.Password},
 		{"domain", c.Domain},
 		{"tls_server_name", c.TLSServerName},
+		{"resolution", c.Resolution},
+		{"nameserver", c.Nameserver},
 	} {
 		if strings.ContainsAny(f.value, "\r\n\x00") {
 			return fmt.Errorf("%s must not contain CR, LF or NUL characters", f.name)
@@ -64,6 +91,22 @@ func (c SIPMonitorConfig) Validate() error {
 	case "", "udp", "tcp", "tls":
 	default:
 		return fmt.Errorf("transport must be 'udp', 'tcp', or 'tls'")
+	}
+
+	switch strings.ToLower(c.Resolution) {
+	case "", SIPResolutionA, SIPResolutionRFC3263:
+	default:
+		return fmt.Errorf("resolution must be 'a' or 'rfc3263'")
+	}
+	if strings.TrimSpace(c.Nameserver) != "" {
+		// Only rfc3263 does its own lookups; "a" mode resolves like every
+		// other monitor type, through the worker's resolver.
+		if c.ResolutionMode() != SIPResolutionRFC3263 {
+			return fmt.Errorf("nameserver requires resolution rfc3263")
+		}
+		if err := ValidateNameserver(c.Nameserver); err != nil {
+			return err
+		}
 	}
 
 	switch strings.ToLower(c.Method) {

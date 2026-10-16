@@ -55,13 +55,27 @@ export function certificateExpiryLabel(tls: TLSCertInfo): string {
 export function sipFacts(m: SIPMetrics, minDaysValid?: number): SIPFact[] {
   const facts: SIPFact[] = [];
   if (m.server) facts.push({ key: 'server', label: 'Answered by', value: m.server });
-  if (m.target?.address) facts.push({ key: 'address', label: 'Address', value: m.target.address });
-  const transport = m.transport.toUpperCase();
-  facts.push({
-    key: 'transport',
-    label: 'Transport',
-    value: m.tls?.version ? `${transport} · ${m.tls.version}` : transport,
-  });
+  const address = sipAddressLabel(m);
+  if (address) facts.push({ key: 'address', label: 'Address', value: address });
+  const attempts = m.resolution?.attempts ?? [];
+  if (attempts.length > 1) {
+    // The failover path, so a dead or refusing server shows even when the
+    // check passed on the next one.
+    facts.push({
+      key: 'attempts',
+      label: 'Tried',
+      value: attempts.map((a) => `${a.address} ${a.outcome}`).join(' → '),
+      tone: 'note',
+    });
+  }
+  if (m.transport) {
+    const transport = m.transport.toUpperCase();
+    facts.push({
+      key: 'transport',
+      label: 'Transport',
+      value: m.tls?.version ? `${transport} · ${m.tls.version}` : transport,
+    });
+  }
   const expiry = m.tls ? certificateExpiryLabel(m.tls) : '';
   if (expiry) {
     const days = m.tls?.days_until_expiry ?? 0;
@@ -73,6 +87,7 @@ export function sipFacts(m: SIPMetrics, minDaysValid?: number): SIPFact[] {
   if (response) facts.push({ key: 'response', label: 'Response', value: `${m.method} ${response}` });
 
   const timing = [
+    m.timing.dns_ms !== undefined ? `DNS ${formatLatency(m.timing.dns_ms)}` : '',
     m.timing.connect_ms !== undefined ? `connect ${formatLatency(m.timing.connect_ms)}` : '',
     m.timing.tls_handshake_ms !== undefined ? `TLS ${formatLatency(m.timing.tls_handshake_ms)}` : '',
     m.timing.response_ms !== undefined ? `response ${formatLatency(m.timing.response_ms)}` : '',
@@ -98,4 +113,18 @@ export function sipFacts(m: SIPMetrics, minDaysValid?: number): SIPFact[] {
   if (m.warning) facts.push({ key: 'sip-warning', label: 'SIP warning', value: m.warning, tone: 'note' });
   if (m.call_id) facts.push({ key: 'call-id', label: 'Call-ID', value: m.call_id, copyable: true });
   return facts;
+}
+
+/**
+ * `203.0.113.7:5061 (sbc2.example.com via SRV, after failover)`: the address
+ * that decided the check, and how DNS led there when it was not the
+ * monitor's own host (an SRV target, a failover).
+ */
+export function sipAddressLabel(m: SIPMetrics): string {
+  const target = m.target;
+  if (!target?.address) return '';
+  const notes: string[] = [];
+  if (target.resolved_via === 'srv') notes.push(`${target.host} via SRV`);
+  if (target.failover) notes.push('after failover');
+  return notes.length > 0 ? `${target.address} (${notes.join(', ')})` : target.address;
 }

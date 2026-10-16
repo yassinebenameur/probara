@@ -127,6 +127,13 @@ test('monitorTarget mirrors the list and detail target', () => {
   assert.equal(monitorTarget({ type: 'tcp', config: { host: 'db', port: 5432 } as never }), 'db:5432');
   assert.equal(monitorTarget({ type: 'ping', config: { host: '10.0.0.1' } as never }), '10.0.0.1');
   assert.equal(monitorTarget({ type: 'push', config: {} as never }), null);
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'sbc.test', port: 5080 } as never }), 'sbc.test:5080');
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'sbc.test', transport: 'TLS' } as never }), 'sbc.test:5061');
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'rfc3263', port: 0 } as never }), 'x.test');
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'rfc3263', port: 5070 } as never }),
+    'x.test:5070'
+  );
 });
 
 test('shortFailureReason strips Go framing', () => {

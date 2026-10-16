@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { certificateExpiryLabel, latestSIPMetrics, sipFacts, sipResponseLabel } from './sip-metrics';
+import { certificateExpiryLabel, latestSIPMetrics, sipAddressLabel, sipFacts, sipResponseLabel } from './sip-metrics';
 import { formatDate } from './format';
 import type { CheckResult, SIPMetrics } from './types';
 
@@ -101,4 +101,41 @@ test('certificateExpiryLabel', () => {
   assert.equal(certificateExpiryLabel({}), '');
   assert.equal(certificateExpiryLabel({ days_until_expiry: 1 }), 'expires in 1 day');
   assert.equal(certificateExpiryLabel({ days_until_expiry: -3 }), 'expired 3 days ago');
+});
+
+test('an SRV failover shows the target, the failover and the path tried', () => {
+  const m: SIPMetrics = {
+    ...base,
+    transport: 'tls',
+    target: { host: 'sbc2.example.com', address: '203.0.113.7:5061', resolved_via: 'srv', failover: true },
+    resolution: {
+      mode: 'rfc3263',
+      srv: [
+        { target: 'sbc1.example.com', port: 5061, priority: 10, weight: 50 },
+        { target: 'sbc2.example.com', port: 5061, priority: 20, weight: 0 },
+      ],
+      attempts: [
+        { address: '203.0.113.6:5061', transport: 'tls', outcome: 'refused', ms: 3 },
+        { address: '203.0.113.7:5061', transport: 'tls', outcome: 'ok', ms: 40 },
+      ],
+    },
+    timing: { dns_ms: 4, connect_ms: 12, total_ms: 60 },
+  };
+  assert.equal(sipAddressLabel(m), '203.0.113.7:5061 (sbc2.example.com via SRV, after failover)');
+  const facts = sipFacts(m);
+  assert.equal(facts.find((f) => f.key === 'attempts')?.value, '203.0.113.6:5061 refused → 203.0.113.7:5061 ok');
+  assert.equal(facts.find((f) => f.key === 'timing')?.value, 'DNS 4 ms, connect 12 ms');
+});
+
+test('a single attempt lists no path, and an undecided transport is not shown', () => {
+  const m: SIPMetrics = {
+    ...base,
+    transport: undefined,
+    resolution: { mode: 'rfc3263' },
+    timing: { dns_ms: 20, total_ms: 25 },
+  };
+  const facts = sipFacts(m);
+  assert.equal(facts.find((f) => f.key === 'attempts'), undefined);
+  assert.equal(facts.find((f) => f.key === 'transport'), undefined);
+  assert.equal(sipAddressLabel(m), '');
 });

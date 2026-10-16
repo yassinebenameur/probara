@@ -62,7 +62,10 @@ type sipFlow struct {
 }
 
 // sipTLSServerName is the TLS identity of a SIP server: SNI, verification
-// name and the server_name recorded with the certificate.
+// name and the server_name recorded with the certificate. It is never an SRV
+// target: RFC 5922 §4 checks the certificate against the domain that was
+// resolved — the configured host — so a DNS answer cannot choose which
+// identity the server has to prove. tls_server_name overrides it.
 func sipTLSServerName(config *models.SIPMonitorConfig) string {
 	if name := strings.TrimSpace(config.TLSServerName); name != "" {
 		return name
@@ -70,10 +73,12 @@ func sipTLSServerName(config *models.SIPMonitorConfig) string {
 	return config.Host
 }
 
-// dialSIP opens a flow to host:port. The TLS identity is tls_server_name,
-// else the configured host.
-func (c *SIPChecker) dialSIP(ctx context.Context, transport, host string, port int, config *models.SIPMonitorConfig) (*sipFlow, error) {
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
+// dialSIP opens a flow to one resolved candidate. The address is an IP
+// literal, which dialGuard checks against the network policy before dialing.
+// The TLS identity is sipTLSServerName.
+func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig) (*sipFlow, error) {
+	addr := candidate.address()
+	transport := candidate.transport
 
 	timeout := 30 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {

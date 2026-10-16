@@ -552,7 +552,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`SIP_LOCALHOST_AS_HOST_GATEWAY`',
               '`false`',
-              'Rewrites a SIP monitor whose host is `localhost` or a loopback IP to dial `host.docker.internal`, so a containerized worker can reach a SIP server on the developer machine. Truthy values are `1`, `true`, `yes`, and `on`. The Compose worker and `make start-all-local` (local-process workers) both turn it on; leave it off in production.',
+              'Rewrites each SIP target host that is `localhost` or a loopback IP (the monitor host or, under `resolution: rfc3263`, an SRV target) to `host.docker.internal` before it is resolved, so a containerized worker can reach a SIP server on the developer machine. Truthy values are `1`, `true`, `yes`, and `on`. The Compose worker and `make start-all-local` (local-process workers) both turn it on; leave it off in production.',
             ],
           ],
         },

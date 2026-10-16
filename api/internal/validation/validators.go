@@ -353,22 +353,7 @@ func (v *DNSConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 		}
 	}
 
-	if ns := strings.TrimSpace(config.Nameserver); ns != "" {
-		nsHost := ns
-		if h, p, err := net.SplitHostPort(ns); err == nil {
-			nsHost = h
-			if port, err := strconv.Atoi(p); err != nil || port < 1 || port > 65535 {
-				return fmt.Errorf("nameserver port must be between 1 and 65535")
-			}
-		}
-		if ip := net.ParseIP(nsHost); ip == nil {
-			if !isValidHostname(nsHost) {
-				return fmt.Errorf("nameserver must be a valid IP address or hostname (host or host:port)")
-			}
-		}
-	}
-
-	return nil
+	return sharedmodels.ValidateNameserver(config.Nameserver)
 }
 
 // GRPCConfigValidator validates gRPC health monitor configuration

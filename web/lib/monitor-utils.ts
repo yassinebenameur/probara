@@ -275,6 +275,13 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>)
     if (monitor.type === 'tcp' && host) {
       return config.port ? `${host}:${config.port}` : host;
     }
+    if (monitor.type === 'sip' && host) {
+      // Under RFC 3263 without a port, SRV picks the servers: the target is
+      // the domain. Otherwise the port the worker dials (5061 over TLS).
+      if (config.resolution === 'rfc3263' && !config.port) return host;
+      const tls = typeof config.transport === 'string' && config.transport.toLowerCase() === 'tls';
+      return `${host}:${(config.port as number | undefined) || (tls ? 5061 : 5060)}`;
+    }
   }
   if (monitor.url) return monitor.url;
   return str('host');

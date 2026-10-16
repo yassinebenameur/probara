@@ -31,6 +31,8 @@ function formFrom(overrides: Partial<SipFormFields> = {}): SipFormFields {
     tls_server_name: 'sip.example.com',
     tls_min_days_valid: '14',
     expected_status: '200',
+    resolution: 'a',
+    nameserver: '',
     ...overrides,
   };
 }
@@ -94,4 +96,34 @@ test('a new monitor with no loaded config omits the password when auth is off', 
   const config = buildSipConfig(undefined, formFrom({ username: '', password: '', transport: 'udp', method: 'options' }));
   assert.equal('password' in config, false);
   assert.equal('username' in config, false);
+});
+
+test('locate-via-DNS saves rfc3263 with SRV port and transport left unset', () => {
+  const config = buildSipConfig(stored, formFrom({
+    host: 'example.com', port: 0, transport: 'auto', resolution: 'rfc3263', nameserver: ' 10.0.0.2:5353 ',
+  }));
+  assert.equal(config.resolution, 'rfc3263');
+  assert.equal(config.port, 0);
+  assert.equal(config.transport, '');
+  assert.equal(config.nameserver, '10.0.0.2:5353');
+  // Auto transport is not TLS, so the TLS-only fields go.
+  assert.equal(config.tls_min_days_valid, undefined);
+});
+
+test('turning locate-via-DNS off drops resolution and nameserver', () => {
+  const dns = { ...stored, resolution: 'rfc3263', nameserver: '10.0.0.2', port: 0 } as SIPMonitorConfig;
+  const config = buildSipConfig(dns, formFrom({ port: 5061 }));
+  assert.equal(config.resolution, undefined);
+  assert.equal(config.nameserver, undefined);
+  assert.equal(config.port, 5061);
+});
+
+test('an rfc3263 save round-trips', () => {
+  const dns = { host: 'example.com', port: 0, transport: '', resolution: 'rfc3263', nameserver: '10.0.0.2' } as SIPMonitorConfig;
+  const config = buildSipConfig(dns, formFrom({
+    host: 'example.com', port: 0, transport: 'auto', method: 'options', username: '', password: '', domain: '',
+    tls_skip_verify: false, tls_server_name: '', tls_min_days_valid: '', expected_status: '',
+    resolution: 'rfc3263', nameserver: '10.0.0.2',
+  }));
+  assert.deepEqual(config, dns);
 });

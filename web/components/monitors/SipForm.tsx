@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
-import { buildSipConfig } from '@/lib/sip-config';
+import { buildSipConfig, SipFormFields } from '@/lib/sip-config';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -33,18 +33,27 @@ export default function SipForm({
   const editSipConfig =
     monitor && monitor.type === 'sip' ? (monitor.config as SIPMonitorConfig) : undefined;
 
+  // RFC 3263 resolution ("Locate server via DNS") leaves port and transport
+  // to SRV when they are unset (0 and '').
+  const initialResolution: SipFormFields['resolution'] =
+    (editSipConfig?.resolution ?? initialSipConfig?.resolution) === 'rfc3263' ? 'rfc3263' : 'a';
+  const initialRfc3263 = initialResolution === 'rfc3263';
+
   // The API accepts transport in any case and port 0 (5060, or 5061 over
   // TLS); normalize both so the select matches and a save keeps the port the
-  // worker actually dials.
-  const initialTransport = (
-    (editSipConfig?.transport || initialSipConfig?.transport || 'udp').toLowerCase()
-  ) as 'udp' | 'tcp' | 'tls';
+  // worker actually dials. Under rfc3263 an empty transport is Auto and port
+  // 0 stays empty: SRV decides both.
+  const storedTransport = (editSipConfig?.transport || initialSipConfig?.transport || '').toLowerCase();
+  const initialTransport = (storedTransport || (initialRfc3263 ? 'auto' : 'udp')) as SipFormFields['transport'];
 
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
     host: editSipConfig?.host || initialSipConfig?.host || '',
-    port: editSipConfig?.port || initialSipConfig?.port || (initialTransport === 'tls' ? 5061 : 5060),
+    port:
+      editSipConfig?.port || initialSipConfig?.port || (initialRfc3263 ? 0 : initialTransport === 'tls' ? 5061 : 5060),
     transport: initialTransport,
+    resolution: initialResolution,
+    nameserver: editSipConfig?.nameserver || initialSipConfig?.nameserver || '',
     method: (editSipConfig?.method || initialSipConfig?.method || 'options') as 'options' | 'register',
     username: editSipConfig?.username || initialSipConfig?.username || '',
     password: editSipConfig?.password || initialSipConfig?.password || '',
@@ -72,6 +81,25 @@ export default function SipForm({
   useClearErrorsOnEdit(formData, setErrors);
   useFollowEnabled(monitor?.enabled, setFormData);
   const formRef = useRef<HTMLFormElement>(null);
+  const rfc3263 = formData.resolution === 'rfc3263';
+  const defaultPort = formData.transport === 'tls' ? 5061 : 5060;
+
+  const setLocateViaDNS = (on: boolean) =>
+    setFormData((prev) => {
+      const prevDefault = prev.transport === 'tls' ? 5061 : 5060;
+      if (on) {
+        // A port pins A/AAAA resolution, so the conventional default the
+        // form pre-filled is cleared and SRV picks the port.
+        return { ...prev, resolution: 'rfc3263', port: prev.port === prevDefault ? 0 : prev.port };
+      }
+      const transport = prev.transport === 'auto' ? 'udp' : prev.transport;
+      return {
+        ...prev,
+        resolution: 'a',
+        transport,
+        port: prev.port || (transport === 'tls' ? 5061 : 5060),
+      };
+    });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,7 +109,9 @@ export default function SipForm({
     const newErrors: Record<string, string> = {};
     if (!formData.name.trim()) newErrors.name = 'Name is required';
     if (!formData.host.trim()) newErrors.host = 'Host is required';
-    if (formData.port < 1 || formData.port > 65535) newErrors.port = 'Port must be between 1 and 65535';
+    if (rfc3263 ? formData.port < 0 || formData.port > 65535 : formData.port < 1 || formData.port > 65535) {
+      newErrors.port = 'Port must be between 1 and 65535';
+    }
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
@@ -90,6 +120,9 @@ export default function SipForm({
       if (!Number.isInteger(days) || days < 0) {
         newErrors.tls_min_days_valid = 'Must be a whole number of days, 0 or more';
       }
+    }
+    if (rfc3263 && /\s/.test(formData.nameserver.trim())) {
+      newErrors.nameserver = 'Enter a host or host:port';
     }
     if ((formData.username.trim() === '') !== (formData.password === '')) {
       newErrors.username = 'Username and password must be provided together';
@@ -152,28 +185,44 @@ export default function SipForm({
                 type="text"
                 value={formData.host}
                 onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                placeholder="sip.example.com"
+                placeholder={rfc3263 ? 'example.com' : 'sip.example.com'}
                 className="input font-mono"
               />
-              <FieldHint>Hostname or IP</FieldHint>
+              <FieldHint>
+                {rfc3263 ? "SIP domain whose SRV records name the servers, or a hostname or IP" : 'Hostname or IP'}
+              </FieldHint>
             </>
           )}
         </FormField>
 
+        <ToggleRow
+          title="Locate server via DNS (SRV)"
+          description="RFC 3263: find the servers from the domain's SRV records and fail over between them"
+          checked={rfc3263}
+          onChange={setLocateViaDNS}
+        />
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Port" required error={errors.port}>
+          <FormField label="Port" required={!rfc3263} error={errors.port}>
             {(control) => (
               <>
                 <input
                   {...control}
                   type="number"
-                  value={formData.port}
-                  onChange={(e) => setFormData({ ...formData, port: parseInt(e.target.value) || 5060 })}
+                  value={rfc3263 && formData.port === 0 ? '' : formData.port}
+                  onChange={(e) =>
+                    setFormData({ ...formData, port: parseInt(e.target.value) || (rfc3263 ? 0 : defaultPort) })
+                  }
+                  placeholder={rfc3263 ? 'from SRV' : undefined}
                   min={1}
                   max={65535}
                   className="input tabular-nums"
                 />
-                <FieldHint>Default: 5060 (5061 for TLS)</FieldHint>
+                <FieldHint>
+                  {rfc3263
+                    ? 'Leave empty to use SRV; a port skips SRV and dials the host directly'
+                    : 'Default: 5060 (5061 for TLS)'}
+                </FieldHint>
               </>
             )}
           </FormField>
@@ -181,12 +230,15 @@ export default function SipForm({
             <select
               value={formData.transport}
               onChange={(e) => {
-                const transport = e.target.value as 'udp' | 'tcp' | 'tls';
+                const transport = e.target.value as SipFormFields['transport'];
                 setFormData({
                   ...formData,
                   transport,
-                  // Track the conventional default port unless the user set a custom one.
-                  port: transport === 'tls' && formData.port === 5060
+                  // Track the conventional default port unless the user set a
+                  // custom one. Under SRV an empty port stays empty.
+                  port: rfc3263
+                    ? formData.port
+                    : transport === 'tls' && formData.port === 5060
                     ? 5061
                     : transport !== 'tls' && formData.port === 5061
                     ? 5060
@@ -195,12 +247,31 @@ export default function SipForm({
               }}
               className="input"
             >
+              {rfc3263 && <option value="auto">Auto (from SRV)</option>}
               <option value="udp">UDP</option>
               <option value="tcp">TCP</option>
               <option value="tls">TLS</option>
             </select>
           </FormField>
         </div>
+
+        {rfc3263 && (
+          <FormField label="DNS server" error={errors.nameserver}>
+            {(control) => (
+              <>
+                <input
+                  {...control}
+                  type="text"
+                  value={formData.nameserver}
+                  onChange={(e) => setFormData({ ...formData, nameserver: e.target.value })}
+                  placeholder="10.0.0.2 or resolver.internal:5353"
+                  className="input font-mono"
+                />
+                <FieldHint>Optional. Defaults to the worker&apos;s resolver.</FieldHint>
+              </>
+            )}
+          </FormField>
+        )}
 
         {formData.transport === 'tls' && (
           <>
@@ -402,9 +473,11 @@ export default function SipForm({
                 ? [
                     everyLabel(formData.interval_seconds),
                     <PlanTarget key="t">
-                      SIP {formData.method.toUpperCase()} {formData.host.trim()}:{formData.port}
+                      SIP {formData.method.toUpperCase()} {formData.host.trim()}
+                      {formData.port ? `:${formData.port}` : ''}
                     </PlanTarget>,
-                    `over ${formData.transport.toUpperCase()}`,
+                    ...(rfc3263 && !formData.port ? ['located via SRV'] : []),
+                    formData.transport === 'auto' ? 'transport from SRV' : `over ${formData.transport.toUpperCase()}`,
                     downAfterLabel(formData.consecutive_failures_threshold),
                   ]
                 : []

@@ -3,8 +3,12 @@ import { SIPMonitorConfig } from './types';
 /** The SIP config fields SipForm edits, in their form-state shapes. */
 export interface SipFormFields {
   host: string;
+  /** 0 means unset: from SRV under rfc3263 (the form requires a port otherwise). */
   port: number;
-  transport: 'udp' | 'tcp' | 'tls';
+  /** 'auto' leaves the transport to SRV; offered only under rfc3263. */
+  transport: 'udp' | 'tcp' | 'tls' | 'auto';
+  resolution: 'a' | 'rfc3263';
+  nameserver: string;
   method: 'options' | 'register';
   username: string;
   password: string;
@@ -29,6 +33,8 @@ const FORM_OWNED_KEYS = [
   'tls_server_name',
   'tls_min_days_valid',
   'expected_status',
+  'resolution',
+  'nameserver',
 ] as const;
 
 /**
@@ -49,12 +55,20 @@ export function buildSipConfig(
   const rest: Record<string, unknown> = { ...(loaded ?? {}) };
   for (const key of FORM_OWNED_KEYS) delete rest[key];
 
+  // "Locate via DNS" is RFC 3263 resolution: port and transport may be left
+  // to SRV (0 and ''). Without it the worker dials the host's A/AAAA
+  // records, so an Auto transport cannot reach the API from here.
+  const rfc3263 = form.resolution === 'rfc3263';
   const config = {
     ...rest,
     host: form.host.trim(),
     port: form.port,
-    transport: form.transport,
+    transport: form.transport === 'auto' ? (rfc3263 ? '' : 'udp') : form.transport,
   } as SIPMonitorConfig;
+  if (rfc3263) {
+    config.resolution = 'rfc3263';
+    if (form.nameserver.trim()) config.nameserver = form.nameserver.trim();
+  }
 
   if (form.method !== 'options') config.method = form.method;
   if (form.username.trim()) {

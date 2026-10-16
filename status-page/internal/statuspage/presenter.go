@@ -86,8 +86,14 @@ func extractSIPTarget(configJSON []byte) string {
 		return ""
 	}
 
-	// Same defaults the worker dials: 5061 over TLS, 5060 otherwise.
+	// Under RFC 3263 without a port, SRV picks the servers and their
+	// ports: the target is the domain itself.
 	port, _ := config["port"].(float64)
+	if resolution, _ := config["resolution"].(string); port == 0 && strings.EqualFold(resolution, "rfc3263") {
+		return host
+	}
+
+	// Same defaults the worker dials: 5061 over TLS, 5060 otherwise.
 	if port == 0 {
 		port = 5060
 		if transport, _ := config["transport"].(string); strings.EqualFold(transport, "tls") {
