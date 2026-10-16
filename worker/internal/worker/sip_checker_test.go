@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"strconv"
@@ -184,12 +185,7 @@ func TestSIPChecker_PrivateIPGuard(t *testing.T) {
 	defer cancel()
 
 	result := NewSIPChecker(true, nil).Check(ctx, raw, 5)
-	if result.Status != "error" {
-		t.Fatalf("Status = %q, want error for loopback target under SSRF guard", result.Status)
-	}
-	if result.ErrorMessage == nil || !strings.Contains(*result.ErrorMessage, "ssrf_blocked") {
-		t.Fatalf("ErrorMessage = %v, want ssrf_blocked", result.ErrorMessage)
-	}
+	requireSIPError(t, result, "ssrf_blocked")
 }
 
 func TestSIPChecker_OptionsUDP(t *testing.T) {
@@ -230,8 +226,11 @@ func TestSIPChecker_OptionsTCP(t *testing.T) {
 	}
 }
 
-func TestSIPChecker_OptionsTLS(t *testing.T) {
-	cert := newSelfSignedTestCert(t)
+// startFakeTLSSIPServer serves 200 OK to every request over TLS with a
+// self-signed certificate for 127.0.0.1 that expires at notAfter.
+func startFakeTLSSIPServer(t *testing.T, notAfter time.Time) (string, int) {
+	t.Helper()
+	cert := newSelfSignedTestCert(t, notAfter)
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	if err != nil {
 		t.Fatalf("tls.Listen() error = %v", err)
@@ -239,7 +238,32 @@ func TestSIPChecker_OptionsTLS(t *testing.T) {
 	startFakeStreamSIPServer(t, listener, func(request string) []string {
 		return []string{sipResponseMsg(200, "OK")}
 	})
-	host, port := splitTestHostPort(t, listener.Addr().String())
+	return splitTestHostPort(t, listener.Addr().String())
+}
+
+// requireSIPError asserts an error result whose message starts with the
+// given category prefix and contains every fragment.
+func requireSIPError(t *testing.T, result CheckResult, prefix string, fragments ...string) {
+	t.Helper()
+	if result.Status != "error" {
+		t.Fatalf("Status = %q (%v), want error", result.Status, result.ErrorMessage)
+	}
+	if result.ErrorMessage == nil {
+		t.Fatalf("ErrorMessage = nil, want %q prefix", prefix)
+	}
+	msg := *result.ErrorMessage
+	if !strings.HasPrefix(msg, prefix+": ") {
+		t.Fatalf("ErrorMessage = %q, want %q prefix", msg, prefix+": ")
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(msg, fragment) {
+			t.Fatalf("ErrorMessage = %q, want it to contain %q", msg, fragment)
+		}
+	}
+}
+
+func TestSIPChecker_OptionsTLS(t *testing.T) {
+	host, port := startFakeTLSSIPServer(t, time.Now().Add(time.Hour))
 
 	result := runSIPCheck(t, map[string]interface{}{
 		"host": host, "port": port, "transport": "tls", "tls_skip_verify": true,
@@ -248,10 +272,76 @@ func TestSIPChecker_OptionsTLS(t *testing.T) {
 		t.Fatalf("Status = %q (%v), want success", result.Status, result.ErrorMessage)
 	}
 
-	// Without tls_skip_verify the self-signed certificate must be rejected.
+	// Without tls_skip_verify the self-signed certificate must be rejected,
+	// and reported as a TLS failure rather than a connect error: the TCP
+	// connection succeeded.
 	strict := runSIPCheck(t, map[string]interface{}{"host": host, "port": port, "transport": "tls"})
-	if strict.Status != "error" {
-		t.Fatalf("strict Status = %q, want error", strict.Status)
+	requireSIPError(t, strict, "tls", "tls handshake: ", "certificate signed by unknown authority")
+	if strings.Contains(*strict.ErrorMessage, "failed to connect") {
+		t.Fatalf("ErrorMessage = %q, a handshake failure must not read as a connect failure", *strict.ErrorMessage)
+	}
+}
+
+func TestSIPChecker_TLSExpiredCertificate(t *testing.T) {
+	host, port := startFakeTLSSIPServer(t, time.Now().Add(-time.Hour))
+
+	// The verifier may report the untrusted self-signed chain before the
+	// expiry (the stdlib and platform verifiers differ), so only the
+	// category is pinned here; TestClassifySIPError covers the typed
+	// expired-certificate error itself.
+	result := runSIPCheck(t, map[string]interface{}{"host": host, "port": port, "transport": "tls"})
+	requireSIPError(t, result, "tls", "tls handshake: ", "certificate")
+
+	// tls_skip_verify is an explicit opt-out: an expired lab certificate
+	// still passes.
+	skipped := runSIPCheck(t, map[string]interface{}{
+		"host": host, "port": port, "transport": "tls", "tls_skip_verify": true,
+	})
+	if skipped.Status != "success" {
+		t.Fatalf("skip-verify Status = %q (%v), want success", skipped.Status, skipped.ErrorMessage)
+	}
+}
+
+// A plaintext SIP server on a TLS monitor fails the handshake with a record
+// error, not a certificate error; it is still a TLS failure.
+func TestSIPChecker_TLSAgainstPlaintextServer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				_, _ = conn.Write([]byte(sipResponseMsg(400, "Bad Request")))
+				_, _ = io.Copy(io.Discard, conn)
+			}(conn)
+		}
+	}()
+	host, port := splitTestHostPort(t, listener.Addr().String())
+
+	result := runSIPCheck(t, map[string]interface{}{"host": host, "port": port, "transport": "tls"})
+	requireSIPError(t, result, "tls", "tls handshake: ")
+}
+
+func TestSIPChecker_ConnectionRefused(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	host, port := splitTestHostPort(t, listener.Addr().String())
+	listener.Close()
+
+	for _, transport := range []string{"tcp", "tls"} {
+		t.Run(transport, func(t *testing.T) {
+			result := runSIPCheck(t, map[string]interface{}{"host": host, "port": port, "transport": transport})
+			requireSIPError(t, result, "refused", "failed to connect: ", "connection refused")
+		})
 	}
 }
 
@@ -346,17 +436,23 @@ func TestSIPChecker_RegisterAuthFailures(t *testing.T) {
 	})
 }
 
-func newSelfSignedTestCert(t *testing.T) tls.Certificate {
+func newSelfSignedTestCert(t *testing.T, notAfter time.Time) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey() error = %v", err)
 	}
+	// Valid from an hour ago (or an hour before notAfter, if that is
+	// earlier), so a past notAfter yields an expired certificate.
+	notBefore := time.Now().Add(-time.Hour)
+	if earlier := notAfter.Add(-time.Hour); earlier.Before(notBefore) {
+		notBefore = earlier
+	}
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "127.0.0.1"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)

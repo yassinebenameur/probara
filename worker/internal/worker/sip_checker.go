@@ -322,15 +322,18 @@ func (c *SIPChecker) dialSIP(ctx context.Context, transport, host string, port i
 			}
 			if err != nil {
 				rawConn.Close()
-			} else {
-				conn = tlsConn
+				// The TCP connection is up: this is a TLS failure (bad,
+				// expired or untrusted certificate, protocol mismatch),
+				// reported as such rather than as a connect error.
+				return nil, &sipDialError{handshake: true, err: err}
 			}
+			conn = tlsConn
 		}
 	default: // udp
 		conn, err = guard.DialContext(ctx, "udp", addr)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		return nil, &sipDialError{err: err}
 	}
 	if err := conn.SetDeadline(deadline); err != nil {
 		conn.Close()
@@ -472,22 +475,6 @@ func sipContentLength(resp *sipResponse) int {
 		return 0
 	}
 	return length
-}
-
-func classifySIPError(err error) string {
-	errStr := err.Error()
-	switch {
-	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline"):
-		return "timeout"
-	case strings.Contains(errStr, "no such host") || strings.Contains(errStr, "DNS"):
-		return "dns"
-	case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "connect"):
-		return "connect"
-	case strings.Contains(errStr, "certificate") || strings.Contains(errStr, "tls"):
-		return "tls"
-	default:
-		return "unknown"
-	}
 }
 
 func resolveSIPTargetHost(host string) string {
