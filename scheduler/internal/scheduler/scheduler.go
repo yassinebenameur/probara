@@ -39,10 +39,16 @@ const (
 // nextCheckDelay returns how long after now the monitor should run again.
 // Only 'suspect' (temporal, mid-confirmation) gets the fast recheck;
 // 'degraded' (spatial: some locations down, below quorum) can persist
-// indefinitely and runs at the normal interval.
-func nextCheckDelay(currentState string, intervalSeconds int) time.Duration {
-	interval := time.Duration(intervalSeconds) * time.Second
-	if currentState == "suspect" && suspectRecheckInterval < interval {
+// indefinitely and runs at the normal interval. Side-effecting checks (SIP
+// INVITE test calls) never get the fast recheck (S-A9): their interval floor
+// (models.SIPCallMinIntervalSeconds) is the call-rate limit, and a 20 s
+// recheck would also overlap a call that can run 24 s (timeout plus teardown
+// reserve). IsSIPCallConfig reads only non-secret fields, so the encrypted
+// config answers the same.
+func nextCheckDelay(m Monitor) time.Duration {
+	interval := time.Duration(m.IntervalSeconds) * time.Second
+	if m.CurrentState == "suspect" && suspectRecheckInterval < interval &&
+		!models.IsSIPCallConfig(m.Type, m.Config) {
 		return suspectRecheckInterval
 	}
 	return interval
@@ -877,7 +883,7 @@ func (s *Scheduler) scheduleBatch(ctx context.Context) {
 		}
 
 		// Calculate next run time
-		nextRunAt := time.Now().Add(nextCheckDelay(monitor.CurrentState, monitor.IntervalSeconds))
+		nextRunAt := time.Now().Add(nextCheckDelay(monitor))
 
 		// Update monitor's next_run_at within the transaction
 		if err := s.updateMonitorNextRunAt(ctx, tx, monitor.ID, nextRunAt); err != nil {

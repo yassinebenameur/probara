@@ -140,7 +140,7 @@ flowchart LR
 | S-A6 | Effective quorum = `clamp(location_quorum, 1, Selected)` when `Selected > 0`. | ✅ `TestAggregateLocations`, `TestSpecProperty_AggregateInvariants` |
 | S-A7 | A single-location monitor behaves identically to a location-less one. | ✅ `TestSpecScenario_SingleLocationParity` |
 | S-A8 | `degraded` is monitor-level only; per-location state is `unknown/up/suspect/down` (DB check, migration 000064). | ✅ schema constraint |
-| S-A9 | Monitor-level `consecutive_failures` = max over per-location values (drives display and the suspect fast-recheck). | ✅ `quorum.go`; test `TestQuorumDegradedThenDownThenRecovery` |
+| S-A9 | Monitor-level `consecutive_failures` = max over per-location values (drives display and the suspect fast-recheck). The fast recheck skips side-effecting monitors (SIP INVITE test calls): they keep their interval while suspect, since the interval floor is their call-rate limit. | ✅ `quorum.go`; test `TestQuorumDegradedThenDownThenRecovery`; fast-recheck exemption `nextCheckDelay` (`scheduler.go`), test `TestNextCheckDelay` |
 | S-A10 | Only locations with **fresh** evidence (S-F1) contribute to counts. Stale locations are excluded exactly like never-reported ones; a monitor whose contributing set becomes empty is `unknown` (S-A5). | ✅ `monitorstate.LoadFreshLocationCounts` is the single aggregation input, shared by results ingest (`quorum.go`) and the watchdog's re-aggregation pass (stale locations produce no new results, so the watchdog re-derives). Test `TestWatchdogReaggregatesStaleLocations` |
 
 ## S-F — Freshness and absence
