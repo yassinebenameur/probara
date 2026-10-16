@@ -134,6 +134,15 @@ test('monitorTarget mirrors the list and detail target', () => {
     monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'rfc3263', port: 5070 } as never }),
     'x.test:5070'
   );
+  // An IP host skips SRV: the worker dials it at the default port.
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: '192.0.2.10', resolution: 'rfc3263', port: 0 } as never }),
+    '192.0.2.10:5060'
+  );
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: '2001:db8::1', resolution: 'rfc3263', transport: 'tls' } as never }),
+    '2001:db8::1:5061'
+  );
 });
 
 test('shortFailureReason strips Go framing', () => {

@@ -277,14 +277,23 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>)
     }
     if (monitor.type === 'sip' && host) {
       // Under RFC 3263 without a port, SRV picks the servers: the target is
-      // the domain. Otherwise the port the worker dials (5061 over TLS).
-      if (config.resolution === 'rfc3263' && !config.port) return host;
+      // the domain. An IP host skips SRV, so it falls through to the port
+      // the worker dials (5061 over TLS), like every other config.
+      if (config.resolution === 'rfc3263' && !config.port && !isIPLiteral(host)) return host;
       const tls = typeof config.transport === 'string' && config.transport.toLowerCase() === 'tls';
       return `${host}:${(config.port as number | undefined) || (tls ? 5061 : 5060)}`;
     }
   }
   if (monitor.url) return monitor.url;
   return str('host');
+}
+
+// isIPLiteral reports an IPv4 or IPv6 address (bracketed or not). Monitor
+// hosts are validated as an IP or a hostname, and no hostname is a dotted
+// quad of digits or contains a colon.
+function isIPLiteral(host: string): boolean {
+  const h = host.trim().replace(/^\[|\]$/g, '');
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':');
 }
 
 const HTTP_METHOD_PREFIX = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|Get|Post|Put|Patch|Delete|Head|Options) "[^"]*":\s*/;

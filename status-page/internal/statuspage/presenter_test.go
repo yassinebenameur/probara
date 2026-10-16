@@ -31,6 +31,8 @@ func TestMonitorPresenter_ConfigureExtractsMonitorURLs(t *testing.T) {
 		{name: "sip tls explicit port", monitorType: "sip", configJSON: []byte(`{"host":"sip.example.com","transport":"tls","port":5071}`), wantURL: "sip.example.com:5071"},
 		{name: "sip tcp default port", monitorType: "sip", configJSON: []byte(`{"host":"sip.example.com","transport":"tcp"}`), wantURL: "sip.example.com:5060"},
 		{name: "sip rfc3263 without port shows the domain", monitorType: "sip", configJSON: []byte(`{"host":"example.com","resolution":"rfc3263","port":0,"transport":""}`), wantURL: "example.com"},
+		{name: "sip rfc3263 ip host shows the dialed default port", monitorType: "sip", configJSON: []byte(`{"host":"192.0.2.10","resolution":"rfc3263","port":0}`), wantURL: "192.0.2.10:5060"},
+		{name: "sip rfc3263 ip host over tls", monitorType: "sip", configJSON: []byte(`{"host":"192.0.2.10","resolution":"rfc3263","transport":"tls"}`), wantURL: "192.0.2.10:5061"},
 		{name: "sip rfc3263 with port", monitorType: "sip", configJSON: []byte(`{"host":"example.com","resolution":"rfc3263","port":5070}`), wantURL: "example.com:5070"},
 		{name: "sip resolution a keeps the default port", monitorType: "sip", configJSON: []byte(`{"host":"sip.example.com","resolution":"a"}`), wantURL: "sip.example.com:5060"},
 		{name: "tcp", monitorType: "tcp", configJSON: []byte(`{"host":"db.example.com","port":5432}`), wantURL: "db.example.com:5432"},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/google/uuid"
@@ -87,9 +88,11 @@ func extractSIPTarget(configJSON []byte) string {
 	}
 
 	// Under RFC 3263 without a port, SRV picks the servers and their
-	// ports: the target is the domain itself.
+	// ports: the target is the domain itself. An IP host skips SRV, so it
+	// falls through to the default port the worker dials.
 	port, _ := config["port"].(float64)
-	if resolution, _ := config["resolution"].(string); port == 0 && strings.EqualFold(resolution, "rfc3263") {
+	isIP := net.ParseIP(strings.Trim(strings.TrimSpace(host), "[]")) != nil
+	if resolution, _ := config["resolution"].(string); port == 0 && !isIP && strings.EqualFold(resolution, "rfc3263") {
 		return host
 	}
 

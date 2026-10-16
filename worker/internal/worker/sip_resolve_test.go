@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,7 +21,9 @@ import (
 )
 
 // fakeSIPResolver answers SRV and A/AAAA from maps and records every query.
-// A name missing from a map is NXDOMAIN; one in errs fails with that error.
+// A name missing from a map is NXDOMAIN; one in errs fails with that error,
+// alongside its srv records when it has some (as LookupSRV does after
+// filtering out invalid targets).
 type fakeSIPResolver struct {
 	srv  map[string][]*net.SRV // "_sip._udp.example.com"
 	ips  map[string][]string   // host → addresses
@@ -46,7 +49,7 @@ func (f *fakeSIPResolver) LookupSRV(_ context.Context, service, proto, name stri
 	q := fmt.Sprintf("_%s._%s.%s", service, proto, name)
 	f.record("SRV " + q)
 	if err := f.errs[q]; err != nil {
-		return "", nil, err
+		return "", f.srv[q], err
 	}
 	records, ok := f.srv[q]
 	if !ok {
@@ -240,6 +243,21 @@ func TestResolveSIPTargets_Failures(t *testing.T) {
 		}
 	})
 
+	t.Run("records returned alongside an error are still used", func(t *testing.T) {
+		// LookupSRV filters out records with invalid target names and
+		// returns the rest with an error.
+		r := &fakeSIPResolver{
+			srv:  map[string][]*net.SRV{"_sip._udp.example.com": {srvRecord("sbc1.example.com", 5070, 10, 0)}},
+			errs: map[string]error{"_sip._udp.example.com": &net.DNSError{Err: "SRV header name is invalid", Name: "example.com"}},
+			ips:  map[string][]string{"sbc1.example.com": {"192.0.2.11"}},
+		}
+		candidates, _, err := resolveSIPTargets(context.Background(), rfc("example.com"), r)
+		if err != nil {
+			t.Fatalf("resolveSIPTargets() error = %v, want the remaining record used", err)
+		}
+		requireStrings(t, "candidates", candidateAddrs(candidates), []string{"srv sbc1.example.com 192.0.2.11:5070/udp"})
+	})
+
 	t.Run("a lone '.' target means the service is not offered", func(t *testing.T) {
 		r := &fakeSIPResolver{srv: map[string][]*net.SRV{"_sip._udp.example.com": {{Target: ".", Port: 0}}}}
 		_, _, err := resolveSIPTargets(context.Background(), rfc("example.com"), r)
@@ -351,6 +369,8 @@ func TestSIPFailoverTarget(t *testing.T) {
 	refused := &sipDialError{err: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}
 	handshake := &sipDialError{handshake: true, err: errors.New("remote error: tls: handshake failure")}
 	noResponse := &sipNoResponseError{method: "OPTIONS"}
+	connectTimeout := &sipDialError{err: &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}}
+	handshakeTimeout := &sipDialError{handshake: true, err: os.ErrDeadlineExceeded}
 	blocked := &sipDialError{err: fmt.Errorf("%w: ip 10.0.0.1 not allowed", netguard.ErrBlocked)}
 	resp := func(code int) *sipMessage { return &sipMessage{StatusCode: code} }
 
@@ -368,6 +388,9 @@ func TestSIPFailoverTarget(t *testing.T) {
 		{"tls at the last host stops", "rfc3263", sipAttemptResult{err: handshake}, 2, -1},
 		{"no response moves on under rfc3263", "rfc3263", sipAttemptResult{err: noResponse}, 0, 1},
 		{"no response stops under a", "a", sipAttemptResult{err: noResponse}, 0, -1},
+		{"a connect timeout moves on under a", "a", sipAttemptResult{err: connectTimeout}, 0, 1},
+		{"a handshake timeout stops under a", "a", sipAttemptResult{err: handshakeTimeout}, 0, -1},
+		{"a handshake timeout moves on under rfc3263", "rfc3263", sipAttemptResult{err: handshakeTimeout}, 0, 1},
 		{"503 moves on under rfc3263", "rfc3263", sipAttemptResult{resp: resp(503)}, 0, 1},
 		{"503 stops under a", "a", sipAttemptResult{resp: resp(503)}, 0, -1},
 		{"any other final stops", "rfc3263", sipAttemptResult{resp: resp(404)}, 0, -1},
@@ -728,6 +751,97 @@ func TestSIPChecker_AModeUnchanged(t *testing.T) {
 	if request := <-seen; !strings.HasPrefix(request, want) {
 		t.Errorf("request = %q, want %q", request, want)
 	}
+}
+
+// blackholeDial stands in for an address that drops SYNs: the dial to
+// addr hangs until its context ends, then fails as net.Dialer's does. Every
+// other address is dialed through dialGuard. The deadline it saw is sent on
+// deadlines.
+func blackholeDial(addr string, deadlines chan<- time.Duration) func(context.Context, *dialGuard, string, string) (net.Conn, error) {
+	return func(ctx context.Context, guard *dialGuard, network, address string) (net.Conn, error) {
+		if address != addr {
+			return guard.DialContext(ctx, network, address)
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			deadlines <- time.Until(deadline)
+		}
+		<-ctx.Done()
+		return nil, &net.OpError{Op: "dial", Net: network, Err: os.ErrDeadlineExceeded}
+	}
+}
+
+// Under "a" a hostname's address that never completes a TCP connect gets
+// its share of the budget (what is left over the addresses left, at least
+// 2 s), as net.Dialer gave it when the hostname was dialed directly, then the
+// next address is tried: one SBC down behind a SYN-dropping firewall does not
+// take the monitor down.
+func TestSIPChecker_AModeConnectFailover(t *testing.T) {
+	t.Setenv("SIP_LOCALHOST_AS_HOST_GATEWAY", "")
+	for _, transport := range []string{"tcp", "tls"} {
+		t.Run(transport, func(t *testing.T) {
+			var port int
+			if transport == "tcp" {
+				port = startOKTCPSIPServer(t, nil)
+			} else {
+				listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{newSelfSignedTestCert(t, time.Now().Add(30*24*time.Hour))}})
+				if err != nil {
+					t.Fatalf("tls.Listen() error = %v", err)
+				}
+				startFakeStreamSIPServer(t, listener, func(request string) []string {
+					return []string{sipReply(request, 200, "OK")}
+				})
+				_, port = splitTestHostPort(t, listener.Addr().String())
+			}
+			deadlines := make(chan time.Duration, 1)
+			checker := &SIPChecker{
+				resolver: &fakeSIPResolver{ips: map[string][]string{"sip.example.com": {"192.0.2.1", "127.0.0.1"}}},
+				testDial: blackholeDial(fmt.Sprintf("192.0.2.1:%d", port), deadlines),
+			}
+			start := time.Now()
+			result := runSIPCheckWith(t, checker, map[string]interface{}{
+				"host": "sip.example.com", "port": port, "transport": transport, "tls_skip_verify": true,
+			}, 6)
+			if result.Status != "success" {
+				t.Fatalf("Status = %q (%v), want success via the second address", result.Status, result.ErrorMessage)
+			}
+			if got := <-deadlines; got < 2500*time.Millisecond || got > 3*time.Second {
+				t.Errorf("connect budget = %s, want half the 6s check", got)
+			}
+			if elapsed := time.Since(start); elapsed > 4500*time.Millisecond {
+				t.Errorf("check took %s, want the black hole given up on after its share", elapsed)
+			}
+			m, _ := decodeSIPMetrics(t, result)
+			requireAttemptOutcomes(t, m, "timeout", "ok")
+			if !m.Target.Failover || m.Target.Address != fmt.Sprintf("127.0.0.1:%d", port) {
+				t.Errorf("target = %+v, want failover to 127.0.0.1:%d", m.Target, port)
+			}
+		})
+	}
+
+	// The last address keeps the whole budget, and UDP is never split: its
+	// connect sends nothing, so there is nothing to time out.
+	t.Run("budget", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tcp := []sipCandidate{{transport: "tcp"}, {transport: "tcp"}, {transport: "tcp"}}
+		if got := sipConnectBudget(ctx, "a", tcp, 0); got < 3*time.Second || got > 3400*time.Millisecond {
+			t.Errorf("first of three = %s, want a third of 10s", got)
+		}
+		if got := sipConnectBudget(ctx, "a", tcp, 2); got != 0 {
+			t.Errorf("last = %s, want 0 (whole budget)", got)
+		}
+		if got := sipConnectBudget(ctx, "a", []sipCandidate{{transport: "udp"}, {transport: "udp"}}, 0); got != 0 {
+			t.Errorf("udp = %s, want 0", got)
+		}
+		if got := sipConnectBudget(ctx, "rfc3263", tcp, 0); got != 0 {
+			t.Errorf("rfc3263 = %s, want 0 (its attempt slice bounds it)", got)
+		}
+		short, cancelShort := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancelShort()
+		if got := sipConnectBudget(short, "a", tcp, 0); got < 1900*time.Millisecond || got > 2*time.Second {
+			t.Errorf("3s over three = %s, want the 2s floor", got)
+		}
+	})
 }
 
 // DNS failures still write the envelope, with the resolution mode.

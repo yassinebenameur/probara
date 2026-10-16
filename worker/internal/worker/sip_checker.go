@@ -30,6 +30,9 @@ type SIPChecker struct {
 	// resolver replaces DNS in tests; nil uses the worker's resolver, or
 	// one pinned to the monitor's nameserver.
 	resolver sipResolver
+	// testDial, set only by tests, interposes on the dial dialGuard makes
+	// (dialThroughGuard); nil dials through dialGuard.
+	testDial func(ctx context.Context, guard *dialGuard, network, addr string) (net.Conn, error)
 }
 
 // NewSIPChecker creates a new SIP checker
@@ -44,6 +47,35 @@ func NewSIPChecker(blockPrivateIPs bool, allowedCIDRs []*net.IPNet) *SIPChecker 
 // under rfc3263 failover: below it a UDP request gets too few
 // retransmissions to tell a dead server from a lost datagram.
 const sipMinAttemptBudget = 1500 * time.Millisecond
+
+// sipMinConnectBudget is the floor of one address's connect budget under "a"
+// (sipConnectBudget), net.Dialer's own minimum for the same split.
+const sipMinConnectBudget = 2 * time.Second
+
+// sipConnectBudget bounds the TCP connect to candidate i of a hostname under
+// resolution "a". Before the checker resolved hostnames itself it handed them
+// to net.Dialer, which gives each address but the last what is left divided
+// by the addresses left (at least 2 s) to connect, so an address that drops
+// SYNs, or an IPv6 path that is black-holed, failed over to the next one
+// instead of eating the whole check; this keeps that. Only the connect is
+// bounded: once connected, an address keeps the whole budget, as before. Zero
+// (no bound) for the last address, for UDP, whose connect sends nothing, and
+// under rfc3263, whose attempt slice already bounds everything.
+func sipConnectBudget(ctx context.Context, mode string, candidates []sipCandidate, i int) time.Duration {
+	if mode != models.SIPResolutionA || candidates[i].transport == "udp" || i >= len(candidates)-1 {
+		return 0
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	remaining := time.Until(deadline)
+	budget := max(remaining/time.Duration(len(candidates)-i), sipMinConnectBudget)
+	if budget >= remaining {
+		return 0
+	}
+	return budget
+}
 
 // sipAttemptResult is how one address answered.
 type sipAttemptResult struct {
@@ -169,7 +201,8 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		// Under rfc3263 an unanswered address is given up on so the next
 		// can be tried (RFC 3263 §4.3), so each one gets a share of what
 		// is left. Under "a" every address may use the whole budget: only
-		// a transport failure moves on, as dialing a hostname always did.
+		// a transport failure moves on, as dialing a hostname always did,
+		// and a connect that outlasts its share (sipConnectBudget).
 		attemptCtx, attemptCancel := ctx, context.CancelFunc(func() {})
 		if mode == models.SIPResolutionRFC3263 && i < len(candidates)-1 {
 			if deadline, ok := ctx.Deadline(); ok {
@@ -178,12 +211,13 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			}
 		}
 		attemptStart := time.Now()
+		connectBudget := sipConnectBudget(ctx, mode, candidates, i)
 		last = c.runNonInviteAttempt(attemptCtx, candidate, &config, sipAttemptParams{
 			method:     methodUpper,
 			requestURI: requestURI,
 			toURI:      toURI,
 			domain:     domain,
-		}, metrics)
+		}, connectBudget, metrics)
 		attemptCancel()
 		if last.err != nil && candidate.transport == "tls" {
 			last.err = withSIPSRVIdentityHint(last.err, candidate, serverName, overridden)
@@ -218,8 +252,9 @@ type sipAttemptParams struct {
 
 // runNonInviteAttempt runs an OPTIONS or REGISTER, with the digest retry,
 // against one address. It records the attempt in metrics as it goes.
-func (c *SIPChecker) runNonInviteAttempt(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, p sipAttemptParams, metrics *sipMetrics) sipAttemptResult {
-	flow, err := c.dialSIP(ctx, candidate, config)
+// connectBudget bounds the TCP connect alone (dialSIP).
+func (c *SIPChecker) runNonInviteAttempt(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, p sipAttemptParams, connectBudget time.Duration, metrics *sipMetrics) sipAttemptResult {
+	flow, err := c.dialSIP(ctx, candidate, config, connectBudget)
 	if err != nil {
 		var dialErr *sipDialError
 		if errors.As(err, &dialErr) {
@@ -349,6 +384,9 @@ func sipAttemptOutcome(a sipAttemptResult) string {
 //     network policy refuses) moves to the next address;
 //   - a TLS handshake failure moves to the next address of a different host
 //     only: another address of the same host presents the same certificate;
+//   - a connect that times out moves to the next address: under "a" it ran
+//     out of its sipConnectBudget share (TLS handshake and transaction
+//     silence still keep the whole budget there, and never move on);
 //   - rfc3263 only: nothing within the attempt's share of the budget (no
 //     response, or a dial or handshake that hangs), or a 503, moves to the
 //     next address.
@@ -377,13 +415,20 @@ func sipFailoverTarget(ctx context.Context, mode string, a sipAttemptResult, can
 	case "timeout":
 		// The attempt's share ran out (no response, or a dial or handshake
 		// into a black hole); the check's own budget did not.
-		if mode == models.SIPResolutionRFC3263 {
+		if mode == models.SIPResolutionRFC3263 || isSIPConnectTimeout(a.err) {
 			return i + 1
 		}
 		return -1
 	default:
 		return -1
 	}
+}
+
+// isSIPConnectTimeout reports a timeout in the connect itself, not in the TLS
+// handshake or the transaction that follows it.
+func isSIPConnectTimeout(err error) bool {
+	var dialErr *sipDialError
+	return errors.As(err, &dialErr) && !dialErr.handshake && classifySIPError(err) == "timeout"
 }
 
 // sipFinalResult judges the deciding attempt's final response.

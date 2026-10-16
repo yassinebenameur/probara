@@ -76,13 +76,25 @@ func sipTLSServerName(config *models.SIPMonitorConfig) string {
 // dialSIP opens a flow to one resolved candidate. The address is an IP
 // literal, which dialGuard checks against the network policy before dialing.
 // The TLS identity is sipTLSServerName.
-func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig) (*sipFlow, error) {
+//
+// connectBudget, when positive, bounds the connect alone (the TCP dial, not
+// the TLS handshake): Check uses it to give each address of a hostname a
+// share of the budget, so one that never answers a SYN is given up on (see
+// sipConnectBudget). Zero lets the connect use all of ctx.
+func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, connectBudget time.Duration) (*sipFlow, error) {
 	addr := candidate.address()
 	transport := candidate.transport
 
 	timeout := 30 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = time.Until(deadline)
+	}
+	dialCtx := ctx
+	if connectBudget > 0 && connectBudget < timeout {
+		var cancel context.CancelFunc
+		dialCtx, cancel = context.WithTimeout(ctx, connectBudget)
+		defer cancel()
+		timeout = connectBudget
 	}
 	guard := newDialGuard(c.blockPrivateIPs, c.allowedCIDRs, timeout)
 
@@ -91,7 +103,7 @@ func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config
 		network = "udp"
 	}
 	start := time.Now()
-	conn, err := guard.DialContext(ctx, network, addr)
+	conn, err := c.dialThroughGuard(dialCtx, guard, network, addr)
 	if err != nil {
 		return nil, &sipDialError{err: err}
 	}
@@ -133,6 +145,16 @@ func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config
 	flow.timing = timing
 	flow.start()
 	return flow, nil
+}
+
+// dialThroughGuard makes a flow's one dial through dialGuard. Tests may
+// interpose (testDial) to stand in for an address that never answers, which
+// no local socket can reproduce reliably; production never sets it.
+func (c *SIPChecker) dialThroughGuard(ctx context.Context, guard *dialGuard, network, addr string) (net.Conn, error) {
+	if c.testDial != nil {
+		return c.testDial(ctx, guard, network, addr)
+	}
+	return guard.DialContext(ctx, network, addr)
 }
 
 // newSIPFlow wraps an established connection. The caller calls start.

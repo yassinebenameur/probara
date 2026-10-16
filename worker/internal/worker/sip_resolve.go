@@ -116,7 +116,10 @@ func resolveSIPTargets(ctx context.Context, config *models.SIPMonitorConfig, r s
 		service, proto := sipSRVService(t)
 		_, records, err := r.LookupSRV(ctx, service, proto, host)
 		res.lookedUp = true
-		if err != nil {
+		// The stdlib drops records whose target is not a valid name and
+		// returns an error alongside the rest: the usable records still
+		// decide, and only an answer with none left is a failure.
+		if err != nil && len(records) == 0 {
 			if isDNSNotFound(err) {
 				continue
 			}
