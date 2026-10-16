@@ -27,7 +27,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
-import { SELECTED_SEGMENT } from '@/components/ui/roving';
+import { handleRovingKeyDown, SELECTED_SEGMENT } from '@/components/ui/roving';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
@@ -66,6 +66,14 @@ const SIP_RELATED_FIELDS: Record<string, string[]> = {
 const CALL_ADVANCED_FIELDS = ['call_target_uri', 'call_sdp_address'];
 
 const CALL_INTERVAL_PRESETS = [60, 300, 900, 3600] as const;
+
+// The call Mode segment: a roving radiogroup (one tab stop, arrow keys move
+// the selection), like Tabs and RangePicker.
+const CALL_MODES = [
+  { mode: 'answer', label: 'Answer and hang up' },
+  { mode: 'ring', label: 'Ring only' },
+] as const;
+const CALL_MODE_IDS = CALL_MODES.map((m) => m.mode);
 
 type SipMethod = SipFormFields['method'];
 
@@ -760,19 +768,21 @@ export default function SipForm({
                 className="mb-2 flex w-fit max-w-full gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
                 role="radiogroup"
                 aria-label="Call mode"
+                onKeyDown={(e) =>
+                  handleRovingKeyDown(e, CALL_MODE_IDS, formData.call_mode, (mode) =>
+                    setFormData((prev) => ({ ...prev, call_mode: mode }))
+                  )
+                }
               >
-                {(
-                  [
-                    { mode: 'answer' as const, label: 'Answer and hang up' },
-                    { mode: 'ring' as const, label: 'Ring only' },
-                  ]
-                ).map(({ mode, label }) => (
+                {CALL_MODES.map(({ mode, label }) => (
                   <button
                     key={mode}
                     type="button"
                     role="radio"
+                    data-roving-id={mode}
+                    tabIndex={formData.call_mode === mode ? 0 : -1}
                     aria-checked={formData.call_mode === mode}
-                    onClick={() => setFormData({ ...formData, call_mode: mode })}
+                    onClick={() => setFormData((prev) => ({ ...prev, call_mode: mode }))}
                     className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
                       formData.call_mode === mode ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
                     }`}
