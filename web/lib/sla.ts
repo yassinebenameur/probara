@@ -368,9 +368,15 @@ export function slaInputError(input: SlaInput): string | null {
   return null;
 }
 
-/** The outage table grows a Cause column only when a row carries one, so older issued reports look unchanged. */
-export function hasOutageCauses(outages: Pick<SlaReportOutage, 'cause_title'>[]): boolean {
-  return outages.some((o) => Boolean(o.cause_title));
+/**
+ * Whether the report shows its suspected-cause panel and the monitor-outage
+ * Cause column: the PDF's rule (api/internal/services/slas/export.go), so a
+ * workspace without auto-triage never sees a table of "Not triaged", and a
+ * report issued before causes existed looks unchanged. Only the CSV carries
+ * the causes regardless.
+ */
+export function showSuspectedCauses(r: Pick<SlaReport, 'suspected_causes'>): boolean {
+  return !!r.suspected_causes && r.suspected_causes.triaged_outage_count > 0;
 }
 
 /** A bucket's share of the attributed downtime, as the PDF prints it; "—" when nothing was attributed. */
@@ -389,10 +395,12 @@ export function slaCausesCaveat(c: Pick<SlaReportSuspectedCauses, 'outage_count'
   return (
     "Each monitor outage takes the suspected cause of its monitor's availability alerts that overlapped it, " +
     "from Probara's local AI triage, or an operator's label on it (* marks causes that include operator-labelled outages). " +
+    "The AI's hypothesis counts as a suspected cause only at medium or high confidence; an operator's label counts whatever the confidence. " +
     'Suspected causes are observed symptoms, not confirmed root causes. ' +
+    'Inconclusive: the triage found no supported cause, named one only at low confidence, or an operator labelled it insufficient evidence. ' +
     'Not triaged: the alert was never triaged, for example automatic triage was off at the time, the alert resolved within the settle wait, ' +
     "the monitor was in its triage cooldown, the workspace's hourly triage limit or the platform backlog was reached, " +
-    'the alert was older than the triage lookback, triage was switched off, or the local AI was unavailable. ' +
+    'the alert was older than the triage lookback, triage was switched off while the alert was queued, or the local AI was unavailable. ' +
     'Triage pending: triage was still running or the alert still open when the report was computed. ' +
     'No alert: no availability alert overlapped the outage. ' +
     'Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. ' +

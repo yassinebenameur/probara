@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  causeShare, hasOutageCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
+  causeShare, showSuspectedCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
   DEFAULT_SLA_TARGET, type SlaInput, type SlaReport,
 } from './sla';
 
@@ -65,25 +65,39 @@ test('periods read as dates in the SLA timezone, end exclusive', () => {
   assert.equal(formatSlaPeriodRange('bad', '2026-01-05T00:00:00Z', 'UTC', now), '—');
 });
 
-test('suspected causes are optional: a report issued before them renders as before', () => {
-  // An issued report from before causes existed: no suspected_causes, no
-  // cause fields on its outages, so no panel and no Cause column.
-  const legacy: Pick<SlaReport, 'suspected_causes' | 'outages'> = {
-    outages: [{
-      monitor_id: 'm1', monitor_name: 'checkout', start: '2026-09-10T10:00:00Z', end: '2026-09-10T11:00:00Z',
-      duration_seconds: 3600, planned_seconds: 0, unplanned_seconds: 3600, started_before: false, ongoing: false,
-    }],
+test('suspected causes show under the PDF rule: absent on legacy reports, hidden until one outage is triaged', () => {
+  // An issued report from before causes existed: no suspected_causes, so no
+  // panel and no Cause column.
+  const legacy: Pick<SlaReport, 'suspected_causes'> = {};
+  assert.equal(showSuspectedCauses(legacy), false);
+
+  // AI or auto-triage off: every outage is Not triaged or No alert. The CSV
+  // still carries them; the UI and PDF show nothing.
+  const untriaged: Pick<SlaReport, 'suspected_causes'> = {
+    suspected_causes: {
+      outage_count: 2, triaged_outage_count: 0, pending_outage_count: 0, unplanned_seconds: 600,
+      buckets: [
+        { kind: 'untriaged', key: 'untriaged', title: 'Not triaged', outage_count: 2, alert_count: 2, monitor_count: 1,
+          unplanned_seconds: 600, confirmed_outage_count: 0, corrected_outage_count: 0 },
+      ],
+    },
   };
-  assert.equal(legacy.suspected_causes, undefined);
-  assert.equal(hasOutageCauses(legacy.outages), false);
-  assert.equal(hasOutageCauses([]), false);
-  assert.equal(hasOutageCauses([{}, { cause_title: 'Not triaged' }]), true);
+  assert.equal(showSuspectedCauses(untriaged), false);
+
+  const triaged: Pick<SlaReport, 'suspected_causes'> = {
+    suspected_causes: { ...untriaged.suspected_causes!, triaged_outage_count: 1 },
+  };
+  assert.equal(showSuspectedCauses(triaged), true);
 });
 
 test('cause share and caveat', () => {
   assert.equal(causeShare(900, 3600), '25.0%');
+  assert.equal(causeShare(3600, 3600), '100.0%');
+  // Only planned or zero-length time attributed: no share rather than NaN.
   assert.equal(causeShare(0, 0), '—');
+  assert.equal(causeShare(120, 0), '—');
   const caveat = slaCausesCaveat({ outage_count: 4, triaged_outage_count: 3 });
   assert.match(caveat, /observed symptoms, not confirmed root causes/);
+  assert.match(caveat, /only at medium or high confidence/);
   assert.match(caveat, /3 of 4 monitor outages had a triaged alert\.$/);
 });
