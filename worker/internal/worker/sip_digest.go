@@ -151,7 +151,12 @@ func sipSupportedDigestAlgorithm(algorithm string) int {
 type sipAuthState struct {
 	username string
 	password string
-	realms   map[string]*sipAuthRealm // key: credentials header + "\x00" + realm
+	realms   map[string]*sipAuthRealm // key: sipAuthKey(credentials header, realm)
+	order    []string                 // realms keys, first-seen
+}
+
+func sipAuthKey(credentialsHeader, realm string) string {
+	return credentialsHeader + "\x00" + realm
 }
 
 type sipAuthRealm struct {
@@ -168,7 +173,8 @@ func newSIPAuthState(username, password string) *sipAuthState {
 // sipAuthAnswer is the credentials answering one 401/407.
 type sipAuthAnswer struct {
 	headers   []sipHeader
-	algorithm string // the strongest algorithm used, as the envelope names it
+	keys      []string // the realm keys headers answer, in the same order
+	algorithm string   // the strongest algorithm used, as the envelope names it
 	// stale: every challenge in the response was marked stale=true.
 	stale bool
 }
@@ -223,12 +229,15 @@ func (a *sipAuthState) answer(resp *sipMessage, method, uri string) (sipAuthAnsw
 	for _, realm := range order {
 		challenge := best[realm]
 		allStale = allStale && challenge.Stale
-		key := credentialsHeader + "\x00" + realm
+		key := sipAuthKey(credentialsHeader, realm)
 		state := a.realms[key]
 		if state == nil || state.challenge.Nonce != challenge.Nonce {
 			cnonce, err := newSIPCnonce()
 			if err != nil {
 				return sipAuthAnswer{}, err
+			}
+			if state == nil {
+				a.order = append(a.order, key)
 			}
 			state = &sipAuthRealm{header: credentialsHeader, challenge: challenge, cnonce: cnonce}
 			a.realms[key] = state
@@ -239,12 +248,61 @@ func (a *sipAuthState) answer(resp *sipMessage, method, uri string) (sipAuthAnsw
 			return sipAuthAnswer{}, err
 		}
 		out.headers = append(out.headers, sipHeader{Name: credentialsHeader, Value: value})
+		out.keys = append(out.keys, key)
 		if name := sipDigestAlgorithmName(challenge.Algorithm); out.algorithm == "" || name == "SHA-256" {
 			out.algorithm = name
 		}
 	}
 	out.stale = allStale
 	return out, nil
+}
+
+// credentials is every credential a new request in the exchange carries:
+// ans's headers for the realms it just answered, and a fresh answer (the
+// realm's next nonce count, over this request's method and uri) for every
+// other realm answered earlier, all in first-seen order. A retry challenged
+// by one hop (a stale nonce, a BYE challenged for one realm) so keeps the
+// credentials every other hop already accepted (RFC 3261 §22.3).
+func (a *sipAuthState) credentials(ans sipAuthAnswer, method, uri string) ([]sipHeader, error) {
+	fresh := make(map[string]sipHeader, len(ans.keys))
+	for i, key := range ans.keys {
+		fresh[key] = ans.headers[i]
+	}
+	out := make([]sipHeader, 0, len(a.order))
+	for _, key := range a.order {
+		if h, ok := fresh[key]; ok {
+			out = append(out, h)
+			continue
+		}
+		state := a.realms[key]
+		state.nc++
+		value, err := buildSIPDigestAuthorizationWithCnonce(state.challenge, a.username, a.password, method, uri, state.cnonce, state.nc)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sipHeader{Name: state.header, Value: value})
+	}
+	return out, nil
+}
+
+// unansweredRealm is the first realm a 401/407 challenges that this exchange
+// never answered (a further hop asking for its own credentials), or false
+// when every challenged realm was answered before.
+func (a *sipAuthState) unansweredRealm(resp *sipMessage) (string, bool) {
+	credentialsHeader := "Authorization"
+	if resp.StatusCode == 407 {
+		credentialsHeader = "Proxy-Authorization"
+	}
+	for _, value := range resp.Values(sipChallengeHeader(resp.StatusCode)) {
+		challenge, err := parseSIPDigestChallenge(value)
+		if err != nil {
+			continue
+		}
+		if _, known := a.realms[sipAuthKey(credentialsHeader, challenge.Realm)]; !known {
+			return challenge.Realm, true
+		}
+	}
+	return "", false
 }
 
 // parseSIPAuthParams splits `key="value", key2=value2` pairs, honoring commas

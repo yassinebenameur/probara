@@ -377,6 +377,7 @@ type sipCall struct {
 	anyProvisional bool
 	ringingAt      time.Time
 	authRounds     int
+	authNewRealm   string // a realm first challenged after the last round allowed
 	primary        *sipDialog
 	inviteFinal    *sipMessage // the current INVITE's non-2xx final
 	decided        bool
@@ -881,13 +882,23 @@ func (s *sipCall) onFinal(inv *sipInviteTxn, in sipInbound) {
 		(s.phase == sipCallCalling || s.phase == sipCallProceeding) {
 		// Round 1 always; round 2 only when the server says the nonce went
 		// stale. The ACK of the challenge went out with it (onResponse).
+		// A realm never answered before, challenged after round 1, is a
+		// further hop (proxy then UAS): one round is all this probe does, so
+		// that fails the call, worded so it does not blame the password.
+		newRealm, isNew := s.auth.unansweredRealm(msg)
 		answer, err := s.auth.answer(msg, "INVITE", s.base.RequestURI)
 		if err == nil && (s.authRounds == 0 || (s.authRounds == 1 && answer.stale)) {
 			s.authRounds++
 			s.metrics.Auth.Algorithm = answer.algorithm
 			s.metrics.Auth.Rounds = s.authRounds
 			s.cseq++
-			if err := s.sendInvite(answer.headers); err != nil {
+			// Every realm answered so far rides the retry (and so the 2xx
+			// ACK, D22), not only the one just challenged.
+			credentials, err := s.auth.credentials(answer, "INVITE", s.base.RequestURI)
+			if err == nil {
+				err = s.sendInvite(credentials)
+			}
+			if err != nil {
 				s.decideError(err)
 				s.phase = sipCallDone
 				return
@@ -902,6 +913,9 @@ func (s *sipCall) onFinal(inv *sipInviteTxn, in sipInbound) {
 			s.phase = sipCallDone
 			s.decide("failure", code, in.at, fmt.Sprintf("auth: cannot answer authentication challenge: %v", err))
 			return
+		}
+		if isNew && s.authRounds > 0 {
+			s.authNewRealm = newRealm
 		}
 	}
 
@@ -935,6 +949,8 @@ func (s *sipCall) onFinal(inv *sipInviteTxn, in sipInbound) {
 		switch {
 		case s.auth == nil:
 			s.decide("failure", code, in.at, fmt.Sprintf("auth: %s (server requires authentication but no credentials are configured)", status))
+		case s.authNewRealm != "":
+			s.decide("failure", code, in.at, fmt.Sprintf("auth: %s challenged realm %q after the first round; only one authentication round is supported (multi-hop authentication)", status, s.authNewRealm))
 		default:
 			s.decide("failure", code, in.at, fmt.Sprintf("auth: authentication failed: %s", status))
 		}
@@ -1163,10 +1179,12 @@ func (s *sipCall) bye(ctx context.Context, d *sipDialog) (outcome string, status
 			return "bye_481", code, ms
 		case (code == 401 || code == 407) && round == 0 && s.auth != nil:
 			answer, err := s.auth.answer(in.msg, "BYE", req.RequestURI)
+			if err == nil {
+				credentials, err = s.auth.credentials(answer, "BYE", req.RequestURI)
+			}
 			if err != nil {
 				return fmt.Sprintf("bye_%d", code), code, ms
 			}
-			credentials = answer.headers
 			cseq++
 		default:
 			return fmt.Sprintf("bye_%d", code), code, ms

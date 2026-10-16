@@ -686,12 +686,51 @@ func TestSIPInvite_DigestStaleAndRealms(t *testing.T) {
 		if creds := fHeaders(all[1].raw, "Proxy-Authorization"); len(creds) != 2 {
 			t.Fatalf("Proxy-Authorization headers = %d, want one per realm", len(creds))
 		}
-		third := sipTestHeader(all[2].raw, "Proxy-Authorization")
-		if f := digestFields(third); f["nonce"] != "e2" || f["nc"] != "00000001" {
-			t.Fatalf("stale retry = %s, want the new nonce at nc=1", third)
+		// The stale retry answers edge's new nonce and keeps core's
+		// credentials (its next nonce count), in first-seen order; the 2xx
+		// ACK repeats both.
+		third := fHeaders(all[2].raw, "Proxy-Authorization")
+		if len(third) != 2 {
+			t.Fatalf("stale retry Proxy-Authorization = %q, want edge and core", third)
+		}
+		if f := digestFields(third[0]); f["realm"] != "edge" || f["nonce"] != "e2" || f["nc"] != "00000001" {
+			t.Fatalf("stale retry edge = %s, want the new nonce at nc=1", third[0])
+		}
+		if f := digestFields(third[1]); f["realm"] != "core" || f["nonce"] != "c1" || f["nc"] != "00000002" || !verifyDigest(third[1], "INVITE", "p") {
+			t.Fatalf("stale retry core = %s, want the cached realm at nc=2", third[1])
+		}
+		acks := u.waitRequests("ACK", 3, 2*time.Second)
+		if got := fHeaders(acks[2].raw, "Proxy-Authorization"); len(got) != 2 || got[0] != third[0] || got[1] != third[1] {
+			t.Fatalf("2xx ACK Proxy-Authorization = %q, want the INVITE's %q", got, third)
 		}
 		if m.Auth.Rounds != 2 {
 			t.Fatalf("auth rounds = %d, want 2", m.Auth.Rounds)
+		}
+	})
+	t.Run("further hop", func(t *testing.T) {
+		// The UAS's realm answered, a proxy's new realm challenges next: one
+		// round is all the probe does, and the wording says so instead of
+		// blaming the password.
+		var invites branchSet
+		n := 0
+		u := startFakeUAS(t, "udp", func(u *fakeUAS, msg string) {
+			if fMethod(msg) != "INVITE" || !invites.first(msg) {
+				return
+			}
+			n++
+			if n == 1 {
+				u.send(uasReply(msg, 401, "Unauthorized", "p", "", `WWW-Authenticate: Digest realm="uas", nonce="u1", qop="auth"`))
+				return
+			}
+			u.send(uasReply(msg, 407, "Proxy Auth", "p", "", `Proxy-Authenticate: Digest realm="proxy", nonce="p1", qop="auth"`))
+		})
+		result, _ := runInvite(t, newInviteTestChecker(), inviteConfig(u, map[string]any{"number": "100"}, map[string]any{"username": "u", "password": "p"}), 5)
+		requireStatus(t, result, "failure", `auth: 407 Proxy Auth challenged realm "proxy" after the first round`, "multi-hop authentication")
+		if strings.Contains(resultMsg(result), "authentication failed") {
+			t.Fatalf("message = %q blames the password", resultMsg(result))
+		}
+		if len(u.requests("INVITE")) != 2 {
+			t.Fatalf("INVITEs = %d, want 2", len(u.requests("INVITE")))
 		}
 	})
 	t.Run("not stale", func(t *testing.T) {
