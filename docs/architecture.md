@@ -192,8 +192,10 @@ recorded as incomplete evidence rather than modeled.
 Each delivery runs under one deadline (`LOCAL_AI_TIMEOUT_SECONDS` + 30s) with a
 15s `InProgress` heartbeat; transient errors retry with a delay, and the final
 delivery records a failure except on worker shutdown. DB-connected workers fail
-pending analyses older than 10 minutes, skipping rows locked by an active run
-unless they are older than 30 minutes; this replaces the API read-path timeout.
+pending analyses older than 20 minutes (longer than the unavailable-AI retry
+window, so a job waiting out a retry delay is not failed), skipping rows locked
+by an active run unless they are older than 30 minutes; this replaces the API
+read-path timeout.
 With no DB-connected worker running, pending analyses stay pending until one
 returns. The consumer and the sweep restart with capped backoff, and the
 consumer re-creates its durable if it disappears from the server. A publish

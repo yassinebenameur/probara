@@ -19,7 +19,21 @@ const (
 	// within its deadline is never swept. Rows a run is actively processing
 	// are additionally protected by the advisory lock (see sweepStaleSQL),
 	// which makes this a bound on queue wait, not a race against the model.
-	staleAfter = 10 * time.Minute
+	// Between deliveries no lock is held, so it must also outlast
+	// unavailableRetryWindow, or the sweep fails an analysis that is still
+	// waiting out an ai.ErrUnavailable retry delay; the 5 minutes left over
+	// absorb queue wait before the first delivery and redelivery latency.
+	// Rows orphaned by a lost worker (AckWait BackOff redeliveries) are what
+	// the sweep exists for and are not covered.
+	staleAfter = 20 * time.Minute
+
+	// unavailableRetryWindow is the latest an analysis can still be waiting
+	// for its final delivery while the local AI keeps answering
+	// ai.ErrUnavailable: every delivery but the last at its full deadline,
+	// each followed by the longest retry delay (unavailableRetryMax).
+	// TestSweepWindowCoversUnavailableRetries recomputes it from the delay
+	// functions.
+	unavailableRetryWindow = (maxDeliver - 1) * (maxLocalAITimeout + ackWaitHeadroom + unavailableRetryMax)
 
 	// lockCeiling is the age past which the sweep fails a pending row even
 	// while its advisory lock is held. A delivery can only take the lock on a
@@ -51,6 +65,10 @@ const (
 // negative (a build error) if staleAfter <= maxLocalAITimeout+ackWaitHeadroom.
 // Counted in seconds: a nanosecond length overflows int on 32-bit targets.
 var _ [(staleAfter-maxLocalAITimeout-ackWaitHeadroom)/time.Second - 1]struct{}
+
+// Compile-time guard: the sweep never fails an analysis inside its
+// unavailable-retry window.
+var _ [(staleAfter-unavailableRetryWindow)/time.Second - 1]struct{}
 
 // ValidateSweepWindow is the startup twin of the compile-time guard, checked
 // against the configured (not just the maximum) local AI timeout.

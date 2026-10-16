@@ -26,6 +26,9 @@ func TestSweepStaleFailsOnlyOldUnclaimedPendingRows(t *testing.T) {
 	}
 	fresh := insert("pending", time.Minute)
 	nearlyStale := insert("pending", staleAfter-30*time.Second)
+	// Unlocked and waiting out its last ai.ErrUnavailable retry delay: the
+	// final delivery can still complete it.
+	retrying := insert("pending", unavailableRetryWindow)
 	oldReady := insert("ready", time.Hour)
 	held := insert("pending", staleAfter+5*time.Minute)
 	heldPastCeiling := insert("pending", lockCeiling+time.Minute)
@@ -75,7 +78,7 @@ func TestSweepStaleFailsOnlyOldUnclaimedPendingRows(t *testing.T) {
 			t.Fatalf("stale row %s: %s %q", id, status, message)
 		}
 	}
-	for name, id := range map[string]uuid.UUID{"fresh": fresh, "nearly stale": nearlyStale, "held": held} {
+	for name, id := range map[string]uuid.UUID{"fresh": fresh, "nearly stale": nearlyStale, "retrying": retrying, "held": held} {
 		if status, _ := f.status(id); status != "pending" {
 			t.Fatalf("%s row was swept: %s", name, status)
 		}

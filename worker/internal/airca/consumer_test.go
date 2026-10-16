@@ -117,6 +117,27 @@ func TestSweepWindowExceedsLongestDelivery(t *testing.T) {
 	}
 }
 
+// TestSweepWindowCoversUnavailableRetries pins staleAfter above the latest an
+// analysis whose local AI stays unavailable can sit unlocked waiting for its
+// final delivery: (maxDeliver-1) full deliveries, each followed by the
+// longest NAK delay any error can produce (longestRetryDelay passes a
+// day-long Retry-After hint, so the cap is what is measured). The sweep cannot see the retry
+// (no lock is held between deliveries), so a shorter window would fail an
+// analysis that the final delivery could still complete.
+func TestSweepWindowCoversUnavailableRetries(t *testing.T) {
+	delivery := maxLocalAITimeout + ackWaitHeadroom
+	var window time.Duration
+	for n := uint64(1); n < maxDeliver; n++ {
+		window += delivery + longestRetryDelay(n)
+	}
+	if window != unavailableRetryWindow {
+		t.Fatalf("unavailableRetryWindow %s, recomputed %s", unavailableRetryWindow, window)
+	}
+	if staleAfter <= window {
+		t.Fatalf("staleAfter %s must exceed the unavailable retry window %s", staleAfter, window)
+	}
+}
+
 // TestLockCeilingCoversLongestDeliveryChain pins lockCeiling above both the
 // longest a single run can legitimately hold a row past staleAfter and a whole
 // chain of maximal deliveries with their retry delays.

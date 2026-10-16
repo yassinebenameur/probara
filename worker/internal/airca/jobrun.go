@@ -253,7 +253,8 @@ func retryDelay(numDelivered uint64) time.Duration {
 
 // unavailableRetryMax caps the wait before retrying a job the local AI could
 // not take (ai.ErrUnavailable: queue full, model loading, pod restarting).
-// The relay's triageFailAfter guard counts (maxDeliver-1) of these.
+// The relay's triageFailAfter guard and the RCA sweep's staleAfter guard
+// (unavailableRetryWindow) each count (maxDeliver-1) of these.
 const unavailableRetryMax = 2 * time.Minute
 
 // unavailableRetryDelay spaces retries of ai.ErrUnavailable longer than
