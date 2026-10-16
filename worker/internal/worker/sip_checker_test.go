@@ -761,3 +761,58 @@ func TestSIPChecker_NoResponseIsTimeout(t *testing.T) {
 		t.Fatalf("server saw %d sends in 2s, want about 3 (Timer E)", n)
 	}
 }
+
+// A target that reflects packets (a UDP or TCP echo service, a misrouted port
+// forward) sends the probe its own request back. The probe must not answer
+// it: its answer would carry the request's Via branch, the reflector would
+// bounce that back too, and the check would read its own reply as the
+// server's final response. A reflector is never "up".
+func TestSIPChecker_EchoTargetIsNeverSuccess(t *testing.T) {
+	startTCPEcho := func(t *testing.T) (string, int) {
+		t.Helper()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("Listen() error = %v", err)
+		}
+		t.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer conn.Close()
+					_, _ = io.Copy(conn, conn)
+				}()
+			}
+		}()
+		return splitTestHostPort(t, listener.Addr().String())
+	}
+
+	for _, tc := range []struct {
+		name, transport, method string
+	}{
+		{"udp options", "udp", "options"},
+		{"udp register", "udp", "register"},
+		{"tcp options", "tcp", "options"},
+		{"tcp register", "tcp", "register"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var host string
+			var port int
+			if tc.transport == "udp" {
+				host, port = startFakeUDPSIPServer(t, func(message string) []string { return []string{message} })
+			} else {
+				host, port = startTCPEcho(t)
+			}
+			result := runSIPCheck(t, map[string]interface{}{
+				"host": host, "port": port, "transport": tc.transport, "method": tc.method,
+			})
+			requireSIPError(t, result, "loop", "looped back")
+			if result.HTTPStatus != nil {
+				t.Fatalf("HTTPStatus = %d, want none: no SIP server answered", *result.HTTPStatus)
+			}
+		})
+	}
+}

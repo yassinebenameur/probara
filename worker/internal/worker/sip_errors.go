@@ -43,10 +43,13 @@ func classifySIPError(err error) string {
 		netErr  net.Error
 		dnsErr  *net.DNSError
 		dialErr *sipDialError
+		loopErr *sipLoopError
 	)
 	switch {
 	case errors.Is(err, netguard.ErrBlocked):
 		return "ssrf_blocked"
+	case errors.As(err, &loopErr):
+		return "loop"
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
 		return "timeout"
 	case errors.As(err, &dnsErr):

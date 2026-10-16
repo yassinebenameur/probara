@@ -19,6 +19,9 @@ import (
 //	ACK                     no reply
 //	anything else           501
 //
+// The probe's own requests coming back never reach the UAS: the endpoint's
+// dispatcher drops them and fails their transaction (sipLoopError).
+//
 // A request missing the headers a response must echo (Via, From, To,
 // Call-ID, CSeq) cannot be answered and is dropped; one whose CSeq method
 // does not match its method gets 400.

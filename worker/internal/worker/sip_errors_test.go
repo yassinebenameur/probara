@@ -39,6 +39,7 @@ func TestClassifySIPError(t *testing.T) {
 		{"handshake reset", &sipDialError{handshake: true, err: errors.New("remote error: tls: handshake failure")}, "tls"},
 		// Typed certificate errors are TLS even outside the handshake wrapper.
 		{"bare certificate error", expired, "tls"},
+		{"looped back", &sipLoopError{method: "OPTIONS"}, "loop"},
 		{"refused", &sipDialError{err: refused}, "refused"},
 		{"dial failure", &sipDialError{err: errors.New("no resolved IPs")}, "connect"},
 		{"reset mid-exchange", fmt.Errorf("failed to read response: %w", syscall.ECONNRESET), "connect"},

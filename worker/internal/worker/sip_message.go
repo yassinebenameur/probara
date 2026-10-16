@@ -175,7 +175,12 @@ func (m *sipMessage) topViaBranch() string {
 	if len(vias) == 0 {
 		return ""
 	}
-	_, params, _ := strings.Cut(vias[0], ";")
+	return sipViaBranch(vias[0])
+}
+
+// sipViaBranch is the branch parameter of one Via value ("" when absent).
+func sipViaBranch(via string) string {
+	_, params, _ := strings.Cut(via, ";")
 	branch, _ := sipParam(params, "branch")
 	return branch
 }

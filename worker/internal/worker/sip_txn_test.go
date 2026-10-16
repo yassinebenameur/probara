@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -358,4 +359,64 @@ func TestSIPFlow_SendAfterClose(t *testing.T) {
 		t.Fatalf("send after Close = %v, want net.ErrClosed", err)
 	}
 	e.Close() // idempotent
+}
+
+// A burst of provisionals larger than a transaction's buffer must never cost
+// it the final response: on a stream nothing retransmits that final, so a
+// dropped one would read as "no final response" from a server that answered.
+func TestSIPEndpoint_FinalSurvivesProvisionalFlood(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if c, err := listener.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow := newSIPFlow("tcp", conn)
+	flow.start()
+	e := newSIPEndpoint(flow)
+	defer e.Close()
+	server := <-accepted
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var provisionals atomic.Int32
+	done := runTxn(ctx, e, testSIPOptions(e), func(sipInbound) {
+		provisionals.Add(1)
+		time.Sleep(5 * time.Millisecond) // a transaction slower than the burst
+	})
+	buf := make([]byte, 4096)
+	n, err := server.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(buf[:n])
+	var burst strings.Builder
+	for range 20 {
+		burst.WriteString(sipReply(raw, 100, "Trying"))
+	}
+	burst.WriteString(sipReply(raw, 200, "OK"))
+	if _, err := server.Write([]byte(burst.String())); err != nil {
+		t.Fatal(err)
+	}
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("err = %v, want the 200 after the burst", res.err)
+	}
+	if res.in.msg.StatusCode != 200 {
+		t.Fatalf("final = %d, want 200", res.in.msg.StatusCode)
+	}
+	if got := provisionals.Load(); got < 1 || got > 20 {
+		t.Fatalf("onProvisional saw %d provisionals, want 1..20", got)
+	}
 }
