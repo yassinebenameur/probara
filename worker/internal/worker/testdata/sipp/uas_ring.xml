@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+
+<!-- Ring-mode callee for sip_invite_integration_test.go: it rings and never
+     answers, so the probe must CANCEL; SIPp then confirms the CANCEL, ends
+     the INVITE with 487 and requires the probe's ACK of that 487. -->
+<scenario name="Probara ringing UAS">
+  <recv request="INVITE">
+    <action>
+      <ereg regexp="^ *([0-9]+) INVITE$" search_in="hdr" header="CSeq:" check_it="true" assign_to="invcseq,invcseqnum" />
+    </action>
+  </recv>
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 180 Ringing
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:[local_ip]:[local_port];transport=[transport]>
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <recv request="CANCEL" />
+
+  <send>
+    <![CDATA[
+
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <send retrans="500">
+    <![CDATA[
+
+      SIP/2.0 487 Request Terminated
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      CSeq: [$invcseqnum] INVITE
+      Content-Length: 0
+
+    ]]>
+  </send>
+
+  <recv request="ACK" />
+
+  <!-- Check-only captures: declare them used. -->
+  <Reference variables="invcseq" />
+</scenario>

@@ -41,6 +41,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   Uptime Kuma over its socket.io API and writes Kuma's own backup shape (Kuma
   2.0 removed the export button). Transport only — all translation lives in
   `api/internal/services/import/kuma.go`
+- `scripts/sipp/` — digest-pinned SIPp image that
+  `worker/internal/worker/sip_invite_integration_test.go` builds and runs its
+  `testdata/sipp/` UAS scenarios in (bump base digest and package together)
 - `ai-service/` — Python CPU inference service for local AI (FastAPI,
   `probara_ai/`: `server.py`, `runtime.py` with `verify_artifact`, `gate.py`
   the release predicate, `contract.py` the evidence contract); committed
@@ -539,6 +542,8 @@ or imported groups come back empty. Any other path that creates groups through
   without a Docker daemon — then set
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
   (role needs CREATEDB) and each test gets a scratch database on that server.
+  The SIPp INVITE test (`worker/.../sip_invite_integration_test.go`) is no
+  database test and skips instead when no Docker provider is reachable.
 - CI's Go job logs the whole module with `-v`, far past any log tail; a
   failure is repeated by its "Summarize test failures" step (end of the job
   log, step summary, check-run annotations) — read that, not the log head.
