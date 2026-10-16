@@ -156,6 +156,11 @@ func (h *Handlers) TestMonitorConfig(w http.ResponseWriter, r *http.Request) {
 		errors.WriteValidationError(w, err.Error())
 		return
 	}
+	// A test of a test-call config places a real call.
+	if err := monitorservice.RequireCallPermission(r.Context(), req.Type, req.Config); err != nil {
+		errors.WriteForbiddenError(w, err.Error())
+		return
+	}
 	if containsEncryptedTestSecret(req.Type, req.Config) {
 		errors.WriteValidationError(w, "encrypted credentials cannot be supplied in test requests; use saved secret placeholders")
 		return
@@ -278,6 +283,10 @@ func (h *Handlers) CreateMonitor(w http.ResponseWriter, r *http.Request) {
 
 	monitor, err := h.service.CreateMonitor(r.Context(), tenantUUID, &req)
 	if err != nil {
+		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			errors.WriteForbiddenError(w, err.Error())
+			return
+		}
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),
 			"tenant_id": tenantID,
@@ -531,6 +540,10 @@ func (h *Handlers) UpdateMonitor(w http.ResponseWriter, r *http.Request) {
 
 	monitor, err := h.service.UpdateMonitor(r.Context(), tenantUUID, monitorID, &req)
 	if err != nil {
+		if stderrors.Is(err, monitorservice.ErrCallMonitorForbidden) {
+			errors.WriteForbiddenError(w, err.Error())
+			return
+		}
 		if err.Error() == "monitor not found" {
 			errors.WriteNotFoundError(w, "monitor not found")
 			return
@@ -981,6 +994,12 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 
 	if sharedmodels.IsPassiveMonitorType(string(monitor.Type)) {
 		errors.WriteValidationError(w, fmt.Sprintf("%s monitors cannot be run on-demand", monitor.Type))
+		return
+	}
+	// Running a test-call monitor places a real call from every selected
+	// location.
+	if err := monitorservice.RequireCallPermission(r.Context(), monitor.Type, monitor.Config); err != nil {
+		errors.WriteForbiddenError(w, err.Error())
 		return
 	}
 

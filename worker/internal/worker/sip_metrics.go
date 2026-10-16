@@ -25,7 +25,7 @@ type sipMetricsEnvelope struct {
 }
 
 type sipMetrics struct {
-	Method string `json:"method"` // OPTIONS, REGISTER
+	Method string `json:"method"` // OPTIONS, REGISTER, INVITE
 	// Transport is the deciding attempt's: udp, tcp or tls. Empty only when
 	// rfc3263 resolution left it to DNS and DNS failed before choosing one.
 	Transport  string `json:"transport,omitempty"`
@@ -59,9 +59,85 @@ type sipMetrics struct {
 	// evaluation and the status page read through.
 	TLS *tlscert.Info `json:"tls,omitempty"`
 
+	// Call describes an INVITE test call (sip_invite.go).
+	Call *sipCallMetrics `json:"call,omitempty"`
+
+	// LatencyWarnMs is the warn threshold (warn_pdd_ms, else
+	// warn_answer_ms) a successful call exceeded; Warnings says which, and
+	// carries the other things worth an operator's attention that did not
+	// change the status (an unconfirmed teardown, a ring-mode call that was
+	// answered and so billed).
+	LatencyWarnMs *int64   `json:"latency_warn_ms,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+
 	// AssertionsFailed lists the check's own rules that failed it, in the
 	// error message's "name: detail" form.
 	AssertionsFailed []string `json:"assertions_failed,omitempty"`
+}
+
+// sipMaxCallList caps the provisional, warnings and record_route lists.
+const sipMaxCallList = 8
+
+func (m *sipMetrics) warn(msg string) {
+	for _, w := range m.Warnings {
+		if w == msg {
+			return
+		}
+	}
+	if len(m.Warnings) < sipMaxCallList {
+		m.Warnings = append(m.Warnings, msg)
+	}
+}
+
+// sipCallMetrics is metrics_data.sip.call. Timing anchors (integer ms):
+//   - pdd_ms (RFC 6076 SRD): the INVITE that produced it (the authenticated
+//     one when challenged) → its first 18x, or its 2xx when no 18x came
+//     (pdd_source then "200");
+//   - answer_ms: that INVITE → the first 2xx;
+//   - setup_pdd_ms, setup_ms: the first INVITE → the first 18x / 2xx, so
+//     they include the digest round trip;
+//   - trying_ms: the INVITE → its first 100;
+//   - bye_ms (RFC 6076 SDD): the BYE → its final response.
+//
+// Provisional at_ms is relative to the INVITE that drew it.
+type sipCallMetrics struct {
+	Mode          string               `json:"mode"`
+	TryingMs      *int64               `json:"trying_ms,omitempty"`
+	PDDMs         *int64               `json:"pdd_ms,omitempty"`
+	PDDSource     string               `json:"pdd_source,omitempty"`
+	SetupPDDMs    *int64               `json:"setup_pdd_ms,omitempty"`
+	AnswerMs      *int64               `json:"answer_ms,omitempty"`
+	SetupMs       *int64               `json:"setup_ms,omitempty"`
+	HoldMs        int64                `json:"hold_ms"`
+	ByeMs         *int64               `json:"bye_ms,omitempty"`
+	Provisional   []sipProvisionalStep `json:"provisional,omitempty"`
+	EarlyMedia    bool                 `json:"early_media"`
+	Answered      bool                 `json:"answered"`
+	ForkedAnswers int                  `json:"forked_answers"`
+	RouteHops     int                  `json:"route_hops"`
+	Require100rel bool                 `json:"require_100rel"`
+	AnsweredBy    *sipAnsweredBy       `json:"answered_by,omitempty"`
+	SDPAnswer     *sipSDPAnswer        `json:"sdp_answer,omitempty"`
+	RTPRxPackets  int64                `json:"rtp_rx_packets"`
+	// Teardown is how the call ended: bye_ok, bye_481, bye_<code>,
+	// bye_unconfirmed, cancelled, cancel_unconfirmed, answered_after_cancel,
+	// remote_bye, no_provisional or none; TeardownStatus is the final
+	// response that settled it (the BYE's, or the INVITE's 487).
+	Teardown       string `json:"teardown"`
+	TeardownStatus int    `json:"teardown_status,omitempty"`
+}
+
+type sipProvisionalStep struct {
+	Code int   `json:"code"`
+	AtMs int64 `json:"at_ms"`
+}
+
+// sipAnsweredBy is who answered: the flow's peer, the 2xx Contact host (never
+// contacted) and its Record-Route hosts.
+type sipAnsweredBy struct {
+	Source      string   `json:"source,omitempty"`
+	ContactHost string   `json:"contact_host,omitempty"`
+	RecordRoute []string `json:"record_route,omitempty"`
 }
 
 // sipReasonHeader is the Reason header (RFC 3326) of the final response,

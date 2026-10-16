@@ -274,3 +274,62 @@ func TestLoadAlerterConfig_SuspectedCauseKillSwitches(t *testing.T) {
 		t.Fatalf("invalid LOCAL_AI_DISABLED accepted: %v", err)
 	}
 }
+
+// Test calls are on by default on platform workers and off on private-location
+// workers, whose operators opt in; the destination allow-list is anchored.
+func TestLoadWorkerConfig_SIPCall(t *testing.T) {
+	t.Setenv("HTTP_PORT", "8083")
+	t.Setenv("METRICS_PORT", "9092")
+
+	cfg, err := LoadWorkerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SIPCallEnabled || len(cfg.SIPCallAllowedDestinations) != 0 {
+		t.Fatalf("platform defaults: enabled=%t allowed=%d", cfg.SIPCallEnabled, len(cfg.SIPCallAllowedDestinations))
+	}
+
+	t.Setenv("WORKER_LOCATION_ID", "6f1c2b8e-2f43-4c0e-9d41-0c3b3e0a9a11")
+	t.Setenv("LOCATION_CREDENTIAL", "secret")
+	if cfg, err = LoadWorkerConfig(); err != nil || cfg.SIPCallEnabled {
+		t.Fatalf("location worker default: enabled=%t err=%v", cfg != nil && cfg.SIPCallEnabled, err)
+	}
+	t.Setenv("SIP_CALL_ENABLED", "true")
+	if cfg, err = LoadWorkerConfig(); err != nil || !cfg.SIPCallEnabled {
+		t.Fatalf("location worker opt-in: enabled=%t err=%v", cfg != nil && cfg.SIPCallEnabled, err)
+	}
+	t.Setenv("WORKER_LOCATION_ID", "")
+	t.Setenv("LOCATION_CREDENTIAL", "")
+	t.Setenv("SIP_CALL_ENABLED", "false")
+	if cfg, err = LoadWorkerConfig(); err != nil || cfg.SIPCallEnabled {
+		t.Fatalf("platform opt-out: enabled=%t err=%v", cfg != nil && cfg.SIPCallEnabled, err)
+	}
+	t.Setenv("SIP_CALL_ENABLED", "perhaps")
+	if _, err := LoadWorkerConfig(); err == nil || !strings.Contains(err.Error(), "invalid SIP_CALL_ENABLED") {
+		t.Fatalf("invalid SIP_CALL_ENABLED accepted: %v", err)
+	}
+	t.Setenv("SIP_CALL_ENABLED", "")
+
+	t.Setenv("SIP_CALL_ALLOWED_DESTINATIONS", ` \+331[0-9]+ , ,ivr-test`)
+	cfg, err = LoadWorkerConfig()
+	if err != nil || len(cfg.SIPCallAllowedDestinations) != 2 {
+		t.Fatalf("allow-list = %v, %v", cfg, err)
+	}
+	match := func(user string) bool {
+		for _, re := range cfg.SIPCallAllowedDestinations {
+			if re.MatchString(user) {
+				return true
+			}
+		}
+		return false
+	}
+	for user, want := range map[string]bool{"+33123": true, "ivr-test": true, "0033123": false, "+33123x": false, "my-ivr-test": false} {
+		if got := match(user); got != want {
+			t.Errorf("allow-list match %q = %t, want %t", user, got, want)
+		}
+	}
+	t.Setenv("SIP_CALL_ALLOWED_DESTINATIONS", "([")
+	if _, err := LoadWorkerConfig(); err == nil || !strings.Contains(err.Error(), "invalid SIP_CALL_ALLOWED_DESTINATIONS") {
+		t.Fatalf("invalid pattern accepted: %v", err)
+	}
+}

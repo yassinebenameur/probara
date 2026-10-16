@@ -141,6 +141,11 @@ export const LOCATIONS_PAGE: DocPage = {
           text:
             "Add only the CIDRs the worker is expected to monitor. Disabling private-IP blocking globally broadens the worker into an internal network request primitive and weakens [SSRF containment](/docs/security/#ssrf-network-policy).",
         },
+        {
+          type: "paragraph",
+          text:
+            "A private-location worker places no [SIP test call](/docs/monitors/#network-protocols) until its operator sets `SIP_CALL_ENABLED=true`: such calls are real and possibly billed to the trunk they go through, so a test-call monitor assigned to a location whose worker has not opted in fails there with `sip_call: disabled on this worker`. `SIP_CALL_ALLOWED_DESTINATIONS` further limits which numbers the worker will call.",
+        },
       ],
     },
     {

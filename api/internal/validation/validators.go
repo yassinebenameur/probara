@@ -626,6 +626,18 @@ func (v *SIPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	return config.Validate()
 }
 
+// ValidateSchedule bounds a test call's interval and timeout
+// (SIPMonitorConfig.ValidateSchedule); OPTIONS and REGISTER have no extra
+// schedule rules. A config that does not parse is ValidateConfig's to report
+// (a type-only PATCH carries the old type's config here, as it always has).
+func (v *SIPConfigValidator) ValidateSchedule(configRaw json.RawMessage, intervalSeconds, timeoutSeconds int) error {
+	var config sharedmodels.SIPMonitorConfig
+	if err := json.Unmarshal(configRaw, &config); err != nil {
+		return nil
+	}
+	return config.ValidateSchedule(intervalSeconds, timeoutSeconds)
+}
+
 // SyntheticAPIConfigValidator validates synthetic API monitor configuration.
 type SyntheticAPIConfigValidator struct{}
 
@@ -1072,3 +1084,5 @@ var (
 	_ ConfigValidator = (*SyntheticAPIConfigValidator)(nil)
 	_ ConfigValidator = (*SyntheticBrowserConfigValidator)(nil)
 )
+
+var _ ScheduleAwareValidator = (*SIPConfigValidator)(nil)

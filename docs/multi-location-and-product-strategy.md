@@ -146,8 +146,8 @@ Each new type is cheap to add structurally (checker in `worker/internal/worker/r
 
 ### Tier 3 — moat types
 
-1. **SIP REGISTER** — auth against registrar, registration latency; low effort, deepens existing OPTIONS check.
-2. **Synthetic call** — real SIP INVITE + RTP, assert answered, measure post-dial delay. Browser-check equivalent for telephony.
+1. **SIP REGISTER** — auth against registrar, registration latency; low effort, deepens existing OPTIONS check. *Shipped.*
+2. **Synthetic call** — real SIP INVITE + RTP, assert answered, measure post-dial delay. Browser-check equivalent for telephony. *Call signalling shipped* (`method: invite`: PDD, answer time, ACK/BYE or CANCEL, digest, forks, tenant-admin gate); RTP is next — no media is sent or analysed yet.
 3. **RTP/audio quality** — jitter, loss, MOS on established media.
 4. **IVR journey** — call → expect prompt (STT on received audio) → DTMF → expect next prompt. "Playwright for phone trees."
 5. **ASR/TTS/LLM semantic checks** — send known WAV to ASR, assert transcript; text to TTS, assert plausible audio; LLM endpoint latency + semantic assertion. Zero incumbents in "uptime for AI voice stacks". Cheaper than full call testing (HTTP + media assertions) — do early.
@@ -155,4 +155,4 @@ Each new type is cheap to add structurally (checker in `worker/internal/worker/r
 
 ### Order
 
-Now: TCP + Postgres + Redis (+ config-secrets groundwork, shared "Databases" picker category). Next: RabbitMQ, Mongo, MySQL, WebSocket, cert/domain expiry. Then: Prometheus query + Kubernetes, SIP REGISTER. Strategic bets with the enterprise roadmap: ASR/TTS checks early, then synthetic call → RTP quality → IVR.
+Now: TCP + Postgres + Redis (+ config-secrets groundwork, shared "Databases" picker category). Next: RabbitMQ, Mongo, MySQL, WebSocket, cert/domain expiry. Then: Prometheus query + Kubernetes, SIP REGISTER. Strategic bets with the enterprise roadmap: ASR/TTS checks early, then synthetic call (signalling shipped) → RTP quality → IVR.

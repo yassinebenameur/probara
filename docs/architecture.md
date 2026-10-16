@@ -20,8 +20,9 @@ website (`website/`) are separate applications.
 | `web/` | Authenticated operator UI and `/api` proxy, including cookies and SSE streams | Go API |
 | `website/` | Statically exported public product website and documentation | No application database |
 
-Worker checkers include HTTP, ping, DNS, TCP, gRPC, SIP, synthetic API/browser,
-Redis, PostgreSQL, MongoDB, RabbitMQ, MySQL, and WebSocket checks. `agent`,
+Worker checkers include HTTP, ping, DNS, TCP, gRPC, SIP (OPTIONS/REGISTER
+probes and INVITE test calls, the one side-effecting checker), synthetic
+API/browser, Redis, PostgreSQL, MongoDB, RabbitMQ, MySQL, and WebSocket checks. `agent`,
 `push`, and `group` monitors are passive and are not dispatched as worker checks.
 
 Host monitoring uses **probara-collector**, an OpenTelemetry Collector

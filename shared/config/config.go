@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -249,6 +250,19 @@ type WorkerConfig struct {
 	HTTPBlockPrivateIPs   bool
 	HTTPAllowedCIDRs      []*net.IPNet
 	SyntheticArtifactsDir string
+
+	// SIPCallEnabled lets this worker place SIP test calls (INVITE monitors:
+	// real, possibly billed, calls). SIP_CALL_ENABLED; defaults to true on
+	// platform workers and false on private-location workers (LocationID
+	// set), so a customer-run worker places no call until its operator opts
+	// in.
+	SIPCallEnabled bool
+	// SIPCallAllowedDestinations, when non-empty, limits test calls to
+	// Request-URI user parts (the called number) matching one of these
+	// patterns, each anchored to the whole user part.
+	// SIP_CALL_ALLOWED_DESTINATIONS, comma-separated regular expressions; an
+	// invalid one fails startup.
+	SIPCallAllowedDestinations []*regexp.Regexp
 
 	// Installation-owned local inference configuration; private workers receive none.
 	AIRCAStream       string
@@ -956,6 +970,22 @@ func LoadWorkerConfig() (*WorkerConfig, error) {
 		return nil, fmt.Errorf("LOCATION_CREDENTIAL requires WORKER_LOCATION_ID")
 	}
 
+	// SIP_CALL_ENABLED — the default depends on the location mode, so it is
+	// read after WORKER_LOCATION_ID.
+	cfg.SIPCallEnabled = cfg.LocationID == ""
+	if v := strings.TrimSpace(os.Getenv("SIP_CALL_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SIP_CALL_ENABLED: %w", err)
+		}
+		cfg.SIPCallEnabled = enabled
+	}
+	allowed, err := parseSIPCallAllowedDestinations(os.Getenv("SIP_CALL_ALLOWED_DESTINATIONS"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.SIPCallAllowedDestinations = allowed
+
 	// MAX_HTTP_TIMEOUT_SECONDS
 	maxTimeoutStr := os.Getenv("MAX_HTTP_TIMEOUT_SECONDS")
 	if maxTimeoutStr == "" {
@@ -1298,4 +1328,24 @@ func loadLocalAIConfig() (ai.Config, error) {
 		c.Timeout = time.Duration(n) * time.Second
 	}
 	return c, nil
+}
+
+// parseSIPCallAllowedDestinations compiles SIP_CALL_ALLOWED_DESTINATIONS:
+// comma-separated patterns, each anchored so it must match the whole called
+// user part (`\+33.*` allows French numbers, never one that merely contains
+// them). Empty allows every destination.
+func parseSIPCallAllowedDestinations(raw string) ([]*regexp.Regexp, error) {
+	var patterns []*regexp.Regexp
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		re, err := regexp.Compile(`^(?:` + p + `)$`)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SIP_CALL_ALLOWED_DESTINATIONS entry %q: %w", p, err)
+		}
+		patterns = append(patterns, re)
+	}
+	return patterns, nil
 }

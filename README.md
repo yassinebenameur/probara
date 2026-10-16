@@ -10,7 +10,8 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
 
 - **18 monitor types, checked at the real protocol layer** — HTTP (status,
   body, JSON, and TLS-expiry assertions), ICMP ping, DNS records, TCP, gRPC
-  health, WebSocket, SIP (OPTIONS and digest-auth REGISTER over udp/tcp/tls),
+  health, WebSocket, SIP (OPTIONS, digest-auth REGISTER and INVITE test
+  calls over udp/tcp/tls),
   Redis, PostgreSQL, MySQL, MongoDB, RabbitMQ, multi-step API sequences with
   variable extraction, scripted browser journeys (headless Chromium via
   chromedp), push heartbeats, a host agent for CPU/memory/disk telemetry,
@@ -342,6 +343,8 @@ Retention setting semantics:
 | `SYNTHETIC_BROWSER_ARTIFACTS_DIR` | no | temp dir |
 | `CHROME_BIN` | no | auto-detected |
 | `SIP_LOCALHOST_AS_HOST_GATEWAY` | no | `false` |
+| `SIP_CALL_ENABLED` (lets the worker place SIP INVITE test calls) | no | `true`; `false` with `WORKER_LOCATION_ID` |
+| `SIP_CALL_ALLOWED_DESTINATIONS` (comma-separated anchored regexes on the called number) | no | empty (all) |
 | `AI_TRIAGE_ENABLED` (automatic alert triage kill switch: `false` stops new claims, queued rows drain as skipped; also alerter + api) | no | `true` |
 
 The AI job stream names (`AI_RCA_*`, `AI_TRIAGE_*`) have working code

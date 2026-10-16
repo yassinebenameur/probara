@@ -162,6 +162,29 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		[]string{"type"},
 	)
 
+	// SIP test calls: whether this worker places them (SIP_CALL_ENABLED,
+	// off by default on private-location workers) and to which numbers
+	// (SIP_CALL_ALLOWED_DESTINATIONS), plus the post-call linger counters.
+	if checker, err := w.checkerRegistry.Get("sip"); err == nil {
+		if sip, ok := checker.(*SIPChecker); ok {
+			sip.ConfigureCalls(cfg.SIPCallEnabled, cfg.SIPCallAllowedDestinations)
+			lingers := metricsRegistry.NewCounter(
+				"sip_linger_total",
+				"SIP test-call lingers by outcome (late answers BYE'd, late provisionals CANCELled, quiet)",
+				[]string{"outcome"},
+			)
+			dropped := metricsRegistry.NewCounter(
+				"sip_linger_dropped_total",
+				"SIP test-call flows closed without a linger because every linger slot was taken",
+				[]string{},
+			).With(prometheus.Labels{})
+			sip.ConfigureCallMetrics(
+				func(outcome string) { lingers.With(prometheus.Labels{"outcome": outcome}).Inc() },
+				dropped.Inc,
+			)
+		}
+	}
+
 	return w
 }
 

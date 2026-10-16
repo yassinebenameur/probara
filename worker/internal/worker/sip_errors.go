@@ -13,6 +13,14 @@ import (
 	"github.com/yassinebenameur/probara/shared/netguard"
 )
 
+// Test calls a worker refuses to place (SIP_CALL_ENABLED,
+// SIP_CALL_ALLOWED_DESTINATIONS). Both are decided before anything is
+// resolved or sent.
+var (
+	errSIPCallsDisabled         = errors.New("disabled on this worker")
+	errSIPDestinationNotAllowed = errors.New("destination not allowed by worker policy")
+)
+
 // sipDialError marks a failure to establish the SIP transport (dial, or the
 // TLS handshake on top of it). It lets classifySIPError fall back to
 // "connect" for transport setup failures without matching on message text,
@@ -50,6 +58,10 @@ func classifySIPError(err error) string {
 		loopErr *sipLoopError
 	)
 	switch {
+	case errors.Is(err, errSIPCallsDisabled):
+		return "sip_call"
+	case errors.Is(err, errSIPDestinationNotAllowed):
+		return "policy"
 	case errors.Is(err, netguard.ErrBlocked):
 		return "ssrf_blocked"
 	case errors.As(err, &loopErr):

@@ -554,6 +554,16 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`false`',
               'Rewrites each SIP target host that is `localhost` or a loopback IP (the monitor host or, under `resolution: rfc3263`, an SRV target) to `host.docker.internal` before it is resolved, so a containerized worker can reach a SIP server on the developer machine. Truthy values are `1`, `true`, `yes`, and `on`. The Compose worker and `make start-all-local` (local-process workers) both turn it on; leave it off in production.',
             ],
+            [
+              '`SIP_CALL_ENABLED`',
+              '`true` on platform workers, `false` on private-location workers (`WORKER_LOCATION_ID` set)',
+              'Lets the worker place [SIP test calls](/docs/monitors/#network-protocols) (`method: invite`), which are real and possibly billed. A disabled worker fails each one with `sip_call: disabled on this worker` before sending anything. A private-location operator opts in with `SIP_CALL_ENABLED=true` (Helm: `worker.locations[].extraEnv`). Any value `strconv.ParseBool` rejects fails startup.',
+            ],
+            [
+              '`SIP_CALL_ALLOWED_DESTINATIONS`',
+              'Empty (every destination)',
+              'Comma-separated regular expressions; a test call is placed only when the called user part (`call.number`, or the decoded user of `call.target_uri`) matches one in full (each is anchored), else it fails with `policy: destination not allowed by worker policy` before sending anything. An invalid expression fails startup.',
+            ],
           ],
         },
         {

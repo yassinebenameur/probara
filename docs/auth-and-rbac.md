@@ -56,7 +56,13 @@ AuthMiddleware → AuditMutations → RequireWrite → [route guards] → handle
   match. Test requests cannot supply ciphertext envelopes directly: use
   write-only placeholders for existing credentials.
 - `RequireTenantAdmin`: API key create/revoke, tenant settings mutation,
-  audit log. Superadmin or tenant-role admin; API keys never pass.
+  audit log. Superadmin or tenant-role admin; API keys never pass. Its
+  predicate is `ctxpkg.IsTenantAdmin`, which also gates SIP test-call
+  monitors (`method: invite`, real calls) where no route guard can: create
+  and every update (pause included) in the monitors service, so import
+  inherits it, and `/monitors/{id}/run` and `/monitors/test` in their
+  handlers (`monitorservice.RequireCallPermission`). Editors and API keys of
+  any scope get 403.
 - `RequireSuperadmin`: `/users/*`.
 
 Audit runs *outside* the write gate so denied attempts are recorded with

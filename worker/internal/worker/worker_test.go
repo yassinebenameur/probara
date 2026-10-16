@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -294,4 +295,67 @@ func TestProgressHeartbeatToleratesMissingInProgress(t *testing.T) {
 	w := newProcessTestWorker(t, &flakyPublisher{}, &fakeCallChecker{})
 	stop := w.startProgressHeartbeat(&queue.Message{}, time.Second, w.logger.WithFields(nil))
 	stop()
+}
+
+// The real SIP checker marks INVITE configs side-effecting: a redelivered
+// test-call job is acked without placing the call (no packet reaches the
+// callee) and without publishing; an OPTIONS job is still re-run.
+func TestProcessJob_RedeliveredSIPCallIsNotPlacedAgain(t *testing.T) {
+	var packets atomic.Int32
+	host, port := startFakeUDPSIPServer(t, func(string) []string {
+		packets.Add(1)
+		return nil
+	})
+	pub := &flakyPublisher{}
+	w := NewWorker(&config.WorkerConfig{
+		CheckResultStream:  models.CheckResultStream,
+		CheckResultSubject: models.CheckResultSubject,
+		SIPCallEnabled:     true,
+	}, logger.New("worker-test", "error"), metrics.NewRegistry("worker"), nil)
+	w.results = pub
+
+	payload, err := json.Marshal(models.CheckJobPayload{
+		MonitorID: uuid.New().String(), Type: "sip", TimeoutSeconds: 5,
+		Config: json.RawMessage(fmt.Sprintf(`{"host":%q,"port":%d,"method":"invite","call":{"number":"100"}}`, host, port)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(models.Job{ID: uuid.New().String(), TenantID: uuid.New().String(), Type: models.JobTypeCheck, Version: "v1", Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.processJob(context.Background(), &queue.Message{Data: data, NumDelivered: 2}); err != nil {
+		t.Fatalf("processJob = %v, want nil (ack)", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := packets.Load(); n != 0 || pub.attempts != 0 {
+		t.Fatalf("redelivered call sent %d packets and %d publishes, want none", n, pub.attempts)
+	}
+	if got := counterValue(t, w.sideEffectSkipped, "sip"); got != 1 {
+		t.Fatalf("side_effect_redelivery_skipped_total{sip} = %v, want 1", got)
+	}
+
+	sip, _ := w.checkerRegistry.Get("sip")
+	if isSideEffecting(sip, json.RawMessage(`{"host":"x","method":"options"}`)) {
+		t.Fatal("an OPTIONS probe must stay at-least-once")
+	}
+	if !isSideEffecting(sip, json.RawMessage(`{"host":"x","method":"invite","password":"{\"alg\":\"aes-256-gcm\",\"ct\":\"…\"}","call":{"number":"1"}}`)) {
+		t.Fatal("an INVITE with an encrypted password must be side-effecting")
+	}
+}
+
+// NewWorker applies SIP_CALL_ENABLED / SIP_CALL_ALLOWED_DESTINATIONS to the
+// SIP checker.
+func TestNewWorker_ConfiguresSIPCalls(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		w := NewWorker(&config.WorkerConfig{SIPCallEnabled: enabled}, logger.New("worker-test", "error"), metrics.NewRegistry("worker"), nil)
+		checker, err := w.checkerRegistry.Get("sip")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := checker.(*SIPChecker).callsEnabled; got != enabled {
+			t.Fatalf("SIPCallEnabled=%v: checker calls enabled = %v", enabled, got)
+		}
+	}
 }

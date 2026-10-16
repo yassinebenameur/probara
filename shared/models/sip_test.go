@@ -43,8 +43,9 @@ func TestSIPMonitorConfigValidate(t *testing.T) {
 		{name: "port too large", config: `{"host":"sip.example.com","port":65536}`, errContains: "port must be between 1 and 65535"},
 		{name: "negative port", config: `{"host":"sip.example.com","port":-1}`, errContains: "port must be between 1 and 65535"},
 		{name: "invalid transport", config: `{"host":"sip.example.com","transport":"sctp"}`, errContains: "transport must be"},
-		// INVITE is not accepted until the call flow exists.
-		{name: "invalid method", config: `{"host":"sip.example.com","method":"invite"}`, errContains: "method must be"},
+		{name: "invalid method", config: `{"host":"sip.example.com","method":"message"}`, errContains: "method must be 'options', 'register' or 'invite'"},
+		{name: "invite without call", config: `{"host":"sip.example.com","method":"invite"}`, errContains: "call is required when method is invite"},
+		{name: "call without invite", config: `{"host":"sip.example.com","method":"options","call":{"number":"100"}}`, errContains: "call is only allowed when method is invite"},
 		{name: "password without username", config: `{"host":"sip.example.com","password":"secret"}`, errContains: "username and password must be provided together"},
 		{name: "username without password", config: `{"host":"sip.example.com","username":"agent"}`, errContains: "username and password must be provided together"},
 		{name: "blank username with password", config: `{"host":"sip.example.com","username":"  ","password":"secret"}`, errContains: "username and password must be provided together"},

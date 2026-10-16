@@ -83,7 +83,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               'Platform `member` + tenant `editor`',
               'Selected tenant',
-              'Can create/update ordinary tenant resources, but not tenant-admin-only actions.',
+              'Can create/update ordinary tenant resources, but not tenant-admin-only actions (which include managing, running or testing SIP test-call monitors).',
             ],
             [
               'Platform `member` + tenant `viewer`',
@@ -93,7 +93,7 @@ export const SECURITY_PAGE: DocPage = {
             [
               'API key, `write` scope',
               'Exactly the key’s tenant',
-              'Can write ordinary resources but never passes tenant-admin middleware.',
+              'Can write ordinary resources but never passes tenant-admin checks, so it cannot manage, run or test a SIP test-call monitor.',
             ],
             [
               'API key, `read` scope',

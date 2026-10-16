@@ -56,6 +56,16 @@ type sipClientTxn struct {
 	looped       chan struct{}   // closed when the request came back to us
 	loopOnce     sync.Once
 	completed    bool // final response received; later retransmissions are absorbed
+
+	// onResponse, set for INVITE client transactions (registerInvite),
+	// receives every response, provisional and final, retransmissions and
+	// forked 2xx included, on the dispatcher goroutine; the channels above
+	// are unused. An INVITE needs that: a non-2xx final is ACKed by the
+	// transaction and its retransmissions re-ACKed (Timer D's job), every
+	// 2xx — one per fork, each retransmitted until ACKed — gets its own ACK,
+	// and all of it must happen whatever the call's own goroutine is busy
+	// with (a CANCEL, a BYE) or after the check has returned (sip_linger.go).
+	onResponse func(sipInbound)
 }
 
 // sipLoopError is a request of ours that came back to us as a request: the
@@ -69,6 +79,13 @@ func (e *sipLoopError) Error() string {
 }
 
 func newSIPEndpoint(flow *sipFlow) *sipEndpoint {
+	return newSIPEndpointWithDialogs(flow, nil)
+}
+
+// newSIPEndpointWithDialogs is newSIPEndpoint for a flow that holds dialogs:
+// matchDialog (see sipUAS) decides which in-dialog requests are ours. It is
+// set before the dispatcher starts, so no request is answered without it.
+func newSIPEndpointWithDialogs(flow *sipFlow, matchDialog func(*sipMessage) bool) *sipEndpoint {
 	e := &sipEndpoint{
 		flow:     flow,
 		t1:       sipT1,
@@ -78,6 +95,7 @@ func newSIPEndpoint(flow *sipFlow) *sipEndpoint {
 		done:     make(chan struct{}),
 	}
 	e.uas = newSIPUAS(flow.send)
+	e.uas.matchDialog = matchDialog
 	go e.dispatch()
 	return e
 }
@@ -118,6 +136,8 @@ func (e *sipEndpoint) dispatch() {
 		switch {
 		case txn == nil:
 			e.stray.Add(1)
+		case txn.onResponse != nil:
+			txn.onResponse(in)
 		case completed:
 			// A retransmitted final for a finished transaction
 			// (the Completed state's job): absorbed, not stray.
@@ -158,6 +178,18 @@ func (e *sipEndpoint) ownRequest(req *sipMessage) bool {
 }
 
 func (e *sipEndpoint) register(key string) (*sipClientTxn, error) {
+	return e.registerTxn(key, nil)
+}
+
+// registerInvite registers an INVITE client transaction whose responses all
+// go to onResponse (see sipClientTxn.onResponse). The caller sends the
+// INVITE and runs Timer A; its looped channel still reports the INVITE
+// coming back to us.
+func (e *sipEndpoint) registerInvite(branch string, onResponse func(sipInbound)) (*sipClientTxn, error) {
+	return e.registerTxn(sipTxnKey(branch, "INVITE"), onResponse)
+}
+
+func (e *sipEndpoint) registerTxn(key string, onResponse func(sipInbound)) (*sipClientTxn, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, exists := e.txns[key]; exists {
@@ -167,6 +199,7 @@ func (e *sipEndpoint) register(key string) (*sipClientTxn, error) {
 		provisionals: make(chan sipInbound, 16),
 		final:        make(chan sipInbound, 1),
 		looped:       make(chan struct{}),
+		onResponse:   onResponse,
 	}
 	e.txns[key] = txn
 	branch, _, _ := strings.Cut(key, " ")

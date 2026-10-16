@@ -96,7 +96,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "AI training labels are writes, not diagnostics: confirming or correcting an [incident analysis](/docs/alerting/#ai-analysis) or an [alert triage](/docs/alerting/#ai-triage) and accepting or dismissing a [dependency suggestion](/docs/dependencies/#suggestions) need an editor, admin, superadmin, or write API key, and viewers and read keys get HTTP 403. Only tenant admins and superadmins, signed in, can [export labels](#ai-settings); every API key is refused, write scope included.",
+            "AI training labels are writes, not diagnostics: confirming or correcting an [incident analysis](/docs/alerting/#ai-analysis) or an [alert triage](/docs/alerting/#ai-triage) and accepting or dismissing a [dependency suggestion](/docs/dependencies/#suggestions) need an editor, admin, superadmin, or write API key, and viewers and read keys get HTTP 403. Only tenant admins and superadmins, signed in, can [export labels](#ai-settings); every API key is refused, write scope included. The same holds for [SIP test-call monitors](/docs/monitors/#network-protocols), which place real calls: creating, changing, pausing, running, testing or importing one needs a signed-in tenant admin or superadmin, and editors and API keys get HTTP 403.",
         },
         {
           type: "callout",

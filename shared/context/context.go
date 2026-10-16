@@ -110,6 +110,22 @@ func IsSuperadmin(ctx context.Context) bool {
 	return ok && platformRole == "superadmin"
 }
 
+// IsTenantAdmin reports a superadmin, or a signed-in user (never an API key:
+// keys carry no admin ID) whose role in the selected tenant is admin. It is
+// the predicate behind the API's RequireTenantAdmin middleware and the
+// service-level gates that need the same answer outside a route, such as SIP
+// test-call monitors.
+func IsTenantAdmin(ctx context.Context) bool {
+	if IsSuperadmin(ctx) {
+		return true
+	}
+	if !IsAdmin(ctx) {
+		return false
+	}
+	role, ok := GetRole(ctx)
+	return ok && role == "admin"
+}
+
 // WithActorType adds the credential type to the context
 func WithActorType(ctx context.Context, actorType string) context.Context {
 	return context.WithValue(ctx, ActorTypeKey, actorType)

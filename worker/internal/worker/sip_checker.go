@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,9 +16,9 @@ import (
 )
 
 // SIPChecker implements Checker for SIP monitors. It supports OPTIONS
-// availability pings and contact-less REGISTER checks (which exercise the
-// registrar's digest authentication path without mutating any bindings),
-// over UDP, TCP, or TLS. The host is resolved to IP literals first
+// availability pings, contact-less REGISTER checks (which exercise the
+// registrar's digest authentication path without mutating any bindings) and
+// INVITE test calls (sip_invite.go), over UDP, TCP, or TLS. The host is resolved to IP literals first
 // (sip_resolve.go: A/AAAA, or RFC 3263 SRV when the monitor opts in), and
 // each is dialed through dialGuard so SIP probes inherit the worker's
 // private-IP (SSRF) policy; every message of an attempt rides that one flow
@@ -33,13 +34,24 @@ type SIPChecker struct {
 	// testDial, set only by tests, interposes on the dial dialGuard makes
 	// (dialThroughGuard); nil dials through dialGuard.
 	testDial func(ctx context.Context, guard *dialGuard, network, addr string) (net.Conn, error)
+
+	// Test calls (sip_invite.go). callsEnabled and callAllowed come from
+	// ConfigureCalls; calls are off until it is called.
+	callsEnabled bool
+	callAllowed  []*regexp.Regexp
+	lingers      *sipLingerPool
+	// callTimers and callHook are for tests only.
+	callTimers sipCallTimers
+	callHook   func(stage string)
 }
 
-// NewSIPChecker creates a new SIP checker
+// NewSIPChecker creates a new SIP checker. It places no test call until
+// ConfigureCalls enables them.
 func NewSIPChecker(blockPrivateIPs bool, allowedCIDRs []*net.IPNet) *SIPChecker {
 	return &SIPChecker{
 		blockPrivateIPs: blockPrivateIPs,
 		allowedCIDRs:    allowedCIDRs,
+		lingers:         newSIPLingerPool(sipCallLingerSlots),
 	}
 }
 
@@ -94,6 +106,12 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			ErrorMessage: &errMsg,
 		}
 	}
+	// D12: a test call holds at most 10 s, whatever the payload says (the
+	// API refuses more; the clamp covers a payload that predates the rule).
+	// Applied before Validate so such a payload still runs, clamped.
+	if config.Call != nil && config.Call.HoldMs > models.SIPCallMaxHoldMs {
+		config.Call.HoldMs = models.SIPCallMaxHoldMs
+	}
 	// The API validates on write, but the payload may predate a rule (CR/LF
 	// hardening) or come from a private-location queue; nothing reaches the
 	// wire unless the shared rules pass here too.
@@ -105,6 +123,9 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		}
 	}
 	config.Host = strings.TrimSpace(config.Host)
+	if config.IsCall() {
+		return c.checkInvite(ctx, &config, timeoutSeconds)
+	}
 	mode := config.ResolutionMode()
 
 	method := strings.ToLower(config.Method)
@@ -333,28 +354,17 @@ func (c *SIPChecker) runNonInviteAttempt(ctx context.Context, candidate sipCandi
 		metrics.Auth = &sipAuthMetrics{Challenge: resp.StatusCode}
 	}
 	if (resp.StatusCode == 401 || resp.StatusCode == 407) && config.Username != "" && config.Password != "" {
-		authHeaderName := "Authorization"
-		challengeValue := resp.Get("WWW-Authenticate")
-		if resp.StatusCode == 407 {
-			authHeaderName = "Proxy-Authorization"
-			challengeValue = resp.Get("Proxy-Authenticate")
-		}
-		if challengeValue == "" {
+		if len(resp.Values(sipChallengeHeader(resp.StatusCode))) == 0 {
 			return sipAttemptResult{resp: resp, err: fmt.Errorf("server returned %d without an authentication challenge", resp.StatusCode)}
 		}
-
-		challenge, parseErr := parseSIPDigestChallenge(challengeValue)
-		var credentials string
-		if parseErr == nil {
-			metrics.Auth.Algorithm = sipDigestAlgorithmName(challenge.Algorithm)
-			credentials, parseErr = buildSIPDigestAuthorization(challenge, config.Username, config.Password, p.method, p.requestURI)
+		answer, authErr := newSIPAuthState(config.Username, config.Password).answer(resp, p.method, p.requestURI)
+		if authErr != nil {
+			return sipAttemptResult{resp: resp, err: fmt.Errorf("cannot answer authentication challenge: %v", authErr)}
 		}
-		if parseErr != nil {
-			return sipAttemptResult{resp: resp, err: fmt.Errorf("cannot answer authentication challenge: %v", parseErr)}
-		}
+		metrics.Auth.Algorithm = answer.algorithm
 
 		req.CSeq = 2
-		req.Extra = append(req.Extra, sipHeader{Name: authHeaderName, Value: credentials})
+		req.Extra = append(req.Extra, answer.headers...)
 		metrics.Auth.Rounds = 1
 		metrics.Auth.AuthMs = sipDurationMs(time.Since(firstSent))
 		resp, err = send()
@@ -364,6 +374,14 @@ func (c *SIPChecker) runNonInviteAttempt(ctx context.Context, candidate sipCandi
 		return sipAttemptResult{resp: resp, authAttempted: true}
 	}
 	return sipAttemptResult{resp: resp}
+}
+
+// sipChallengeHeader is the header carrying a 401's or 407's challenges.
+func sipChallengeHeader(status int) string {
+	if status == 407 {
+		return "Proxy-Authenticate"
+	}
+	return "WWW-Authenticate"
 }
 
 // sipAttemptOutcome is an attempt's entry in resolution.attempts.

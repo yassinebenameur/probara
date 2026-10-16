@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -14,7 +15,7 @@ type SIPMonitorConfig struct {
 	Host           string `json:"host"`                      // SIP server hostname/IP; the RFC 3263 domain under resolution rfc3263
 	Port           int    `json:"port"`                      // 0: 5060 (5061 for TLS), or from SRV under rfc3263
 	Transport      string `json:"transport"`                 // "udp", "tcp", or "tls"; "" is udp, or SRV-discovered under rfc3263
-	Method         string `json:"method,omitempty"`          // "options" (default) or "register"
+	Method         string `json:"method,omitempty"`          // "options" (default), "register" or "invite" (a test call: Call)
 	Username       string `json:"username,omitempty"`        // AOR user + digest auth username
 	Password       string `json:"password,omitempty"`        // Digest auth secret (encrypted at rest)
 	Domain         string `json:"domain,omitempty"`          // SIP domain for the AOR/request URI (default: host)
@@ -35,6 +36,40 @@ type SIPMonitorConfig struct {
 	// Nameserver pins the DNS server for rfc3263 lookups (host[:port], the
 	// DNS monitor's grammar). Blank uses the worker's resolver.
 	Nameserver string `json:"nameserver,omitempty"`
+	// Call configures the test call; set if and only if method is "invite"
+	// (sip_call.go).
+	Call *SIPCallConfig `json:"call,omitempty"`
+}
+
+// SIP monitor methods.
+const (
+	SIPMethodOptions  = "options"
+	SIPMethodRegister = "register"
+	SIPMethodInvite   = "invite"
+)
+
+// IsCall reports a test-call (INVITE) config: one whose every check places a
+// real, possibly billed, call. Either marker counts, so a payload that
+// somehow carries only one of them is still treated as a call by everything
+// that gates or de-duplicates calls (the API's tenant-admin gate, the
+// worker's at-most-once delivery). Both fields are non-secret, so a masked or
+// still-encrypted config answers the same.
+func (c SIPMonitorConfig) IsCall() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Method), SIPMethodInvite) || c.Call != nil
+}
+
+// IsSIPCallConfig reports whether a monitor of monitorType with this config
+// places calls (SIPMonitorConfig.IsCall). Anything that is not a parseable
+// sip config is not a call.
+func IsSIPCallConfig(monitorType string, config json.RawMessage) bool {
+	if monitorType != "sip" || len(config) == 0 {
+		return false
+	}
+	var cfg SIPMonitorConfig
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return false
+	}
+	return cfg.IsCall()
 }
 
 // SIP address resolution modes.
@@ -110,9 +145,16 @@ func (c SIPMonitorConfig) Validate() error {
 	}
 
 	switch strings.ToLower(c.Method) {
-	case "", "options", "register":
+	case "", SIPMethodOptions, SIPMethodRegister, SIPMethodInvite:
 	default:
-		return fmt.Errorf("method must be 'options' or 'register'")
+		return fmt.Errorf("method must be 'options', 'register' or 'invite'")
+	}
+	isInvite := strings.EqualFold(c.Method, SIPMethodInvite)
+	if isInvite && c.Call == nil {
+		return fmt.Errorf("call is required when method is invite")
+	}
+	if !isInvite && c.Call != nil {
+		return fmt.Errorf("call is only allowed when method is invite")
 	}
 
 	// Digest credentials go together: a password without a username (or vice
@@ -124,6 +166,12 @@ func (c SIPMonitorConfig) Validate() error {
 	// SIP response codes are 100-699.
 	if c.ExpectedStatus != nil && (*c.ExpectedStatus < 100 || *c.ExpectedStatus > 699) {
 		return fmt.Errorf("expected_status must be between 100 and 699")
+	}
+
+	if c.Call != nil {
+		if err := c.Call.validate(c.ExpectedStatus); err != nil {
+			return err
+		}
 	}
 
 	// The checker trims the override before using it as the SNI and

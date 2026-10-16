@@ -289,6 +289,18 @@ or imported groups come back empty. Any other path that creates groups through
   without running, and a failed publish retries in place, never NAKs. A
   checker that acts on the world (places calls, sends messages) must
   implement it, deciding from non-secret config fields only.
+- **SIP test calls** (`sip` + `method: invite`, `worker/internal/worker/sip_invite.go`)
+  place real, billable calls. `models.IsSIPCallConfig` is the one "is this a
+  call" test (non-secret fields): the checker's `SideEffecting`, the API's
+  tenant-admin gate (`monitorservice.RequireCallPermission` →
+  `ctxpkg.IsTenantAdmin`, in `CreateMonitor`/`UpdateMonitor` so import
+  inherits it, plus the run-now and test handlers; API keys never pass) and
+  the update-time method-class refusal all use it. Schedule bounds go through
+  `ScheduleAwareValidator` (`validation/registry.go`), applied to the
+  effective type/config/interval/timeout on every update. Workers read
+  `SIP_CALL_ENABLED` (default true, false with `WORKER_LOCATION_ID`) and
+  `SIP_CALL_ALLOWED_DESTINATIONS`; a `SIPChecker` never configured
+  (`ConfigureCalls`) places no call.
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs).
@@ -625,7 +637,8 @@ or imported groups come back empty. Any other path that creates groups through
   `RawPruneCutoffSQL` (one hour lower, same DB clock), and skips buckets with
   a pending mark (`checkResultNotPendingRollup`). Change the pair together.
 - `expected_status` etc. reuse `HTTPStatus` fields for non-HTTP protocols
-  (SIP status codes ride in `http_status`).
+  (SIP status codes ride in `http_status`; for an INVITE it is the final
+  INVITE code, the 18x in ring mode, never the BYE's).
 - SIP dev against the host: `SIP_LOCALHOST_AS_HOST_GATEWAY=true` rewrites
   each loopback target host (configured host or SRV target) to
   `host.docker.internal` before resolving it; the Compose worker and
@@ -637,8 +650,14 @@ or imported groups come back empty. Any other path that creates groups through
 - SIP signalling rides one flow per attempt: every request, response and
   answer to a server-sent request goes over the connection `dialSIP` opened
   through `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a
-  Contact, Via, Record-Route or SDP address. Requests are client transactions in
+  Contact, Via, Record-Route or SDP address (in a call's dialogs they only
+  fill the Request-URI and Route headers). Requests are client transactions in
   `sip_txn.go` (Timer E on UDP, matched by Via branch + CSeq method).
+- INVITE responses reach `sipCall.onResponse` on the dispatcher goroutine,
+  which sends every ACK itself (non-2xx in-transaction, each 2xx per To tag,
+  re-sent for retransmissions) so ACKs go out during CANCEL/BYE waits and the
+  post-result linger; keep them there. The 2xx ACK repeats the INVITE's
+  credentials; CANCEL and the non-2xx ACK carry none.
 - `alert_policies` are retired (API returns 410); workspace alert config
   lives on tenants via `/notification-settings`.
 - **AI analysis timing**: the worker's stale-pending sweep
