@@ -56,7 +56,7 @@ spec:
       {{- end }}
       containers:
       - name: alerter
-        image: "{{ .Values.image.repository }}-alerter:{{ .Values.image.tag }}"
+        image: "{{ .Values.image.repository }}-alerter:{{ include "monitoring-platform.imageTag" . }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         command: ["./alerter"]
         ports:

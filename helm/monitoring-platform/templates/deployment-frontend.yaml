@@ -43,7 +43,7 @@ spec:
       {{- end }}
       containers:
       - name: frontend
-        image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+        image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default (include "monitoring-platform.imageTag" .) }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy | default .Values.frontend.image.pullPolicy }}
         ports:
         - name: http

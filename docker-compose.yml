@@ -76,6 +76,12 @@ services:
   # start-all-local) therefore start the platform first and local-ai on its
   # own, tolerating its failure. With plain Compose and no pullable approved
   # image, name the services or set LOCAL_AI_IMAGE to an image you have.
+  # `latest` is pushed only by stable releases, so until one ships local-ai
+  # there is none to pull and Compose builds from ai-service/ (Git LFS head
+  # weights required); on the prerelease line set e.g.
+  # LOCAL_AI_IMAGE=ghcr.io/yassinebenameur/probara-local-ai:alpha. A local
+  # build keeps this tag, so after an ai-service/ or MODEL_VERSION change run
+  # `docker compose build local-ai` (or `up -d --build local-ai`).
   #
   # Sizing: LOCAL_AI_CPUS must not exceed the Docker host's CPUs (Docker
   # refuses to create the container otherwise); the Makefile and

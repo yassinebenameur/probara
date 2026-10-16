@@ -166,7 +166,9 @@ helm upgrade --install probara ./helm/monitoring-platform \
 ```yaml
 image:
   repository: ghcr.io/yassinebenameur/probara
-  tag: "latest" # use a pinned release tag in production
+  # Empty = the chart's appVersion (the release it was published with); pin
+  # an explicit release tag in production.
+  tag: "1.0.0"
 
 secrets:
   adminJwtSecret: "replace-with-32-plus-char-secret"

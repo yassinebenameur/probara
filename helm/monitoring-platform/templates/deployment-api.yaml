@@ -56,7 +56,7 @@ spec:
       {{- end }}
       containers:
       - name: api
-        image: "{{ .Values.image.repository }}-api:{{ .Values.image.tag }}"
+        image: "{{ .Values.image.repository }}-api:{{ include "monitoring-platform.imageTag" . }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         command: ["./api"]
         ports:

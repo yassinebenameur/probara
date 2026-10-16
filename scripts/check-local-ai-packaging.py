@@ -40,6 +40,11 @@ def helm(*args):
     return subprocess.run(['helm', 'template', RELEASE, CHART, *args], capture_output=True, text=True)
 
 
+def app_version():
+    chart = yaml.safe_load((Path(CHART) / 'Chart.yaml').read_text())
+    return str(chart['appVersion'])
+
+
 def render(*args):
     result = helm(*args)
     if result.returncode != 0:
@@ -109,8 +114,13 @@ def check_default():
     assert text == again, 'default render is not stable: the derived local_ai_token must not change between renders'
     spec = pod(objects, 'Deployment', FULL + '-local-ai')
     container = spec['containers'][0]
-    assert container['image'] == 'ghcr.io/yassinebenameur/probara-local-ai:latest', container['image']
+    # Empty image.tag = the chart's appVersion, the tag docker-build pushes for
+    # every release (`latest` never exists on the prerelease line).
+    assert container['image'] == f'ghcr.io/yassinebenameur/probara-local-ai:{app_version()}', container['image']
     assert container['imagePullPolicy'] == 'IfNotPresent'
+    probara = sorted({c['image'] for v in objects if v['kind'] in ('Deployment', 'Job')
+                      for c in v['spec']['template']['spec']['containers'] if '/probara' in c['image']})
+    assert len(probara) == 8 and all(i.endswith(':' + app_version()) for i in probara), probara
     assert container['resources'] == {'requests': {'cpu': '1', 'memory': '2Gi'}, 'limits': {'cpu': '4', 'memory': '4Gi'}}
     assert spec['automountServiceAccountToken'] is False
     assert 'serviceAccountName' not in spec

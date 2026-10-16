@@ -583,7 +583,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           tone: 'warning',
           title: 'Bundled defaults favor evaluation',
           text:
-            'Compose uses development database credentials and unauthenticated NATS. Helm defaults to `latest` images, simple single-instance embedded stateful services, writable root filesystems, and no network policies. Harden or replace these defaults before production.',
+            'Compose uses development database credentials and unauthenticated NATS. Helm defaults to unpinned image tags (the chart’s `appVersion`), simple single-instance embedded stateful services, writable root filesystems, and no network policies. Harden or replace these defaults before production.',
         },
       ],
     },

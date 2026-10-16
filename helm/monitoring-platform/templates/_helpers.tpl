@@ -29,6 +29,17 @@ Create chart name and version as used by the chart label.
 {{- end }}
 
 {{/*
+Tag for every Probara image: image.tag, or the chart's appVersion when it is
+empty. The release (scripts/release/update-helm-chart.sh) sets appVersion to
+the released version, and docker-build pushes that exact tag for every image,
+the gated local-ai one included, while `latest` exists only for stable
+releases (never on the prerelease line).
+*/}}
+{{- define "monitoring-platform.imageTag" -}}
+{{- .Values.image.tag | default .Chart.AppVersion -}}
+{{- end }}
+
+{{/*
 Common labels
 */}}
 {{- define "monitoring-platform.labels" -}}

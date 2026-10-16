@@ -53,7 +53,7 @@ spec:
       {{- end }}
       containers:
         - name: local-ai
-          image: "{{ .Values.localAI.image.repository | default (printf "%s-local-ai" .Values.image.repository) }}:{{ .Values.localAI.image.tag | default .Values.image.tag }}"
+          image: "{{ .Values.localAI.image.repository | default (printf "%s-local-ai" .Values.image.repository) }}:{{ .Values.localAI.image.tag | default (include "monitoring-platform.imageTag" .) }}"
           imagePullPolicy: {{ .Values.localAI.image.pullPolicy | default .Values.global.imagePullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

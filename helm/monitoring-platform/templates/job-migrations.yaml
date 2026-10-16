@@ -46,9 +46,9 @@ spec:
       containers:
         - name: migrations
           {{- if .Values.migrations.image.repository }}
-          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag | default .Values.image.tag }}"
+          image: "{{ .Values.migrations.image.repository }}:{{ .Values.migrations.image.tag | default (include "monitoring-platform.imageTag" .) }}"
           {{- else }}
-          image: "{{ .Values.image.repository }}-migrations:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}-migrations:{{ include "monitoring-platform.imageTag" . }}"
           {{- end }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
