@@ -68,7 +68,8 @@ func ValidateSweepWindow(localAITimeout time.Duration) error {
 // consumer currently holds unless they are past lockCeiling (the CTE is
 // materialized because it locks rows and calls a volatile function, so the
 // try-lock only runs on candidates), and the status='pending' re-check keeps
-// the write guarded like markFailed.
+// the write guarded like markFailed. The candidate scan relies on the partial
+// index idx_incident_ai_analyses_pending (migration 000092).
 var sweepStaleSQL = `
 WITH candidates AS (
 	SELECT id, created_at FROM incident_ai_analyses

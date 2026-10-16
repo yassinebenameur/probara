@@ -10,10 +10,10 @@ CREATE TABLE ai_labels (
     tenant_id         UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     subject_type      TEXT NOT NULL CHECK (subject_type IN ('incident_analysis','alert_triage','dependency_pair')),
     subject_key       TEXT NOT NULL,   -- analysis UUID text, or "<uuidLo>:<uuidHi>" for pairs
-    subject_id        UUID,            -- analysis id (no FK); NULL for pairs
-    incident_id       UUID,            -- incident_analysis only (no FK); export group key
+    subject_id        UUID,            -- analysis or alert_triage id (no FK); NULL for pairs
+    incident_id       UUID,            -- export group key (no FK): the analysis's incident, or for alert_triage the earliest incident linking the alert; NULL for pairs and unlinked triage
     verdict           TEXT NOT NULL CHECK (verdict IN ('confirmed','corrected','rejected')),
-    incident_label    TEXT,            -- incident_analysis only: incident-level catalogue key
+    incident_label    TEXT,            -- incident_analysis: incident-level catalogue key; alert_triage: alert-level key (hypothesis or correction); NULL for dependency_pair
     answers           JSONB NOT NULL CHECK (jsonb_typeof(answers) = 'object'),
     request           JSONB NOT NULL CHECK (jsonb_typeof(request) = 'object'),
     predicted         JSONB,

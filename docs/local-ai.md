@@ -293,7 +293,8 @@ the cluster's CNI enforces NetworkPolicy.
 ## Migration and rollback
 
 Migration 000092 adds structured metadata, preserves historical analysis
-prose and labels it `legacy-llm`. Obsolete provider columns and encrypted
+prose and labels it `legacy-llm`, and adds the partial index on pending
+analyses that the worker's stale sweep scans. Obsolete provider columns and encrypted
 keys remain unused for rollback compatibility, and retired `LLM_*` variables
 are ignored. To roll back, restore the previous application images and
 configuration; dropping the metadata removes new provenance but leaves the

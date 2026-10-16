@@ -27,19 +27,38 @@ func TestLocalAIMigrationPreservesLegacyResultsAndSwitches(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Recreate the exact pre-091 column/default boundary in this isolated DB.
-	exec(`ALTER TABLE incident_ai_analyses DROP COLUMN metadata; ALTER TABLE ai_settings ALTER COLUMN enabled SET DEFAULT FALSE`)
+	_, file, _, _ := runtime.Caller(0)
+	migration := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(filepath.Dir(file), "migrations", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	pendingIndexExists := func() bool {
+		t.Helper()
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pg_indexes WHERE indexname='idx_incident_ai_analyses_pending'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	// Recreate the exact pre-092 schema boundary in this isolated DB with the
+	// migration's own down file.
+	exec(migration("000092_local_ai_metadata.down.sql"))
+	if pendingIndexExists() {
+		t.Fatal("down migration kept idx_incident_ai_analyses_pending")
+	}
 	incident := uuid.New()
 	analysis := uuid.New()
 	exec(`INSERT INTO incidents(id,tenant_id,title) VALUES($1,$2,'legacy incident')`, incident, tenant)
 	exec(`INSERT INTO incident_ai_analyses(id,tenant_id,incident_id,status,model,summary,probable_root_cause) VALUES($1,$2,$3,'ready','old-provider','preserved historical summary','historical suspected cause')`, analysis, tenant, incident)
 	exec(`INSERT INTO ai_settings(tenant_id,enabled,base_url,api_key_encrypted,model) VALUES($1,FALSE,'https://legacy.invalid','retained ciphertext','legacy-model')`, tenant)
-	_, file, _, _ := runtime.Caller(0)
-	up, err := os.ReadFile(filepath.Join(filepath.Dir(file), "migrations", "000092_local_ai_metadata.up.sql"))
-	if err != nil {
-		t.Fatal(err)
+	exec(migration("000092_local_ai_metadata.up.sql"))
+	if !pendingIndexExists() {
+		t.Fatal("up migration did not create idx_incident_ai_analyses_pending (worker stale sweep)")
 	}
-	exec(string(up))
 	var text string
 	var metadata []byte
 	if err := tx.QueryRowContext(ctx, `SELECT summary,metadata FROM incident_ai_analyses WHERE id=$1`, analysis).Scan(&text, &metadata); err != nil {
