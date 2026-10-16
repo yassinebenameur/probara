@@ -246,6 +246,10 @@ test('isSipCall mirrors the API gate: method invite or a call object, sip only',
   assert.equal(isSipCall('sip', { method: 'options' }), false);
   assert.equal(isSipCall('sip', undefined), false);
   assert.equal(isSipCall('http', { method: 'invite' }), false);
+  // Any spelling of the key, as the server's gate reads it.
+  assert.equal(isSipCall('sip', { method: 'options', Method: 'invite' }), true);
+  assert.equal(isSipCall('sip', { Call: { number: '1' }, call: null }), true);
+  assert.equal(isSipCall('sip', { Call: null }), false);
 });
 
 test('sipCallTarget names who the call rings', () => {

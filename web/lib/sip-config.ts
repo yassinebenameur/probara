@@ -159,15 +159,18 @@ export function sipCallURIError(uri: string): string | null {
  * Whether a monitor places real calls: a `sip` monitor whose method is
  * invite or that carries a call. The TS twin of Go's
  * models.IsSIPCallConfig, which the API's tenant-admin gate uses, so the UI
- * hides exactly what the server refuses. Both fields are non-secret.
+ * hides exactly what the server refuses. Like it, it errs towards a call:
+ * any spelling of the "method" or "call" key counts. Both fields are
+ * non-secret.
  */
 export function isSipCall(type: string | undefined, config: unknown): boolean {
-  if (type !== 'sip' || !config || typeof config !== 'object') return false;
-  const cfg = config as { method?: unknown; call?: unknown };
-  return (
-    (typeof cfg.method === 'string' && cfg.method.trim().toLowerCase() === 'invite') ||
-    (cfg.call !== undefined && cfg.call !== null)
-  );
+  if (type !== 'sip' || !config || typeof config !== 'object' || Array.isArray(config)) return false;
+  return Object.entries(config as Record<string, unknown>).some(([key, value]) => {
+    const name = key.toLowerCase();
+    if (name === 'call') return value !== undefined && value !== null;
+    if (name === 'method') return typeof value === 'string' && value.trim().toLowerCase() === 'invite';
+    return false;
+  });
 }
 
 /**
