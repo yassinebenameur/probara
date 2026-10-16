@@ -116,10 +116,18 @@ export function sipFacts(m: SIPMetrics, minDaysValid?: number): SIPFact[] {
   // The check's own warnings (a warn threshold, an unconfirmed teardown, a
   // ring-mode call that was answered): the status stayed, the operator
   // should still know.
-  // An unconfirmed teardown already reads as a warning on its Teardown row.
-  const teardownShown = m.call?.teardown === 'bye_unconfirmed' || m.call?.teardown === 'cancel_unconfirmed';
+  // The Teardown row already shows this exact warning; any other teardown
+  // warning (a forked dialog's BYE unconfirmed after a CANCEL that was not)
+  // still gets its own row. The worker de-duplicates warnings, so skipping
+  // on equality skips it once.
+  const shownTeardownWarning =
+    m.call?.teardown === 'bye_unconfirmed'
+      ? 'teardown: BYE unconfirmed'
+      : m.call?.teardown === 'cancel_unconfirmed'
+        ? 'teardown: CANCEL unconfirmed'
+        : undefined;
   (m.warnings ?? []).forEach((warning, i) => {
-    if (teardownShown && warning.startsWith('teardown:')) return;
+    if (warning === shownTeardownWarning) return;
     facts.push({ key: `warning-${i}`, label: 'Warning', value: warning, tone: 'warning' });
   });
   if (m.latency_warn_ms !== undefined && !(m.warnings && m.warnings.length > 0)) {

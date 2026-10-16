@@ -214,6 +214,21 @@ test('an unconfirmed teardown is one warning row, not two', () => {
   ]);
 });
 
+test('only the teardown warning the Teardown row shows is hidden', () => {
+  const facts = sipFacts({
+    ...base,
+    method: 'INVITE',
+    call: { ...answeredCall, teardown: 'cancel_unconfirmed', bye_ms: undefined },
+    warnings: ['teardown: CANCEL unconfirmed', 'teardown: BYE unconfirmed'],
+  });
+  const warnings = facts.filter((f) => f.tone === 'warning').map((f) => [f.label, f.value]);
+  assert.equal(warnings.filter(([label]) => label === 'Teardown').length, 1);
+  assert.deepEqual(
+    warnings.filter(([label]) => label === 'Warning'),
+    [['Warning', 'teardown: BYE unconfirmed']],
+  );
+});
+
 test('latency_warn_ms reads as a warning when no warnings came with it', () => {
   const facts = sipFacts({ ...base, latency_warn_ms: 3000 });
   assert.equal(facts.find((f) => f.key === 'latency-warn')?.value, 'over the 3.0 s warning threshold');
