@@ -284,7 +284,10 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>)
       // Under RFC 3263 without a port, SRV picks the servers: the target is
       // the domain. An IP host skips SRV, so it falls through to the port
       // the worker dials (5061 over TLS), like every other config.
-      if (config.resolution === 'rfc3263' && !config.port && !isIPLiteral(host)) return host;
+      // The worker and status page read the mode case-insensitively
+      // (ResolutionMode, EqualFold), and stored rows may hold "RFC3263".
+      const rfc3263 = typeof config.resolution === 'string' && config.resolution.trim().toLowerCase() === 'rfc3263';
+      if (rfc3263 && !config.port && !isIPLiteral(host)) return host;
       const tls = typeof config.transport === 'string' && config.transport.toLowerCase() === 'tls';
       return `${host}:${(config.port as number | undefined) || (tls ? 5061 : 5060)}`;
     }

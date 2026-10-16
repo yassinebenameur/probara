@@ -130,6 +130,8 @@ test('monitorTarget mirrors the list and detail target', () => {
   assert.equal(monitorTarget({ type: 'sip', config: { host: 'sbc.test', port: 5080 } as never }), 'sbc.test:5080');
   assert.equal(monitorTarget({ type: 'sip', config: { host: 'sbc.test', transport: 'TLS' } as never }), 'sbc.test:5061');
   assert.equal(monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'rfc3263', port: 0 } as never }), 'x.test');
+  // Stored rows may spell the mode in any case, as the worker accepts.
+  assert.equal(monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'RFC3263', port: 0 } as never }), 'x.test');
   assert.equal(
     monitorTarget({ type: 'sip', config: { host: 'x.test', resolution: 'rfc3263', port: 5070 } as never }),
     'x.test:5070'

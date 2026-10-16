@@ -121,8 +121,10 @@ export default function SipForm({
 
   // RFC 3263 resolution ("Locate server via DNS") leaves port and transport
   // to SRV when they are unset (0 and '').
+  // Read case-insensitively, as the worker does: a stored "RFC3263" is rfc3263.
+  const rawResolution = editSipConfig?.resolution ?? initialSipConfig?.resolution;
   const initialResolution: SipFormFields['resolution'] =
-    (editSipConfig?.resolution ?? initialSipConfig?.resolution) === 'rfc3263' ? 'rfc3263' : 'a';
+    typeof rawResolution === 'string' && rawResolution.trim().toLowerCase() === 'rfc3263' ? 'rfc3263' : 'a';
   const initialRfc3263 = initialResolution === 'rfc3263';
 
   // The API accepts transport in any case and port 0 (5060, or 5061 over
