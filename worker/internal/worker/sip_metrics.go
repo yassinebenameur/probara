@@ -77,7 +77,8 @@ type sipReasonHeader struct {
 // Host is the name it came from — the configured host, or the SRV target —
 // after the SIP_LOCALHOST_AS_HOST_GATEWAY rewrite; Address the IP:port the
 // flow connected to; ResolvedVia how Host became that address: "literal" for
-// an IP, "a" for an A/AAAA lookup, "srv" for an SRV target. Failover is set
+// an IP, "a" for an A/AAAA lookup, "srv" for an SRV target, "naptr" for an
+// SRV target whose SRV name a NAPTR record gave. Failover is set
 // when an earlier address was tried first and given up on.
 type sipTargetMetrics struct {
 	Host        string `json:"host"`
@@ -87,17 +88,29 @@ type sipTargetMetrics struct {
 }
 
 // sipResolutionMetrics is how the check found its addresses (sip_resolve.go)
-// and what happened at each one. Mode is "a" or "rfc3263"; SRV lists the
-// records of the transport that was used, in the order they were tried;
+// and what happened at each one. Mode is "a" or "rfc3263"; NAPTRStatus
+// (rfc3263 only) is ok, none, unavailable (no nameserver answered; SRV went
+// ahead without it) or skipped (an IP host, or a port or transport was set);
+// NAPTR lists the usable NAPTR records in order and preference; SRV lists
+// the records of the SRV name that was used, in the order they were tried;
 // Attempts lists every address tried (or SRV target that did not resolve),
 // in order, with its outcome: ok (a final response decided the check), 503,
 // or the error class (refused, timeout, tls, ssrf_blocked, connect, dns, …).
 type sipResolutionMetrics struct {
-	Mode     string              `json:"mode"`
-	SRV      []sipSRVMetrics     `json:"srv,omitempty"`
-	Attempts []sipAttemptMetrics `json:"attempts,omitempty"`
+	Mode        string              `json:"mode"`
+	NAPTRStatus string              `json:"naptr_status,omitempty"`
+	NAPTR       []sipNAPTRMetrics   `json:"naptr,omitempty"`
+	SRV         []sipSRVMetrics     `json:"srv,omitempty"`
+	Attempts    []sipAttemptMetrics `json:"attempts,omitempty"`
 
 	lookedUp bool // a DNS query was made: dns_ms is meaningful
+}
+
+type sipNAPTRMetrics struct {
+	Order       int    `json:"order"`
+	Pref        int    `json:"pref"`
+	Service     string `json:"service"`     // SIP+D2U, SIP+D2T, SIPS+D2T
+	Replacement string `json:"replacement"` // the SRV name it leads to
 }
 
 type sipSRVMetrics struct {
@@ -123,7 +136,7 @@ func (r *sipResolutionMetrics) addAttempt(a sipAttemptMetrics) {
 // sipTimingMetrics reuses the HTTP timing names. dns_ms and total_ms cover
 // the whole check; the others describe the attempt that decided it (after a
 // failover, the last address tried). Anchors:
-//   - dns_ms: every SRV and A/AAAA lookup; absent for an IP literal.
+//   - dns_ms: every NAPTR, SRV and A/AAAA lookup; absent for an IP literal.
 //   - connect_ms: dial (UDP: socket setup; TCP/TLS: TCP connect).
 //   - tls_handshake_ms: the TLS handshake on top of it.
 //   - first_response_ms: first request sent → the first response to it of

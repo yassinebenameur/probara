@@ -20,14 +20,15 @@ import (
 	"github.com/yassinebenameur/probara/shared/netguard"
 )
 
-// fakeSIPResolver answers SRV and A/AAAA from maps and records every query.
-// A name missing from a map is NXDOMAIN; one in errs fails with that error,
-// alongside its srv records when it has some (as LookupSRV does after
-// filtering out invalid targets).
+// fakeSIPResolver answers NAPTR, SRV and A/AAAA from maps and records every
+// query. A name missing from a map is NXDOMAIN; one in errs fails with that
+// error, alongside its srv records when it has some (as LookupSRV does after
+// filtering out invalid targets). NAPTR errors are keyed "NAPTR <name>".
 type fakeSIPResolver struct {
-	srv  map[string][]*net.SRV // "_sip._udp.example.com"
-	ips  map[string][]string   // host → addresses
-	errs map[string]error      // query name → error
+	naptr map[string][]sipNAPTR // "example.com"
+	srv   map[string][]*net.SRV // "_sip._udp.example.com"
+	ips   map[string][]string   // host → addresses
+	errs  map[string]error      // query name → error
 
 	mu      sync.Mutex
 	queries []string // "SRV _sip._udp.example.com", "A sbc1.example.com"
@@ -45,8 +46,24 @@ func (f *fakeSIPResolver) recorded() []string {
 	return append([]string(nil), f.queries...)
 }
 
+func (f *fakeSIPResolver) LookupNAPTR(_ context.Context, name string) ([]sipNAPTR, error) {
+	f.record("NAPTR " + name)
+	if err := f.errs["NAPTR "+name]; err != nil {
+		return nil, err
+	}
+	records, ok := f.naptr[name]
+	if !ok {
+		return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	return records, nil
+}
+
 func (f *fakeSIPResolver) LookupSRV(_ context.Context, service, proto, name string) (string, []*net.SRV, error) {
-	q := fmt.Sprintf("_%s._%s.%s", service, proto, name)
+	// Like net.Resolver, empty service and proto look name up directly.
+	q := name
+	if service != "" || proto != "" {
+		q = fmt.Sprintf("_%s._%s.%s", service, proto, name)
+	}
 	f.record("SRV " + q)
 	if err := f.errs[q]; err != nil {
 		return "", f.srv[q], err
@@ -129,6 +146,7 @@ func TestResolveSIPTargets(t *testing.T) {
 		want        []string
 		wantQueries []string
 		wantSRV     int
+		wantNAPTR   string // naptr_status; "" means skipped under rfc3263, absent under a
 	}{
 		{
 			name:        "a mode resolves the host at the default port, never SRV",
@@ -176,16 +194,18 @@ func TestResolveSIPTargets(t *testing.T) {
 			name:        "rfc3263 auto transport takes the first transport the domain publishes",
 			config:      models.SIPMonitorConfig{Host: "example.com", Resolution: "rfc3263"},
 			want:        []string{"srv sbc1.example.com 192.0.2.11:5060/tcp", "srv sbc2.example.com 192.0.2.12:5070/tcp"},
-			wantQueries: []string{"SRV _sip._udp.example.com", "SRV _sip._tcp.example.com", "A sbc1.example.com", "A sbc2.example.com"},
+			wantQueries: []string{"NAPTR example.com", "SRV _sip._udp.example.com", "SRV _sip._tcp.example.com", "A sbc1.example.com", "A sbc2.example.com"},
 			wantSRV:     2,
+			wantNAPTR:   "none",
 		},
 		{
 			name:   "rfc3263 without SRV falls back to A at the default port over udp",
 			config: models.SIPMonitorConfig{Host: "other.example", Resolution: "rfc3263"},
 			want:   []string{"a other.example 192.0.2.9:5060/udp"},
 			wantQueries: []string{
-				"SRV _sip._udp.other.example", "SRV _sip._tcp.other.example", "SRV _sips._tcp.other.example", "A other.example",
+				"NAPTR other.example", "SRV _sip._udp.other.example", "SRV _sip._tcp.other.example", "SRV _sips._tcp.other.example", "A other.example",
 			},
+			wantNAPTR: "none",
 		},
 		{
 			name:        "rfc3263 explicit tls without SRV falls back to 5061",
@@ -218,6 +238,13 @@ func TestResolveSIPTargets(t *testing.T) {
 			}
 			if res.Mode != tt.config.ResolutionMode() {
 				t.Errorf("mode = %q, want %q", res.Mode, tt.config.ResolutionMode())
+			}
+			wantNAPTR := tt.wantNAPTR
+			if wantNAPTR == "" && tt.config.ResolutionMode() == models.SIPResolutionRFC3263 {
+				wantNAPTR = "skipped"
+			}
+			if res.NAPTRStatus != wantNAPTR {
+				t.Errorf("naptr_status = %q, want %q", res.NAPTRStatus, wantNAPTR)
 			}
 			if res.lookedUp != (len(tt.wantQueries) > 0) {
 				t.Errorf("lookedUp = %v with queries %v", res.lookedUp, tt.wantQueries)
@@ -696,6 +723,12 @@ func TestWithSIPSRVIdentityHint(t *testing.T) {
 		t.Errorf("error %q contains \"; \", the assertion separator", err)
 	}
 
+	// An SRV target NAPTR led to is an SRV target too.
+	naptr := sipCandidate{host: "sbc1.example.com", via: "naptr"}
+	if got := withSIPSRVIdentityHint(mismatch, naptr, "example.com", false); !strings.Contains(got.Error(), "not SRV target sbc1.example.com") {
+		t.Errorf("naptr target got no hint: %v", got)
+	}
+
 	// No hint off SRV, with an override, or for another TLS failure.
 	if got := withSIPSRVIdentityHint(mismatch, sipCandidate{host: "example.com", via: "a"}, "example.com", false); got != error(mismatch) {
 		t.Errorf("a-record target got a hint: %v", got)
@@ -868,13 +901,21 @@ func TestSIPChecker_NameserverThroughDialGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSIPResolver() error = %v", err)
 	}
-	resolver, ok := r.(*net.Resolver)
-	if !ok || !resolver.PreferGo || resolver.Dial == nil {
-		t.Fatalf("resolver = %T, want a pinned Go resolver", r)
+	pinned, ok := r.(sipNetResolver)
+	if !ok || pinned.Resolver == nil || !pinned.PreferGo || pinned.Dial == nil {
+		t.Fatalf("resolver = %#v, want a pinned Go resolver", r)
 	}
-	_, err = resolver.Dial(context.Background(), "udp", "ignored:53")
+	_, err = pinned.Dial(context.Background(), "udp", "ignored:53")
 	if !errors.Is(err, netguard.ErrBlocked) {
 		t.Fatalf("Dial() error = %v, want ssrf_blocked for a private nameserver", err)
+	}
+	// NAPTR asks the same nameserver, through the same policy.
+	if pinned.naptr == nil || pinned.naptr.server != "10.0.0.53:53" {
+		t.Fatalf("naptr client = %+v, want it pinned to 10.0.0.53:53", pinned.naptr)
+	}
+	_, err = pinned.LookupNAPTR(context.Background(), "example.com")
+	if !errors.Is(err, netguard.ErrBlocked) {
+		t.Fatalf("LookupNAPTR() error = %v, want ssrf_blocked for a private nameserver", err)
 	}
 
 	// Without a nameserver (or outside rfc3263) the worker's resolver.
@@ -882,8 +923,9 @@ func TestSIPChecker_NameserverThroughDialGuard(t *testing.T) {
 		{Host: "example.com", Resolution: "rfc3263"},
 		{Host: "example.com", Nameserver: "10.0.0.53"},
 	} {
-		if r, _ := checker.newSIPResolver(c, time.Second); r != sipResolver(net.DefaultResolver) {
-			t.Errorf("config %+v: resolver %T, want net.DefaultResolver", c, r)
+		r, _ := checker.newSIPResolver(c, time.Second)
+		if nr, ok := r.(sipNetResolver); !ok || nr.Resolver != net.DefaultResolver || nr.naptr == nil || nr.naptr.server != "" {
+			t.Errorf("config %+v: resolver %#v, want net.DefaultResolver with resolv.conf NAPTR", c, r)
 		}
 	}
 }

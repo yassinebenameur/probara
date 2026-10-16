@@ -5,7 +5,7 @@ export interface SipFormFields {
   host: string;
   /** 0 means unset: from SRV under rfc3263 (the form requires a port otherwise). */
   port: number;
-  /** 'auto' leaves the transport to SRV; offered only under rfc3263. */
+  /** 'auto' leaves the transport to NAPTR/SRV; offered only under rfc3263. */
   transport: 'udp' | 'tcp' | 'tls' | 'auto';
   resolution: 'a' | 'rfc3263';
   nameserver: string;

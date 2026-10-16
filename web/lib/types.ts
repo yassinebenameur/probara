@@ -382,10 +382,10 @@ export interface SIPMonitorConfig {
   host: string;
   // 0: 5060 (5061 over TLS), or from SRV under resolution 'rfc3263'.
   port: number;
-  // '' is UDP, or left to SRV under resolution 'rfc3263'.
+  // '' is UDP, or left to NAPTR/SRV under resolution 'rfc3263'.
   transport: "" | "udp" | "tcp" | "tls";
-  // 'rfc3263' locates the server through SRV with failover; absent or 'a'
-  // dials the host's A/AAAA records.
+  // 'rfc3263' locates the server through NAPTR (transport left to DNS) and
+  // SRV with failover; absent or 'a' dials the host's A/AAAA records.
   resolution?: "a" | "rfc3263";
   // DNS server for rfc3263 lookups (host or host:port); rfc3263 only.
   nameserver?: string;
@@ -1955,13 +1955,19 @@ export interface SIPReasonHeader {
 export interface SIPTargetMetrics {
   host: string;
   address?: string;
-  resolved_via: 'literal' | 'a' | 'srv';
+  // naptr: an SRV target whose SRV name a NAPTR record gave.
+  resolved_via: 'literal' | 'a' | 'srv' | 'naptr';
   // An earlier address was tried first and given up on.
   failover?: boolean;
 }
 
 export interface SIPResolutionMetrics {
   mode: 'a' | 'rfc3263';
+  // rfc3263 only. unavailable: no nameserver answered, SRV went ahead
+  // without it; skipped: an IP host, or a port or transport was set.
+  naptr_status?: 'ok' | 'none' | 'unavailable' | 'skipped';
+  // The usable NAPTR records, in order and preference.
+  naptr?: { order: number; pref: number; service: string; replacement: string }[];
   srv?: { target: string; port: number; priority: number; weight: number }[];
   // Every address tried, in order: outcome is ok, 503 or the error class.
   attempts?: { address: string; transport: string; outcome: string; ms: number }[];

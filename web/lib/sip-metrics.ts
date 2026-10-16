@@ -118,13 +118,15 @@ export function sipFacts(m: SIPMetrics, minDaysValid?: number): SIPFact[] {
 /**
  * `203.0.113.7:5061 (sbc2.example.com via SRV, after failover)`: the address
  * that decided the check, and how DNS led there when it was not the
- * monitor's own host (an SRV target, a failover).
+ * monitor's own host (an SRV target, reached through NAPTR or not; a
+ * failover).
  */
 export function sipAddressLabel(m: SIPMetrics): string {
   const target = m.target;
   if (!target?.address) return '';
   const notes: string[] = [];
   if (target.resolved_via === 'srv') notes.push(`${target.host} via SRV`);
+  if (target.resolved_via === 'naptr') notes.push(`${target.host} via NAPTR→SRV`);
   if (target.failover) notes.push('after failover');
   return notes.length > 0 ? `${target.address} (${notes.join(', ')})` : target.address;
 }

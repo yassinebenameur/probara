@@ -124,10 +124,11 @@ func (e *sipSRVIdentityError) Error() string {
 func (e *sipSRVIdentityError) Unwrap() error { return e.err }
 
 // withSIPSRVIdentityHint adds the hint to a hostname mismatch at an SRV
-// target when no tls_server_name override is configured.
+// target (found directly or through NAPTR) when no tls_server_name override
+// is configured.
 func withSIPSRVIdentityHint(err error, candidate sipCandidate, serverName string, overridden bool) error {
 	var hostnameErr x509.HostnameError
-	if candidate.via != "srv" || overridden || !errors.As(err, &hostnameErr) {
+	if (candidate.via != "srv" && candidate.via != "naptr") || overridden || !errors.As(err, &hostnameErr) {
 		return err
 	}
 	return &sipSRVIdentityError{err: err, serverName: serverName, target: candidate.host}

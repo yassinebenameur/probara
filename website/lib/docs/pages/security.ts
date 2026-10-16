@@ -359,6 +359,7 @@ go run ./cmd/admin/encrypt_existing_channels`,
           type: 'list',
           items: [
             'Hostname dials resolve candidate IPs and validate them before connecting.',
+            "A SIP monitor's `nameserver` is dialed under the same policy as its targets. Without one, its RFC 3263 NAPTR query goes to the worker's own `/etc/resolv.conf` nameservers, the resolver every hostname lookup already uses: the policy lets exactly those addresses through.",
             'Browser validation rejects a hostname if any returned address is blocked, reducing mixed public/private DNS selection risk.',
             'Use a [dedicated location worker](/docs/locations/#target-policy) for internal monitoring and grant that location only the internal CIDRs it owns.',
             'Do not globally disable blocking to monitor one private target.',

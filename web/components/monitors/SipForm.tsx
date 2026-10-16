@@ -189,15 +189,15 @@ export default function SipForm({
                 className="input font-mono"
               />
               <FieldHint>
-                {rfc3263 ? "SIP domain whose SRV records name the servers, or a hostname or IP" : 'Hostname or IP'}
+                {rfc3263 ? 'SIP domain whose NAPTR/SRV records name the servers, or a hostname or IP' : 'Hostname or IP'}
               </FieldHint>
             </>
           )}
         </FormField>
 
         <ToggleRow
-          title="Locate server via DNS (SRV)"
-          description="RFC 3263: find the servers from the domain's SRV records and fail over between them"
+          title="Locate server via DNS (NAPTR/SRV)"
+          description="RFC 3263: find the servers from the domain's NAPTR and SRV records and fail over between them"
           checked={rfc3263}
           onChange={setLocateViaDNS}
         />
@@ -247,7 +247,7 @@ export default function SipForm({
               }}
               className="input"
             >
-              {rfc3263 && <option value="auto">Auto (from SRV)</option>}
+              {rfc3263 && <option value="auto">Auto (from NAPTR/SRV)</option>}
               <option value="udp">UDP</option>
               <option value="tcp">TCP</option>
               <option value="tls">TLS</option>
@@ -477,7 +477,7 @@ export default function SipForm({
                       {formData.port ? `:${formData.port}` : ''}
                     </PlanTarget>,
                     ...(rfc3263 && !formData.port ? ['located via SRV'] : []),
-                    formData.transport === 'auto' ? 'transport from SRV' : `over ${formData.transport.toUpperCase()}`,
+                    formData.transport === 'auto' ? 'transport from NAPTR/SRV' : `over ${formData.transport.toUpperCase()}`,
                     downAfterLabel(formData.consecutive_failures_threshold),
                   ]
                 : []

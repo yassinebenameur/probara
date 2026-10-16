@@ -127,6 +127,22 @@ test('an SRV failover shows the target, the failover and the path tried', () => 
   assert.equal(facts.find((f) => f.key === 'timing')?.value, 'DNS 4 ms, connect 12 ms');
 });
 
+test('a target found through NAPTR says so', () => {
+  const m: SIPMetrics = {
+    ...base,
+    transport: 'tls',
+    target: { host: 'sbc1.example.com', address: '203.0.113.6:5061', resolved_via: 'naptr' },
+    resolution: {
+      mode: 'rfc3263',
+      naptr_status: 'ok',
+      naptr: [{ order: 10, pref: 10, service: 'SIPS+D2T', replacement: '_sips._tcp.example.com' }],
+      srv: [{ target: 'sbc1.example.com', port: 5061, priority: 10, weight: 0 }],
+    },
+    timing: { total_ms: 30 },
+  };
+  assert.equal(sipAddressLabel(m), '203.0.113.6:5061 (sbc1.example.com via NAPTR→SRV)');
+});
+
 test('a single attempt lists no path, and an undecided transport is not shown', () => {
   const m: SIPMetrics = {
     ...base,

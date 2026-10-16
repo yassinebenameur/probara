@@ -14,11 +14,24 @@ import (
 	"github.com/yassinebenameur/probara/shared/models"
 )
 
-// sipResolver is the DNS a SIP check needs. *net.Resolver implements it;
-// tests substitute a fake.
+// sipResolver is the DNS a SIP check needs. sipNetResolver implements it
+// (the stdlib for SRV and A/AAAA, sip_naptr.go for NAPTR); tests substitute
+// a fake. LookupNAPTR reports NXDOMAIN as a *net.DNSError with IsNotFound,
+// and every other error as "no answer".
 type sipResolver interface {
+	LookupNAPTR(ctx context.Context, name string) ([]sipNAPTR, error)
 	LookupSRV(ctx context.Context, service, proto, name string) (string, []*net.SRV, error)
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
+}
+
+// sipNetResolver is the production sipResolver.
+type sipNetResolver struct {
+	*net.Resolver
+	naptr *sipNAPTRClient
+}
+
+func (r sipNetResolver) LookupNAPTR(ctx context.Context, name string) ([]sipNAPTR, error) {
+	return r.naptr.LookupNAPTR(ctx, name)
 }
 
 // sipCandidate is one address a SIP check may send to: always an IP literal,
@@ -29,7 +42,7 @@ type sipCandidate struct {
 	ip        net.IP
 	port      int
 	transport string // udp, tcp, tls
-	via       string // literal, a, srv
+	via       string // literal, a, srv, naptr (an SRV target reached through NAPTR)
 }
 
 func (c sipCandidate) address() string {
@@ -43,7 +56,8 @@ const (
 	// sipMaxAddressesPerSRVTarget keeps one multi-homed SRV target from
 	// using every candidate slot, so the next target is still tried.
 	sipMaxAddressesPerSRVTarget = 2
-	// sipMaxResolutionList caps the srv and attempts lists in metrics_data.
+	// sipMaxResolutionList caps the naptr, srv and attempts lists in
+	// metrics_data.
 	sipMaxResolutionList = 8
 )
 
@@ -68,6 +82,14 @@ func sipSRVService(transport string) (service, proto string) {
 	}
 }
 
+// naptr_status values (metrics_data.sip.resolution) under rfc3263.
+const (
+	sipNAPTRStatusOK          = "ok"          // usable NAPTR records were found
+	sipNAPTRStatusNone        = "none"        // no NAPTR record, or none a SIP client can use
+	sipNAPTRStatusUnavailable = "unavailable" // no nameserver answered: SRV went ahead without it
+	sipNAPTRStatusSkipped     = "skipped"     // an IP host, or a port or transport was set
+)
+
 // sipAutoTransports is the order SRV is queried in when transport is left to
 // DNS. RFC 3263 lets the client choose among the transports the domain
 // publishes; UDP first matches SIP's default transport (and RFC 3263's own
@@ -80,9 +102,13 @@ var sipAutoTransports = []string{"udp", "tcp", "tls"}
 // behaviour: an IP literal is used as is, a hostname's A/AAAA records are
 // tried in order at the configured or default port. resolution "rfc3263"
 // follows RFC 3263 §4: an IP literal or an explicit port means A/AAAA only;
-// otherwise SRV for the configured transport, or for each transport in
-// sipAutoTransports until one is published, with each SRV target resolved
-// to its addresses; no SRV record falls back to A/AAAA at the default port.
+// otherwise, with the transport left to DNS, the domain's NAPTR records
+// (§4.1) are followed to the first SRV name they lead to that is published;
+// failing that (or with a configured transport) SRV for the configured
+// transport, or for each transport in sipAutoTransports until one is
+// published, with each SRV target resolved to its addresses; no SRV record
+// falls back to A/AAAA at the default port. A NAPTR lookup that gets no
+// answer is recorded and skipped, never a failure: SRV still decides.
 //
 // The SIP_LOCALHOST_AS_HOST_GATEWAY rewrite applies to each target host
 // (the configured one or an SRV target) before its A/AAAA lookup.
@@ -97,6 +123,9 @@ func resolveSIPTargets(ctx context.Context, config *models.SIPMonitorConfig, r s
 
 	literal := net.ParseIP(strings.Trim(host, "[]")) != nil
 	if mode == models.SIPResolutionA || literal || config.Port != 0 {
+		if mode == models.SIPResolutionRFC3263 {
+			res.NAPTRStatus = sipNAPTRStatusSkipped
+		}
 		if transport == "" {
 			transport = "udp"
 		}
@@ -108,80 +137,34 @@ func resolveSIPTargets(ctx context.Context, config *models.SIPMonitorConfig, r s
 		return candidates, res, err
 	}
 
+	// SRV names already asked through NAPTR, so the transport walk below
+	// does not ask them twice.
+	queried := map[string]bool{}
+	if transport == "" {
+		// RFC 3263 §4.1: only a client free to choose the transport
+		// consults NAPTR. The probe's Request-URI is sip:, so every SIP
+		// service, SIPS+D2T included, is usable.
+		candidates, decided, err := resolveSIPNAPTR(ctx, r, res, host, false, queried)
+		if decided {
+			return candidates, res, err
+		}
+	} else {
+		res.NAPTRStatus = sipNAPTRStatusSkipped
+	}
+
 	transports := sipAutoTransports
 	if transport != "" {
 		transports = []string{transport}
 	}
 	for _, t := range transports {
 		service, proto := sipSRVService(t)
-		_, records, err := r.LookupSRV(ctx, service, proto, host)
-		res.lookedUp = true
-		// The stdlib drops records whose target is not a valid name and
-		// returns an error alongside the rest: the usable records still
-		// decide, and only an answer with none left is a failure.
-		if err != nil && len(records) == 0 {
-			if isDNSNotFound(err) {
-				continue
-			}
-			return nil, res, err
-		}
-		if len(records) == 0 {
+		if queried[sipSRVKey("_"+service+"._"+proto+"."+host)] {
 			continue
 		}
-		// A single "." target says the service is decidedly not
-		// available at this domain (RFC 2782).
-		if len(records) == 1 && strings.TrimSuffix(records[0].Target, ".") == "" {
-			return nil, res, &net.DNSError{
-				Err:  fmt.Sprintf("SRV _%s._%s says SIP over %s is not offered", service, proto, strings.ToUpper(t)),
-				Name: host,
-			}
+		candidates, decided, err := lookupSIPSRV(ctx, r, res, service, proto, host, t, "srv")
+		if decided {
+			return candidates, res, err
 		}
-		ordered := orderSRVRecords(records)
-		for _, rec := range ordered {
-			if len(res.SRV) >= sipMaxResolutionList {
-				break
-			}
-			res.SRV = append(res.SRV, sipSRVMetrics{
-				Target:   strings.TrimSuffix(rec.Target, "."),
-				Port:     int(rec.Port),
-				Priority: int(rec.Priority),
-				Weight:   int(rec.Weight),
-			})
-		}
-		var (
-			candidates []sipCandidate
-			lastErr    error
-		)
-		for _, rec := range ordered {
-			if len(candidates) >= sipMaxCandidates {
-				break
-			}
-			target := strings.TrimSuffix(rec.Target, ".")
-			if target == "" {
-				continue
-			}
-			limit := min(sipMaxAddressesPerSRVTarget, sipMaxCandidates-len(candidates))
-			found, err := lookupSIPHost(ctx, r, res, target, int(rec.Port), t, "srv", limit)
-			if err != nil {
-				// One unresolvable target is a failover, not the end:
-				// record it and try the next.
-				lastErr = err
-				res.addAttempt(sipAttemptMetrics{
-					Address:   net.JoinHostPort(target, strconv.Itoa(int(rec.Port))),
-					Transport: t,
-					Outcome:   "dns",
-				})
-				continue
-			}
-			candidates = append(candidates, found...)
-		}
-		if len(candidates) == 0 {
-			if lastErr == nil {
-				lastErr = &net.DNSError{Err: "no usable SRV target", Name: host}
-			}
-			return nil, res, lastErr
-		}
-		return candidates, res, nil
 	}
 
 	// No SRV record: A/AAAA at the transport's default port (RFC 3263 §4.2),
@@ -193,8 +176,140 @@ func resolveSIPTargets(ctx context.Context, config *models.SIPMonitorConfig, r s
 	return candidates, res, err
 }
 
+// resolveSIPNAPTR is the NAPTR step (RFC 3263 §4.1): the usable records, in
+// order and preference, each followed to the SRV name it replaces the domain
+// with, until one is published. decided reports that an SRV answer settled
+// the check's candidates (or its error); otherwise the caller goes on to the
+// plain SRV walk. A NAPTR lookup that gets no answer never fails the check.
+func resolveSIPNAPTR(ctx context.Context, r sipResolver, res *sipResolutionMetrics, host string, sipsOnly bool, queried map[string]bool) ([]sipCandidate, bool, error) {
+	res.lookedUp = true
+	records, err := r.LookupNAPTR(ctx, host)
+	if err != nil {
+		if isDNSNotFound(err) {
+			res.NAPTRStatus = sipNAPTRStatusNone
+		} else {
+			res.NAPTRStatus = sipNAPTRStatusUnavailable
+		}
+		return nil, false, nil
+	}
+	usable := usableSIPNAPTR(records, sipsOnly)
+	if len(usable) == 0 {
+		res.NAPTRStatus = sipNAPTRStatusNone
+		return nil, false, nil
+	}
+	res.NAPTRStatus = sipNAPTRStatusOK
+	for _, rec := range usable {
+		if len(res.NAPTR) >= sipMaxResolutionList {
+			break
+		}
+		res.NAPTR = append(res.NAPTR, sipNAPTRMetrics{
+			Order:       int(rec.Order),
+			Pref:        int(rec.Preference),
+			Service:     strings.ToUpper(rec.Services),
+			Replacement: rec.Replacement,
+		})
+	}
+	for _, rec := range usable {
+		key := sipSRVKey(rec.Replacement)
+		if queried[key] {
+			continue
+		}
+		queried[key] = true
+		candidates, decided, err := lookupSIPSRV(ctx, r, res, "", "", rec.Replacement, rec.transport, "naptr")
+		if decided {
+			return candidates, true, err
+		}
+	}
+	return nil, false, nil
+}
+
+func sipSRVKey(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
+}
+
+// lookupSIPSRV asks for one SRV name (service and proto empty: name is the
+// full SRV name, as NAPTR gives it) and resolves its targets. decided is
+// false only when the name is not published (NXDOMAIN or no records), so the
+// caller may try the next name; a published answer decides, with candidates
+// or with the error that left none.
+func lookupSIPSRV(ctx context.Context, r sipResolver, res *sipResolutionMetrics, service, proto, name, transport, via string) ([]sipCandidate, bool, error) {
+	srvName := name
+	if service != "" || proto != "" {
+		srvName = "_" + service + "._" + proto + "." + name
+	}
+	_, records, err := r.LookupSRV(ctx, service, proto, name)
+	res.lookedUp = true
+	// The stdlib drops records whose target is not a valid name and
+	// returns an error alongside the rest: the usable records still
+	// decide, and only an answer with none left is a failure.
+	if err != nil && len(records) == 0 {
+		if isDNSNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	if len(records) == 0 {
+		return nil, false, nil
+	}
+	// A single "." target says the service is decidedly not available at
+	// this domain (RFC 2782).
+	if len(records) == 1 && strings.TrimSuffix(records[0].Target, ".") == "" {
+		return nil, true, &net.DNSError{
+			Err:  fmt.Sprintf("SRV %s says SIP over %s is not offered", srvName, strings.ToUpper(transport)),
+			Name: name,
+		}
+	}
+	ordered := orderSRVRecords(records)
+	for _, rec := range ordered {
+		if len(res.SRV) >= sipMaxResolutionList {
+			break
+		}
+		res.SRV = append(res.SRV, sipSRVMetrics{
+			Target:   strings.TrimSuffix(rec.Target, "."),
+			Port:     int(rec.Port),
+			Priority: int(rec.Priority),
+			Weight:   int(rec.Weight),
+		})
+	}
+	var (
+		candidates []sipCandidate
+		lastErr    error
+	)
+	for _, rec := range ordered {
+		if len(candidates) >= sipMaxCandidates {
+			break
+		}
+		target := strings.TrimSuffix(rec.Target, ".")
+		if target == "" {
+			continue
+		}
+		limit := min(sipMaxAddressesPerSRVTarget, sipMaxCandidates-len(candidates))
+		found, err := lookupSIPHost(ctx, r, res, target, int(rec.Port), transport, via, limit)
+		if err != nil {
+			// One unresolvable target is a failover, not the end: record
+			// it and try the next.
+			lastErr = err
+			res.addAttempt(sipAttemptMetrics{
+				Address:   net.JoinHostPort(target, strconv.Itoa(int(rec.Port))),
+				Transport: transport,
+				Outcome:   "dns",
+			})
+			continue
+		}
+		candidates = append(candidates, found...)
+	}
+	if len(candidates) == 0 {
+		if lastErr == nil {
+			lastErr = &net.DNSError{Err: "no usable SRV target", Name: name}
+		}
+		return nil, true, lastErr
+	}
+	return candidates, true, nil
+}
+
 // lookupSIPHost resolves one target host to at most limit candidates. via is
-// "srv" for an SRV target, else "" to derive literal/a from the host.
+// "srv" or "naptr" for an SRV target, else "" to derive literal/a from the
+// host.
 func lookupSIPHost(ctx context.Context, r sipResolver, res *sipResolutionMetrics, host string, port int, transport, via string, limit int) ([]sipCandidate, error) {
 	host = resolveSIPTargetHost(host)
 	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
@@ -279,24 +394,31 @@ func orderSRVRecords(records []*net.SRV) []*net.SRV {
 // newSIPResolver is the resolver for a check: the worker's own, or a Go
 // resolver pinned to the configured nameserver. The nameserver is an
 // operator-supplied address like any target, so its connections go through
-// dialGuard and the worker's network policy too.
+// dialGuard and the worker's network policy too. NAPTR queries
+// (sip_naptr.go) go to the same nameserver, or to the worker's resolv.conf
+// nameservers when none is set.
 func (c *SIPChecker) newSIPResolver(config *models.SIPMonitorConfig, timeout time.Duration) (sipResolver, error) {
 	if c.resolver != nil {
 		return c.resolver, nil
 	}
+	naptr := &sipNAPTRClient{blockPrivateIPs: c.blockPrivateIPs, allowedCIDRs: c.allowedCIDRs}
 	nameserver := strings.TrimSpace(config.Nameserver)
 	if nameserver == "" || config.ResolutionMode() != models.SIPResolutionRFC3263 {
-		return net.DefaultResolver, nil
+		return sipNetResolver{Resolver: net.DefaultResolver, naptr: naptr}, nil
 	}
 	addr, err := models.NormalizeNameserverAddr(nameserver)
 	if err != nil {
 		return nil, fmt.Errorf("invalid nameserver: %w", err)
 	}
+	naptr.server = addr
 	guard := newDialGuard(c.blockPrivateIPs, c.allowedCIDRs, timeout)
-	return &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return guard.DialContext(ctx, network, addr)
+	return sipNetResolver{
+		Resolver: &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return guard.DialContext(ctx, network, addr)
+			},
 		},
+		naptr: naptr,
 	}, nil
 }

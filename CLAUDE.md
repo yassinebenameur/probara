@@ -624,8 +624,8 @@ or imported groups come back empty. Any other path that creates groups through
   `host.docker.internal` before resolving it; the Compose worker and
   `start-local-services.sh` (local-process workers) both default it on.
 - SIP resolves its own targets (`sip_resolve.go`: A/AAAA, or opt-in RFC
-  3263 SRV with failover) into IP-literal candidates; each attempt dials
-  one through `dialGuard`. SIP TLS identity is `tls_server_name` or the
+  3263 NAPTR (`sip_naptr.go`, best effort) and SRV with failover) into
+  IP-literal candidates; each attempt dials one through `dialGuard`. SIP TLS identity is `tls_server_name` or the
   configured host, never an SRV target.
 - SIP signalling rides one flow per attempt: every request, response and
   answer to a server-sent request goes over the connection `dialSIP` opened
