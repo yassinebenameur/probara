@@ -289,22 +289,25 @@ or imported groups come back empty. Any other path that creates groups through
   a check runs (`checkProgressInterval`, `worker.go`; keep it well under the
   30 s AckWait). Checks whose checker implements `SideEffectingChecker`
   (`checker.go`) are at-most-once: a redelivery (`NumDelivered > 1`) is acked
-  without running, a failed publish retries in place, never NAKs, and a
-  result the worker's own shutdown produced (`CheckResult.Interrupted`) is
-  acked unpublished. A checker that acts on the world (places calls, sends messages) must
-  implement it, deciding from non-secret config fields only. Scheduled jobs
-  carry a per-slot `Nats-Msg-Id` (`checkJobMsgID`, used by
-  `publishMonitorJobs`), so a dispatch retried for the same `next_run_at` is
-  a stream duplicate; keep the id deterministic per slot.
-- **SIP test calls** (`sip` + `method: invite`, `worker/internal/worker/sip_invite.go`)
-  place real, billable calls. `models.IsSIPCallConfig` is the one "is this a
-  call" test (non-secret fields): the checker's `SideEffecting`, the API's
-  tenant-admin gate (`monitorservice.RequireCallPermission` →
-  `ctxpkg.IsTenantAdmin`, in `CreateMonitor`/`UpdateMonitor` so import
-  inherits it, plus the run-now and test handlers; API keys never pass) and
-  the update-time method-class refusal all use it. Schedule bounds go through
-  `ScheduleAwareValidator` (`validation/registry.go`), applied to the
-  effective type/config/interval/timeout on every update. Workers read
+  without running, a failed publish retries in place, never NAKs, and a result
+  the worker's own shutdown produced (`CheckResult.Interrupted`) is acked
+  unpublished. A checker that acts on the world (places calls, sends messages)
+  must implement it, deciding from non-secret config fields only. Scheduled
+  jobs carry a per-slot `Nats-Msg-Id` (`checkJobMsgID`, used by
+  `publishMonitorJobs`), so a dispatch retried for the same `next_run_at` is a
+  stream duplicate; keep the id deterministic per slot.
+- **SIP test calls** (`sip` + `method: invite`,
+  `worker/internal/worker/sip_invite.go`) place real, billable calls.
+  `models.IsSIPCallConfig` is the one "is this a call" test (non-secret
+  fields; it errs towards a call, matching any key spelling, and the API
+  validator parses with `ParseSIPMonitorConfig`, which refuses case-variant
+  keys): the checker's `SideEffecting`, the API's tenant-admin gate
+  (`monitorservice.RequireCallPermission` → `ctxpkg.IsTenantAdmin`, in
+  `CreateMonitor`/`UpdateMonitor` so import inherits it, plus the run-now and
+  test handlers; API keys never pass) and the update-time method-class refusal
+  all use it. Schedule bounds go through `ScheduleAwareValidator`
+  (`validation/registry.go`), applied to the effective
+  type/config/interval/timeout on every update. Workers read
   `SIP_CALL_ENABLED` (default true, false with `WORKER_LOCATION_ID`) and
   `SIP_CALL_ALLOWED_DESTINATIONS`; a `SIPChecker` never configured
   (`ConfigureCalls`) places no call. Its web twin is `isSipCall`
@@ -660,8 +663,9 @@ or imported groups come back empty. Any other path that creates groups through
   `start-local-services.sh` (local-process workers) both default it on.
 - SIP resolves its own targets (`sip_resolve.go`: A/AAAA, or opt-in RFC
   3263 NAPTR (`sip_naptr.go`, best effort) and SRV with failover) into
-  IP-literal candidates; each attempt dials one through `dialGuard`. SIP TLS identity is `tls_server_name` or the
-  configured host, never an SRV target.
+  IP-literal candidates; each attempt dials one through `dialGuard`. SIP
+  TLS identity is `tls_server_name` or the configured host, never an SRV
+  target.
 - SIP signalling rides one flow per attempt: every request, response and
   answer to a server-sent request goes over the connection `dialSIP` opened
   through `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a

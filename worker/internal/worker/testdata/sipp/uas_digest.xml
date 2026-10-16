@@ -5,7 +5,7 @@
      first INVITE draws a 401; SIPp's own verifyauth checks the retried
      INVITE against user "probara" / password "probara-secret" and answers
      403 when it does not verify. On the answered path the 2xx ACK must carry
-     the INVITE's Authorization (RFC 3261 22.1); the ereg check fails the
+     the INVITE's Authorization (RFC 3261 13.2.2.4); the ereg check fails the
      SIPp call when it does not. -->
 <scenario name="Probara digest-authenticating UAS">
   <recv request="INVITE" />

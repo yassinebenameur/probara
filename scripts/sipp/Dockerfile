@@ -1,7 +1,8 @@
 # SIPp UAS for worker/internal/worker/sip_invite_integration_test.go.
 #
 # The base image is pinned by digest and the package by version so the test
-# runs the same SIPp everywhere; bump both together. SIPp (Debian's
+# runs the same SIPp everywhere; bump both together, and the sippImageTag
+# label in sip_invite_integration_test.go with the package. SIPp (Debian's
 # sip-tester) is a third-party SIP implementation the hand-rolled INVITE
 # client is checked against, next to the scripted fake UAS in
 # sip_invite_test.go. The scenarios live in the test's testdata/sipp/ and are

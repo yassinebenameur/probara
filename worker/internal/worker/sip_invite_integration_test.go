@@ -27,7 +27,10 @@ import (
 
 const (
 	sippImageRepo = "probara-sipp-test"
-	sippImageTag  = "3.6.1-1"
+	// sippImageTag is a label only, mirroring scripts/sipp/Dockerfile's
+	// sip-tester pin (Docker tags allow no ':' or '+'): the build follows the
+	// Dockerfile (layer-cached), so a stale tag never runs a stale SIPp.
+	sippImageTag = "3.6.1-1"
 	sippPassword  = "probara-secret" // uas_digest.xml's verifyauth password
 )
 
