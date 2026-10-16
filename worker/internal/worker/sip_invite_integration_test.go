@@ -31,7 +31,7 @@ const (
 	// sip-tester pin (Docker tags allow no ':' or '+'): the build follows the
 	// Dockerfile (layer-cached), so a stale tag never runs a stale SIPp.
 	sippImageTag = "3.6.1-1"
-	sippPassword  = "probara-secret" // uas_digest.xml's verifyauth password
+	sippPassword = "probara-secret" // uas_digest.xml's verifyauth password
 )
 
 type sippUAS struct {
