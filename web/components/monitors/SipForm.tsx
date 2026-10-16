@@ -49,15 +49,30 @@ type TestState =
 
 // Errors cleared by edits to another field (useClearErrorsOnEdit): the call
 // schedule bounds follow the method and the hold, the hold follows the
-// timeout and mode, a sips: target follows the transport.
+// timeout and mode, a sips: target follows the transport. An error also
+// clears when the field that hides its input changes, so a hidden field never
+// keeps the footer at "N fields need attention": every call_* field (and the
+// test-call domain rule) lives only under method invite, the answer
+// thresholds and hold only in answer mode, the nameserver only under
+// rfc3263, and the certificate threshold only over TLS (which turning
+// "Locate via DNS" off can change along with the resolution).
 const SIP_RELATED_FIELDS: Record<string, string[]> = {
   timeout_seconds: ['interval_seconds', 'method'],
   interval_seconds: ['method'],
-  call_hold_ms: ['timeout_seconds', 'call_mode'],
-  call_target_uri: ['transport', 'call_target_kind'],
-  call_number: ['call_target_kind'],
-  call_warn_pdd_ms: ['call_max_pdd_ms'],
-  call_warn_answer_ms: ['call_max_answer_ms'],
+  nameserver: ['resolution'],
+  tls_min_days_valid: ['transport', 'resolution'],
+  domain: ['method'],
+  call_number: ['call_target_kind', 'method'],
+  call_target_uri: ['transport', 'call_target_kind', 'method'],
+  call_from_user: ['method'],
+  call_from_display: ['method'],
+  call_from_domain: ['method'],
+  call_sdp_address: ['method'],
+  call_hold_ms: ['timeout_seconds', 'call_mode', 'method'],
+  call_warn_pdd_ms: ['call_max_pdd_ms', 'method'],
+  call_max_pdd_ms: ['method'],
+  call_warn_answer_ms: ['call_max_answer_ms', 'call_mode', 'method'],
+  call_max_answer_ms: ['call_mode', 'method'],
   expected_status: ['call_mode', 'method'],
 };
 
