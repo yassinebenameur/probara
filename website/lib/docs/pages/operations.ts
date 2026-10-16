@@ -247,8 +247,13 @@ make healthcheck`,
             ],
             [
               'Worker NATS/results',
-              '`nats_ack_total`, `nats_nak_total`, `result_publish_errors_total`, `side_effect_redelivery_skipped_total{type=…}`, `side_effect_result_abandoned_total{type=…}`',
-              'NAK or publish-error growth and falling ACK throughput; any skipped redelivery or abandoned result of a side-effecting check (a worker died or lost NATS mid-check).',
+              '`nats_ack_total`, `nats_nak_total`, `result_publish_errors_total`, `side_effect_redelivery_skipped_total{type=…}`, `side_effect_result_abandoned_total{type=…}`, `side_effect_result_interrupted_total{type=…}`',
+              'NAK or publish-error growth and falling ACK throughput; any skipped redelivery or abandoned result of a side-effecting check (a worker died or lost NATS mid-check). Interrupted results are side-effecting checks a worker shutdown cut short (expected around deploys; each is a missing sample).',
+            ],
+            [
+              'SIP test-call linger',
+              '`sip_linger_total{outcome=late_answer|late_cancel|quiet|flow_closed|aborted}`, `sip_linger_dropped_total`',
+              "Any `sip_linger_dropped_total` growth: every linger slot (32 per worker) was taken, so a late or forked answer to that call was neither ACKed nor BYE'd and may stay up, and billed, until the far end times it out. Sustained `late_answer` means the far end answers after the check gave up.",
             ],
             [
               'Status live updates',
