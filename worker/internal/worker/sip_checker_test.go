@@ -188,6 +188,30 @@ func TestSIPChecker_PrivateIPGuard(t *testing.T) {
 	requireSIPError(t, result, "ssrf_blocked")
 }
 
+// The worker applies the shared config rules before dialing, so a stored
+// config carrying header-injection characters never reaches the wire, even
+// if it predates the API rule.
+func TestSIPChecker_RejectsInvalidConfigBeforeDialing(t *testing.T) {
+	var requests atomic.Int32
+	host, port := startFakeUDPSIPServer(t, func(request string) []string {
+		requests.Add(1)
+		return []string{sipResponseMsg(200, "OK")}
+	})
+
+	result := runSIPCheck(t, map[string]interface{}{
+		"host": host, "port": port, "transport": "udp",
+		"method": "register", "domain": "example.com\r\nX-Injected: 1",
+	})
+	requireSIPError(t, result, "invalid SIP config", "domain must not contain CR, LF or NUL")
+	if result.LatencyMs != nil {
+		t.Fatalf("LatencyMs = %d, want nil: nothing was sent", *result.LatencyMs)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("server received %d requests, want 0", got)
+	}
+}
+
 func TestSIPChecker_OptionsUDP(t *testing.T) {
 	host, port := startFakeUDPSIPServer(t, func(request string) []string {
 		if !strings.HasPrefix(request, "OPTIONS sip:") {

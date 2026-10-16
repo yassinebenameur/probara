@@ -628,61 +628,17 @@ func (v *PushConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	return nil
 }
 
-// SIPConfigValidator validates SIP monitor configuration
+// SIPConfigValidator validates SIP monitor configuration. The rules live on
+// the shared config struct, which the worker's SIP checker applies too.
 type SIPConfigValidator struct{}
 
 // ValidateConfig validates SIP monitor config
 func (v *SIPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
-	var config models.SIPConfig
+	var config sharedmodels.SIPMonitorConfig
 	if err := json.Unmarshal(configRaw, &config); err != nil {
 		return fmt.Errorf("invalid SIP config: %w", err)
 	}
-
-	if config.Host == "" {
-		return fmt.Errorf("host is required")
-	}
-
-	// Validate host is either a valid hostname or IP address
-	if ip := net.ParseIP(config.Host); ip == nil {
-		// Not an IP, check if it's a valid hostname
-		if !isValidHostname(config.Host) {
-			return fmt.Errorf("host must be a valid IP address or hostname")
-		}
-	}
-
-	// Validate port (default is 5060 if not specified)
-	if config.Port != 0 && (config.Port < 1 || config.Port > 65535) {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-
-	// Validate transport
-	if config.Transport != "" {
-		transport := strings.ToLower(config.Transport)
-		if transport != "udp" && transport != "tcp" && transport != "tls" {
-			return fmt.Errorf("transport must be 'udp', 'tcp', or 'tls'")
-		}
-	}
-
-	// Validate method
-	if config.Method != "" {
-		method := strings.ToLower(config.Method)
-		if method != "options" && method != "register" {
-			return fmt.Errorf("method must be 'options' or 'register'")
-		}
-	}
-
-	// Digest credentials go together: a password without a username (or vice
-	// versa) is a config mistake, not a server-side condition.
-	if (strings.TrimSpace(config.Username) == "") != (config.Password == "") {
-		return fmt.Errorf("username and password must be provided together")
-	}
-
-	// Validate expected status (SIP response codes are 100-699)
-	if config.ExpectedStatus != nil && (*config.ExpectedStatus < 100 || *config.ExpectedStatus > 699) {
-		return fmt.Errorf("expected_status must be between 100 and 699")
-	}
-
-	return nil
+	return config.Validate()
 }
 
 // SyntheticAPIConfigValidator validates synthetic API monitor configuration.
@@ -1113,13 +1069,10 @@ func validateURL(urlStr string) error {
 	return nil
 }
 
+// isValidHostname delegates to the shared rule that the shared config
+// structs' Validate methods use, so both apply one hostname grammar.
 func isValidHostname(hostname string) bool {
-	if len(hostname) == 0 || len(hostname) > 253 {
-		return false
-	}
-
-	hostnameRegex := regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$`)
-	return hostnameRegex.MatchString(hostname)
+	return sharedmodels.IsValidHostname(hostname)
 }
 
 // Ensure validators implement ConfigValidator interface

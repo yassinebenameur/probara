@@ -61,6 +61,16 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			ErrorMessage: &errMsg,
 		}
 	}
+	// The API validates on write, but the payload may predate a rule (CR/LF
+	// hardening) or come from a private-location queue; nothing reaches the
+	// wire unless the shared rules pass here too.
+	if err := config.Validate(); err != nil {
+		errMsg := fmt.Sprintf("invalid SIP config: %v", err)
+		return CheckResult{
+			Status:       "error",
+			ErrorMessage: &errMsg,
+		}
+	}
 
 	// Set defaults
 	transport := strings.ToLower(config.Transport)
