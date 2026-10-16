@@ -321,7 +321,7 @@ export const ADMINISTRATION_PAGE: DocPage = {
           ["`installation_enabled`", "Installation-level availability switch; overrides workspace enablement"],
           ["`available` / `model`", "Read-only local-service readiness and model identity. Each API process caches the result for about 30 seconds, failures included, so a just-fixed service can read as unavailable until the cache expires."],
           ["`message`", "One of four fixed readiness strings (disabled, not configured correctly, unreachable, not ready); details are only in the API logs"],
-          ["`auto_triage_enabled`", "Writable, default `false`; [triage new alerts automatically](/docs/alerting/#ai-triage). Takes effect only while `enabled` is also on"],
+          ["`auto_triage_enabled`", "Writable, default `false`; [triage new alerts automatically](/docs/alerting/#ai-triage). Takes effect only while `enabled` is also on. With it off, alerts are not triaged at all, so [SLA report](/docs/slas/#suspected-causes) outages land in Not triaged"],
           ["`triage_delay_seconds`", "Writable, default `60`, 0–3600; how long an alert must stay open before it is triaged. The wait is never shorter than two check intervals of the alert's monitor (that part capped at one hour), so `0` still waits for them"],
           ["`triage_cooldown_seconds`", "Writable, default `900`, 0–86400; skip an alert's triage when its monitor already has a ready triage completed within this time. `0` turns the cooldown off"],
           ["`triage_max_per_hour`", "Writable, default `60`, 1–600; triages claimed per rolling hour in this workspace, skipped ones not counted"],

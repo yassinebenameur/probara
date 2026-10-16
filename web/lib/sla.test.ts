@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
-  DEFAULT_SLA_TARGET, type SlaInput,
+  causeShare, hasOutageCauses, slaCausesCaveat, dayTone, formatSlaDuration, formatSlaPeriodRange, formatSlaPct, formatTarget, slaInputError, slaReportQueryString, slaTone, strictestTarget,
+  DEFAULT_SLA_TARGET, type SlaInput, type SlaReport,
 } from './sla';
 
 test('formatSlaDuration picks the two most significant units', () => {
@@ -63,4 +63,27 @@ test('periods read as dates in the SLA timezone, end exclusive', () => {
   assert.equal(formatSlaPeriodRange('2025-09-01T00:00:00Z', '2025-10-01T00:00:00Z', 'UTC', now), '1–30 Sep 2025');
   assert.equal(formatSlaPeriodRange('2025-12-29T00:00:00Z', '2026-01-05T00:00:00Z', 'UTC', now), '29 Dec 2025 – 4 Jan 2026');
   assert.equal(formatSlaPeriodRange('bad', '2026-01-05T00:00:00Z', 'UTC', now), '—');
+});
+
+test('suspected causes are optional: a report issued before them renders as before', () => {
+  // An issued report from before causes existed: no suspected_causes, no
+  // cause fields on its outages, so no panel and no Cause column.
+  const legacy: Pick<SlaReport, 'suspected_causes' | 'outages'> = {
+    outages: [{
+      monitor_id: 'm1', monitor_name: 'checkout', start: '2026-09-10T10:00:00Z', end: '2026-09-10T11:00:00Z',
+      duration_seconds: 3600, planned_seconds: 0, unplanned_seconds: 3600, started_before: false, ongoing: false,
+    }],
+  };
+  assert.equal(legacy.suspected_causes, undefined);
+  assert.equal(hasOutageCauses(legacy.outages), false);
+  assert.equal(hasOutageCauses([]), false);
+  assert.equal(hasOutageCauses([{}, { cause_title: 'Not triaged' }]), true);
+});
+
+test('cause share and caveat', () => {
+  assert.equal(causeShare(900, 3600), '25.0%');
+  assert.equal(causeShare(0, 0), '—');
+  const caveat = slaCausesCaveat({ outage_count: 4, triaged_outage_count: 3 });
+  assert.match(caveat, /observed symptoms, not confirmed root causes/);
+  assert.match(caveat, /3 of 4 monitor outages had a triaged alert\.$/);
 });

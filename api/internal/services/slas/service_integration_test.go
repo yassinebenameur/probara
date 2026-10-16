@@ -125,6 +125,70 @@ func TestSLAService(t *testing.T) {
 		require.Equal(t, "sla-checkout-platform-2026-09.pdf", FileName(r, FormatPDF))
 	})
 
+	t.Run("suspected causes", func(t *testing.T) {
+		causeOf := func(t *testing.T, slaID uuid.UUID, q ReportQuery) *models.SLAReport {
+			t.Helper()
+			r, err := svc.Report(ctx, tenantID, slaID, q)
+			require.NoError(t, err)
+			require.NotNil(t, r.SuspectedCauses, "every report computed now carries the breakdown")
+			return r
+		}
+		r := causeOf(t, serial.ID, ReportQuery{Period: "2026-09"})
+		require.Equal(t, 1, r.SuspectedCauses.OutageCount)
+		require.Equal(t, models.SLACauseUntriaged, r.SuspectedCauses.Buckets[0].Kind, "a resolved alert with no triage is untriaged")
+		require.Equal(t, models.SLACauseUntriaged, r.Outages[0].CauseKind)
+
+		var alertID, triageID uuid.UUID
+		require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT id FROM alerts WHERE monitor_id = $1`, b).Scan(&alertID))
+		require.NoError(t, dbClient.QueryRowContext(ctx, `
+			INSERT INTO alert_triage (tenant_id, alert_id, monitor_id, status, hypothesis, completed_at)
+			VALUES ($1, $2, $3, 'ready', 'dns_failure', NOW()) RETURNING id
+		`, tenantID, alertID, b).Scan(&triageID))
+		r = causeOf(t, serial.ID, ReportQuery{Period: "2026-09"})
+		require.Equal(t, 1, r.SuspectedCauses.TriagedOutageCount)
+		require.Equal(t, "dns_failure", r.SuspectedCauses.Buckets[0].Key)
+		require.Equal(t, "DNS resolution failure", r.Outages[0].CauseTitle)
+
+		_, err := dbClient.ExecContext(ctx, `
+			INSERT INTO ai_labels (tenant_id, subject_type, subject_key, subject_id, verdict, incident_label, answers, request, catalogue_version)
+			VALUES ($1, 'alert_triage', $2, $3, 'corrected', 'tls_problem', '{}', '{}', 'test')
+		`, tenantID, triageID.String(), triageID)
+		require.NoError(t, err)
+		r = causeOf(t, serial.ID, ReportQuery{Period: "2026-09"})
+		require.Equal(t, "tls_problem", r.SuspectedCauses.Buckets[0].Key, "the operator label wins over the hypothesis")
+		require.Equal(t, 1, r.SuspectedCauses.Buckets[0].CorrectedOutageCount)
+
+		// An open alert inside the lookback is pending while the workspace
+		// has auto-triage on, untriaged once it is off.
+		c := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "search")
+		interval(ctx, t, dbClient, tenantID, c, "up", aug1, at(now.Add(-time.Hour)))
+		interval(ctx, t, dbClient, tenantID, c, "down", now.Add(-time.Hour), at(nov1))
+		_, err = dbClient.ExecContext(ctx, `
+			INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count, created_at, updated_at)
+			VALUES ($1, $2, $3, 'availability', 'active', $4, 3, NOW(), NOW())
+		`, uuid.New(), tenantID, c, now.Add(-50*time.Minute))
+		require.NoError(t, err)
+		live, err := svc.Create(ctx, tenantID, &models.CreateSLARequest{Name: "Search", TargetPct: 99.9, MonitorIDs: []string{c.String()}})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Delete(ctx, tenantID, live.ID) })
+
+		_, err = dbClient.ExecContext(ctx, `
+			INSERT INTO ai_settings (tenant_id, enabled, auto_triage_enabled) VALUES ($1, TRUE, TRUE)
+			ON CONFLICT (tenant_id) DO UPDATE SET enabled = TRUE, auto_triage_enabled = TRUE
+		`, tenantID)
+		require.NoError(t, err)
+		r = causeOf(t, live.ID, ReportQuery{})
+		require.Equal(t, 1, r.SuspectedCauses.PendingOutageCount)
+		require.Equal(t, models.SLACausePending, r.Outages[0].CauseKind)
+		require.Contains(t, strings.Join(r.Notes, "\n"), "still pending")
+
+		_, err = dbClient.ExecContext(ctx, `UPDATE ai_settings SET auto_triage_enabled = FALSE WHERE tenant_id = $1`, tenantID)
+		require.NoError(t, err)
+		r = causeOf(t, live.ID, ReportQuery{})
+		require.Equal(t, models.SLACauseUntriaged, r.Outages[0].CauseKind)
+		require.NoError(t, svc.Delete(ctx, tenantID, live.ID))
+	})
+
 	t.Run("mean aggregation", func(t *testing.T) {
 		agg := models.SLAAggregationMean
 		mean, err := svc.Update(ctx, tenantID, serial.ID, &models.UpdateSLARequest{Aggregation: &agg})

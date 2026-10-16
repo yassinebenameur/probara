@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { Info } from 'lucide-react';
 import {
-  dayTone, formatSlaDate, formatSlaDuration, formatSlaPct, formatTarget, slaTone, type SlaReport, type SlaReportOutage,
+  causeShare, dayTone, formatSlaDate, formatSlaDuration, formatSlaPct, formatTarget, hasOutageCauses, slaCausesCaveat, slaTone,
+  type SlaReport, type SlaReportOutage, type SlaReportSuspectedCauses,
 } from '@/lib/sla';
 import { formatDate, formatDateTime, formatUptime } from '@/lib/format';
 import TypeBadge from '@/components/ui/TypeBadge';
@@ -37,6 +38,7 @@ function Tile({ label, children, hint }: { label: string; children: React.ReactN
 
 function OutageTable({ outages, timeZone, showMonitor }: { outages: SlaReportOutage[]; timeZone: string; showMonitor: boolean }) {
   if (outages.length === 0) return <p className="text-sm text-slate-500">No outages in this period.</p>;
+  const showCause = hasOutageCauses(outages);
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[560px] text-sm">
@@ -46,7 +48,8 @@ function OutageTable({ outages, timeZone, showMonitor }: { outages: SlaReportOut
             <th className="py-2 pr-4 font-medium">End</th>
             <th className="py-2 pr-4 font-medium">Duration</th>
             <th className="py-2 pr-4 font-medium">Planned</th>
-            {showMonitor && <th className="py-2 font-medium">Monitor</th>}
+            {showMonitor && <th className={`py-2 font-medium ${showCause ? 'pr-4' : ''}`}>Monitor</th>}
+            {showCause && <th className="py-2 font-medium">Suspected cause</th>}
           </tr>
         </thead>
         <tbody>
@@ -64,17 +67,73 @@ function OutageTable({ outages, timeZone, showMonitor }: { outages: SlaReportOut
                 {o.planned_seconds > 0 ? formatSlaDuration(o.planned_seconds) : '—'}
               </td>
               {showMonitor && (
-                <td className="whitespace-nowrap py-2 text-slate-300">
+                <td className={`whitespace-nowrap py-2 text-slate-300 ${showCause ? 'pr-4' : ''}`}>
                   {o.monitor_id ? (
                     <Link href={`/monitors/${o.monitor_id}`} className="hover:text-cyan-300">{o.monitor_name}</Link>
                   ) : 'Service'}
                 </td>
+              )}
+              {showCause && (
+                <td className={`py-2 ${o.cause_kind === 'suspected' ? 'text-slate-300' : 'text-slate-500'}`}>{o.cause_title ?? '—'}</td>
               )}
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function SuspectedCausesPanel({ causes }: { causes: SlaReportSuspectedCauses }) {
+  const subtitle = causes.outage_count > 0
+    ? `${causes.triaged_outage_count} of ${causes.outage_count} monitor outages triaged`
+    : undefined;
+  return (
+    <Panel title="Suspected causes" subtitle={subtitle}>
+      {causes.buckets.length === 0 ? (
+        <p className="text-sm text-slate-500">No monitor outages to attribute in this period.</p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="border-b border-divider text-left text-xs text-slate-500">
+                  <th className="py-2 pr-4 font-medium">Cause</th>
+                  <th className="py-2 pr-4 font-medium">Outages</th>
+                  <th className="py-2 pr-4 font-medium">Monitors</th>
+                  <th className="py-2 pr-4 font-medium">Downtime</th>
+                  <th className="py-2 pr-4 font-medium">Share</th>
+                  <th className="py-2 font-medium">Operator-labelled</th>
+                </tr>
+              </thead>
+              <tbody>
+                {causes.buckets.map((b) => {
+                  const labelled = b.confirmed_outage_count + b.corrected_outage_count > 0;
+                  return (
+                    <tr key={`${b.kind}-${b.key}`} className="border-b border-divider align-baseline last:border-0">
+                      <td className={`py-2 pr-4 ${b.kind === 'suspected' ? 'text-slate-200' : 'text-slate-400'}`}>
+                        {b.title}
+                        {labelled && <span className="text-slate-500"> *</span>}
+                      </td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-300">{b.outage_count}</td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-300">{b.monitor_count}</td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-300">{formatSlaDuration(b.unplanned_seconds)}</td>
+                      <td className="whitespace-nowrap py-2 pr-4 tabular-nums text-slate-400">
+                        {causeShare(b.unplanned_seconds, causes.unplanned_seconds)}
+                      </td>
+                      <td className="whitespace-nowrap py-2 tabular-nums text-slate-400">
+                        {labelled ? `${b.confirmed_outage_count} confirmed · ${b.corrected_outage_count} corrected` : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">{slaCausesCaveat(causes)}</p>
+        </>
+      )}
+    </Panel>
   );
 }
 
@@ -231,6 +290,8 @@ export function SlaReportView({ report }: { report: SlaReport }) {
           </div>
         )}
       </Panel>
+
+      {report.suspected_causes && <SuspectedCausesPanel causes={report.suspected_causes} />}
 
       {serial && (
         <Panel title="Service outages" subtitle="Any monitor down outside maintenance">

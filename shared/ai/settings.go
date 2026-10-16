@@ -3,8 +3,17 @@ package ai
 import (
 	"context"
 	"database/sql"
+	"time"
+
 	"github.com/google/uuid"
 )
+
+// TriageLookback bounds which open alerts the triage relay claims
+// (worker/internal/airca relayClaimSQL): turning auto-triage on in a
+// workspace with days-old open alerts must not spend the hourly cap on them.
+// The API's SLA cause breakdown uses the same bound to tell an open alert
+// that may still be triaged from one that never will be.
+const TriageLookback = 6 * time.Hour
 
 type SettingsQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row

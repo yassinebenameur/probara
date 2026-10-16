@@ -6,8 +6,8 @@ export const SLAS_PAGE: DocPage = {
   title: "SLA reporting",
   description: "Define availability targets for sets of monitors, track error budgets per calendar period, and export or freeze reports.",
   eyebrow: "Availability objectives",
-  readingTime: "7 min read",
-  keywords: ["SLA", "SLO", "error budget", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV"],
+  readingTime: "8 min read",
+  keywords: ["SLA", "SLO", "error budget", "availability report", "uptime report", "MTTR", "MTTA", "PDF", "CSV", "suspected cause", "root cause"],
   sections: [
     {
       id: "define",
@@ -80,11 +80,46 @@ export const SLAS_PAGE: DocPage = {
             "Service outages (serial SLAs): the spans during which the composite was down, maintenance excluded.",
             "Monitor outages: each monitor's merged down spans with their planned share. Clipped spans are marked as starting earlier or ongoing. The list shows the first 500; counts and exports cover all.",
             "Response: outage count, mean time to recover (outages wholly inside the period with unplanned time), availability alerts triggered in the period, and mean time to acknowledge.",
+            "Suspected causes: monitor outages bucketed by the [triage](/docs/alerting/#ai-triage) of their overlapping availability alerts, into named suspected causes, inconclusive, triage pending, not triaged and no alert (see [Suspected causes](#suspected-causes)). Counts are monitor outages, not alerts, and the monitor-outage list gains a suspected-cause column. Reports issued before this breakdown existed have none.",
           ],
         },
         {
           type: "paragraph",
-          text: "Export any report as PDF (an A4 document with the headline, budget, daily strip, monitor table, outages and method note), CSV (summary, daily, monitor and outage sections separated by blank lines, times in the SLA's timezone) or JSON (the full report document). The monitor detail page uses the strictest target of the SLAs covering that monitor, falling back to 99.9%.",
+          text: "Export any report as PDF (an A4 document with the headline, budget, daily strip, monitor table, suspected causes, outages and method note), CSV (summary, daily, monitor, outage and suspected-cause sections separated by blank lines, times in the SLA's timezone) or JSON (the full report document). The PDF's suspected-cause table appears only when at least one monitor outage was triaged (suspected or inconclusive), so a workspace without auto-triage never sends a table of \"Not triaged\". In the CSV, outage rows gain `Cause key` and `Suspected cause` columns and a suspected-cause section follows the outages. Both appear only on reports that carry `suspected_causes`, so reports issued before this release export exactly as they did. The monitor detail page uses the strictest target of the SLAs covering that monitor, falling back to 99.9%.",
+        },
+      ],
+    },
+    {
+      id: "suspected-causes",
+      title: "Suspected causes",
+      intro:
+        "With [automatic alert triage](/docs/alerting/#ai-triage) on, Probara's local AI names a suspected cause for each new alert. SLA reports roll the period's monitor outages up by those causes, so a report says what kind of failure consumed the error budget as well as how much.",
+      blocks: [
+        {
+          type: "list",
+          items: [
+            "Each per-monitor outage with unplanned time takes the effective cause of the availability alerts on its own monitor that overlap it, with 2 minutes of slack for an alert that triggered just after a short outage closed. When several alerts overlap, a named cause wins over an inconclusive triage, which wins over a pending one, which wins over none. The whole outage's unplanned time goes to that one cause.",
+            "An operator's label on the triage (confirm or correct) wins over the model's hypothesis. The breakdown counts how many outages per cause were operator-confirmed or operator-corrected, and the PDF marks such causes with an asterisk.",
+            "Counts are monitor outages, not alerts. Downtime is summed per monitor, so when monitors fail together it can exceed the service's downtime.",
+            "Composite (service) outages, group roll-up alerts and incident analyses are not attributed.",
+          ],
+        },
+        {
+          type: "table",
+          columns: ["Bucket", "Meaning"],
+          rows: [
+            ["Suspected cause (`suspected`)", "A named catalogue cause, from a ready triage or an operator's label on it. One row per cause, largest downtime first."],
+            ["Inconclusive (`inconclusive`)", "The triage ran and found no supported cause, or an operator labelled it insufficient evidence."],
+            ["Triage pending (`pending`)", "The triage was queued or running, or the alert was still open, within the 6-hour triage lookback and in a workspace with auto-triage on, when the report was computed. The report adds a note saying how many outages were pending."],
+            ["Not triaged (`untriaged`)", "The overlapping alerts were never triaged: no triage (auto-triage off at the time, resolved within the settle wait, cooldown, hourly cap or backlog), a failed triage, a skipped one, or an open alert older than the 6-hour lookback."],
+            ["No alert (`no_alert`)", "No availability alert of the monitor overlapped the outage."],
+          ],
+        },
+        {
+          type: "callout",
+          tone: "warning",
+          title: "Symptoms, not root causes",
+          text: "Suspected causes are observed symptoms from triage evidence, not confirmed root causes. Validate them before quoting them to a customer. Alerts are only triaged automatically (there is no manual trigger), so with auto-triage off the period's outages land in Not triaged or No alert.",
         },
       ],
     },
@@ -94,7 +129,7 @@ export const SLAS_PAGE: DocPage = {
       blocks: [
         {
           type: "paragraph",
-          text: "A live report of a past period is recomputed on every view, so it changes when someone edits or deletes a maintenance window, wipes a monitor's history, or changes the SLA itself. Issue a report to freeze a closed period. Probara stores the complete report, including the SLA settings and resolved monitor list at that moment, and every later download of it renders from that snapshot. Only closed calendar periods can be issued, once each. Deleting the SLA deletes its issued reports; purging a monitor does not.",
+          text: "A live report of a past period is recomputed on every view, so it changes when someone edits or deletes a maintenance window, wipes a monitor's history, or changes the SLA itself, and as triages complete and operators label or relabel alerts (which moves outages between suspected-cause buckets). Issue a report to freeze a closed period. Probara stores the complete report, including the SLA settings and resolved monitor list at that moment, and every later download of it renders from that snapshot. That includes each suspected cause's bucket and title, whatever the catalogue later calls the key; outages still pending when it was issued stay pending. Only closed calendar periods can be issued, once each. Deleting the SLA deletes its issued reports; purging a monitor does not.",
         },
         {
           type: "callout",
@@ -118,6 +153,10 @@ export const SLAS_PAGE: DocPage = {
             ["GET/POST /api/v1/slas/{id}/reports", "List issued reports / issue one ({\"period\": \"2026-09\"}; empty body means the last closed period). 409 if already issued."],
             ["GET /api/v1/sla-reports/{id}[?format=]", "An issued report exactly as frozen."],
           ],
+        },
+        {
+          type: "paragraph",
+          text: "The report document carries `suspected_causes` (`outage_count`, `triaged_outage_count`, `pending_outage_count`, `unplanned_seconds`, and `buckets` with `kind`, `key`, `title`, `outage_count`, `alert_count`, `monitor_count`, `unplanned_seconds`, `confirmed_outage_count`, `corrected_outage_count`), and each attributed monitor outage carries `cause_kind`, `cause_key` and `cause_title`. `key` is the catalogue key for suspected causes and the bucket kind otherwise. All of these are absent on reports issued before the breakdown existed; treat them as optional.",
         },
       ],
     },

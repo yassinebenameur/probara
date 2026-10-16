@@ -221,7 +221,9 @@ predicate as reminders, targets only plugins advertising `CapabilityFollowUp`
 (not PagerDuty or Opsgenie), runs last in the tick on its own time budget so
 the recovery sweep keeps its share, and stops under `LOCAL_AI_DISABLED=true` or
 `AI_TRIAGE_ENABLED=false`. The alerter reads the catalogue only and never calls
-local AI. Workspaces opt in through `ai_settings.auto_triage_enabled`
+local AI. On the API side, triage is read for display (`triageview`) and by
+SLA reports, which roll monitor outages up by suspected cause
+(`api/internal/services/slas/causes.go`); neither feeds paging. Workspaces opt in through `ai_settings.auto_triage_enabled`
 with a delay, a per-monitor cooldown and an hourly cap.
 
 The relay (`worker/internal/airca/relay.go`) is a transactional outbox in each

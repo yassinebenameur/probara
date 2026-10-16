@@ -84,7 +84,10 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   ahead of the recovery sweep, with a round-robin batch so one hanging
   provider cannot hold the others back. Cause predicates (`ai.IsNamedCause`,
   `ai.IsConfident`, `ai.RCAInsufficientEvidence`) live in `shared/ai`; reuse
-  them. Never let triage gate or alter a page.
+  them. SLA reports (`api/internal/services/slas/causes.go`) also read
+  triage, only through triageview's `CauseJoin`/`CauseColumns`/
+  `ClaimableExpr`/`EffectiveCause` (label over hypothesis). Never let triage
+  gate or alter a page.
 - Durable work goes through JetStream (`shared/queue`). Core NATS
   (`shared/statusupdates`, `statuspage.updates`) is live fan-out only;
   nothing persistent may depend on a core-NATS subscriber.
@@ -605,8 +608,9 @@ or imported groups come back empty. Any other path that creates groups through
   "Analysis failed: <message>. Try again.".
 - **AI triage timing**: the relay/consumer windows live as constants with
   compile-time guards in `worker/internal/airca/relay.go` and `triage.go`
-  (15 s tick, 6 h lookback, claim wait `GREATEST(delay, LEAST(2×interval,
-  1 h))`, 3 min republish, 30 min run timeout from `started_at`, not-started
+  (15 s tick, 6 h lookback — the value is `ai.TriageLookback` in
+  `shared/ai/settings.go`, aliased by relay.go's `triageLookback` — claim wait
+  `GREATEST(delay, LEAST(2×interval, 1 h))`, 3 min republish, 30 min run timeout from `started_at`, not-started
   timeout = stream max age 1 h + 10 min). Republishes must land inside the
   `AI_TRIAGE` Duplicates window (30 min), and the relay and consumer must
   provision the stream through the same `triageSpec`/`ensureStream`, or one
@@ -614,6 +618,9 @@ or imported groups come back empty. Any other path that creates groups through
   `buildEvidence` in `context.go`; never fork the window/evidence SQL. The
   claim and cap SQL is `relayClaimSQL`; the settings ranges are pinned in
   migration 000094, `aisettings` and `web/lib/ai-triage.ts` together.
+  `triageview.ClaimableExpr` (api/internal/services/triageview) is the API
+  twin of `relayClaimSQL`'s eligibility clause and drives the SLA report's
+  pending vs. untriaged split; change them together.
 - **Local AI release gate**: `release_approved` comes only from
   `ai-service/training/validate_cpu.py`; `probara_ai/gate.py` is the
   predicate and `verify_artifact` recomputes it from `cpu-evaluation.json`,

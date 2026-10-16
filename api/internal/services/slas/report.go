@@ -108,6 +108,10 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 		ServiceOutages: []models.SLAReportOutage{},
 		Outages:        []models.SLAReportOutage{},
 		Notes:          []string{},
+		// Present (possibly empty) on every report computed since causes
+		// exist; renderers tell "nothing to attribute" from "computed before
+		// causes existed" (nil) by it.
+		SuspectedCauses: &models.SLAReportSuspectedCauses{Buckets: []models.SLAReportCauseBucket{}},
 	}
 	if !custom {
 		report.Period.PreviousKey = period.Previous(loc).Key
@@ -205,12 +209,26 @@ func (s *Service) buildReport(ctx context.Context, tenantID uuid.UUID, sla *mode
 		}
 	}
 	sort.SliceStable(perMonitor, func(i, j int) bool { return perMonitor[i].Start.Before(perMonitor[j].Start) })
-	for _, o := range perMonitor {
+	// Causes cover every per-monitor outage, not just the capped list.
+	causeAlerts, err := s.loadCauseAlerts(ctx, tenantID, ids, window, now)
+	if err != nil {
+		return nil, err
+	}
+	causes, perOutage := attributeCauses(perMonitor, causeAlerts)
+	report.SuspectedCauses = causes
+	for i, o := range perMonitor {
 		if len(report.Outages) >= maxReportOutages {
 			report.OutagesTruncated = true
 			break
 		}
-		report.Outages = append(report.Outages, outageRow(o, names[*o.MonitorID]))
+		row := outageRow(o, names[*o.MonitorID])
+		if c := perOutage[i]; c.Kind != "" {
+			row.CauseKind, row.CauseKey, row.CauseTitle = c.Kind, c.Key, c.Title
+		}
+		report.Outages = append(report.Outages, row)
+	}
+	if note := pendingNote(causes); note != "" {
+		report.Notes = append(report.Notes, note)
 	}
 
 	// MTTR over the outages the SLA is judged by: the service's for serial,

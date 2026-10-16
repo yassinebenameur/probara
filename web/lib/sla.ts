@@ -58,6 +58,42 @@ export interface SlaReportOutage {
   unplanned_seconds: number;
   started_before: boolean;
   ongoing: boolean;
+  /** The outage's suspected-cause bucket; only on per-monitor outages with unplanned time, on reports computed since causes exist. */
+  cause_kind?: SlaCauseKind;
+  /** Catalogue key for suspected causes, else the kind. */
+  cause_key?: string;
+  cause_title?: string;
+}
+
+/** Suspected-cause buckets (api models.SLACause*), in display order after the named causes. */
+export type SlaCauseKind = 'suspected' | 'inconclusive' | 'pending' | 'untriaged' | 'no_alert';
+
+export interface SlaReportCauseBucket {
+  kind: SlaCauseKind;
+  /** Catalogue key for suspected causes, else the kind. */
+  key: string;
+  /** Frozen when the report is computed, so an issued report keeps its wording. */
+  title: string;
+  outage_count: number;
+  alert_count: number;
+  monitor_count: number;
+  unplanned_seconds: number;
+  confirmed_outage_count: number;
+  corrected_outage_count: number;
+}
+
+/**
+ * Monitor outages rolled up by the triage of their overlapping availability
+ * alerts. Counts are monitor outages, not alerts; unplanned_seconds is summed
+ * per monitor, so it can exceed the service downtime.
+ */
+export interface SlaReportSuspectedCauses {
+  outage_count: number;
+  triaged_outage_count: number;
+  pending_outage_count: number;
+  unplanned_seconds: number;
+  /** Already ordered by the API: named causes by downtime, then the fixed buckets. */
+  buckets: SlaReportCauseBucket[];
 }
 
 export interface SlaReportMonitor {
@@ -142,6 +178,8 @@ export interface SlaReport {
     mtta_seconds: number | null;
   };
   notes: string[];
+  /** Absent on reports issued before causes existed: render nothing for those. */
+  suspected_causes?: SlaReportSuspectedCauses;
 }
 
 export interface SlaReportRef {
@@ -328,4 +366,36 @@ export function slaInputError(input: SlaInput): string | null {
   }
   if (input.monitor_ids.length === 0 && input.tags.length === 0) return 'Select at least one monitor or tag.';
   return null;
+}
+
+/** The outage table grows a Cause column only when a row carries one, so older issued reports look unchanged. */
+export function hasOutageCauses(outages: Pick<SlaReportOutage, 'cause_title'>[]): boolean {
+  return outages.some((o) => Boolean(o.cause_title));
+}
+
+/** A bucket's share of the attributed downtime, as the PDF prints it; "—" when nothing was attributed. */
+export function causeShare(bucketSeconds: number, totalSeconds: number): string {
+  if (!(totalSeconds > 0)) return '—';
+  return `${((bucketSeconds / totalSeconds) * 100).toFixed(1)}%`;
+}
+
+/**
+ * The note under the suspected-cause breakdown. Same wording as the PDF's
+ * causesCaveat (api/internal/services/slas/export.go); change them together.
+ * The triage lookback is left unnumbered here: it lives in shared/ai
+ * (TriageLookback) and the docs, not in the UI.
+ */
+export function slaCausesCaveat(c: Pick<SlaReportSuspectedCauses, 'outage_count' | 'triaged_outage_count'>): string {
+  return (
+    "Each monitor outage takes the suspected cause of its monitor's availability alerts that overlapped it, " +
+    "from Probara's local AI triage, or an operator's label on it (* marks causes that include operator-labelled outages). " +
+    'Suspected causes are observed symptoms, not confirmed root causes. ' +
+    'Not triaged: the alert was never triaged, for example automatic triage was off at the time, the alert resolved within the settle wait, ' +
+    "the monitor was in its triage cooldown, the workspace's hourly triage limit or the platform backlog was reached, " +
+    'the alert was older than the triage lookback, triage was switched off, or the local AI was unavailable. ' +
+    'Triage pending: triage was still running or the alert still open when the report was computed. ' +
+    'No alert: no availability alert overlapped the outage. ' +
+    'Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. ' +
+    `${c.triaged_outage_count} of ${c.outage_count} monitor outages had a triaged alert.`
+  );
 }

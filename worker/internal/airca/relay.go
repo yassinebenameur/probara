@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 
+	"github.com/yassinebenameur/probara/shared/ai"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -54,10 +55,9 @@ const (
 	// delivery can come: the backlog (or a NATS outage) outlasted the job.
 	triageNotStartedAfter = triageMaxAge + 10*time.Minute
 
-	// triageLookback bounds which alerts are claimed: turning auto-triage on
-	// in a workspace with days-old open alerts must not spend the hourly cap
-	// on them.
-	triageLookback = 6 * time.Hour
+	// triageLookback bounds which alerts are claimed (ai.TriageLookback,
+	// shared with the API's SLA cause breakdown).
+	triageLookback = ai.TriageLookback
 
 	// triageMaxIntervalWait caps the two-check-intervals part of the claim
 	// wait, so alerts of monitors checking less often than every 30 minutes
@@ -122,7 +122,10 @@ var relayTimeoutsSQL = []string{
 // in the window; alerts that resolve within it are never claimed. Mesh
 // alerts (no monitor) are claimed and skipped by the consumer as not
 // modeled; alerts of deleted monitors are not claimed. Skipped rows do not
-// count against the cap.
+// count against the cap. The eligibility clause (open, within the lookback,
+// live monitor, workspace AI and auto-triage on) has an API twin,
+// api/internal/services/triageview.ClaimableExpr, which splits SLA report
+// outages into pending vs. untriaged; change them together.
 var relayClaimSQL = `
 WITH settings AS (
     SELECT tenant_id, triage_delay_seconds, triage_max_per_hour
