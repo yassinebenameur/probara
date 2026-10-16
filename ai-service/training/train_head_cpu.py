@@ -23,7 +23,7 @@ os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", USE_TF="0")
 import torch
 from safetensors.torch import save_file
 from laya.train import TrainConfig, load_checkpoint, items_from_rows, train_model
-from probara_ai.contract import STATE_FORMAT, VERSION
+from probara_ai.contract import STATE_FORMAT, VERSION, from_label_export, state_text
 from probara_ai.cpu import CPU_FORMAT, prepare_cpu
 from train import read, MAX_LEN, HEAD_LEN
 from train_cpu import FrozenCPUEncoder
@@ -59,8 +59,27 @@ def load_init_head(model, path):
     return f"{path.name} sha256 {hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()}"
 
 
+def current_format_row(row):
+    """An extra training row whose state is the current STATE_FORMAT rendering.
+
+    Operator label exports (groups "op-<task>-...") carry the frozen format-1
+    state and are re-rendered from their evidence by from_label_export, which
+    refuses an export whose state is not exactly that text. Any other row must
+    already be current, as verify_rendering demands of the corpus: training on
+    text the runtime never sends would silently skew the head.
+    """
+    task = row["task"]
+    if row["state"] == state_text(task, row["evidence"], STATE_FORMAT):
+        return row
+    if row["group"].startswith(f"op-{task}-"):
+        return from_label_export(row)
+    raise ValueError(f"extra training row (group {row['group']}) is not rendered in evidence "
+                     f"state format {STATE_FORMAT}")
+
+
 def read_extra_train(data, paths):
-    """Training-only rows (training/augment.py); never calibration/test groups."""
+    """Training-only rows (training/augment.py, operator label exports); never
+    calibration/test groups."""
     if not paths:
         return []
     eval_groups = {r["group"] for t in ("rca", "dependency") for part in ("calibration", "test")
@@ -69,8 +88,8 @@ def read_extra_train(data, paths):
     for path in paths:
         extra = read(path)
         if {r["group"] for r in extra} & eval_groups:
-            raise ValueError(f"{path.name}: augmentation groups overlap calibration/test groups")
-        rows += extra
+            raise ValueError(f"{path.name}: extra training groups overlap calibration/test groups")
+        rows += [current_format_row(r) for r in extra]
     return rows
 
 

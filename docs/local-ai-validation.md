@@ -124,7 +124,8 @@ Disclosures:
   numbers show the model reproducing the rules more often than the
   conservative rules baseline commits to an answer; they say nothing about
   real incidents. Operator labels (`POST /ai-labels/export`) are the path
-  to that.
+  to that; see [Operator labels](local-ai.md#operator-labels) for the
+  training procedure.
 - v4 was trained by a working copy of `train_head_cpu.py` that wrote the
   earlier full-checkpoint layout and was converted with
   `tools/convert_candidate.py`, which verified every encoder tensor against

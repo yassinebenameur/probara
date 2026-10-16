@@ -193,7 +193,8 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (`training_row`/`state_text`/`validate_evidence`), pinned by
   `shared/ai/testdata/label-export-v1.jsonl` (`TestLabelExportFixture`,
   regenerate with `-update`); the ai-service training reader must test the
-  same file, so change both sides together. Labels copy evidence server-side,
+  same file (`read_extra_train` re-renders `op-` rows through
+  `from_label_export`), so change both sides together. Labels copy evidence server-side,
   never from the client: `incident_ai_analyses.decision_snapshot` (worker
   `markReady`) and `alert_triage.decision_snapshot` (`markTriageReady`) are
   read by `api/internal/services/ailabels`

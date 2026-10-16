@@ -302,6 +302,38 @@ or five co-firing windows; the stronger construction-aligned guards are a
 disclosed corpus upper bound, not a claim the model beats. Results measure
 this controlled corpus, not real-world incident accuracy.
 
+### Operator labels
+
+Operator labels are the route to real-world accuracy. A tenant admin exports
+them from Settings → AI → Export labels (`POST /api/v1/ai-labels/export`,
+optionally windowed by `since`/`until` and filtered by subject type), which
+downloads one `probara-ai-labels-YYYYMMDD.jsonl` per workspace. Each row is a
+training row (`task`, `group`, `evidence`, `state`, `questions`, `expected`,
+plus `provenance`) whose `state` is rendered in evidence state format 1,
+frozen on the Go side (`shared/ai/labelexport.go`, pinned by
+`shared/ai/testdata/label-export-v1.jsonl`) whatever the current
+`STATE_FORMAT` is. Pass the file as `--extra-train`
+only, never as calibration or test data:
+
+```sh
+python ai-service/training/train_head_cpu.py --version <next> \
+  --base ai-service/.cache/base --data ai-service/artifacts/dataset \
+  --extra-train ai-service/.cache/labels/probara-ai-labels-20261016.jsonl \
+  --output ai-service/artifacts/<next> --work ai-service/.cache/composed --epochs 3
+```
+
+`read_extra_train` re-renders each `op-<task>-` row from its evidence in the
+current format (`probara_ai.contract.from_label_export`) and refuses a row
+whose exported state is not exactly the format-1 text (an edited file, or a Go
+and Python contract that drifted), as well as any other extra row not in the
+current format. Export groups are `op-<task>-<hmac>`, disjoint from corpus
+groups (and `--extra-train` refuses any overlap with calibration or test), so
+held-out numbers stay corpus-only, as for v4. The file's sha256 is recorded
+in `training-config.json`. An export carries evidence counters and answers
+with no monitor names or IDs, but it still describes a workspace's
+incidents: share it only with the people who retrain the model (docs site,
+Security → "Notifications, webhooks, SMTP, and AI").
+
 ## Evidence and outcomes
 
 RCA uses the earliest linked alert as its anchor, falling back to incident
