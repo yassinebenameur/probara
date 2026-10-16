@@ -291,7 +291,10 @@ or imported groups come back empty. Any other path that creates groups through
   (`checker.go`) are at-most-once: a redelivery (`NumDelivered > 1`) is acked
   without running, and a failed publish retries in place, never NAKs. A
   checker that acts on the world (places calls, sends messages) must
-  implement it, deciding from non-secret config fields only.
+  implement it, deciding from non-secret config fields only. Scheduled jobs
+  carry a per-slot `Nats-Msg-Id` (`checkJobMsgID`, used by
+  `publishMonitorJobs`), so a dispatch retried for the same `next_run_at` is
+  a stream duplicate; keep the id deterministic per slot.
 - **SIP test calls** (`sip` + `method: invite`, `worker/internal/worker/sip_invite.go`)
   place real, billable calls. `models.IsSIPCallConfig` is the one "is this a
   call" test (non-secret fields): the checker's `SideEffecting`, the API's

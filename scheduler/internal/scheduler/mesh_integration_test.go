@@ -28,7 +28,7 @@ type spyJobPublisher struct {
 	published []publishedJob
 }
 
-func (p *spyJobPublisher) publish(_ context.Context, subject string, job *models.Job) error {
+func (p *spyJobPublisher) publish(_ context.Context, subject string, job *models.Job, _ map[string][]string) error {
 	p.published = append(p.published, publishedJob{subject: subject, job: job})
 	return nil
 }

@@ -77,6 +77,12 @@ instead: a redelivered job is acked without running or publishing
 result publish is retried in place (1s, 2s, 4s) and then dropped
 (`probara_worker_side_effect_result_abandoned_total{type}`), never NAKed. A
 lost sample reads as missing evidence; a repeated side effect cannot be undone.
+On the dispatch side, every scheduled job carries a `Nats-Msg-Id` per
+(monitor, location, due slot) (`checkJobMsgID`, `scheduler.go`): a dispatch
+retried for the same slot (a lost PubAck, or a failed reschedule that rolls the
+batch back) is absorbed by the stream's 2-minute duplicate window, so
+side-effecting checks are at-most-once across redelivery and dispatch retries
+alike. Run-now publishes without one: it is a deliberate manual trigger.
 
 Private-location workers use location-scoped broker credentials and encrypted
 monitor configurations. The platform validates location result provenance
