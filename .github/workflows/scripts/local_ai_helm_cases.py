@@ -85,11 +85,17 @@ def chart_secret_keys(docs):
 
 def assert_boundary(docs):
     # Only the API, the platform worker and the inference service carry
-    # LOCAL_AI_*; scheduler, alerter, status page and location workers never.
+    # LOCAL_AI_*; scheduler, status page and location workers never. The
+    # alerter never calls the service and gets only the LOCAL_AI_DISABLED kill
+    # switch (alerterAIEnv), which stops suspected-cause follow-ups.
     allowed = ("-api", "-worker", "-local-ai")
     for name, workload in {**objects(docs, "Deployment"), **objects(docs, "StatefulSet"),
                            **objects(docs, "Job")}.items():
         carried = sorted(k for k in env(workload) if k.startswith("LOCAL_AI_"))
+        if name.endswith("-alerter"):
+            if carried != ["LOCAL_AI_DISABLED"]:
+                raise AssertionError(f"{name} must receive only LOCAL_AI_DISABLED, got {carried}")
+            continue
         if carried and not name.endswith(allowed):
             raise AssertionError(f"{name} must not receive {carried}")
 

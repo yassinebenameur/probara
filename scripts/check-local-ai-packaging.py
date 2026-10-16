@@ -5,8 +5,9 @@ Usage (from anywhere; paths resolve from this file):
     python3 -I scripts/check-local-ai-packaging.py [--skip-compose]
 
 Needs helm on PATH, PyYAML, and (unless --skip-compose) docker compose.
-Asserts the service boundary (only api + platform worker get LOCAL_AI_*,
-the local AI pod gets only its token), the token convention (stable derived
+Asserts the service boundary (only api + platform worker get the LOCAL_AI_*
+client env, the alerter only the LOCAL_AI_DISABLED kill switch, the local AI
+pod only its token and service settings), the token convention (stable derived
 default, literal, per-field and chart-wide existing Secret), the external URL
 mode, scheduling/image/extraEnv knobs (top-level extraEnv never reaches the
 local AI pod), the optional client token reference, the NetworkPolicy toggle,
@@ -87,7 +88,11 @@ def assert_clients(objects, url, ref):
         else:
             assert env['LOCAL_AI_DISABLED']['value'] == 'true', name
             assert not {'LOCAL_AI_URL', 'LOCAL_AI_TOKEN', 'LOCAL_AI_TIMEOUT_SECONDS'} & env.keys(), name
-    others = [(k, n) for k, n in (('Deployment', FULL + '-scheduler'), ('Deployment', FULL + '-alerter'),
+    # The alerter never calls the service; it gets only the LOCAL_AI_DISABLED
+    # kill switch (alerterAIEnv), which stops suspected-cause follow-ups.
+    alerter = {k: v for k, v in env_of(objects, 'Deployment', FULL + '-alerter').items() if k.startswith('LOCAL_AI_')}
+    assert alerter == {'LOCAL_AI_DISABLED': {'name': 'LOCAL_AI_DISABLED', 'value': 'false' if url else 'true'}}, alerter
+    others = [(k, n) for k, n in (('Deployment', FULL + '-scheduler'),
                                   ('Deployment', FULL + '-status-page'), ('Deployment', FULL + '-frontend'),
                                   ('Deployment', FULL + '-worker-eu'), ('Job', FULL + '-migrations'))]
     for kind, name in others:
@@ -254,7 +259,9 @@ def check_compose():
         assert env['LOCAL_AI_URL'] == 'http://local-ai:8090', name
         assert env['LOCAL_AI_TOKEN'] == ai['environment']['LOCAL_AI_TOKEN'], name
         assert env['LOCAL_AI_DISABLED'] == ai['environment']['LOCAL_AI_DISABLED'], name
-    for name in ('scheduler', 'alerter', 'status-page'):
+    alerter = {k: v for k, v in services['alerter'].get('environment', {}).items() if k.startswith('LOCAL_AI_')}
+    assert alerter == {'LOCAL_AI_DISABLED': ai['environment']['LOCAL_AI_DISABLED']}, alerter
+    for name in ('scheduler', 'status-page'):
         leaked = [k for k in services[name].get('environment', {}) if k.startswith('LOCAL_AI_')]
         assert not leaked, f'compose {name} must not receive local AI env: {leaked}'
 
