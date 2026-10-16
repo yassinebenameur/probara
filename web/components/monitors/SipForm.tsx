@@ -18,7 +18,7 @@ import {
   SIP_CALL_MIN_INTERVAL_SECONDS,
 } from '@/lib/sip-config';
 import { sipCallSummary } from '@/lib/sip-metrics';
-import { pluralize } from '@/lib/format';
+import { formatLatency, pluralize } from '@/lib/format';
 import { useCurrentUser, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -597,7 +597,7 @@ export default function SipForm({
             {test.phase === 'done' && test.result.status === 'success' && (
               <p className="flex items-center gap-1.5 text-xs text-emerald-300">
                 <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-                Passed{typeof test.result.latency_ms === 'number' ? ` in ${test.result.latency_ms} ms` : ''}
+                Passed{typeof test.result.latency_ms === 'number' ? ` in ${formatLatency(test.result.latency_ms)}` : ''}
                 {testResultSummary ? `: ${testResultSummary}` : ''}
               </p>
             )}
