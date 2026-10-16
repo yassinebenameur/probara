@@ -187,8 +187,11 @@ export function validateSipCallFields(
   if (form.call_from_user.trim() && !SIP_CALL_USER.test(form.call_from_user.trim())) {
     errors.call_from_user = 'Up to 64 digits, letters and + * # . _ ~ -';
   }
-  if (/["\\]/.test(form.call_from_display) || form.call_from_display.length > 64) {
-    errors.call_from_display = 'Up to 64 characters, without " or \\';
+  // Counted in code points like the server's []rune (an emoji is one), on
+  // the trimmed value the save sends; control characters are refused too.
+  const display = form.call_from_display.trim();
+  if (/["\\\u0000-\u001f\u007f]/.test(display) || [...display].length > 64) {
+    errors.call_from_display = 'Up to 64 printable characters, without " or \\';
   }
 
   let hold = 0;

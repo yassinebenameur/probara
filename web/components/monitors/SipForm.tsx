@@ -877,7 +877,6 @@ export default function SipForm({
                     value={formData.call_from_display}
                     onChange={(e) => setFormData({ ...formData, call_from_display: e.target.value })}
                     placeholder="Probara probe"
-                    maxLength={64}
                     className="input"
                   />
                 )}

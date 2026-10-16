@@ -262,6 +262,14 @@ test('sipCallsPerDay counts one call per check per location', () => {
   assert.equal(sipCallsPerDay(300, 1), 288);
 });
 
+test('the caller name is counted in code points, like the server', () => {
+  const ok = callFormFrom(storedCall);
+  assert.equal(validateSipCallFields({ ...ok, call_from_display: '\u{1F4DE}'.repeat(40) }, 60, 10).call_from_display, undefined);
+  assert.ok(validateSipCallFields({ ...ok, call_from_display: 'x'.repeat(65) }, 60, 10).call_from_display);
+  assert.ok(validateSipCallFields({ ...ok, call_from_display: 'Probe\tone' }, 60, 10).call_from_display);
+  assert.ok(validateSipCallFields({ ...ok, call_from_display: 'say "hi"' }, 60, 10).call_from_display);
+});
+
 test('validateSipCallFields applies the test-call rules', () => {
   const ok = callFormFrom(storedCall);
   assert.deepEqual(validateSipCallFields(ok, 60, 10), {});
