@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -152,7 +153,8 @@ type sipReasonHeader struct {
 // sipTargetMetrics is the peer that decided the check (the last one tried).
 // Host is the name it came from — the configured host, or the SRV target —
 // after the SIP_LOCALHOST_AS_HOST_GATEWAY rewrite; Address the IP:port the
-// flow connected to; ResolvedVia how Host became that address: "literal" for
+// flow connected to, also after a failed TLS handshake (the TCP leg
+// connected), and empty when no connection was made; ResolvedVia how Host became that address: "literal" for
 // an IP, "a" for an A/AAAA lookup, "srv" for an SRV target, "naptr" for an
 // SRV target whose SRV name a NAPTR record gave. Failover is set
 // when an earlier address was tried first and given up on.
@@ -302,6 +304,22 @@ func (m *sipMetrics) recordFlow(flow *sipFlow, serverName string) {
 	m.recordDialTiming(flow.timing)
 	if flow.tlsState != nil {
 		m.TLS = tlscert.FromConnectionState(*flow.tlsState, serverName, time.Now())
+	}
+}
+
+// recordDialError keeps what a failed dial learned. A failed TLS handshake
+// had a TCP connection, so the address that served the rejected certificate
+// (or stalled the handshake) is recorded; a dial that never connected
+// (refused, timed out, blocked) leaves Address empty. c.address() is the
+// IP:port dialSIP dialed, after the loopback rewrite, as flow.peer would be.
+func (m *sipMetrics) recordDialError(err error, c sipCandidate) {
+	var dialErr *sipDialError
+	if !errors.As(err, &dialErr) {
+		return
+	}
+	m.recordDialTiming(dialErr.timing)
+	if dialErr.handshake && m.Target != nil {
+		m.Target.Address = c.address()
 	}
 }
 

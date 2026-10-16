@@ -257,10 +257,7 @@ func (c *SIPChecker) checkInvite(ctx context.Context, config *models.SIPMonitorC
 		connectBudget := sipConnectBudget(callCtx, models.SIPResolutionA, candidates, i)
 		flow, err := c.dialSIP(callCtx, candidate, config, connectBudget, true)
 		if err != nil {
-			var dialErr *sipDialError
-			if errors.As(err, &dialErr) {
-				metrics.recordDialTiming(dialErr.timing)
-			}
+			metrics.recordDialError(err, candidate)
 			if candidate.transport == "tls" {
 				err = withSIPSRVIdentityHint(err, candidate, serverName, overridden)
 			}

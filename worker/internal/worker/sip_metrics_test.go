@@ -279,8 +279,10 @@ func TestSIPMetrics_TLSTiming(t *testing.T) {
 	if m.Timing.ConnectMs == nil || m.Timing.TLSHandshakeMs != nil {
 		t.Errorf("timing = %+v, want connect_ms only", m.Timing)
 	}
-	if m.Target == nil || m.Target.Address != "" {
-		t.Errorf("target = %+v, want no connected address after a failed handshake", m.Target)
+	// The TCP leg connected: the address that served the rejected
+	// certificate is recorded.
+	if m.Target == nil || m.Target.Address != net.JoinHostPort(host, fmt.Sprint(port)) {
+		t.Errorf("target = %+v, want the connected address after a failed handshake", m.Target)
 	}
 }
 

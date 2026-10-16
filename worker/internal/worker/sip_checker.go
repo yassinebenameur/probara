@@ -277,10 +277,7 @@ type sipAttemptParams struct {
 func (c *SIPChecker) runNonInviteAttempt(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, p sipAttemptParams, connectBudget time.Duration, metrics *sipMetrics) sipAttemptResult {
 	flow, err := c.dialSIP(ctx, candidate, config, connectBudget, false)
 	if err != nil {
-		var dialErr *sipDialError
-		if errors.As(err, &dialErr) {
-			metrics.recordDialTiming(dialErr.timing)
-		}
+		metrics.recordDialError(err, candidate)
 		return sipAttemptResult{err: err}
 	}
 	metrics.recordFlow(flow, sipTLSServerName(config))
