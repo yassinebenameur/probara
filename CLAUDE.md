@@ -289,8 +289,9 @@ or imported groups come back empty. Any other path that creates groups through
   a check runs (`checkProgressInterval`, `worker.go`; keep it well under the
   30 s AckWait). Checks whose checker implements `SideEffectingChecker`
   (`checker.go`) are at-most-once: a redelivery (`NumDelivered > 1`) is acked
-  without running, and a failed publish retries in place, never NAKs. A
-  checker that acts on the world (places calls, sends messages) must
+  without running, a failed publish retries in place, never NAKs, and a
+  result the worker's own shutdown produced (`CheckResult.Interrupted`) is
+  acked unpublished. A checker that acts on the world (places calls, sends messages) must
   implement it, deciding from non-secret config fields only. Scheduled jobs
   carry a per-slot `Nats-Msg-Id` (`checkJobMsgID`, used by
   `publishMonitorJobs`), so a dispatch retried for the same `next_run_at` is

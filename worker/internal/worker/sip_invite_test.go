@@ -1387,6 +1387,31 @@ func TestSIPInvite_TeardownSurvivesCancelAndPanic(t *testing.T) {
 		if m.Call.Teardown != "bye_ok" {
 			t.Fatalf("teardown = %q (result %s %s)", m.Call.Teardown, result.Status, resultMsg(result))
 		}
+		// Answered before the shutdown: that verdict stands and is published.
+		if result.Status != "success" || result.Interrupted {
+			t.Fatalf("result = %s interrupted=%v, want the answered call's success", result.Status, result.Interrupted)
+		}
+	})
+	t.Run("parent cancelled while ringing", func(t *testing.T) {
+		u := startFakeUAS(t, "udp", cancellingUAS(false))
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) && len(u.responses()) == 0 && len(u.requests("INVITE")) == 0 {
+				time.Sleep(5 * time.Millisecond)
+			}
+			time.Sleep(200 * time.Millisecond) // past the 180
+			cancel()
+		}()
+		result, m := runInviteCtx(t, ctx, newInviteTestChecker(), inviteConfig(u, map[string]any{"number": "100"}, nil), 10)
+		cancel()
+		if !result.Interrupted || result.Status != "error" {
+			t.Fatalf("result = %s %q interrupted=%v, want an interrupted error", result.Status, resultMsg(result), result.Interrupted)
+		}
+		u.waitRequests("CANCEL", 1, time.Second)
+		if m.Call.Teardown != "cancelled" {
+			t.Fatalf("teardown = %q, want cancelled", m.Call.Teardown)
+		}
 	})
 	t.Run("panic", func(t *testing.T) {
 		u := startFakeUAS(t, "udp", answeringUAS(0, 10*time.Millisecond))

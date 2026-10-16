@@ -224,7 +224,9 @@ func (c *SIPChecker) checkInvite(ctx context.Context, config *models.SIPMonitorC
 	}
 	errorResult := func(err error) CheckResult {
 		msg := fmt.Sprintf("%s: %v", classifySIPError(err), err)
-		return finish(CheckResult{Status: "error", ErrorMessage: &msg}, time.Time{})
+		// Before the INVITE is sent (resolution, dial) a cancelled ctx is the
+		// worker shutting down, whatever error it surfaced as.
+		return finish(CheckResult{Status: "error", ErrorMessage: &msg, Interrupted: ctx.Err() != nil}, time.Time{})
 	}
 
 	resolver, err := c.newSIPResolver(config, timeout)
@@ -742,8 +744,14 @@ func (s *sipCall) drive(parent, callCtx context.Context) {
 			}
 
 		case <-callCtx.Done():
-			if parent.Err() != nil {
+			if parent.Err() != nil && !s.decided {
+				// The worker is shutting down mid-call: teardown still runs,
+				// but the result says nothing about the target, so it is
+				// marked and processJob drops it rather than publish a
+				// failure. A verdict reached before (a call answered and
+				// holding) stands and is published.
 				s.decide("error", 0, time.Time{}, "cancelled: check cancelled")
+				s.result.Interrupted = true
 			}
 			if s.phase == sipCallHolding {
 				s.phase = sipCallTerminating

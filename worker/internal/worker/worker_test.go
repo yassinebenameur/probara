@@ -239,6 +239,43 @@ func TestProcessJob_SideEffectingPublishSurvivesShutdown(t *testing.T) {
 	}
 }
 
+// interruptedCallChecker places a "call" that the worker's shutdown cuts
+// short: it blocks until ctx is cancelled and returns an Interrupted result.
+type interruptedCallChecker struct{ fakeCallChecker }
+
+func (c *interruptedCallChecker) Check(ctx context.Context, _ json.RawMessage, _ int) CheckResult {
+	c.runs.Add(1)
+	<-ctx.Done()
+	msg := "cancelled: check cancelled"
+	return CheckResult{Status: "error", ErrorMessage: &msg, Interrupted: true}
+}
+
+// A side-effecting check interrupted by worker shutdown is evidence about
+// the worker, not the target: acked, nothing published, counted.
+func TestProcessJob_InterruptedSideEffectingCheckIsNotPublished(t *testing.T) {
+	checker := &interruptedCallChecker{}
+	pub := &flakyPublisher{}
+	w := newProcessTestWorker(t, pub, checker)
+	msg, _ := newJobMessage(t, "invite", 1, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for checker.runs.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		cancel() // the worker shuts down mid-call
+	}()
+	if err := w.processJob(ctx, msg); err != nil {
+		t.Fatalf("processJob = %v, want nil (ack)", err)
+	}
+	if pub.attempts != 0 {
+		t.Fatalf("publish attempts = %d, want none", pub.attempts)
+	}
+	if got := counterValue(t, w.sideEffectInterrupted, fakeCallType); got != 1 {
+		t.Fatalf("side_effect_result_interrupted_total = %v, want 1", got)
+	}
+}
+
 func TestProcessJob_OrdinaryPublishFailureStillNaks(t *testing.T) {
 	checker := &fakeCallChecker{}
 	pub := &flakyPublisher{failures: 1}

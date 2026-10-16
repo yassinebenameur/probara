@@ -77,7 +77,11 @@ instead: a redelivered job is acked without running or publishing
 result publish is retried in place (1s, 2s, 4s) and then dropped
 (`probara_worker_side_effect_result_abandoned_total{type}`), never NAKed. A
 lost sample reads as missing evidence; a repeated side effect cannot be undone.
-On the dispatch side, every scheduled job carries a `Nats-Msg-Id` per
+A side-effecting check cut short by the worker's own shutdown (an INVITE test
+call during a deploy) still tears its call down, then is acked and publishes
+nothing (`CheckResult.Interrupted`,
+`probara_worker_side_effect_result_interrupted_total{type}`): a gap, never a
+recorded failure. On the dispatch side, every scheduled job carries a `Nats-Msg-Id` per
 (monitor, location, due slot) (`checkJobMsgID`, `scheduler.go`): a dispatch
 retried for the same slot (a lost PubAck, or a failed reschedule that rolls the
 batch back) is absorbed by the stream's 2-minute duplicate window, so

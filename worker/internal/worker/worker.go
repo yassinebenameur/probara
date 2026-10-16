@@ -80,6 +80,9 @@ type Worker struct {
 	resultPublishErrors prometheus.Counter
 	sideEffectSkipped   *prometheus.CounterVec
 	sideEffectAbandoned *prometheus.CounterVec
+	// sideEffectInterrupted counts side-effecting results the worker's own
+	// shutdown produced, acked and never published.
+	sideEffectInterrupted *prometheus.CounterVec
 
 	// Zero values use checkProgressInterval / sideEffectPublishBackoff;
 	// tests shrink them.
@@ -159,6 +162,11 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 	w.sideEffectAbandoned = metricsRegistry.NewCounter(
 		"side_effect_result_abandoned_total",
 		"Side-effecting check results dropped after every publish retry failed",
+		[]string{"type"},
+	)
+	w.sideEffectInterrupted = metricsRegistry.NewCounter(
+		"side_effect_result_interrupted_total",
+		"Side-effecting checks interrupted by worker shutdown, acked without publishing",
 		[]string{"type"},
 	)
 
@@ -467,6 +475,17 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		checkResult = CheckResult{Status: "error", ErrorMessage: &errMsg}
 	} else {
 		checkResult = checker.Check(checkCtx, checkConfig, payload.TimeoutSeconds)
+	}
+
+	// A side-effecting check cut short by this worker's shutdown (a deploy
+	// mid-call) produced no evidence about its target: ack it and publish
+	// nothing, so it costs one sample (a gap) instead of recording a failure.
+	// Teardown already ran inside Check.
+	if sideEffecting && checkResult.Interrupted {
+		logEntry.WithField("type", payload.Type).Warn("Side-effecting check interrupted by worker shutdown; acking without publishing")
+		w.sideEffectInterrupted.With(prometheus.Labels{"type": payload.Type}).Inc()
+		w.natsAckTotal.Inc()
+		return nil
 	}
 
 	// Publish result for the platform-side ingest consumer to persist. A

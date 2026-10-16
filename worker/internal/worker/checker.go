@@ -59,6 +59,12 @@ type CheckResult struct {
 	ErrorMessage         *string
 	MatchedBodySubstring bool
 	MetricsData          json.RawMessage
+	// Interrupted marks a result that the worker's own shutdown produced
+	// (its context was cancelled before the check decided anything). It is
+	// worker-internal, never published: processJob drops such a result for a
+	// side-effecting check, since it is evidence about the worker, not the
+	// target.
+	Interrupted bool
 }
 
 // HTTPChecker implements Checker for HTTP monitors
