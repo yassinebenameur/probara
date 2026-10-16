@@ -103,11 +103,14 @@ var sipAutoTransports = []string{"udp", "tcp", "tls"}
 // tried in order at the configured or default port. resolution "rfc3263"
 // follows RFC 3263 §4: an IP literal or an explicit port means A/AAAA only;
 // otherwise, with the transport left to DNS, the domain's NAPTR records
-// (§4.1) are followed to the first SRV name they lead to that is published;
-// failing that (or with a configured transport) SRV for the configured
-// transport, or for each transport in sipAutoTransports until one is
-// published, with each SRV target resolved to its addresses; no SRV record
-// falls back to A/AAAA at the default port. A NAPTR lookup that gets no
+// (§4.1) are followed to the first SRV name they lead to that yields a usable
+// target; failing that (or with a configured transport) SRV for the
+// configured transport, or for each transport in sipAutoTransports until one
+// yields a usable target, with each SRV target resolved to its addresses; no
+// SRV record falls back to A/AAAA at the default port. A published SRV name
+// that yields nothing gives way to the next name (sipSRVWalk), and when every
+// published name failed the first failure is the error, never a fallback to
+// A/AAAA past what DNS said. A NAPTR lookup that gets no
 // answer is recorded and skipped, never a failure: SRV still decides.
 //
 // The SIP_LOCALHOST_AS_HOST_GATEWAY rewrite applies to each target host
@@ -156,15 +159,20 @@ func resolveSIPTargets(ctx context.Context, config *models.SIPMonitorConfig, r s
 	if transport != "" {
 		transports = []string{transport}
 	}
+	walk := sipSRVWalk{res: res}
 	for _, t := range transports {
 		service, proto := sipSRVService(t)
 		if queried[sipSRVKey("_"+service+"._"+proto+"."+host)] {
 			continue
 		}
-		candidates, decided, err := lookupSIPSRV(ctx, r, res, service, proto, host, t, "srv")
-		if decided {
-			return candidates, res, err
+		if candidates, ok := walk.try(func() ([]sipCandidate, bool, error) {
+			return lookupSIPSRV(ctx, r, res, service, proto, host, t, "srv")
+		}); ok {
+			return candidates, res, nil
 		}
+	}
+	if failed, err := walk.failed(); failed {
+		return nil, res, err
 	}
 
 	// No SRV record: A/AAAA at the transport's default port (RFC 3263 §4.2),
@@ -178,9 +186,11 @@ func resolveSIPTargets(ctx context.Context, config *models.SIPMonitorConfig, r s
 
 // resolveSIPNAPTR is the NAPTR step (RFC 3263 §4.1): the usable records, in
 // order and preference, each followed to the SRV name it replaces the domain
-// with, until one is published. decided reports that an SRV answer settled
-// the check's candidates (or its error); otherwise the caller goes on to the
-// plain SRV walk. A NAPTR lookup that gets no answer never fails the check.
+// with, until one yields a usable target. decided reports that an SRV answer
+// settled the check's candidates, or that every SRV name the records led to
+// was published and failed (the first failure is the error); otherwise none
+// was published and the caller goes on to the plain SRV walk. A NAPTR lookup
+// that gets no answer never fails the check.
 func resolveSIPNAPTR(ctx context.Context, r sipResolver, res *sipResolutionMetrics, host string, sipsOnly bool, queried map[string]bool) ([]sipCandidate, bool, error) {
 	res.lookedUp = true
 	records, err := r.LookupNAPTR(ctx, host)
@@ -209,18 +219,62 @@ func resolveSIPNAPTR(ctx context.Context, r sipResolver, res *sipResolutionMetri
 			Replacement: rec.Replacement,
 		})
 	}
+	walk := sipSRVWalk{res: res}
 	for _, rec := range usable {
 		key := sipSRVKey(rec.Replacement)
 		if queried[key] {
 			continue
 		}
 		queried[key] = true
-		candidates, decided, err := lookupSIPSRV(ctx, r, res, "", "", rec.Replacement, rec.transport, "naptr")
-		if decided {
-			return candidates, true, err
+		if candidates, ok := walk.try(func() ([]sipCandidate, bool, error) {
+			return lookupSIPSRV(ctx, r, res, "", "", rec.Replacement, rec.transport, "naptr")
+		}); ok {
+			return candidates, true, nil
 		}
 	}
-	return nil, false, nil
+	failed, err := walk.failed()
+	return nil, failed, err
+}
+
+// sipSRVWalk tries SRV names in turn (the NAPTR-led names, or one per
+// transport). RFC 3263 §4.1 and RFC 3403 §4: a name that is published but
+// yields nothing — a lone "." target withdrawing the service, a server
+// failure, no target that resolves — rules out that name only, and the walk
+// goes on to the next. Only when no name yields candidates does the first
+// published failure (the most preferred name's reason) decide; the walk
+// never falls through to A/AAAA past it, the same "an SRV server failure is
+// a dns error, not a silent fallback" rule as a single name.
+type sipSRVWalk struct {
+	res      *sipResolutionMetrics
+	firstErr error
+	firstSRV []sipSRVMetrics
+}
+
+// try runs one SRV lookup and reports its candidates when it yielded some.
+// res.SRV is reset first, so it lists the records of the name used.
+func (w *sipSRVWalk) try(lookup func() ([]sipCandidate, bool, error)) ([]sipCandidate, bool) {
+	w.res.SRV = nil
+	candidates, decided, err := lookup()
+	if decided && err == nil && len(candidates) > 0 {
+		return candidates, true
+	}
+	if decided && w.firstErr == nil {
+		if err == nil {
+			err = &net.DNSError{Err: "no usable SRV target"}
+		}
+		w.firstErr, w.firstSRV = err, w.res.SRV
+	}
+	return nil, false
+}
+
+// failed reports that a published name failed and none yielded candidates,
+// restoring that name's SRV records for the envelope.
+func (w *sipSRVWalk) failed() (bool, error) {
+	if w.firstErr == nil {
+		return false, nil
+	}
+	w.res.SRV = w.firstSRV
+	return true, w.firstErr
 }
 
 func sipSRVKey(name string) string {

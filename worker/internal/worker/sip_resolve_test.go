@@ -322,6 +322,32 @@ func TestResolveSIPTargets_Failures(t *testing.T) {
 		}
 	})
 
+	t.Run("with the transport left to DNS a withdrawn transport gives way to the next", func(t *testing.T) {
+		r := &fakeSIPResolver{
+			srv: map[string][]*net.SRV{
+				"_sip._udp.example.com": {{Target: ".", Port: 0}},
+				"_sip._tcp.example.com": {srvRecord("sbc.example.com", 5060, 10, 0)},
+			},
+			ips: map[string][]string{"sbc.example.com": {"192.0.2.12"}},
+		}
+		candidates, _, err := resolveSIPTargets(context.Background(), &models.SIPMonitorConfig{Host: "example.com", Resolution: "rfc3263", Port: 0}, r)
+		if err != nil {
+			t.Fatalf("resolveSIPTargets() error = %v", err)
+		}
+		requireStrings(t, "candidates", candidateAddrs(candidates), []string{"srv sbc.example.com 192.0.2.12:5060/tcp"})
+	})
+
+	t.Run("with the transport left to DNS every failed transport is a dns error", func(t *testing.T) {
+		r := &fakeSIPResolver{
+			srv: map[string][]*net.SRV{"_sip._udp.example.com": {{Target: ".", Port: 0}}},
+			ips: map[string][]string{"example.com": {"192.0.2.1"}},
+		}
+		_, _, err := resolveSIPTargets(context.Background(), &models.SIPMonitorConfig{Host: "example.com", Resolution: "rfc3263"}, r)
+		if err == nil || !strings.Contains(err.Error(), "not offered") {
+			t.Fatalf("err = %v, want the withdrawn transport's dns error, not a fallback to A", err)
+		}
+	})
+
 	t.Run("a hostname that does not resolve", func(t *testing.T) {
 		_, _, err := resolveSIPTargets(context.Background(), &models.SIPMonitorConfig{Host: "nowhere.example"}, &fakeSIPResolver{})
 		if err == nil || classifySIPError(err) != "dns" {

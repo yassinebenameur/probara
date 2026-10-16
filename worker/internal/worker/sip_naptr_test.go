@@ -584,6 +584,63 @@ func TestResolveSIPTargets_NAPTR(t *testing.T) {
 		}
 	})
 
+	// RFC 3263 §4.1: a NAPTR-led SRV name that withdraws the service or
+	// fails gives way to the next record.
+	for name, failing := range map[string]struct {
+		srv []*net.SRV
+		err error
+	}{
+		"a lone '.' target":  {srv: []*net.SRV{{Target: ".", Port: 0}}},
+		"an SRV server fail": {err: &net.DNSError{Err: "server misbehaving", Name: "_sips._tcp.example.com", IsTemporary: true}},
+	} {
+		t.Run(name+" moves to the next record", func(t *testing.T) {
+			r := &fakeSIPResolver{
+				naptr: map[string][]sipNAPTR{"example.com": {
+					{Order: 10, Preference: 10, Flags: "s", Services: "SIPS+D2T", Replacement: "_sips._tcp.example.com"},
+					{Order: 20, Preference: 10, Flags: "s", Services: "SIP+D2U", Replacement: "_sip._udp.example.com"},
+				}},
+				srv: map[string][]*net.SRV{
+					"_sips._tcp.example.com": failing.srv,
+					"_sip._udp.example.com":  srv["_sip._udp.example.com"],
+				},
+				errs: map[string]error{},
+				ips:  ips,
+			}
+			if failing.err != nil {
+				r.errs["_sips._tcp.example.com"] = failing.err
+			}
+			candidates, res, err := resolveSIPTargets(context.Background(), auto, r)
+			if err != nil {
+				t.Fatalf("resolveSIPTargets() error = %v, want the next record used", err)
+			}
+			requireStrings(t, "candidates", candidateAddrs(candidates), []string{"naptr udp.example.com 192.0.2.11:5060/udp"})
+			if res.NAPTRStatus != "ok" || len(res.SRV) != 1 || res.SRV[0].Target != "udp.example.com" {
+				t.Errorf("naptr_status %q srv %+v, want ok and the records of the name used", res.NAPTRStatus, res.SRV)
+			}
+		})
+	}
+
+	t.Run("every NAPTR-led name failing is a dns error, not a fallback to A", func(t *testing.T) {
+		r := &fakeSIPResolver{
+			naptr: map[string][]sipNAPTR{"example.com": {
+				{Order: 10, Preference: 10, Flags: "s", Services: "SIPS+D2T", Replacement: "_sips._tcp.example.com"},
+				{Order: 20, Preference: 10, Flags: "s", Services: "SIP+D2U", Replacement: "_sip._udp.example.com"},
+			}},
+			srv:  map[string][]*net.SRV{"_sips._tcp.example.com": {{Target: ".", Port: 0}}},
+			errs: map[string]error{"_sip._udp.example.com": &net.DNSError{Err: "server misbehaving", Name: "_sip._udp.example.com", IsTemporary: true}},
+			ips:  map[string][]string{"example.com": {"192.0.2.1"}},
+		}
+		_, _, err := resolveSIPTargets(context.Background(), auto, r)
+		if err == nil || classifySIPError(err) != "dns" || !strings.Contains(err.Error(), "not offered") {
+			t.Fatalf("err = %v, want the most preferred record's dns error", err)
+		}
+		for _, q := range r.recorded() {
+			if q == "A example.com" || strings.HasPrefix(q, "SRV _sip._tcp") {
+				t.Fatalf("queries = %q, want no fallback past the failed NAPTR records", r.recorded())
+			}
+		}
+	})
+
 	t.Run("an explicit transport skips NAPTR", func(t *testing.T) {
 		r := &fakeSIPResolver{naptr: map[string][]sipNAPTR{"example.com": {
 			{Order: 1, Flags: "s", Services: "SIPS+D2T", Replacement: "_sips._tcp.example.com"},
