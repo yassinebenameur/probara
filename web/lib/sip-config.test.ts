@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildSipConfig,
   isSipCall,
+  parseWhole,
   sipCallFormFields,
   sipCallsPerDay,
   sipCallTarget,
@@ -81,6 +82,15 @@ test('form-owned fields the user cleared are dropped, not resurrected from the l
 
 test('a zero-day certificate-expiry threshold is kept', () => {
   assert.equal(buildSipConfig(stored, formFrom({ tls_min_days_valid: '0' })).tls_min_days_valid, 0);
+});
+
+test('a certificate threshold the form would refuse is never saved as a different number', () => {
+  for (const typed of ['1e2', '1.5', '-1', '14 days']) {
+    const config = buildSipConfig(stored, formFrom({ tls_min_days_valid: typed }));
+    assert.equal(config.tls_min_days_valid, undefined, typed);
+    assert.equal(parseWhole(typed), null, typed);
+  }
+  assert.equal(buildSipConfig(stored, formFrom({ tls_min_days_valid: ' 30 ' })).tls_min_days_valid, 30);
 });
 
 test('TLS-only fields are dropped when the transport leaves TLS', () => {

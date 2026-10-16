@@ -153,7 +153,8 @@ export function sipCallFormFields(call: SIPCallConfig | undefined): Pick<
   };
 }
 
-const parseWhole = (value: string): number | null => {
+/** A whole number of 0 or more as typed (digits only), else null. */
+export const parseWhole = (value: string): number | null => {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) return null;
   return parseInt(trimmed, 10);
@@ -318,8 +319,10 @@ export function buildSipConfig(
     if (form.tls_server_name.trim()) config.tls_server_name = form.tls_server_name.trim();
     // The certificate is only seen over TLS; the API rejects the threshold
     // on any other transport, so switching away drops it.
-    const minDays = parseInt(form.tls_min_days_valid, 10);
-    if (form.tls_min_days_valid.trim() && !isNaN(minDays)) config.tls_min_days_valid = minDays;
+    // The form validates with the same parser, so what passed is saved as
+    // typed ("1e2" or "1.5" never pass, and never save as 1).
+    const minDays = parseWhole(form.tls_min_days_valid);
+    if (minDays !== null) config.tls_min_days_valid = minDays;
   }
 
   // Ring mode succeeds on ringing, never on a final, so the API refuses an

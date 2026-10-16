@@ -7,6 +7,7 @@ import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
 import {
   buildSipConfig,
   isSipCall,
+  parseWhole,
   sipCallFormFields,
   sipCallsPerDay,
   sipCallTarget,
@@ -244,11 +245,8 @@ export default function SipForm({
     if (rfc3263 ? formData.port < 0 || formData.port > 65535 : formData.port < 1 || formData.port > 65535) {
       newErrors.port = 'Port must be between 1 and 65535';
     }
-    if (formData.transport === 'tls' && formData.tls_min_days_valid.trim()) {
-      const days = Number(formData.tls_min_days_valid);
-      if (!Number.isInteger(days) || days < 0) {
-        newErrors.tls_min_days_valid = 'Must be a whole number of days, 0 or more';
-      }
+    if (formData.transport === 'tls' && formData.tls_min_days_valid.trim() && parseWhole(formData.tls_min_days_valid) === null) {
+      newErrors.tls_min_days_valid = 'Must be a whole number of days, 0 or more';
     }
     if (rfc3263 && /\s/.test(formData.nameserver.trim())) {
       newErrors.nameserver = 'Enter a host or host:port';
