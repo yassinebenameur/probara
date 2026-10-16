@@ -645,7 +645,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Settings → AI says “not configured correctly”',
               '`LOCAL_AI_TOKEN` missing or shorter than 16 characters on the API, or an invalid `LOCAL_AI_URL`',
-              'Compare the API and worker environment with the service’s. In Helm, an existing Secret without `local_ai_token` leaves API and worker without a token by design; add the key or set `secrets.localAiTokenExistingSecret`.',
+              'Compare the API and worker environment with the service’s. A worker with the same problem fails incident analyses with “Local AI is not configured correctly for this installation”, claims no alerts for automatic triage (so the hourly cap is not spent on triages that would fail), and logs a warning at startup. In Helm, an existing Secret without `local_ai_token` leaves API and worker without a token by design; add the key or set `secrets.localAiTokenExistingSecret`.',
             ],
             [
               'Settings → AI says “unreachable”',

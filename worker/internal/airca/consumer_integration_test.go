@@ -191,6 +191,29 @@ func TestConsumerUnavailableLocalAIRetries(t *testing.T) {
 	}
 }
 
+// Without an analyzer, an enabled workspace reads "not configured correctly"
+// (what GET /ai-settings says), a disabled one "disabled".
+func TestConsumerMissingAnalyzerMessages(t *testing.T) {
+	f := newAnalysisFixture(t)
+	c := New(&config.WorkerConfig{LocalAI: ai.Config{Timeout: 10 * time.Second}}, logger.New("test", "error"), f.dbc, nil, nil)
+	job := f.pending()
+	if err := c.handle(f.ctx, &queue.Message{Data: payload(t, job), NumDelivered: 1}); err != nil {
+		t.Fatalf("misconfigured must ack, got %v", err)
+	}
+	if status, message := f.status(job.AnalysisID); status != "failed" || message != analysisMisconfiguredMessage {
+		t.Fatalf("enabled workspace without analyzer: %s %q", status, message)
+	}
+
+	f.exec(`INSERT INTO ai_settings(tenant_id, enabled) VALUES($1, FALSE)`, f.tenant)
+	off := f.pending()
+	if err := c.handle(f.ctx, &queue.Message{Data: payload(t, off), NumDelivered: 1}); err != nil {
+		t.Fatalf("disabled must ack, got %v", err)
+	}
+	if status, message := f.status(off.AnalysisID); status != "failed" || message != "Local AI is disabled for this workspace or installation" {
+		t.Fatalf("disabled workspace: %s %q", status, message)
+	}
+}
+
 func TestConsumerLostRaceIsNotAnError(t *testing.T) {
 	f := newAnalysisFixture(t)
 	job := f.pending()

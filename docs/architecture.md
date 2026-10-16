@@ -255,9 +255,11 @@ alerts and workspaces that turned triage off. Otherwise it builds
 single-monitor evidence anchored at the alert's `triggered_at`, through the
 same `buildEvidence` path as incident analysis (`context.go`), and runs the
 same analyzer. Every write is guarded by tenant, alert and `status='pending'`.
-A local AI that is temporarily unavailable (`ai.ErrUnavailable`: 429/502/503/504,
-refused or reset connections) is NAKed for up to 3 deliveries (1 then 2 min,
-or its `Retry-After`, capped at 2 min) by both job consumers; still
-unavailable on the final delivery, or any other model failure, records
-`failed`. `AI_TRIAGE_ENABLED=false` or
+A worker whose local AI client config was rejected at startup (no analyzer)
+claims nothing in its relay ticks; RCA jobs on it fail as not configured
+correctly. A local AI that is temporarily unavailable (`ai.ErrUnavailable`:
+429/502/503/504, refused or reset connections) is NAKed for up to 3
+deliveries (1 then 2 min, or its `Retry-After`, capped at 2 min) by both job
+consumers; still unavailable on the final delivery, or any other model
+failure, records `failed`. `AI_TRIAGE_ENABLED=false` or
 `LOCAL_AI_DISABLED=true` stops claims, while queued rows drain as skipped.

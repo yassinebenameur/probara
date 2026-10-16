@@ -57,8 +57,9 @@ type Consumer struct {
 	consumerCheckEvery time.Duration // consumerCheckInterval; shortened by tests
 }
 
-// New constructs the consumer. A nil installation analyzer produces failed
-// analyses with a retry action while check execution continues.
+// New constructs the consumer. A nil installation analyzer (local AI disabled,
+// or a client config ai.NewAnalyzer rejected) produces failed analyses with a
+// retry action while check execution continues.
 func New(cfg *config.WorkerConfig, log *logger.Logger, dbClient *db.Client, queueClient *queue.Client, envAnalyzer ai.RootCauseAnalyzer) *Consumer {
 	return &Consumer{cfg: cfg, logger: log, db: dbClient, queue: queueClient, envAnalyzer: envAnalyzer,
 		heartbeatEvery: heartbeatInterval, deliveryHeadroom: ackWaitHeadroom, consumerCheckEvery: consumerCheckInterval}
@@ -153,12 +154,16 @@ func (c *Consumer) processLocked(ctx context.Context, entry *logrus.Entry, job a
 
 	// Resolve shared workspace enablement before gathering any evidence.
 	analyzer, err := c.resolveAnalyzer(ctx, job.TenantID)
+	if errors.Is(err, errAnalyzerMisconfigured) {
+		entry.Warn("Local AI is enabled but its client configuration was rejected at startup; marking analysis failed")
+		return c.finishFailed(ctx, entry, job, analysisMisconfiguredMessage)
+	}
 	if err != nil {
 		entry.WithError(err).Error("Failed to resolve analyzer config")
 		return err // transient database error — retry
 	}
 	if analyzer == nil {
-		entry.Warn("No local AI configured for tenant; marking analysis failed")
+		entry.Warn("Local AI is disabled for the workspace or installation; marking analysis failed")
 		return c.finishFailed(ctx, entry, job, "Local AI is disabled for this workspace or installation")
 	}
 

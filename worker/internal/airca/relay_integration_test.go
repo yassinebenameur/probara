@@ -80,7 +80,7 @@ func (f *relayFixture) exec(q string, args ...any) {
 }
 
 func (f *relayFixture) relay() *Relay {
-	r := NewRelay(f.cfg, logger.New("test", "error"), f.dbc, nil)
+	r := NewRelay(f.cfg, logger.New("test", "error"), f.dbc, nil, true)
 	r.pub = f.pub
 	return r
 }
@@ -360,6 +360,30 @@ func TestRelayKillSwitchStopsClaimsButKeepsDraining(t *testing.T) {
 		if f.triageCount(eligible) != 0 {
 			t.Fatal("kill switch still claimed")
 		}
+	}
+}
+
+// A worker whose analyzer could not be built (rejected LOCAL_AI_URL or
+// LOCAL_AI_TOKEN) claims nothing, so the hourly cap is not spent on triages
+// that would only fail, but it still drains rows already pending.
+func TestRelayWithoutAnalyzerStopsClaimsButKeepsDraining(t *testing.T) {
+	f := newRelayFixture(t)
+	tenant := f.tenant(true, true, 0, 60)
+	eligible, _ := f.openAlert(tenant, 30, 120)
+	f.pendingRow(tenant, 4*time.Minute, 4*time.Minute, 1)
+	f.startedRow(tenant, 40*time.Minute, time.Minute, 31*time.Minute, 1)
+	r := NewRelay(f.cfg, logger.New("test", "error"), f.dbc, nil, false)
+	r.pub = f.pub
+	res := f.tick(r)
+	if res.Claimed != 0 || res.Republished != 1 || res.Failed != 1 {
+		t.Fatalf("no-analyzer tick %+v", res)
+	}
+	if f.triageCount(eligible) != 0 {
+		t.Fatal("relay without an analyzer still claimed")
+	}
+	// A healthy replica claims it on its own tick.
+	if res := f.tick(f.relay()); res.Claimed != 1 || f.triageCount(eligible) != 1 {
+		t.Fatalf("healthy tick %+v", res)
 	}
 }
 

@@ -205,6 +205,12 @@ type Relay struct {
 	pub      triagePublisher
 	interval time.Duration
 
+	// analyzerReady is false when this worker has no analyzer although local
+	// AI is not disabled (ai.NewAnalyzer rejected LOCAL_AI_URL or
+	// LOCAL_AI_TOKEN). Its ticks then claim nothing: every claim would only
+	// become a failed row counted against the workspace's hourly cap.
+	analyzerReady bool
+
 	maxPending int // relayMaxPending; lowered by tests
 }
 
@@ -218,9 +224,10 @@ type TickResult struct {
 	PublishErrors int
 }
 
-// NewRelay constructs the relay.
-func NewRelay(cfg *config.WorkerConfig, log *logger.Logger, dbc *db.Client, q *queue.Client) *Relay {
-	r := &Relay{cfg: cfg, log: log, db: dbc, queue: q, interval: RelayInterval, maxPending: relayMaxPending}
+// NewRelay constructs the relay. analyzerReady is whether this worker built
+// its local AI analyzer (the triage consumer's envAnalyzer is non-nil).
+func NewRelay(cfg *config.WorkerConfig, log *logger.Logger, dbc *db.Client, q *queue.Client, analyzerReady bool) *Relay {
+	r := &Relay{cfg: cfg, log: log, db: dbc, queue: q, interval: RelayInterval, maxPending: relayMaxPending, analyzerReady: analyzerReady}
 	if q != nil {
 		r.pub = q
 	}
@@ -229,13 +236,18 @@ func NewRelay(cfg *config.WorkerConfig, log *logger.Logger, dbc *db.Client, q *q
 
 // Run ensures the AI_TRIAGE stream, then ticks at once and every interval
 // until ctx is cancelled. A failed tick is logged and retried on the next one.
-// It keeps running with AI_TRIAGE_ENABLED=false or LOCAL_AI_DISABLED=true:
-// claims stop, but republish and the timeout still drain pending rows.
+// It keeps running with AI_TRIAGE_ENABLED=false, LOCAL_AI_DISABLED=true or
+// no analyzer: claims stop, but republish and the timeout still drain
+// pending rows. The relay lock is platform-wide, so a replica that skips
+// claims costs nothing; healthy replicas claim on their own ticks.
 func (r *Relay) Run(ctx context.Context) error {
 	if r.queue != nil {
 		if err := ensureTriageStream(ctx, r.queue, r.cfg); err != nil {
 			return err
 		}
+	}
+	if !r.claims() && r.cfg.AITriageEnabled && !r.cfg.LocalAI.Disabled {
+		r.log.Warn("Local AI client configuration was rejected at startup; this worker's triage relay claims no alerts")
 	}
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
@@ -340,7 +352,7 @@ func (r *Relay) claimTx(ctx context.Context) ([]triageRef, TickResult, error) {
 	}
 
 	var publish []triageRef
-	if r.cfg.AITriageEnabled && !r.cfg.LocalAI.Disabled {
+	if r.claims() {
 		claimed, err := queryRefs(ctx, tx, relayClaimSQL, triageLookback.Seconds(), r.maxPending, int(triageMaxIntervalWait.Seconds()))
 		if err != nil {
 			return nil, res, err
@@ -370,6 +382,12 @@ func (r *Relay) claimTx(ctx context.Context) ([]triageRef, TickResult, error) {
 		return nil, res, err
 	}
 	return publish, res, nil
+}
+
+// claims reports whether this relay claims new alerts: triage is on for the
+// installation and this worker has an analyzer to run them.
+func (r *Relay) claims() bool {
+	return r.cfg.AITriageEnabled && !r.cfg.LocalAI.Disabled && r.analyzerReady
 }
 
 func (r *Relay) publish(ctx context.Context, ref triageRef) error {

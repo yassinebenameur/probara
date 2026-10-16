@@ -176,10 +176,11 @@ func main() {
 		// analyses them.
 		// Platform workers only. Both keep running with AI_TRIAGE_ENABLED=false
 		// or LOCAL_AI_DISABLED=true so already-claimed rows drain (skipped,
-		// without a model call) instead of showing as pending forever.
+		// without a model call) instead of showing as pending forever. Without
+		// an analyzer (rejected client config) the relay claims nothing.
 		if cfg.LocationID == "" {
 			triage := airca.NewTriageConsumer(cfg, log, dbClient, queueClient, envAnalyzer)
-			relay := airca.NewRelay(cfg, log, dbClient, queueClient)
+			relay := airca.NewRelay(cfg, log, dbClient, queueClient, envAnalyzer != nil)
 			aiWG.Add(2)
 			go func() {
 				defer aiWG.Done()
