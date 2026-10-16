@@ -77,11 +77,17 @@ func sipTLSServerName(config *models.SIPMonitorConfig) string {
 // literal, which dialGuard checks against the network policy before dialing.
 // The TLS identity is sipTLSServerName.
 //
-// connectBudget, when positive, bounds the connect alone (the TCP dial, not
-// the TLS handshake): Check uses it to give each address of a hostname a
-// share of the budget, so one that never answers a SYN is given up on (see
-// sipConnectBudget). Zero lets the connect use all of ctx.
-func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, connectBudget time.Duration) (*sipFlow, error) {
+// connectBudget, when positive, bounds the connect (the TCP dial): Check uses
+// it to give each address of a hostname a share of the budget, so one that
+// never answers a SYN is given up on (see sipConnectBudget). Zero lets the
+// connect use all of ctx. With boundHandshake the same share, counted from
+// the start of the dial, covers connect and TLS handshake together, so an
+// address that accepts the connection but never completes the handshake is
+// given up on too; a test call sets it (nothing has been sent when the
+// handshake stalls, so another address cannot place a second call), while
+// OPTIONS and REGISTER keep the whole budget for the handshake under "a".
+// The last address (connectBudget 0) keeps all of ctx either way.
+func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, connectBudget time.Duration, boundHandshake bool) (*sipFlow, error) {
 	addr := candidate.address()
 	transport := candidate.transport
 
@@ -103,6 +109,13 @@ func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config
 		network = "udp"
 	}
 	start := time.Now()
+	handshakeCtx := ctx
+	if boundHandshake && connectBudget > 0 {
+		// context.WithDeadline keeps the earlier of ctx's deadline and this.
+		var cancel context.CancelFunc
+		handshakeCtx, cancel = context.WithDeadline(ctx, start.Add(connectBudget))
+		defer cancel()
+	}
 	conn, err := c.dialThroughGuard(dialCtx, guard, network, addr)
 	if err != nil {
 		return nil, &sipDialError{err: err}
@@ -117,11 +130,11 @@ func (c *SIPChecker) dialSIP(ctx context.Context, candidate sipCandidate, config
 			MinVersion:         tls.VersionTLS12,
 		})
 		handshakeStart := time.Now()
-		if deadline, ok := ctx.Deadline(); ok {
+		if deadline, ok := handshakeCtx.Deadline(); ok {
 			err = tlsConn.SetDeadline(deadline)
 		}
 		if err == nil {
-			err = tlsConn.HandshakeContext(ctx)
+			err = tlsConn.HandshakeContext(handshakeCtx)
 		}
 		if err == nil {
 			// The reader runs without deadlines; Close unblocks it.

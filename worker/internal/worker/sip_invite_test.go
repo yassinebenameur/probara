@@ -1537,3 +1537,73 @@ func TestNewSIPCallTarget(t *testing.T) {
 		})
 	}
 }
+
+// stallingTLSDial stands in for an address that accepts the TCP connection
+// and then never answers the TLS ClientHello (a dead load-balancer backend):
+// dials to addr reach a local listener that holds every connection silent.
+// Every other address is dialed through dialGuard.
+func stallingTLSDial(t *testing.T, addr string) func(context.Context, *dialGuard, string, string) (net.Conn, error) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { conn.Close() })
+		}
+	}()
+	return func(ctx context.Context, guard *dialGuard, network, address string) (net.Conn, error) {
+		if address == addr {
+			var d net.Dialer
+			return d.DialContext(ctx, network, listener.Addr().String())
+		}
+		return guard.DialContext(ctx, network, address)
+	}
+}
+
+// A TLS handshake that stalls has sent nothing, so a test call gives the
+// address its share of the budget and moves on; OPTIONS under "a" keeps the
+// whole budget for the handshake, as it always did.
+func TestSIPChecker_InviteFailsOverStalledTLSHandshake(t *testing.T) {
+	u := startFakeUAS(t, "tls", answeringUAS(10*time.Millisecond, 20*time.Millisecond))
+	stalled := fmt.Sprintf("192.0.2.1:%d", u.port)
+
+	c := newInviteTestChecker()
+	c.resolver = &fakeSIPResolver{ips: map[string][]string{"sip.example.com": {"192.0.2.1", "127.0.0.1"}}}
+	c.testDial = stallingTLSDial(t, stalled)
+	cfg := inviteConfig(u, map[string]any{"number": "100"}, map[string]any{"host": "sip.example.com"})
+	start := time.Now()
+	result, m := runInvite(t, c, cfg, 6)
+	requireStatus(t, result, "success")
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("call took %s, want the stalled handshake given up on after its share", elapsed)
+	}
+	requireAttemptOutcomes(t, m, "timeout", "ok")
+	if a := m.Resolution.Attempts[0]; a.Address != stalled || a.Ms < 2500 || a.Ms > 4000 {
+		t.Fatalf("first attempt = %+v, want %s given up on after half the 6s budget", a, stalled)
+	}
+	if !m.Target.Failover || m.Target.Address != fmt.Sprintf("127.0.0.1:%d", u.port) {
+		t.Fatalf("target = %+v, want the second address", m.Target)
+	}
+
+	// OPTIONS: the handshake keeps the whole budget and never fails over.
+	t.Setenv("SIP_LOCALHOST_AS_HOST_GATEWAY", "")
+	options := &SIPChecker{
+		resolver: &fakeSIPResolver{ips: map[string][]string{"sip.example.com": {"192.0.2.1", "127.0.0.1"}}},
+		testDial: stallingTLSDial(t, stalled),
+	}
+	raw, _ := json.Marshal(map[string]any{"host": "sip.example.com", "port": u.port, "transport": "tls", "tls_skip_verify": true})
+	result = options.Check(context.Background(), raw, 3)
+	requireStatus(t, result, "error", "timeout")
+	var env sipMetricsEnvelope
+	if err := json.Unmarshal(result.MetricsData, &env); err != nil {
+		t.Fatal(err)
+	}
+	requireAttemptOutcomes(t, env.SIP, "timeout")
+}

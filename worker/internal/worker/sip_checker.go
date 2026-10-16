@@ -275,7 +275,7 @@ type sipAttemptParams struct {
 // against one address. It records the attempt in metrics as it goes.
 // connectBudget bounds the TCP connect alone (dialSIP).
 func (c *SIPChecker) runNonInviteAttempt(ctx context.Context, candidate sipCandidate, config *models.SIPMonitorConfig, p sipAttemptParams, connectBudget time.Duration, metrics *sipMetrics) sipAttemptResult {
-	flow, err := c.dialSIP(ctx, candidate, config, connectBudget)
+	flow, err := c.dialSIP(ctx, candidate, config, connectBudget, false)
 	if err != nil {
 		var dialErr *sipDialError
 		if errors.As(err, &dialErr) {
@@ -403,8 +403,10 @@ func sipAttemptOutcome(a sipAttemptResult) string {
 //   - a TLS handshake failure moves to the next address of a different host
 //     only: another address of the same host presents the same certificate;
 //   - a connect that times out moves to the next address: under "a" it ran
-//     out of its sipConnectBudget share (TLS handshake and transaction
-//     silence still keep the whole budget there, and never move on);
+//     out of its sipConnectBudget share (for OPTIONS and REGISTER, TLS
+//     handshake and transaction silence still keep the whole budget there,
+//     and never move on; a test call also bounds its TLS handshake by the
+//     share and fails over when it stalls, see isSIPHandshakeStall);
 //   - rfc3263 only: nothing within the attempt's share of the budget (no
 //     response, or a dial or handshake that hangs), or a 503, moves to the
 //     next address.
@@ -443,10 +445,23 @@ func sipFailoverTarget(ctx context.Context, mode string, a sipAttemptResult, can
 }
 
 // isSIPConnectTimeout reports a timeout in the connect itself, not in the TLS
-// handshake or the transaction that follows it.
+// handshake or the transaction that follows it. A test call's handshake that
+// stalls past its share is isSIPHandshakeStall.
 func isSIPConnectTimeout(err error) bool {
 	var dialErr *sipDialError
 	return errors.As(err, &dialErr) && !dialErr.handshake && classifySIPError(err) == "timeout"
+}
+
+// isSIPHandshakeStall reports a TLS handshake that did not complete in time:
+// the TCP connection was up, nothing SIP was sent. A test call bounds its
+// handshake by the address's connect share (dialSIP's boundHandshake), so
+// this is the share running out on an address that accepts and then stalls,
+// such as one dead load-balancer backend, and the call moves to the next
+// address: unlike a certificate error, a stall belongs to that address, not
+// to every address of the host.
+func isSIPHandshakeStall(err error) bool {
+	var dialErr *sipDialError
+	return errors.As(err, &dialErr) && dialErr.handshake && classifySIPError(err) == "timeout"
 }
 
 // sipFinalResult judges the deciding attempt's final response.

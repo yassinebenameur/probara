@@ -250,11 +250,12 @@ func (c *SIPChecker) checkInvite(ctx context.Context, config *models.SIPMonitorC
 		// address is never given up on, neither for silence nor for an error
 		// on the connection (such as a UDP port unreachable): the INVITE may
 		// already be ringing someone, and a second address would place a
-		// second call. Each
-		// address but the last gets a share of the budget to connect,
-		// whatever the resolution mode.
+		// second call. Each address but the last gets a share of the budget
+		// to connect and, over TLS, complete the handshake, whatever the
+		// resolution mode: a handshake that stalls past it has sent nothing,
+		// so the next address is tried (isSIPHandshakeStall).
 		connectBudget := sipConnectBudget(callCtx, models.SIPResolutionA, candidates, i)
-		flow, err := c.dialSIP(callCtx, candidate, config, connectBudget)
+		flow, err := c.dialSIP(callCtx, candidate, config, connectBudget, true)
 		if err != nil {
 			var dialErr *sipDialError
 			if errors.As(err, &dialErr) {
@@ -269,6 +270,9 @@ func (c *SIPChecker) checkInvite(ctx context.Context, config *models.SIPMonitorC
 				Outcome: classifySIPError(err), Ms: time.Since(attemptStart).Milliseconds(),
 			})
 			next := sipFailoverTarget(callCtx, models.SIPResolutionA, sipAttemptResult{err: err}, candidates, i)
+			if next < 0 && isSIPHandshakeStall(err) && callCtx.Err() == nil && i+1 < len(candidates) {
+				next = i + 1
+			}
 			if next < 0 {
 				break
 			}
