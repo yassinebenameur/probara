@@ -1,7 +1,7 @@
 # Bundled CPU AI
 
-Dependency suggestions and incident analysis use one Probara-tuned decision
-head on the [Laya multilingual](https://huggingface.co/convaiinnovations/laya)
+Dependency suggestions, incident analysis and automatic alert triage use one
+Probara-tuned decision head on the [Laya multilingual](https://huggingface.co/convaiinnovations/laya)
 encoder, trained through the
 [pinned training interface](https://github.com/NandhaKishorM/laya/blob/68804629e8ccd9d616d48a40e87de9fabbeae069/laya/train.py).
 Inference runs in `ai-service/`, a CPU-only Python service that needs no
@@ -15,7 +15,11 @@ and the database-connected worker (incident analysis, automatic alert triage)
 call the service, over `POST /v1/decisions` with a bearer token. The alerter
 never calls it: it reads ready triages for the opt-in suspected-cause
 follow-up, and `LOCAL_AI_DISABLED=true` or `AI_TRIAGE_ENABLED=false` stops
-those follow-ups too. The service receives only that
+those follow-ups too. SLA reports are the other reader: the API's suspected-cause
+breakdown (`api/internal/services/slas/causes.go`) reads ready triages and
+their operator labels read-only through `triageview.EffectiveCause` (a label
+wins over the model's hypothesis), never calling the service and never
+affecting paging. The service receives only that
 token: no database, NATS or platform credentials. Private-location workers
 never receive its URL or token and run checks without it.
 

@@ -32,7 +32,7 @@ export const DOC_NAVIGATION: DocNavGroup[] = [
       {
         slug: 'alerting',
         title: 'Alerting & incidents',
-        description: 'Sensitivity, routing, lifecycle, maintenance, and AI RCA.',
+        description: 'Sensitivity, routing, lifecycle, maintenance, AI analysis and triage.',
       },
       {
         slug: 'status-pages',

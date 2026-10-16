@@ -21,7 +21,7 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
   locations than quorum yields a distinct `degraded` state instead of a false
   `down`. An N×N inter-location mesh probes worker-to-worker paths and alerts
   on broken edges.
-- **Small footprint** — every service is a static, CGO-free Go binary. At
+- **Small footprint** — every Go service is a static, CGO-free binary. At
   default Helm resource requests, a complete HA install (two replicas of each
   service plus bundled Postgres and NATS) requests about 1 CPU and 1.4 Gi of
   memory; one replica of each app service requests 450m / 576Mi. The bundled
@@ -33,10 +33,14 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
   anomaly detection, alert grouping, reminders, and maintenance windows.
   Delivery over email, Slack, Discord, Teams, PagerDuty, Opsgenie / Jira
   Service Management (acknowledgements synced), Telegram, SMS via Twilio, and
-  signed webhooks. Incidents, a service dependency graph, and local AI
-  incident analysis and dependency suggestions from a bundled CPU model that
-  runs offline next to the platform: no external LLM, no provider keys, and
-  only counters and flags (never names, URLs or bodies) reach it.
+  signed webhooks. Incidents, a service dependency graph, and local AI from a
+  bundled CPU model that runs offline next to the platform: incident analysis,
+  dependency suggestions, and automatic alert triage that shows a suspected
+  cause next to each new alert without ever changing alert state or paging
+  (optionally sent once as a follow-up to the channels already paged, except
+  PagerDuty and Opsgenie). Operators confirm or correct its answers as
+  training labels, which admins can export. No external LLM, no provider
+  keys, and only counters and flags (never names, URLs or bodies) reach it.
 - **Access control** — multi-tenancy, OIDC SSO with group-to-role mapping,
   admin/editor/viewer roles, an audit log, read/write-scoped API keys, monitor
   and channel secrets encrypted at rest, and an SSRF guard applied to every
@@ -63,7 +67,8 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
   mesh-edge alerts, and notification delivery
 - **Status page** — public uptime pages with live updates
 - **Local AI** (`ai-service/`, Python) — offline CPU inference for incident
-  analysis and dependency suggestions, called only by the API and worker
+  analysis, alert triage and dependency suggestions, called only by the API
+  and worker
 - **Web** — Next.js operator UI
 
 ```
@@ -337,8 +342,16 @@ Retention setting semantics:
 | `SYNTHETIC_BROWSER_ARTIFACTS_DIR` | no | temp dir |
 | `CHROME_BIN` | no | auto-detected |
 | `SIP_LOCALHOST_AS_HOST_GATEWAY` | no | `false` |
+| `AI_TRIAGE_ENABLED` (automatic alert triage kill switch: `false` stops new claims, queued rows drain as skipped; also alerter + api) | no | `true` |
+
+The AI job stream names (`AI_RCA_*`, `AI_TRIAGE_*`) have working code
+defaults; the configuration page of the docs site
+(`website/lib/docs/pages/configuration.ts`) lists them.
 
 ### Local AI (api and DB-connected worker)
+
+The alerter never calls local AI; it reads only the two kill switches (see
+the alerter table).
 
 | Variable | Required | Default |
 | --- | --- | --- |
@@ -368,6 +381,8 @@ restarted).
 | `APP_BASE_URL` (deep links in every channel; also api + worker) | optional | empty |
 | `NOTIFICATION_BLOCK_PRIVATE_IPS` (channel egress guard; also api + worker) | no | `true` |
 | `NOTIFICATION_ALLOWED_CIDRS` (internal channel receivers; also api + worker) | no | empty |
+| `LOCAL_AI_DISABLED` (`true` stops suspected-cause follow-ups; the alerter never calls local AI) | no | `false` |
+| `AI_TRIAGE_ENABLED` (`false` stops suspected-cause follow-ups, including already-ready ones) | no | `true` |
 
 ### Status Page
 

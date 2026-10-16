@@ -101,7 +101,7 @@ export const CONFIGURATION_PAGE: DocPage = {
               '`POSTGRES_URL`',
               'Empty',
               'API, scheduler, worker, alerter, status page, CLIs',
-              'Required by API, scheduler, alerter, and status page. Optional for workers; a worker without it cannot run notification or AI-RCA side consumers.',
+              'Required by API, scheduler, alerter, and status page. Optional for workers; a worker without it cannot run the notification, AI-RCA or alert-triage (relay and consumer) side consumers.',
             ],
             [
               '`NATS_URL`',
@@ -286,7 +286,7 @@ export const CONFIGURATION_PAGE: DocPage = {
             [
               '`PROBARA_SECRETS_KEY`',
               'Base64 encoding of exactly 32 bytes',
-              'Version 1 key for encrypted channel, monitor, location, and AI credentials.',
+              'Version 1 key for encrypted channel, monitor and location credentials (and any retired AI provider key kept for rollback).',
             ],
             [
               '`PROBARA_SECRETS_KEY_V2` … `PROBARA_SECRETS_KEY_V100`',
@@ -387,7 +387,7 @@ export const CONFIGURATION_PAGE: DocPage = {
         },
         {
           type: 'paragraph',
-          text: 'Local AI uses one evaluated Probara checkpoint, served by the installation-owned inference service (`ai-service/`), for both tasks. Range errors in the service variables stop the service at startup; Helm checks `threads`, `queueCapacity`, `queueTimeoutSeconds`, `maxInferenceSeconds` and `timeoutSeconds` (and that the queue timeout is below the client timeout) at render time instead. Workspace rows store only effective enablement: explicit enabled/disabled settings are preserved and absent settings default enabled. External providers and `LLM_*` execution are retired; old columns are retained for rollback. Explanations come from measured evidence and maintained templates.',
+          text: 'Local AI uses one evaluated Probara checkpoint, served by the installation-owned inference service (`ai-service/`), for every AI surface: incident analysis, automatic alert triage and dependency suggestions. Range errors in the service variables stop the service at startup; Helm checks `threads`, `queueCapacity`, `queueTimeoutSeconds`, `maxInferenceSeconds` and `timeoutSeconds` (and that the queue timeout is below the client timeout) at render time instead. Workspace rows store only effective enablement: explicit enabled/disabled settings are preserved and absent settings default enabled. External providers and `LLM_*` execution are retired; old columns are retained for rollback. Explanations come from measured evidence and maintained templates.',
         },
       ],
     },

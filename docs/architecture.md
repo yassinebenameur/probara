@@ -16,7 +16,7 @@ website (`website/`) are separate applications.
 | `worker/` | Execute registered checkers and publish results; private workers report liveness and answer mesh probes | Check execution requires NATS, not PostgreSQL. Optional notification and AI consumers, and the AI triage relay, also use PostgreSQL (platform workers only) |
 | `alerter/` | Derive group health; evaluate availability, latency anomalies, host metrics, TLS expiry, and mesh alerts; apply routing, escalation, maintenance, and dependency suppression | PostgreSQL, NATS, and synchronous notification providers when configured |
 | `status-page/` | Render public pages, incidents, uptime, templates and live updates; manage browser push subscriptions and delivery | PostgreSQL reads and subscription/delivery writes; NATS |
-| `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
+| `ai-service/` | Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: authenticated `/v1/decisions` returning probabilities over the closed choices in `shared/ai/catalogue.json`; bundled fine-tuned Laya head, offline | None: no PostgreSQL, NATS or egress. Called only by the API and the database-connected worker |
 | `web/` | Authenticated operator UI and `/api` proxy, including cookies and SSE streams | Go API |
 | `website/` | Statically exported public product website and documentation | No application database |
 
@@ -227,7 +227,10 @@ the recovery sweep keeps its share, and stops under `LOCAL_AI_DISABLED=true` or
 `AI_TRIAGE_ENABLED=false`. The alerter reads the catalogue only and never calls
 local AI. On the API side, triage is read for display (`triageview`) and by
 SLA reports, which roll monitor outages up by suspected cause
-(`api/internal/services/slas/causes.go`); neither feeds paging. The SLA
+(`api/internal/services/slas/causes.go`, read-only through
+`triageview.EffectiveCause`: an operator label wins over the model's
+hypothesis; live reports recompute it, issued reports freeze it); neither
+feeds paging. The SLA
 "Triage pending" bucket and the relay's claim build eligibility from the same
 `shared/ai` fragments (`TriageClaimableAlertSQL`, `TriageSettingsEnabledSQL`),
 and the API reads `AI_TRIAGE_ENABLED`/`LOCAL_AI_DISABLED` so nothing reads as

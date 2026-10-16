@@ -172,7 +172,10 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   (`computeIntervalAvailability`) and SLA reports (`api/internal/services/slas`)
   both reduce it; never write another interval query. Calendar periods live
   next to it in `period.go`. Issued SLA reports (`sla_reports.data`) are a
-  frozen `models.SLAReport` document: add fields, never repurpose them.
+  frozen `models.SLAReport` document: add fields, never repurpose them. A
+  field added later (e.g. `suspected_causes`) is nil on older reports, and
+  every renderer must export those unchanged
+  (`TestLegacyIssuedReportRendersUnchanged`, `slas/testdata` goldens).
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the

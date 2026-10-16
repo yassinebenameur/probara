@@ -40,7 +40,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Worker',
               'NATS',
-              'Can execute checks without PostgreSQL. Database-free location workers intentionally omit DB; AI-RCA and notification consumers require DB.',
+              'Can execute checks without PostgreSQL. Database-free location workers intentionally omit DB; AI-RCA, alert-triage (relay and consumer) and notification consumers require DB.',
             ],
             [
               'Alerter',
@@ -60,7 +60,7 @@ export const OPERATIONS_PAGE: DocPage = {
             [
               'Local AI service',
               'None: no database, NATS or network egress; only its token and the bundled model',
-              'When it is down or saturated, API and worker report local AI unavailable, incident analyses retry and then fail with a retry action, and dependency suggestions fail. Check execution, alerting and status pages are unaffected.',
+              'When it is down or saturated, API and worker report local AI unavailable, incident analyses retry and then fail with a retry action, new alert triages retry for a few minutes and are then recorded as failed (paging is unaffected), and dependency suggestions fail. Check execution, alerting and status pages are unaffected.',
             ],
             [
               'Collector agent (`probara-collector`)',
@@ -650,7 +650,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Settings → AI says “unreachable”',
               'The service is not running, its image was never built or pulled, the URL points elsewhere, or a NetworkPolicy blocks the caller',
-              'Check `docker compose ps local-ai` / `kubectl get pods -l app.kubernetes.io/component=local-ai` and its logs. A local image build fetches the pinned base model from Hugging Face and fails on purpose for a checkpoint that is not release-approved; to run without local AI, set `LOCAL_AI_DISABLED=true` (Compose) or `localAI.enabled=false` (Helm). Only the API and platform worker pods are admitted by the chart policy.',
+              'Check `docker compose ps local-ai` / `kubectl get pods -l app.kubernetes.io/component=local-ai` and its logs. A local image build fetches the pinned base model from Hugging Face and fails on purpose for a checkpoint that is not release-approved; to run without local AI, set `LOCAL_AI_DISABLED=true` with the Make targets (`start-all`, `start-all-local`, `up`), which then skip `local-ai`, or `localAI.enabled=false` (Helm). Plain `docker compose up` still pulls or builds `local-ai` whatever `LOCAL_AI_DISABLED` says: name the other services instead, or set `LOCAL_AI_IMAGE` to an image you already have. Only the API and platform worker pods are admitted by the chart policy.',
             ],
             [
               'Settings → AI says “not ready”',

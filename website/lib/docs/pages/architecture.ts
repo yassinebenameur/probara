@@ -14,6 +14,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
     "PostgreSQL",
     "NATS JetStream",
     "monitor state",
+    "local AI",
   ],
   sections: [
     {
@@ -27,12 +28,12 @@ export const ARCHITECTURE_PAGE: DocPage = {
           language: "text",
           title: "Primary data flow",
           code:
-            "Web / API client\n      │\n      ▼\n     API ───────────────► PostgreSQL ◄────────────── Alerter\n      │                         ▲                        │\n      │                         │                        ├─ notifications\n      ▼                         │                        └─ incidents\nScheduler ── check.jobs ──► Worker(s)\n      ▲                         │\n      └──── check.results ◄─────┘\n\nPostgreSQL + statuspage.updates ──► Status-page service ──► Public visitors",
+            "Web / API client\n      │\n      ▼\n     API ───────────────► PostgreSQL ◄────────────── Alerter\n      │                         ▲                        │\n      │                         │                        ├─ notifications\n      ▼                         │                        └─ incidents\nScheduler ── check.jobs ──► Worker(s)\n      ▲                         │\n      └──── check.results ◄─────┘\n\nPostgreSQL + statuspage.updates ──► Status-page service ──► Public visitors\n\nAPI / platform worker ──► ai-service (POST /v1/decisions; no DB, NATS or egress)",
         },
         {
           type: "paragraph",
           text:
-            "The boundaries are deliberate. The scheduler does not execute checks or evaluate alert policies. Workers do not need direct PostgreSQL access. The alerter derives lifecycle decisions from stored state rather than from an in-memory result stream alone.",
+            "The boundaries are deliberate. The scheduler does not execute checks or evaluate alert policies. Check execution does not need direct PostgreSQL access. The local AI service holds no database, broker or platform credentials. The alerter derives lifecycle decisions from stored state rather than from an in-memory result stream alone.",
         },
       ],
     },
@@ -57,12 +58,17 @@ export const ARCHITECTURE_PAGE: DocPage = {
             [
               "`worker/`",
               "HTTP, ping, DNS, gRPC, SIP, TCP, database, broker, WebSocket, Prometheus query, and synthetic execution",
-              "Application CRUD or direct database state mutation",
+              "Application CRUD. Check execution never touches PostgreSQL; only platform workers' optional notification and AI consumers and the AI triage relay write to it (private-location workers get no database credentials)",
             ],
             [
               "`alerter/`",
               "Availability, anomaly, host-metric, and mesh alert lifecycle; routing; reminders; notification deduplication; incidents",
               "Running monitors",
+            ],
+            [
+              "`ai-service/`",
+              "Local CPU inference (Python, FastAPI) for incident analysis, automatic alert triage and dependency suggestions: bearer-authenticated `POST /v1/decisions` returning probabilities over a closed catalogue, from a bundled fine-tuned model running offline",
+              "Any database, NATS, outbound network or tenant data at rest; only the API and the database-connected platform worker call it",
             ],
             [
               "`status-page/`",

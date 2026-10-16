@@ -9,8 +9,11 @@ make start-all
 ```
 
 This single command will:
-- Start all backend services (API, Scheduler, Worker, Status Page, PostgreSQL, NATS)
+- Start all backend services (API, Scheduler, Worker, Alerter, Status Page, PostgreSQL, NATS)
 - Run database migrations automatically
+- Start the default-on local AI container (`local-ai`, loopback-bound on
+  127.0.0.1:8090) after the platform; if its image cannot build or start, a
+  warning is printed and the platform runs with AI analysis unavailable
 - Wait for services to be healthy
 - Start the Next.js UI using the current nvm LTS release
 - Show all service URLs
@@ -31,10 +34,16 @@ This command:
 - runs database bootstrap and migrations locally
 - starts `api`, `scheduler`, `worker`, `status-page`, and `alerter` with `go run`
 - then starts the `local-ai` container in the background (Docker Compose; the
-  first image build takes several minutes and needs Git LFS, see Requirements)
+  first image build takes several minutes and needs Git LFS, see Requirements),
+  with a per-checkout bearer token generated into the gitignored
+  `.dev-local-ai-token`; a failed build leaves AI unavailable, not the platform
 - starts the Next.js UI locally with `nvm use --lts`
 
 Local service logs are saved under `/tmp/probara-*.log`, and startup validation logs are written to `/tmp/probara-local-start.log`.
+
+Set `LOCAL_AI_DISABLED=true` to skip local AI with either target. Its image
+builds only from a release-approved model artifact; see
+[`docs/local-ai.md`](docs/local-ai.md).
 
 If Go is missing or the installed version does not match the repository requirement in [`go.mod`](go.mod), startup fails immediately and logs the reason.
 
@@ -46,7 +55,7 @@ make stop-all
 
 This will stop both backend services and the UI.
 
-To stop the local-Go variant:
+To stop the local-Go variant (this also stops the `local-ai` container):
 
 ```bash
 make stop-all-local
@@ -60,6 +69,7 @@ Once running, you can access:
 - **API**: http://localhost:8080
 - **Status Page**: http://localhost:8082
 - **NATS Monitoring**: http://localhost:8222
+- **Local AI**: http://127.0.0.1:8090 (`/healthz`; `/readyz` needs the bearer token)
 
 ## Health Metrics
 
@@ -67,6 +77,7 @@ Once running, you can access:
 - **Scheduler Metrics**: http://localhost:9091
 - **Worker Metrics**: http://localhost:9092
 - **Status Page Metrics**: http://localhost:9093
+- **Alerter Metrics**: http://localhost:9094
 
 ## Other Useful Commands
 

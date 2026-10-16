@@ -223,7 +223,7 @@ docker compose down`,
         {
           type: 'paragraph',
           text:
-            'Local AI is on by default. Compose pulls `LOCAL_AI_IMAGE` and builds it from `ai-service/` only when the pull fails; that build fails on purpose unless the committed artifact is release-approved, and a failed build aborts a whole `docker compose up`. The Make targets (`up`, `build`, `rebuild`, `scale-workers`, `start-all`, `start-all-local`) therefore start the platform first and `local-ai` separately, tolerating its failure. With plain Compose and no pullable approved image, name the services you want or export `LOCAL_AI_DISABLED=true`.',
+            'Local AI is on by default. Compose pulls `LOCAL_AI_IMAGE` and builds it from `ai-service/` only when the pull fails; that build fails on purpose unless the committed artifact is release-approved, and a failed build aborts a whole `docker compose up`. The Make targets (`up`, `build`, `rebuild`, `scale-workers`, `start-all`, `start-all-local`) therefore start the platform first and `local-ai` separately, tolerating its failure. With plain Compose and no pullable approved image, name the services you want (`docker compose up -d postgres nats migrations api scheduler worker status-page alerter`) or set `LOCAL_AI_IMAGE` to an image you already have. `LOCAL_AI_DISABLED=true` turns the feature off and makes the Make targets skip `local-ai`, but plain `docker compose up` still pulls or builds the service.',
         },
         {
           type: 'callout',
