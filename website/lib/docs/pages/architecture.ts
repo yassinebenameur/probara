@@ -123,7 +123,7 @@ export const ARCHITECTURE_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Schedulers claim due rows with database locking that skips rows already claimed by another scheduler. The queue path is at-least-once, so result ingestion is designed to deduplicate repeated job/location results. Clients must not infer exactly-once execution from a single successful publish.",
+            "Schedulers claim due rows with database locking that skips rows already claimed by another scheduler. The queue path is at-least-once, so result ingestion is designed to deduplicate repeated job/location results. Clients must not infer exactly-once execution from a single successful publish. Workers extend a running check's acknowledgement deadline every 10 seconds, so a slow check is not handed to a second worker while it is still running. Checks that act on the outside world rather than only observe it are at-most-once instead: a redelivered job is acknowledged without running, and a result that cannot be published is retried briefly and then dropped, leaving a missing sample rather than a repeated side effect.",
         },
         {
           type: "callout",

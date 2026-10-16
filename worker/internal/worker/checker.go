@@ -29,6 +29,28 @@ type Checker interface {
 	Check(ctx context.Context, config json.RawMessage, timeoutSeconds int) CheckResult
 }
 
+// SideEffectingChecker is implemented by checkers whose Check acts on the
+// outside world instead of only observing it (a SIP INVITE places a real,
+// possibly billed, call). For a config it reports true for, the check-job
+// consumer is at-most-once (processJob in worker.go): a redelivered job is
+// acked without running, and a result that cannot be published is retried in
+// place and then dropped, never NAKed back for another run. A missing sample
+// reads as "no evidence"; a duplicate side effect cannot be taken back.
+//
+// config is the payload config as dispatched, so secret fields may still be
+// encrypted: decide from non-secret fields only. Checkers that do not
+// implement this keep the default at-least-once handling.
+type SideEffectingChecker interface {
+	SideEffecting(config json.RawMessage) bool
+}
+
+// isSideEffecting reports whether running checker on config has side effects
+// that must not be repeated (see SideEffectingChecker).
+func isSideEffecting(checker Checker, config json.RawMessage) bool {
+	se, ok := checker.(SideEffectingChecker)
+	return ok && se.SideEffecting(config)
+}
+
 // CheckResult represents the final evaluated result
 type CheckResult struct {
 	Status               string

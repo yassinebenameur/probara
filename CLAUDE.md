@@ -282,6 +282,13 @@ or imported groups come back empty. Any other path that creates groups through
   on API (run-now publisher), scheduler, and workers. Code defaults
   `CHECK_JOBS`/`check.jobs`; Compose and Helm ship `check-jobs`/`check.job` on
   all three. Changing one service alone silently breaks run-now.
+- **Check-job delivery**: the worker heartbeats `InProgress` every 10 s while
+  a check runs (`checkProgressInterval`, `worker.go`; keep it well under the
+  30 s AckWait). Checks whose checker implements `SideEffectingChecker`
+  (`checker.go`) are at-most-once: a redelivery (`NumDelivered > 1`) is acked
+  without running, and a failed publish retries in place, never NAKs. A
+  checker that acts on the world (places calls, sends messages) must
+  implement it, deciding from non-secret config fields only.
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs).

@@ -23,6 +23,26 @@ import (
 const checkJobStreamMaxAge = 24 * time.Hour
 const consumerRestartBackoff = 2 * time.Second
 
+// checkProgressInterval is how often a running check job tells JetStream it
+// is still being worked on (msg.InProgress). It must stay well under the
+// check-job consumer's AckWait (30s, the shared/queue ConsumerOptions
+// default): without it a check that outlives AckWait (a synthetic_browser
+// journey, an INVITE with hold and teardown) is redelivered to a second
+// worker while the first is still running it.
+const checkProgressInterval = 10 * time.Second
+
+// checkProgressGrace bounds the heartbeat past the job's own timeout (teardown,
+// publish retries), so a wedged checker stops pinning its message and AckWait
+// redelivery takes over again.
+const checkProgressGrace = 30 * time.Second
+
+// sideEffectPublishBackoff is the wait before each in-place publish retry of
+// a side-effecting check's result; sideEffectPublishAttemptTimeout bounds one
+// attempt. Worst case ~27s, inside the worker's 30s shutdown budget.
+var sideEffectPublishBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
+const sideEffectPublishAttemptTimeout = 5 * time.Second
+
 // resultPublisher is the minimal publishing surface the worker needs to hand
 // results back to the platform. Satisfied by *queue.Client and test spies.
 type resultPublisher interface {
@@ -58,6 +78,13 @@ type Worker struct {
 	natsAckTotal        prometheus.Counter
 	natsNakTotal        prometheus.Counter
 	resultPublishErrors prometheus.Counter
+	sideEffectSkipped   *prometheus.CounterVec
+	sideEffectAbandoned *prometheus.CounterVec
+
+	// Zero values use checkProgressInterval / sideEffectPublishBackoff;
+	// tests shrink them.
+	progressInterval    time.Duration
+	publishRetryBackoff []time.Duration
 }
 
 // NewWorker creates a new worker instance
@@ -123,6 +150,17 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		[]string{},
 	)
 	w.resultPublishErrors = resultPublishErrorsCounter.With(prometheus.Labels{})
+
+	w.sideEffectSkipped = metricsRegistry.NewCounter(
+		"side_effect_redelivery_skipped_total",
+		"Redelivered side-effecting check jobs acked without running (at-most-once)",
+		[]string{"type"},
+	)
+	w.sideEffectAbandoned = metricsRegistry.NewCounter(
+		"side_effect_result_abandoned_total",
+		"Side-effecting check results dropped after every publish retry failed",
+		[]string{"type"},
+	)
 
 	return w
 }
@@ -311,6 +349,23 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 
+	// At-most-once for side-effecting checks: a redelivery may follow a run
+	// that already happened (the first worker died mid-check, its ack was
+	// lost, or its publish was abandoned), so it is acked without running or
+	// publishing anything. Checked before expiry so a redelivered expired job
+	// does not publish an expired marker either.
+	if msg.NumDelivered > 1 {
+		if checkType, ok := w.redeliveredSideEffect(job.Payload); ok {
+			logEntry.WithFields(logrus.Fields{
+				"type":          checkType,
+				"num_delivered": msg.NumDelivered,
+			}).Warn("Redelivered side-effecting check; acking without running it")
+			w.sideEffectSkipped.With(prometheus.Labels{"type": checkType}).Inc()
+			w.natsAckTotal.Inc()
+			return nil
+		}
+	}
+
 	// Check deadline
 	if job.IsExpired() {
 		logEntry.Warn("Job expired, marking as error")
@@ -364,6 +419,15 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 
+	sideEffecting := isSideEffecting(checker, payload.Config)
+
+	// Keep the message ours for as long as the check (and its publish) runs.
+	// The deferred stop waits for the heartbeat goroutine to exit, so no
+	// InProgress can race the ack Consume sends after processJob returns.
+	stopProgress := w.startProgressHeartbeat(msg,
+		time.Duration(payload.TimeoutSeconds)*time.Second+checkProgressGrace, logEntry)
+	defer stopProgress()
+
 	// Execute check using the registered checker
 	checkCtx := ctx
 	if payload.Type == "synthetic_browser" {
@@ -382,8 +446,15 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 		checkResult = checker.Check(checkCtx, checkConfig, payload.TimeoutSeconds)
 	}
 
-	// Publish result for the platform-side ingest consumer to persist
-	if err := w.publishResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
+	// Publish result for the platform-side ingest consumer to persist. A
+	// side-effecting check never NAKs: a retry would run it again.
+	if sideEffecting {
+		if err := w.publishSideEffectingResult(ctx, &job, &payload, &checkResult, startTime, logEntry); err != nil {
+			logEntry.WithError(err).WithField("type", payload.Type).
+				Error("Failed to publish side-effecting check result after retries; dropping it (at-most-once)")
+			w.sideEffectAbandoned.With(prometheus.Labels{"type": payload.Type}).Inc()
+		}
+	} else if err := w.publishResult(ctx, &job, &payload, &checkResult, startTime); err != nil {
 		logEntry.WithError(err).Error("Failed to publish result")
 		w.resultPublishErrors.Inc()
 		w.natsNakTotal.Inc()
@@ -402,6 +473,85 @@ func (w *Worker) processJob(ctx context.Context, msg *queue.Message) error {
 
 	w.natsAckTotal.Inc()
 	return nil
+}
+
+// redeliveredSideEffect reports whether a job's payload is for a check whose
+// checker marks that config side-effecting, returning the monitor type.
+func (w *Worker) redeliveredSideEffect(raw json.RawMessage) (string, bool) {
+	var payload models.CheckJobPayload
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Type == "" {
+		return "", false
+	}
+	checker, err := w.checkerRegistry.Get(payload.Type)
+	if err != nil {
+		return "", false
+	}
+	return payload.Type, isSideEffecting(checker, payload.Config)
+}
+
+// startProgressHeartbeat calls msg.InProgress every checkProgressInterval until
+// the returned stop is called or ceiling elapses. stop blocks until the
+// goroutine has exited.
+func (w *Worker) startProgressHeartbeat(msg *queue.Message, ceiling time.Duration, logEntry *logrus.Entry) (stop func()) {
+	if msg.InProgress == nil {
+		return func() {}
+	}
+	interval := w.progressInterval
+	if interval <= 0 {
+		interval = checkProgressInterval
+	}
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		limit := time.NewTimer(ceiling)
+		defer limit.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-limit.C:
+				logEntry.Warn("Check still running past its timeout; no longer extending its ack deadline")
+				return
+			case <-ticker.C:
+				if err := msg.InProgress(); err != nil {
+					logEntry.WithError(err).Warn("Failed to extend check job ack deadline")
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-exited
+	}
+}
+
+// publishSideEffectingResult publishes a side-effecting check's result,
+// retrying in place on failure instead of NAKing (which would run the check
+// again). Retries ignore worker shutdown: the side effect already happened,
+// and a kill mid-retry only costs the sample, since the redelivery is skipped.
+func (w *Worker) publishSideEffectingResult(ctx context.Context, job *models.Job, payload *models.CheckJobPayload, checkResult *CheckResult, startedAt time.Time, logEntry *logrus.Entry) error {
+	backoff := w.publishRetryBackoff
+	if backoff == nil {
+		backoff = sideEffectPublishBackoff
+	}
+	pubCtx := context.WithoutCancel(ctx)
+	for attempt := 0; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(pubCtx, sideEffectPublishAttemptTimeout)
+		err := w.publishResult(attemptCtx, job, payload, checkResult, startedAt)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		w.resultPublishErrors.Inc()
+		if attempt >= len(backoff) {
+			return err
+		}
+		logEntry.WithError(err).WithField("attempt", attempt+1).Warn("Failed to publish side-effecting check result; retrying")
+		time.Sleep(backoff[attempt])
+	}
 }
 
 // handleTestCheck runs an ephemeral check for a test-connection request and

@@ -65,6 +65,18 @@ deliveries and preserves evidence ordering; late checks remain in history
 without moving the current state backwards. See [state semantics](state-semantics.md)
 for transition, quorum, freshness, and availability rules.
 
+Check jobs are at-least-once: a delivery that is NAKed or outlives the
+consumer's 30s AckWait is redelivered (3 deliveries at most). The worker calls
+`InProgress` every 10s while a check and its publish run (bounded at the
+check's timeout plus 30s), so a long check is not redelivered to a second
+worker mid-run. Checks whose checker implements `SideEffectingChecker`
+(`worker/internal/worker/checker.go`) for their config are at-most-once
+instead: a redelivered job is acked without running or publishing
+(`probara_worker_side_effect_redelivery_skipped_total{type}`), and a failed
+result publish is retried in place (1s, 2s, 4s) and then dropped
+(`probara_worker_side_effect_result_abandoned_total{type}`), never NAKed. A
+lost sample reads as missing evidence; a repeated side effect cannot be undone.
+
 Private-location workers use location-scoped broker credentials and encrypted
 monitor configurations. The platform validates location result provenance
 before persistence. These workers do not receive the database connection or

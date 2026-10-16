@@ -247,8 +247,8 @@ make healthcheck`,
             ],
             [
               'Worker NATS/results',
-              '`nats_ack_total`, `nats_nak_total`, `result_publish_errors_total`',
-              'NAK or publish-error growth and falling ACK throughput.',
+              '`nats_ack_total`, `nats_nak_total`, `result_publish_errors_total`, `side_effect_redelivery_skipped_total{type=…}`, `side_effect_result_abandoned_total{type=…}`',
+              'NAK or publish-error growth and falling ACK throughput; any skipped redelivery or abandoned result of a side-effecting check (a worker died or lost NATS mid-check).',
             ],
             [
               'Status live updates',
