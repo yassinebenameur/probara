@@ -273,6 +273,9 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
     return String(value);
   };
 
+  // The row's nested config, so a test-call row badges as CALL, not SIP.
+  const rowConfig = (row: ImportRow) => (mapping.config ? row.fields[mapping.config] : undefined);
+
   const resolve = (row: ImportRow, mappingKey: keyof FieldMapping, configKey: string) => {
     const mapped = getFieldValue(row, mappingKey);
     if (mapped !== '-') return mapped;
@@ -379,7 +382,7 @@ function PreviewTable({ rows, mapping, typeMapping }: { rows: ImportRow[]; mappi
                   <td className="max-w-[200px] truncate text-sm font-medium text-white">
                     {getFieldValue(row, 'name') || `Monitor ${row.index + 1}`}
                   </td>
-                  <td><TypeBadge type={type || 'http'} /></td>
+                  <td><TypeBadge type={type || 'http'} config={rowConfig(row)} /></td>
                   <td className="max-w-[200px] truncate font-mono text-xs text-slate-400" title={target === '-' ? undefined : target}>
                     {target === '-' ? <span className="text-slate-500">—</span> : target}
                   </td>
@@ -468,7 +471,10 @@ function SkippedTable({ rows }: { rows: ImportSkippedRow[] }) {
 }
 
 // Results table
-function ResultsTable({ results }: { results: ImportRowResult[] }) {
+function ResultsTable({ results, rows, configField }: { results: ImportRowResult[]; rows: ImportRow[]; configField?: string }) {
+  // Results carry no config; the preview rows do, so a test call still
+  // badges as CALL here.
+  const configByIndex = new Map(rows.map((row) => [row.index, configField ? row.fields[configField] : undefined]));
   return (
     <div className="glass-well overflow-hidden">
       <div className="max-h-96 overflow-x-auto">
@@ -489,7 +495,7 @@ function ResultsTable({ results }: { results: ImportRowResult[] }) {
                 <td className="max-w-[200px] truncate text-sm font-medium text-white">
                   {result.name}
                 </td>
-                <td><TypeBadge type={result.type} /></td>
+                <td><TypeBadge type={result.type} config={configByIndex.get(result.index)} /></td>
                 <td>
                   <span className={`inline-flex items-center gap-1 text-xs ${
                     result.status === 'success' ? 'text-emerald-300' :
@@ -858,7 +864,7 @@ export default function ImportPage() {
               ))}
             </div>
 
-            <ResultsTable results={importResults.results} />
+            <ResultsTable results={importResults.results} rows={previewData?.rows ?? []} configField={mapping.config} />
 
             <div className="flex items-center justify-between">
               <Button
