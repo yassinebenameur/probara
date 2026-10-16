@@ -74,10 +74,10 @@ func NewWorker(cfg *config.WorkerConfig, log *logger.Logger, metricsRegistry *me
 		cancel:           cancel,
 		secretsEncryptor: secrets.NoOpEncryptor{},
 		checkerRegistry:  NewDefaultRegistry(cfg.MaxBodySizeBytes, cfg.HTTPBlockPrivateIPs, cfg.HTTPAllowedCIDRs, cfg.SyntheticArtifactsDir),
-		passiveTypes: map[string]bool{
-			"agent": true, // Agent monitors receive pushed metrics
-			"group": true, // Group monitors aggregate member results
-		},
+		passiveTypes:     map[string]bool{},
+	}
+	for _, t := range models.PassiveMonitorTypes {
+		w.passiveTypes[t] = true
 	}
 
 	// Initialize metrics

@@ -668,7 +668,7 @@ export const MONITORS_PAGE: DocPage = {
             {
               term: "Run now",
               description:
-                "Queues an existing monitor for normal execution. The returned result is persisted and can change state and alerts.",
+                "Queues an existing monitor for normal execution. The returned result is persisted and can change state and alerts. Group, push and agent monitors never run a check of their own, so Run now refuses them.",
             },
             {
               term: "Results",

@@ -979,8 +979,8 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if monitor.Type == models.MonitorTypeGroup {
-		errors.WriteValidationError(w, "group monitors cannot be run on-demand")
+	if sharedmodels.IsPassiveMonitorType(string(monitor.Type)) {
+		errors.WriteValidationError(w, fmt.Sprintf("%s monitors cannot be run on-demand", monitor.Type))
 		return
 	}
 

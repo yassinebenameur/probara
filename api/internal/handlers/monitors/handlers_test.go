@@ -674,6 +674,45 @@ func TestHandlers_RunMonitorNow_QueueUnavailable(t *testing.T) {
 	}
 }
 
+func TestHandlers_RunMonitorNow_RefusesPassiveTypes(t *testing.T) {
+	for _, typ := range []models.MonitorType{models.MonitorTypeGroup, models.MonitorTypePush, models.MonitorTypeAgent} {
+		t.Run(string(typ), func(t *testing.T) {
+			log := logger.New("test", "debug")
+			monitorSvc := NewMockMonitorService()
+			handlers := NewHandlers(monitorSvc, &MockGroupService{}, &MockResultsService{}, log, t.TempDir())
+			mockPublisher := &MockCheckJobPublisher{}
+			handlers.ConfigureCheckJobs(mockPublisher, "check.jobs")
+
+			tenantID := uuid.New()
+			monitorID := uuid.New()
+			monitorSvc.monitors[monitorID] = &models.Monitor{
+				ID:              monitorID,
+				TenantID:        tenantID,
+				Name:            "Passive",
+				Type:            typ,
+				Config:          json.RawMessage(`{}`),
+				IntervalSeconds: 60,
+				TimeoutSeconds:  30,
+				Enabled:         true,
+			}
+
+			r := chi.NewRouter()
+			r.Post("/{id}/run", handlers.RunMonitorNow)
+			req := httptest.NewRequest(http.MethodPost, "/"+monitorID.String()+"/run", nil)
+			req = req.WithContext(ctxpkg.WithTenantID(req.Context(), tenantID.String()))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("Expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+			}
+			if mockPublisher.job != nil {
+				t.Fatalf("passive %s monitor must not publish a check job", typ)
+			}
+		})
+	}
+}
+
 func TestHandlers_BulkDeleteMonitors(t *testing.T) {
 	log := logger.New("test", "debug")
 	monitorSvc := NewMockMonitorService()

@@ -243,7 +243,7 @@ export const API_PAGE: DocPage = {
             ["`DELETE /api/v1/monitors/{id}`", "Soft-delete a monitor"],
             [
               "`POST /api/v1/monitors/{id}/run`",
-              "Queue a persisted on-demand check",
+              "Queue a persisted on-demand check (refused with 400 for `group`, `push` and `agent` monitors, which never run a check of their own)",
             ],
             [
               "`GET /api/v1/monitors/{id}/results`",

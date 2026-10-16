@@ -48,8 +48,9 @@ const OVERVIEW_RANGES: readonly OverviewTimeRange[] = ['1h', '6h', '24h', '7d', 
 const AGENT_RANGES: readonly AgentTimeRange[] = ['1h', '6h', '24h', '7d'];
 
 // Monitors that never execute a check of their own: a group rolls up its
-// members (the API refuses run-now for it), agent and push monitors are
-// pushed to. Run check and the timeout fact are hidden for them.
+// members, agent and push monitors are fed by heartbeats (the API refuses
+// run-now for all three; shared/models PassiveMonitorTypes is the source).
+// Run check and the timeout fact are hidden for them.
 const PASSIVE_TYPES = new Set(['group', 'agent', 'push']);
 
 const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;

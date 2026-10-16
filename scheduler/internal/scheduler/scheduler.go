@@ -581,14 +581,14 @@ func (s *Scheduler) fetchDueMonitors(ctx context.Context, tx *sql.Tx, batchSize 
 		FROM monitors
 		WHERE enabled = true
 		  AND deleted_at IS NULL
-		  AND type != 'group'
+		  AND type <> ALL($2)
 		  AND (next_run_at IS NULL OR next_run_at <= NOW())
 		ORDER BY next_run_at NULLS FIRST, id
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED
 	`
 
-	rows, err := tx.QueryContext(ctx, query, batchSize)
+	rows, err := tx.QueryContext(ctx, query, batchSize, pq.Array(models.PassiveMonitorTypes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query due monitors: %w", err)
 	}

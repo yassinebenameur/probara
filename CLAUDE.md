@@ -108,6 +108,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   Import, preview, and anything type-driven must delegate to it
   (`DefaultRegistry.Has/Types`), never keep a parallel hardcoded list.
 - **Active-check types** (timeout semantics): `validation.IsActiveCheckType`.
+- **Passive types** (never dispatched, refused by run-now, skipped by the
+  worker): `shared/models.PassiveMonitorTypes`; the monitor page's
+  `PASSIVE_TYPES` is its UI mirror.
 - **Monitor config secrets**: `shared/secrets/monitor_config.go`
   (`MonitorSecretFields` / `MonitorSecretMapFields`). One entry gives
   encryption at rest, `***` masking on reads, write-only merge on updates,

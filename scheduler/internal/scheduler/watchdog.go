@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
@@ -124,14 +125,14 @@ func (s *Scheduler) watchdogActivePass(ctx context.Context) error {
 		rows, err := s.db.QueryContext(ctx, `
 			SELECT m.id FROM monitors m
 			WHERE m.enabled = TRUE AND m.deleted_at IS NULL
-			  AND m.type NOT IN ('group', 'push', 'agent')
+			  AND m.type <> ALL($5)
 			  AND m.current_state <> 'unknown'
 			  AND NOT EXISTS (SELECT 1 FROM monitor_locations ml WHERE ml.monitor_id = m.id)
 			  AND COALESCE(m.last_result_at, m.created_at) < NOW() - make_interval(secs => GREATEST(m.interval_seconds * $1, $2))
 			  AND m.id > $4
 			ORDER BY m.id
 			LIMIT $3
-		`, monitorstate.StaleMultiplier, monitorstate.MinFreshnessSeconds, watchdogBatchLimit, cursor)
+		`, monitorstate.StaleMultiplier, monitorstate.MinFreshnessSeconds, watchdogBatchLimit, cursor, pq.Array(sharedmodels.PassiveMonitorTypes))
 		if err != nil {
 			return err
 		}
