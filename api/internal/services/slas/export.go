@@ -47,7 +47,11 @@ func secondsString(s float64) string { return strconv.FormatFloat(s, 'f', 0, 64)
 // columns on outages and the trailing cause section appear only when the
 // report has SuspectedCauses, so a report issued before causes existed
 // exports byte for byte as it did; new rows go after every existing row so
-// no row position moves.
+// no row position moves. Unlike the PDF, which hides its cause table until
+// an outage was triaged, the CSV is the raw-data export: every report
+// computed since causes exist carries the same column set, AI on or off
+// ("Not triaged"/"No alert" rows), so a spreadsheet never changes shape with
+// the workspace's AI settings.
 func WriteCSV(w io.Writer, r *models.SLAReport) error {
 	loc := reportLocation(r)
 	ts := func(t time.Time) string { return t.In(loc).Format(time.RFC3339) }
@@ -125,6 +129,7 @@ func WriteCSV(w io.Writer, r *models.SLAReport) error {
 			[]string{"Attributed monitor outages", strconv.Itoa(c.OutageCount)},
 			[]string{"Triaged monitor outages", strconv.Itoa(c.TriagedOutageCount)},
 			[]string{"Pending monitor outages", strconv.Itoa(c.PendingOutageCount)},
+			[]string{"Unplanned seconds (summed per monitor)", secondsString(c.UnplannedSeconds)},
 			nil,
 			[]string{"Suspected cause", "Key", "Kind", "Monitor outages", "Overlapping alerts", "Monitors",
 				"Unplanned seconds (summed per monitor)", "Operator-confirmed outages", "Operator-corrected outages"})
@@ -456,11 +461,20 @@ func causesCaveat(c *models.SLAReportSuspectedCauses) string {
 		"Suspected causes are observed symptoms, not confirmed root causes. " +
 		"Not triaged: the alert was never triaged, for example automatic triage was off at the time, the alert resolved within the settle wait, " +
 		"the monitor was in its triage cooldown, the workspace's hourly triage limit or the platform backlog was reached, " +
-		fmt.Sprintf("the alert was older than the %d-hour lookback, triage was switched off, or the local AI was unavailable. ", int(ai.TriageLookback/time.Hour)) +
+		fmt.Sprintf("the alert was older than the %s lookback, triage was switched off while the alert was queued, or the local AI was unavailable. ", lookbackPhrase(ai.TriageLookback)) +
 		"Triage pending: triage was still running or the alert still open when the report was computed. " +
 		"No alert: no availability alert overlapped the outage. " +
 		"Counts are monitor outages, not alerts, and downtime is summed per monitor, so it can exceed the service downtime when monitors fail together. " +
 		fmt.Sprintf("%d of %d monitor outages had a triaged alert.", c.TriagedOutageCount, c.OutageCount)
+}
+
+// lookbackPhrase renders the triage lookback for the caveat ("6-hour"). The
+// caveat renders at download time, so issued reports follow the constant.
+func lookbackPhrase(d time.Duration) string {
+	if d%time.Hour == 0 {
+		return strconv.FormatFloat(d.Hours(), 'f', -1, 64) + "-hour"
+	}
+	return strconv.FormatFloat(d.Minutes(), 'f', -1, 64) + "-minute"
 }
 
 func budgetRemaining(b models.SLAReportBudget) string {

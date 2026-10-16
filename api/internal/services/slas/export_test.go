@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
+	"github.com/yassinebenameur/probara/shared/ai"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite api/internal/services/slas/testdata golden files")
@@ -106,12 +107,39 @@ func TestReportWithCausesExports(t *testing.T) {
 	out := csvBuf.String()
 	require.Contains(t, out, "Started before period,Ongoing,Cause key,Suspected cause\r\n")
 	require.Contains(t, out, ",false,false,dns_failure,DNS resolution failure\r\n")
-	require.Contains(t, out, "\r\n\r\nAttributed monitor outages,1\r\nTriaged monitor outages,1\r\nPending monitor outages,0\r\n")
+	require.Contains(t, out, "\r\n\r\nAttributed monitor outages,1\r\nTriaged monitor outages,1\r\nPending monitor outages,0\r\n"+
+		"Unplanned seconds (summed per monitor),3600\r\n")
 	require.True(t, strings.HasSuffix(out, "\r\nDNS resolution failure,dns_failure,suspected,1,1,1,3600,1,0\r\n"), "the cause section is last")
 
-	require.Contains(t, causesCaveat(r.SuspectedCauses), "older than the 6-hour lookback")
+	require.Contains(t, causesCaveat(r.SuspectedCauses), "older than the "+lookbackPhrase(ai.TriageLookback)+" lookback")
+	require.Equal(t, "6-hour", lookbackPhrase(6*time.Hour))
+	require.Equal(t, "90-minute", lookbackPhrase(90*time.Minute))
 	require.Contains(t, causesCaveat(r.SuspectedCauses), "1 of 1 monitor outages had a triaged alert.")
 	var pdfBuf bytes.Buffer
 	require.NoError(t, WritePDF(&pdfBuf, r))
 	require.True(t, bytes.HasPrefix(pdfBuf.Bytes(), []byte("%PDF")))
+}
+
+// TestCSVSuspectedCauseSection pins the shape of a report computed with the
+// breakdown: the outage cause columns (a no-alert outage included) and the
+// trailing section, two-cell summary rows then one row per bucket.
+func TestCSVSuspectedCauseSection(t *testing.T) {
+	r := legacyReport()
+	r.Issued = nil
+	second := uuid.MustParse("7a2d3b8f-1e5c-4b9f-8a62-2e3f4a5b6c7d")
+	quiet := time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC)
+	r.Outages[0].CauseKind, r.Outages[0].CauseKey, r.Outages[0].CauseTitle = models.SLACauseSuspected, "dns_failure", "DNS resolution failure"
+	r.Outages = append(r.Outages, models.SLAReportOutage{MonitorID: &second, MonitorName: "search", Start: quiet, End: quiet.Add(10 * time.Minute),
+		DurationSeconds: 600, UnplannedSeconds: 600, CauseKind: models.SLACauseNoAlert, CauseKey: models.SLACauseNoAlert, CauseTitle: "No alert"})
+	r.SuspectedCauses = &models.SLAReportSuspectedCauses{OutageCount: 2, TriagedOutageCount: 1, UnplannedSeconds: 4200,
+		Buckets: []models.SLAReportCauseBucket{
+			{Kind: models.SLACauseSuspected, Key: "dns_failure", Title: "DNS resolution failure",
+				OutageCount: 1, AlertCount: 1, MonitorCount: 1, UnplannedSeconds: 3600, CorrectedOutageCount: 1},
+			{Kind: models.SLACauseNoAlert, Key: models.SLACauseNoAlert, Title: "No alert",
+				OutageCount: 1, MonitorCount: 1, UnplannedSeconds: 600},
+		}}
+
+	var csvBuf bytes.Buffer
+	require.NoError(t, WriteCSV(&csvBuf, r))
+	golden(t, "causes-report.csv", csvBuf.Bytes())
 }
