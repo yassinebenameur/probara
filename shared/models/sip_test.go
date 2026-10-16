@@ -27,6 +27,9 @@ func TestSIPMonitorConfigValidate(t *testing.T) {
 		{name: "tls server name ip", config: `{"host":"sbc.example.com","transport":"tls","tls_server_name":"192.0.2.10"}`},
 		{name: "tls server name is trimmed like the checker does", config: `{"host":"sip.example.com","tls_server_name":" sbc.example.com "}`},
 		{name: "blank tls server name means default", config: `{"host":"sip.example.com","tls_server_name":"  "}`},
+		// Its syntax is the API's save-time rule (ValidateSIPTLSServerName):
+		// a stored name that predates it still runs.
+		{name: "legacy tls server name still validates", config: `{"host":"sip.example.com","transport":"tls","tls_server_name":"bad_name"}`},
 		{name: "tls min days valid over tls", config: `{"host":"sip.example.com","transport":"tls","tls_min_days_valid":14}`},
 		{name: "tls min days valid zero", config: `{"host":"sip.example.com","transport":"TLS","tls_min_days_valid":0}`},
 		{name: "resolution a", config: `{"host":"sip.example.com","resolution":"a"}`},
@@ -61,7 +64,6 @@ func TestSIPMonitorConfigValidate(t *testing.T) {
 		{name: "invalid nameserver", config: `{"host":"example.com","resolution":"rfc3263","nameserver":"not a host"}`, errContains: "nameserver must be a valid IP address or hostname"},
 		{name: "nameserver bad port", config: `{"host":"example.com","resolution":"rfc3263","nameserver":"10.0.0.2:0"}`, errContains: "nameserver port must be between 1 and 65535"},
 		{name: "rfc3263 tls min days valid still needs transport tls", config: `{"host":"example.com","resolution":"rfc3263","tls_min_days_valid":14}`, errContains: "set transport tls"},
-		{name: "tls server name invalid", config: `{"host":"sip.example.com","transport":"tls","tls_server_name":"bad name"}`, errContains: "tls_server_name must be a valid hostname or IP address"},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +141,25 @@ func TestIsValidHostname(t *testing.T) {
 	for _, h := range invalid {
 		if IsValidHostname(h) {
 			t.Errorf("IsValidHostname(%q) = true, want false", h)
+		}
+	}
+}
+
+func TestValidateSIPTLSServerName(t *testing.T) {
+	for name, ok := range map[string]bool{
+		"sbc.example.com":    true,
+		"sbc.example.com.":   true,
+		" sbc.example.com ":  true,
+		"192.0.2.10":         true,
+		"2001:db8::1":        true,
+		"":                   true,
+		"bad name":           false,
+		"bad_name":           false,
+		"sbc.example.com..":  false,
+		"sbc.example.com:50": false,
+	} {
+		if err := ValidateSIPTLSServerName(name); (err == nil) != ok {
+			t.Errorf("ValidateSIPTLSServerName(%q) = %v, want ok=%v", name, err, ok)
 		}
 	}
 }

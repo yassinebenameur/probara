@@ -22,7 +22,6 @@ func TestSIPConfigValidatorDelegatesToSharedConfig(t *testing.T) {
 		`{"host":"sip.example.com","password":"secret"}`,
 		`{"host":"sip.example.com","expected_status":42}`,
 		`{"host":"sip.example.com","domain":"example.com\r\nX-Injected: 1"}`,
-		`{"host":"sip.example.com","tls_server_name":"bad name"}`,
 		`{"transport":"udp"}`,
 	}
 	for _, raw := range configs {
@@ -55,6 +54,21 @@ func TestSIPConfigValidatorRejectsCaseVariantKeys(t *testing.T) {
 	err := (&SIPConfigValidator{}).ValidateSchedule(json.RawMessage(`{"host":"trunk.example.com","method":"invite","call":{"number":"1"},"Method":"options","Call":null}`), 30, 10)
 	if err == nil || !strings.Contains(err.Error(), "at least 60") {
 		t.Errorf("ValidateSchedule() = %v, want the call floor", err)
+	}
+}
+
+// tls_server_name's syntax is checked on save only (the worker leaves it to
+// the handshake, so monitors stored before the rule keep running); an
+// absolute name with a trailing dot is fine.
+func TestSIPConfigValidatorTLSServerName(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		`{"host":"sip.example.com","transport":"tls","tls_server_name":"bad_name"}`:         false,
+		`{"host":"sip.example.com","transport":"tls","tls_server_name":"bad name"}`:         false,
+		`{"host":"sip.example.com","transport":"tls","tls_server_name":"sbc.example.com."}`: true,
+	} {
+		if err := DefaultRegistry.Validate("sip", json.RawMessage(raw)); (err == nil) != ok {
+			t.Errorf("%s: Validate() = %v, want ok=%v", raw, err, ok)
+		}
 	}
 }
 

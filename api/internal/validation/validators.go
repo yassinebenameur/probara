@@ -626,7 +626,12 @@ func (v *SIPConfigValidator) ValidateConfig(configRaw json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("invalid SIP config: %w", err)
 	}
-	return config.Validate()
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	// Save-time only: the worker's Validate leaves it out so monitors
+	// stored before the rule keep running.
+	return sharedmodels.ValidateSIPTLSServerName(config.TLSServerName)
 }
 
 // ValidateSchedule bounds a test call's interval and timeout

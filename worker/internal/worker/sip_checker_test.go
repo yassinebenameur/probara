@@ -384,6 +384,21 @@ func TestSIPChecker_OptionsTLS(t *testing.T) {
 	}
 }
 
+// A stored tls_server_name the API's save-time syntax rule would refuse (it
+// predates the rule) still runs: the worker's Validate leaves its syntax to
+// the handshake, and an absolute name with a trailing dot reaches the dial.
+func TestSIPChecker_LegacyTLSServerNameStillRuns(t *testing.T) {
+	host, port := startFakeTLSSIPServer(t, time.Now().Add(time.Hour))
+	for _, name := range []string{"sbc.example.com.", "legacy_name"} {
+		result := runSIPCheck(t, map[string]interface{}{
+			"host": host, "port": port, "transport": "tls", "tls_skip_verify": true, "tls_server_name": name,
+		})
+		if result.Status != "success" {
+			t.Fatalf("tls_server_name %q: Status = %q (%v), want success", name, result.Status, result.ErrorMessage)
+		}
+	}
+}
+
 func TestSIPChecker_TLSExpiredCertificate(t *testing.T) {
 	host, port := startFakeTLSSIPServer(t, time.Now().Add(-time.Hour))
 

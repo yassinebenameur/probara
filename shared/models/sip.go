@@ -268,12 +268,11 @@ func (c SIPMonitorConfig) Validate() error {
 		}
 	}
 
-	// The checker trims the override before using it as the SNI and
-	// verification name, so validate what it will actually use. An IP is
-	// accepted: crypto/tls verifies it against the certificate's IP SANs.
-	if name := strings.TrimSpace(c.TLSServerName); name != "" && !isHostOrIP(name) {
-		return fmt.Errorf("tls_server_name must be a valid hostname or IP address")
-	}
+	// tls_server_name's syntax is checked by the API on save
+	// (ValidateSIPTLSServerName), not here: the worker runs Validate on
+	// stored configs too, and monitors saved before the rule existed must
+	// keep running. A bad name fails at the handshake, which says why; the
+	// CR/LF/NUL rule above is the one that matters on the wire.
 
 	// The certificate is read from the TLS handshake, so the threshold needs
 	// an explicit TLS transport: on UDP/TCP no certificate is ever seen and
@@ -287,6 +286,19 @@ func (c SIPMonitorConfig) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateSIPTLSServerName is the API's save-time check of tls_server_name.
+// The checker trims the override before using it as the SNI and
+// verification name, so it validates what will actually be used. An IP is
+// accepted (crypto/tls verifies it against the certificate's IP SANs), and so
+// is an absolute name with a trailing dot, which Go's TLS stack handles.
+func ValidateSIPTLSServerName(name string) error {
+	name = strings.TrimSpace(name)
+	if name != "" && !isHostOrIP(strings.TrimSuffix(name, ".")) {
+		return fmt.Errorf("tls_server_name must be a valid hostname or IP address")
+	}
 	return nil
 }
 
