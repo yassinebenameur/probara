@@ -1,20 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Sparkles, X } from 'lucide-react';
 
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
-import type { PillTone } from '@/components/ui/Pill';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import RowMenu, { RowMenuItem } from '@/components/ui/RowMenu';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { useToast } from '@/components/ui/ToastProvider';
-import { suggestDependencies, addMonitorDependency, labelDependencySuggestion } from '@/lib/api';
+import { suggestDependencies, addMonitorDependency, getAISettings, labelDependencySuggestion } from '@/lib/api';
 import { dependencyLabelRequest, labelErrorMessage } from '@/lib/ai-labels';
-import type { DependencyLabelCorrection, DependencySuggestion } from '@/lib/types';
+import { pluralize } from '@/lib/format';
+import { aiConfidenceTone } from '@/lib/status-tones';
+import type { AISettings, DependencyLabelCorrection, DependencySuggestion } from '@/lib/types';
 
 // Dismiss reasons beyond the default "not a dependency" (the X button). Each
 // is recorded as a rejected training label with that correction.
@@ -23,12 +24,6 @@ const DISMISS_REASONS: { corrected: DependencyLabelCorrection; label: string }[]
   { corrected: 'shared_upstream', label: 'Dismiss: shared upstream explains both' },
   { corrected: 'insufficient_evidence', label: 'Dismiss: not enough evidence' },
 ];
-
-const CONFIDENCE_TONE: Record<string, PillTone> = {
-  high: 'success',
-  medium: 'info',
-  low: 'neutral',
-};
 
 // Returns the scan trigger (rendered in the graph toolbar, or in the empty
 // canvas) and the results panel, which stays hidden until a scan has run.
@@ -44,6 +39,23 @@ export function useAISuggestions(onAccepted?: () => void) {
   const [error, setError] = useState<string | null>(null);
   const [acceptingKey, setAcceptingKey] = useState<string | null>(null);
 
+  // Disables the trigger when AI is off or the local service is down, as
+  // AIRootCausePanel does. Advisory only: the scan's 503 stays authoritative,
+  // so a failed settings load leaves the trigger enabled.
+  const [availability, setAvailability] = useState<AISettings | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getAISettings().then((s) => { if (!cancelled) setAvailability(s); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const unavailableReason = !availability
+    ? null
+    : !availability.enabled
+      ? 'AI analysis is disabled for this workspace or installation. Check Settings → AI.'
+      : !availability.available
+        ? 'Local analysis service is unavailable. Check Settings → AI.'
+        : null;
+
   const keyOf = (s: DependencySuggestion) => `${s.monitor_id}->${s.depends_on_id}`;
 
   const run = async () => {
@@ -56,10 +68,7 @@ export function useAISuggestions(onAccepted?: () => void) {
       setAbstained(result.abstained_pairs || 0);
       setRan(true);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'request failed';
-      setError(
-        `Couldn't get suggestions (${msg}). Make sure AI is enabled in Settings → AI.`
-      );
+      setError(`Couldn't get suggestions: ${labelErrorMessage(err, 'request failed')}`);
     } finally {
       setLoading(false);
     }
@@ -96,7 +105,7 @@ export function useAISuggestions(onAccepted?: () => void) {
   };
 
   const renderButton = (size: 'sm' | 'xs' = 'sm') => (
-    <Button variant="ghost" size={size} icon={<Sparkles strokeWidth={1.75} />} loading={loading} disabled={loading} onClick={run}>
+    <Button variant="ghost" size={size} icon={<Sparkles strokeWidth={1.75} />} loading={loading} disabled={loading || unavailableReason !== null} title={unavailableReason ?? undefined} onClick={run}>
       {ran ? 'Re-scan with AI' : 'Suggest with AI'}
     </Button>
   );
@@ -110,11 +119,11 @@ export function useAISuggestions(onAccepted?: () => void) {
 
       {!error && ran && suggestions.length === 0 && (
         <div className="text-sm text-slate-500">
-          No proposals passed the evidence and calibrated score thresholds{analyzed > 0 ? ` (analyzed ${analyzed} candidate pair${analyzed === 1 ? '' : 's'})` : ''}.
+          No proposals passed the evidence and calibrated score thresholds{analyzed > 0 ? ` (analyzed ${pluralize(analyzed, 'candidate pair')})` : ''}.
         </div>
       )}
 
-      {ran && abstained > 0 && <p className="text-ui text-slate-400">Abstained on {abstained} candidate pairs. Correlation alone does not prove a dependency.</p>}
+      {ran && abstained > 0 && <p className="text-ui text-slate-400">Abstained on {pluralize(abstained, 'candidate pair')}. Correlation alone does not prove a dependency.</p>}
 
       {suggestions.length > 0 && (
         <div className="-mx-5 -mb-5 divide-y divide-divider">
@@ -128,12 +137,12 @@ export function useAISuggestions(onAccepted?: () => void) {
                   <span className="font-medium">{s.monitor_name}</span>
                   <span className="text-slate-500">depends on</span>
                   <span className="font-medium">{s.depends_on_name}</span>
-                  <Pill tone={CONFIDENCE_TONE[s.confidence] ?? 'neutral'} size="xs" className="capitalize">
+                  <Pill tone={aiConfidenceTone(s.confidence)} size="xs" className="capitalize">
                     {s.confidence}
                   </Pill>
                 </div>
                 {s.reason && <div className="mt-1 text-ui text-slate-400">{s.reason}</div>}
-                {s.metadata?.model_version && <p className="mt-1 text-xs text-slate-500">Local model: {s.metadata.model_version} · {s.metadata.hypothesis}</p>}
+                {s.metadata?.model_version && <p className="mt-1 text-xs text-slate-500">Local model: {s.metadata.model_version}</p>}
               </div>
               <div className="flex flex-shrink-0 items-center gap-1">
                 <IconButton

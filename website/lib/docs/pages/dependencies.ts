@@ -121,7 +121,7 @@ export const DEPENDENCIES_PAGE: DocPage = {
         {
           type: "paragraph",
           text:
-            "Suggestions include measured counts, median timing, corroborating signals, calibrated score, model identity, evidence references and abstained-pair context. Duplicate, existing, self and cycle-producing proposals are rejected, including paths through monitors outside the candidate set. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it.",
+            "Suggestions include measured counts, median timing, corroborating signals, calibrated score, model identity, evidence references and abstained-pair context. Duplicate, existing, self and cycle-producing proposals are rejected, including paths through monitors outside the candidate set. The endpoint is compute-only: it does not write an edge until an operator explicitly accepts and creates it. The **Suggest with AI** button is disabled while local AI is off for the workspace or installation, or the local service is unavailable (see [Settings → AI](/docs/administration/#ai-settings)). The endpoint itself answers 503 while local AI is off, or busy or restarting (with `Retry-After`).",
         },
         {
           type: "paragraph",

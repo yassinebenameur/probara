@@ -62,7 +62,7 @@ const unavailableRetryAfter = 5 * time.Second
 func writeSuggestError(w http.ResponseWriter, err error, log *logger.Logger) {
 	switch {
 	case errors.Is(err, ai.ErrNotConfigured):
-		apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "Local AI is disabled for this workspace or installation. Check Settings → AI analysis.")
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "not_configured", "Local AI is disabled for this workspace or installation. Check Settings → AI.")
 	case errors.Is(err, ai.ErrUnavailable):
 		retry := ai.RetryAfterHint(err)
 		if retry <= 0 {

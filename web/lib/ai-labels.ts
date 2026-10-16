@@ -6,6 +6,7 @@ import type {
   DependencySuggestion,
   IncidentAILabelRequest,
 } from './types';
+import { pluralize } from './format';
 
 // Pure helpers for the AI label controls (incident analysis Confirm/Correct,
 // dependency suggestion Accept/Dismiss). The server copies the evidence from
@@ -87,23 +88,19 @@ export interface LabelExportOutcome {
   tone: 'success' | 'info' | 'warning';
 }
 
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 // What the export button does with a response: a known-empty export skips
 // the 0-byte download, and skipped labels (evidence that failed validation)
 // are always surfaced. Unknown counts fall back to a plain download.
 export function labelExportOutcome(rows: number | null, skipped: number | null): LabelExportOutcome {
   const skippedNote = skipped && skipped > 0
-    ? `${plural(skipped, 'label was', 'labels were')} skipped because their evidence failed validation`
+    ? `${pluralize(skipped, 'label was', 'labels were')} skipped because their evidence failed validation`
     : '';
   if (rows === 0) {
     return skippedNote
       ? { download: false, message: `No training rows to export: ${skippedNote}.`, tone: 'warning' }
       : { download: false, message: 'No labels to export yet.', tone: 'info' };
   }
-  const base = rows === null ? 'Training labels downloaded' : `Downloaded ${plural(rows, 'training row', 'training rows')}`;
+  const base = rows === null ? 'Training labels downloaded' : `Downloaded ${pluralize(rows, 'training row')}`;
   return skippedNote
     ? { download: true, message: `${base}; ${skippedNote}.`, tone: 'warning' }
     : { download: true, message: base, tone: 'success' };

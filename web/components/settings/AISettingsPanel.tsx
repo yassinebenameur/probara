@@ -91,7 +91,7 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const test = async () => {
     setTesting(true);
     try { const p = await testAISettings(); setProbe(p); setSettings((s) => s ? { ...s, available: p.ok, model: p.model, message: p.message } : s); }
-    catch (err) { setProbe({ ok: false, message: err instanceof Error ? err.message : 'Local service unavailable' }); }
+    catch (err) { setProbe({ ok: false, message: errorText(err, 'Local service unavailable') }); }
     finally { setTesting(false); }
   };
   // Same download path as the monitor export (app/monitors/page.tsx).
@@ -128,7 +128,8 @@ export function AISettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
           <Callout tone={settings.available ? 'success' : 'warning'}>
             {settings.installation_enabled ? (settings.available ? 'Local service available' : 'Local service unavailable') : 'Disabled for this installation'}
             {settings.model && ` · ${settings.model}`}
-            {settings.message && <p className="mt-1">{settings.message}</p>}
+            {/* The disabled headline already says it; the message repeats it. */}
+            {settings.installation_enabled && settings.message && <p className="mt-1">{settings.message}</p>}
           </Callout>
           <label className="flex items-center gap-3 text-sm text-slate-200">
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={readOnly || !settings.installation_enabled} className="h-4 w-4 accent-cyan-500" />

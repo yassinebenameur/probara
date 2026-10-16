@@ -276,7 +276,8 @@ export function incidentSeverityLabel(severity: IncidentSeverity | string | null
 export type AIConfidence = 'low' | 'medium' | 'high';
 
 /**
- * Tone of an AI confidence level (incident analysis, alert triage). Never
+ * Tone of an AI confidence level (incident analysis, alert triage,
+ * dependency suggestions). Never
  * danger or warning: a confident suspected cause is not a worse state, and
  * low confidence is a hint, not an error.
  */

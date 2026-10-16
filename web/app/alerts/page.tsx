@@ -181,6 +181,9 @@ function AlertsView() {
       try {
         if (focusTenantId && selectedTenantId && focusTenantId !== selectedTenantId) {
           const tenants = await getTenants().catch(() => null);
+          // The viewer may have left the focused view meanwhile; switching
+          // now would remount whatever page they are on under another tenant.
+          if (cancelled) return;
           const target = focusTenantSwitch(
             { alertId: focusAlertId, tenantId: focusTenantId },
             selectedTenantId,

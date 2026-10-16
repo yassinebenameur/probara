@@ -303,8 +303,9 @@ export default function AlertTable({ alerts, onAlertUpdate, onTriageLabelled, lo
                 {showActions && (
                   <td className="text-right">
                     {/* Fixed slots, acknowledge, resolve, then the triage
-                        label menu, so each lines up down the column
-                        whatever the row's state. */}
+                        label action (a menu while unlabelled, a single
+                        button once labelled), so each lines up down the
+                        column whatever the row's state. */}
                     <div className="flex items-center justify-end gap-1">
                       {!anyOpen ? null : alert.status === 'active' ? (
                         <IconButton
@@ -336,28 +337,24 @@ export default function AlertTable({ alerts, onAlertUpdate, onTriageLabelled, lo
                       ) : (
                         <span className="h-8 w-8" aria-hidden="true" />
                       )}
-                      {!anyLabelable ? null : alert.triage?.labelable ? (
+                      {!anyLabelable ? null : alert.triage?.labelable && alert.triage.labelled ? (
+                        <IconButton
+                          icon={<Tag strokeWidth={1.75} />}
+                          label={triageMenuCopy(alert.triage).change}
+                          onClick={() => setLabelling({ alert, mode: 'prompt' })}
+                          disabled={processing?.id === alert.id}
+                        />
+                      ) : alert.triage?.labelable ? (
                         <RowMenu label="Label suspected cause" disabled={processing?.id === alert.id}>
-                          {alert.triage.labelled ? (
-                            <RowMenuItem
-                              icon={<Tag strokeWidth={1.75} />}
-                              onSelect={() => setLabelling({ alert, mode: 'prompt' })}
-                            >
-                              {triageMenuCopy(alert.triage).change}
-                            </RowMenuItem>
-                          ) : (
-                            <>
-                              <RowMenuItem icon={<Check strokeWidth={1.75} />} onSelect={() => void handleConfirmTriage(alert)}>
-                                {triageMenuCopy(alert.triage).confirm}
-                              </RowMenuItem>
-                              <RowMenuItem
-                                icon={<PencilLine strokeWidth={1.75} />}
-                                onSelect={() => setLabelling({ alert, mode: 'correct' })}
-                              >
-                                {triageMenuCopy(alert.triage).correct}
-                              </RowMenuItem>
-                            </>
-                          )}
+                          <RowMenuItem icon={<Check strokeWidth={1.75} />} onSelect={() => void handleConfirmTriage(alert)}>
+                            {triageMenuCopy(alert.triage).confirm}
+                          </RowMenuItem>
+                          <RowMenuItem
+                            icon={<PencilLine strokeWidth={1.75} />}
+                            onSelect={() => setLabelling({ alert, mode: 'correct' })}
+                          >
+                            {triageMenuCopy(alert.triage).correct}
+                          </RowMenuItem>
                         </RowMenu>
                       ) : (
                         <span className="h-8 w-8" aria-hidden="true" />

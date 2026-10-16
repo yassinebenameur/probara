@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { getAISettings, getIncidentAIAnalysis, labelIncidentAIAnalysis, requestIncidentAIAnalysis } from '@/lib/api';
 import type { AILabel, IncidentAIAnalysis, AISettings } from '@/lib/types';
-import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite, useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
@@ -40,6 +40,9 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
   const [error, setError] = useState<string | null>(null);
 
   const canWrite = useCanWrite();
+  // useCanWrite reads false while identity loads, so viewer copy waits for it.
+  const { loading: userLoading } = useCurrentUser();
+  const viewer = !canWrite && !userLoading;
   const [availability, setAvailability] = useState<AISettings | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -88,6 +91,7 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
           loading={requesting || isPending}
           disabled={requesting || isPending || !canWrite || availability?.enabled === false || availability?.available === false}
           onClick={handleAnalyze}
+          title={viewer ? 'Editors can run analysis' : undefined}
         >
           {buttonLabel}
         </Button>
@@ -98,7 +102,11 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
 
       {!analysis && !error && (
         <p className="text-sm text-slate-400">
-          No analysis yet. Run one to assess the linked monitor checks and configured upstream evidence.
+          {canWrite
+            ? 'No analysis yet. Run one to assess the linked monitor checks and configured upstream evidence.'
+            : viewer
+              ? 'No analysis yet. Editors can run one to assess the linked monitor checks and configured upstream evidence.'
+              : 'No analysis yet.'}
         </p>
       )}
 
@@ -110,7 +118,7 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
 
       {analysis?.status === 'failed' && (
         <p className="text-sm text-rose-300">
-          Analysis failed{analysis.error_message ? `: ${analysis.error_message}` : ''}. Try again.
+          Analysis failed{analysis.error_message ? `: ${analysis.error_message}` : ''}.{canWrite ? ' Try again.' : ''}
         </p>
       )}
 
