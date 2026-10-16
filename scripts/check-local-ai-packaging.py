@@ -88,10 +88,13 @@ def assert_clients(objects, url, ref):
         else:
             assert env['LOCAL_AI_DISABLED']['value'] == 'true', name
             assert not {'LOCAL_AI_URL', 'LOCAL_AI_TOKEN', 'LOCAL_AI_TIMEOUT_SECONDS'} & env.keys(), name
-    # The alerter never calls the service; it gets only the LOCAL_AI_DISABLED
-    # kill switch (alerterAIEnv), which stops suspected-cause follow-ups.
-    alerter = {k: v for k, v in env_of(objects, 'Deployment', FULL + '-alerter').items() if k.startswith('LOCAL_AI_')}
+    # The alerter never calls the service; it gets only the two kill switches
+    # (alerterAIEnv), LOCAL_AI_DISABLED (same value as the api) and
+    # AI_TRIAGE_ENABLED, which stop suspected-cause follow-ups.
+    alerter_env = env_of(objects, 'Deployment', FULL + '-alerter')
+    alerter = {k: v for k, v in alerter_env.items() if k.startswith('LOCAL_AI_')}
     assert alerter == {'LOCAL_AI_DISABLED': {'name': 'LOCAL_AI_DISABLED', 'value': 'false' if url else 'true'}}, alerter
+    assert 'AI_TRIAGE_ENABLED' in alerter_env, 'alerter must receive AI_TRIAGE_ENABLED'
     others = [(k, n) for k, n in (('Deployment', FULL + '-scheduler'),
                                   ('Deployment', FULL + '-status-page'), ('Deployment', FULL + '-frontend'),
                                   ('Deployment', FULL + '-worker-eu'), ('Job', FULL + '-migrations'))]
@@ -275,8 +278,10 @@ def check_compose():
         assert env['LOCAL_AI_URL'] == 'http://local-ai:8090', name
         assert env['LOCAL_AI_TOKEN'] == ai['environment']['LOCAL_AI_TOKEN'], name
         assert env['LOCAL_AI_DISABLED'] == ai['environment']['LOCAL_AI_DISABLED'], name
-    alerter = {k: v for k, v in services['alerter'].get('environment', {}).items() if k.startswith('LOCAL_AI_')}
+    alerter_env = services['alerter'].get('environment', {})
+    alerter = {k: v for k, v in alerter_env.items() if k.startswith('LOCAL_AI_')}
     assert alerter == {'LOCAL_AI_DISABLED': ai['environment']['LOCAL_AI_DISABLED']}, alerter
+    assert 'AI_TRIAGE_ENABLED' in alerter_env, 'compose alerter must receive AI_TRIAGE_ENABLED'
     for name in ('scheduler', 'status-page'):
         leaked = [k for k in services[name].get('environment', {}) if k.startswith('LOCAL_AI_')]
         assert not leaked, f'compose {name} must not receive local AI env: {leaked}'

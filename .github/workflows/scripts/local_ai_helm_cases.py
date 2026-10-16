@@ -84,20 +84,29 @@ def chart_secret_keys(docs):
 
 
 def assert_boundary(docs):
-    # Only the API, the platform worker and the inference service carry
-    # LOCAL_AI_*; scheduler, status page and location workers never. The
-    # alerter never calls the service and gets only the LOCAL_AI_DISABLED kill
-    # switch (alerterAIEnv), which stops suspected-cause follow-ups.
+    # Only the API, the platform worker and the inference service carry the
+    # LOCAL_AI_* client/service env; scheduler, status page and location
+    # workers never. The alerter never calls the service and carries only the
+    # two kill switches (alerterAIEnv), LOCAL_AI_DISABLED and AI_TRIAGE_ENABLED,
+    # which stop suspected-cause follow-ups.
     allowed = ("-api", "-worker", "-local-ai")
     for name, workload in {**objects(docs, "Deployment"), **objects(docs, "StatefulSet"),
                            **objects(docs, "Job")}.items():
-        carried = sorted(k for k in env(workload) if k.startswith("LOCAL_AI_"))
+        variables = env(workload)
+        carried = sorted(k for k in variables if k.startswith("LOCAL_AI_"))
         if name.endswith("-alerter"):
             if carried != ["LOCAL_AI_DISABLED"]:
                 raise AssertionError(f"{name} must receive only LOCAL_AI_DISABLED, got {carried}")
+            if "AI_TRIAGE_ENABLED" not in variables:
+                raise AssertionError(f"{name} must receive AI_TRIAGE_ENABLED")
             continue
         if carried and not name.endswith(allowed):
             raise AssertionError(f"{name} must not receive {carried}")
+
+
+def alerter_disabled(docs):
+    """The alerter's LOCAL_AI_DISABLED, which must match the api's value."""
+    return env(deployment(docs, "-alerter"))["LOCAL_AI_DISABLED"]["value"]
 
 
 def case_default():
@@ -114,6 +123,7 @@ def case_default():
         assert token_ref(docs, suffix) == {"name": secret_name, "key": "local_ai_token"}, suffix
     policy = next(d for n, d in objects(docs, "NetworkPolicy").items() if n.endswith("-local-ai"))["spec"]
     assert policy["egress"] == [], "local AI must have no egress"
+    assert alerter_disabled(docs) == "false", "alerter LOCAL_AI_DISABLED differs from the api's"
     assert_boundary(docs)
 
 
@@ -125,6 +135,7 @@ def case_disabled():
         variables = env(deployment(docs, suffix))
         assert variables["LOCAL_AI_DISABLED"]["value"] == "true", suffix
         assert "LOCAL_AI_URL" not in variables and "LOCAL_AI_TOKEN" not in variables, suffix
+    assert alerter_disabled(docs) == "true", "alerter LOCAL_AI_DISABLED differs from the api's"
     assert_boundary(docs)
 
 
@@ -137,6 +148,7 @@ def case_external_url():
         assert variables["LOCAL_AI_DISABLED"]["value"] == "false", suffix
         assert variables["LOCAL_AI_URL"]["value"] == "https://x", suffix
         assert token_ref(docs, suffix)["key"] == "local_ai_token", suffix
+    assert alerter_disabled(docs) == "false", "alerter LOCAL_AI_DISABLED differs from the api's"
     assert_boundary(docs)
 
 

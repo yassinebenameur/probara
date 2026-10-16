@@ -145,7 +145,9 @@ Local AI is on by default in both. Compose runs `local-ai` on loopback port
 so a failed image build never blocks the platform. Helm's `localAI` values
 deploy one `Recreate` replica (1 CPU/2 GiB request, 4 CPU/4 GiB limit), a
 ClusterIP Service and a NetworkPolicy admitting only the API and worker pods
-with no egress, and render `LOCAL_AI_*` into the API and platform worker only.
+with no egress, and render the `LOCAL_AI_*` client env into the API and
+platform worker only; the alerter gets just the `LOCAL_AI_DISABLED` and
+`AI_TRIAGE_ENABLED` kill switches.
 `localAI.externalUrl` replaces the bundled service with an operator-run one;
 `localAI.enabled=false` without it renders `LOCAL_AI_DISABLED=true`. The token
 is the chart credential `local_ai_token`.

@@ -585,7 +585,7 @@ kubectl -n probara get jobs`,
       id: 'helm-values-local-ai',
       title: 'Helm values: local AI',
       intro:
-        'The chart deploys the bundled CPU inference service by default and configures only the API and the platform worker to call it. Scheduler, alerter, status page and location workers never receive `LOCAL_AI_*`.',
+        'The chart deploys the bundled CPU inference service by default and configures only the API and the platform worker to call it. The alerter never calls it and receives only the `LOCAL_AI_DISABLED` and `AI_TRIAGE_ENABLED` kill switches; scheduler, status page and location workers never receive `LOCAL_AI_*`.',
       blocks: [
         {
           type: 'table',
