@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { getAISettings, getIncidentAIAnalysis, labelIncidentAIAnalysis, requestIncidentAIAnalysis } from '@/lib/api';
-import type { AILabel, IncidentAIAnalysis, AISettings } from '@/lib/types';
+import { getIncidentAIAnalysis, labelIncidentAIAnalysis, requestIncidentAIAnalysis } from '@/lib/api';
+import type { AILabel, IncidentAIAnalysis } from '@/lib/types';
+import { useAIAvailability } from '@/lib/useAIAvailability';
 import { useCanWrite, useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
@@ -43,12 +44,8 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
   // useCanWrite reads false while identity loads, so viewer copy waits for it.
   const { loading: userLoading } = useCurrentUser();
   const viewer = !canWrite && !userLoading;
-  const [availability, setAvailability] = useState<AISettings | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void getAISettings().then((s) => { if (!cancelled) setAvailability(s); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [incidentId]);
+  // Refreshed while AI is not ready, so the request button re-enables.
+  const availability = useAIAvailability();
 
   useEffect(() => {
     if (analysis?.status !== 'pending') return;

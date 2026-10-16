@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Check, Sparkles, X } from 'lucide-react';
 
 import Panel from '@/components/ui/Panel';
@@ -11,11 +11,12 @@ import IconButton from '@/components/ui/IconButton';
 import RowMenu, { RowMenuItem } from '@/components/ui/RowMenu';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import { useToast } from '@/components/ui/ToastProvider';
-import { suggestDependencies, addMonitorDependency, getAISettings, labelDependencySuggestion } from '@/lib/api';
+import { suggestDependencies, addMonitorDependency, labelDependencySuggestion } from '@/lib/api';
+import { useAIAvailability } from '@/lib/useAIAvailability';
 import { dependencyLabelRequest, labelErrorMessage } from '@/lib/ai-labels';
 import { pluralize } from '@/lib/format';
 import { aiConfidenceTone } from '@/lib/status-tones';
-import type { AISettings, DependencyLabelCorrection, DependencySuggestion } from '@/lib/types';
+import type { DependencyLabelCorrection, DependencySuggestion } from '@/lib/types';
 
 // Dismiss reasons beyond the default "not a dependency" (the X button). Each
 // is recorded as a rejected training label with that correction.
@@ -40,14 +41,10 @@ export function useAISuggestions(onAccepted?: () => void) {
   const [acceptingKey, setAcceptingKey] = useState<string | null>(null);
 
   // Disables the trigger when AI is off or the local service is down, as
-  // AIRootCausePanel does. Advisory only: the scan's 503 stays authoritative,
-  // so a failed settings load leaves the trigger enabled.
-  const [availability, setAvailability] = useState<AISettings | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void getAISettings().then((s) => { if (!cancelled) setAvailability(s); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  // AIRootCausePanel does, and re-enables it once AI is ready again. Advisory
+  // only: the scan's 503 stays authoritative, so a failed settings load
+  // leaves the trigger enabled.
+  const availability = useAIAvailability();
   const unavailableReason = !availability
     ? null
     : !availability.enabled
