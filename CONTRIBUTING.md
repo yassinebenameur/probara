@@ -48,23 +48,31 @@ affected process, or verify through tests.
 | `worker/` | Check execution for every monitor type; `dial_guard.go` SSRF policy |
 | `alerter/` | Alert evaluation and notification delivery |
 | `status-page/` | Public status pages and their template engine |
-| `shared/` | Cross-service models, config, secrets, queue, AI provider |
+| `shared/` | Cross-service models, config, secrets, queue, local AI evidence/decisions |
+| `ai-service/` | Python CPU inference service for local AI (FastAPI, `POST /v1/decisions`) |
 | `web/` | Next.js operator UI |
 | `website/` | Landing page and documentation site |
 | `helm/monitoring-platform/` | Deployment chart |
 
 ## Building and testing
 
-Most Go services share the root module. The downloadable agent under `agent/`
-is a separate nested module, so verify both when a change crosses that boundary:
+Go is a single module at the repository root:
 
 ```sh
 make lint
 go test ./...
-(cd agent && go test ./...)
 ```
 
 The full `api/` suite takes over two minutes.
+
+The local AI service has its own Python tests. With the hash-locked
+dependencies installed ([docs/local-ai.md](docs/local-ai.md)), from the
+repository root:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=ai-service:ai-service/training \
+  python -m pytest ai-service/tests .github/workflows/scripts -q
+```
 
 Use the repository's Node.js LTS selection and the committed lockfiles for both
 frontends. From `web/`, then `website/`, run:

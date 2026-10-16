@@ -464,8 +464,10 @@ export async function createIncident(data: CreateIncidentRequest): Promise<Incid
   return apiRequest<IncidentDetail>('POST', '/v1/incidents', data);
 }
 
-// requestIncidentAIAnalysis enqueues an AI root cause analysis and returns the
-// pending record. Throws on 503 when the LLM provider is not configured.
+// requestIncidentAIAnalysis enqueues a local AI root cause analysis and returns
+// the pending record. Throws on 503 when local AI is disabled for the workspace
+// or installation, or when the analysis queue is not configured or the enqueue
+// fails.
 export async function requestIncidentAIAnalysis(id: string): Promise<IncidentAIAnalysis> {
   return apiRequest<IncidentAIAnalysis>('POST', `/v1/incidents/${id}/ai-analysis`);
 }
@@ -495,7 +497,7 @@ export async function exportAILabels(filter: AILabelExportFilter = {}): Promise<
   };
 }
 
-// --- AI settings (per-tenant LLM config) ---
+// --- AI settings (workspace local-AI switch + automatic triage) ---
 
 export async function getAISettings(): Promise<AISettings> {
   return apiRequest<AISettings>('GET', '/v1/ai-settings');
