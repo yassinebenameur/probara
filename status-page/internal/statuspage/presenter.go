@@ -76,6 +76,14 @@ func extractConfigString(configJSON []byte, key string) string {
 	return value
 }
 
+// extractSIPTarget is a SIP monitor's public target: its signalling server
+// (host, with the port the worker dials). An INVITE test call deliberately
+// shows that host too, never call.number or call.target_uri: monitor.URL is
+// public on every page whatever show_monitor_url says (the detail line, the
+// data-search text, a custom template's .URL), so a dialled number would leak
+// to every visitor. This departs from the design's "number@domain" on
+// purpose; the operator UI's monitorTarget, which only signed-in users see,
+// differs.
 func extractSIPTarget(configJSON []byte) string {
 	var config map[string]interface{}
 	if err := json.Unmarshal(configJSON, &config); err != nil {
