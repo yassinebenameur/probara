@@ -15,6 +15,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/metricstore"
 	"github.com/yassinebenameur/probara/shared/monitorstate"
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // ErrStatusPageNotFound is returned when a slug or ID resolves to no status
@@ -156,19 +157,6 @@ type MonitorStatus struct {
 	AgentMetrics *AgentMetricsData `json:"-"`
 	// Push-specific metrics (only populated for push monitors - dynamically detected)
 	PushMetrics map[string]interface{} `json:"-"`
-}
-
-type httpMetricsEnvelope struct {
-	HTTP *httpMetrics `json:"http,omitempty"`
-}
-
-type httpMetrics struct {
-	TLS *httpTLSInfo `json:"tls,omitempty"`
-}
-
-type httpTLSInfo struct {
-	NotAfter        string `json:"not_after,omitempty"`
-	DaysUntilExpiry *int   `json:"days_until_expiry,omitempty"`
 }
 
 // AgentMetricsData represents the latest agent metrics for display
@@ -1263,6 +1251,23 @@ type CurrentStatus struct {
 	TLSNotAfter        string
 }
 
+// applyCertificate copies the certificate a check recorded in its
+// metrics_data (an HTTPS or SIP-over-TLS check's) onto the status. The
+// location is shared/tlscert's, the same one the alerter's tls_expiry
+// evaluation reads, so the page and the alert never disagree on it.
+func (cs *CurrentStatus) applyCertificate(metricsJSON []byte) {
+	info := tlscert.Extract(metricsJSON)
+	if info == nil {
+		return
+	}
+	if info.DaysUntilExpiry != nil {
+		cs.TLSDaysUntilExpiry = info.DaysUntilExpiry
+	}
+	if info.NotAfter != "" {
+		cs.TLSNotAfter = info.NotAfter
+	}
+}
+
 // GetMonitorCurrentStatus gets the current status derived from the monitor's persisted state and
 // the latest check result (for display fields). Status is derived from current_state, not the
 // raw result status, for consistency with batchCurrentStatus.
@@ -1313,17 +1318,7 @@ func (s *Service) GetMonitorCurrentStatus(ctx context.Context, monitorID, tenant
 		result.LastLatency = &latencyInt
 	}
 
-	if len(metricsJSON) > 0 {
-		var env httpMetricsEnvelope
-		if err := json.Unmarshal(metricsJSON, &env); err == nil && env.HTTP != nil && env.HTTP.TLS != nil {
-			if env.HTTP.TLS.DaysUntilExpiry != nil {
-				result.TLSDaysUntilExpiry = env.HTTP.TLS.DaysUntilExpiry
-			}
-			if env.HTTP.TLS.NotAfter != "" {
-				result.TLSNotAfter = env.HTTP.TLS.NotAfter
-			}
-		}
-	}
+	result.applyCertificate(metricsJSON)
 
 	return result, nil
 }

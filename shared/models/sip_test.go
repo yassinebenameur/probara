@@ -27,6 +27,9 @@ func TestSIPMonitorConfigValidate(t *testing.T) {
 		{name: "tls server name ip", config: `{"host":"sbc.example.com","transport":"tls","tls_server_name":"192.0.2.10"}`},
 		{name: "tls server name is trimmed like the checker does", config: `{"host":"sip.example.com","tls_server_name":" sbc.example.com "}`},
 		{name: "blank tls server name means default", config: `{"host":"sip.example.com","tls_server_name":"  "}`},
+		{name: "tls min days valid over tls", config: `{"host":"sip.example.com","transport":"tls","tls_min_days_valid":14}`},
+		{name: "tls min days valid zero", config: `{"host":"sip.example.com","transport":"TLS","tls_min_days_valid":0}`},
+		{name: "tls min days valid with skip verify", config: `{"host":"sip.example.com","transport":"tls","tls_skip_verify":true,"tls_min_days_valid":7}`},
 
 		{name: "missing host", config: `{"transport":"udp"}`, errContains: "host is required"},
 		{name: "invalid host", config: `{"host":"sip example.com"}`, errContains: "host must be a valid IP address or hostname"},
@@ -41,6 +44,10 @@ func TestSIPMonitorConfigValidate(t *testing.T) {
 		{name: "blank username with password", config: `{"host":"sip.example.com","username":"  ","password":"secret"}`, errContains: "username and password must be provided together"},
 		{name: "expected status below range", config: `{"host":"sip.example.com","expected_status":42}`, errContains: "expected_status must be between 100 and 699"},
 		{name: "expected status above range", config: `{"host":"sip.example.com","expected_status":700}`, errContains: "expected_status must be between 100 and 699"},
+		{name: "tls min days valid negative", config: `{"host":"sip.example.com","transport":"tls","tls_min_days_valid":-1}`, errContains: "tls_min_days_valid must be 0 or greater"},
+		{name: "tls min days valid over udp", config: `{"host":"sip.example.com","transport":"udp","tls_min_days_valid":14}`, errContains: "tls_min_days_valid requires transport tls"},
+		{name: "tls min days valid over tcp", config: `{"host":"sip.example.com","transport":"tcp","tls_min_days_valid":14}`, errContains: "tls_min_days_valid requires transport tls"},
+		{name: "tls min days valid needs an explicit transport", config: `{"host":"sip.example.com","port":5061,"tls_min_days_valid":14}`, errContains: "set transport tls"},
 		{name: "tls server name invalid", config: `{"host":"sip.example.com","transport":"tls","tls_server_name":"bad name"}`, errContains: "tls_server_name must be a valid hostname or IP address"},
 	}
 

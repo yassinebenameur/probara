@@ -21,6 +21,9 @@ type SIPMonitorConfig struct {
 	ExpectedStatus *int   `json:"expected_status,omitempty"` // Expected final SIP response (default: 200)
 	TLSSkipVerify  bool   `json:"tls_skip_verify,omitempty"` // Skip certificate verification (lab/self-signed)
 	TLSServerName  string `json:"tls_server_name,omitempty"` // SNI/verification name override
+	// TLSMinDaysValid opens a tls_expiry alert when the server certificate
+	// has fewer days left (alerter tls_expiry.go); the check itself passes.
+	TLSMinDaysValid *int `json:"tls_min_days_valid,omitempty"`
 }
 
 // Validate checks the config. The worker calls it too, so it must accept a
@@ -85,6 +88,18 @@ func (c SIPMonitorConfig) Validate() error {
 	// accepted: crypto/tls verifies it against the certificate's IP SANs.
 	if name := strings.TrimSpace(c.TLSServerName); name != "" && !isHostOrIP(name) {
 		return fmt.Errorf("tls_server_name must be a valid hostname or IP address")
+	}
+
+	// The certificate is read from the TLS handshake, so the threshold needs
+	// an explicit TLS transport: on UDP/TCP no certificate is ever seen and
+	// the alert could never fire.
+	if c.TLSMinDaysValid != nil {
+		if *c.TLSMinDaysValid < 0 {
+			return fmt.Errorf("tls_min_days_valid must be 0 or greater")
+		}
+		if !strings.EqualFold(c.Transport, "tls") {
+			return fmt.Errorf("tls_min_days_valid requires transport tls (set transport tls)")
+		}
 	}
 
 	return nil

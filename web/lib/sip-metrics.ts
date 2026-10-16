@@ -1,5 +1,5 @@
-import { formatLatency, pluralize } from './format';
-import type { CheckResult, SIPMetrics, SIPMetricsEnvelope } from './types';
+import { formatDate, formatLatency, pluralize } from './format';
+import type { CheckResult, SIPMetrics, SIPMetricsEnvelope, TLSCertInfo } from './types';
 
 // Facts the monitor detail page's Server panel shows for a SIP monitor, read
 // from the worker's metrics_data.sip envelope (worker sip_metrics.go).
@@ -34,11 +34,40 @@ export function sipResponseLabel(m: SIPMetrics): string {
   return label;
 }
 
-export function sipFacts(m: SIPMetrics): SIPFact[] {
+/**
+ * `expires in 12 days (Nov 1, 2026)`; empty without an expiry. Days come
+ * from the worker's snapshot (whole days, truncated), the same number the
+ * status page shows.
+ */
+export function certificateExpiryLabel(tls: TLSCertInfo): string {
+  const days = tls.days_until_expiry;
+  if (days === undefined) return '';
+  const when = tls.not_after ? ` (${formatDate(tls.not_after)})` : '';
+  if (days < 0) return `expired ${pluralize(-days, 'day')} ago${when}`;
+  return `expires in ${pluralize(days, 'day')}${when}`;
+}
+
+/**
+ * The facts for one envelope. minDaysValid is the monitor's
+ * tls_min_days_valid: a certificate inside it reads as a warning, matching
+ * the tls_expiry alert the alerter opens for it.
+ */
+export function sipFacts(m: SIPMetrics, minDaysValid?: number): SIPFact[] {
   const facts: SIPFact[] = [];
   if (m.server) facts.push({ key: 'server', label: 'Answered by', value: m.server });
   if (m.target?.address) facts.push({ key: 'address', label: 'Address', value: m.target.address });
-  facts.push({ key: 'transport', label: 'Transport', value: m.transport.toUpperCase() });
+  const transport = m.transport.toUpperCase();
+  facts.push({
+    key: 'transport',
+    label: 'Transport',
+    value: m.tls?.version ? `${transport} · ${m.tls.version}` : transport,
+  });
+  const expiry = m.tls ? certificateExpiryLabel(m.tls) : '';
+  if (expiry) {
+    const days = m.tls?.days_until_expiry ?? 0;
+    const warn = days < 0 || (minDaysValid !== undefined && days < minDaysValid);
+    facts.push({ key: 'certificate', label: 'Certificate', value: expiry, tone: warn ? 'warning' : undefined });
+  }
 
   const response = sipResponseLabel(m);
   if (response) facts.push({ key: 'response', label: 'Response', value: `${m.method} ${response}` });

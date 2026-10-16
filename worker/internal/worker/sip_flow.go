@@ -61,6 +61,15 @@ type sipFlow struct {
 	err       error // set before inbound is closed
 }
 
+// sipTLSServerName is the TLS identity of a SIP server: SNI, verification
+// name and the server_name recorded with the certificate.
+func sipTLSServerName(config *models.SIPMonitorConfig) string {
+	if name := strings.TrimSpace(config.TLSServerName); name != "" {
+		return name
+	}
+	return config.Host
+}
+
 // dialSIP opens a flow to host:port. The TLS identity is tls_server_name,
 // else the configured host.
 func (c *SIPChecker) dialSIP(ctx context.Context, transport, host string, port int, config *models.SIPMonitorConfig) (*sipFlow, error) {
@@ -85,12 +94,8 @@ func (c *SIPChecker) dialSIP(ctx context.Context, transport, host string, port i
 
 	var tlsState *tls.ConnectionState
 	if transport == "tls" {
-		serverName := strings.TrimSpace(config.TLSServerName)
-		if serverName == "" {
-			serverName = config.Host
-		}
 		tlsConn := tls.Client(conn, &tls.Config{
-			ServerName:         serverName,
+			ServerName:         sipTLSServerName(config),
 			InsecureSkipVerify: config.TLSSkipVerify, //nolint:gosec // explicit user opt-in for lab/self-signed servers
 			MinVersion:         tls.VersionTLS12,
 		})

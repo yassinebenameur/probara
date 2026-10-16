@@ -547,3 +547,19 @@ func TestRenderStatusPage_PushToggleFollowsPushEnabled(t *testing.T) {
 		t.Fatalf("data-push-enabled not set when push is enabled")
 	}
 }
+
+// A SIP-over-TLS monitor carries its certificate expiry to the page view like
+// an HTTPS monitor (the reader is type-agnostic, see applyCertificate).
+func TestBuildStatusPageMonitorView_SIPShowsTLSDays(t *testing.T) {
+	days := 12
+	view := buildStatusPageMonitorView(MonitorStatus{
+		ID:                 "sip-1",
+		Name:               "SBC",
+		MonitorType:        "sip",
+		Status:             "up",
+		TLSDaysUntilExpiry: &days,
+	})
+	if view.TLSDetail != "TLS expires in 12 days" {
+		t.Fatalf("TLSDetail = %q, want %q", view.TLSDetail, "TLS expires in 12 days")
+	}
+}

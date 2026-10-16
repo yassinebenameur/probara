@@ -14,6 +14,7 @@ const stored = {
   expected_status: 200,
   tls_skip_verify: true,
   tls_server_name: 'sip.example.com',
+  tls_min_days_valid: 14,
   future_field: { kept: true },
 } as unknown as SIPMonitorConfig;
 
@@ -28,6 +29,7 @@ function formFrom(overrides: Partial<SipFormFields> = {}): SipFormFields {
     domain: 'example.com',
     tls_skip_verify: true,
     tls_server_name: 'sip.example.com',
+    tls_min_days_valid: '14',
     expected_status: '200',
     ...overrides,
   };
@@ -49,13 +51,25 @@ test('a save keeps tls_server_name and keys the form does not render', () => {
 test('form-owned fields the user cleared are dropped, not resurrected from the loaded config', () => {
   const config = buildSipConfig(
     stored,
-    formFrom({ method: 'options', domain: '', expected_status: '', tls_skip_verify: false, tls_server_name: '' }),
+    formFrom({
+      method: 'options',
+      domain: '',
+      expected_status: '',
+      tls_skip_verify: false,
+      tls_server_name: '',
+      tls_min_days_valid: '',
+    }),
   );
   assert.equal(config.method, undefined);
   assert.equal(config.domain, undefined);
   assert.equal(config.expected_status, undefined);
   assert.equal(config.tls_skip_verify, undefined);
   assert.equal(config.tls_server_name, undefined);
+  assert.equal(config.tls_min_days_valid, undefined);
+});
+
+test('a zero-day certificate-expiry threshold is kept', () => {
+  assert.equal(buildSipConfig(stored, formFrom({ tls_min_days_valid: '0' })).tls_min_days_valid, 0);
 });
 
 test('TLS-only fields are dropped when the transport leaves TLS', () => {
@@ -63,6 +77,7 @@ test('TLS-only fields are dropped when the transport leaves TLS', () => {
   assert.equal(config.transport, 'udp');
   assert.equal(config.tls_skip_verify, undefined);
   assert.equal(config.tls_server_name, undefined);
+  assert.equal(config.tls_min_days_valid, undefined);
 });
 
 test('dropping auth clears a stored password with an empty string', () => {

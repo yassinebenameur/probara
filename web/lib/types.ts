@@ -389,6 +389,8 @@ export interface SIPMonitorConfig {
   expected_status?: number;
   tls_skip_verify?: boolean;
   tls_server_name?: string;
+  // Open a certificate-expiry alert when fewer days remain (transport tls only).
+  tls_min_days_valid?: number;
 }
 
 // Pasted TLS material shared by the database monitor types: CA PEM for
@@ -1864,7 +1866,7 @@ export interface HTTPMetrics {
   final_url?: string;
   redirects?: number;
   timing?: HTTPTimingInfo;
-  tls?: HTTPTLSInfo;
+  tls?: TLSCertInfo;
   assertions_failed?: string[];
   display_values?: HTTPDisplayValue[];
 }
@@ -1930,6 +1932,8 @@ export interface SIPMetrics {
   retransmissions: number;
   stray_messages: number;
   auth?: SIPAuthMetrics;
+  tls?: TLSCertInfo;
+  assertions_failed?: string[];
 }
 
 export interface SIPReasonHeader {
@@ -1967,7 +1971,9 @@ export interface HTTPTimingInfo {
   total_ms?: number;
 }
 
-export interface HTTPTLSInfo {
+// A check's certificate snapshot (Go shared/tlscert Info): http.tls for
+// HTTPS checks, sip.tls for SIP over TLS.
+export interface TLSCertInfo {
   version?: string;
   cipher_suite?: string;
   server_name?: string;
@@ -1982,6 +1988,8 @@ export interface HTTPTLSInfo {
   verified_chains?: number;
   peer_certificates?: number;
 }
+
+export type HTTPTLSInfo = TLSCertInfo;
 
 export interface SyntheticAPIMetricsEnvelope {
   synthetic_api?: SyntheticAPIMetrics;

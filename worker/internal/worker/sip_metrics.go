@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // sipMetricsEnvelope is a SIP check's metrics_data: {"sip": {…}}. It is
@@ -47,6 +49,16 @@ type sipMetrics struct {
 	StrayMessages   int64 `json:"stray_messages"`
 
 	Auth *sipAuthMetrics `json:"auth,omitempty"`
+
+	// TLS is the server certificate of a TLS flow, captured whenever the
+	// handshake completed (tls_skip_verify included). Its location is
+	// registered in shared/tlscert, which the alerter's tls_expiry
+	// evaluation and the status page read through.
+	TLS *tlscert.Info `json:"tls,omitempty"`
+
+	// AssertionsFailed lists the check's own rules that failed it, in the
+	// error message's "name: detail" form.
+	AssertionsFailed []string `json:"assertions_failed,omitempty"`
 }
 
 // sipReasonHeader is the Reason header (RFC 3326) of the final response,
@@ -133,13 +145,16 @@ func newSIPTargetMetrics(host string) *sipTargetMetrics {
 	return &sipTargetMetrics{Host: host, ResolvedVia: via}
 }
 
-// recordFlow copies what the dial learned: the connected address and the
-// transport setup timing.
-func (m *sipMetrics) recordFlow(flow *sipFlow) {
+// recordFlow copies what the dial learned: the connected address, the
+// transport setup timing and, over TLS, the server certificate.
+func (m *sipMetrics) recordFlow(flow *sipFlow, serverName string) {
 	if m.Target != nil && flow.peer != nil {
 		m.Target.Address = flow.peer.String()
 	}
 	m.recordDialTiming(flow.timing)
+	if flow.tlsState != nil {
+		m.TLS = tlscert.FromConnectionState(*flow.tlsState, serverName, time.Now())
+	}
 }
 
 func (m *sipMetrics) recordDialTiming(t sipFlowTiming) {

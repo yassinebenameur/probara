@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import Image from 'next/image';
 import { AlertTriangle, Eraser, Pause, Pencil, Play, RefreshCw, Trash2 } from 'lucide-react';
-import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope } from '@/lib/types';
+import { Monitor, UpdateMonitorRequest, MonitorResultsResponse, CheckResult, MonitorAnalyticsResponse, MonitorAnalyticsRange, DBMetricsEnvelope, MongoDBMetrics, TCPMonitorConfig, TCPMetricsEnvelope, SIPMonitorConfig } from '@/lib/types';
 import { getMonitor, updateMonitor, getMonitorResults, getMonitorAnalytics, deleteMonitor, deleteMonitorHistory, getSyntheticBrowserScreenshotUrl, getTenantSettings, getSlas, runMonitorNow, toggleMonitorEnabled } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import MonitorForm from '@/components/monitors/MonitorForm';
@@ -222,7 +222,8 @@ function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
   }
   if (monitor.type === 'sip') {
     const sip = latestSIPMetrics(results);
-    for (const fact of sip ? sipFacts(sip) : []) {
+    const minDaysValid = (monitor.config as SIPMonitorConfig).tls_min_days_valid;
+    for (const fact of sip ? sipFacts(sip, minDaysValid) : []) {
       rows.push(
         <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
           {fact.copyable ? (

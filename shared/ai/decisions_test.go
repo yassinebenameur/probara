@@ -138,6 +138,29 @@ func TestFullWindowSummaryAndAllowlist(t *testing.T) {
 		t.Fatal("secret escaped sample allowlist")
 	}
 }
+
+// Certificate facts come from wherever shared/tlscert locates the
+// certificate, so a SIP-over-TLS monitor's expired or replaced certificate
+// is evidence like an HTTPS one's.
+func TestSummarizeChecksCertificateFromAnyEnvelope(t *testing.T) {
+	now := time.Now().UTC()
+	expired := now.Add(-time.Hour).Format(time.RFC3339)
+	valid := now.Add(48 * time.Hour).Format(time.RFC3339)
+	sip := func(notAfter, serial string) json.RawMessage {
+		return json.RawMessage(`{"sip":{"method":"OPTIONS","tls":{"not_after":"` + notAfter + `","serial_number":"` + serial + `"}}}`)
+	}
+	e := SummarizeChecks([]CheckContext{
+		{Status: "success", CheckedAt: now.Add(-time.Minute), Metrics: sip(valid, "1")},
+		{Status: "success", CheckedAt: now, Metrics: sip(expired, "2")},
+	})
+	if !e.CertificateExpired || !e.CertificateChanged {
+		t.Fatalf("sip certificate evidence = %+v, want expired and changed", e)
+	}
+	e = SummarizeChecks([]CheckContext{{Status: "success", CheckedAt: now, Metrics: json.RawMessage(`{"http":{"tls":{"not_after":"` + expired + `"}}}`)}})
+	if !e.CertificateExpired {
+		t.Fatalf("http certificate evidence = %+v, want expired", e)
+	}
+}
 func TestDisabledAndCancellation(t *testing.T) {
 	if _, err := NewAnalyzer(Config{Disabled: true}); err != ErrNotConfigured {
 		t.Fatal(err)

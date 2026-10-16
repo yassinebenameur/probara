@@ -11,6 +11,7 @@ export interface SipFormFields {
   domain: string;
   tls_skip_verify: boolean;
   tls_server_name: string;
+  tls_min_days_valid: string;
   expected_status: string;
 }
 
@@ -26,6 +27,7 @@ const FORM_OWNED_KEYS = [
   'domain',
   'tls_skip_verify',
   'tls_server_name',
+  'tls_min_days_valid',
   'expected_status',
 ] as const;
 
@@ -65,6 +67,10 @@ export function buildSipConfig(
   if (form.transport === 'tls') {
     if (form.tls_skip_verify) config.tls_skip_verify = true;
     if (form.tls_server_name.trim()) config.tls_server_name = form.tls_server_name.trim();
+    // The certificate is only seen over TLS; the API rejects the threshold
+    // on any other transport, so switching away drops it.
+    const minDays = parseInt(form.tls_min_days_valid, 10);
+    if (form.tls_min_days_valid.trim() && !isNaN(minDays)) config.tls_min_days_valid = minDays;
   }
 
   if (form.expected_status) {

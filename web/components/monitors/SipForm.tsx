@@ -51,6 +51,8 @@ export default function SipForm({
     domain: editSipConfig?.domain || initialSipConfig?.domain || '',
     tls_skip_verify: editSipConfig?.tls_skip_verify ?? initialSipConfig?.tls_skip_verify ?? false,
     tls_server_name: editSipConfig?.tls_server_name || initialSipConfig?.tls_server_name || '',
+    tls_min_days_valid:
+      (editSipConfig?.tls_min_days_valid ?? initialSipConfig?.tls_min_days_valid)?.toString() ?? '',
     expected_status: editSipConfig?.expected_status?.toString()
       || initialSipConfig?.expected_status?.toString() || '',
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
@@ -82,6 +84,12 @@ export default function SipForm({
     if (formData.port < 1 || formData.port > 65535) newErrors.port = 'Port must be between 1 and 65535';
     if (formData.timeout_seconds >= formData.interval_seconds) {
       newErrors.timeout_seconds = 'Timeout must be less than interval';
+    }
+    if (formData.transport === 'tls' && formData.tls_min_days_valid.trim()) {
+      const days = Number(formData.tls_min_days_valid);
+      if (!Number.isInteger(days) || days < 0) {
+        newErrors.tls_min_days_valid = 'Must be a whole number of days, 0 or more';
+      }
     }
     if ((formData.username.trim() === '') !== (formData.password === '')) {
       newErrors.username = 'Username and password must be provided together';
@@ -215,6 +223,27 @@ export default function SipForm({
                     className="input font-mono"
                   />
                   <FieldHint>Overrides the name used for SNI and certificate verification. Defaults to the host.</FieldHint>
+                </>
+              )}
+            </FormField>
+            <FormField label="Certificate valid for at least" error={errors.tls_min_days_valid}>
+              {(control) => (
+                <>
+                  <span className="flex items-center gap-2">
+                    <input
+                      {...control}
+                      type="number"
+                      value={formData.tls_min_days_valid}
+                      onChange={(e) => setFormData({ ...formData, tls_min_days_valid: e.target.value })}
+                      placeholder="14"
+                      min={0}
+                      className="input !w-28 tabular-nums"
+                    />
+                    <span className="text-xs text-slate-500">days</span>
+                  </span>
+                  {!errors.tls_min_days_valid && (
+                    <FieldHint>Open a certificate-expiry alert when fewer days remain; the check itself still passes</FieldHint>
+                  )}
                 </>
               )}
             </FormField>

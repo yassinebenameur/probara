@@ -126,6 +126,12 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   `***` all **keep** the stored value (the channel form submits every secret
   input blank on edit), and `null` **clears** it — SchemaForm's "Remove
   stored value", offered only for optional secret fields.
+- **Certificate location in `metrics_data`**: `shared/tlscert` owns the
+  certificate snapshot (`Info`, built by `FromConnectionState`) and where it
+  sits (`MetricsPaths`: `http.tls`, `sip.tls`). The alerter's `tls_expiry`
+  reads through `SQLExpr`, the status page and AI evidence through
+  `Extract`; `TestSQLExprMatchesExtract` pins the pair. A new TLS-capable
+  type adds its path there, never a hard-coded `#> '{x,tls}'`.
 - **Metric identity and display**: `shared/metricstore` owns canonical series
   keys (`name{k=v,…}`, sorted keys), attribute hashing, and the curated
   label/unit table for OTel metrics. Ingest dedup, `host_metric` alert

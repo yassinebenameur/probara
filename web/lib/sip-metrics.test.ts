@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { latestSIPMetrics, sipFacts, sipResponseLabel } from './sip-metrics';
+import { certificateExpiryLabel, latestSIPMetrics, sipFacts, sipResponseLabel } from './sip-metrics';
+import { formatDate } from './format';
 import type { CheckResult, SIPMetrics } from './types';
 
 const base: SIPMetrics = {
@@ -80,4 +81,24 @@ test('sipFacts on a check that never got an answer', () => {
       ['Auth', '401 challenge, not answered'],
     ]
   );
+});
+
+test('sipFacts shows the TLS version and the certificate expiry', () => {
+  const tls = { version: 'TLS 1.3', not_after: '2026-10-28T00:00:00Z', days_until_expiry: 12 };
+  const facts = sipFacts({ ...base, transport: 'tls', tls });
+  assert.equal(facts.find((f) => f.key === 'transport')?.value, 'TLS · TLS 1.3');
+  const cert = facts.find((f) => f.key === 'certificate');
+  assert.equal(cert?.value, `expires in 12 days (${formatDate('2026-10-28T00:00:00Z')})`);
+  assert.equal(cert?.tone, undefined);
+
+  // Inside the monitor's tls_min_days_valid window it reads as a warning,
+  // like the tls_expiry alert it opens.
+  assert.equal(sipFacts({ ...base, transport: 'tls', tls }, 14).find((f) => f.key === 'certificate')?.tone, 'warning');
+  assert.equal(sipFacts({ ...base, transport: 'tls', tls }, 7).find((f) => f.key === 'certificate')?.tone, undefined);
+});
+
+test('certificateExpiryLabel', () => {
+  assert.equal(certificateExpiryLabel({}), '');
+  assert.equal(certificateExpiryLabel({ days_until_expiry: 1 }), 'expires in 1 day');
+  assert.equal(certificateExpiryLabel({ days_until_expiry: -3 }), 'expired 3 days ago');
 });

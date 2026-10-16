@@ -204,3 +204,35 @@ func TestService_BatchUptimeSummary_UsesHourlyRollupsAndBoundedRawScan(t *testin
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+// The status page finds a check's certificate wherever shared/tlscert says it
+// lives: an HTTPS check's http.tls and a SIP-over-TLS check's sip.tls alike.
+func TestCurrentStatusApplyCertificate(t *testing.T) {
+	tests := []struct {
+		name     string
+		metrics  string
+		wantDays *int
+		wantNot  string
+	}{
+		{name: "http", metrics: `{"http":{"tls":{"not_after":"2027-01-01T00:00:00Z","days_until_expiry":30}}}`, wantDays: intPtr(30), wantNot: "2027-01-01T00:00:00Z"},
+		{name: "sip", metrics: `{"sip":{"method":"OPTIONS","transport":"tls","tls":{"not_after":"2027-02-01T00:00:00Z","days_until_expiry":12}}}`, wantDays: intPtr(12), wantNot: "2027-02-01T00:00:00Z"},
+		{name: "sip without tls", metrics: `{"sip":{"method":"OPTIONS","transport":"udp"}}`},
+		{name: "no metrics", metrics: ``},
+		{name: "garbage", metrics: `{"http":"tls"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := &CurrentStatus{}
+			cs.applyCertificate([]byte(tt.metrics))
+			if (cs.TLSDaysUntilExpiry == nil) != (tt.wantDays == nil) ||
+				(cs.TLSDaysUntilExpiry != nil && *cs.TLSDaysUntilExpiry != *tt.wantDays) {
+				t.Errorf("TLSDaysUntilExpiry = %v, want %v", cs.TLSDaysUntilExpiry, tt.wantDays)
+			}
+			if cs.TLSNotAfter != tt.wantNot {
+				t.Errorf("TLSNotAfter = %q, want %q", cs.TLSNotAfter, tt.wantNot)
+			}
+		})
+	}
+}
+
+func intPtr(n int) *int { return &n }

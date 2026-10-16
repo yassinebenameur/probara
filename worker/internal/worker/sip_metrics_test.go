@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // decodeSIPMetrics unmarshals a result's metrics_data twice: as the typed
@@ -346,5 +349,90 @@ func TestSIPMetricsString(t *testing.T) {
 	}
 	if trimmed := strings.TrimSuffix(got, "…"); !strings.HasPrefix(long, trimmed) || len(trimmed)%2 != 0 {
 		t.Errorf("truncation split a rune: %q", trimmed)
+	}
+}
+
+// A TLS flow records its server certificate under sip.tls, where
+// shared/tlscert (and so the alerter and the status page) finds it. It is
+// captured under tls_skip_verify too.
+func TestSIPMetrics_TLSCertificate(t *testing.T) {
+	host, port := startFakeTLSSIPServer(t, time.Now().Add(10*24*time.Hour))
+
+	result := runSIPCheck(t, map[string]interface{}{
+		"host": host, "port": port, "transport": "tls", "tls_skip_verify": true,
+		"tls_server_name": "sbc.example.com", "tls_min_days_valid": 30,
+	})
+	// Inside the window the check still passes: the tls_expiry alert fires
+	// instead.
+	if result.Status != "success" {
+		t.Fatalf("Status = %q (%v), want success", result.Status, result.ErrorMessage)
+	}
+	m, raw := decodeSIPMetrics(t, result)
+	if m.TLS == nil || m.TLS.DaysUntilExpiry == nil {
+		t.Fatalf("tls = %+v, want certificate info", m.TLS)
+	}
+	if days := *m.TLS.DaysUntilExpiry; days != 9 && days != 10 {
+		t.Errorf("days_until_expiry = %d, want 9 or 10", days)
+	}
+	if m.TLS.ServerName != "sbc.example.com" || m.TLS.NotAfter == "" || m.TLS.PeerCertificates != 1 {
+		t.Errorf("tls = %+v, want the configured server name, not_after and one peer certificate", m.TLS)
+	}
+	if len(m.AssertionsFailed) != 0 {
+		t.Errorf("assertions_failed = %v, want none", m.AssertionsFailed)
+	}
+	if info := tlscert.Extract(result.MetricsData); info == nil || info.NotAfter != m.TLS.NotAfter {
+		t.Errorf("tlscert.Extract = %+v, want the sip.tls certificate", info)
+	}
+	requireSIPMetricsKeys(t, raw, "tls")
+
+	// Plain transports carry no certificate.
+	udpHost, udpPort := startFakeUDPSIPServer(t, func(request string) []string {
+		return []string{sipReply(request, 200, "OK")}
+	})
+	udp := runSIPCheck(t, map[string]interface{}{"host": udpHost, "port": udpPort, "transport": "udp"})
+	if m, _ := decodeSIPMetrics(t, udp); m.TLS != nil {
+		t.Errorf("udp tls = %+v, want none", m.TLS)
+	}
+}
+
+// tls_min_days_valid on a check that got an answer but no certificate fails
+// it: the threshold could never be evaluated. Validation requires transport
+// tls, so a real flow always has one; the rule is pinned directly.
+func TestApplySIPCertificateRule(t *testing.T) {
+	days := 14
+	withRule := &models.SIPMonitorConfig{Host: "sip.example.com", Transport: "tls", TLSMinDaysValid: &days}
+	status := 200
+
+	m := &sipMetrics{}
+	got := applySIPCertificateRule(withRule, m, CheckResult{Status: "success", HTTPStatus: &status})
+	if got.Status != "failure" || got.ErrorMessage == nil || *got.ErrorMessage != "tls: missing certificate info" {
+		t.Fatalf("no certificate = %q (%v), want failure tls: missing certificate info", got.Status, got.ErrorMessage)
+	}
+	if len(m.AssertionsFailed) != 1 || m.AssertionsFailed[0] != "tls: missing certificate info" {
+		t.Errorf("assertions_failed = %v", m.AssertionsFailed)
+	}
+
+	prior := "unexpected SIP status: got 503, expected 200"
+	got = applySIPCertificateRule(withRule, &sipMetrics{}, CheckResult{Status: "failure", ErrorMessage: &prior})
+	if got.Status != "failure" || *got.ErrorMessage != prior+"; tls: missing certificate info" {
+		t.Errorf("failure without certificate = %q", *got.ErrorMessage)
+	}
+
+	// An error result already explains why nothing was captured.
+	errMsg := "tls: tls handshake: x509: certificate has expired"
+	got = applySIPCertificateRule(withRule, &sipMetrics{}, CheckResult{Status: "error", ErrorMessage: &errMsg})
+	if got.Status != "error" || *got.ErrorMessage != errMsg {
+		t.Errorf("error result changed to %q (%s)", got.Status, *got.ErrorMessage)
+	}
+
+	// A certificate inside the window, or no rule at all, leaves success.
+	left := 3
+	got = applySIPCertificateRule(withRule, &sipMetrics{TLS: &tlscert.Info{DaysUntilExpiry: &left}}, CheckResult{Status: "success"})
+	if got.Status != "success" {
+		t.Errorf("certificate inside the window = %q, want success", got.Status)
+	}
+	got = applySIPCertificateRule(&models.SIPMonitorConfig{Host: "sip.example.com"}, &sipMetrics{}, CheckResult{Status: "success"})
+	if got.Status != "success" {
+		t.Errorf("no rule = %q, want success", got.Status)
 	}
 }

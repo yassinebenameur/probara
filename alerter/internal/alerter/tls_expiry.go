@@ -13,6 +13,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/maintenance"
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // tlsExpiryConfig is the effective TLS-expiry threshold for one monitor,
@@ -25,6 +26,7 @@ type tlsExpiryConfig struct {
 }
 
 // evaluateTLSExpiry compares each monitor's latest recorded certificate expiry
+// (an HTTPS or SIP-over-TLS check's, located through shared/tlscert)
 // against its tls_min_days_valid threshold and opens or resolves a tls_expiry
 // alert. Like latency anomalies and host metrics, this is orthogonal to the
 // availability state machine: a healthy endpoint with an aging certificate
@@ -143,18 +145,22 @@ func (a *Alerter) loadLatestCertExpiries(ctx context.Context, monitorIDs []uuid.
 	if len(monitorIDs) == 0 {
 		return result, nil
 	}
+	// Where the certificate sits in metrics_data ({http,tls}, {sip,tls}, …)
+	// is shared/tlscert's to say; the status page reads the same location
+	// through tlscert.Extract (TestSQLExprMatchesExtract pins the pair).
+	certExpr := tlscert.SQLExpr("metrics_data")
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT m.id,
-			cr.metrics_data #>> '{http,tls,not_after}',
-			cr.metrics_data #>> '{http,tls,days_until_expiry}'
+			cr.tls #>> '{not_after}',
+			cr.tls #>> '{days_until_expiry}'
 		FROM unnest($1::uuid[]) AS m(id)
 		JOIN LATERAL (
-			SELECT metrics_data
+			SELECT `+certExpr+` AS tls
 			FROM check_results
 			WHERE monitor_id = m.id
 			  AND result_source = 'monitor'
 			  AND created_at > NOW() - INTERVAL '24 hours'
-			  AND metrics_data #> '{http,tls}' IS NOT NULL
+			  AND `+certExpr+` IS NOT NULL
 			ORDER BY created_at DESC
 			LIMIT 1
 		) cr ON TRUE

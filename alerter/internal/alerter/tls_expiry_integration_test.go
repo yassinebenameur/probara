@@ -15,17 +15,23 @@ import (
 // insertHTTPMonitor inserts an enabled http monitor with the given config JSON.
 func insertHTTPMonitor(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID uuid.UUID, name, configJSON string) uuid.UUID {
 	t.Helper()
+	return insertTLSMonitor(ctx, t, dbClient, tenantID, "http", name, configJSON)
+}
+
+// insertTLSMonitor inserts an enabled monitor of the given type.
+func insertTLSMonitor(ctx context.Context, t *testing.T, dbClient *shareddb.Client, tenantID uuid.UUID, monitorType, name, configJSON string) uuid.UUID {
+	t.Helper()
 	id := uuid.New()
 	if _, err := dbClient.ExecContext(ctx, `
 		INSERT INTO monitors (
 			id, tenant_id, name, type, config, interval_seconds, timeout_seconds,
 			alert_policy_id, enabled, tags, agent_id, push_token, next_run_at, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, 'http', $4::jsonb, 60, 30,
+			$1, $2, $3, $5, $4::jsonb, 60, 30,
 			NULL, TRUE, ARRAY[]::text[], NULL, NULL, NULL, NOW(), NOW()
 		)
-	`, id, tenantID, name, configJSON); err != nil {
-		t.Fatalf("insert http monitor: %v", err)
+	`, id, tenantID, name, configJSON, monitorType); err != nil {
+		t.Fatalf("insert %s monitor: %v", monitorType, err)
 	}
 	return id
 }
@@ -35,6 +41,14 @@ func insertHTTPMonitor(ctx context.Context, t *testing.T, dbClient *shareddb.Cli
 func tlsMetrics(daysLeft int) string {
 	notAfter := time.Now().UTC().Add(time.Duration(daysLeft)*24*time.Hour + time.Hour)
 	return fmt.Sprintf(`{"http":{"final_url":"https://example.com","tls":{"not_after":%q,"days_until_expiry":%d}}}`,
+		notAfter.Format(time.RFC3339), daysLeft)
+}
+
+// sipTLSMetrics is tlsMetrics for a SIP-over-TLS check: the certificate sits
+// under sip.tls (worker sip_metrics.go), found through shared/tlscert.
+func sipTLSMetrics(daysLeft int) string {
+	notAfter := time.Now().UTC().Add(time.Duration(daysLeft)*24*time.Hour + time.Hour)
+	return fmt.Sprintf(`{"sip":{"method":"OPTIONS","transport":"tls","status_code":200,"tls":{"not_after":%q,"days_until_expiry":%d}}}`,
 		notAfter.Format(time.RFC3339), daysLeft)
 }
 
@@ -177,5 +191,58 @@ func TestEvaluateTLSExpiryUsesFailingResults(t *testing.T) {
 	}
 	if got := countTLSExpiryAlerts(ctx, t, dbClient, monitorID, "active"); got != 1 {
 		t.Fatalf("active tls_expiry alert count = %d, want 1", got)
+	}
+}
+
+// A SIP-over-TLS monitor's certificate (metrics_data.sip.tls) opens and then
+// resolves a tls_expiry alert exactly like an HTTPS one.
+func TestEvaluateTLSExpirySIPOverTLS(t *testing.T) {
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "alerter")
+	monitorID := insertTLSMonitor(ctx, t, dbClient, tenantID, "sip", "sbc",
+		`{"host":"sbc.example.com","port":5061,"transport":"tls","tls_min_days_valid":14}`)
+
+	now := time.Now().UTC()
+	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-10*time.Second), sipTLSMetrics(6))
+
+	alerter := newHostMetricAlerter(dbClient)
+	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
+		t.Fatalf("evaluateTLSExpiry(open) error = %v", err)
+	}
+	if got := countTLSExpiryAlerts(ctx, t, dbClient, monitorID, "active"); got != 1 {
+		t.Fatalf("active tls_expiry alert count = %d, want 1", got)
+	}
+	var lastError string
+	if err := dbClient.QueryRowContext(ctx, `
+		SELECT last_error FROM alerts WHERE monitor_id = $1 AND kind = 'tls_expiry' AND status = 'active'
+	`, monitorID).Scan(&lastError); err != nil {
+		t.Fatalf("read tls expiry alert: %v", err)
+	}
+	if lastError != "tls: expires in 6d (< 14d)" {
+		t.Errorf("last_error = %q, want %q", lastError, "tls: expires in 6d (< 14d)")
+	}
+
+	// A newer plain-SIP row without a certificate does not hide the latest
+	// one that has it; the renewed certificate then resolves the alert.
+	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-5*time.Second), `{"sip":{"method":"OPTIONS","transport":"tls"}}`)
+	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
+		t.Fatalf("evaluateTLSExpiry(no cert row) error = %v", err)
+	}
+	if got := countTLSExpiryAlerts(ctx, t, dbClient, monitorID, "active"); got != 1 {
+		t.Fatalf("active tls_expiry alert count after a certificate-less row = %d, want 1", got)
+	}
+
+	insertAgentMetricsResult(ctx, t, dbClient, tenantID, monitorID, now.Add(-1*time.Second), sipTLSMetrics(80))
+	if err := alerter.evaluateTLSExpiry(ctx); err != nil {
+		t.Fatalf("evaluateTLSExpiry(renewed) error = %v", err)
+	}
+	if got := countTLSExpiryAlerts(ctx, t, dbClient, monitorID, "active"); got != 0 {
+		t.Fatalf("active tls_expiry alert count after renewal = %d, want 0", got)
+	}
+	if got := countTLSExpiryAlerts(ctx, t, dbClient, monitorID, "resolved"); got != 1 {
+		t.Fatalf("resolved tls_expiry alert count after renewal = %d, want 1", got)
 	}
 }

@@ -3,7 +3,6 @@ package statuspage
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -272,17 +271,7 @@ func (s *Service) batchCurrentStatus(ctx context.Context, monitorIDs []uuid.UUID
 			v := int(latencyMS.Int64)
 			cs.LastLatency = &v
 		}
-		if len(metricsJSON) > 0 {
-			var env httpMetricsEnvelope
-			if err := json.Unmarshal(metricsJSON, &env); err == nil && env.HTTP != nil && env.HTTP.TLS != nil {
-				if env.HTTP.TLS.DaysUntilExpiry != nil {
-					cs.TLSDaysUntilExpiry = env.HTTP.TLS.DaysUntilExpiry
-				}
-				if env.HTTP.TLS.NotAfter != "" {
-					cs.TLSNotAfter = env.HTTP.TLS.NotAfter
-				}
-			}
-		}
+		cs.applyCertificate(metricsJSON)
 		result[monitorID] = cs
 	}
 	if err := rows.Err(); err != nil {

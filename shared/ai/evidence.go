@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/tlscert"
 )
 
 // MonitorEvidence is the entire allowlist sent for an RCA decision. Raw config,
@@ -107,10 +109,6 @@ func SummarizeChecks(checks []CheckContext) MonitorEvidence {
 					TLSMS     int `json:"tls_handshake_ms"`
 					TTFBMS    int `json:"ttfb_ms"`
 				} `json:"timing"`
-				TLS struct {
-					NotAfter string `json:"not_after"`
-					Serial   string `json:"serial_number"`
-				} `json:"tls"`
 			} `json:"http"`
 		}
 		if len(c.Metrics) <= 64*1024 && json.Unmarshal(c.Metrics, &m) == nil {
@@ -118,14 +116,18 @@ func SummarizeChecks(checks []CheckContext) MonitorEvidence {
 			e.MaxConnectMS = max(e.MaxConnectMS, m.HTTP.Timing.ConnectMS)
 			e.MaxTLSMS = max(e.MaxTLSMS, m.HTTP.Timing.TLSMS)
 			e.MaxTTFBMS = max(e.MaxTTFBMS, m.HTTP.Timing.TTFBMS)
-			if end, err := time.Parse(time.RFC3339, m.HTTP.TLS.NotAfter); err == nil && !end.After(c.CheckedAt) {
-				e.CertificateExpired = true
-			}
-			if m.HTTP.TLS.Serial != "" {
-				if serial != "" && serial != m.HTTP.TLS.Serial {
-					e.CertificateChanged = true
+			// The certificate sits wherever shared/tlscert says (an HTTPS
+			// or SIP-over-TLS check's); only its expiry and serial are kept.
+			if cert := tlscert.Extract(c.Metrics); cert != nil {
+				if end, err := time.Parse(time.RFC3339, cert.NotAfter); err == nil && !end.After(c.CheckedAt) {
+					e.CertificateExpired = true
 				}
-				serial = m.HTTP.TLS.Serial
+				if cert.SerialNumber != "" {
+					if serial != "" && serial != cert.SerialNumber {
+						e.CertificateChanged = true
+					}
+					serial = cert.SerialNumber
+				}
 			}
 		}
 	}

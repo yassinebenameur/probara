@@ -113,6 +113,7 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		if endpoint != nil {
 			metrics.recordEndpoint(endpoint)
 		}
+		result = applySIPCertificateRule(&config, metrics, result)
 		result.LatencyMs = &latencyMs
 		result.MetricsData = metrics.marshal(latencyMs)
 		return result
@@ -133,7 +134,7 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		}
 		return errorResult(err)
 	}
-	metrics.recordFlow(flow)
+	metrics.recordFlow(flow, sipTLSServerName(&config))
 	endpoint = newSIPEndpoint(flow)
 	defer endpoint.Close()
 
@@ -251,6 +252,31 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		Status:     "success",
 		HTTPStatus: &resp.StatusCode,
 	})
+}
+
+// applySIPCertificateRule enforces tls_min_days_valid's one check-side rule.
+// A certificate inside the window does NOT fail the check: the alerter reads
+// the recorded expiry (shared/tlscert) and opens a tls_expiry alert, so a
+// healthy server with an aging certificate stays up. Only a check that got
+// an answer without a certificate to report fails, since the threshold could
+// never be evaluated. An "error" result (dial, handshake, timeout) already
+// says why nothing was captured and is left alone.
+func applySIPCertificateRule(config *models.SIPMonitorConfig, metrics *sipMetrics, result CheckResult) CheckResult {
+	if config.TLSMinDaysValid == nil || result.Status == "error" {
+		return result
+	}
+	if metrics.TLS != nil && metrics.TLS.DaysUntilExpiry != nil {
+		return result
+	}
+	const assertion = "tls: missing certificate info"
+	metrics.AssertionsFailed = append(metrics.AssertionsFailed, assertion)
+	msg := assertion
+	if result.ErrorMessage != nil && *result.ErrorMessage != "" {
+		msg = *result.ErrorMessage + "; " + assertion
+	}
+	result.Status = "failure"
+	result.ErrorMessage = &msg
+	return result
 }
 
 func resolveSIPTargetHost(host string) string {
