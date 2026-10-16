@@ -154,8 +154,12 @@ fi
 # .dev-local-ai-token next to .dev-secrets.key, and exported so both the
 # container (Compose interpolation) and the api/worker processes (inherited
 # env) agree on it. LOCAL_AI_DISABLED=true skips the container and turns the
-# feature off in api/worker. A failed start (for example an image build without
-# the model weights) is logged and does not block the platform.
+# feature off in api/worker. The token and sizing are exported here, before
+# the api and worker start; the container itself starts after them, in the
+# background (start_local_ai below): a first run with no pullable image builds
+# it from source for many minutes, and the clients already treat a model that
+# is not up yet as unavailable. A failed start is logged and never blocks the
+# platform.
 if [[ "${LOCAL_AI_DISABLED:-false}" != "true" ]]; then
   AI_TOKEN_FILE="$ROOT_DIR/.dev-local-ai-token"
   if [[ -z "${LOCAL_AI_TOKEN:-}" ]]; then
@@ -175,11 +179,26 @@ if [[ "${LOCAL_AI_DISABLED:-false}" != "true" ]]; then
   ai_threads="${LOCAL_AI_THREADS:-$ai_cpus}"
   [[ -n "${LOCAL_AI_THREADS:-}" || "$ai_threads" -le 4 ]] || ai_threads=4
   export LOCAL_AI_CPUS="$ai_cpus" LOCAL_AI_THREADS="$ai_threads"
-  log "Starting local AI container (docker compose service local-ai)"
-  if ! (cd "$ROOT_DIR" && docker compose up -d local-ai) >>"$STARTUP_LOG" 2>&1; then
-    log "WARNING: local AI container failed to start; AI analysis will report the model unavailable. See $STARTUP_LOG, or set LOCAL_AI_DISABLED=true."
-  fi
 fi
+
+# Pull or build and start the local-ai container. Without a local or pullable
+# image Compose builds from ai-service/, which needs the Git LFS head weights:
+# a pointer file would fail only after torch and the ~650 MB base downloaded,
+# so that case is refused up front (pull only, no build).
+start_local_ai() {
+  local model head image
+  model="$(awk -F= '/^ARG MODEL_VERSION=/ { print $2; exit }' "$ROOT_DIR/ai-service/Dockerfile")"
+  head="$ROOT_DIR/ai-service/artifacts/${model:-probara-laya-v4}/head.safetensors"
+  image="$(cd "$ROOT_DIR" && docker compose config --images local-ai 2>/dev/null || true)"
+  if ! docker image inspect "$image" >/dev/null 2>&1 && head -c 40 "$head" 2>/dev/null | grep -q '^version https://git-lfs'; then
+    echo "local-ai: $head is a Git LFS pointer, so $image is pulled but never built. To build it: git lfs install && git lfs pull --include 'ai-service/artifacts/*/head.safetensors'"
+    (cd "$ROOT_DIR" && docker compose up -d --no-build local-ai)
+    return
+  fi
+  # An existing image is reused as is, even a stale local build: after an
+  # ai-service/ or MODEL_VERSION change run `docker compose build local-ai`.
+  (cd "$ROOT_DIR" && docker compose up -d local-ai)
+}
 
 start_service api ./api/cmd/api 8080 9090 \
   ADMIN_JWT_SECRET="${ADMIN_JWT_SECRET:-your-secret-key-change-in-production}" \
@@ -225,3 +244,15 @@ start_service alerter ./alerter/cmd/alerter 8084 9094 \
   ALERT_GROUP_MAX_CHILDREN="${ALERT_GROUP_MAX_CHILDREN:-5}"
 
 log "All local Go services started successfully."
+
+if [[ "${LOCAL_AI_DISABLED:-false}" != "true" ]]; then
+  log "Starting local AI container in the background (docker compose service local-ai; progress in $STARTUP_LOG)"
+  (
+    if start_local_ai >>"$STARTUP_LOG" 2>&1; then
+      echo "local-ai: container started" >>"$STARTUP_LOG"
+    else
+      echo "WARNING: local AI container failed to start; AI analysis will report the model unavailable. Set LOCAL_AI_DISABLED=true to skip it." >>"$STARTUP_LOG"
+    fi
+  ) </dev/null &
+  disown 2>/dev/null || true
+fi

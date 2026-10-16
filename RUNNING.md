@@ -30,6 +30,8 @@ This command:
 - starts `postgres` and `nats` with Docker Compose
 - runs database bootstrap and migrations locally
 - starts `api`, `scheduler`, `worker`, `status-page`, and `alerter` with `go run`
+- then starts the `local-ai` container in the background (Docker Compose; the
+  first image build takes several minutes and needs Git LFS, see Requirements)
 - starts the Next.js UI locally with `nvm use --lts`
 
 Local service logs are saved under `/tmp/probara-*.log`, and startup validation logs are written to `/tmp/probara-local-start.log`.
@@ -126,6 +128,7 @@ fewer failing locations show as **Degraded** (amber, no alert).
 
 - Docker & Docker Compose v2
 - Go `1.26.5`
+- Git LFS, to build the local AI image from source: `git lfs install && git lfs pull --include 'ai-service/artifacts/*/head.safetensors'` once after cloning (`LOCAL_AI_DISABLED=true` skips local AI)
 - Node.js via nvm — use the current LTS release selected by `.nvmrc`
 - Make
 - Bash
@@ -143,7 +146,8 @@ All backend services run in Docker containers with health checks and automatic r
 - The `start-all` command automatically uses nvm LTS for the UI
 - All backend services run in Docker containers
 - The UI runs locally using npm/next for hot-reload support
-- `start-all-local` keeps only infrastructure in Docker and runs app services with local Go
+- `start-all-local` keeps Postgres, NATS and the `local-ai` container in Docker and runs app services with local Go
+- A locally built `local-ai` image is reused as is: after an `ai-service/` or `MODEL_VERSION` change, run `docker compose build local-ai` (or `docker compose up -d --build local-ai`)
 - UI logs are saved to `/tmp/probara-ui.log`
 - Local Go service logs are saved to `/tmp/probara-api.log`, `/tmp/probara-scheduler.log`, `/tmp/probara-worker.log`, `/tmp/probara-status-page.log`, and `/tmp/probara-alerter.log`
 - Use `make help` to see all available commands

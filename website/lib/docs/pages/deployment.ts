@@ -67,6 +67,7 @@ export const DEPLOYMENT_PAGE: DocPage = {
           items: [
             'Docker with Compose v2 for PostgreSQL, NATS, migrations, and container workflows.',
             'GNU Make and a Bash-compatible environment for repository scripts. On Windows, use WSL or another environment that can execute the Makefile’s Bash commands.',
+            'Git LFS to build the local AI image from source: run `git lfs install` and `git lfs pull --include \'ai-service/artifacts/*/head.safetensors\'` once after cloning. Not needed when a release image is pulled or with `LOCAL_AI_DISABLED=true`.',
             'Go 1.26.5 for the main monorepo. The local launcher compares the installed major/minor version with the root `go.mod` directive.',
             'Node.js LTS and npm for the frontend. `scripts/start-ui.sh` can use nvm when it is available.',
             'Helm 3 and `kubectl` for Kubernetes deployment.',
@@ -133,7 +134,7 @@ make stop-all-local`,
         {
           type: 'paragraph',
           text:
-            'The target starts PostgreSQL and NATS, bootstraps local database access, validates Go, runs migrations, builds downloadable collector binaries, starts the `local-ai` container, builds and launches each Go service, and starts Next.js on `0.0.0.0:3000`. A local AI container that fails to start is logged and does not block the platform; API and worker then report the model unavailable. `LOCAL_AI_DISABLED=true` skips the container and turns the feature off.',
+            'The target starts PostgreSQL and NATS, bootstraps local database access, validates Go, runs migrations, builds downloadable collector binaries, builds and launches each Go service, starts the `local-ai` container in the background (the first image build takes several minutes; progress in `/tmp/probara-local-start.log`), and starts Next.js on `0.0.0.0:3000`. Until the container is up, or if it fails to start, API and worker report the model unavailable; the platform is never blocked. With no local image and the head weights still a Git LFS pointer, it only tries a pull. A local build is reused as is, so rebuild it with `docker compose build local-ai` after an `ai-service/` change. `LOCAL_AI_DISABLED=true` skips the container and turns the feature off.',
         },
         {
           type: 'definitions',

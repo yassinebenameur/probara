@@ -41,7 +41,13 @@ never receive its URL or token and run checks without it.
   default to min(host CPUs, 4) in the Make targets.
 - **Local processes** (`make start-all-local`): the same container, plus a
   per-checkout token in the gitignored `.dev-local-ai-token`, exported to the
-  container and to the api/worker processes.
+  container and to the api/worker processes. The container starts after the
+  Go services, in the background (progress in `/tmp/probara-local-start.log`);
+  with no local image and the head weights still a Git LFS pointer it only
+  tries a pull, never a build.
+- **Rebuilds**: a local build is tagged as `LOCAL_AI_IMAGE` and reused as is,
+  so after an `ai-service/` or `MODEL_VERSION` change run
+  `docker compose build local-ai` (or `docker compose up -d --build local-ai`).
 - **Helm**: `localAI` values deploy one `Recreate` replica (1 CPU/2 GiB
   request, 4 CPU/4 GiB limit), a ClusterIP Service and a NetworkPolicy that
   admits only the API and worker pods and allows no egress; it is enforced

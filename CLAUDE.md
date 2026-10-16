@@ -524,8 +524,9 @@ or imported groups come back empty. Any other path that creates groups through
 
 ## Local dev environment
 
-- `make start-all-local` is the usual stack: Compose runs only postgres
-  (`probara`/`probara`, :5432) and nats (:4222, monitoring :8222); the
+- `make start-all-local` is the usual stack: Compose runs postgres
+  (`probara`/`probara`, :5432), nats (:4222, monitoring :8222) and local-ai
+  (:8090, below); the
   target applies migrations, builds the collector binaries, then runs the Go
   services as local processes (binaries in `/tmp/probara-bin`, logs in
   `/tmp/probara-<service>.log`) and the UI as `next dev`. HTTP/metrics
@@ -539,8 +540,12 @@ or imported groups come back empty. Any other path that creates groups through
   call `ai-service` at `LOCAL_AI_URL` with `LOCAL_AI_TOKEN` (`shared/config`
   `loadLocalAIConfig`); absent workspace `ai_settings` rows default enabled.
   Both `make start-all-local` and the Compose targets run it as the Compose
-  service `local-ai` on `127.0.0.1:8090`, started separately so a failed
-  image build never blocks the platform; `LOCAL_AI_DISABLED=true` skips it.
+  service `local-ai` on `127.0.0.1:8090`, started after the platform (in the
+  background for `start-all-local`) so a slow or failed image build never
+  blocks it; `LOCAL_AI_DISABLED=true` skips it. Building the image needs the
+  Git LFS head weights (`git lfs pull --include
+  'ai-service/artifacts/*/head.safetensors'`); a local build is reused until
+  `docker compose build local-ai`.
   The local-process stack keeps a per-checkout token in the gitignored
   `.dev-local-ai-token`; plain Compose falls back to a fixed, public
   development token (loopback-only). If the image cannot be pulled or built

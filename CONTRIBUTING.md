@@ -11,13 +11,20 @@ project's [LICENSE](LICENSE) (AGPL-3.0).
 
 - **Go 1.26.5** — use the toolchain declared by both Go modules
 - **Node.js LTS** — see `.nvmrc`
-- **Docker + Docker Compose** — provides Postgres and NATS for local dev
+- **Docker + Docker Compose** — provides Postgres, NATS and the local AI
+  container for local dev
+- **Git LFS** — only to build the local AI image from source (the model head
+  weights are LFS files): `git lfs install && git lfs pull --include 'ai-service/artifacts/*/head.safetensors'` once after cloning. `LOCAL_AI_DISABLED=true`
+  skips local AI entirely
 - **Helm 3** — only if you touch `helm/monitoring-platform/`
 
 ## Getting a local environment
 
-Infrastructure (Postgres, NATS, and an optional dex IdP for OIDC) runs in
-Compose; the application services run as local processes:
+Infrastructure (Postgres, NATS, the local AI container, and an optional dex
+IdP for OIDC) runs in Compose; the application services run as local
+processes. Local AI starts last, in the background (the first image build
+takes several minutes); after an `ai-service/` change, rebuild it with
+`docker compose build local-ai`.
 
 ```sh
 make start-all-local # run api, scheduler, worker, and the web UI locally

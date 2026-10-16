@@ -188,8 +188,8 @@ start-all:
 	@echo "Running database migrations..."
 	docker compose run --rm migrations
 	@echo "Starting application services..."
-	@$(call local_ai,up -d,start)
 	docker compose up -d api scheduler worker status-page alerter
+	@$(call local_ai,up -d,start)
 	@echo "Waiting for services to be healthy..."
 	@sleep 10
 	@echo "Starting UI with nvm LTS..."

@@ -98,7 +98,13 @@ status is `SERVING`.
 ## Quick Start (Local)
 
 Prerequisites: Docker + Docker Compose v2, Go 1.26.5, Node.js LTS via `nvm`,
-Make.
+Make, and [Git LFS](https://git-lfs.com) to build the local AI image from
+source (needed until a release image is pullable; skip it with
+`LOCAL_AI_DISABLED=true`). After cloning, once:
+
+```bash
+git lfs install && git lfs pull --include 'ai-service/artifacts/*/head.safetensors'
+```
 
 One command — infra in Docker, app services in containers, UI via nvm:
 
@@ -115,9 +121,12 @@ make start-all-local
 
 Both bootstrap the database, run migrations, start local AI, and start the
 UI. The local AI image builds only from a release-approved model artifact
-(see [`docs/local-ai.md`](docs/local-ai.md)); if it cannot start, the platform
-runs with AI analysis unavailable, and `LOCAL_AI_DISABLED=true` skips it. Create or
-update an admin user (one-time):
+(see [`docs/local-ai.md`](docs/local-ai.md)); the first build takes several
+minutes (torch and the ~650 MB base model). The platform starts first and
+local AI joins when ready; if it cannot start, the platform runs with AI
+analysis unavailable, and `LOCAL_AI_DISABLED=true` skips it. A local build is
+reused as is: after an `ai-service/` or model change, run
+`docker compose build local-ai`. Create or update an admin user (one-time):
 
 ```bash
 POSTGRES_URL='postgres://probara:probara@localhost:5432/probara?sslmode=disable' \
