@@ -518,7 +518,9 @@ or imported groups come back empty. Any other path that creates groups through
   (`docs/local-ai.md`), `PYTHONDONTWRITEBYTECODE=1
   PYTHONPATH=ai-service:ai-service/training python -m pytest ai-service/tests
   .github/workflows/scripts -q`. Real-base and real-checkpoint tests skip
-  unless `PROBARA_LAYA_BASE` / `LOCAL_AI_ARTIFACT` are set. Never run training,
+  unless `PROBARA_LAYA_BASE` / `LOCAL_AI_ARTIFACT` are set, dataset-backed
+  ones unless `python ai-service/training/generate.py --output
+  ai-service/artifacts/dataset` has run (CI generates it first). Never run training,
   `validate_cpu.py` or the image build casually: they take hours or download
   the ~650 MB base.
 

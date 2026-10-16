@@ -137,8 +137,10 @@ def test_manifest_records_a_fixed_state_format(tmp_path):
         verify_committed(artifact, load_manifest(artifact))
 
 
-def test_committed_corpus_is_rendered_in_the_current_format():
+def test_generated_corpus_is_rendered_in_the_current_format():
+    # artifacts/dataset is gitignored: CI generates it before pytest.
     data = ROOT / "artifacts/dataset"
+    if not data.exists(): pytest.skip("Regenerate controlled dataset first")
     assert json.loads((data / "provenance.json").read_text())["corpus_version"] == "probara-controlled-v3"
     verify_rendering(data, STATE_FORMAT)
     with pytest.raises(ValueError, match="not rendered in evidence state format 1"):
