@@ -254,8 +254,40 @@ func TestSLAService(t *testing.T) {
 		require.NotNil(t, issued.Issued)
 		frozen := *issued.Summary.AvailabilityPct
 
+		// The suspected causes are frozen with it: the "suspected causes"
+		// subtest left B's outage corrected to tls_problem.
+		outageOf := func(r *models.SLAReport) models.SLAReportOutage {
+			t.Helper()
+			for _, o := range r.Outages {
+				if o.MonitorID != nil && *o.MonitorID == b {
+					return o
+				}
+			}
+			t.Fatalf("no outage for monitor %s", b)
+			return models.SLAReportOutage{}
+		}
+		require.NotNil(t, issued.SuspectedCauses)
+		require.Equal(t, "tls_problem", issued.SuspectedCauses.Buckets[0].Key)
+		require.Equal(t, 1, issued.SuspectedCauses.Buckets[0].CorrectedOutageCount)
+		require.Equal(t, "tls_problem", outageOf(issued).CauseKey)
+
 		_, err = svc.IssueReport(ctx, tenantID, serial.ID, "2026-09", Issuer{})
 		require.ErrorIs(t, err, ErrConflict)
+
+		// Relabelling changes the live report, never the issued one.
+		_, err = dbClient.ExecContext(ctx, `
+			UPDATE ai_labels SET verdict = 'confirmed', incident_label = 'dns_failure'
+			WHERE tenant_id = $1 AND subject_type = 'alert_triage'`, tenantID)
+		require.NoError(t, err)
+		relabelled, err := svc.Report(ctx, tenantID, serial.ID, ReportQuery{Period: "2026-09"})
+		require.NoError(t, err)
+		require.Equal(t, "dns_failure", outageOf(relabelled).CauseKey)
+		require.Equal(t, 1, relabelled.SuspectedCauses.Buckets[0].ConfirmedOutageCount)
+		reread, err := svc.GetIssuedReport(ctx, tenantID, issued.Issued.ID)
+		require.NoError(t, err)
+		require.Equal(t, issued.SuspectedCauses, reread.SuspectedCauses)
+		want, got := outageOf(issued), outageOf(reread)
+		require.Equal(t, []string{want.CauseKind, want.CauseKey, want.CauseTitle}, []string{got.CauseKind, got.CauseKey, got.CauseTitle})
 
 		// Wiping history changes the live report, never the issued one.
 		_, err = dbClient.ExecContext(ctx, `DELETE FROM monitor_state_intervals WHERE monitor_id = $1 AND state = 'down'`, b)
@@ -284,6 +316,64 @@ func TestSLAService(t *testing.T) {
 		_, err = svc.GetIssuedReport(ctx, otherTenant, refs[0].ID)
 		require.ErrorIs(t, err, ErrNotFound)
 		require.ErrorIs(t, svc.Delete(ctx, otherTenant, serial.ID), ErrNotFound)
+
+		// Another tenant's triage, label and AI settings rows that point at
+		// this tenant's alerts never reach its causes (CauseJoin's and
+		// ClaimableExpr's tenant predicates). X: an open alert inside the
+		// lookback with no triage of its own, in a workspace with
+		// auto-triage off. Y: a ready triage of its own, no label.
+		_, err = dbClient.ExecContext(ctx, `
+			INSERT INTO ai_settings (tenant_id, enabled, auto_triage_enabled) VALUES ($1, TRUE, FALSE), ($2, TRUE, TRUE)
+			ON CONFLICT (tenant_id) DO UPDATE SET enabled = EXCLUDED.enabled, auto_triage_enabled = EXCLUDED.auto_triage_enabled
+		`, tenantID, otherTenant)
+		require.NoError(t, err)
+		x := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "isolation-x")
+		y := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "isolation-y")
+		alertOf := map[uuid.UUID]uuid.UUID{}
+		for _, m := range []uuid.UUID{x, y} {
+			interval(ctx, t, dbClient, tenantID, m, "up", aug1, at(now.Add(-time.Hour)))
+			interval(ctx, t, dbClient, tenantID, m, "down", now.Add(-time.Hour), at(nov1))
+			id := uuid.New()
+			_, err = dbClient.ExecContext(ctx, `
+				INSERT INTO alerts (id, tenant_id, monitor_id, kind, status, triggered_at, failure_count, created_at, updated_at)
+				VALUES ($1, $2, $3, 'availability', 'active', $4, 3, NOW(), NOW())
+			`, id, tenantID, m, now.Add(-50*time.Minute))
+			require.NoError(t, err)
+			alertOf[m] = id
+		}
+		_, err = dbClient.ExecContext(ctx, `
+			INSERT INTO alert_triage (tenant_id, alert_id, monitor_id, status, hypothesis, confidence, completed_at)
+			VALUES ($1, $2, $3, 'ready', 'dns_failure', 'high', NOW())
+		`, otherTenant, alertOf[x], x)
+		require.NoError(t, err)
+		var yTriage uuid.UUID
+		require.NoError(t, dbClient.QueryRowContext(ctx, `
+			INSERT INTO alert_triage (tenant_id, alert_id, monitor_id, status, hypothesis, confidence, completed_at)
+			VALUES ($1, $2, $3, 'ready', 'dns_failure', 'high', NOW()) RETURNING id
+		`, tenantID, alertOf[y], y).Scan(&yTriage))
+		_, err = dbClient.ExecContext(ctx, `
+			INSERT INTO ai_labels (tenant_id, subject_type, subject_key, subject_id, verdict, incident_label, answers, request, catalogue_version)
+			VALUES ($1, 'alert_triage', $2, $3, 'corrected', 'tls_problem', '{}', '{}', 'test')
+		`, otherTenant, yTriage.String(), yTriage)
+		require.NoError(t, err)
+
+		iso, err := svc.Create(ctx, tenantID, &models.CreateSLARequest{Name: "Isolation", TargetPct: 99.9,
+			MonitorIDs: []string{x.String(), y.String()}})
+		require.NoError(t, err)
+		r, err := svc.Report(ctx, tenantID, iso.ID, ReportQuery{})
+		require.NoError(t, err)
+		require.NoError(t, svc.Delete(ctx, tenantID, iso.ID))
+		causes := map[uuid.UUID]string{}
+		for _, o := range r.Outages {
+			if o.MonitorID != nil {
+				causes[*o.MonitorID] = o.CauseKey
+			}
+		}
+		require.Equal(t, map[uuid.UUID]string{x: models.SLACauseUntriaged, y: "dns_failure"}, causes,
+			"X ignores the foreign triage and the foreign workspace's auto-triage; Y ignores the foreign label")
+		for _, bucket := range r.SuspectedCauses.Buckets {
+			require.Zero(t, bucket.CorrectedOutageCount, bucket.Key)
+		}
 	})
 
 	require.NoError(t, svc.Delete(ctx, tenantID, serial.ID))
