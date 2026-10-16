@@ -9,16 +9,11 @@
 // checks is their average rate) while gauges become point samples. Reuses
 // the metric-store chart internals so the panels match the agent dashboard.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Monitor,
-  MonitorAnalyticsRange,
-  MonitorMetricsSnapshotsResponse,
-  MongoDBMetrics,
-  MongoDBMonitorConfig,
-} from '@/lib/types';
-import { getMonitorMetricsSnapshots } from '@/lib/api';
+import { useMemo } from 'react';
+import { Monitor, MonitorAnalyticsRange, MongoDBMetrics, MongoDBMonitorConfig } from '@/lib/types';
 import { formatBytes } from '@/lib/metrics';
+import { pickSnapshots, snapshotStepMs, type TimedSnapshot } from '@/lib/metric-snapshots';
+import { useMetricsSnapshots } from '@/lib/useMetricsSnapshots';
 import Callout from '@/components/ui/Callout';
 import InfoTip from '@/components/ui/InfoTip';
 import {
@@ -28,13 +23,10 @@ import {
   type ChartRow,
   type ChartSeries,
   type ReferenceThreshold,
-  type TimeRange as ChartTimeRange,
+  chartRangeFor,
 } from './metric-chart';
 
-interface Snapshot {
-  ts: number;
-  m: MongoDBMetrics;
-}
+type Snapshot = TimedSnapshot<MongoDBMetrics>;
 
 interface PanelSpec {
   title: string;
@@ -87,10 +79,6 @@ function gaugePoints(snapshots: Snapshot[], read: (m: MongoDBMetrics) => number 
 
 const last = (points: Point[]): number | undefined => points[points.length - 1]?.[1];
 
-// The chart only distinguishes time-of-day from date axis labels.
-const chartRange = (range: MonitorAnalyticsRange): ChartTimeRange =>
-  range === '1h' || range === '6h' || range === '24h' ? range : '7d';
-
 export default function MongoClusterPanels({
   monitor,
   timeRange,
@@ -102,64 +90,18 @@ export default function MongoClusterPanels({
   latestResultAt?: string;
 }) {
   const config = (monitor.config || {}) as MongoDBMonitorConfig;
-  const [data, setData] = useState<MonitorMetricsSnapshotsResponse | null>(null);
-  const lastFetch = useRef<{ key: string; at: number; bucketMs: number } | null>(null);
-  const fetchSeq = useRef(0);
-
-  useEffect(() => {
-    const key = `${monitor.id}:${timeRange}`;
-    const prev = lastFetch.current;
-    // New checks refetch at most once per bucket: a newer snapshot inside
-    // the current bucket would only replace the last point. Superseded
-    // responses are dropped by sequence, not effect cleanup, so a throttled
-    // re-run never discards the fetch still in flight.
-    if (prev && prev.key === key && Date.now() - prev.at < prev.bucketMs) return;
-    lastFetch.current = { key, at: Date.now(), bucketMs: prev?.key === key ? prev.bucketMs : 0 };
-    const seq = ++fetchSeq.current;
-    getMonitorMetricsSnapshots(monitor.id, { range: timeRange })
-      .then((resp) => {
-        if (seq !== fetchSeq.current) return;
-        lastFetch.current = { key, at: Date.now(), bucketMs: resp.bucket_seconds * 1000 };
-        setData(resp);
-      })
-      .catch((err) => console.error('Failed to load cluster metrics:', err));
-  }, [monitor.id, timeRange, latestResultAt]);
+  const data = useMetricsSnapshots(monitor.id, timeRange, latestResultAt, 'cluster metrics');
 
   const { panels, unauthorized } = useMemo(() => {
-    const snapshots: Snapshot[] = [];
-    for (const s of data?.snapshots ?? []) {
-      const m = (s.metrics_data as { mongodb?: MongoDBMetrics } | null)?.mongodb;
-      if (!m) continue;
-      const ts = Date.parse(s.created_at);
-      if (Number.isFinite(ts)) snapshots.push({ ts, m });
-    }
+    const snapshots: Snapshot[] = pickSnapshots(data, (md) => (md as { mongodb?: MongoDBMetrics } | null)?.mongodb);
 
     const latest = snapshots[snapshots.length - 1]?.m;
     const isUnauthorized = Boolean(latest?.unavailable?.some((u) => u.reason === 'unauthorized'));
 
-    // Snap rows to the observed check cadence (median inter-snapshot delta),
-    // not the configured interval: scheduler ticks land with jitter (e.g.
-    // 35s on a 30s interval), and a too-fine grid turns that jitter into
-    // false line breaks. A genuinely missed check still leaves a >1-bucket
-    // hole, so real gaps keep breaking the line.
-    const deltas = snapshots
-      .slice(1)
-      .map((s, i) => s.ts - snapshots[i].ts)
-      .sort((a, b) => a - b);
-    const medianDelta = deltas[Math.floor(deltas.length / 2)] ?? 0;
-    // The 1.25 pad absorbs fractional drift (35s points on a 35s grid would
-    // still skip a bucket now and then); two checks in one bucket just
-    // overwrite, which is invisible, while a missed check still leaves a hole.
-    // Downsampled, the newest-per-bucket picks sit up to one bucket plus one
-    // check interval apart, so the grid must be that coarse or it breaks the
-    // line between adjacent buckets.
-    const intervalMs = monitor.interval_seconds * 1000;
-    const bucketMs = (data?.bucket_seconds ?? 0) * 1000;
-    const stepMs = Math.max(
-      intervalMs,
-      Math.ceil(medianDelta * 1.25),
-      bucketMs > intervalMs ? bucketMs + intervalMs : 0,
-      1000
+    const stepMs = snapshotStepMs(
+      snapshots.map((snap) => snap.ts),
+      monitor.interval_seconds,
+      data?.bucket_seconds ?? 0
     );
     const specs: PanelSpec[] = [];
 
@@ -361,7 +303,7 @@ export default function MongoClusterPanels({
             <MetricChart
               data={panel.rows}
               series={panel.series}
-              range={chartRange(timeRange)}
+              range={chartRangeFor(timeRange)}
               yDomain={panel.yDomain}
               yTickFormatter={panel.yTickFormatter}
               valueFormatter={panel.valueFormatter}

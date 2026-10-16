@@ -499,6 +499,9 @@ or imported groups come back empty. Any other path that creates groups through
   `useCurrentUser().loading` to clear). Recent
   checks draw as `components/monitors/CheckTrace.tsx`, the one check-history
   trace (monitors list, dashboard) — never a second bar strip.
+  Per-check `metrics_data` charts on the detail page (`MongoClusterPanels`,
+  `SipCallPanels`) fetch through `lib/useMetricsSnapshots.ts` and pick and
+  grid their points with `lib/metric-snapshots.ts`; a new panel does the same.
 - **`/monitors` deep links** (`?status=`, repeatable `?tag=`,
   `?routing=unrouted`, `?sort=name`) are parsed and written only by
   `parseMonitorListParams`/`formatMonitorListParams` in `lib/monitor-list.ts`;

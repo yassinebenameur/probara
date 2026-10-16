@@ -1,4 +1,5 @@
 import { formatDate, formatLatency, pluralize } from './format';
+import type { TimedSnapshot } from './metric-snapshots';
 import type { CheckResult, SIPCallMetrics, SIPMetrics, SIPMetricsEnvelope, TLSCertInfo } from './types';
 
 // Facts the monitor detail page's Server panel shows for a SIP monitor, read
@@ -221,4 +222,69 @@ export function sipAddressLabel(m: SIPMetrics): string {
   if (target.resolved_via === 'naptr') notes.push(`${target.host} via NAPTR→SRV`);
   if (target.failover) notes.push('after failover');
   return notes.length > 0 ? `${target.address} (${notes.join(', ')})` : target.address;
+}
+
+/** metrics_data.sip.call of one snapshot, or undefined (metric-snapshots pickSnapshots). */
+export function pickSIPCall(metricsData: unknown): SIPCallMetrics | undefined {
+  return (metricsData as SIPMetricsEnvelope | null | undefined)?.sip?.call ?? undefined;
+}
+
+type Point = [number, number];
+
+/**
+ * The test-call timing series the detail page charts (SipCallPanels), one
+ * point per check that measured it:
+ * - pdd: post-dial delay from the INVITE that drew it (the authenticated one
+ *   when challenged) to the first 18x, or to the 200 when none came;
+ * - answer: from that INVITE to the 200;
+ * - setupPdd / setup: the same ends measured from the first INVITE, so they
+ *   include the digest round trip. Empty unless some check was challenged
+ *   (they then differ from pdd / answer), so an unchallenged trunk draws one
+ *   line per panel.
+ * Checks that stopped before the event (no ringing, no answer, no response)
+ * add no point, which leaves a gap in the line.
+ */
+export function sipCallSeries(snapshots: TimedSnapshot<SIPCallMetrics>[]): {
+  pdd: Point[];
+  setupPdd: Point[];
+  answer: Point[];
+  setup: Point[];
+} {
+  const pdd: Point[] = [];
+  const setupPdd: Point[] = [];
+  const answer: Point[] = [];
+  const setup: Point[] = [];
+  let pddDiffers = false;
+  let answerDiffers = false;
+  for (const { ts, m } of snapshots) {
+    if (m.pdd_ms !== undefined) {
+      pdd.push([ts, m.pdd_ms]);
+      const viaSetup = m.setup_pdd_ms ?? m.pdd_ms;
+      setupPdd.push([ts, viaSetup]);
+      if (viaSetup !== m.pdd_ms) pddDiffers = true;
+    }
+    if (m.answer_ms !== undefined) {
+      answer.push([ts, m.answer_ms]);
+      const viaSetup = m.setup_ms ?? m.answer_ms;
+      setup.push([ts, viaSetup]);
+      if (viaSetup !== m.answer_ms) answerDiffers = true;
+    }
+  }
+  return {
+    pdd,
+    setupPdd: pddDiffers ? setupPdd : [],
+    answer,
+    setup: answerDiffers ? setup : [],
+  };
+}
+
+/**
+ * The warn / max thresholds of one call timing as chart reference lines
+ * (`warn 3.0 s`, `fail 5.0 s`), in the MongoDB panels' wording.
+ */
+export function sipCallThresholdLines(warnMs?: number, maxMs?: number): { y: number; label: string }[] {
+  const lines: { y: number; label: string }[] = [];
+  if (warnMs !== undefined && warnMs > 0) lines.push({ y: warnMs, label: `warn ${formatLatency(warnMs)}` });
+  if (maxMs !== undefined && maxMs > 0) lines.push({ y: maxMs, label: `fail ${formatLatency(maxMs)}` });
+  return lines;
 }

@@ -8,6 +8,8 @@ import MetricExplorer from './MetricExplorer';
 import type { TimeRange as AgentTimeRange } from './metric-chart';
 import MonitorAnalyticsOverview from './MonitorAnalyticsOverview';
 import MongoClusterPanels from './MongoClusterPanels';
+import SipCallPanels from './SipCallPanels';
+import { isSipCall } from '@/lib/sip-config';
 
 interface MonitorDetailOverviewProps {
   monitor: Monitor;
@@ -94,6 +96,9 @@ export default function MonitorDetailOverview({
       />
       {monitor.type === 'mongodb' && (
         <MongoClusterPanels monitor={monitor} timeRange={timeRange} latestResultAt={results[0]?.created_at} />
+      )}
+      {isSipCall(monitor.type, monitor.config) && (
+        <SipCallPanels monitor={monitor} timeRange={timeRange} latestResultAt={results[0]?.created_at} />
       )}
     </div>
   );

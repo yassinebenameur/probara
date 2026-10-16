@@ -14,8 +14,14 @@ import {
   YAxis,
 } from 'recharts';
 import { formatDate, formatTimestamp } from '@/lib/format';
+import type { MonitorAnalyticsRange } from '@/lib/types';
 
 export type TimeRange = '1h' | '6h' | '24h' | '7d';
+
+// A monitor overview range as a chart range: the chart only distinguishes
+// time-of-day from date axis labels, so every range past a day reads as 7d.
+export const chartRangeFor = (range: MonitorAnalyticsRange): TimeRange =>
+  range === '1h' || range === '6h' || range === '24h' ? range : '7d';
 
 export const RANGE_MS: Record<TimeRange, number> = {
   '1h': 60 * 60 * 1000,

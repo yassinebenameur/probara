@@ -3,9 +3,12 @@ import test from 'node:test';
 import {
   certificateExpiryLabel,
   latestSIPMetrics,
+  pickSIPCall,
   sipAddressLabel,
   sipCallFacts,
+  sipCallSeries,
   sipCallSummary,
+  sipCallThresholdLines,
   sipFacts,
   sipResponseLabel,
   sipTeardownLabel,
@@ -240,4 +243,74 @@ test('sipCallSummary for a Test result', () => {
   assert.equal(sipCallSummary(answeredCall), 'ringing after 850 ms, answered in 4.2 s');
   assert.equal(sipCallSummary({ ...answeredCall, pdd_ms: 4200, pdd_source: '200' }), 'answered in 4.2 s');
   assert.equal(sipCallSummary(undefined), '');
+});
+
+const callMetrics = (over: Partial<SIPCallMetrics>): SIPCallMetrics => ({
+  mode: 'answer',
+  hold_ms: 0,
+  early_media: false,
+  answered: false,
+  forked_answers: 0,
+  route_hops: 0,
+  require_100rel: false,
+  rtp_rx_packets: 0,
+  teardown: 'none',
+  ...over,
+});
+
+test('pickSIPCall reads metrics_data.sip.call only', () => {
+  const call = callMetrics({ pdd_ms: 850 });
+  assert.equal(pickSIPCall({ sip: { ...base, method: 'INVITE', call } }), call);
+  assert.equal(pickSIPCall({ sip: base }), undefined);
+  assert.equal(pickSIPCall({ mongodb: {} }), undefined);
+  assert.equal(pickSIPCall(null), undefined);
+});
+
+test('sipCallSeries plots PDD and answer time, leaving gaps for calls that stopped early', () => {
+  const series = sipCallSeries([
+    { ts: 1, m: callMetrics({ pdd_ms: 850, pdd_source: '180', setup_pdd_ms: 850, answer_ms: 4200, setup_ms: 4200 }) },
+    // Rang, never answered: a PDD point, no answer point.
+    { ts: 2, m: callMetrics({ pdd_ms: 900, pdd_source: '180' }) },
+    // No response at all: no point anywhere.
+    { ts: 3, m: callMetrics({ teardown: 'no_provisional' }) },
+    // Answered without ringing: PDD is the answer time (source 200).
+    { ts: 4, m: callMetrics({ pdd_ms: 300, pdd_source: '200', answer_ms: 300 }) },
+  ]);
+  assert.deepEqual(series.pdd, [
+    [1, 850],
+    [2, 900],
+    [4, 300],
+  ]);
+  assert.deepEqual(series.answer, [
+    [1, 4200],
+    [4, 300],
+  ]);
+  // Never challenged: the from-first-INVITE lines would duplicate, so none.
+  assert.deepEqual(series.setupPdd, []);
+  assert.deepEqual(series.setup, []);
+});
+
+test('sipCallSeries adds the from-first-INVITE lines once a call was challenged', () => {
+  const series = sipCallSeries([
+    { ts: 1, m: callMetrics({ pdd_ms: 800, answer_ms: 4000 }) },
+    { ts: 2, m: callMetrics({ pdd_ms: 850, setup_pdd_ms: 910, answer_ms: 4200, setup_ms: 4260 }) },
+  ]);
+  // Unchallenged checks plot their own value on the setup line.
+  assert.deepEqual(series.setupPdd, [
+    [1, 800],
+    [2, 910],
+  ]);
+  assert.deepEqual(series.setup, [
+    [1, 4000],
+    [2, 4260],
+  ]);
+});
+
+test('sipCallThresholdLines labels warn and fail lines', () => {
+  assert.deepEqual(sipCallThresholdLines(3000, 5000), [
+    { y: 3000, label: 'warn 3.0 s' },
+    { y: 5000, label: 'fail 5.0 s' },
+  ]);
+  assert.deepEqual(sipCallThresholdLines(undefined, 800), [{ y: 800, label: 'fail 800 ms' }]);
+  assert.deepEqual(sipCallThresholdLines(), []);
 });
