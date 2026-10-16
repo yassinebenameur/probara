@@ -386,7 +386,6 @@ type sipCall struct {
 	failover       bool
 	restartTimerA  bool
 	cancelSent     bool
-	noProvisional  bool
 }
 
 // sipCallOutcome is how a call on one flow ended.
@@ -640,7 +639,6 @@ func (s *sipCall) drive(parent, callCtx context.Context) {
 		case s.primary != nil:
 			s.phase = sipCallTerminating
 		case s.phase == sipCallCalling || s.phase == sipCallProceeding:
-			s.noProvisional = !s.proceeding
 			s.phase = sipCallCancelling
 		}
 	}()
@@ -770,7 +768,6 @@ func (s *sipCall) giveUp() {
 		s.phase = sipCallCancelling
 	case sipCallCalling:
 		s.decideError(&sipNoResponseError{method: "INVITE", stray: s.ep.stray.Load(), malformed: s.flow.malformed.Load()})
-		s.noProvisional = true
 		s.phase = sipCallCancelling
 	}
 }
