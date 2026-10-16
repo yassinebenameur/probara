@@ -103,6 +103,12 @@ func newSIPCallTarget(config *models.SIPMonitorConfig) (sipCallTarget, error) {
 		host = strings.TrimSpace(config.Host)
 	}
 	var t sipCallTarget
+	// Validate refuses such a domain for a test call; a payload that
+	// predates the rule must not build a Request-URI or From around it
+	// either (maddr, ?headers or a second name-addr would ride along).
+	if net.ParseIP(host) == nil && !models.IsValidHostname(host) {
+		return t, fmt.Errorf("domain: must be a valid hostname or IP address")
+	}
 	if call.TargetURI != "" {
 		u, err := models.ParseSIPCallURI(call.TargetURI)
 		if err != nil {

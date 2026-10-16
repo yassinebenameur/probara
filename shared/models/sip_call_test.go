@@ -65,6 +65,17 @@ func TestSIPCallConfigValidate(t *testing.T) {
 		{name: "provisional expected status", config: `{` + base + `,"expected_status":180,"call":{"number":"100"}}`, errContains: "final response (200-699)"},
 		{name: "expected status in ring mode", config: `{` + base + `,"expected_status":200,"call":{"number":"100","mode":"ring"}}`, errContains: "expected_status is not allowed in ring mode"},
 		{name: "media reserved", config: `{` + base + `,"call":{"number":"100","media":{"mos":true}}}`, errContains: "media analysis is not available yet"},
+		{name: "domain", config: `{` + base + `,"domain":"carrier.example.com","call":{"number":"100"}}`},
+		{name: "domain ip", config: `{` + base + `,"domain":"203.0.113.9","call":{"number":"100"}}`},
+		{name: "domain with maddr", config: `{` + base + `,"domain":"carrier.example.com;maddr=203.0.113.9","call":{"number":"100"}}`, errContains: "domain must be a valid hostname or IP address"},
+		{name: "domain with headers", config: `{` + base + `,"domain":"carrier.example.com?X=1","call":{"number":"100"}}`, errContains: "domain must be a valid hostname"},
+		{name: "domain with a second name-addr", config: `{` + base + `,"domain":"carrier.example.com>, <sip:x@y","call":{"number":"100"}}`, errContains: "domain must be a valid hostname"},
+		{name: "domain with a space", config: `{` + base + `,"domain":"carrier example.com","call":{"number":"100"}}`, errContains: "domain must be a valid hostname"},
+		{name: "domain with a quote", config: `{` + base + `,"domain":"carrier\".example.com","call":{"number":"100"}}`, errContains: "domain must be a valid hostname"},
+		{name: "domain with a port", config: `{` + base + `,"domain":"carrier.example.com:5060","call":{"number":"100"}}`, errContains: "domain must be a valid hostname"},
+		// OPTIONS/REGISTER keep accepting what they always stored.
+		{name: "options domain is not a host", config: `{"host":"trunk.example.com","domain":"carrier.example.com:5060"}`},
+		{name: "register domain is not a host", config: `{"host":"trunk.example.com","method":"register","domain":"carrier.example.com;x=y"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

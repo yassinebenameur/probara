@@ -1607,3 +1607,14 @@ func TestSIPChecker_InviteFailsOverStalledTLSHandshake(t *testing.T) {
 	}
 	requireAttemptOutcomes(t, env.SIP, "timeout")
 }
+
+// A domain that is not a bare host (a payload that predates the rule) never
+// becomes part of a Request-URI or From.
+func TestNewSIPCallTarget_RefusesBadDomain(t *testing.T) {
+	for _, domain := range []string{"carrier.example.com;maddr=203.0.113.9", "carrier.example.com?X=1", "x>, <sip:y@z"} {
+		config := models.SIPMonitorConfig{Host: "trunk.example.com", Domain: domain, Method: "invite", Call: &models.SIPCallConfig{Number: "100"}}
+		if _, err := newSIPCallTarget(&config); err == nil || !strings.Contains(err.Error(), "domain:") {
+			t.Errorf("domain %q: err = %v, want a domain error", domain, err)
+		}
+	}
+}

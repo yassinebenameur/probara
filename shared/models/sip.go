@@ -240,6 +240,15 @@ func (c SIPMonitorConfig) Validate() error {
 	if !isInvite && c.Call != nil {
 		return fmt.Errorf("call is only allowed when method is invite")
 	}
+	// The number path writes domain into the Request-URI, To and default
+	// From (the worker's newSIPCallTarget); anything but a bare host would
+	// smuggle maddr, ?headers or a second name-addr past the user-part rules
+	// and the destination allow-list, which only sees call.number. Test calls
+	// only: OPTIONS and REGISTER monitors stored with something else (such as
+	// host:port) keep running.
+	if d := strings.TrimSpace(c.Domain); isInvite && d != "" && !isHostOrIP(d) {
+		return fmt.Errorf("domain must be a valid hostname or IP address for a test call (no port, parameters or headers)")
+	}
 
 	// Digest credentials go together: a password without a username (or vice
 	// versa) is a config mistake, not a server-side condition.
