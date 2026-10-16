@@ -20,6 +20,9 @@ import (
 type sipDialError struct {
 	handshake bool // the TCP connection succeeded; the TLS handshake failed
 	err       error
+	// timing is how far transport setup got (the TCP connect time when the
+	// handshake failed), for the check's metrics_data.
+	timing sipFlowTiming
 }
 
 func (e *sipDialError) Error() string {

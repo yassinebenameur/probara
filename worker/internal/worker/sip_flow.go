@@ -110,7 +110,7 @@ func (c *SIPChecker) dialSIP(ctx context.Context, transport, host string, port i
 			// The TCP connection is up: this is a TLS failure (bad,
 			// expired or untrusted certificate, protocol mismatch),
 			// reported as such rather than as a connect error.
-			return nil, &sipDialError{handshake: true, err: err}
+			return nil, &sipDialError{handshake: true, err: err, timing: timing}
 		}
 		timing.TLSHandshake = time.Since(handshakeStart)
 		state := tlsConn.ConnectionState()

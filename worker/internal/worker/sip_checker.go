@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -81,23 +82,6 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	defer cancel()
 	targetHost := resolveSIPTargetHost(config.Host)
 
-	errorResult := func(err error) CheckResult {
-		latencyMs := time.Since(startTime).Milliseconds()
-		errMsg := fmt.Sprintf("%s: %v", classifySIPError(err), err)
-		return CheckResult{
-			Status:       "error",
-			ErrorMessage: &errMsg,
-			LatencyMs:    &latencyMs,
-		}
-	}
-
-	flow, err := c.dialSIP(ctx, transport, targetHost, config.Port, &config)
-	if err != nil {
-		return errorResult(err)
-	}
-	endpoint := newSIPEndpoint(flow)
-	defer endpoint.Close()
-
 	domain := strings.TrimSpace(config.Domain)
 	if domain == "" {
 		domain = config.Host
@@ -114,6 +98,45 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		requestURI = fmt.Sprintf("sip:%s:%d", config.Host, config.Port)
 	}
 
+	// From here on every result carries the metrics_data envelope
+	// (sip_metrics.go): a check that fails to dial still records where it
+	// went and how long transport setup took.
+	metrics := &sipMetrics{
+		Method:     methodUpper,
+		Transport:  transport,
+		RequestURI: requestURI,
+		Target:     newSIPTargetMetrics(targetHost),
+	}
+	var endpoint *sipEndpoint
+	finish := func(result CheckResult) CheckResult {
+		latencyMs := time.Since(startTime).Milliseconds()
+		if endpoint != nil {
+			metrics.recordEndpoint(endpoint)
+		}
+		result.LatencyMs = &latencyMs
+		result.MetricsData = metrics.marshal(latencyMs)
+		return result
+	}
+	errorResult := func(err error) CheckResult {
+		errMsg := fmt.Sprintf("%s: %v", classifySIPError(err), err)
+		return finish(CheckResult{Status: "error", ErrorMessage: &errMsg})
+	}
+	failure := func(resp *sipMessage, errMsg string) CheckResult {
+		return finish(CheckResult{Status: "failure", HTTPStatus: &resp.StatusCode, ErrorMessage: &errMsg})
+	}
+
+	flow, err := c.dialSIP(ctx, transport, targetHost, config.Port, &config)
+	if err != nil {
+		var dialErr *sipDialError
+		if errors.As(err, &dialErr) {
+			metrics.recordDialTiming(dialErr.timing)
+		}
+		return errorResult(err)
+	}
+	metrics.recordFlow(flow)
+	endpoint = newSIPEndpoint(flow)
+	defer endpoint.Close()
+
 	// REGISTER uses the configured AOR and sends no Contact header, making
 	// it a query-style registration check that never creates, refreshes, or
 	// removes bindings. OPTIONS keeps the probe@monitor.local identity.
@@ -124,6 +147,7 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		CallID:     uuid.New().String() + "@monitor.local",
 		CSeq:       1,
 	}
+	metrics.CallID = params.CallID
 	if method == "register" {
 		aor := fmt.Sprintf("<sip:%s@%s>", fromUser, domain)
 		params.From, params.To = aor, aor
@@ -133,10 +157,31 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		params.Contact = flow.contactValue(requestURI)
 		params.Extra = []sipHeader{{Name: "Accept", Value: "application/sdp"}}
 	}
+
+	// firstSent anchors first_response_ms (and auth_ms); each send
+	// re-anchors response_ms on the request it measures.
+	var firstSent, firstResponse time.Time
 	send := func() (*sipMessage, error) {
 		params.Via = flow.viaValue(newSIPBranch())
-		in, err := endpoint.roundTripNonInvite(ctx, buildSIPRequest(params), nil)
-		return in.msg, err
+		sent := time.Now()
+		if firstSent.IsZero() {
+			firstSent = sent
+		}
+		seeResponse := func(at time.Time) {
+			if firstResponse.IsZero() {
+				firstResponse = at
+				metrics.Timing.FirstResponseMs = sipDurationMs(at.Sub(firstSent))
+			}
+		}
+		metrics.clearFinal()
+		in, err := endpoint.roundTripNonInvite(ctx, buildSIPRequest(params), func(p sipInbound) { seeResponse(p.at) })
+		if err != nil {
+			return nil, err
+		}
+		seeResponse(in.at)
+		metrics.Timing.ResponseMs = sipDurationMs(in.at.Sub(sent))
+		metrics.recordFinal(in.msg)
+		return in.msg, nil
 	}
 
 	resp, err := send()
@@ -148,6 +193,9 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 	// is a new transaction (new branch) that keeps the Call-ID and From tag
 	// and increments CSeq, per RFC 3261 §8.1.3.5.
 	authAttempted := false
+	if resp.StatusCode == 401 || resp.StatusCode == 407 {
+		metrics.Auth = &sipAuthMetrics{Challenge: resp.StatusCode}
+	}
 	if (resp.StatusCode == 401 || resp.StatusCode == 407) && config.Username != "" && config.Password != "" {
 		authHeaderName := "Authorization"
 		challengeValue := resp.Get("WWW-Authenticate")
@@ -156,42 +204,29 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 			challengeValue = resp.Get("Proxy-Authenticate")
 		}
 		if challengeValue == "" {
-			latencyMs := time.Since(startTime).Milliseconds()
-			errMsg := fmt.Sprintf("server returned %d without an authentication challenge", resp.StatusCode)
-			return CheckResult{
-				Status:       "failure",
-				HTTPStatus:   &resp.StatusCode,
-				ErrorMessage: &errMsg,
-				LatencyMs:    &latencyMs,
-			}
+			return failure(resp, fmt.Sprintf("server returned %d without an authentication challenge", resp.StatusCode))
 		}
 
 		challenge, parseErr := parseSIPDigestChallenge(challengeValue)
 		var credentials string
 		if parseErr == nil {
+			metrics.Auth.Algorithm = sipDigestAlgorithmName(challenge.Algorithm)
 			credentials, parseErr = buildSIPDigestAuthorization(challenge, config.Username, config.Password, methodUpper, requestURI)
 		}
 		if parseErr != nil {
-			latencyMs := time.Since(startTime).Milliseconds()
-			errMsg := fmt.Sprintf("cannot answer authentication challenge: %v", parseErr)
-			return CheckResult{
-				Status:       "failure",
-				HTTPStatus:   &resp.StatusCode,
-				ErrorMessage: &errMsg,
-				LatencyMs:    &latencyMs,
-			}
+			return failure(resp, fmt.Sprintf("cannot answer authentication challenge: %v", parseErr))
 		}
 
 		params.CSeq = 2
 		params.Extra = append(params.Extra, sipHeader{Name: authHeaderName, Value: credentials})
+		metrics.Auth.Rounds = 1
+		metrics.Auth.AuthMs = sipDurationMs(time.Since(firstSent))
 		resp, err = send()
 		if err != nil {
 			return errorResult(err)
 		}
 		authAttempted = true
 	}
-
-	latencyMs := time.Since(startTime).Milliseconds()
 
 	expectedStatus := 200
 	if config.ExpectedStatus != nil {
@@ -208,19 +243,14 @@ func (c *SIPChecker) Check(ctx context.Context, configRaw json.RawMessage, timeo
 		default:
 			errMsg = fmt.Sprintf("unexpected SIP status: got %d, expected %d", resp.StatusCode, expectedStatus)
 		}
-		return CheckResult{
-			Status:       "failure",
-			HTTPStatus:   &resp.StatusCode, // Reuse HTTPStatus for SIP status
-			ErrorMessage: &errMsg,
-			LatencyMs:    &latencyMs,
-		}
+		// HTTPStatus carries the SIP status.
+		return failure(resp, errMsg)
 	}
 
-	return CheckResult{
+	return finish(CheckResult{
 		Status:     "success",
 		HTTPStatus: &resp.StatusCode,
-		LatencyMs:  &latencyMs,
-	}
+	})
 }
 
 func resolveSIPTargetHost(host string) string {

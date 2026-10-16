@@ -1729,6 +1729,7 @@ export interface CheckResult {
     | GRPCMetricsEnvelope
     | TCPMetricsEnvelope
     | WebSocketMetricsEnvelope
+    | SIPMetricsEnvelope
     | SyntheticAPIMetricsEnvelope
     | SyntheticBrowserMetricsEnvelope;
   location_id?: string; // Absent = default fleet
@@ -1906,6 +1907,56 @@ export interface WebSocketMetrics {
   subprotocol?: string;
   tls_version?: string;
   latency_warn_ms?: number;
+}
+
+// SIP metrics (worker sip_metrics.go). Written on success, failure and error
+// whenever the check dialed; timing anchors are documented on the Go struct.
+export interface SIPMetricsEnvelope {
+  sip?: SIPMetrics;
+}
+
+export interface SIPMetrics {
+  method: string;
+  transport: string;
+  request_uri?: string;
+  call_id?: string;
+  status_code?: number;
+  reason?: string;
+  server?: string;
+  warning?: string;
+  reason_header?: SIPReasonHeader;
+  target?: SIPTargetMetrics;
+  timing: SIPTimingInfo;
+  retransmissions: number;
+  stray_messages: number;
+  auth?: SIPAuthMetrics;
+}
+
+export interface SIPReasonHeader {
+  protocol: string;
+  cause?: number;
+  text?: string;
+}
+
+export interface SIPTargetMetrics {
+  host: string;
+  address?: string;
+  resolved_via: 'literal' | 'a';
+}
+
+export interface SIPTimingInfo {
+  connect_ms?: number;
+  tls_handshake_ms?: number;
+  first_response_ms?: number;
+  response_ms?: number;
+  total_ms: number;
+}
+
+export interface SIPAuthMetrics {
+  challenge: number;
+  algorithm?: string;
+  rounds: number;
+  auth_ms?: number;
 }
 
 export interface HTTPTimingInfo {

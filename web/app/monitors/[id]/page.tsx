@@ -37,6 +37,7 @@ import { formatDateTime, formatDateTimeFull, formatDuration, formatRelativeTime,
 import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
+import { latestSIPMetrics, sipFacts } from '@/lib/sip-metrics';
 
 const TAB_IDS = ['overview', 'history', 'settings', 'json'] as const;
 
@@ -101,7 +102,8 @@ function DetailRow({
 }
 
 // Type-specific facts for the sidebar's Server panel: what the database or
-// broker reported about itself, the TCP TLS version. Interval and timeout
+// broker reported about itself, the TCP TLS version, what the SIP server
+// answered (lib/sip-metrics.ts). Interval and timeout
 // live in the page header. Empty when the type has nothing to add, so the
 // panel is not rendered at all.
 function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
@@ -216,6 +218,20 @@ function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
     const tcpMetrics = latest ? (latest.metrics_data as TCPMetricsEnvelope).tcp : null;
     if (cfg?.use_tls) {
       rows.push(<DetailRow key="tls" label="TLS">{tcpMetrics?.tls_version || 'Enabled'}</DetailRow>);
+    }
+  }
+  if (monitor.type === 'sip') {
+    const sip = latestSIPMetrics(results);
+    for (const fact of sip ? sipFacts(sip) : []) {
+      rows.push(
+        <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
+          {fact.copyable ? (
+            <CopyableTarget value={fact.value} label={fact.label} href={null} size="xs" className="min-w-0 justify-end" />
+          ) : (
+            fact.value
+          )}
+        </DetailRow>
+      );
     }
   }
   return rows;
