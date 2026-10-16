@@ -188,6 +188,38 @@ func TestSIPMetrics_DigestChallenge(t *testing.T) {
 	}
 }
 
+// A challenged REGISTER whose authenticated retry is never answered times
+// out with no final response: the 401 it answered must not read as the
+// check's status (clearFinal), while its arrival and the round stay.
+func TestSIPMetrics_AuthenticatedRetryUnanswered(t *testing.T) {
+	challenge := `WWW-Authenticate: Digest realm="probara.test", nonce="n1", qop="auth", algorithm=SHA-256`
+	host, port := startFakeUDPSIPServer(t, func(request string) []string {
+		if strings.Contains(request, "\r\nAuthorization:") {
+			return nil // silent to the authenticated retry
+		}
+		return []string{sipReply(request, 401, "Unauthorized", challenge, "Server: Registrar/1.0")}
+	})
+	t.Setenv("SIP_LOCALHOST_AS_HOST_GATEWAY", "")
+	raw, _ := json.Marshal(map[string]interface{}{
+		"host": host, "port": port, "transport": "udp", "method": "register",
+		"domain": "probara.test", "username": "agent42", "password": "s3cret",
+	})
+	result := NewSIPChecker(false, nil).Check(context.Background(), raw, 1)
+	requireSIPError(t, result, "timeout")
+
+	m, _ := decodeSIPMetrics(t, result)
+	requireSIPTotalMatchesLatency(t, result, m)
+	if m.StatusCode != 0 || m.Reason != "" || m.Server != "" || m.Timing.ResponseMs != nil {
+		t.Errorf("status %d reason %q server %q response_ms %v, want the challenge cleared", m.StatusCode, m.Reason, m.Server, m.Timing.ResponseMs)
+	}
+	if m.Timing.FirstResponseMs == nil {
+		t.Errorf("first_response_ms = nil, want the 401's arrival kept")
+	}
+	if a := m.Auth; a == nil || a.Challenge != 401 || a.Rounds != 1 || a.AuthMs == nil {
+		t.Fatalf("auth = %+v, want challenge 401, 1 round, auth_ms set", a)
+	}
+}
+
 // A dial that never connects still writes the envelope: where the check
 // went, and no Call-ID since nothing was sent.
 func TestSIPMetrics_ErrorBeforeAnyRequest(t *testing.T) {
