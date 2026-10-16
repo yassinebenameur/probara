@@ -593,7 +593,7 @@ export const ALERTING_PAGE: DocPage = {
       id: "ai-triage",
       title: "Automatic alert triage",
       intro:
-        "With **Automatic alert triage** turned on in [Settings → AI](/docs/administration/#ai-settings), each new open alert gets one suspected cause from the same local model, catalogue and evidence checks as [incident analysis](#ai-analysis). Triage is shown next to the alert, and can optionally be sent once to the channels already paged for it (see suspected-cause follow-ups below). [SLA reports](/docs/slas/#suspected-causes) roll monitor outages up by these suspected causes, operator labels included.",
+        "With **Automatic alert triage** turned on in [Settings → AI](/docs/administration/#ai-settings), each new open alert gets one suspected cause from the same local model, catalogue and evidence checks as [incident analysis](#ai-analysis). Triage is shown next to the alert, and can optionally be sent once to the channels already paged for it (see suspected-cause follow-ups below). [SLA reports](/docs/slas/#suspected-causes) roll monitor outages up by these suspected causes at medium or high confidence, operator labels included (a low-confidence one counts as inconclusive).",
       blocks: [
         {
           type: "callout",

@@ -5,7 +5,10 @@
 //
 // SLA reports read triage only through CauseJoin, CauseColumns,
 // ClaimableExpr and EffectiveCause, which own the label-over-hypothesis rule
-// for the suspected-cause breakdown.
+// for the suspected-cause breakdown. An unlabelled model hypothesis counts as
+// a suspected cause only at medium or high confidence (ai.IsConfident), the
+// same bar as the alerter's suspected-cause follow-up; an operator's label
+// wins whatever the confidence.
 //
 // Triage never changes paging: nothing here feeds routing, suppression,
 // severity or the page events. The alerter's opt-in suspected-cause
@@ -47,10 +50,10 @@ const Columns = `tr.id, tr.status, tr.hypothesis, tr.confidence, tr.summary, tr.
 const CauseJoin = Join + `LEFT JOIN ai_labels trl ON trl.tenant_id = tr.tenant_id
 	AND trl.subject_type = '` + models.AILabelSubjectAlertTriage + `' AND trl.subject_key = tr.id::text `
 
-// CauseColumns are the CauseInput fields, in order: triage status and
-// hypothesis, label verdict and label key. Append ClaimableExpr (or FALSE
-// under a kill switch) for CauseInput.Claimable.
-const CauseColumns = `tr.status, tr.hypothesis, trl.verdict, trl.incident_label`
+// CauseColumns are the CauseInput fields, in order: triage status,
+// hypothesis and confidence, label verdict and label key. Append
+// ClaimableExpr (or FALSE under a kill switch) for CauseInput.Claimable.
+const CauseColumns = `tr.status, tr.hypothesis, tr.confidence, trl.verdict, trl.incident_label`
 
 // ClaimableExpr is true when the alert has no triage row yet but the relay
 // may still claim it: the shared eligibility of worker/internal/airca
@@ -70,6 +73,7 @@ func ClaimableExpr(lookbackParam string) string {
 type CauseInput struct {
 	Status       sql.NullString
 	Hypothesis   sql.NullString
+	Confidence   sql.NullString
 	LabelVerdict sql.NullString
 	LabelKey     sql.NullString
 	Claimable    bool
@@ -77,7 +81,7 @@ type CauseInput struct {
 
 // Dest returns the scan destinations, in CauseColumns + ClaimableExpr order.
 func (in *CauseInput) Dest() []any {
-	return []any{&in.Status, &in.Hypothesis, &in.LabelVerdict, &in.LabelKey, &in.Claimable}
+	return []any{&in.Status, &in.Hypothesis, &in.Confidence, &in.LabelVerdict, &in.LabelKey, &in.Claimable}
 }
 
 // Cause is an alert's effective suspected cause.
@@ -95,10 +99,14 @@ type Cause struct {
 // EffectiveCause applies the label-over-hypothesis rule. A confirmed or
 // corrected label wins over the model: it names a cause (ai.IsNamedCause),
 // or it is inconclusive (insufficient_evidence, or a key the running
-// catalogue cannot title). Otherwise a ready triage gives its hypothesis the
-// same way. A pending triage, or no row yet on a claimable alert, is
-// pending; anything else (no row, failed, skipped) is untriaged. Labels are
-// only ever written on ready triages; a rejected verdict is ignored.
+// catalogue cannot title), whatever the model's confidence. Otherwise a
+// ready triage gives its hypothesis the same way, but only at medium or high
+// confidence (ai.IsConfident, the alerter follow-up's bar); a low-confidence
+// hypothesis is inconclusive, so a report never presents to a customer a
+// cause the platform would not even send its own operators. A pending
+// triage, or no row yet on a claimable alert, is pending; anything else (no
+// row, failed, skipped) is untriaged. Labels are only ever written on ready
+// triages; a rejected verdict is ignored (the model's hypothesis stands).
 func EffectiveCause(in CauseInput) Cause {
 	if v := in.LabelVerdict.String; (v == ai.LabelVerdictConfirmed || v == ai.LabelVerdictCorrected) &&
 		in.LabelKey.Valid && in.LabelKey.String != "" {
@@ -106,6 +114,9 @@ func EffectiveCause(in CauseInput) Cause {
 	}
 	switch {
 	case in.Status.String == models.AlertTriageStatusReady:
+		if !ai.IsConfident(in.Confidence.String) {
+			return Cause{Kind: models.SLACauseInconclusive, Key: models.SLACauseInconclusive}
+		}
 		return namedOrInconclusive(in.Hypothesis.String, "")
 	case in.Status.String == models.AlertTriageStatusPending, !in.Status.Valid && in.Claimable:
 		return Cause{Kind: models.SLACausePending, Key: models.SLACausePending}

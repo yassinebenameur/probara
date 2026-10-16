@@ -458,7 +458,9 @@ func WritePDF(w io.Writer, r *models.SLAReport) error {
 func causesCaveat(c *models.SLAReportSuspectedCauses) string {
 	return "Each monitor outage takes the suspected cause of its monitor's availability alerts that overlapped it, " +
 		"from Probara's local AI triage, or an operator's label on it (* marks causes that include operator-labelled outages). " +
+		"The AI's hypothesis counts as a suspected cause only at medium or high confidence; an operator's label counts whatever the confidence. " +
 		"Suspected causes are observed symptoms, not confirmed root causes. " +
+		"Inconclusive: the triage found no supported cause, named one only at low confidence, or an operator labelled it insufficient evidence. " +
 		"Not triaged: the alert was never triaged, for example automatic triage was off at the time, the alert resolved within the settle wait, " +
 		"the monitor was in its triage cooldown, the workspace's hourly triage limit or the platform backlog was reached, " +
 		fmt.Sprintf("the alert was older than the %s lookback, triage was switched off while the alert was queued, or the local AI was unavailable. ", lookbackPhrase(ai.TriageLookback)) +

@@ -141,15 +141,22 @@ func TestSLAService(t *testing.T) {
 		var alertID, triageID uuid.UUID
 		require.NoError(t, dbClient.QueryRowContext(ctx, `SELECT id FROM alerts WHERE monitor_id = $1`, b).Scan(&alertID))
 		require.NoError(t, dbClient.QueryRowContext(ctx, `
-			INSERT INTO alert_triage (tenant_id, alert_id, monitor_id, status, hypothesis, completed_at)
-			VALUES ($1, $2, $3, 'ready', 'dns_failure', NOW()) RETURNING id
+			INSERT INTO alert_triage (tenant_id, alert_id, monitor_id, status, hypothesis, confidence, completed_at)
+			VALUES ($1, $2, $3, 'ready', 'dns_failure', 'low', NOW()) RETURNING id
 		`, tenantID, alertID, b).Scan(&triageID))
+		r = causeOf(t, serial.ID, ReportQuery{Period: "2026-09"})
+		require.Equal(t, 1, r.SuspectedCauses.TriagedOutageCount)
+		require.Equal(t, models.SLACauseInconclusive, r.Outages[0].CauseKind,
+			"a low-confidence hypothesis is not a suspected cause (ai.IsConfident)")
+
+		_, err := dbClient.ExecContext(ctx, `UPDATE alert_triage SET confidence = 'high' WHERE id = $1`, triageID)
+		require.NoError(t, err)
 		r = causeOf(t, serial.ID, ReportQuery{Period: "2026-09"})
 		require.Equal(t, 1, r.SuspectedCauses.TriagedOutageCount)
 		require.Equal(t, "dns_failure", r.SuspectedCauses.Buckets[0].Key)
 		require.Equal(t, "DNS resolution failure", r.Outages[0].CauseTitle)
 
-		_, err := dbClient.ExecContext(ctx, `
+		_, err = dbClient.ExecContext(ctx, `
 			INSERT INTO ai_labels (tenant_id, subject_type, subject_key, subject_id, verdict, incident_label, answers, request, catalogue_version)
 			VALUES ($1, 'alert_triage', $2, $3, 'corrected', 'tls_problem', '{}', '{}', 'test')
 		`, tenantID, triageID.String(), triageID)

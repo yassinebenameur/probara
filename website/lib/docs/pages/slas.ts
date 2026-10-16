@@ -99,7 +99,7 @@ export const SLAS_PAGE: DocPage = {
           type: "list",
           items: [
             "Each per-monitor outage with unplanned time takes the effective cause of the availability alerts on its own monitor that overlap it, with 2 minutes of slack for an alert that triggered just after a short outage closed. When several alerts overlap, a named cause wins over an inconclusive triage, which wins over a pending one, which wins over none. The whole outage's unplanned time goes to that one cause.",
-            "An operator's label on the triage (confirm or correct) wins over the model's hypothesis. The breakdown counts how many outages per cause were operator-confirmed or operator-corrected, and the PDF marks such causes with an asterisk.",
+            "The model's hypothesis counts as a suspected cause only when the triage rated it medium or high confidence, the same bar as the [suspected-cause follow-up](/docs/alerting/#ai-triage); a low-confidence hypothesis is inconclusive. An operator's label on the triage (confirm or correct) wins over the model's hypothesis, whatever its confidence. The breakdown counts how many outages per cause were operator-confirmed or operator-corrected, and the PDF marks such causes with an asterisk.",
             "Counts are monitor outages, not alerts. Downtime is summed per monitor, so when monitors fail together it can exceed the service's downtime.",
             "Composite (service) outages, group roll-up alerts and incident analyses are not attributed.",
           ],
@@ -108,8 +108,8 @@ export const SLAS_PAGE: DocPage = {
           type: "table",
           columns: ["Bucket", "Meaning"],
           rows: [
-            ["Suspected cause (`suspected`)", "A named catalogue cause, from a ready triage or an operator's label on it. One row per cause, largest downtime first."],
-            ["Inconclusive (`inconclusive`)", "The triage ran and found no supported cause, or an operator labelled it insufficient evidence."],
+            ["Suspected cause (`suspected`)", "A named catalogue cause, from a ready triage at medium or high confidence or an operator's label on it. One row per cause, largest downtime first."],
+            ["Inconclusive (`inconclusive`)", "The triage ran and found no supported cause, named one only at low confidence, or an operator labelled it insufficient evidence."],
             ["Triage pending (`pending`)", "The triage was queued or running, or the alert was still open, within the 6-hour triage lookback and in a workspace with auto-triage on, when the report was computed. With the installation's triage switched off (`AI_TRIAGE_ENABLED=false` or `LOCAL_AI_DISABLED=true`) an alert with no triage is never pending. The report adds a note saying how many outages were pending."],
             ["Not triaged (`untriaged`)", "The overlapping alerts were never triaged: no triage (auto-triage off at the time, resolved within the settle wait, cooldown, hourly cap or backlog), a failed triage, a skipped one, or an open alert older than the 6-hour lookback."],
             ["No alert (`no_alert`)", "No availability alert of the monitor overlapped the outage."],
