@@ -672,7 +672,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                       />
                       <span className="text-xs text-slate-500">days</span>
                     </span>
-                    {!errors.tls_min_days_valid && <Hint>Fail the check before the certificate expires</Hint>}
+                    {!errors.tls_min_days_valid && <Hint>Open a certificate-expiry alert when fewer days remain; the check itself still passes</Hint>}
                   </>
                 )}
               </FormField>

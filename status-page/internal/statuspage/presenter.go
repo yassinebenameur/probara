@@ -86,9 +86,13 @@ func extractSIPTarget(configJSON []byte) string {
 		return ""
 	}
 
+	// Same defaults the worker dials: 5061 over TLS, 5060 otherwise.
 	port, _ := config["port"].(float64)
 	if port == 0 {
 		port = 5060
+		if transport, _ := config["transport"].(string); strings.EqualFold(transport, "tls") {
+			port = 5061
+		}
 	}
 
 	return fmt.Sprintf("%s:%d", host, int(port))

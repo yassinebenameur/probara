@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { buildSipConfig } from '@/lib/sip-config';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -32,16 +33,24 @@ export default function SipForm({
   const editSipConfig =
     monitor && monitor.type === 'sip' ? (monitor.config as SIPMonitorConfig) : undefined;
 
+  // The API accepts transport in any case and port 0 (5060, or 5061 over
+  // TLS); normalize both so the select matches and a save keeps the port the
+  // worker actually dials.
+  const initialTransport = (
+    (editSipConfig?.transport || initialSipConfig?.transport || 'udp').toLowerCase()
+  ) as 'udp' | 'tcp' | 'tls';
+
   const [formData, setFormData] = useState({
     name: monitor?.name || initialData?.name || '',
     host: editSipConfig?.host || initialSipConfig?.host || '',
-    port: editSipConfig?.port || initialSipConfig?.port || 5060,
-    transport: (editSipConfig?.transport || initialSipConfig?.transport || 'udp') as 'udp' | 'tcp' | 'tls',
+    port: editSipConfig?.port || initialSipConfig?.port || (initialTransport === 'tls' ? 5061 : 5060),
+    transport: initialTransport,
     method: (editSipConfig?.method || initialSipConfig?.method || 'options') as 'options' | 'register',
     username: editSipConfig?.username || initialSipConfig?.username || '',
     password: editSipConfig?.password || initialSipConfig?.password || '',
     domain: editSipConfig?.domain || initialSipConfig?.domain || '',
     tls_skip_verify: editSipConfig?.tls_skip_verify ?? initialSipConfig?.tls_skip_verify ?? false,
+    tls_server_name: editSipConfig?.tls_server_name || initialSipConfig?.tls_server_name || '',
     expected_status: editSipConfig?.expected_status?.toString()
       || initialSipConfig?.expected_status?.toString() || '',
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
@@ -84,28 +93,9 @@ export default function SipForm({
       return;
     }
 
-    const config: SIPMonitorConfig = {
-      host: formData.host.trim(),
-      port: formData.port,
-      transport: formData.transport,
-    };
-
-    if (formData.method !== 'options') config.method = formData.method;
-    if (formData.username.trim()) {
-      config.username = formData.username.trim();
-      config.password = formData.password;
-    } else if (editSipConfig?.password) {
-      // Auth dropped: an omitted secret field means "keep the stored value"
-      // server-side, so clearing it takes an explicit empty string.
-      config.password = '';
-    }
-    if (formData.domain.trim()) config.domain = formData.domain.trim();
-    if (formData.transport === 'tls' && formData.tls_skip_verify) config.tls_skip_verify = true;
-
-    if (formData.expected_status) {
-      const status = parseInt(formData.expected_status);
-      if (!isNaN(status)) config.expected_status = status;
-    }
+    // Built on top of the loaded config so keys this form does not render
+    // survive the save (an update replaces the whole stored config).
+    const config = buildSipConfig(editSipConfig ?? initialSipConfig, formData);
 
     const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
       name: formData.name.trim(),
@@ -205,13 +195,30 @@ export default function SipForm({
         </div>
 
         {formData.transport === 'tls' && (
-          <ToggleRow
-            title="Skip certificate verification"
-            description="For lab servers with self-signed certificates"
-            checked={formData.tls_skip_verify}
-            onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
-            tone="warning"
-          />
+          <>
+            <ToggleRow
+              title="Skip certificate verification"
+              description="For lab servers with self-signed certificates"
+              checked={formData.tls_skip_verify}
+              onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
+              tone="warning"
+            />
+            <FormField label="TLS server name (SNI)">
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.tls_server_name}
+                    onChange={(e) => setFormData({ ...formData, tls_server_name: e.target.value })}
+                    placeholder="sip.example.com"
+                    className="input font-mono"
+                  />
+                  <FieldHint>Overrides the name used for SNI and certificate verification. Defaults to the host.</FieldHint>
+                </>
+              )}
+            </FormField>
+          </>
         )}
       </FormSection>
 

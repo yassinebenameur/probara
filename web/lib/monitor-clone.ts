@@ -99,13 +99,13 @@ function buildClonedConfig(monitor: Monitor): MonitorConfig {
       };
     }
     case 'sip': {
-      const cfg = monitor.config as SIPMonitorConfig | undefined;
-      return {
-        host: cfg?.host || '',
-        port: cfg?.port || 5060,
-        transport: cfg?.transport || 'udp',
-        ...(cfg?.expected_status !== undefined ? { expected_status: cfg.expected_status } : {}),
-      };
+      // Every non-secret field carries over (method, auth user, domain, TLS
+      // settings and any key the form does not render). The password only
+      // ever comes back masked, so the clone re-enters it.
+      const fallback: SIPMonitorConfig = { host: '', port: 5060, transport: 'udp' };
+      const cfg = cloneObject((monitor.config as SIPMonitorConfig | undefined) || fallback);
+      delete cfg.password;
+      return cfg;
     }
     case 'prometheus': {
       const cfg = cloneObject(monitor.config as PrometheusMonitorConfig);
