@@ -96,7 +96,9 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   separate pool calls.
 - Every service keeps `/healthz`, `/readyz` and `/metrics`; keep them intact
   when touching startup or server wiring (ai-service's `/readyz` needs the
-  bearer token, so the chart's readiness probe is an exec).
+  bearer token, so the chart's readiness probe is an exec; its `/healthz`
+  turns 503 once a batch outruns `LOCAL_AI_MAX_INFERENCE_SECONDS`, which is
+  what restarts a wedged pod).
 - Preserve tenant isolation on every tenant-scoped query, and put logic two
   services need in `shared/` rather than copying it.
 

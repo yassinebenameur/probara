@@ -23,11 +23,12 @@ never receive its URL or token and run checks without it.
 |---|---|---|---|
 | `LOCAL_AI_DISABLED` | `false` | API, worker, alerter, service | Installation override; disables analysis, triage, suggestions and suspected-cause follow-ups for every workspace |
 | `LOCAL_AI_URL` | `http://127.0.0.1:8090` | API, worker | `http(s)://host[:port]`, no path, query or credentials |
-| `LOCAL_AI_TOKEN` | none | API, worker, service | Shared bearer token, at least 16 characters |
+| `LOCAL_AI_TOKEN` | none | API, worker, service | Shared bearer token, at least 16 characters; every side trims surrounding whitespace (Go `strings.TrimSpace`, Python `str.strip`) |
 | `LOCAL_AI_TIMEOUT_SECONDS` | `90` | API, worker | Request timeout, 1–300 seconds |
 | `LOCAL_AI_THREADS` | `4` | service | CPU inference threads, 1–4 |
 | `LOCAL_AI_QUEUE_CAPACITY` | `4` | service | Batches waiting behind the executing one, 1–32 |
-| `LOCAL_AI_QUEUE_TIMEOUT_SECONDS` | `5` | service | Wait for the executing slot, above 0 and at most 30 |
+| `LOCAL_AI_QUEUE_TIMEOUT_SECONDS` | `60` | service | Wait for the executing slot, above 0 and at most 300; keep below `LOCAL_AI_TIMEOUT_SECONDS` (Helm enforces it) |
+| `LOCAL_AI_MAX_INFERENCE_SECONDS` | `120` | service | A batch running longer is wedged: `/healthz` and `/readyz` answer 503; above 0 and at most 600 |
 
 - **Compose**: service `local-ai`, published on `127.0.0.1:8090`, wired to
   `api` and `worker` as `http://local-ai:8090`. Without an exported
@@ -65,7 +66,16 @@ The service exposes `/healthz` (unauthenticated), `/readyz` (bearer token;
 503 until the model is loaded, when disabled, or while shutting down) and
 `/metrics` (`probara_ai_*`). It runs one batch at a time; a batch beyond the
 queue capacity, or one that waits past the queue timeout, gets HTTP 429 with
-`Retry-After: 5`. Bodies over 512 KiB get 413, and evidence outside the
+`Retry-After: 5`. A full 50-decision batch takes about 15-20 s on 4 CPU
+threads, so the 60 s default queue timeout lets a queued request outlast a
+batch or two, and it stays below the 90 s client timeout so callers see a
+retryable 429 (worker jobs are redelivered; dependency suggestions answer 503
+`unavailable` with `Retry-After`) rather than their own timeout. A batch still
+running after `LOCAL_AI_MAX_INFERENCE_SECONDS` is wedged: an executor thread
+cannot be cancelled, so `/healthz` and `/readyz` answer 503 and
+`probara_ai_wedged` reads 1 until it finishes, and the Helm liveness probe
+(every 15 s, three failures) restarts the pod. Compose only marks the
+container unhealthy. Bodies over 512 KiB get 413, and evidence outside the
 allowlist or duplicate decision IDs get 422.
 
 ## Model artifact

@@ -115,3 +115,82 @@ def test_cancelled_request_retains_cpu_slot(monkeypatch):
                 await task
             assert (await client.post("/v1/decisions", json=batch("recovered"), headers=HEADERS)).status_code == 200
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("raw", [TOKEN + "\n", "  " + TOKEN + "  ", TOKEN + "\r\n"])
+def test_token_whitespace_is_trimmed_like_go_clients(monkeypatch, raw):
+    # The Go clients strings.TrimSpace LOCAL_AI_TOKEN (shared/config); a
+    # Secret written with a trailing newline must still authenticate them.
+    monkeypatch.setenv("LOCAL_AI_TOKEN", raw)
+    with TestClient(create_app(FakeRuntime)) as client:
+        assert client.get("/readyz", headers=HEADERS).status_code == 200
+        assert client.post("/v1/decisions", json=batch(), headers=HEADERS).status_code == 200
+        assert client.get("/readyz", headers={"Authorization": "Bearer wrong-token-0123456789"}).status_code == 401
+
+
+def test_whitespace_only_or_short_token_refused(monkeypatch):
+    for raw in (" " * 20, "\n" * 20, "short-token\n" + " " * 8):
+        monkeypatch.setenv("LOCAL_AI_TOKEN", raw)
+        with pytest.raises(ValueError, match="LOCAL_AI_TOKEN"):
+            create_app(FakeRuntime)
+
+
+def test_queue_timeout_and_max_inference_settings(monkeypatch):
+    monkeypatch.setenv("LOCAL_AI_TOKEN", TOKEN)
+    monkeypatch.delenv("LOCAL_AI_QUEUE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("LOCAL_AI_MAX_INFERENCE_SECONDS", raising=False)
+    assert create_app(FakeRuntime).state.limits == {"queue_timeout_seconds": 60.0, "max_inference_seconds": 120.0}
+    monkeypatch.setenv("LOCAL_AI_QUEUE_TIMEOUT_SECONDS", "300")
+    monkeypatch.setenv("LOCAL_AI_MAX_INFERENCE_SECONDS", "600")
+    assert create_app(FakeRuntime).state.limits == {"queue_timeout_seconds": 300.0, "max_inference_seconds": 600.0}
+    for name, bad in (("LOCAL_AI_QUEUE_TIMEOUT_SECONDS", "0"), ("LOCAL_AI_QUEUE_TIMEOUT_SECONDS", "300.5"),
+                      ("LOCAL_AI_MAX_INFERENCE_SECONDS", "0"), ("LOCAL_AI_MAX_INFERENCE_SECONDS", "601")):
+        monkeypatch.setenv("LOCAL_AI_QUEUE_TIMEOUT_SECONDS", "60")
+        monkeypatch.setenv("LOCAL_AI_MAX_INFERENCE_SECONDS", "120")
+        monkeypatch.setenv(name, bad)
+        with pytest.raises(ValueError):
+            create_app(FakeRuntime)
+
+
+def test_wedged_inference_fails_liveness_until_it_finishes(monkeypatch):
+    import concurrent.futures
+    import threading
+    entered, release = threading.Event(), threading.Event()
+    class HungRuntime(FakeRuntime):
+        def predict(self, decisions, items):
+            entered.set()
+            assert release.wait(10)
+            return super().predict(decisions, items)
+    monkeypatch.setenv("LOCAL_AI_TOKEN", TOKEN)
+    monkeypatch.setenv("LOCAL_AI_MAX_INFERENCE_SECONDS", "0.2")
+    with TestClient(create_app(HungRuntime)) as client, concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        assert "probara_ai_wedged 0" in client.get("/metrics").text
+        running = pool.submit(client.post, "/v1/decisions", json=batch("hung"), headers=HEADERS)
+        assert entered.wait(3)
+        assert client.get("/healthz").status_code == 200, "a batch within the bound is not wedged"
+        time.sleep(.3)
+        health = client.get("/healthz")
+        assert health.status_code == 503 and health.json()["status"] == "wedged"
+        assert client.get("/readyz", headers=HEADERS).status_code == 503
+        text = client.get("/metrics").text
+        assert "probara_ai_wedged 1" in text
+        assert float(text.split("probara_ai_inflight_seconds ")[1].split()[0]) > .2
+        release.set()
+        assert running.result(timeout=5).status_code == 200
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/readyz", headers=HEADERS).status_code == 200
+        text = client.get("/metrics").text
+        assert "probara_ai_wedged 0" in text and "probara_ai_inflight_seconds 0.000" in text
+
+
+def test_failed_inference_clears_inflight(monkeypatch):
+    class BrokenRuntime(FakeRuntime):
+        def predict(self, decisions, items):
+            raise RuntimeError("kernel failure")
+    monkeypatch.setenv("LOCAL_AI_TOKEN", TOKEN)
+    monkeypatch.setenv("LOCAL_AI_MAX_INFERENCE_SECONDS", "0.05")
+    with TestClient(create_app(BrokenRuntime)) as client:
+        assert client.post("/v1/decisions", json=batch(), headers=HEADERS).status_code == 503
+        time.sleep(.1)
+        assert client.get("/healthz").status_code == 200
+        assert "probara_ai_inflight_seconds 0.000" in client.get("/metrics").text

@@ -11,8 +11,8 @@ pod only its token and service settings), the token convention (stable derived
 default, literal, per-field and chart-wide existing Secret), the external URL
 mode, scheduling/image/extraEnv knobs (top-level extraEnv never reaches the
 local AI pod), the optional client token reference, the NetworkPolicy toggle,
-every fail-fast case (including the threads/queueCapacity/timeoutSeconds
-ranges), and the Compose/Makefile/start-script wiring (a failed local-ai build
+every fail-fast case (including the threads/queueCapacity/queueTimeoutSeconds/
+maxInferenceSeconds/timeoutSeconds ranges and queue timeout < client timeout), and the Compose/Makefile/start-script wiring (a failed local-ai build
 never blocks the platform; CPU sizing fits small Docker hosts).
 """
 import argparse
@@ -116,8 +116,16 @@ def check_default():
     assert container['securityContext']['readOnlyRootFilesystem'] is True
     assert container['securityContext']['allowPrivilegeEscalation'] is False
     names = [v['name'] for v in container['env']]
-    assert names == ['LOCAL_AI_TOKEN', 'LOCAL_AI_THREADS', 'LOCAL_AI_QUEUE_CAPACITY'], names
-    assert token_ref({v['name']: v for v in container['env']}) == {'name': CHART_SECRET, 'key': 'local_ai_token'}
+    assert names == ['LOCAL_AI_TOKEN', 'LOCAL_AI_THREADS', 'LOCAL_AI_QUEUE_CAPACITY',
+                     'LOCAL_AI_QUEUE_TIMEOUT_SECONDS', 'LOCAL_AI_MAX_INFERENCE_SECONDS'], names
+    env = {v['name']: v for v in container['env']}
+    assert token_ref(env) == {'name': CHART_SECRET, 'key': 'local_ai_token'}
+    assert env['LOCAL_AI_QUEUE_TIMEOUT_SECONDS']['value'] == '60' and env['LOCAL_AI_MAX_INFERENCE_SECONDS']['value'] == '120'
+    # Liveness on /healthz restarts a wedged inference; readiness trims the
+    # token like the service and the Go clients do.
+    liveness = container['livenessProbe']
+    assert liveness['httpGet']['path'] == '/healthz' and liveness['failureThreshold'] == 3, liveness
+    assert ".strip()" in ' '.join(container['readinessProbe']['exec']['command'])
     # The global podAnnotations advertise a 9090 scrape port; the service is on 8090.
     assert 'annotations' not in find(objects, 'Deployment', FULL + '-local-ai')['spec']['template']['metadata']
     assert not any(k in spec for k in ('nodeSelector', 'tolerations', 'affinity'))
@@ -139,7 +147,7 @@ def check_default():
 def check_disabled():
     # Range checks apply only to what is in use: no pod, no URL, nothing to check.
     objects, _ = render('--set', 'localAI.enabled=false', '--set', 'localAI.threads=8',
-                        '--set', 'localAI.timeoutSeconds=0', *LOCATION)
+                        '--set', 'localAI.queueTimeoutSeconds=900', '--set', 'localAI.timeoutSeconds=0', *LOCATION)
     assert not local_ai_objects(objects)
     assert 'local_ai_token' not in secret_data(objects)
     assert_clients(objects, None, None)
@@ -221,6 +229,12 @@ FAILURES = [
     (['--set', 'localAI.threads=2.5'], 'localAI.threads must be a whole number from 1 to 4'),
     (['--set', 'localAI.queueCapacity=0'], 'localAI.queueCapacity must be a whole number from 1 to 32'),
     (['--set', 'localAI.queueCapacity=33'], 'localAI.queueCapacity must be a whole number from 1 to 32'),
+    (['--set', 'localAI.queueTimeoutSeconds=0'], 'localAI.queueTimeoutSeconds must be a whole number from 1 to 300'),
+    (['--set', 'localAI.queueTimeoutSeconds=301', '--set', 'localAI.timeoutSeconds=300'], 'localAI.queueTimeoutSeconds must be a whole number from 1 to 300'),
+    (['--set', 'localAI.queueTimeoutSeconds=90'], 'localAI.queueTimeoutSeconds (90) must be lower than localAI.timeoutSeconds (90)'),
+    (['--set', 'localAI.timeoutSeconds=30'], 'must be lower than localAI.timeoutSeconds (30)'),
+    (['--set', 'localAI.maxInferenceSeconds=0'], 'localAI.maxInferenceSeconds must be a whole number from 1 to 600'),
+    (['--set', 'localAI.maxInferenceSeconds=601'], 'localAI.maxInferenceSeconds must be a whole number from 1 to 600'),
     (['--set', 'localAI.timeoutSeconds=0'], 'localAI.timeoutSeconds must be a whole number from 1 to 300'),
     (['--set', 'localAI.timeoutSeconds=600'], 'localAI.timeoutSeconds must be a whole number from 1 to 300'),
     (['--set', 'localAI.enabled=false', '--set', 'localAI.externalUrl=http://x:8090', '--set', 'secrets.localAiToken=' + OPERATOR_TOKEN,
@@ -252,6 +266,8 @@ def check_compose():
                                                env={**os.environ, 'LOCAL_AI_CPUS': '2', 'LOCAL_AI_THREADS': '2'}))
     assert float(small['services']['local-ai']['cpus']) == 2
     assert small['services']['local-ai']['environment']['LOCAL_AI_THREADS'] == '2'
+    assert ai['environment']['LOCAL_AI_QUEUE_TIMEOUT_SECONDS'] == '60', ai['environment']
+    assert ai['environment']['LOCAL_AI_MAX_INFERENCE_SECONDS'] == '120', ai['environment']
     reservations = ai['deploy']['resources']['reservations']
     assert float(reservations['cpus']) == 1 and int(reservations['memory']) == 2 * 1024 ** 3
     for name in ('api', 'worker'):

@@ -329,7 +329,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`POST /api/v1/monitors/dependency-suggestions`",
-              "Compute advisory AI suggestions without saving edges",
+              "Compute advisory AI suggestions without saving edges. 503 `not_configured` when local AI is off; 503 `unavailable` with `Retry-After` while the service is busy or restarting",
             ],
             [
               "`POST /api/v1/monitors/dependency-suggestions/label`",

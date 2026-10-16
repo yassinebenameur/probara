@@ -93,6 +93,10 @@ services:
       LOCAL_AI_DISABLED: "${LOCAL_AI_DISABLED:-false}"
       LOCAL_AI_THREADS: "${LOCAL_AI_THREADS:-4}"
       LOCAL_AI_QUEUE_CAPACITY: "${LOCAL_AI_QUEUE_CAPACITY:-4}"
+      # Keep below the api/worker LOCAL_AI_TIMEOUT_SECONDS (90).
+      LOCAL_AI_QUEUE_TIMEOUT_SECONDS: "${LOCAL_AI_QUEUE_TIMEOUT_SECONDS:-60}"
+      # A batch running longer is wedged: /healthz turns 503 (unhealthy).
+      LOCAL_AI_MAX_INFERENCE_SECONDS: "${LOCAL_AI_MAX_INFERENCE_SECONDS:-120}"
     ports:
       - "127.0.0.1:8090:8090"
     cpus: "${LOCAL_AI_CPUS:-4}"

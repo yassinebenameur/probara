@@ -568,8 +568,17 @@ localAI:
   threads: 4
   # Waiting batches before the service answers 429, 1-32.
   queueCapacity: 4
+  # How long a waiting batch may wait for the executing one before a 429
+  # (LOCAL_AI_QUEUE_TIMEOUT_SECONDS, 1-300, and lower than timeoutSeconds so
+  # a queued caller gets a retryable 429 before its own client gives up). A
+  # full 50-decision batch takes about 15-20 s on 4 CPU threads.
+  queueTimeoutSeconds: 60
+  # A batch still running after this many seconds is wedged: /healthz turns
+  # 503 and the liveness probe restarts the pod (LOCAL_AI_MAX_INFERENCE_SECONDS,
+  # 1-600).
+  maxInferenceSeconds: 120
   # Client-side request timeout on api/worker (LOCAL_AI_TIMEOUT_SECONDS, 1-300).
-  # All three ranges are enforced at render time.
+  # All these ranges are enforced at render time.
   timeoutSeconds: 90
   # AI_TRIAGE_ENABLED on the platform worker, the alerter and the api: false
   # stops new automatic alert triages (queued ones drain as skipped) and every
@@ -618,6 +627,7 @@ localAI:
     #     - port: 8090
     #       protocol: TCP
     extraIngress: []
-  # Extra env vars for the local AI pod (e.g. LOCAL_AI_QUEUE_TIMEOUT_SECONDS).
-  # The only extra env it gets: the top-level extraEnv does not reach it.
+  # Extra env vars for the local AI pod; every LOCAL_AI_* setting the service
+  # reads has its own value above. The only extra env it gets: the top-level
+  # extraEnv does not reach it.
   extraEnv: []

@@ -70,6 +70,10 @@ spec:
               value: {{ .Values.localAI.threads | quote }}
             - name: LOCAL_AI_QUEUE_CAPACITY
               value: {{ .Values.localAI.queueCapacity | quote }}
+            - name: LOCAL_AI_QUEUE_TIMEOUT_SECONDS
+              value: {{ .Values.localAI.queueTimeoutSeconds | quote }}
+            - name: LOCAL_AI_MAX_INFERENCE_SECONDS
+              value: {{ .Values.localAI.maxInferenceSeconds | quote }}
             {{- /* Deliberately not the top-level extraEnv: that is where shared
             credentials such as PROBARA_SECRETS_KEY_V2 go, and this pod holds none. */}}
             {{- with .Values.localAI.extraEnv }}
@@ -86,11 +90,17 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 60
+          # /healthz turns 503 once a batch has run past maxInferenceSeconds
+          # (a hung kernel cannot be cancelled, and with one replica only a
+          # restart recovers), so the restart lands within about that bound
+          # plus periodSeconds x failureThreshold.
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
           # /readyz needs the bearer token, which an httpGet probe cannot read
           # from a Secret, so the probe execs the image's own Python.
           readinessProbe:
@@ -98,7 +108,7 @@ spec:
               command:
                 - python
                 - -c
-                - "import os,urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8090/readyz',headers={'Authorization':'Bearer '+os.environ['LOCAL_AI_TOKEN']}),timeout=3)"
+                - "import os,urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8090/readyz',headers={'Authorization':'Bearer '+os.environ['LOCAL_AI_TOKEN'].strip()}),timeout=3)"
             periodSeconds: 15
             timeoutSeconds: 5
       volumes:

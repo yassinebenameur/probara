@@ -336,8 +336,11 @@ Retention setting semantics:
 | `LOCAL_AI_TOKEN` | yes, unless disabled (16+ chars, same on the service) | none |
 | `LOCAL_AI_TIMEOUT_SECONDS` | no | `90` |
 
-The inference service itself also reads `LOCAL_AI_THREADS`,
-`LOCAL_AI_QUEUE_CAPACITY` and `LOCAL_AI_QUEUE_TIMEOUT_SECONDS`.
+The inference service itself also reads `LOCAL_AI_THREADS` (4),
+`LOCAL_AI_QUEUE_CAPACITY` (4), `LOCAL_AI_QUEUE_TIMEOUT_SECONDS` (60, 1-300;
+keep it below `LOCAL_AI_TIMEOUT_SECONDS`) and `LOCAL_AI_MAX_INFERENCE_SECONDS`
+(120, 1-600; a batch running longer turns `/healthz` 503 so the pod is
+restarted).
 
 ### Alerter
 

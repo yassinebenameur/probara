@@ -163,8 +163,8 @@ kubectl -n probara rollout status deployment/probara-worker`,
             [
               'Local AI',
               '`http://127.0.0.1:8090`',
-              '`/healthz`, unauthenticated: the process answers.',
-              '`/readyz` requires `Authorization: Bearer <LOCAL_AI_TOKEN>` (401 otherwise) and returns the model identity; 503 while the model loads, when `LOCAL_AI_DISABLED=true`, or during shutdown.',
+              '`/healthz`, unauthenticated: the process answers, and no batch has run past `LOCAL_AI_MAX_INFERENCE_SECONDS` (503 `wedged` otherwise, so Kubernetes restarts the pod).',
+              '`/readyz` requires `Authorization: Bearer <LOCAL_AI_TOKEN>` (401 otherwise) and returns the model identity; 503 while the model loads, when `LOCAL_AI_DISABLED=true`, during shutdown, or while a batch is wedged.',
             ],
             [
               'NATS',
@@ -257,8 +257,8 @@ make healthcheck`,
             ],
             [
               'Local AI service (port 8090, plain-text exposition)',
-              '`probara_ai_ready`, `probara_ai_admitted`, `probara_ai_completed_total`, `probara_ai_rejected_total`, `probara_ai_failed_total`, `probara_ai_inference_seconds_sum`',
-              '`ready` at 0, growth in `rejected_total` (429 saturation) or `failed_total`, and `admitted` pinned at queue capacity + 1. Divide `inference_seconds_sum` by `completed_total` for mean batch time.',
+              '`probara_ai_ready`, `probara_ai_admitted`, `probara_ai_completed_total`, `probara_ai_rejected_total`, `probara_ai_failed_total`, `probara_ai_inference_seconds_sum`, `probara_ai_inflight_seconds`, `probara_ai_wedged`',
+              '`ready` at 0, growth in `rejected_total` (429 saturation) or `failed_total`, `admitted` pinned at queue capacity + 1, and `wedged` at 1 (the executing batch, `inflight_seconds` old, has passed `LOCAL_AI_MAX_INFERENCE_SECONDS`). Divide `inference_seconds_sum` by `completed_total` for mean batch time.',
             ],
           ],
         },
@@ -275,7 +275,7 @@ curl -fsS http://127.0.0.1:8090/metrics`,
         {
           type: 'paragraph',
           text:
-            'The local AI service runs one batch at a time and admits at most `LOCAL_AI_QUEUE_CAPACITY` more. A batch beyond that, or one that waits longer than `LOCAL_AI_QUEUE_TIMEOUT_SECONDS` for the executing slot, gets HTTP 429 with `Retry-After: 5`. The worker treats that as transient: an incident analysis is redelivered after 10 s and again after 30 s, and the third failed delivery records a failed analysis whose action is to check readiness and retry. Bodies over 512 KiB get 413 and evidence outside the allowlist 422. The chart does not annotate this pod for scraping; see [local AI values](/docs/deployment/#helm-values-local-ai).',
+            'The local AI service runs one batch at a time and admits at most `LOCAL_AI_QUEUE_CAPACITY` more. A batch beyond that, or one that waits longer than `LOCAL_AI_QUEUE_TIMEOUT_SECONDS` (default 60 s, a few full batches) for the executing slot, gets HTTP 429 with `Retry-After: 5`. The worker treats that as transient: an incident analysis or alert triage is redelivered 1 minute and then 2 minutes later (or after the service’s `Retry-After`, at most 2 minutes), and the third failed delivery records it as failed; a failed analysis carries the action to check readiness and retry. Dependency suggestions, which the API computes on request, answer 503 `unavailable` with `Retry-After` instead of an error. A batch still running after `LOCAL_AI_MAX_INFERENCE_SECONDS` (default 120 s) is wedged: `/healthz` answers 503 and `probara_ai_wedged` is 1 until it finishes, so the Helm liveness probe restarts the pod; under Compose the container turns unhealthy and needs `docker compose restart local-ai`. Bodies over 512 KiB get 413 and evidence outside the allowlist 422. The chart does not annotate this pod for scraping; see [local AI values](/docs/deployment/#helm-values-local-ai).',
         },
         {
           type: 'callout',
@@ -665,7 +665,7 @@ helm lint ./helm/monitoring-platform \\
             [
               'Incident analyses fail during load',
               'Inference saturation: 429 responses exhausted the worker’s three deliveries',
-              'Watch `probara_ai_rejected_total` and `probara_ai_admitted`. Raise `localAI.queueCapacity` or the queue timeout, give the pod more CPU up to 4 threads, or retry the analysis later.',
+              'Watch `probara_ai_rejected_total` and `probara_ai_admitted`. Raise `localAI.queueCapacity` or `localAI.queueTimeoutSeconds` (it must stay below `localAI.timeoutSeconds`), give the pod more CPU up to 4 threads, or retry the analysis later. If `probara_ai_wedged` is 1, one batch is holding the slot: the liveness probe restarts the pod, or restart it yourself.',
             ],
             [
               'Prometheus cannot scrape API on 9090',
