@@ -727,7 +727,8 @@ func (s *sipCall) drive(parent, callCtx context.Context) {
 			s.phase = sipCallDone
 
 		case <-s.ep.done:
-			s.decideError(sipFlowReadError(s.flow))
+			s.drainEvents()
+			s.decideError(sipFlowReadError(s.flow)) // no-op if a drained final or 2xx decided
 			if s.primary != nil {
 				s.phase = sipCallTerminating
 			} else {
@@ -778,8 +779,25 @@ func sipFormatSeconds(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'f', 1, 64) + "s"
 }
 
+// drainEvents applies every event already queued. The dispatcher queues a
+// response's event before it closes ep.done, so a final or 2xx sent just
+// before the peer hung up is waiting here (the same reason
+// roundTripNonInvite drains on e.done); without the drain, a select that
+// sees both ready picks one at random and the result depends on the race.
+func (s *sipCall) drainEvents() {
+	for {
+		select {
+		case ev := <-s.events:
+			s.handle(ev)
+		default:
+			return
+		}
+	}
+}
+
 // handle applies one event to the call's state.
 func (s *sipCall) handle(ev sipCallEvent) {
+	s.hook("event")
 	switch ev.kind {
 	case sipCallEvProvisional:
 		if ev.txn == s.current {
@@ -1065,6 +1083,7 @@ func (s *sipCall) settleInvite(ctx context.Context) {
 			// what confirms the call ended.
 			cancelDone = nil
 		case <-s.ep.done:
+			s.drainEvents() // a 487 sent just before the close settles the call
 			s.settleTeardownLabel()
 			return
 		case <-ctx.Done():
@@ -1091,14 +1110,7 @@ func (s *sipCall) settleTeardownLabel() {
 // it runs. The first answered dialog's BYE labels the teardown.
 func (s *sipCall) byeAll(ctx context.Context) {
 	for {
-		for drained := false; !drained; {
-			select {
-			case ev := <-s.events:
-				s.handle(ev)
-			default:
-				drained = true
-			}
-		}
+		s.drainEvents()
 		d := s.nextUnended()
 		if d == nil {
 			return

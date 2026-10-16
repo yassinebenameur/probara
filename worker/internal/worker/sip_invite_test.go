@@ -156,6 +156,19 @@ func (u *fakeUAS) send(raw string) {
 	}
 }
 
+// hangUp closes the stream connection (TCP/TLS): a peer that writes its
+// last response and goes away at once.
+func (u *fakeUAS) hangUp() {
+	u.mu.Lock()
+	conn := u.conn
+	u.mu.Unlock()
+	if conn != nil {
+		u.writeMu.Lock()
+		conn.Close()
+		u.writeMu.Unlock()
+	}
+}
+
 func (u *fakeUAS) sendAfter(d time.Duration, raw string) {
 	time.AfterFunc(d, func() { u.send(raw) })
 }
@@ -721,6 +734,91 @@ func TestSIPInvite_BusyAndExpectedStatus(t *testing.T) {
 	result, _ = runInvite(t, newInviteTestChecker(), inviteConfig(u2, map[string]any{"number": "100"}, map[string]any{"expected_status": 486}), 5)
 	requireStatus(t, result, "success")
 	requireHTTPStatus(t, result, 486)
+}
+
+// A stream peer that sends its final (or its answer) and closes at once:
+// the response the dispatcher queued before the flow ended decides the call,
+// never the closed connection, whichever the call goroutine sees first. A
+// slow event handler and a few provisionals ahead of the final leave both
+// the final's event and the closed flow ready together, which without the
+// drain decided the call at random.
+func TestSIPInvite_FinalThenHangUp(t *testing.T) {
+	slowChecker := func() *SIPChecker {
+		c := newInviteTestChecker()
+		c.callHook = func(stage string) {
+			if stage == "event" {
+				time.Sleep(3 * time.Millisecond)
+			}
+		}
+		return c
+	}
+	progress := func(u *fakeUAS, invite string) {
+		u.send(uasReply(invite, 100, "Trying", "", ""))
+		for range 4 {
+			u.send(uasReply(invite, 183, "Session Progress", "srv1", ""))
+		}
+	}
+	busy := func(u *fakeUAS, msg string) {
+		if fMethod(msg) == "INVITE" {
+			progress(u, msg)
+			u.send(uasReply(msg, 486, "Busy Here", "srv1", ""))
+			u.hangUp()
+		}
+	}
+	t.Run("expected busy", func(t *testing.T) {
+		u := startFakeUAS(t, "tcp", busy)
+		result, _ := runInvite(t, slowChecker(), inviteConfig(u, map[string]any{"number": "100"}, map[string]any{"expected_status": 486}), 5)
+		requireStatus(t, result, "success")
+		requireHTTPStatus(t, result, 486)
+	})
+	t.Run("busy", func(t *testing.T) {
+		u := startFakeUAS(t, "tcp", busy)
+		result, _ := runInvite(t, slowChecker(), inviteConfig(u, map[string]any{"number": "100"}, nil), 5)
+		requireStatus(t, result, "failure", "status: 486 Busy Here")
+		requireHTTPStatus(t, result, 486)
+	})
+	t.Run("answered", func(t *testing.T) {
+		u := startFakeUAS(t, "tcp", func(u *fakeUAS, msg string) {
+			if fMethod(msg) == "INVITE" {
+				progress(u, msg)
+				u.send(uasReply(msg, 200, "OK", "srv1", uasSDPAnswer, u.contact()))
+				u.hangUp()
+			}
+		})
+		result, m := runInvite(t, slowChecker(), inviteConfig(u, map[string]any{"number": "100"}, nil), 5)
+		requireStatus(t, result, "success")
+		if !m.Call.Answered {
+			t.Fatal("answered = false, want the 200 sent before the close")
+		}
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		var invite atomic.Value
+		u := startFakeUAS(t, "tcp", func(u *fakeUAS, msg string) {
+			switch fMethod(msg) {
+			case "INVITE":
+				invite.Store(msg)
+				u.send(uasReply(msg, 180, "Ringing", "srv1", ""))
+			case "CANCEL":
+				inv := invite.Load().(string)
+				for range 4 {
+					u.send(uasReply(inv, 183, "Session Progress", "srv1", ""))
+				}
+				u.send(uasReply(msg, 200, "OK", "srv1", ""))
+				u.send(uasReply(inv, 487, "Request Terminated", "srv1", ""))
+				u.hangUp()
+			}
+		})
+		result, m := runInvite(t, slowChecker(), inviteConfig(u, map[string]any{"number": "100", "mode": "ring"}, nil), 5)
+		requireStatus(t, result, "success")
+		if m.Call.Teardown != "cancelled" {
+			t.Fatalf("teardown = %q, want cancelled", m.Call.Teardown)
+		}
+		for _, w := range m.Warnings {
+			if strings.Contains(w, "CANCEL unconfirmed") {
+				t.Fatalf("warnings = %q", m.Warnings)
+			}
+		}
+	})
 }
 
 // cancellingUAS rings and then waits: a CANCEL gets 200, and the INVITE then
