@@ -12,9 +12,11 @@ import (
 // (worker/internal/airca relayClaimSQL): turning auto-triage on in a
 // workspace with days-old open alerts must not spend the hourly cap on them.
 // The API's SLA cause breakdown uses the same bound to tell an open alert
-// that may still be triaged from one that never will be. The AI triage docs
-// (website/lib/docs/pages/alerting.ts) state the same "6 hours" bound; change
-// them together.
+// that may still be triaged from one that never will be. The docs state the
+// same bound: "6 hours" in the AI triage section
+// (website/lib/docs/pages/alerting.ts) and "6-hour" in the
+// SLA suspected-cause bucket table (website/lib/docs/pages/slas.ts); change them
+// together.
 const TriageLookback = 6 * time.Hour
 
 // TriageSettingsEnabledSQL is the workspace half of triage eligibility: the
