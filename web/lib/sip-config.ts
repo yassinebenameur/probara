@@ -77,6 +77,83 @@ export const SIP_CALL_MAX_TIMEOUT_SECONDS = 20;
 export const SIP_CALL_MAX_HOLD_MS = 10000;
 const SIP_CALL_MIN_ANSWER_BUDGET_MS = 2000;
 const SIP_CALL_USER = /^[0-9A-Za-z+*#._~-]{1,64}$/;
+// How a target_uri user part may be written (Go's sipCallURIUserRaw): the
+// unescaped number characters but '#', or percent-escapes.
+const SIP_CALL_URI_USER_RAW = /^(?:[0-9A-Za-z+*._~-]|%[0-9A-Fa-f]{2})+$/;
+const SIP_CALL_MAX_URI_BYTES = 512;
+// shared/models/hostname.go's hostnameRE.
+const HOSTNAME = /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+
+function isIPv6(s: string): boolean {
+  if (!s.includes(':') || !/^[0-9A-Fa-f:.]+$/.test(s)) return false;
+  try {
+    new URL(`http://[${s}]/`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A hostname or IP address without brackets or port: the TS twin of Go's
+ * isHostOrIP (shared/models), which the API applies to domain (on a test
+ * call), call.from_domain and call.sdp_address.
+ */
+export function isHostOrIP(value: string): boolean {
+  return (value.length <= 253 && HOSTNAME.test(value)) || isIPv6(value);
+}
+
+/**
+ * Why a test call's target URI is refused, or null when it is accepted: the
+ * client mirror of Go's ParseSIPCallURI (shared/models/sip_call.go), so the
+ * message lands on the field instead of coming back from the API.
+ */
+export function sipCallURIError(uri: string): string | null {
+  if (new TextEncoder().encode(uri).length > SIP_CALL_MAX_URI_BYTES) return `At most ${SIP_CALL_MAX_URI_BYTES} bytes`;
+  if (/[?<>"\s\u0000-\u001f\u007f]/.test(uri)) return 'No ?headers, spaces or quotes';
+  const scheme = /^(sips?):/i.exec(uri);
+  if (!scheme) return 'Must start with sip: or sips:';
+  const rest = uri.slice(scheme[0].length);
+  const at = rest.indexOf('@');
+  if (at <= 0) return 'Must be a sip: or sips: URI with a user part (sip:user@host)';
+  const user = rest.slice(0, at);
+  const hostPart = rest.slice(at + 1);
+  if (hostPart.includes('@')) return 'Must have a single @';
+  if (/[;:]/.test(user)) return 'No ;parameters or :password in the user part';
+  let decoded = '';
+  try {
+    decoded = decodeURIComponent(user);
+  } catch {
+    decoded = '';
+  }
+  if (!SIP_CALL_URI_USER_RAW.test(user) || !SIP_CALL_USER.test(decoded)) {
+    return 'User part: 1-64 digits, letters and + * # . _ ~ - (# written %23)';
+  }
+  const [hostPort, ...params] = hostPart.split(';');
+  if (params.some((p) => p.split('=')[0].trim().toLowerCase() === 'maddr')) return 'Must not carry a maddr parameter';
+  let host = hostPort;
+  let port = '';
+  if (hostPort.startsWith('[')) {
+    const end = hostPort.indexOf(']');
+    if (end < 0) return 'Has an unterminated IPv6 host';
+    host = hostPort.slice(1, end);
+    const after = hostPort.slice(end + 1);
+    if (after && !after.startsWith(':')) return 'Has an invalid host';
+    port = after.slice(1);
+    if (!isIPv6(host) || /^[\d.]+$/.test(host)) return 'Has an invalid IPv6 host';
+  } else {
+    const colon = hostPort.indexOf(':');
+    if (colon >= 0) {
+      host = hostPort.slice(0, colon);
+      port = hostPort.slice(colon + 1);
+    }
+    if (!isHostOrIP(host) || host.includes(':')) return 'Host must be a hostname or IP address';
+  }
+  if (port && !(/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)) {
+    return 'Port must be between 1 and 65535';
+  }
+  return null;
+}
 
 /**
  * Whether a monitor places real calls: a `sip` monitor whose method is
@@ -176,8 +253,9 @@ export function validateSipCallFields(
 
   if (form.call_target_kind === 'uri') {
     const uri = form.call_target_uri.trim();
+    const uriError = uri ? sipCallURIError(uri) : null;
     if (!uri) errors.call_target_uri = 'Enter the sip: or sips: URI to call';
-    else if (!/^sips?:[^@\s]+@[^@\s]+$/i.test(uri)) errors.call_target_uri = 'Must be a sip: or sips: URI with a user part (sip:user@host)';
+    else if (uriError) errors.call_target_uri = uriError;
     else if (/^sips:/i.test(uri) && form.transport !== 'tls') errors.call_target_uri = 'A sips: URI requires transport TLS';
   } else {
     const number = form.call_number.trim();
@@ -186,6 +264,17 @@ export function validateSipCallFields(
   }
   if (form.call_from_user.trim() && !SIP_CALL_USER.test(form.call_from_user.trim())) {
     errors.call_from_user = 'Up to 64 digits, letters and + * # . _ ~ -';
+  }
+  // Test-call host fields are bare hosts (the API refuses anything else):
+  // domain goes into the Request-URI, To and From.
+  if (form.domain.trim() && !isHostOrIP(form.domain.trim())) {
+    errors.domain = 'Must be a hostname or IP address (no port, parameters or headers)';
+  }
+  if (form.call_from_domain.trim() && !isHostOrIP(form.call_from_domain.trim())) {
+    errors.call_from_domain = 'Must be a hostname or IP address';
+  }
+  if (form.call_sdp_address.trim() && !isHostOrIP(form.call_sdp_address.trim())) {
+    errors.call_sdp_address = 'Must be a hostname or IP address (no port)';
   }
   // Counted in code points like the server's []rune (an emoji is one), on
   // the trimmed value the save sends; control characters are refused too.

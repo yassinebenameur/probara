@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildSipConfig,
+  isHostOrIP,
   isSipCall,
   parseWhole,
   sipCallFormFields,
   sipCallsPerDay,
   sipCallTarget,
+  sipCallURIError,
   SipFormFields,
   validateSipCallFields,
 } from './sip-config';
@@ -296,4 +298,50 @@ test('validateSipCallFields applies the test-call rules', () => {
   assert.deepEqual(validateSipCallFields(uri, 60, 10), {});
   assert.ok(validateSipCallFields({ ...uri, transport: 'udp' }, 60, 10).call_target_uri);
   assert.ok(validateSipCallFields({ ...uri, call_target_uri: 'tel:+331' }, 60, 10).call_target_uri);
+});
+
+test('target URIs follow the server rules', () => {
+  for (const uri of [
+    'sip:ivr@pbx.example.com;transport=tcp',
+    'sip:%2B331@carrier.example.com:5070;user=phone',
+    'sip:ivr%23@pbx.example.com',
+    'sips:100@[2001:db8::1]:5061',
+  ]) {
+    assert.equal(sipCallURIError(uri), null, uri);
+  }
+  for (const [uri, fragment] of [
+    ['sip:u@h?x=y', '?headers'],
+    ['sip:u@pbx.example.com;maddr=1.2.3.4', 'maddr'],
+    ['sip:1;phone-context=+44@carrier.example.com', ';parameters'],
+    ['sip:u:pw@pbx.example.com', ':password'],
+    ['sip:u@pbx.example.com:70000', 'Port'],
+    ['sip:u@a@b.example.com', 'single @'],
+    ['sip:ivr#@pbx.example.com', 'User part'],
+    ['sip:' + 'a'.repeat(510) + '@h', '512 bytes'],
+    ['tel:+331', 'sip: or sips:'],
+    ['sip:u@bad_host', 'hostname'],
+  ] as const) {
+    assert.ok(sipCallURIError(uri)?.includes(fragment), `${uri}: ${sipCallURIError(uri)}`);
+  }
+});
+
+test('host fields of a test call must be bare hosts', () => {
+  assert.ok(isHostOrIP('carrier.example.com'));
+  assert.ok(isHostOrIP('203.0.113.10'));
+  assert.ok(isHostOrIP('2001:db8::1'));
+  assert.ok(!isHostOrIP('a b'));
+  assert.ok(!isHostOrIP('203.0.113.10:4000'));
+  assert.ok(!isHostOrIP('[2001:db8::1]'));
+
+  const ok = callFormFrom(storedCall);
+  const errors = validateSipCallFields(
+    { ...ok, domain: 'carrier.example.com;maddr=203.0.113.9', call_from_domain: 'a b', call_sdp_address: '203.0.113.10:4000' },
+    60,
+    10,
+  );
+  assert.ok(errors.domain);
+  assert.ok(errors.call_from_domain);
+  assert.ok(errors.call_sdp_address);
+  // OPTIONS and REGISTER keep their looser domain.
+  assert.equal(validateSipCallFields({ ...ok, method: 'register', domain: 'example.com:5060' }, 60, 10).domain, undefined);
 });

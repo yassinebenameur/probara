@@ -661,7 +661,7 @@ export default function SipForm({
           </FormField>
 
           {(formData.method === 'register' || isCall) && (
-            <FormField label="SIP domain">
+            <FormField label="SIP domain" error={errors.domain}>
               {(control) => (
                 <>
                   <input
@@ -672,11 +672,13 @@ export default function SipForm({
                     placeholder="example.com"
                     className="input font-mono"
                   />
-                  <FieldHint>
-                    {isCall
-                      ? 'Domain of the called number and the caller ID. Defaults to the host.'
-                      : 'Domain of the address-of-record. Defaults to the host.'}
-                  </FieldHint>
+                  {!errors.domain && (
+                    <FieldHint>
+                      {isCall
+                        ? 'Domain of the called number and the caller ID: a hostname or IP. Defaults to the host.'
+                        : 'Domain of the address-of-record. Defaults to the host.'}
+                    </FieldHint>
+                  )}
                 </>
               )}
             </FormField>
@@ -881,7 +883,7 @@ export default function SipForm({
                   />
                 )}
               </FormField>
-              <FormField label="Caller domain">
+              <FormField label="Caller domain" error={errors.call_from_domain}>
                 {(control) => (
                   <>
                     <input
@@ -892,7 +894,7 @@ export default function SipForm({
                       placeholder={formData.domain.trim() || formData.host.trim() || 'example.com'}
                       className="input font-mono"
                     />
-                    <FieldHint>Default: the SIP domain</FieldHint>
+                    {!errors.call_from_domain && <FieldHint>Default: the SIP domain</FieldHint>}
                   </>
                 )}
               </FormField>
@@ -933,7 +935,7 @@ export default function SipForm({
                     )}
                   </FormField>
                 )}
-                <FormField label="SDP address">
+                <FormField label="SDP address" error={errors.call_sdp_address}>
                   {(control) => (
                     <>
                       <input
@@ -944,7 +946,9 @@ export default function SipForm({
                         placeholder="203.0.113.10"
                         className="input font-mono"
                       />
-                      <FieldHint>The public address a worker behind NAT puts in its audio offer. No media is sent.</FieldHint>
+                      {!errors.call_sdp_address && (
+                        <FieldHint>The public address a worker behind NAT puts in its audio offer. No media is sent.</FieldHint>
+                      )}
                     </>
                   )}
                 </FormField>
