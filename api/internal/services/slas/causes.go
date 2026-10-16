@@ -225,13 +225,25 @@ func attributeCauses(outages []sharedanalytics.Outage, alerts []causeAlert) (*mo
 }
 
 // pendingNote tells the reader that some causes were still being worked out
-// when the report was computed (an issued report keeps them as pending).
+// when the report was computed (an issued report keeps them as pending). It
+// points at the Triage pending bucket only when the page and the PDF show the
+// breakdown, which they do only once an outage was triaged (the PDF's
+// TriagedOutageCount rule, mirrored by showSuspectedCauses in web/lib/sla.ts);
+// otherwise it says why no breakdown is shown.
 func pendingNote(c *models.SLAReportSuspectedCauses) string {
 	if c == nil || c.PendingOutageCount == 0 {
 		return ""
 	}
+	lead := fmt.Sprintf("%d monitor outages had alerts whose triage was still pending when this report was computed", c.PendingOutageCount)
 	if c.PendingOutageCount == 1 {
-		return "1 monitor outage had an alert whose triage was still pending when this report was computed; its suspected cause is listed as Triage pending."
+		lead = "1 monitor outage had an alert whose triage was still pending when this report was computed"
 	}
-	return fmt.Sprintf("%d monitor outages had alerts whose triage was still pending when this report was computed; their suspected causes are listed as Triage pending.", c.PendingOutageCount)
+	switch {
+	case c.TriagedOutageCount == 0:
+		return lead + "; suspected causes are listed only once a monitor outage has been triaged."
+	case c.PendingOutageCount == 1:
+		return lead + "; its suspected cause is listed as Triage pending."
+	default:
+		return lead + "; their suspected causes are listed as Triage pending."
+	}
 }

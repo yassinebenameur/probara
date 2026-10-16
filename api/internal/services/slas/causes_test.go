@@ -173,9 +173,18 @@ func TestPendingNote(t *testing.T) {
 	require.Empty(t, pendingNote(nil))
 	require.Empty(t, pendingNote(&models.SLAReportSuspectedCauses{}))
 	require.Equal(t, "1 monitor outage had an alert whose triage was still pending when this report was computed; its suspected cause is listed as Triage pending.",
-		pendingNote(&models.SLAReportSuspectedCauses{PendingOutageCount: 1}))
+		pendingNote(&models.SLAReportSuspectedCauses{PendingOutageCount: 1, TriagedOutageCount: 1}))
 	require.Equal(t, "3 monitor outages had alerts whose triage was still pending when this report was computed; their suspected causes are listed as Triage pending.",
-		pendingNote(&models.SLAReportSuspectedCauses{PendingOutageCount: 3}))
+		pendingNote(&models.SLAReportSuspectedCauses{PendingOutageCount: 3, TriagedOutageCount: 2}))
+	// Nothing triaged: the page and PDF hide the breakdown, so the note must
+	// not send the reader to a Triage pending row they cannot see.
+	for _, n := range []int{1, 3} {
+		note := pendingNote(&models.SLAReportSuspectedCauses{PendingOutageCount: n})
+		require.NotContains(t, note, "listed as Triage pending")
+		require.Contains(t, note, "suspected causes are listed only once a monitor outage has been triaged.")
+	}
+	require.Equal(t, "1 monitor outage had an alert whose triage was still pending when this report was computed; suspected causes are listed only once a monitor outage has been triaged.",
+		pendingNote(&models.SLAReportSuspectedCauses{PendingOutageCount: 1}))
 }
 
 func TestAttributeCausesEmpty(t *testing.T) {

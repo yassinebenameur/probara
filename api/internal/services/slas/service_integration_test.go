@@ -188,6 +188,8 @@ func TestSLAService(t *testing.T) {
 		require.Equal(t, 1, r.SuspectedCauses.PendingOutageCount)
 		require.Equal(t, models.SLACausePending, r.Outages[0].CauseKind)
 		require.Contains(t, strings.Join(r.Notes, "\n"), "still pending")
+		require.Equal(t, 0, r.SuspectedCauses.TriagedOutageCount)
+		require.NotContains(t, strings.Join(r.Notes, "\n"), "listed as Triage pending", "the page and PDF hide the breakdown with nothing triaged")
 
 		_, err = dbClient.ExecContext(ctx, `UPDATE ai_settings SET auto_triage_enabled = FALSE WHERE tenant_id = $1`, tenantID)
 		require.NoError(t, err)
