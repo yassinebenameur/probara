@@ -1,5 +1,6 @@
 import { formatLatency, formatRelativeTime } from './format';
-import { CheckResult, HTTPDisplayValue, Monitor, MonitorState, MonitorType } from './types';
+import { sipCallTarget } from './sip-config';
+import { CheckResult, HTTPDisplayValue, Monitor, MonitorState, MonitorType, SIPMonitorConfig } from './types';
 
 export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
 export type MonitorDisplayStatus = MonitorHealthStatus | 'paused' | 'maintenance';
@@ -254,7 +255,7 @@ export function sortBySeverity<T>(
 /**
  * The address a monitor checks, as shown under its name: the URL for HTTP,
  * synthetic, Prometheus and WebSocket monitors, `host:port` for gRPC and TCP,
- * the host for everything else. Null when the type has no target (push,
+ * who a SIP test call rings (`number@domain`), the host for everything else. Null when the type has no target (push,
  * group, agent without a host).
  */
 export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>): string | null {
@@ -276,6 +277,10 @@ export function monitorTarget(monitor: Pick<Monitor, 'type' | 'config' | 'url'>)
       return config.port ? `${host}:${config.port}` : host;
     }
     if (monitor.type === 'sip' && host) {
+      // A test call reads as who it rings (number@domain, or the target
+      // URI); the host it goes through is in the settings.
+      const callTarget = sipCallTarget(config as unknown as SIPMonitorConfig);
+      if (callTarget) return callTarget;
       // Under RFC 3263 without a port, SRV picks the servers: the target is
       // the domain. An IP host skips SRV, so it falls through to the port
       // the worker dials (5061 over TLS), like every other config.

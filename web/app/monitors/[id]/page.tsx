@@ -30,10 +30,11 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import ModalPortal from '@/components/ui/ModalPortal';
 import CopyableTarget from '@/components/ui/CopyableTarget';
 import { useToast } from '@/components/ui/ToastProvider';
-import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { getEffectiveMonitorStatus, monitorTarget, monitorTargetLabel, shortFailureReason } from '@/lib/monitor-utils';
 import { checkResultLabel, MONITOR_STATUS_LABEL, MONITOR_STATUS_TONE } from '@/lib/status-tones';
-import { formatDateTime, formatDateTimeFull, formatDuration, formatRelativeTime, RANGES } from '@/lib/format';
+import { formatDateTime, formatDateTimeFull, formatDuration, formatRelativeTime, pluralize, RANGES } from '@/lib/format';
+import { isSipCall } from '@/lib/sip-config';
 import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
@@ -311,6 +312,7 @@ export default function EditMonitorPage() {
   const params = useParams();
   const id = params.id as string;
   const canWrite = useCanWrite();
+  const isTenantAdmin = useIsTenantAdmin();
 
   const [monitor, setMonitor] = useState<Monitor | null>(null);
   const [loading, setLoading] = useState(true);
@@ -336,6 +338,7 @@ export default function EditMonitorPage() {
   const [screenshotBlobURL, setScreenshotBlobURL] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
   const [runningCheck, setRunningCheck] = useState(false);
+  const [confirmRunCall, setConfirmRunCall] = useState(false);
   const [togglingEnabled, setTogglingEnabled] = useState(false);
   const isPollingRef = useRef(false);
   const resultsRef = useRef<MonitorResultsResponse | null>(null);
@@ -606,6 +609,7 @@ export default function EditMonitorPage() {
   // its first result so the toast can say how it went.
   const handleRunCheck = async () => {
     if (!monitor || runningCheck) return;
+    setConfirmRunCall(false);
     setRunningCheck(true);
     try {
       const run = await runMonitorNow(monitor.id);
@@ -820,6 +824,11 @@ export default function EditMonitorPage() {
     selectedWindowMs > retentionWindowMs;
 
   const isPassive = PASSIVE_TYPES.has(monitor.type);
+  // A SIP test call places real calls: running, pausing or resuming it is a
+  // tenant admin's (the API refuses anyone else), and a run asks first.
+  const isCall = isSipCall(monitor.type, monitor.config);
+  const canOperate = isCall ? isTenantAdmin : canWrite;
+  const runCallCount = Math.max(1, monitor.location_ids?.length ?? 0);
   const target = monitorTarget(monitor);
   const lastCheckAt = results?.results?.[0]?.created_at ?? analytics?.summary?.latest_check_at;
   const serverRows = serverFactRows(monitor, results?.results || []);
@@ -891,7 +900,7 @@ export default function EditMonitorPage() {
         subtitle={
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums sm:flex-nowrap">
             <span className="inline-flex min-w-0 items-center gap-2 max-sm:basis-full">
-              <TypeBadge type={monitor.type} />
+              <TypeBadge type={monitor.type} config={monitor.config} />
               {target && (
                 <CopyableTarget
                   value={target}
@@ -918,33 +927,39 @@ export default function EditMonitorPage() {
         action={
           canWrite ? (
             <>
-              {!isPassive && (
+              {!isPassive && canOperate && (
                 <Button
                   variant="ghost"
                   size="sm"
                   icon={<RefreshCw className={`h-4 w-4 ${runningCheck ? 'animate-spin' : ''}`} strokeWidth={1.75} />}
-                  onClick={handleRunCheck}
+                  onClick={isCall ? () => setConfirmRunCall(true) : handleRunCheck}
                   disabled={runningCheck}
-                  title="Run the check now on every location of this monitor"
+                  title={
+                    isCall
+                      ? 'Place the test call now from every location of this monitor'
+                      : 'Run the check now on every location of this monitor'
+                  }
                 >
                   {runningCheck ? 'Running…' : 'Run check'}
                 </Button>
               )}
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={
-                  monitor.enabled ? (
-                    <Pause className="h-4 w-4" strokeWidth={1.75} />
-                  ) : (
-                    <Play className="h-4 w-4" strokeWidth={1.75} />
-                  )
-                }
-                onClick={handleToggleEnabled}
-                loading={togglingEnabled}
-              >
-                {monitor.enabled ? 'Pause' : 'Resume'}
-              </Button>
+              {canOperate && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={
+                    monitor.enabled ? (
+                      <Pause className="h-4 w-4" strokeWidth={1.75} />
+                    ) : (
+                      <Play className="h-4 w-4" strokeWidth={1.75} />
+                    )
+                  }
+                  onClick={handleToggleEnabled}
+                  loading={togglingEnabled}
+                >
+                  {monitor.enabled ? 'Pause' : 'Resume'}
+                </Button>
+              )}
               <RowMenu label="More actions">
                 <RowMenuItem
                   icon={<Pencil className="h-3.5 w-3.5" strokeWidth={1.75} />}
@@ -1063,6 +1078,26 @@ export default function EditMonitorPage() {
       {activeTab === 'json' && (
         <MonitorDetailJson monitor={monitor} analytics={analytics} />
       )}
+
+      <ConfirmDialog
+        open={confirmRunCall}
+        tone="default"
+        title="Place real test calls?"
+        description={
+          <>
+            Running this check now places {pluralize(runCallCount, 'real call')}
+            {target ? (
+              <>
+                {' '}to <span className="font-mono text-slate-200">{target}</span>
+              </>
+            ) : null}
+            {runCallCount > 1 ? ', one from each of the monitor’s locations' : ''}. The carrier may bill them.
+          </>
+        }
+        confirmLabel={runCallCount > 1 ? `Place ${runCallCount} calls` : 'Place call'}
+        onConfirm={() => void handleRunCheck()}
+        onCancel={() => setConfirmRunCall(false)}
+      />
 
       <ConfirmDialog
         open={confirmDelete}

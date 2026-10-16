@@ -223,7 +223,7 @@ export function MonitorMultiSelect({
               {covered ? (
                 <p className="flex-shrink-0 text-xs text-slate-500">Covered by {opts?.coveredBy}</p>
               ) : (
-                <TypeBadge type={mon.type} />
+                <TypeBadge type={mon.type} config={mon.config} />
               )}
               {(mon.tags ?? []).slice(0, 2).map((tag) => (
                 <TagPill key={tag} tag={tag} size="xs" />

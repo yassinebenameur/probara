@@ -46,3 +46,17 @@ test('SIP clone keeps every non-secret field and drops the masked password', () 
   (config.future_field as { nested: string[] }).nested.push('x');
   assert.deepEqual((source.config as unknown as { future_field: { nested: string[] } }).future_field.nested, ['kept']);
 });
+
+test('SIP test-call clone keeps the whole call', () => {
+  const call = { number: '+33123456789', mode: 'ring', warn_pdd_ms: 3000, probe_header: true };
+  const source = {
+    id: 'source', name: 'IVR', type: 'sip', interval_seconds: 300, timeout_seconds: 15,
+    enabled: true, tags: [], location_ids: [], location_quorum: 1,
+    config: { host: 'trunk.example.com', port: 5060, transport: 'udp', method: 'invite', username: 'u', password: '***', call },
+  } as unknown as Monitor;
+  const config = buildClonedMonitorInitialData(source).config as SIPMonitorConfig;
+  assert.equal(config.method, 'invite');
+  assert.deepEqual(config.call, call);
+  assert.equal(config.password, undefined);
+  assert.notEqual(config.call, call);
+});

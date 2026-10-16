@@ -85,6 +85,12 @@ interface ScheduleSectionProps {
   timeoutSeconds: number;
   onTimeoutChange: (seconds: number) => void;
   timeoutError?: string;
+  intervalError?: string;
+  /** Bounds a type puts on its schedule (a SIP test call: at least 60 s, at most 20 s). */
+  minIntervalSeconds?: number;
+  intervalPresets?: readonly number[];
+  intervalHint?: string;
+  maxTimeoutSeconds?: number;
   /** Omit for monitors that only run on the default fleet. */
   locations?: {
     selectedIds: string[];
@@ -109,6 +115,11 @@ export default function ScheduleSection({
   timeoutSeconds,
   onTimeoutChange,
   timeoutError,
+  intervalError,
+  minIntervalSeconds = 10,
+  intervalPresets,
+  intervalHint,
+  maxTimeoutSeconds,
   locations,
   enabled,
   onEnabledChange,
@@ -139,7 +150,16 @@ export default function ScheduleSection({
       }
     >
       <div className="flex flex-wrap gap-x-10 gap-y-4">
-        <IntervalField label="Check every" value={intervalSeconds} onChange={onIntervalChange} min={10} step={5} />
+        <IntervalField
+          label="Check every"
+          value={intervalSeconds}
+          onChange={onIntervalChange}
+          presets={intervalPresets}
+          min={minIntervalSeconds}
+          step={5}
+          error={intervalError}
+          hint={intervalHint}
+        />
         <FormField label="Timeout" error={timeoutError}>
           {(control) => (
             <>
@@ -149,6 +169,7 @@ export default function ScheduleSection({
                   value={timeoutSeconds}
                   onChange={onTimeoutChange}
                   min={1}
+                  max={maxTimeoutSeconds}
                   className="input input-sm !w-24 tabular-nums"
                 />
                 <span className="text-xs text-slate-500">seconds</span>
@@ -157,7 +178,9 @@ export default function ScheduleSection({
                 (overlaps ? (
                   <FieldHint tone="warning">At least the interval: checks would overlap</FieldHint>
                 ) : (
-                  <FieldHint>Less than the interval</FieldHint>
+                  <FieldHint>
+                    {maxTimeoutSeconds ? `Less than the interval, at most ${maxTimeoutSeconds} seconds` : 'Less than the interval'}
+                  </FieldHint>
                 ))}
             </>
           )}

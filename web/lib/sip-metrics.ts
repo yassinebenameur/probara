@@ -1,5 +1,5 @@
 import { formatDate, formatLatency, pluralize } from './format';
-import type { CheckResult, SIPMetrics, SIPMetricsEnvelope, TLSCertInfo } from './types';
+import type { CheckResult, SIPCallMetrics, SIPMetrics, SIPMetricsEnvelope, TLSCertInfo } from './types';
 
 // Facts the monitor detail page's Server panel shows for a SIP monitor, read
 // from the worker's metrics_data.sip envelope (worker sip_metrics.go).
@@ -108,11 +108,103 @@ export function sipFacts(m: SIPMetrics, minDaysValid?: number): SIPFact[] {
   if (m.stray_messages > 0) {
     facts.push({ key: 'stray', label: 'Ignored', value: pluralize(m.stray_messages, 'unmatched response'), tone: 'note' });
   }
+  if (m.call) facts.push(...sipCallFacts(m.call));
   // The server's own Warning header (RFC 3261 §20.43): diagnostic text, not
   // a Probara threshold warning, so it reads as a note.
   if (m.warning) facts.push({ key: 'sip-warning', label: 'SIP warning', value: m.warning, tone: 'note' });
+  // The check's own warnings (a warn threshold, an unconfirmed teardown, a
+  // ring-mode call that was answered): the status stayed, the operator
+  // should still know.
+  // An unconfirmed teardown already reads as a warning on its Teardown row.
+  const teardownShown = m.call?.teardown === 'bye_unconfirmed' || m.call?.teardown === 'cancel_unconfirmed';
+  (m.warnings ?? []).forEach((warning, i) => {
+    if (teardownShown && warning.startsWith('teardown:')) return;
+    facts.push({ key: `warning-${i}`, label: 'Warning', value: warning, tone: 'warning' });
+  });
+  if (m.latency_warn_ms !== undefined && !(m.warnings && m.warnings.length > 0)) {
+    facts.push({ key: 'latency-warn', label: 'Warning', value: `over the ${formatLatency(m.latency_warn_ms)} warning threshold`, tone: 'warning' });
+  }
   if (m.call_id) facts.push({ key: 'call-id', label: 'Call-ID', value: m.call_id, copyable: true });
   return facts;
+}
+
+/**
+ * The call's own facts (metrics_data.sip.call): post-dial delay with what
+ * ended it, answer time, the negotiated codec and how the call was torn
+ * down. An unconfirmed teardown is a warning: the far end may still hold a
+ * billed call open.
+ */
+export function sipCallFacts(call: SIPCallMetrics): SIPFact[] {
+  const facts: SIPFact[] = [];
+  if (call.pdd_ms !== undefined) {
+    const source = call.pdd_source ? ` (${call.pdd_source})` : '';
+    facts.push({ key: 'pdd', label: 'Post-dial delay', value: `${formatLatency(call.pdd_ms)}${source}` });
+  }
+  if (call.answer_ms !== undefined) {
+    const hold = call.hold_ms > 0 ? `, held ${formatLatency(call.hold_ms)}` : '';
+    facts.push({ key: 'answer', label: 'Answered in', value: `${formatLatency(call.answer_ms)}${hold}` });
+  } else if (call.mode === 'ring' && call.pdd_ms !== undefined) {
+    facts.push({ key: 'answer', label: 'Call', value: 'rang, cancelled before answer (ring mode)' });
+  }
+  const media = [
+    call.sdp_answer?.codec ?? '',
+    call.early_media ? 'early media' : '',
+  ].filter(Boolean);
+  if (media.length > 0) facts.push({ key: 'media', label: 'Media', value: media.join(' · ') });
+  if (call.forked_answers > 0) {
+    facts.push({ key: 'forks', label: 'Forked', value: `${pluralize(call.forked_answers, 'extra answer')}, each hung up`, tone: 'note' });
+  }
+  const teardown = sipTeardownLabel(call);
+  if (teardown) {
+    const unconfirmed = call.teardown === 'bye_unconfirmed' || call.teardown === 'cancel_unconfirmed';
+    facts.push({ key: 'teardown', label: 'Teardown', value: teardown, tone: unconfirmed ? 'warning' : undefined });
+  }
+  return facts;
+}
+
+/** How the call ended, in words; empty for "none" (nothing to tear down). */
+export function sipTeardownLabel(call: SIPCallMetrics): string {
+  const bye = call.bye_ms !== undefined ? ` in ${formatLatency(call.bye_ms)}` : '';
+  switch (call.teardown) {
+    case 'bye_ok':
+      return `BYE confirmed${bye}`;
+    case 'bye_481':
+      return 'BYE answered 481: the far end had already ended the call';
+    case 'bye_unconfirmed':
+      return 'BYE unconfirmed: the far end may still hold the call';
+    case 'cancelled':
+      return 'CANCEL confirmed (487)';
+    case 'cancel_unconfirmed':
+      return 'CANCEL unconfirmed: the far end may still be ringing';
+    case 'answered_after_cancel':
+      return `answered after CANCEL, hung up with BYE${bye}`;
+    case 'remote_bye':
+      return 'the callee hung up first';
+    case 'no_provisional':
+      return 'no response, nothing to cancel';
+    case 'none':
+    case '':
+      return '';
+    default: {
+      const code = /^bye_(\d{3})$/.exec(call.teardown)?.[1];
+      return code ? `BYE answered ${code}` : call.teardown;
+    }
+  }
+}
+
+/**
+ * One line for a test-call Test result: `ringing after 850 ms, answered in
+ * 4.2 s`. Empty without call metrics.
+ */
+export function sipCallSummary(call: SIPCallMetrics | undefined): string {
+  if (!call) return '';
+  const parts: string[] = [];
+  // pdd_source 200: answered without ringing, so the PDD is the answer time.
+  if (call.pdd_ms !== undefined && call.pdd_source !== '200') {
+    parts.push(`ringing after ${formatLatency(call.pdd_ms)}`);
+  }
+  if (call.answer_ms !== undefined) parts.push(`answered in ${formatLatency(call.answer_ms)}`);
+  return parts.join(', ');
 }
 
 /**

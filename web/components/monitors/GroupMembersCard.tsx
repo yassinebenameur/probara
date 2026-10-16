@@ -41,7 +41,7 @@ export function GroupMembersCard({ groupId }: { groupId: string }) {
                 <span className={`h-2 w-2 shrink-0 rounded-full ${colors.dot}`} aria-hidden="true" />
                 <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{member.name}</span>
                 {member.enabled ? (
-                  <TypeBadge type={member.type} />
+                  <TypeBadge type={member.type} config={member.config} />
                 ) : (
                   <span className="text-xs text-slate-500">Paused</span>
                 )}

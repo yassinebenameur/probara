@@ -174,7 +174,7 @@ export default function MonitorPicker({
                         in {placement.sectionTitle || 'another section'}
                       </span>
                     ) : (
-                      <TypeBadge type={monitor.type} />
+                      <TypeBadge type={monitor.type} config={monitor.config} />
                     )}
                   </button>
                 );

@@ -300,7 +300,9 @@ or imported groups come back empty. Any other path that creates groups through
   effective type/config/interval/timeout on every update. Workers read
   `SIP_CALL_ENABLED` (default true, false with `WORKER_LOCATION_ID`) and
   `SIP_CALL_ALLOWED_DESTINATIONS`; a `SIPChecker` never configured
-  (`ConfigureCalls`) places no call.
+  (`ConfigureCalls`) places no call. Its web twin is `isSipCall`
+  (`web/lib/sip-config.ts`): the UI hides call run/pause/clone and locks the
+  form for non-admins (`useIsTenantAdmin`), and confirms every Test and run.
 - **Compose and Helm move together**: a port, queue subject or credential
   changed in `docker-compose.yml` must change in the chart's values too (the
   check-job names above show what drift costs).
@@ -489,7 +491,8 @@ or imported groups come back empty. Any other path that creates groups through
   `monitorTarget`, `shortFailureReason` in `lib/monitor-utils.ts`.
 - **Shared controls**: time ranges use `components/ui/RangePicker.tsx`
   (page-scoped: header or Tabs `trailing`, never inside one card); monitor
-  types render as `components/ui/TypeBadge.tsx`, labels from
+  types render as `components/ui/TypeBadge.tsx` (pass `config` where it is at
+  hand so a SIP test call reads `CALL`, via `monitorTypeDisplay`), labels from
   `lib/monitor-type-labels.ts` only; write affordances gate on
   `useCanWrite()` / `useIsTenantAdmin()` from `CurrentUserProvider` (both
   read false while identity loads, so "read-only" copy also waits for

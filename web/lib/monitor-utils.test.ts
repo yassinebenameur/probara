@@ -143,6 +143,15 @@ test('monitorTarget mirrors the list and detail target', () => {
     monitorTarget({ type: 'sip', config: { host: '2001:db8::1', resolution: 'rfc3263', transport: 'tls' } as never }),
     '2001:db8::1:5061'
   );
+  // A test call reads as who it rings.
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: 'trunk.test', domain: 'example.com', method: 'invite', call: { number: '1000' } } as never }),
+    '1000@example.com'
+  );
+  assert.equal(
+    monitorTarget({ type: 'sip', config: { host: 'trunk.test', method: 'invite', call: { target_uri: 'sip:ivr@pbx.test' } } as never }),
+    'sip:ivr@pbx.test'
+  );
 });
 
 test('shortFailureReason strips Go framing', () => {

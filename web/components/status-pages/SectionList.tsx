@@ -488,7 +488,7 @@ function MonitorRow({
               onClick={onRemove}
             />
           </div>
-          <TypeBadge type={monitor.type} className="hidden sm:inline-flex" />
+          <TypeBadge type={monitor.type} config={monitor.config} className="hidden sm:inline-flex" />
         </>
       )}
     </div>

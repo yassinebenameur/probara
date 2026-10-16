@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildSipConfig, SipFormFields } from './sip-config';
+import {
+  buildSipConfig,
+  isSipCall,
+  sipCallFormFields,
+  sipCallsPerDay,
+  sipCallTarget,
+  SipFormFields,
+  validateSipCallFields,
+} from './sip-config';
 import type { SIPMonitorConfig } from './types';
 
 const stored = {
@@ -33,6 +41,7 @@ function formFrom(overrides: Partial<SipFormFields> = {}): SipFormFields {
     expected_status: '200',
     resolution: 'a',
     nameserver: '',
+    ...sipCallFormFields(undefined),
     ...overrides,
   };
 }
@@ -126,4 +135,147 @@ test('an rfc3263 save round-trips', () => {
     resolution: 'rfc3263', nameserver: '10.0.0.2',
   }));
   assert.deepEqual(config, dns);
+});
+
+const storedCall = {
+  host: 'trunk.example.com',
+  port: 5061,
+  transport: 'tls',
+  method: 'invite',
+  username: 'probe',
+  password: '***',
+  domain: 'example.com',
+  call: {
+    number: '+33123456789',
+    from_display: 'Probara probe',
+    mode: 'answer',
+    hold_ms: 2000,
+    warn_pdd_ms: 3000,
+    max_pdd_ms: 5000,
+    probe_header: true,
+    future_call_field: 'kept',
+  },
+  future_field: 1,
+} as unknown as SIPMonitorConfig;
+
+function callFormFrom(config: SIPMonitorConfig, overrides: Partial<SipFormFields> = {}): SipFormFields {
+  return {
+    host: config.host,
+    port: config.port,
+    transport: config.transport as SipFormFields['transport'],
+    resolution: 'a',
+    nameserver: '',
+    method: 'invite',
+    username: config.username ?? '',
+    password: config.password ?? '',
+    domain: config.domain ?? '',
+    tls_skip_verify: false,
+    tls_server_name: '',
+    tls_min_days_valid: '',
+    expected_status: '',
+    ...sipCallFormFields(config.call),
+    ...overrides,
+  };
+}
+
+test('a test-call save round-trips the stored call, unknown keys included', () => {
+  assert.deepEqual(buildSipConfig(storedCall, callFormFrom(storedCall)), storedCall);
+});
+
+test('a save keeps tls_server_name and unknown fields of a test call', () => {
+  const withSNI = { ...storedCall, tls_server_name: 'sbc.example.com' } as SIPMonitorConfig;
+  const config = buildSipConfig(withSNI, callFormFrom(withSNI, { tls_server_name: 'sbc.example.com' }));
+  assert.equal(config.tls_server_name, 'sbc.example.com');
+  assert.equal((config.call as unknown as { future_call_field: string }).future_call_field, 'kept');
+});
+
+test('ring mode drops what the API refuses there', () => {
+  const config = buildSipConfig(
+    storedCall,
+    callFormFrom(storedCall, { call_mode: 'ring', expected_status: '486', call_warn_answer_ms: '8000' }),
+  );
+  assert.equal(config.call?.mode, 'ring');
+  assert.equal(config.call?.hold_ms, undefined);
+  assert.equal(config.call?.warn_answer_ms, undefined);
+  assert.equal(config.expected_status, undefined);
+  // PDD thresholds still apply to ringing.
+  assert.equal(config.call?.max_pdd_ms, 5000);
+});
+
+test('a target URI replaces the number, and leaving invite drops the call', () => {
+  const uri = buildSipConfig(
+    storedCall,
+    callFormFrom(storedCall, { call_target_kind: 'uri', call_target_uri: ' sips:ivr@pbx.example.com ' }),
+  );
+  assert.equal(uri.call?.target_uri, 'sips:ivr@pbx.example.com');
+  assert.equal(uri.call?.number, undefined);
+
+  const options = buildSipConfig(storedCall, callFormFrom(storedCall, { method: 'options' }));
+  assert.equal(options.call, undefined);
+  assert.equal(options.method, undefined); // options is the default and is omitted
+});
+
+test('a new test call always says its mode', () => {
+  const config = buildSipConfig(undefined, callFormFrom(storedCall, { call_number: '1000', call_hold_ms: '' }));
+  assert.deepEqual(config.call, {
+    number: '1000',
+    from_display: 'Probara probe',
+    mode: 'answer',
+    warn_pdd_ms: 3000,
+    max_pdd_ms: 5000,
+    probe_header: true,
+  });
+});
+
+test('isSipCall mirrors the API gate: method invite or a call object, sip only', () => {
+  assert.equal(isSipCall('sip', { method: 'invite' }), true);
+  assert.equal(isSipCall('sip', { method: ' INVITE ' }), true);
+  assert.equal(isSipCall('sip', { method: 'options', call: {} }), true);
+  assert.equal(isSipCall('sip', { method: 'options' }), false);
+  assert.equal(isSipCall('sip', undefined), false);
+  assert.equal(isSipCall('http', { method: 'invite' }), false);
+});
+
+test('sipCallTarget names who the call rings', () => {
+  assert.equal(sipCallTarget(storedCall), '+33123456789@example.com');
+  assert.equal(sipCallTarget({ ...storedCall, domain: undefined } as SIPMonitorConfig), '+33123456789@trunk.example.com');
+  assert.equal(
+    sipCallTarget({ ...storedCall, call: { target_uri: 'sip:ivr@pbx.example.com' } } as SIPMonitorConfig),
+    'sip:ivr@pbx.example.com',
+  );
+  assert.equal(sipCallTarget({ host: 'x', port: 0, transport: '' }), null);
+});
+
+test('sipCallsPerDay counts one call per check per location', () => {
+  assert.equal(sipCallsPerDay(60, 0), 1440);
+  assert.equal(sipCallsPerDay(60, 3), 4320);
+  assert.equal(sipCallsPerDay(300, 1), 288);
+});
+
+test('validateSipCallFields applies the test-call rules', () => {
+  const ok = callFormFrom(storedCall);
+  assert.deepEqual(validateSipCallFields(ok, 60, 10), {});
+  assert.deepEqual(validateSipCallFields({ ...ok, method: 'options', call_number: '' }, 30, 30), {});
+
+  const errors = validateSipCallFields(
+    { ...ok, call_number: 'bad number', call_warn_pdd_ms: '5000', call_max_pdd_ms: '5000', expected_status: '180' },
+    30,
+    25,
+  );
+  assert.ok(errors.call_number);
+  assert.ok(errors.call_warn_pdd_ms);
+  assert.ok(errors.expected_status);
+  assert.ok(errors.interval_seconds);
+  assert.ok(errors.timeout_seconds);
+
+  // The hold plus 2 s to ring and answer must fit in the timeout.
+  assert.ok(validateSipCallFields({ ...ok, call_hold_ms: '9000' }, 60, 10).call_hold_ms);
+  assert.deepEqual(validateSipCallFields({ ...ok, call_hold_ms: '8000' }, 60, 10), {});
+  // Ring mode ignores the hold and the expected status.
+  assert.deepEqual(validateSipCallFields({ ...ok, call_mode: 'ring', call_hold_ms: '9000', expected_status: '180' }, 60, 10), {});
+
+  const uri = { ...ok, call_target_kind: 'uri' as const, call_target_uri: 'sips:ivr@pbx.example.com' };
+  assert.deepEqual(validateSipCallFields(uri, 60, 10), {});
+  assert.ok(validateSipCallFields({ ...uri, transport: 'udp' }, 60, 10).call_target_uri);
+  assert.ok(validateSipCallFields({ ...uri, call_target_uri: 'tel:+331' }, 60, 10).call_target_uri);
 });

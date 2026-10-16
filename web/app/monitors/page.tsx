@@ -46,7 +46,8 @@ import {
   sortMonitorsByName,
 } from '@/lib/monitor-list';
 import { getApiKey } from '@/lib/auth';
-import { useCanWrite } from '@/components/providers/CurrentUserProvider';
+import { useCanWrite, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
+import { isSipCall } from '@/lib/sip-config';
 import {
   calculateUptime,
   countOperationalResults,
@@ -446,16 +447,24 @@ function MonitorActionsMenu({
   onDelete: () => void;
   onSnooze: (monitor: Monitor, durationMinutes: number) => void;
 }) {
+  // Cloning, pausing or resuming a SIP test call is a tenant admin's: the
+  // API refuses anyone else, since each check places a real call.
+  const isTenantAdmin = useIsTenantAdmin();
+  const callLocked = isSipCall(monitor.type, monitor.config) && !isTenantAdmin;
   return (
     <RowMenu label={`Actions for ${monitor.name}`}>
       <RowMenuItem href={`/monitors/${monitorId}`} icon={<Pencil strokeWidth={1.75} />}>Edit</RowMenuItem>
-      <RowMenuItem href={`/monitors/new?clone=${monitorId}`} icon={<Copy strokeWidth={1.75} />}>Clone</RowMenuItem>
-      <RowMenuItem
-        onSelect={() => onToggleEnabled(monitor)}
-        icon={monitor.enabled ? <Pause strokeWidth={1.75} /> : <Play strokeWidth={1.75} />}
-      >
-        {monitor.enabled ? 'Pause' : 'Resume'}
-      </RowMenuItem>
+      {!callLocked && (
+        <RowMenuItem href={`/monitors/new?clone=${monitorId}`} icon={<Copy strokeWidth={1.75} />}>Clone</RowMenuItem>
+      )}
+      {!callLocked && (
+        <RowMenuItem
+          onSelect={() => onToggleEnabled(monitor)}
+          icon={monitor.enabled ? <Pause strokeWidth={1.75} /> : <Play strokeWidth={1.75} />}
+        >
+          {monitor.enabled ? 'Pause' : 'Resume'}
+        </RowMenuItem>
+      )}
       <RowMenuSeparator />
       <SnoozeOptions onSnooze={(minutes) => onSnooze(monitor, minutes)} />
       <RowMenuSeparator />
@@ -533,7 +542,7 @@ function MonitorRow({
           <TagList tags={monitor.tags} max={3} />
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-2">
-          <TypeBadge type={monitor.type} />
+          <TypeBadge type={monitor.type} config={monitor.config} />
           <TargetLine monitor={monitor} />
           {monitor.type === 'agent' && agentMetrics && <AgentMetricsMini metrics={agentMetrics} />}
         </div>
@@ -936,7 +945,7 @@ function DetailPanel({
             <Pill tone={MONITOR_STATUS_TONE[status]} size="xs" dot>{MONITOR_STATUS_LABEL[status]}</Pill>
           </div>
           <div className="mt-1 flex min-w-0 items-center gap-2">
-            <TypeBadge type={monitor.type} />
+            <TypeBadge type={monitor.type} config={monitor.config} />
             {target ? (
               <CopyableTarget
                 value={target}

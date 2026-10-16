@@ -389,7 +389,8 @@ export interface SIPMonitorConfig {
   resolution?: "a" | "rfc3263";
   // DNS server for rfc3263 lookups (host or host:port); rfc3263 only.
   nameserver?: string;
-  method?: "options" | "register";
+  // "invite" places a real test call (call is then required).
+  method?: "options" | "register" | "invite";
   username?: string;
   password?: string; // write-only; API reads return the masked placeholder
   domain?: string;
@@ -398,6 +399,35 @@ export interface SIPMonitorConfig {
   tls_server_name?: string;
   // Open a certificate-expiry alert when fewer days remain (transport tls only).
   tls_min_days_valid?: number;
+  // The test call; set if and only if method is "invite" (Go shared/models
+  // sip_call.go SIPCallConfig).
+  call?: SIPCallConfig;
+}
+
+// A SIP test call. Exactly one of number / target_uri. Every check places a
+// real, possibly billed, call, so only tenant admins may create, change, run
+// or test one, and the schedule is bounded (interval >= 60 s, timeout <= 20 s).
+export interface SIPCallConfig {
+  // Called user part: sip:<number>@<domain or host> (;user=phone for digits).
+  number?: string;
+  // Full sip:/sips: Request-URI; the worker still sends to the monitor's host.
+  target_uri?: string;
+  from_user?: string;
+  from_display?: string;
+  from_domain?: string;
+  // "answer" (default): 200, hold, BYE. "ring": success on the first 18x, then CANCEL.
+  mode?: "answer" | "ring";
+  // Answer mode only, 0-10000.
+  hold_ms?: number;
+  warn_pdd_ms?: number;
+  max_pdd_ms?: number;
+  // Answer mode only.
+  warn_answer_ms?: number;
+  max_answer_ms?: number;
+  // NAT override for the SDP offer's o=/c= address.
+  sdp_address?: string;
+  // Adds X-Probara-Probe: 1.
+  probe_header?: boolean;
 }
 
 // Pasted TLS material shared by the database monitor types: CA PEM for
@@ -1943,7 +1973,43 @@ export interface SIPMetrics {
   stray_messages: number;
   auth?: SIPAuthMetrics;
   tls?: TLSCertInfo;
+  // INVITE test calls only.
+  call?: SIPCallMetrics;
+  // The warn threshold a successful call exceeded; warnings says which.
+  latency_warn_ms?: number;
+  // Worth an operator's attention without changing the status: a warn
+  // threshold, an unconfirmed teardown, a ring-mode call that was answered.
+  warnings?: string[];
   assertions_failed?: string[];
+}
+
+// metrics_data.sip.call (worker sip_metrics.go sipCallMetrics). pdd_ms and
+// answer_ms run from the INVITE that drew them (the authenticated one when
+// challenged); setup_pdd_ms and setup_ms from the first INVITE.
+export interface SIPCallMetrics {
+  mode: 'answer' | 'ring';
+  trying_ms?: number;
+  pdd_ms?: number;
+  // The response that ended post-dial delay: "180", "183", or "200" when no 18x came.
+  pdd_source?: string;
+  setup_pdd_ms?: number;
+  answer_ms?: number;
+  setup_ms?: number;
+  hold_ms: number;
+  bye_ms?: number;
+  provisional?: { code: number; at_ms: number }[];
+  early_media: boolean;
+  answered: boolean;
+  forked_answers: number;
+  route_hops: number;
+  require_100rel: boolean;
+  answered_by?: { source?: string; contact_host?: string; record_route?: string[] };
+  sdp_answer?: { codec?: string; payload_type?: number; remote_media?: string; direction?: string };
+  rtp_rx_packets: number;
+  // bye_ok, bye_481, bye_<code>, bye_unconfirmed, cancelled,
+  // cancel_unconfirmed, answered_after_cancel, remote_bye, no_provisional, none.
+  teardown: string;
+  teardown_status?: number;
 }
 
 export interface SIPReasonHeader {

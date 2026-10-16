@@ -1,11 +1,32 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
-import { buildSipConfig, SipFormFields } from '@/lib/sip-config';
+import { CheckCircle2, Loader2, PhoneCall, PlugZap, XCircle } from 'lucide-react';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment, Location } from '@/lib/types';
+import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
+import {
+  buildSipConfig,
+  isSipCall,
+  sipCallFormFields,
+  sipCallsPerDay,
+  sipCallTarget,
+  validateSipCallFields,
+  SipFormFields,
+  SIP_CALL_MAX_HOLD_MS,
+  SIP_CALL_MAX_TIMEOUT_SECONDS,
+  SIP_CALL_MIN_INTERVAL_SECONDS,
+} from '@/lib/sip-config';
+import { sipCallSummary } from '@/lib/sip-metrics';
+import { pluralize } from '@/lib/format';
+import { useCurrentUser, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
+import Button from '@/components/ui/Button';
+import Callout from '@/components/ui/Callout';
+import CollapsibleSection from '@/components/ui/CollapsibleSection';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
+import { SELECTED_SEGMENT } from '@/components/ui/roving';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
@@ -19,6 +40,39 @@ interface SipFormProps {
   loading?: boolean;
 }
 
+type TestState =
+  | { phase: 'idle' }
+  | { phase: 'running' }
+  | { phase: 'done'; result: TestMonitorConfigResponse }
+  | { phase: 'request_failed'; message: string };
+
+// Errors cleared by edits to another field (useClearErrorsOnEdit): the call
+// schedule bounds follow the method and the hold, the hold follows the
+// timeout and mode, a sips: target follows the transport.
+const SIP_RELATED_FIELDS: Record<string, string[]> = {
+  timeout_seconds: ['interval_seconds', 'method'],
+  interval_seconds: ['method'],
+  call_hold_ms: ['timeout_seconds', 'call_mode'],
+  call_target_uri: ['transport', 'call_target_kind'],
+  call_number: ['call_target_kind'],
+  call_warn_pdd_ms: ['call_max_pdd_ms'],
+  call_warn_answer_ms: ['call_max_answer_ms'],
+  expected_status: ['call_mode', 'method'],
+};
+
+// Error keys that live in the call's Advanced disclosure, opened on submit
+// when one of them fails.
+const CALL_ADVANCED_FIELDS = ['call_target_uri', 'call_sdp_address'];
+
+const CALL_INTERVAL_PRESETS = [60, 300, 900, 3600] as const;
+
+type SipMethod = SipFormFields['method'];
+
+const normalizeMethod = (method: string | undefined): SipMethod => {
+  const m = (method || '').trim().toLowerCase();
+  return m === 'register' || m === 'invite' ? m : 'options';
+};
+
 export default function SipForm({
   monitor,
   initialData,
@@ -27,11 +81,19 @@ export default function SipForm({
   loading = false,
 }: SipFormProps) {
   const isEditMode = Boolean(monitor);
+  const { canWrite, loading: userLoading } = useCurrentUser();
+  const isTenantAdmin = useIsTenantAdmin();
   const initialSipConfig =
     !isEditMode && initialData?.type === 'sip' ? (initialData.config as SIPMonitorConfig) : undefined;
 
   const editSipConfig =
     monitor && monitor.type === 'sip' ? (monitor.config as SIPMonitorConfig) : undefined;
+  const loadedConfig = editSipConfig ?? initialSipConfig;
+
+  // A saved monitor cannot switch between a test call and OPTIONS/REGISTER
+  // (the API refuses it: latency and billing would change meaning under one
+  // history), so edit mode locks the method class.
+  const storedIsCall = isEditMode && isSipCall('sip', editSipConfig);
 
   // RFC 3263 resolution ("Locate server via DNS") leaves port and transport
   // to SRV when they are unset (0 and '').
@@ -54,7 +116,7 @@ export default function SipForm({
     transport: initialTransport,
     resolution: initialResolution,
     nameserver: editSipConfig?.nameserver || initialSipConfig?.nameserver || '',
-    method: (editSipConfig?.method || initialSipConfig?.method || 'options') as 'options' | 'register',
+    method: normalizeMethod(editSipConfig?.method || initialSipConfig?.method),
     username: editSipConfig?.username || initialSipConfig?.username || '',
     password: editSipConfig?.password || initialSipConfig?.password || '',
     domain: editSipConfig?.domain || initialSipConfig?.domain || '',
@@ -64,6 +126,7 @@ export default function SipForm({
       (editSipConfig?.tls_min_days_valid ?? initialSipConfig?.tls_min_days_valid)?.toString() ?? '',
     expected_status: editSipConfig?.expected_status?.toString()
       || initialSipConfig?.expected_status?.toString() || '',
+    ...sipCallFormFields(loadedConfig?.call),
     interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
     timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
     enabled: monitor?.enabled ?? initialData?.enabled ?? true,
@@ -78,11 +141,34 @@ export default function SipForm({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
-  useClearErrorsOnEdit(formData, setErrors);
+  useClearErrorsOnEdit(formData, setErrors, SIP_RELATED_FIELDS);
   useFollowEnabled(monitor?.enabled, setFormData);
   const formRef = useRef<HTMLFormElement>(null);
   const rfc3263 = formData.resolution === 'rfc3263';
   const defaultPort = formData.transport === 'tls' ? 5061 : 5060;
+  const isCall = formData.method === 'invite';
+  const ring = formData.call_mode === 'ring';
+  const [callAdvancedOpen, setCallAdvancedOpen] = useState(
+    formData.call_target_kind === 'uri' || Boolean(formData.call_sdp_address) || formData.call_probe_header
+  );
+
+  // Test calls are a tenant admin's: anyone else can read the monitor but
+  // the API refuses any change, run or test of it. False while identity
+  // loads; the read-only notice waits for it.
+  const callLocked = isCall && !isTenantAdmin;
+  const showCallLockedNotice = callLocked && !userLoading;
+
+  const [test, setTest] = useState<TestState>({ phase: 'idle' });
+  const [confirmTestCall, setConfirmTestCall] = useState(false);
+  // Shared by the Locations section (onLocationsLoaded) so the test-from
+  // picker can name the monitor's locations. '' = default fleet.
+  const [availableLocations, setAvailableLocations] = useState<Location[]>([]);
+  const [testLocationId, setTestLocationId] = useState('');
+  const canTest = isCall ? isTenantAdmin : !userLoading && (!isEditMode || canWrite);
+
+  // One check per location per interval; the default fleet runs it once.
+  const callLocations = Math.max(1, formData.location_ids.length);
+  const callsPerDay = sipCallsPerDay(formData.interval_seconds, formData.location_ids.length);
 
   const setLocateViaDNS = (on: boolean) =>
     setFormData((prev) => {
@@ -101,19 +187,62 @@ export default function SipForm({
       };
     });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (reportConstraintViolation(formRef.current)) return;
-    setErrors({});
+  const setMethod = (method: SipMethod) =>
+    setFormData((prev) => {
+      if (method !== 'invite') return { ...prev, method };
+      // Start a new test call inside its schedule bounds rather than with
+      // two errors waiting on submit.
+      return {
+        ...prev,
+        method,
+        interval_seconds: Math.max(prev.interval_seconds, SIP_CALL_MIN_INTERVAL_SECONDS),
+        timeout_seconds: Math.min(prev.timeout_seconds, SIP_CALL_MAX_TIMEOUT_SECONDS),
+      };
+    });
 
-    const newErrors: Record<string, string> = {};
-    if (!formData.name.trim()) newErrors.name = 'Name is required';
+  const sipFields = (): SipFormFields => ({
+    host: formData.host,
+    port: formData.port,
+    transport: formData.transport,
+    resolution: formData.resolution,
+    nameserver: formData.nameserver,
+    method: formData.method,
+    username: formData.username,
+    password: formData.password,
+    domain: formData.domain,
+    tls_skip_verify: formData.tls_skip_verify,
+    tls_server_name: formData.tls_server_name,
+    tls_min_days_valid: formData.tls_min_days_valid,
+    expected_status: formData.expected_status,
+    call_target_kind: formData.call_target_kind,
+    call_number: formData.call_number,
+    call_target_uri: formData.call_target_uri,
+    call_from_user: formData.call_from_user,
+    call_from_display: formData.call_from_display,
+    call_from_domain: formData.call_from_domain,
+    call_mode: formData.call_mode,
+    call_hold_ms: formData.call_hold_ms,
+    call_warn_pdd_ms: formData.call_warn_pdd_ms,
+    call_max_pdd_ms: formData.call_max_pdd_ms,
+    call_warn_answer_ms: formData.call_warn_answer_ms,
+    call_max_answer_ms: formData.call_max_answer_ms,
+    call_sdp_address: formData.call_sdp_address,
+    call_probe_header: formData.call_probe_header,
+  });
+
+  // Built on top of the loaded config so keys this form does not render
+  // survive the save (an update replaces the whole stored config).
+  const buildConfig = () => buildSipConfig(loadedConfig, sipFields());
+
+  // Everything but naming and the schedule's interval/timeout relation:
+  // what a Test needs too.
+  const validateTarget = (): Record<string, string> => {
+    const newErrors: Record<string, string> = {
+      ...validateSipCallFields(sipFields(), formData.interval_seconds, formData.timeout_seconds),
+    };
     if (!formData.host.trim()) newErrors.host = 'Host is required';
     if (rfc3263 ? formData.port < 0 || formData.port > 65535 : formData.port < 1 || formData.port > 65535) {
       newErrors.port = 'Port must be between 1 and 65535';
-    }
-    if (formData.timeout_seconds >= formData.interval_seconds) {
-      newErrors.timeout_seconds = 'Timeout must be less than interval';
     }
     if (formData.transport === 'tls' && formData.tls_min_days_valid.trim()) {
       const days = Number(formData.tls_min_days_valid);
@@ -127,21 +256,71 @@ export default function SipForm({
     if ((formData.username.trim() === '') !== (formData.password === '')) {
       newErrors.username = 'Username and password must be provided together';
     }
+    return newErrors;
+  };
 
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      revealFirstError(formRef.current);
+  const showErrors = (newErrors: Record<string, string>) => {
+    setErrors(newErrors);
+    if (CALL_ADVANCED_FIELDS.some((key) => newErrors[key])) setCallAdvancedOpen(true);
+    revealFirstError(formRef.current);
+  };
+
+  const runTest = async () => {
+    setConfirmTestCall(false);
+    // Ignore a stale pick if the location was deselected since.
+    const chosenLocationId = formData.location_ids.includes(testLocationId) ? testLocationId : '';
+    setTest({ phase: 'running' });
+    try {
+      const result = await testMonitorConfig({
+        type: 'sip',
+        config: buildConfig(),
+        timeout_seconds: Math.min(formData.timeout_seconds || 10, isCall ? SIP_CALL_MAX_TIMEOUT_SECONDS : 30),
+        ...(isEditMode && monitor ? { monitor_id: monitor.id } : {}),
+        ...(chosenLocationId ? { location_id: chosenLocationId } : {}),
+      });
+      setTest({ phase: 'done', result });
+    } catch (err) {
+      setTest({ phase: 'request_failed', message: err instanceof Error ? err.message : 'Test request failed' });
+    }
+  };
+
+  const handleTest = () => {
+    if (!canTest || test.phase === 'running') return;
+    const targetErrors = validateTarget();
+    // The schedule does not bound a one-off test (its timeout is clamped).
+    delete targetErrors.interval_seconds;
+    delete targetErrors.timeout_seconds;
+    if (Object.keys(targetErrors).length > 0) {
+      showErrors(targetErrors);
       return;
     }
+    setErrors({});
+    // A test of a test call dials for real: confirm first.
+    if (isCall) setConfirmTestCall(true);
+    else void runTest();
+  };
 
-    // Built on top of the loaded config so keys this form does not render
-    // survive the save (an update replaces the whole stored config).
-    const config = buildSipConfig(editSipConfig ?? initialSipConfig, formData);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (callLocked) return;
+    if (reportConstraintViolation(formRef.current)) return;
+    setErrors({});
+
+    const newErrors: Record<string, string> = validateTarget();
+    if (!formData.name.trim()) newErrors.name = 'Name is required';
+    if (formData.timeout_seconds >= formData.interval_seconds) {
+      newErrors.timeout_seconds = 'Timeout must be less than interval';
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      showErrors(newErrors);
+      return;
+    }
 
     const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
       name: formData.name.trim(),
       type: 'sip',
-      config,
+      config: buildConfig(),
       interval_seconds: formData.interval_seconds,
       timeout_seconds: formData.timeout_seconds,
       enabled: formData.enabled,
@@ -164,334 +343,715 @@ export default function SipForm({
     await onSubmit(requestData);
   };
 
-  return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
-        <FormField label="Monitor name" required error={errors.name}>
+  const callTarget = isCall ? sipCallTarget(buildConfig()) : null;
+  const methodHint =
+    formData.method === 'register'
+      ? 'Sends a query-style REGISTER (no Contact) that exercises the registrar and its digest authentication without creating or removing any bindings.'
+      : formData.method === 'invite'
+        ? 'Places a real call through the host, which acts as the outbound proxy, and measures post-dial delay and answer time. Digest credentials answer the trunk’s challenges.'
+        : 'Sends a SIP OPTIONS request to test server availability without initiating a call. Answers digest challenges when credentials are configured.';
+  const methodOptionDisabled = (m: SipMethod) => isEditMode && (storedIsCall ? m !== 'invite' : m === 'invite');
+  const testResultSummary =
+    test.phase === 'done' && test.result.status === 'success' ? sipCallSummary(test.result.metrics_data?.sip?.call) : '';
+
+  const thresholdInput = (
+    key: 'call_warn_pdd_ms' | 'call_max_pdd_ms' | 'call_warn_answer_ms' | 'call_max_answer_ms',
+    label: string,
+    placeholder: string,
+  ) => (
+    <FormField label={label} error={errors[key]}>
+      {(control) => (
+        <span className="flex items-center gap-2">
           <input
-            type="text"
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="My SIP server"
-            className="input"
+            {...control}
+            type="number"
+            value={formData[key]}
+            onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
+            placeholder={placeholder}
+            min={1}
+            className="input !w-28 tabular-nums"
           />
-        </FormField>
+          <span className="text-xs text-slate-500">ms</span>
+        </span>
+      )}
+    </FormField>
+  );
 
-        <FormField label="Host" required error={errors.host}>
-          {(control) => (
-            <>
-              <input
-                {...control}
-                type="text"
-                value={formData.host}
-                onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                placeholder={rfc3263 ? 'example.com' : 'sip.example.com'}
-                className="input font-mono"
-              />
-              <FieldHint>
-                {rfc3263 ? 'SIP domain whose NAPTR/SRV records name the servers, or a hostname or IP' : 'Hostname or IP'}
-              </FieldHint>
-            </>
-          )}
-        </FormField>
+  return (
+    <>
+      <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+        {showCallLockedNotice && (
+          <Callout tone="info" title="Read-only test call">
+            Only a tenant admin signed in to Probara can create, change, run or test a SIP test-call monitor, since
+            every check places a real call with the trunk&apos;s credentials.
+          </Callout>
+        )}
 
-        <ToggleRow
-          title="Locate server via DNS (NAPTR/SRV)"
-          description="RFC 3263: find the servers from the domain's NAPTR and SRV records and fail over between them"
-          checked={rfc3263}
-          onChange={setLocateViaDNS}
-        />
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Port" required={!rfc3263} error={errors.port}>
-            {(control) => (
-              <>
-                <input
-                  {...control}
-                  type="number"
-                  value={rfc3263 && formData.port === 0 ? '' : formData.port}
-                  onChange={(e) =>
-                    setFormData({ ...formData, port: parseInt(e.target.value) || (rfc3263 ? 0 : defaultPort) })
-                  }
-                  placeholder={rfc3263 ? 'from SRV' : undefined}
-                  min={1}
-                  max={65535}
-                  className="input tabular-nums"
-                />
-                <FieldHint>
-                  {rfc3263
-                    ? 'Leave empty to use SRV; a port skips SRV and dials the host directly'
-                    : 'Default: 5060 (5061 for TLS)'}
-                </FieldHint>
-              </>
-            )}
-          </FormField>
-          <FormField label="Transport">
-            <select
-              value={formData.transport}
-              onChange={(e) => {
-                const transport = e.target.value as SipFormFields['transport'];
-                setFormData({
-                  ...formData,
-                  transport,
-                  // Track the conventional default port unless the user set a
-                  // custom one. Under SRV an empty port stays empty.
-                  port: rfc3263
-                    ? formData.port
-                    : transport === 'tls' && formData.port === 5060
-                    ? 5061
-                    : transport !== 'tls' && formData.port === 5061
-                    ? 5060
-                    : formData.port,
-                });
-              }}
+        <FormSection title="Target">
+          <FormField label="Monitor name" required error={errors.name}>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="My SIP server"
               className="input"
-            >
-              {rfc3263 && <option value="auto">Auto (from NAPTR/SRV)</option>}
-              <option value="udp">UDP</option>
-              <option value="tcp">TCP</option>
-              <option value="tls">TLS</option>
-            </select>
+            />
           </FormField>
-        </div>
 
-        {rfc3263 && (
-          <FormField label="DNS server" error={errors.nameserver}>
+          <FormField label="Host" required error={errors.host}>
             {(control) => (
               <>
                 <input
                   {...control}
                   type="text"
-                  value={formData.nameserver}
-                  onChange={(e) => setFormData({ ...formData, nameserver: e.target.value })}
-                  placeholder="10.0.0.2 or resolver.internal:5353"
+                  value={formData.host}
+                  onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                  placeholder={rfc3263 ? 'example.com' : 'sip.example.com'}
                   className="input font-mono"
                 />
-                <FieldHint>Optional. Defaults to the worker&apos;s resolver.</FieldHint>
+                <FieldHint>
+                  {rfc3263 ? 'SIP domain whose NAPTR/SRV records name the servers, or a hostname or IP' : 'Hostname or IP'}
+                </FieldHint>
               </>
             )}
           </FormField>
-        )}
 
-        {formData.transport === 'tls' && (
-          <>
-            <ToggleRow
-              title="Skip certificate verification"
-              description="For lab servers with self-signed certificates"
-              checked={formData.tls_skip_verify}
-              onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
-              tone="warning"
-            />
-            <FormField label="TLS server name (SNI)">
+          <ToggleRow
+            title="Locate server via DNS (NAPTR/SRV)"
+            description="RFC 3263: find the servers from the domain's NAPTR and SRV records and fail over between them"
+            checked={rfc3263}
+            onChange={setLocateViaDNS}
+          />
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <FormField label="Port" required={!rfc3263} error={errors.port}>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="number"
+                    value={rfc3263 && formData.port === 0 ? '' : formData.port}
+                    onChange={(e) =>
+                      setFormData({ ...formData, port: parseInt(e.target.value) || (rfc3263 ? 0 : defaultPort) })
+                    }
+                    placeholder={rfc3263 ? 'from SRV' : undefined}
+                    min={1}
+                    max={65535}
+                    className="input tabular-nums"
+                  />
+                  <FieldHint>
+                    {rfc3263
+                      ? 'Leave empty to use SRV; a port skips SRV and dials the host directly'
+                      : 'Default: 5060 (5061 for TLS)'}
+                  </FieldHint>
+                </>
+              )}
+            </FormField>
+            <FormField label="Transport">
+              <select
+                value={formData.transport}
+                onChange={(e) => {
+                  const transport = e.target.value as SipFormFields['transport'];
+                  setFormData({
+                    ...formData,
+                    transport,
+                    // Track the conventional default port unless the user set a
+                    // custom one. Under SRV an empty port stays empty.
+                    port: rfc3263
+                      ? formData.port
+                      : transport === 'tls' && formData.port === 5060
+                      ? 5061
+                      : transport !== 'tls' && formData.port === 5061
+                      ? 5060
+                      : formData.port,
+                  });
+                }}
+                className="input"
+              >
+                {rfc3263 && <option value="auto">Auto (from NAPTR/SRV)</option>}
+                <option value="udp">UDP</option>
+                <option value="tcp">TCP</option>
+                <option value="tls">TLS</option>
+              </select>
+            </FormField>
+          </div>
+
+          {rfc3263 && (
+            <FormField label="DNS server" error={errors.nameserver}>
               {(control) => (
                 <>
                   <input
                     {...control}
                     type="text"
-                    value={formData.tls_server_name}
-                    onChange={(e) => setFormData({ ...formData, tls_server_name: e.target.value })}
-                    placeholder="sip.example.com"
+                    value={formData.nameserver}
+                    onChange={(e) => setFormData({ ...formData, nameserver: e.target.value })}
+                    placeholder="10.0.0.2 or resolver.internal:5353"
                     className="input font-mono"
                   />
-                  <FieldHint>Overrides the name used for SNI and certificate verification. Defaults to the host.</FieldHint>
+                  <FieldHint>Optional. Defaults to the worker&apos;s resolver.</FieldHint>
                 </>
               )}
             </FormField>
-            <FormField label="Certificate valid for at least" error={errors.tls_min_days_valid}>
-              {(control) => (
-                <>
-                  <span className="flex items-center gap-2">
+          )}
+
+          {formData.transport === 'tls' && (
+            <>
+              <ToggleRow
+                title="Skip certificate verification"
+                description="For lab servers with self-signed certificates"
+                checked={formData.tls_skip_verify}
+                onChange={(v) => setFormData({ ...formData, tls_skip_verify: v })}
+                tone="warning"
+              />
+              <FormField label="TLS server name (SNI)">
+                {(control) => (
+                  <>
                     <input
                       {...control}
-                      type="number"
-                      value={formData.tls_min_days_valid}
-                      onChange={(e) => setFormData({ ...formData, tls_min_days_valid: e.target.value })}
-                      placeholder="14"
-                      min={0}
-                      className="input !w-28 tabular-nums"
+                      type="text"
+                      value={formData.tls_server_name}
+                      onChange={(e) => setFormData({ ...formData, tls_server_name: e.target.value })}
+                      placeholder="sip.example.com"
+                      className="input font-mono"
                     />
-                    <span className="text-xs text-slate-500">days</span>
-                  </span>
-                  {!errors.tls_min_days_valid && (
-                    <FieldHint>Open a certificate-expiry alert when fewer days remain; the check itself still passes</FieldHint>
+                    <FieldHint>Overrides the name used for SNI and certificate verification. Defaults to the host.</FieldHint>
+                  </>
+                )}
+              </FormField>
+              <FormField label="Certificate valid for at least" error={errors.tls_min_days_valid}>
+                {(control) => (
+                  <>
+                    <span className="flex items-center gap-2">
+                      <input
+                        {...control}
+                        type="number"
+                        value={formData.tls_min_days_valid}
+                        onChange={(e) => setFormData({ ...formData, tls_min_days_valid: e.target.value })}
+                        placeholder="14"
+                        min={0}
+                        className="input !w-28 tabular-nums"
+                      />
+                      <span className="text-xs text-slate-500">days</span>
+                    </span>
+                    {!errors.tls_min_days_valid && (
+                      <FieldHint>Open a certificate-expiry alert when fewer days remain; the check itself still passes</FieldHint>
+                    )}
+                  </>
+                )}
+              </FormField>
+            </>
+          )}
+
+          <div className="glass-well flex flex-wrap items-center gap-3 px-4 py-3">
+            <Button
+              type="button"
+              onClick={handleTest}
+              disabled={!canTest || test.phase === 'running' || loading}
+              title={
+                !canTest
+                  ? isCall
+                    ? 'Only a tenant admin can test a SIP test call'
+                    : 'Write access is required to test a saved monitor'
+                  : undefined
+              }
+              icon={
+                test.phase === 'running' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+                ) : isCall ? (
+                  <PhoneCall className="h-4 w-4" strokeWidth={1.75} />
+                ) : (
+                  <PlugZap className="h-4 w-4" strokeWidth={1.75} />
+                )
+              }
+            >
+              {test.phase === 'running' ? 'Testing…' : isCall ? 'Test call' : 'Test'}
+            </Button>
+            {formData.location_ids.length > 0 && (
+              <select
+                aria-label="Test from location"
+                value={formData.location_ids.includes(testLocationId) ? testLocationId : ''}
+                onChange={(e) => setTestLocationId(e.target.value)}
+                className="input input-sm !w-auto"
+              >
+                <option value="">Test from: default fleet</option>
+                {availableLocations
+                  .filter((loc) => formData.location_ids.includes(loc.id))
+                  .map((loc) => (
+                    <option key={loc.id} value={loc.id}>Test from: {loc.name}</option>
+                  ))}
+              </select>
+            )}
+            {test.phase === 'idle' && (
+              <p className="text-xs text-slate-500">
+                {isCall
+                  ? 'Places one real call from a worker without saving anything.'
+                  : 'Runs one check from a worker without saving anything.'}
+              </p>
+            )}
+            {test.phase === 'done' && test.result.status === 'success' && (
+              <p className="flex items-center gap-1.5 text-xs text-emerald-300">
+                <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                Passed{typeof test.result.latency_ms === 'number' ? ` in ${test.result.latency_ms} ms` : ''}
+                {testResultSummary ? `: ${testResultSummary}` : ''}
+              </p>
+            )}
+            {test.phase === 'done' && test.result.status !== 'success' && (
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-300">
+                <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                <span className="truncate" title={test.result.error_message}>
+                  {test.result.error_message || 'Check failed'}
+                </span>
+              </p>
+            )}
+            {test.phase === 'request_failed' && (
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-amber-300">
+                <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                <span className="truncate" title={test.message}>{test.message}</span>
+              </p>
+            )}
+          </div>
+        </FormSection>
+
+        <FormSection title="Check">
+          <FormField label="Method">
+            {(control) => (
+              <>
+                <select
+                  {...control}
+                  value={formData.method}
+                  onChange={(e) => setMethod(e.target.value as SipMethod)}
+                  className="input"
+                >
+                  <option value="options" disabled={methodOptionDisabled('options')}>OPTIONS: server availability ping</option>
+                  <option value="register" disabled={methodOptionDisabled('register')}>REGISTER: registrar and authentication probe</option>
+                  {(isTenantAdmin || formData.method === 'invite') && (
+                    <option value="invite" disabled={methodOptionDisabled('invite')}>Test call (INVITE): places a real call</option>
+                  )}
+                </select>
+                <FieldHint>
+                  {methodHint}
+                  {isEditMode && ' A saved monitor cannot switch between a test call and OPTIONS/REGISTER: create a new one.'}
+                </FieldHint>
+              </>
+            )}
+          </FormField>
+
+          {(formData.method === 'register' || isCall) && (
+            <FormField label="SIP domain">
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.domain}
+                    onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
+                    placeholder="example.com"
+                    className="input font-mono"
+                  />
+                  <FieldHint>
+                    {isCall
+                      ? 'Domain of the called number and the caller ID. Defaults to the host.'
+                      : 'Domain of the address-of-record. Defaults to the host.'}
+                  </FieldHint>
+                </>
+              )}
+            </FormField>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <FormField label="Username" error={errors.username}>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    placeholder="agent42"
+                    autoComplete="off"
+                    className="input"
+                  />
+                  <FieldHint>Optional digest auth user</FieldHint>
+                </>
+              )}
+            </FormField>
+            <FormField label="Password">
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="password"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    autoComplete="new-password"
+                    className="input"
+                  />
+                  <FieldHint>{isEditMode ? 'Leave *** to keep the stored password' : 'Stored encrypted'}</FieldHint>
+                </>
+              )}
+            </FormField>
+          </div>
+
+          {!(isCall && ring) && (
+            <FormField label="Expected status code" error={errors.expected_status}>
+              {(control) => (
+                <>
+                  <input
+                    {...control}
+                    type="number"
+                    value={formData.expected_status}
+                    onChange={(e) => setFormData({ ...formData, expected_status: e.target.value })}
+                    placeholder="200"
+                    min={isCall ? 200 : 100}
+                    max={699}
+                    className="input !w-32 tabular-nums"
+                  />
+                  {!errors.expected_status && (
+                    <FieldHint>
+                      {isCall
+                        ? 'Default: any 2xx answer. Set one exact final response instead, such as 486 for a busy test line.'
+                        : 'Default: 200 OK'}
+                    </FieldHint>
                   )}
                 </>
               )}
             </FormField>
-          </>
-        )}
-      </FormSection>
+          )}
+        </FormSection>
 
-      <FormSection title="Check">
-        <FormField label="Method">
-          {(control) => (
-            <>
-              <select
-                {...control}
-                value={formData.method}
-                onChange={(e) => setFormData({ ...formData, method: e.target.value as 'options' | 'register' })}
-                className="input"
+        {isCall && (
+          <FormSection title="Call">
+            <Callout tone="warning" title="Each check places a real call">
+              About {pluralize(callsPerDay, 'call')} a day
+              {callLocations > 1 ? ` (${callLocations} locations)` : ''}, plus Run check and Test. Use a dedicated test
+              number that accepts {pluralize(callLocations, 'concurrent call')}; a single-channel number answers 486
+              to the others.
+            </Callout>
+
+            {formData.call_target_kind === 'number' ? (
+              <FormField label="Number to call" required error={errors.call_number}>
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="text"
+                      value={formData.call_number}
+                      onChange={(e) => setFormData({ ...formData, call_number: e.target.value })}
+                      placeholder="+33123456789"
+                      autoComplete="off"
+                      className="input font-mono"
+                    />
+                    {!errors.call_number && (
+                      <FieldHint>
+                        {callTarget ? `Calls ${callTarget}` : 'Digits, letters and + * # . _ ~ -'}
+                        {/^\+?[0-9]+$/.test(formData.call_number.trim()) ? ' as a telephone number (user=phone)' : ''}
+                      </FieldHint>
+                    )}
+                  </>
+                )}
+              </FormField>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Calls the target URI set under Advanced{callTarget ? `: ${callTarget}` : ''}.
+              </p>
+            )}
+
+            <div>
+              <p className="mb-2 text-xs font-medium text-slate-400">Mode</p>
+              <div
+                className="mb-2 flex w-fit max-w-full gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
+                role="radiogroup"
+                aria-label="Call mode"
               >
-                <option value="options">OPTIONS: server availability ping</option>
-                <option value="register">REGISTER: registrar and authentication probe</option>
-              </select>
+                {(
+                  [
+                    { mode: 'answer' as const, label: 'Answer and hang up' },
+                    { mode: 'ring' as const, label: 'Ring only' },
+                  ]
+                ).map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={formData.call_mode === mode}
+                    onClick={() => setFormData({ ...formData, call_mode: mode })}
+                    className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                      formData.call_mode === mode ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <FieldHint>
-                {formData.method === 'register'
-                  ? 'Sends a query-style REGISTER (no Contact) that exercises the registrar and its digest authentication without creating or removing any bindings.'
-                  : 'Sends a SIP OPTIONS request to test server availability without initiating a call. Answers digest challenges when credentials are configured.'}
+                {ring
+                  ? 'Succeeds on the first ringing (18x) and cancels, so the call is never answered or billed. A call answered anyway is hung up at once and flagged.'
+                  : 'Waits for the answer (200), holds the call, then hangs up with BYE. No audio is sent.'}
               </FieldHint>
-            </>
-          )}
-        </FormField>
+            </div>
 
-        {formData.method === 'register' && (
-          <FormField label="SIP domain">
-            {(control) => (
-              <>
-                <input
-                  {...control}
-                  type="text"
-                  value={formData.domain}
-                  onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
-                  placeholder="example.com"
-                  className="input font-mono"
-                />
-                <FieldHint>Domain of the address-of-record. Defaults to the host.</FieldHint>
-              </>
+            {!ring && (
+              <FormField label="Hold" error={errors.call_hold_ms}>
+                {(control) => (
+                  <>
+                    <span className="flex items-center gap-2">
+                      <input
+                        {...control}
+                        type="number"
+                        value={formData.call_hold_ms}
+                        onChange={(e) => setFormData({ ...formData, call_hold_ms: e.target.value })}
+                        placeholder="0"
+                        min={0}
+                        max={SIP_CALL_MAX_HOLD_MS}
+                        className="input !w-28 tabular-nums"
+                      />
+                      <span className="text-xs text-slate-500">ms</span>
+                    </span>
+                    {!errors.call_hold_ms && (
+                      <FieldHint>How long the answered call stays up before the hang-up; it comes out of the timeout</FieldHint>
+                    )}
+                  </>
+                )}
+              </FormField>
             )}
-          </FormField>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {thresholdInput('call_warn_pdd_ms', 'Post-dial delay warning', '3000')}
+              {thresholdInput('call_max_pdd_ms', 'Post-dial delay failure', '5000')}
+              {!ring && thresholdInput('call_warn_answer_ms', 'Answer time warning', '8000')}
+              {!ring && thresholdInput('call_max_answer_ms', 'Answer time failure', '12000')}
+            </div>
+            <FieldHint>
+              Post-dial delay runs from the INVITE to the first ringing; answer time to the 200. A warning keeps the check
+              up and notes it; a failure threshold fails it.
+            </FieldHint>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <FormField label="Caller user" error={errors.call_from_user}>
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="text"
+                      value={formData.call_from_user}
+                      onChange={(e) => setFormData({ ...formData, call_from_user: e.target.value })}
+                      placeholder={formData.username.trim() || 'probara'}
+                      autoComplete="off"
+                      className="input font-mono"
+                    />
+                    {!errors.call_from_user && <FieldHint>Default: the username</FieldHint>}
+                  </>
+                )}
+              </FormField>
+              <FormField label="Caller name" error={errors.call_from_display}>
+                {(control) => (
+                  <input
+                    {...control}
+                    type="text"
+                    value={formData.call_from_display}
+                    onChange={(e) => setFormData({ ...formData, call_from_display: e.target.value })}
+                    placeholder="Probara probe"
+                    maxLength={64}
+                    className="input"
+                  />
+                )}
+              </FormField>
+              <FormField label="Caller domain">
+                {(control) => (
+                  <>
+                    <input
+                      {...control}
+                      type="text"
+                      value={formData.call_from_domain}
+                      onChange={(e) => setFormData({ ...formData, call_from_domain: e.target.value })}
+                      placeholder={formData.domain.trim() || formData.host.trim() || 'example.com'}
+                      className="input font-mono"
+                    />
+                    <FieldHint>Default: the SIP domain</FieldHint>
+                  </>
+                )}
+              </FormField>
+            </div>
+
+            <CollapsibleSection
+              variant="row"
+              title="Advanced"
+              summary={formData.call_target_kind === 'uri' ? 'calls a target URI' : undefined}
+              tone={CALL_ADVANCED_FIELDS.some((key) => errors[key]) ? 'danger' : 'default'}
+              isOpen={callAdvancedOpen}
+              onToggle={setCallAdvancedOpen}
+            >
+              <div className="space-y-4">
+                <ToggleRow
+                  title="Call a full SIP URI"
+                  description="Instead of a number at the SIP domain. Every request still goes to the host above."
+                  checked={formData.call_target_kind === 'uri'}
+                  onChange={(on) => setFormData({ ...formData, call_target_kind: on ? 'uri' : 'number' })}
+                />
+                {formData.call_target_kind === 'uri' && (
+                  <FormField label="Target URI" required error={errors.call_target_uri}>
+                    {(control) => (
+                      <>
+                        <input
+                          {...control}
+                          type="text"
+                          value={formData.call_target_uri}
+                          onChange={(e) => setFormData({ ...formData, call_target_uri: e.target.value })}
+                          placeholder="sip:ivr-test@pbx.example.com"
+                          autoComplete="off"
+                          className="input font-mono"
+                        />
+                        {!errors.call_target_uri && (
+                          <FieldHint>sip: or sips: (TLS only); no ;parameters in the user part, no ?headers or maddr</FieldHint>
+                        )}
+                      </>
+                    )}
+                  </FormField>
+                )}
+                <FormField label="SDP address">
+                  {(control) => (
+                    <>
+                      <input
+                        {...control}
+                        type="text"
+                        value={formData.call_sdp_address}
+                        onChange={(e) => setFormData({ ...formData, call_sdp_address: e.target.value })}
+                        placeholder="203.0.113.10"
+                        className="input font-mono"
+                      />
+                      <FieldHint>The public address a worker behind NAT puts in its audio offer. No media is sent.</FieldHint>
+                    </>
+                  )}
+                </FormField>
+                <ToggleRow
+                  title="Mark probe calls"
+                  description="Adds X-Probara-Probe: 1 so the far end can recognise and route test calls"
+                  checked={formData.call_probe_header}
+                  onChange={(v) => setFormData({ ...formData, call_probe_header: v })}
+                />
+              </div>
+            </CollapsibleSection>
+          </FormSection>
         )}
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Username" error={errors.username}>
-            {(control) => (
-              <>
-                <input
-                  {...control}
-                  type="text"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                  placeholder="agent42"
-                  autoComplete="off"
-                  className="input"
-                />
-                <FieldHint>Optional digest auth user</FieldHint>
-              </>
-            )}
-          </FormField>
-          <FormField label="Password">
-            {(control) => (
-              <>
-                <input
-                  {...control}
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  autoComplete="new-password"
-                  className="input"
-                />
-                <FieldHint>{isEditMode ? 'Leave *** to keep the stored password' : 'Stored encrypted'}</FieldHint>
-              </>
-            )}
-          </FormField>
-        </div>
-
-        <FormField label="Expected status code">
-          {(control) => (
-            <>
-              <input
-                {...control}
-                type="number"
-                value={formData.expected_status}
-                onChange={(e) => setFormData({ ...formData, expected_status: e.target.value })}
-                placeholder="200"
-                min={100}
-                max={699}
-                className="input !w-32 tabular-nums"
-              />
-              <FieldHint>Default: 200 OK</FieldHint>
-            </>
-          )}
-        </FormField>
-      </FormSection>
-
-      <ScheduleSection
-        intervalSeconds={formData.interval_seconds}
-        onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
-        timeoutSeconds={formData.timeout_seconds}
-        onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
-        timeoutError={errors.timeout_seconds}
-        locations={{
-          selectedIds: formData.location_ids,
-          onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
-          quorum: formData.location_quorum,
-          onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
-        }}
-        enabled={formData.enabled}
-        onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
-        enabledDescription={`Run SIP ${formData.method === 'register' ? 'REGISTER' : 'OPTIONS'} checks on this schedule`}
-      />
-
-      <FormPanel
-        title="Alerting"
-        rows={
-          <DependenciesField
-            selectedIds={formData.depends_on_ids}
-            onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
-            excludeId={monitor?.id}
-            error={errors.depends_on_ids}
-          />
-        }
-      >
-        <AlertingSection
-          isGroup={false}
+        <ScheduleSection
           intervalSeconds={formData.interval_seconds}
-          threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
-          mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
-          dependencySuppression={formData.dependency_suppression}
-          hasDependencies={formData.depends_on_ids.length > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
-          customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onIntervalChange={(n) => setFormData((prev) => ({ ...prev, interval_seconds: n }))}
+          timeoutSeconds={formData.timeout_seconds}
+          onTimeoutChange={(n) => setFormData((prev) => ({ ...prev, timeout_seconds: n }))}
+          timeoutError={errors.timeout_seconds}
+          intervalError={errors.interval_seconds}
+          {...(isCall
+            ? {
+                minIntervalSeconds: SIP_CALL_MIN_INTERVAL_SECONDS,
+                intervalPresets: CALL_INTERVAL_PRESETS,
+                intervalHint: `At least ${SIP_CALL_MIN_INTERVAL_SECONDS} seconds: each check is a real call`,
+                maxTimeoutSeconds: SIP_CALL_MAX_TIMEOUT_SECONDS,
+              }
+            : {})}
+          locations={{
+            selectedIds: formData.location_ids,
+            onChange: (ids) => setFormData((prev) => ({ ...prev, location_ids: ids })),
+            quorum: formData.location_quorum,
+            onQuorumChange: (n) => setFormData((prev) => ({ ...prev, location_quorum: n })),
+            onLocationsLoaded: setAvailableLocations,
+          }}
+          enabled={formData.enabled}
+          onEnabledChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
+          enabledDescription={
+            isCall
+              ? 'Place a test call on this schedule'
+              : `Run SIP ${formData.method === 'register' ? 'REGISTER' : 'OPTIONS'} checks on this schedule`
+          }
         />
-      </FormPanel>
 
-      <LabelsSection
-        tags={formData.tags}
-        onTagsChange={(v) => setFormData({ ...formData, tags: v })}
-        placeholder="production, voip, critical"
-      />
-
-      <FormActions
-        middle={
-          <PlanSummary
-            errors={errors}
-            parts={
-              formData.host.trim()
-                ? [
-                    everyLabel(formData.interval_seconds),
-                    <PlanTarget key="t">
-                      SIP {formData.method.toUpperCase()} {formData.host.trim()}
-                      {formData.port ? `:${formData.port}` : ''}
-                    </PlanTarget>,
-                    ...(rfc3263 && !formData.port ? ['located via SRV'] : []),
-                    formData.transport === 'auto' ? 'transport from NAPTR/SRV' : `over ${formData.transport.toUpperCase()}`,
-                    downAfterLabel(formData.consecutive_failures_threshold),
-                  ]
-                : []
-            }
+        <FormPanel
+          title="Alerting"
+          rows={
+            <DependenciesField
+              selectedIds={formData.depends_on_ids}
+              onChange={(ids) => setFormData((prev) => ({ ...prev, depends_on_ids: ids }))}
+              excludeId={monitor?.id}
+              error={errors.depends_on_ids}
+            />
+          }
+        >
+          <AlertingSection
+            isGroup={false}
+            intervalSeconds={formData.interval_seconds}
+            threshold={formData.consecutive_failures_threshold}
+            onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+            mode={formData.notification_mode}
+            onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+            dependencySuppression={formData.dependency_suppression}
+            hasDependencies={formData.depends_on_ids.length > 0}
+            onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+            customChannels={formData.notification_channels}
+            onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
           />
+        </FormPanel>
+
+        <LabelsSection
+          tags={formData.tags}
+          onTagsChange={(v) => setFormData({ ...formData, tags: v })}
+          placeholder="production, voip, critical"
+        />
+
+        <FormActions
+          middle={
+            <PlanSummary
+              errors={errors}
+              parts={
+                formData.host.trim()
+                  ? isCall
+                    ? [
+                        everyLabel(formData.interval_seconds),
+                        <PlanTarget key="t">
+                          call {callTarget || 'number'} via {formData.host.trim()}
+                          {formData.port ? `:${formData.port}` : ''}
+                        </PlanTarget>,
+                        ring ? 'ring only' : 'answer and hang up',
+                        `≈ ${pluralize(callsPerDay, 'call')}/day`,
+                        downAfterLabel(formData.consecutive_failures_threshold),
+                      ]
+                    : [
+                        everyLabel(formData.interval_seconds),
+                        <PlanTarget key="t">
+                          SIP {formData.method.toUpperCase()} {formData.host.trim()}
+                          {formData.port ? `:${formData.port}` : ''}
+                        </PlanTarget>,
+                        ...(rfc3263 && !formData.port ? ['located via SRV'] : []),
+                        formData.transport === 'auto' ? 'transport from NAPTR/SRV' : `over ${formData.transport.toUpperCase()}`,
+                        downAfterLabel(formData.consecutive_failures_threshold),
+                      ]
+                  : []
+              }
+            />
+          }
+          cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
+          submit={{
+            label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
+            loading,
+            disabled: loading || callLocked,
+            type: 'submit',
+          }}
+        />
+      </form>
+
+      <ConfirmDialog
+        open={confirmTestCall}
+        tone="default"
+        title="Place a real test call?"
+        description={
+          <>
+            This places a real call to <span className="font-mono text-slate-200">{callTarget || 'the configured number'}</span>{' '}
+            through {formData.host.trim()}. The carrier may bill it.
+          </>
         }
-        cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
-        submit={{
-          label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',
-          loading,
-          disabled: loading,
-          type: 'submit',
-        }}
+        confirmLabel="Place call"
+        onConfirm={() => void runTest()}
+        onCancel={() => setConfirmTestCall(false)}
       />
-    </form>
+    </>
   );
 }

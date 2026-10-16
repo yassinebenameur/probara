@@ -1,3 +1,5 @@
+import { isSipCall } from './sip-config';
+
 // Display names for monitor types: the one source for every operator-UI type
 // label (picker, list, detail, import, incidents). This is a display mirror
 // of the registry (api/internal/validation/registry.go), listed in
@@ -41,4 +43,23 @@ export function monitorTypeLabel(type: string, _variant: 'label' | 'short' = 'la
 /** ≤5-char uppercase tag for the TypeBadge. */
 export function monitorTypeBadge(type: string): string {
   return TYPE_LABELS[type]?.badge ?? type.slice(0, 5).toUpperCase();
+}
+
+/**
+ * Variants of a type that must look different in operator lists: a SIP
+ * monitor that places real, possibly billed, calls (method invite) next to
+ * the free OPTIONS/REGISTER probes. Status pages keep the plain type.
+ */
+export const TYPE_VARIANT_LABELS = {
+  sip_call: { label: 'SIP call', badge: 'CALL' },
+} as const;
+
+/**
+ * Label and badge for a monitor, config included: `SIP call`/`CALL` for a
+ * SIP test call (isSipCall), the type's own otherwise. Use it (or TypeBadge
+ * with `config`) wherever the monitor's config is at hand.
+ */
+export function monitorTypeDisplay(monitor: { type: string; config?: unknown }): { label: string; badge: string } {
+  if (isSipCall(monitor.type, monitor.config)) return TYPE_VARIANT_LABELS.sip_call;
+  return { label: monitorTypeLabel(monitor.type), badge: monitorTypeBadge(monitor.type) };
 }

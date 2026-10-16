@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { certificateExpiryLabel, latestSIPMetrics, sipAddressLabel, sipFacts, sipResponseLabel } from './sip-metrics';
+import {
+  certificateExpiryLabel,
+  latestSIPMetrics,
+  sipAddressLabel,
+  sipCallFacts,
+  sipCallSummary,
+  sipFacts,
+  sipResponseLabel,
+  sipTeardownLabel,
+} from './sip-metrics';
 import { formatDate } from './format';
-import type { CheckResult, SIPMetrics } from './types';
+import type { CheckResult, SIPCallMetrics, SIPMetrics } from './types';
 
 const base: SIPMetrics = {
   method: 'OPTIONS',
@@ -154,4 +163,81 @@ test('a single attempt lists no path, and an undecided transport is not shown', 
   assert.equal(facts.find((f) => f.key === 'attempts'), undefined);
   assert.equal(facts.find((f) => f.key === 'transport'), undefined);
   assert.equal(sipAddressLabel(m), '');
+});
+
+const answeredCall: SIPCallMetrics = {
+  mode: 'answer',
+  trying_ms: 20,
+  pdd_ms: 850,
+  pdd_source: '180',
+  answer_ms: 4200,
+  hold_ms: 2000,
+  bye_ms: 35,
+  early_media: true,
+  answered: true,
+  forked_answers: 0,
+  route_hops: 1,
+  require_100rel: false,
+  sdp_answer: { codec: 'PCMA/8000', payload_type: 8, remote_media: '198.51.100.7:40012', direction: 'sendrecv' },
+  rtp_rx_packets: 0,
+  teardown: 'bye_ok',
+  teardown_status: 200,
+};
+
+test('a test call shows PDD, answer time, media and teardown', () => {
+  assert.deepEqual(
+    sipCallFacts(answeredCall).map((f) => [f.label, f.value, f.tone]),
+    [
+      ['Post-dial delay', '850 ms (180)', undefined],
+      ['Answered in', '4.2 s, held 2.0 s', undefined],
+      ['Media', 'PCMA/8000 · early media', undefined],
+      ['Teardown', 'BYE confirmed in 35 ms', undefined],
+    ]
+  );
+});
+
+test('an unconfirmed teardown is one warning row, not two', () => {
+  const facts = sipFacts({
+    ...base,
+    method: 'INVITE',
+    call: { ...answeredCall, teardown: 'bye_unconfirmed', bye_ms: undefined },
+    warnings: ['pdd: 3400ms > 3000ms (warn)', 'teardown: BYE unconfirmed'],
+    latency_warn_ms: 3000,
+  });
+  const warnings = facts.filter((f) => f.tone === 'warning').map((f) => [f.label, f.value]);
+  assert.deepEqual(warnings, [
+    ['Teardown', 'BYE unconfirmed: the far end may still hold the call'],
+    ['Warning', 'pdd: 3400ms > 3000ms (warn)'],
+  ]);
+});
+
+test('latency_warn_ms reads as a warning when no warnings came with it', () => {
+  const facts = sipFacts({ ...base, latency_warn_ms: 3000 });
+  assert.equal(facts.find((f) => f.key === 'latency-warn')?.value, 'over the 3.0 s warning threshold');
+});
+
+test('ring mode and the teardown wording', () => {
+  const ringing: SIPCallMetrics = {
+    ...answeredCall,
+    mode: 'ring',
+    answer_ms: undefined,
+    hold_ms: 0,
+    answered: false,
+    teardown: 'cancelled',
+    sdp_answer: undefined,
+    early_media: false,
+  };
+  assert.deepEqual(
+    sipCallFacts(ringing).map((f) => f.value),
+    ['850 ms (180)', 'rang, cancelled before answer (ring mode)', 'CANCEL confirmed (487)']
+  );
+  assert.equal(sipTeardownLabel({ ...answeredCall, teardown: 'bye_503' }), 'BYE answered 503');
+  assert.equal(sipTeardownLabel({ ...answeredCall, teardown: 'none' }), '');
+  assert.equal(sipTeardownLabel({ ...answeredCall, teardown: 'remote_bye' }), 'the callee hung up first');
+});
+
+test('sipCallSummary for a Test result', () => {
+  assert.equal(sipCallSummary(answeredCall), 'ringing after 850 ms, answered in 4.2 s');
+  assert.equal(sipCallSummary({ ...answeredCall, pdd_ms: 4200, pdd_source: '200' }), 'answered in 4.2 s');
+  assert.equal(sipCallSummary(undefined), '');
 });
