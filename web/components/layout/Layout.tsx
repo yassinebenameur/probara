@@ -14,7 +14,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   // Don't show layout on auth pages
-  if (pathname === '/connect' || pathname === '/login') {
+  if (pathname === '/connect' || pathname === '/login' || pathname === '/oauth/consent') {
     return <>{children}</>;
   }
 

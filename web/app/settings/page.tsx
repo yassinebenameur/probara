@@ -24,6 +24,7 @@ import { saveStoredApiKey, removeStoredApiKey } from '@/lib/api-keys';
 import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection';
 import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
 import { AISettingsPanel } from '@/components/settings/AISettingsPanel';
+import { MCPPanel } from '@/components/settings/MCPPanel';
 import AlertChannelList from '@/components/alert-channels/AlertChannelList';
 import Tabs, { useUrlTab } from '@/components/ui/Tabs';
 
@@ -93,7 +94,7 @@ export default function SettingsPage() {
   const [showInactiveKeys, setShowInactiveKeys] = useState(false);
   // Notifications (default routing above the channel list) leads; its id stays
   // `channels` because /alert-channels and the routing badges link to it.
-  const [tab, setTab] = useUrlTab(['channels', 'general', 'ai', 'access'] as const);
+  const [tab, setTab] = useUrlTab(['channels', 'general', 'ai', 'mcp', 'access'] as const);
 
   useEffect(() => {
     setBrowserKeyPresent(Boolean(getApiKey()));
@@ -250,7 +251,7 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Settings"
-        subtitle="Notifications, data retention, AI and access for this workspace."
+        subtitle="Notifications, data retention, AI, agent connections (MCP) and access for this workspace."
       />
 
       <Tabs
@@ -258,6 +259,7 @@ export default function SettingsPage() {
           { id: 'channels', label: 'Notifications' },
           { id: 'general', label: 'General' },
           { id: 'ai', label: 'AI' },
+          { id: 'mcp', label: 'MCP' },
           { id: 'access', label: 'Access' },
         ]}
         active={tab}
@@ -276,6 +278,8 @@ export default function SettingsPage() {
       {tab === 'channels' && <AlertChannelList />}
 
       {tab === 'ai' && !userLoading && <AISettingsPanel readOnly={!canWrite} />}
+
+      {tab === 'mcp' && <MCPPanel />}
 
       {tab === 'access' && isSuperadmin && <SSOPanel />}
 
