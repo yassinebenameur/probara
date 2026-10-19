@@ -9,100 +9,137 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: build-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    name: Test dependency selection
+    runs-on: ubuntu-latest
+    outputs:
+      ai_validation: ${{ steps.changes.outputs.ai_validation }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: false
+      - name: Select expensive validation
+        id: changes
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_BASE: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/workflows/scripts/ci.py changes --event "$CI_EVENT" --base "$CI_BASE" --head "$CI_HEAD"
+
   go-format:
+    # Preserve the existing check name for branch protection.
     name: Go formatting
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
-          # LFS bandwidth is metered; only the local-ai job needs the model files.
           lfs: false
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache-dependency-path: go.sum
+      - run: make fmt
+      - run: go vet ./...
+      - name: Check CI selection and reporting
+        run: python3 -m unittest discover -s .github/workflows/scripts -p test_ci.py -v
 
-      - name: Check formatting
-        run: make fmt
-
-  go-test:
-    name: Go test (${{ matrix.name }})
+  go-unit:
+    name: Go fast tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # A mistakenly included Docker test must not quietly work on this runner.
+      DOCKER_HOST: unix:///tmp/probara-unit-no-docker.sock
+      PROBARA_TEST_POSTGRES_DSN: ''
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go mod download
+      - name: Run fast suite with race detection
+        shell: bash
+        run: go test -json -tags=unit -race -count=1 -timeout=10m ./... 2>&1 | tee "$RUNNER_TEMP/go-unit.jsonl"
+      - name: Summarize cases and package timings
+        if: always()
+        run: python3 .github/workflows/scripts/ci.py go-report "$RUNNER_TEMP/go-unit.jsonl"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-log-unit
+          path: ${{ runner.temp }}/go-unit.jsonl
+          retention-days: 7
 
+  go-full:
+    name: Go full tests (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: main module
-            directory: .
-            go-version-file: go.mod
-            dependency-path: go.sum
-            coverage-file: coverage-main.out
-            coverage-flag: main
-
+        shard: [api, alerting-worker, platform]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: probara
+          POSTGRES_PASSWORD: probara
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Each fixture creates and drops its own database on this job's server.
+      PROBARA_TEST_POSTGRES_DSN: postgres://probara:probara@localhost:5432/postgres?sslmode=disable
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
-          # LFS bandwidth is metered; only the local-ai job needs the model files.
           lfs: false
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version-file: ${{ matrix.go-version-file }}
-          cache-dependency-path: ${{ matrix.dependency-path }}
-
-      - name: Download dependencies
-        working-directory: ${{ matrix.directory }}
-        run: go mod download
-
-      - name: Run go vet
-        working-directory: ${{ matrix.directory }}
-        run: go vet ./...
-
-      - name: Run tests
-        working-directory: ${{ matrix.directory }}
-        # Explicit bash adds -o pipefail, so tee cannot mask a test failure.
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go mod download
+      - name: Verify browser dependency
+        if: matrix.shard == 'alerting-worker'
+        run: command -v google-chrome || command -v chromium || command -v chromium-browser
+      - name: Select package group
+        run: python3 .github/workflows/scripts/ci.py packages --shard '${{ matrix.shard }}' > "$RUNNER_TEMP/packages.txt"
+      - name: Run full suite group with race detection and coverage
         shell: bash
-        run: go test -v -race -coverprofile="${{ github.workspace }}/${{ matrix.coverage-file }}" ./... 2>&1 | tee "${{ runner.temp }}/go-test.log"
-
-      # The -v output of the whole module runs to hundreds of thousands of
-      # lines, so a failing test scrolls far out of any log tail and the run
-      # ends on a bare "FAIL". Repeat the failures at the end of the job, in
-      # the step summary, and as annotations on the check run.
-      - name: Summarize test failures
-        if: failure()
         run: |
-          log="${{ runner.temp }}/go-test.log"
-          [ -f "$log" ] || exit 0
-          # A test's own output precedes its FAIL line; a panic or race
-          # report follows its header.
-          failed='^[[:space:]]*--- FAIL|^FAIL[[:space:]]'
-          crashed='^panic:|^WARNING: DATA RACE'
-          context=$({ grep -E -B40 "$failed" "$log"; grep -E -A40 "$crashed" "$log"; } | tail -n 600 || true)
-          echo "$context"
-          {
-            echo '## Go test failures'
-            echo '```'
-            echo "$context"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          grep -E '^[[:space:]]*--- FAIL|^FAIL[[:space:]]' "$log" | sed -E 's/^[[:space:]]+//' | head -n 50 |
-            while IFS= read -r line; do echo "::error title=Go test failure::$line"; done
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v7
+          mapfile -t packages < "$RUNNER_TEMP/packages.txt"
+          go test -json -race -count=1 -p 2 -timeout=15m -coverprofile="coverage-${{ matrix.shard }}.out" "${packages[@]}" 2>&1 | tee "$RUNNER_TEMP/go-${{ matrix.shard }}.jsonl"
+      - name: Summarize cases and package timings
+        if: always()
+        run: python3 .github/workflows/scripts/ci.py go-report "$RUNNER_TEMP/go-${{ matrix.shard }}.jsonl"
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          files: ./${{ matrix.coverage-file }}
-          flags: ${{ matrix.coverage-flag }}
-          fail_ci_if_error: false
+          name: go-log-${{ matrix.shard }}
+          path: ${{ runner.temp }}/go-${{ matrix.shard }}.jsonl
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: coverage-${{ matrix.shard }}.out
+          if-no-files-found: error
+          retention-days: 7
 
   frontend:
     name: Frontend (${{ matrix.name }})
@@ -157,8 +194,42 @@ jobs:
           NEXT_TELEMETRY_DISABLED: 1
         run: npm run build
 
-  local-ai:
-    name: Bundled CPU AI
+  ai-fast:
+    name: AI fast tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: ai-service:ai-service/training
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13.3'
+          cache: pip
+          cache-dependency-path: |
+            ai-service/requirements.lock
+            ai-service/requirements-dev.lock
+            ai-service/requirements-laya.txt
+      - name: Install actual test dependencies
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: \
+            --extra-index-url https://download.pytorch.org/whl/cpu -r ai-service/requirements-dev.lock
+          python -m pip install --no-deps --no-build-isolation -r ai-service/requirements-laya.txt
+          python -m pip check
+      - name: Generate controlled dataset
+        run: python ai-service/training/generate.py --output ai-service/artifacts/dataset
+      - name: Test contracts, packaging, server and synthetic fixtures
+        run: python -m pytest ai-service/tests .github/workflows/scripts -m 'not checkpoint' --strict-markers -q -rs
+
+  ai-checkpoint:
+    name: AI checkpoint validation
+    needs: changes
+    if: needs.changes.outputs.ai_validation == 'true'
     runs-on: ubuntu-latest
     # An approved checkpoint adds the held-out reproduction (2000 int8 CPU
     # decisions) on top of the base fetch and composition.
@@ -267,6 +338,17 @@ jobs:
       - name: Generate controlled dataset
         run: python ai-service/training/generate.py --output ai-service/artifacts/dataset
 
+      # PROBARA_LAYA_BASE runs the real-base reproduction test. Runtime
+      # refuses an unapproved checkpoint by design, so LOCAL_AI_ARTIFACT (the
+      # bundled-inference test) is set only for an approved one.
+      - name: Real checkpoint tests
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+          PROBARA_LAYA_BASE: ${{ env.LAYA_BASE }}
+          LOCAL_AI_ARTIFACT: ${{ steps.artifact.outputs.approved == 'true' && steps.artifact.outputs.composed || '' }}
+        run: python -m pytest ai-service/tests -m checkpoint --strict-markers -q -rs
+
       # The approval run's CPU evaluation happened on the developer's machine;
       # the image runs linux/amd64, whose qnnpack int8 kernels differ. This
       # runner is linux/amd64 with the image's locked torch wheel, so re-score
@@ -280,13 +362,46 @@ jobs:
           COMPOSED: ${{ steps.artifact.outputs.composed }}
         run: python .github/workflows/scripts/local_ai_artifact.py reproduce --composed "$COMPOSED" --data ai-service/artifacts/dataset
 
-      # PROBARA_LAYA_BASE runs the real-base reproduction test. Runtime
-      # refuses an unapproved checkpoint by design, so LOCAL_AI_ARTIFACT (the
-      # bundled-inference test) is set only for an approved one.
-      - name: Contract, packaging, artifact, CI helper and CPU inference tests
+
+  go-test:
+    # Preserve the former required Go check without waiting for unrelated AI work.
+    name: Go test (main module)
+    if: always()
+    needs: [go-format, go-unit, go-full]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+      - name: Verify all required results
         env:
-          HF_HUB_OFFLINE: '1'
-          TRANSFORMERS_OFFLINE: '1'
-          PROBARA_LAYA_BASE: ${{ env.LAYA_BASE }}
-          LOCAL_AI_ARTIFACT: ${{ steps.artifact.outputs.approved == 'true' && steps.artifact.outputs.composed || '' }}
-        run: python -m pytest ai-service/tests .github/workflows/scripts -q -rs
+          CI_RESULTS: ${{ toJSON(needs) }}
+        run: python3 .github/workflows/scripts/ci.py required-results --suite go
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage-parts
+          merge-multiple: true
+      - name: Merge complete coverage
+        run: python3 .github/workflows/scripts/ci.py merge-coverage coverage-parts coverage-main.out
+      - uses: codecov/codecov-action@v7
+        with:
+          files: ./coverage-main.out
+          flags: main
+          fail_ci_if_error: false
+
+  local-ai:
+    # The existing required AI status covers fast checks and selected validation.
+    name: Bundled CPU AI
+    if: always()
+    needs: [changes, ai-fast, ai-checkpoint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+      - name: Verify selected AI results
+        env:
+          CI_RESULTS: ${{ toJSON(needs) }}
+        run: python3 .github/workflows/scripts/ci.py required-results --suite ai

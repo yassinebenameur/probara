@@ -1,3 +1,5 @@
+//go:build !unit
+
 package scheduler
 
 // Integration tests for the metric-store maintenance passes

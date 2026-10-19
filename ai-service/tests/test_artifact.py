@@ -161,6 +161,7 @@ def test_candidate_output_rules(tmp_path):
     assert not (out / "stale.json").exists()
 
 
+@pytest.mark.checkpoint
 @pytest.mark.skipif(not os.environ.get("PROBARA_LAYA_BASE"), reason="set PROBARA_LAYA_BASE to the verified pinned base")
 def test_v1_reproduces_its_evaluated_weights(tmp_path):
     artifact = ARTIFACTS / "probara-laya-v1"

@@ -1,3 +1,5 @@
+//go:build !unit
+
 package maintenancewindows_test
 
 import (

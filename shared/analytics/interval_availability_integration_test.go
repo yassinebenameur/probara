@@ -1,3 +1,5 @@
+//go:build !unit
+
 package analytics
 
 // Time-based availability tests (docs/state-semantics.md S-U1–S-U5, S-M3):

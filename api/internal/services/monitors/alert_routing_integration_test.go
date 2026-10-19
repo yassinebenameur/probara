@@ -1,3 +1,5 @@
+//go:build !unit
+
 package monitors_test
 
 import (

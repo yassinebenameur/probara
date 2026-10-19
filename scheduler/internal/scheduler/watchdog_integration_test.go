@@ -1,3 +1,5 @@
+//go:build !unit
+
 package scheduler
 
 // Absence-watchdog tests (docs/state-semantics.md S-F1..S-F4, S-A10): missing

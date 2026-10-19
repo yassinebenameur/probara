@@ -1,3 +1,5 @@
+//go:build !unit
+
 package monitors
 
 // S-P2 (docs/state-semantics.md): an enabled toggle resets observed state to

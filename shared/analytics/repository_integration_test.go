@@ -1,8 +1,10 @@
+//go:build !unit
+
 package analytics
 
 import (
 	"context"
-	"math"
+
 	"testing"
 	"time"
 
@@ -144,23 +146,5 @@ func TestRepository_GetScopeAnalytics_RollupSourceUsesSharedAggregationAndPersis
 	}
 	if !result.Downtime[1].Start.Equal(day2.Add(10*time.Hour)) || !result.Downtime[1].End.Equal(now) || !result.Downtime[1].IsOpen {
 		t.Fatalf("Open downtime period = %#v, want open [%v, %v]", result.Downtime[1], day2.Add(10*time.Hour), now)
-	}
-}
-
-func findSeriesPoint(t *testing.T, series []SeriesPoint, bucketStart time.Time) SeriesPoint {
-	t.Helper()
-	for _, point := range series {
-		if point.BucketStart.Equal(bucketStart) {
-			return point
-		}
-	}
-	t.Fatalf("series point for %v not found", bucketStart)
-	return SeriesPoint{}
-}
-
-func assertClose(t *testing.T, got, want float64) {
-	t.Helper()
-	if math.Abs(got-want) > 0.0001 {
-		t.Fatalf("value = %.6f, want %.6f", got, want)
 	}
 }

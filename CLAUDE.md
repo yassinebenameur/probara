@@ -572,17 +572,24 @@ or imported groups come back empty. Any other path that creates groups through
   runs the whole module with `-race` (skipping `scripts/`); `make lint` fails
   on gofmt drift or `go vet` findings. The full api suite takes >2 min — run
   it in the background.
-- Tests sit next to the code; database- or queue-backed ones are
-  `*_integration_test.go`, with no build tag, so plain `go test` runs them.
+- Tests sit next to the code; external-service, browser and binary-backed
+  cases are `*_integration_test.go` with `//go:build !unit`. Plain `go test`
+  and `make test` still run everything; `make test-unit` / `go test -tags=unit`
+  exclude those files. Keep helpers needed by both suites in ordinary
+  `*_test.go` files. CI checks the classification and compiles/runs both modes.
   `testutil.SetupPostgresDB` uses testcontainers and fails (not skips)
   without a Docker daemon — then set
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
   (role needs CREATEDB) and each test gets a scratch database on that server.
   The SIPp INVITE test (`worker/.../sip_invite_integration_test.go`) is no
   database test and skips instead when no Docker provider is reachable.
-- CI's Go job logs the whole module with `-v`, far past any log tail; a
-  failure is repeated by its "Summarize test failures" step (end of the job
-  log, step summary, check-run annotations) — read that, not the log head.
+- CI runs a fast Go job and three complete package groups with `-race`;
+  each full group gets one Postgres service via `PROBARA_TEST_POSTGRES_DSN`.
+  `scripts/ci.py` under `.github/workflows/` owns package assignment, JSON
+  failure/timing summaries, unexpected-skip checks and coverage merging.
+  The aggregate keeps the required `Go test (main module)` check name.
+  `docs/testing.md` documents the suites, intentional optional skips and
+  conservative AI checkpoint selection; update it when changing the workflow.
 - Web/website: CI runs `npm run lint`, `npx tsc --noEmit` and `npm run build`
   in both (`website/` lint allows no warnings), plus `npm test` in `web/`.
   Run the same in whichever one you touched.

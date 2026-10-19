@@ -18,6 +18,7 @@ def test_actual_token_budget_rejects_without_truncation():
         runtime.prepare([d])
 
 
+@pytest.mark.checkpoint
 @pytest.mark.skipif(not os.environ.get("LOCAL_AI_ARTIFACT"), reason="set LOCAL_AI_ARTIFACT for real bundled CPU verification")
 def test_bundled_cpu_inference_without_network(monkeypatch):
     def denied(*args, **kwargs):
