@@ -49,7 +49,7 @@ func (h *Handlers) recordKeyEvent(r *http.Request, action string, keyID string, 
 	event.Outcome = audit.OutcomeSuccess
 	event.ResourceType = "api_key"
 	event.ResourceID = keyID
-	event.Details = details
+	event.MergeDetails(details)
 	h.audit.Record(event)
 }
 
