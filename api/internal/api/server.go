@@ -30,6 +30,7 @@ import (
 	metricsqueryhandlers "github.com/yassinebenameur/probara/api/internal/handlers/metricsquery"
 	monitorhandlers "github.com/yassinebenameur/probara/api/internal/handlers/monitors"
 	notificationsettingshandlers "github.com/yassinebenameur/probara/api/internal/handlers/notificationsettings"
+	oauthhandlers "github.com/yassinebenameur/probara/api/internal/handlers/oauth"
 	oidcmappinghandlers "github.com/yassinebenameur/probara/api/internal/handlers/oidcmappings"
 	otlphandlers "github.com/yassinebenameur/probara/api/internal/handlers/otlp"
 	pushhandlers "github.com/yassinebenameur/probara/api/internal/handlers/push"
@@ -37,6 +38,7 @@ import (
 	statuspagehandlers "github.com/yassinebenameur/probara/api/internal/handlers/statuspages"
 	tenanthandlers "github.com/yassinebenameur/probara/api/internal/handlers/tenants"
 	userhandlers "github.com/yassinebenameur/probara/api/internal/handlers/users"
+	mcpserver "github.com/yassinebenameur/probara/api/internal/mcp"
 	apimiddleware "github.com/yassinebenameur/probara/api/internal/middleware"
 	adminauthservice "github.com/yassinebenameur/probara/api/internal/services/adminauth"
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
@@ -56,6 +58,7 @@ import (
 	locationnatsauthservice "github.com/yassinebenameur/probara/api/internal/services/locationnatsauth"
 	locationservice "github.com/yassinebenameur/probara/api/internal/services/locations"
 	maintenancewindowservice "github.com/yassinebenameur/probara/api/internal/services/maintenancewindows"
+	mcpoauthservice "github.com/yassinebenameur/probara/api/internal/services/mcpoauth"
 	meshservice "github.com/yassinebenameur/probara/api/internal/services/mesh"
 	metricsqueryservice "github.com/yassinebenameur/probara/api/internal/services/metricsquery"
 	monitorservice "github.com/yassinebenameur/probara/api/internal/services/monitors"
@@ -94,6 +97,7 @@ type Server struct {
 	locationAuth       *callout.AuthorizationService
 	locationAuthConn   *nats.Conn
 	locationAuthErr    error
+	mcpErr             error
 }
 
 type monitorStatusNotifier struct {
@@ -199,8 +203,52 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		r.Post("/{token}", pushHandlers.HandlePushPost)
 	})
 
+	// MCP: OAuth authorization server discovery at the well-known paths
+	// clients probe (path insertion and appending, OAuth and OpenID names).
+	authMiddleware := apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret)
+	oauthHandlers := oauthhandlers.NewHandlers(mcpoauthservice.NewService(dbClient), log, auditRecorder, cfg.PublicBaseURL, cfg.AppBaseURL)
+	mcpHandler := mcpserver.NewHandler(log, oauthHandlers.ResourceMetadataURL)
+	r.Group(func(r chi.Router) {
+		r.Use(oauthhandlers.PublicCORS)
+		r.Get("/.well-known/oauth-protected-resource", oauthHandlers.ProtectedResourceMetadata)
+		r.Get("/.well-known/oauth-protected-resource/*", oauthHandlers.ProtectedResourceMetadata)
+		r.Get("/.well-known/oauth-authorization-server", oauthHandlers.AuthorizationServerMetadata)
+		r.Get("/.well-known/oauth-authorization-server/*", oauthHandlers.AuthorizationServerMetadata)
+		r.Get("/.well-known/openid-configuration/*", oauthHandlers.AuthorizationServerMetadata)
+	})
+
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
+		// MCP endpoint: bearer credentials only (API key or MCP OAuth
+		// token). It sits outside the protected group because the outer
+		// request is not itself a write: every tool call is dispatched as
+		// its own REST request through the full middleware chain.
+		r.With(oauthhandlers.PublicCORS).Handle("/mcp", mcpHandler.Protect(authMiddleware))
+
+		// MCP OAuth authorization server.
+		r.Route("/oauth", func(r chi.Router) {
+			r.Group(func(r chi.Router) {
+				r.Use(oauthhandlers.PublicCORS)
+				r.Get("/.well-known/oauth-authorization-server", oauthHandlers.AuthorizationServerMetadata)
+				r.Get("/.well-known/openid-configuration", oauthHandlers.AuthorizationServerMetadata)
+				r.Post("/register", oauthHandlers.Register)
+				r.Get("/authorize", oauthHandlers.Authorize)
+				r.Post("/token", oauthHandlers.Token)
+				r.Post("/revoke", oauthHandlers.Revoke)
+			})
+			// Consent and connection management for the operator UI: a
+			// signed-in user session only, outside the write gate (a viewer
+			// may connect a read-only agent and revoke their own
+			// connections) and outside generic audit (they record their own).
+			r.Group(func(r chi.Router) {
+				r.Use(authMiddleware)
+				r.Get("/authorize/request", oauthHandlers.AuthorizationRequest)
+				r.Post("/authorize/decision", oauthHandlers.Decide)
+				r.Get("/grants", oauthHandlers.ListGrants)
+				r.Delete("/grants/{id}", oauthHandlers.RevokeGrant)
+			})
+		})
+
 		adminUsersSvc := adminusersservice.NewService(dbClient, cfg.AdminBcryptCost)
 		adminUsersHandlers := userhandlers.NewHandlers(adminUsersSvc, log).WithAudit(auditRecorder)
 
@@ -225,7 +273,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		// Protected API routes
 		r.Route("/", func(r chi.Router) {
 			// Apply auth middleware to all API routes
-			r.Use(apimiddleware.AuthMiddleware(dbClient, log, cfg.AdminJWTSecret))
+			r.Use(authMiddleware)
 			// Audit wraps the write gate so denied mutations are recorded too
 			// (RequireWrite 403s surface as outcome=denied).
 			r.Use(apimiddleware.AuditMutations(auditRecorder))
@@ -576,6 +624,10 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		})
 	})
 
+	// Resolve the MCP tool catalog against the finished router: a tool whose
+	// route is gone is a startup error, never a tool that always 404s.
+	mcpErr := mcpHandler.Bind(r, mcpHandler.Extras())
+
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:      r,
@@ -597,6 +649,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 		auditPruner:        auditPruner,
 		locationAuthorizer: locationAuthorizer,
 		locationAuthErr:    locationAuthErr,
+		mcpErr:             mcpErr,
 	}
 }
 
@@ -607,6 +660,9 @@ func (s *Server) Start() error {
 	}).Info("Starting HTTP server")
 	if s.locationAuthErr != nil {
 		return fmt.Errorf("configure NATS location authorization: %w", s.locationAuthErr)
+	}
+	if s.mcpErr != nil {
+		return fmt.Errorf("configure MCP server: %w", s.mcpErr)
 	}
 	if s.locationAuthorizer != nil {
 		nc, err := nats.Connect(s.config.NATSURL,
