@@ -105,6 +105,11 @@ func (h *Handlers) ConfigureCheckJobs(publisher checkJobPublisher, subject strin
 }
 
 // TestMonitorConfigRequest is the body for POST /api/v1/monitors/test.
+// RunMonitorNowRequest is the optional body of POST /monitors/{id}/run.
+type RunMonitorNowRequest struct {
+	LocationID *string `json:"location_id,omitempty"`
+}
+
 type TestMonitorConfigRequest struct {
 	Type           models.MonitorType `json:"type"`
 	Config         json.RawMessage    `json:"config"`
@@ -1006,9 +1011,7 @@ func (h *Handlers) RunMonitorNow(w http.ResponseWriter, r *http.Request) {
 	// Optional body: {"location_id": "..."} narrows the run to one of the
 	// monitor's locations. Default: fan out exactly like the scheduler (all
 	// selected locations, or the default fleet when none).
-	var runReq struct {
-		LocationID *string `json:"location_id,omitempty"`
-	}
+	var runReq RunMonitorNowRequest
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&runReq) // empty body is fine
 	}
