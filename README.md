@@ -46,6 +46,12 @@ service. Runs on Docker Compose or Kubernetes (Helm). Licensed AGPL-3.0.
   admin/editor/viewer roles, an audit log, read/write-scoped API keys, monitor
   and channel secrets encrypted at rest, and an SSRF guard applied to every
   checker and notification channel that dials out.
+- **MCP server for AI agents** — Claude Code, Claude.ai, Cursor and any
+  Model Context Protocol client connect to `/api/v1/mcp` and get every API
+  capability as a tool (about 140, plus monitor-type schemas and a live alert
+  watch). Agents sign in through OAuth as a user, or use a workspace API key,
+  and act with exactly that role, tenant scope and audit trail: each tool
+  call runs through the same REST route and checks.
 - **Status pages** — theme the built-in page, or replace the entire Go
   template with draft preview and versioned publish/revert. Pages update live
   over NATS and server-sent events.

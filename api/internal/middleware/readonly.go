@@ -45,18 +45,23 @@ func isPostReadPath(path string) bool {
 	return false
 }
 
+// IsReadOnlyRequest reports whether RequireWrite lets a read-only identity
+// through: safe methods plus the postReadPaths allowlist. The MCP catalog
+// derives each tool's readOnlyHint from it, so the two cannot disagree.
+func IsReadOnlyRequest(method, path string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+	return method == http.MethodPost && isPostReadPath(strings.TrimSuffix(path, "/"))
+}
+
 // RequireWrite blocks mutating methods for read-only identities (viewer
 // members, read-scope API keys). Reads always pass; the postReadPaths
 // allowlist exempts compute-only POST endpoints.
 func RequireWrite(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions:
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		if r.Method == http.MethodPost && isPostReadPath(strings.TrimSuffix(r.URL.Path, "/")) {
+		if IsReadOnlyRequest(r.Method, r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

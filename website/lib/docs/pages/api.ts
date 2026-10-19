@@ -93,6 +93,11 @@ export const API_PAGE: DocPage = {
               description:
                 "Used only in `/api/v1/push/{token}`. No cookie or bearer key is required because possession of the URL token authorizes a heartbeat.",
             },
+            {
+              term: "MCP access token",
+              description:
+                "`Bearer pbm_at_…`, issued to an AI agent by the [MCP sign-in](/docs/mcp/#authentication). Valid only on `/api/v1/mcp`: every tool call there runs as one of the routes below with the same checks. A direct REST call with it returns 401.",
+            },
           ],
         },
         {

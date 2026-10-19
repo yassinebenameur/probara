@@ -29,6 +29,16 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
   internal: "Single sign-on failed unexpectedly. Please try again.",
 };
 
+// Where to go after signing in: a same-origin path only (mirrors the API's
+// sanitizeNextPath for SSO), so a crafted link cannot bounce elsewhere. The
+// MCP consent screen sends people here with next=/oauth/consent?….
+function safeNextPath(next: string | null): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//") || /[\\\r\n]/.test(next)) {
+    return "/";
+  }
+  return next;
+}
+
 export default function LoginPage() {
   return (
     <Suspense>
@@ -47,6 +57,7 @@ function LoginPageInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [oidc, setOidc] = useState<OidcStatus>({ enabled: false });
+  const nextPath = safeNextPath(searchParams.get("next"));
 
   useEffect(() => {
     const ssoError = searchParams.get("sso_error");
@@ -137,7 +148,7 @@ function LoginPageInner() {
       // Ensure we don't fall back to API-key mode after admin login
       clearApiKey();
 
-      router.push("/");
+      router.push(nextPath);
       return null;
     } catch {
       return "Failed to sign in. Please try again.";
@@ -360,8 +371,10 @@ function LoginPageInner() {
                   onClick={() => {
                     clearApiKey();
                     // A full-page navigation: the API answers with a redirect to the identity provider.
-                    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-                    window.location.href = "/api/v1/auth/oidc/start";
+                    window.location.href =
+                      nextPath === "/"
+                        ? "/api/v1/auth/oidc/start"
+                        : `/api/v1/auth/oidc/start?next=${encodeURIComponent(nextPath)}`;
                   }}
                 >
                   Continue with {oidc.label || "SSO"}

@@ -56,3 +56,28 @@ func TestIsTenantAdmin(t *testing.T) {
 		}
 	}
 }
+
+func TestCanWriteScopeNarrowsRoles(t *testing.T) {
+	bg := context.Background()
+	user := WithAdminID(bg, "u1")
+	cases := []struct {
+		name string
+		ctx  context.Context
+		want bool
+	}{
+		{"superadmin", WithPlatformRole(user, "superadmin"), true},
+		{"superadmin with read scope", WithAuthScope(WithPlatformRole(user, "superadmin"), "read"), false},
+		{"superadmin with write scope", WithAuthScope(WithPlatformRole(user, "superadmin"), "write"), true},
+		{"tenant editor", WithRole(user, "editor"), true},
+		{"tenant editor with read scope", WithAuthScope(WithRole(user, "editor"), "read"), false},
+		{"tenant viewer with write scope", WithAuthScope(WithRole(user, "viewer"), "write"), false},
+		{"api key write", WithAuthScope(WithAPIKeyID(bg, "k1"), "write"), true},
+		{"api key read", WithAuthScope(WithAPIKeyID(bg, "k1"), "read"), false},
+		{"anonymous", bg, false},
+	}
+	for _, c := range cases {
+		if got := CanWrite(c.ctx); got != c.want {
+			t.Errorf("%s: CanWrite() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

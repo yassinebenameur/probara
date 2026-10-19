@@ -323,7 +323,7 @@ export default function HomePage() {
                 <p>
                   Separate tenants, control writes with roles and scoped API keys, connect
                   OIDC, retain an audit trail, and configure encryption for stored monitor
-                  and channel secrets.
+                  and channel secrets. AI agents connect over MCP with the same roles.
                 </p>
                 <div className="feature-card__visual rbac-grid" aria-hidden="true">
                   <div className="rbac-cell">

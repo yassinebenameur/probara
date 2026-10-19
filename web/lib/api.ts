@@ -105,6 +105,7 @@ import type {
   MetricSeriesListResponse,
   MetricQueryRequest,
   MetricQueryResponse,
+  McpConnectionListResponse,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -681,6 +682,23 @@ export async function createApiKey(
 
 export async function revokeApiKey(id: string): Promise<void> {
   return apiRequest<void>('DELETE', `/v1/api-keys/${id}`);
+}
+
+// MCP: the agent endpoint and the signed-in user's OAuth connections to it.
+export function getMcpEndpointUrl(): string {
+  const path = getApiUrl('/v1/mcp');
+  if (path.startsWith('/') && typeof window !== 'undefined') {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+export async function getMcpConnections(): Promise<McpConnectionListResponse> {
+  return apiRequest<McpConnectionListResponse>('GET', '/v1/oauth/grants');
+}
+
+export async function revokeMcpConnection(id: string): Promise<void> {
+  return apiRequest<void>('DELETE', `/v1/oauth/grants/${id}`);
 }
 
 // Status Page API functions

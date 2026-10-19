@@ -100,6 +100,11 @@ func (h *Handlers) GetDependencyGraph(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(graph)
 }
 
+// AddDependencyRequest is the body of POST /monitors/{id}/dependencies.
+type AddDependencyRequest struct {
+	DependsOnID string `json:"depends_on_id"`
+}
+
 // AddMonitorDependency handles POST /api/v1/monitors/{id}/dependencies —
 // creates one edge ({"depends_on_id": "..."}) for the graph editor.
 func (h *Handlers) AddMonitorDependency(w http.ResponseWriter, r *http.Request) {
@@ -134,9 +139,7 @@ func (h *Handlers) mutateDependencyEdge(w http.ResponseWriter, r *http.Request, 
 
 	var dependsOnID uuid.UUID
 	if op == "add" {
-		var body struct {
-			DependsOnID string `json:"depends_on_id"`
-		}
+		var body AddDependencyRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			errors.WriteValidationError(w, "invalid request body: "+err.Error())
 			return

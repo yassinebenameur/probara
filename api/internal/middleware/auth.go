@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/yassinebenameur/probara/api/internal/services/mcpoauth"
 	"github.com/yassinebenameur/probara/shared/auth"
 	ctxpkg "github.com/yassinebenameur/probara/shared/context"
 	"github.com/yassinebenameur/probara/shared/db"
@@ -72,6 +74,11 @@ func AuthMiddleware(dbClient *db.Client, log *logger.Logger, jwtSecret string) f
 					"path":  r.URL.Path,
 				}).Warn("Failed to extract API key")
 				writeAuthError(w, "missing or invalid Authorization header")
+				return
+			}
+
+			if strings.HasPrefix(apiKey, mcpoauth.AccessTokenPrefix) {
+				handleMCPTokenRequest(w, r, next, dbClient, log, apiKey)
 				return
 			}
 
@@ -167,6 +174,41 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, next http.Handle
 	}
 
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// mcpEndpointPath is the only route an MCP OAuth access token may call
+// directly; every other route accepts it only on a request the MCP server
+// dispatched for a tool call (marked via=mcp in the context, which no client
+// can set). The token is issued for the MCP resource, not the REST API.
+const mcpEndpointPath = "/api/v1/mcp"
+
+// handleMCPTokenRequest authenticates an MCP OAuth access token as the user
+// who granted it. Roles come from the database exactly as for a cookie
+// session; the grant's scope is added on top and can only narrow them
+// (ctxpkg.CanWrite checks scope first). Without an explicit tenant the
+// grant's default tenant applies.
+func handleMCPTokenRequest(w http.ResponseWriter, r *http.Request, next http.Handler, dbClient *db.Client, log *logger.Logger, token string) {
+	via, _ := ctxpkg.GetVia(r.Context())
+	if via != ctxpkg.ViaMCP && strings.TrimSuffix(r.URL.Path, "/") != mcpEndpointPath {
+		writeAuthError(w, "MCP access tokens are only valid on the MCP endpoint")
+		return
+	}
+	identity, err := mcpoauth.LookupAccessToken(r.Context(), dbClient, token)
+	if err != nil {
+		if !errors.Is(err, mcpoauth.ErrInvalidGrant) {
+			log.WithError(err).Error("Failed to resolve MCP access token")
+		}
+		writeAuthError(w, "invalid or expired access token")
+		return
+	}
+	if r.Header.Get("X-Tenant-ID") == "" && r.URL.Query().Get("tenant_id") == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("X-Tenant-ID", identity.TenantID.String())
+	}
+	scoped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(ctxpkg.WithAuthScope(r.Context(), identity.Scope)))
+	})
+	handleAdminRequest(w, r, scoped, dbClient, log, identity.AdminUserID)
 }
 
 // lastUsedTouch tracks per-key throttling of last_used_at updates so hot keys

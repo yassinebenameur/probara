@@ -175,8 +175,25 @@ func FromRequest(r *http.Request) Event {
 		// API key requests before scoped keys land carry no key ID.
 		event.ActorType = ActorAPIKey
 	}
+	if via, ok := ctxpkg.GetVia(ctx); ok {
+		event.Details = map[string]any{"via": via}
+	}
 
 	return event
+}
+
+// MergeDetails adds details to the event without dropping what FromRequest
+// already put there (the MCP "via" marker).
+func (e *Event) MergeDetails(details map[string]any) {
+	if len(details) == 0 {
+		return
+	}
+	if e.Details == nil {
+		e.Details = make(map[string]any, len(details))
+	}
+	for k, v := range details {
+		e.Details[k] = v
+	}
 }
 
 // ClientIP extracts the originating client IP, honoring X-Forwarded-For.

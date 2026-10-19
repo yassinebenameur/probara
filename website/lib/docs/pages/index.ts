@@ -7,6 +7,7 @@ import { ARCHITECTURE_PAGE } from "./architecture";
 import { DEPENDENCIES_PAGE } from "./dependencies";
 import { GETTING_STARTED_PAGE } from "./getting-started";
 import { LOCATIONS_PAGE } from "./locations";
+import { MCP_PAGE } from "./mcp";
 import { MONITORS_PAGE } from "./monitors";
 import { SLAS_PAGE } from "./slas";
 import { STATUS_PAGES_PAGE } from "./status-pages";
@@ -20,6 +21,7 @@ export {
   DEPENDENCIES_PAGE,
   GETTING_STARTED_PAGE,
   LOCATIONS_PAGE,
+  MCP_PAGE,
   MONITORS_PAGE,
   SLAS_PAGE,
   STATUS_PAGES_PAGE,
@@ -37,4 +39,5 @@ export const PRODUCT_DOC_PAGES: DocPage[] = [
   AGENTS_PAGE,
   ADMINISTRATION_PAGE,
   API_PAGE,
+  MCP_PAGE,
 ];

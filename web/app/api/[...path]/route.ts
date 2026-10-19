@@ -77,6 +77,12 @@ async function proxyRequest(req: NextRequest, ctx: RouteContext): Promise<Respon
   const { path } = await ctx.params;
   const targetUrl = buildTargetUrl(req.url, path);
   const headers = copyHeaders(req.headers);
+  // The API builds absolute URLs (MCP OAuth metadata and redirects) from
+  // the origin the client used; the Host header is dropped above, so pass it
+  // on as the forwarded host when no outer proxy already did.
+  const incoming = new URL(req.url);
+  if (!headers.has('x-forwarded-host')) headers.set('x-forwarded-host', incoming.host);
+  if (!headers.has('x-forwarded-proto')) headers.set('x-forwarded-proto', incoming.protocol.replace(':', ''));
 
   const init: RequestInit & { duplex?: 'half' } = {
     method: req.method,
