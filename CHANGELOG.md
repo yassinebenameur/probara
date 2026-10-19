@@ -1,3 +1,20 @@
+# [2.0.0-alpha.2](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.1...v2.0.0-alpha.2) (2026-10-19)
+
+
+### Bug Fixes
+
+* **agent:** embed only API keys in collector install scripts ([2861b93](https://github.com/yassinebenameur/probara/commit/2861b931b9a9074538e3d8f3ec429dc2316b1526))
+* **auth:** let a credential scope narrow every role, superadmin included ([693aec8](https://github.com/yassinebenameur/probara/commit/693aec819f159cec89bf6e7356f1a9ddb2f3fdd6))
+* **mcp:** make alert wait timeout tests deterministic ([31276ec](https://github.com/yassinebenameur/probara/commit/31276ecbca1e708bff3caa700d9a71661ecfce72))
+
+
+### Features
+
+* **audit:** record the dispatch channel in audit event details ([9731770](https://github.com/yassinebenameur/probara/commit/973177004f59286fb470f4666d42962c29d9374f))
+* **mcp:** add an OAuth 2.1 authorization server for MCP clients ([e025f69](https://github.com/yassinebenameur/probara/commit/e025f698e3737babe74fb7ec3d437b8e7a78ba7b))
+* **mcp:** serve the whole API as MCP tools at /api/v1/mcp ([79cb0b6](https://github.com/yassinebenameur/probara/commit/79cb0b6363455f70e4d21cf900c838f457968117))
+* **web:** add the MCP consent screen and settings tab ([6506a72](https://github.com/yassinebenameur/probara/commit/6506a72ff7f9a1cfc55cf3a34a1b2e229cfb422d))
+
 # [2.0.0-alpha.1](https://github.com/yassinebenameur/probara/compare/v1.0.0...v2.0.0-alpha.1) (2026-10-16)
 
 
