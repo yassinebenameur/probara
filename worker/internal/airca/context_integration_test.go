@@ -26,7 +26,7 @@ func TestIncidentWindowTenantIsolationAndConsumerIdempotency(t *testing.T) {
 	m := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "api")
 	up := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "database")
 	foreign := testutil.InsertHTTPMonitor(ctx, t, dbc, other, "private-foreign")
-	anchor := time.Now().UTC().Add(-2 * time.Hour)
+	anchor := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	requested := anchor.Add(40 * time.Minute)
 	incident := uuid.New()
 	alert := uuid.New()
@@ -209,7 +209,7 @@ func TestHostEvidenceRejectsIdleExpiredAndForeignSamples(t *testing.T) {
 	tenant := testutil.InsertTenant(ctx, t, dbc, "host evidence")
 	other := testutil.InsertTenant(ctx, t, dbc, "other")
 	m := testutil.InsertAgentMonitor(ctx, t, dbc, tenant, "host", "host-evidence", 30)
-	anchor := time.Now().UTC().Add(-time.Hour)
+	anchor := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	exec := func(q string, args ...any) {
 		t.Helper()
 		if _, err := dbc.ExecContext(ctx, q, args...); err != nil {
@@ -272,7 +272,7 @@ func TestPlatformRowsAreNotEvidenceAndMeshAlertsArePersisted(t *testing.T) {
 		exec(`INSERT INTO check_results(monitor_id,tenant_id,job_id,status,result_source,error_message,created_at,started_at,completed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$7)`, monitor, tenant, uuid.New(), status, source, message, at)
 	}
 	m := testutil.InsertHTTPMonitor(ctx, t, dbc, tenant, "api")
-	anchor := time.Now().UTC().Add(-2 * time.Hour)
+	anchor := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	requested := anchor.Add(40 * time.Minute)
 	for i := 0; i < 10; i++ {
 		check(m, "success", "monitor", "", anchor.Add(time.Duration(i)*time.Minute))
