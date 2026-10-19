@@ -141,6 +141,11 @@ export const SECURITY_PAGE: DocPage = {
               'SHA-256 hash stored in `admin_sessions`; rotated on use, with a 60-second reuse window so concurrent refreshes (parallel requests, multiple tabs) do not invalidate the session',
               'Default lifetime is 30 days. The reuse window also means a stolen refresh token can be replayed for up to 60 seconds after rotation. Protect database backups because they contain session metadata and hashes.',
             ],
+            [
+              'MCP OAuth tokens',
+              'Opaque `pbm_at_` (1 hour) and `pbm_rt_` (30 days) values, SHA-256 hashed in `mcp_oauth_tokens`; refresh tokens rotate on every use with no reuse window',
+              'Presenting a rotated refresh token or replaying an authorization code revokes the whole connection. Access tokens act as the consenting user, are accepted only on the MCP endpoint and requests it dispatches, and their read/write scope can only narrow the user\'s role. See [MCP authentication](/docs/mcp/#authentication).',
+            ],
           ],
         },
         {

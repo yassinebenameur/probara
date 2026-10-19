@@ -20,7 +20,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 
 ## Repo layout
 
-- `api/` — REST API (chi), validation registry, monitor/import/auth services
+- `api/` — REST API (chi), validation registry, monitor/import/auth services,
+  the MCP server (`internal/mcp/`) and its OAuth authorization server
+  (`internal/services/mcpoauth/`, `internal/handlers/oauth/`)
 - `scheduler/` — cron-style dispatch, JetStream stream provisioning, results
   ingest (`internal/ingest/`)
 - `worker/` — check execution (all monitor types); checkers dial through
@@ -250,7 +252,9 @@ or imported groups come back empty. Any other path that creates groups through
    `shared/models/` (one file per newer type, e.g. `prometheus.go`; older types
    sit in `check_job_payload.go`). The API validator and the worker both consume
    the shared struct, so put `Validate()` on it rather than duplicating rules
-2. Validator in `api/internal/validation/` + register in `registry.go`
+2. Validator in `api/internal/validation/` + register in `registry.go`, and
+   its `ConfigType()` in `config_types.go` (the struct MCP's
+   `describe_monitor_type` reflects; `TestEveryValidatorNamesItsConfigType`)
 3. Checker in `worker/internal/worker/` + register in worker `registry.go` —
    any checker that dials must take `(blockPrivateIPs, allowedCIDRs)` and dial
    through `dialGuard` (SSRF policy)
@@ -388,6 +392,31 @@ or imported groups come back empty. Any other path that creates groups through
   that re-parses the value as config (numeric, boolean-ish or
   space/comma/brace passwords abort startup), and quoting the reference
   silently disables the expansion.
+
+## MCP server
+
+- **Tools are a protocol adapter over the router.** Each catalog entry
+  (`api/internal/mcp/catalog*.go`) is one REST route; a call rebuilds that
+  request and dispatches it through the root router in process with the
+  caller's bearer, so auth, audit, the write gate, role gates, validation and
+  masking apply unchanged. Never call a service from `api/internal/mcp` —
+  extras (`extras.go`) read only compile-time registries or go through the
+  router too. Inner requests get a value-free context (`detached`): chi
+  reuses a RouteContext it finds, and identity must be re-resolved.
+- **Every `/api/v1` route is a tool or in `notExposed` with a reason.**
+  `Bind` (startup) and `TestMCPCatalogMatchesRouter` fail on a missing route,
+  a tool whose route is gone, or a stale exclusion. Body schemas reflect the
+  handler's request type, so name the type (no anonymous decode structs on a
+  routed handler); readOnly comes from `middleware.IsReadOnlyRequest`, gates
+  from `chi.Walk`.
+- **Bearer only.** `Protect` strips cookies before auth; never let the MCP
+  route accept the session cookie. MCP OAuth access tokens (`pbm_at_`) are
+  accepted only on `/api/v1/mcp` and on requests it dispatched
+  (`ctxpkg.ViaMCP`), carry a scope and never a role, and `CanWrite` checks
+  scope first so it only narrows. Consent and `/oauth/grants` take a user
+  session only, outside the write gate, with their own audit events.
+- `tools/list` filtering by capability is UX; enforcement is the inner
+  dispatch. Install scripts embed only API keys (`embeddableAPIKey`).
 
 ## Notifications
 

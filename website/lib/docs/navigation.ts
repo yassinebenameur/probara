@@ -70,6 +70,11 @@ export const DOC_NAVIGATION: DocNavGroup[] = [
         description: 'Authentication, conventions, endpoint families, and examples.',
       },
       {
+        slug: 'mcp',
+        title: 'MCP server',
+        description: 'Connect Claude, Cursor and other AI agents with your role and audit trail.',
+      },
+      {
         slug: 'configuration',
         title: 'Configuration variables',
         description: 'Every service environment variable, default, and constraint.',
