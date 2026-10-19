@@ -6,8 +6,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -19,10 +19,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/yassinebenameur/probara/api/internal/models"
 	adminusersservice "github.com/yassinebenameur/probara/api/internal/services/adminusers"
-	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/config"
 	"github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
@@ -73,13 +73,16 @@ func newMCPFixture(t *testing.T) *mcpFixture {
 func (f *mcpFixture) apiKey(tenant uuid.UUID, scope string) string {
 	f.t.Helper()
 	key := "pk_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	hashed, err := auth.HashAPIKey(key)
+	// Exercise real key validation without production-cost bcrypt work on
+	// every outer MCP request and inner REST dispatch, especially under -race.
+	hash, err := bcrypt.GenerateFromPassword([]byte(key), bcrypt.MinCost)
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	prefix := sha256.Sum256([]byte(key))
 	if _, err := f.db.ExecContext(f.ctx, `
 		INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix, scope) VALUES ($1, $2, $3, $4, $5)`,
-		tenant, "mcp-test-"+scope, hashed.BcryptHash, hashed.KeyPrefix, scope); err != nil {
+		tenant, "mcp-test-"+scope, string(hash), hex.EncodeToString(prefix[:]), scope); err != nil {
 		f.t.Fatal(err)
 	}
 	return key
@@ -480,15 +483,13 @@ func TestMCPOAuthFlow(t *testing.T) {
 func TestMCPWaitForAlertEventsTimesOutQuietly(t *testing.T) {
 	f := newMCPFixture(t)
 	session := f.connect(f.apiKey(f.tenantA, "read"))
-	start := time.Now()
+	// Assert the response through the full authenticated transport here;
+	// the exact wait duration is covered with a fake clock in the MCP package.
 	out, isErr := callTool(t, session, "wait_for_alert_events", map[string]any{"timeout_seconds": 1})
 	if isErr {
 		t.Fatalf("wait_for_alert_events: %s", out)
 	}
 	if !strings.Contains(out, `"events":[]`) {
 		t.Fatalf("expected no events: %s", out)
-	}
-	if time.Since(start) > 10*time.Second {
-		t.Fatal(fmt.Sprintf("took %s", time.Since(start)))
 	}
 }
