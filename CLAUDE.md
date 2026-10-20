@@ -639,7 +639,11 @@ or imported groups come back empty. Any other path that creates groups through
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`
   (role needs CREATEDB) and each test gets a scratch database on that server.
   The SIPp INVITE test (`worker/.../sip_invite_integration_test.go`) is no
-  database test and skips instead when no Docker provider is reachable.
+  database test and skips instead when no Docker provider is reachable (CI
+  still fails that skip). Its `media/*` subtests run SIPp's `-rtp_echo` on a
+  fixed UDP port published on the host's `127.0.0.1` (the templated
+  `uas_echo.xml.tmpl` names it), so they need a local daemon (Docker Desktop
+  or the runner's dockerd); a remote `DOCKER_HOST` fails them, never skips.
 - CI runs a fast Go job and three complete package groups with `-race`;
   each full group gets one Postgres service via `PROBARA_TEST_POSTGRES_DSN`.
   `scripts/ci.py` under `.github/workflows/` owns package assignment, JSON

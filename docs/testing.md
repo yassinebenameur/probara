@@ -44,6 +44,21 @@ using testcontainers. The database client integration test retains its own
 container to exercise client startup independently. NATS and SIPp tests also
 own their containers. Chrome must be installed for the worker group.
 
+The SIPp test's `media/*` subtests (`TestSIPInvite_SIPpUAS_Integration`) place
+test calls that exchange RTP with SIPp's `-rtp_echo` (echo with PCMU and PCMA,
+TCP signalling, `audio`, `two_way`, and SIPp without the echo for the no-echo,
+no-audio and measure-only outcomes). Each publishes an even UDP port P from
+the host's `127.0.0.1` to the same port in the container, so the templated
+answer SDP (`testdata/sipp/uas_echo.xml.tmpl`) can name `127.0.0.1:P`, and the
+echo comes back through the daemon's loopback forwarder: Docker Desktop's on
+macOS, `docker-proxy` (or DNAT and conntrack with `userland-proxy: false`) on
+Linux. That needs a daemon publishing on the test host's own loopback, so a
+remote `DOCKER_HOST` fails these subtests with a message naming the cause;
+rootless Docker and Podman are not supported. Readiness also waits for SIPp's
+media socket on a non-loopback container address and for a build that has
+`-rtp_echo`. No subtest skips: the report's skip check covers subtests too.
+One-way streams, loss and jitter are covered in process by `fakeMediaPeer`.
+
 Go output is recorded as JSON in seven-day workflow artifacts, with failures
 and package timings repeated in the step summary (failure detail is capped
 at 512 KiB; the rest stays in the artifact). Missing Docker or Chrome
