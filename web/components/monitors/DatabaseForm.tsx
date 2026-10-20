@@ -5,20 +5,23 @@ import {
   Monitor,
   CreateMonitorRequest,
   UpdateMonitorRequest,
-  MonitorType,
-  DependencySuppression,
-  NotificationMode,
-  ChannelAssignment,
-  RedisMonitorConfig,
-  PostgresMonitorConfig,
-  MongoDBMonitorConfig,
-  RabbitMQMonitorConfig,
-  MySQLMonitorConfig,
   DBQueryValueOp,
-  MASKED_SECRET,
   Location,
 } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
+import {
+  ConnectionMode,
+  DB_TYPE_META,
+  DatabaseConfig,
+  DatabaseMonitorType,
+  QUERY_CAPABLE_TYPES,
+  buildDatabaseConfig,
+  buildDatabaseRequest,
+  databaseSourceConfig,
+  databaseTLSMaterialRelevant,
+  initialDatabaseFormState,
+  storedDatabaseSecrets,
+} from '@/lib/monitor-form/database';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import {
   Activity,
@@ -46,98 +49,7 @@ import DependenciesField from './DependenciesField';
 import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
 import { SELECTED_SEGMENT } from '@/components/ui/roving';
 
-export type DatabaseMonitorType = 'redis' | 'postgres' | 'mongodb' | 'rabbitmq' | 'mysql';
-
-type DatabaseConfig = RedisMonitorConfig &
-  PostgresMonitorConfig &
-  MongoDBMonitorConfig &
-  RabbitMQMonitorConfig &
-  MySQLMonitorConfig;
-
-// Types whose checker supports the optional assertion query + value assertion.
-const QUERY_CAPABLE_TYPES: DatabaseMonitorType[] = ['postgres', 'mysql'];
-
-type ConnectionMode = 'fields' | 'connection_string';
-
-const DB_TYPE_META: Record<
-  DatabaseMonitorType,
-  {
-    label: string;
-    defaultPort: number;
-    hostPlaceholder: string;
-    csPlaceholder: string;
-    csHint: string;
-    csSchemes: string[];
-    csAllowsKeyValueDSN: boolean;
-    // Accepts the driver's native non-URI DSN (mysql: user:pw@tcp(host)/db).
-    csAllowsNativeDSN?: boolean;
-    supportsTLSToggle: boolean;
-    usernameRequired: boolean;
-    checkVerb: string;
-  }
-> = {
-  redis: {
-    label: 'Redis',
-    defaultPort: 6379,
-    hostPlaceholder: 'redis.internal',
-    csPlaceholder: 'redis://user:password@redis.internal:6379/0',
-    csHint: 'redis:// or rediss:// (TLS) URI. May include username, password, and DB index.',
-    csSchemes: ['redis://', 'rediss://'],
-    csAllowsKeyValueDSN: false,
-    supportsTLSToggle: true,
-    usernameRequired: false,
-    checkVerb: 'connect + PING',
-  },
-  postgres: {
-    label: 'PostgreSQL',
-    defaultPort: 5432,
-    hostPlaceholder: 'db.internal',
-    csPlaceholder: 'postgres://user:password@db.internal:5432/mydb?sslmode=require',
-    csHint: 'postgres:// URI or key=value DSN. TLS is controlled by sslmode in the string.',
-    csSchemes: ['postgres://', 'postgresql://'],
-    csAllowsKeyValueDSN: true,
-    supportsTLSToggle: false,
-    usernameRequired: true,
-    checkVerb: 'connect + ping',
-  },
-  mongodb: {
-    label: 'MongoDB',
-    defaultPort: 27017,
-    hostPlaceholder: 'mongo.internal',
-    csPlaceholder: 'mongodb://user:password@mongo.internal:27017/?authSource=admin',
-    csHint: 'mongodb:// or mongodb+srv:// URI. May include credentials and options like tls=true.',
-    csSchemes: ['mongodb://', 'mongodb+srv://'],
-    csAllowsKeyValueDSN: false,
-    supportsTLSToggle: true,
-    usernameRequired: false,
-    checkVerb: 'connect + ping',
-  },
-  rabbitmq: {
-    label: 'RabbitMQ',
-    defaultPort: 5672,
-    hostPlaceholder: 'mq.internal',
-    csPlaceholder: 'amqp://user:password@mq.internal:5672/vhost',
-    csHint: 'amqp:// or amqps:// (TLS) URI. May include credentials and the vhost path.',
-    csSchemes: ['amqp://', 'amqps://'],
-    csAllowsKeyValueDSN: false,
-    supportsTLSToggle: true,
-    usernameRequired: true,
-    checkVerb: 'AMQP handshake',
-  },
-  mysql: {
-    label: 'MySQL',
-    defaultPort: 3306,
-    hostPlaceholder: 'db.internal',
-    csPlaceholder: 'mysql://user:password@db.internal:3306/mydb',
-    csHint: 'mysql:// URI or a driver DSN like user:password@tcp(db.internal:3306)/mydb.',
-    csSchemes: ['mysql://'],
-    csAllowsKeyValueDSN: false,
-    csAllowsNativeDSN: true,
-    supportsTLSToggle: true,
-    usernameRequired: true,
-    checkVerb: 'connect + ping',
-  },
-};
+export type { DatabaseMonitorType } from '@/lib/monitor-form/database';
 
 const QUERY_VALUE_OPS: { value: DBQueryValueOp; label: string }[] = [
   { value: 'equals', label: 'equals' },
@@ -244,72 +156,17 @@ export default function DatabaseForm({
   const meta = DB_TYPE_META[type];
   const isEditMode = Boolean(monitor);
   const canTestConnection = !loadingUser && (!isEditMode || canWrite);
-  const existingConfig =
-    monitor && monitor.type === type
-      ? ((monitor.config || {}) as DatabaseConfig)
-      : !isEditMode && initialData?.type === type
-        ? ((initialData.config || {}) as DatabaseConfig)
-        : ({} as DatabaseConfig);
+  const existingConfig = databaseSourceConfig(type, monitor, initialData);
 
-  // The API masks stored secrets as "***" — that tells us one exists without
-  // revealing it. Cloned monitors carry the mask too, but a clone can't reuse
-  // another monitor's secret, so treat it as unset there.
-  const storedPassword = isEditMode && existingConfig.password === MASKED_SECRET;
-  const storedConnString = isEditMode && existingConfig.connection_string === MASKED_SECRET;
-  const storedClientKey = isEditMode && existingConfig.tls_client_key_pem === MASKED_SECRET;
+  const stored = storedDatabaseSecrets(existingConfig, isEditMode);
+  const storedPassword = stored.password;
+  const storedConnString = stored.connectionString;
+  const storedClientKey = stored.clientKey;
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    connection_mode: (existingConfig.connection_string ? 'connection_string' : 'fields') as ConnectionMode,
-    connection_string: '',
-    host: existingConfig.host || '',
-    port: existingConfig.port || meta.defaultPort,
-    username: existingConfig.username || '',
-    password: '',
-    database: existingConfig.database || '',
-    ssl_mode: existingConfig.ssl_mode || ('' as '' | 'disable' | 'require' | 'verify-full'),
-    auth_source: existingConfig.auth_source || '',
-    replica_set: existingConfig.replica_set || '',
-    vhost: existingConfig.vhost || '',
-    db_index: existingConfig.db ?? 0,
-    tls_enabled: existingConfig.tls_enabled ?? false,
-    tls_skip_verify: existingConfig.tls_skip_verify ?? false,
-    tls_ca_pem: existingConfig.tls_ca_pem || '',
-    tls_client_cert_pem: existingConfig.tls_client_cert_pem || '',
-    tls_client_key_pem: '',
-    query: existingConfig.query || '',
-    query_value_op: existingConfig.query_value_op || ('' as '' | DBQueryValueOp),
-    query_value: existingConfig.query_value || '',
-    expected_role: existingConfig.expected_role || ('' as '' | 'master' | 'replica'),
-    max_latency_ms: existingConfig.max_latency_ms ? String(existingConfig.max_latency_ms) : '',
-    warn_latency_ms: existingConfig.warn_latency_ms ? String(existingConfig.warn_latency_ms) : '',
-    collect_replication: existingConfig.collect_replication ?? false,
-    collect_connections: existingConfig.collect_connections ?? false,
-    collect_cache: existingConfig.collect_cache ?? false,
-    collect_memory: existingConfig.collect_memory ?? false,
-    collect_network: existingConfig.collect_network ?? false,
-    collect_cpu: existingConfig.collect_cpu ?? false,
-    max_replication_lag_seconds: existingConfig.max_replication_lag_seconds
-      ? String(existingConfig.max_replication_lag_seconds)
-      : '',
-    warn_replication_lag_seconds: existingConfig.warn_replication_lag_seconds
-      ? String(existingConfig.warn_replication_lag_seconds)
-      : '',
-    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
-    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
-    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
+  const [formData, setFormData] = useState(() => initialDatabaseFormState(type, monitor, initialData));
 
   // Explicitly dropped stored secrets ("Clear" on the set-chip): the field is
-  // then omitted from the submitted config, which clears it server-side.
+  // then submitted as "" (the explicit clear) instead of "***" (keep).
   const [cleared, setCleared] = useState({ password: false, clientKey: false });
   const hasStoredPassword = storedPassword && !cleared.password;
   const hasStoredClientKey = storedClientKey && !cleared.clientKey;
@@ -340,11 +197,7 @@ export default function DatabaseForm({
 
   const usingConnString = formData.connection_mode === 'connection_string';
   // PEM material only makes sense when the connection can use TLS.
-  const tlsMaterialRelevant = usingConnString
-    ? true
-    : type === 'postgres'
-      ? formData.ssl_mode !== 'disable'
-      : formData.tls_enabled;
+  const tlsMaterialRelevant = databaseTLSMaterialRelevant(type, formData);
   const hasTLSMaterial = Boolean(
     formData.tls_ca_pem.trim() || formData.tls_client_cert_pem.trim() || formData.tls_client_key_pem.trim() || hasStoredClientKey
   );
@@ -428,95 +281,7 @@ export default function DatabaseForm({
     return newErrors;
   };
 
-  const buildConfig = (): DatabaseConfig => {
-    const config: DatabaseConfig = {};
-
-    // An omitted secret field means "keep the stored value" server-side, so
-    // every deliberate drop — the Clear affordances and the connection-mode
-    // switch — has to submit "" (the explicit clear) instead of leaving the
-    // field out.
-    if (usingConnString) {
-      // Blank + previously stored = keep the stored secret (write-only).
-      config.connection_string = formData.connection_string.trim() || MASKED_SECRET;
-      if (storedPassword) config.password = '';
-      if (meta.supportsTLSToggle && formData.tls_skip_verify) config.tls_skip_verify = true;
-    } else {
-      if (storedConnString) config.connection_string = '';
-      config.host = formData.host.trim();
-      config.port = formData.port;
-      if (formData.username.trim()) config.username = formData.username.trim();
-      if (formData.password) {
-        config.password = formData.password;
-      } else if (hasStoredPassword) {
-        config.password = MASKED_SECRET;
-      } else if (storedPassword) {
-        // "Clear" on the set-chip.
-        config.password = '';
-      }
-      if (type === 'redis' && formData.db_index > 0) config.db = formData.db_index;
-      if (type === 'postgres') {
-        if (formData.database.trim()) config.database = formData.database.trim();
-        if (formData.ssl_mode) config.ssl_mode = formData.ssl_mode;
-      }
-      if (type === 'mongodb') {
-        if (formData.auth_source.trim()) config.auth_source = formData.auth_source.trim();
-        if (formData.replica_set.trim()) config.replica_set = formData.replica_set.trim();
-      }
-      if (type === 'rabbitmq' && formData.vhost.trim()) config.vhost = formData.vhost.trim();
-      if (type === 'mysql' && formData.database.trim()) config.database = formData.database.trim();
-      if (meta.supportsTLSToggle && formData.tls_enabled) {
-        config.tls_enabled = true;
-        if (formData.tls_skip_verify) config.tls_skip_verify = true;
-      }
-    }
-
-    if (tlsMaterialRelevant) {
-      if (formData.tls_ca_pem.trim()) config.tls_ca_pem = formData.tls_ca_pem.trim();
-      if (formData.tls_client_cert_pem.trim()) {
-        config.tls_client_cert_pem = formData.tls_client_cert_pem.trim();
-        // Blank + previously stored = keep the stored key (write-only).
-        config.tls_client_key_pem = formData.tls_client_key_pem.trim() || MASKED_SECRET;
-      } else if (storedClientKey) {
-        // Client cert removed (or the stored key cleared): "" is the explicit
-        // clear — omitting the field would keep the stored key.
-        config.tls_client_key_pem = '';
-      }
-    }
-
-    if (type === 'redis' && formData.expected_role) config.expected_role = formData.expected_role;
-    if (type === 'mongodb') {
-      // Cluster checks apply in both connection modes — post-connect commands.
-      if (formData.collect_replication) config.collect_replication = true;
-      if (formData.collect_connections) config.collect_connections = true;
-      if (formData.collect_cache) config.collect_cache = true;
-      if (formData.collect_memory) config.collect_memory = true;
-      if (formData.collect_network) config.collect_network = true;
-      if (formData.collect_cpu) config.collect_cpu = true;
-      if (formData.collect_replication) {
-        const maxLag = formData.max_replication_lag_seconds.trim()
-          ? parseInt(formData.max_replication_lag_seconds, 10)
-          : undefined;
-        const warnLag = formData.warn_replication_lag_seconds.trim()
-          ? parseInt(formData.warn_replication_lag_seconds, 10)
-          : undefined;
-        if (maxLag) config.max_replication_lag_seconds = maxLag;
-        if (warnLag) config.warn_replication_lag_seconds = warnLag;
-      }
-    }
-    if (QUERY_CAPABLE_TYPES.includes(type) && formData.query.trim()) {
-      config.query = formData.query.trim();
-      if (formData.query_value_op) {
-        config.query_value_op = formData.query_value_op;
-        config.query_value = formData.query_value;
-      }
-    }
-    const maxLatency = formData.max_latency_ms.trim() ? parseInt(formData.max_latency_ms, 10) : undefined;
-    const warnLatency = formData.warn_latency_ms.trim() ? parseInt(formData.warn_latency_ms, 10) : undefined;
-    if (maxLatency) config.max_latency_ms = maxLatency;
-    if (warnLatency) config.warn_latency_ms = warnLatency;
-
-    return config;
-  };
+  const buildConfig = (): DatabaseConfig => buildDatabaseConfig(type, formData, stored, cleared);
 
   const handleTestConnection = async () => {
     if (!canTestConnection) return;
@@ -558,28 +323,7 @@ export default function DatabaseForm({
       return;
     }
 
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: type as MonitorType,
-      config: buildConfig(),
-      interval_seconds: formData.interval_seconds,
-      timeout_seconds: formData.timeout_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map((t) => t.trim()).filter((t) => t);
-    }
-    requestData.depends_on_ids = formData.depends_on_ids;
-    requestData.location_ids = formData.location_ids;
-    requestData.location_quorum =
-      formData.location_ids.length >= 2
-        ? Math.min(formData.location_quorum, formData.location_ids.length)
-        : 1;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildDatabaseRequest(type, formData, stored, cleared);
 
     await onSubmit(requestData);
   };

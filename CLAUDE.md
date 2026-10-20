@@ -261,7 +261,10 @@ or imported groups come back empty. Any other path that creates groups through
    through `dialGuard` (SSRF policy)
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
-   `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`
+   `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`;
+   its hydration and request builder in `web/lib/monitor-form/`, with exact
+   payload tests (create, filled, an edit round trip that sets every field
+   the form hydrates, clone, secret clears) in `web/lib/monitor-form-*.test.ts`
 6. Docs: `website/lib/docs/pages/monitors.ts` (type table + protocol passage +
    secrets coverage) — import/export support is automatic via the registry
 7. Display-only mirrors that the registry cannot drive: `typeLabel`/`typeBadge`
@@ -564,6 +567,13 @@ or imported groups come back empty. Any other path that creates groups through
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
   form does the same.
+- **Monitor form payloads are pure and pinned**: every form's initial state
+  and submitted request come from `lib/monitor-form/` (`initial*FormState`,
+  `build*Request`; the shared envelope is `common.ts`), never from inline
+  `handleSubmit` code. `lib/monitor-form-*.test.ts` assert the exact wire
+  JSON of every type's create and edit round trip (and of a clone for the
+  delegated types and http), so a payload change shows up as a test diff;
+  a field a form hydrates goes into its type's edit fixture.
 
 ## Build, test, verify
 

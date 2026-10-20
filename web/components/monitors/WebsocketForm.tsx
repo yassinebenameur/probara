@@ -5,11 +5,8 @@ import {
   Monitor,
   CreateMonitorRequest,
   UpdateMonitorRequest,
-  WebSocketMonitorConfig,
-  DependencySuppression,
-  NotificationMode,
-  ChannelAssignment,
 } from '@/lib/types';
+import { buildWebsocketRequest, initialWebsocketFormState, renameWebsocketHeaderRow } from '@/lib/monitor-form/websocket';
 import { Plus, X } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
@@ -29,17 +26,6 @@ interface WebsocketFormProps {
   loading?: boolean;
 }
 
-type HeaderRow = { key: string; value: string; hasStoredValue?: boolean; originalKey?: string };
-
-function headersToRows(headers?: Record<string, string>): HeaderRow[] {
-  return Object.entries(headers || {}).map(([key, value]) => ({
-    key,
-    value: value === '***' ? '' : value,
-    hasStoredValue: value === '***',
-    originalKey: value === '***' ? key : undefined,
-  }));
-}
-
 export default function WebsocketForm({
   monitor,
   initialData,
@@ -48,32 +34,8 @@ export default function WebsocketForm({
   loading = false,
 }: WebsocketFormProps) {
   const isEditMode = Boolean(monitor);
-  const initialWSConfig =
-    !isEditMode && initialData?.type === 'websocket' ? (initialData.config as WebSocketMonitorConfig) : undefined;
-  const existingConfig = monitor && monitor.type === 'websocket' ? (monitor.config as WebSocketMonitorConfig) : undefined;
-  const sourceConfig = existingConfig ?? initialWSConfig;
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    url: sourceConfig?.url ?? '',
-    headers: headersToRows(sourceConfig?.headers),
-    tls_skip_verify: sourceConfig?.tls_skip_verify ?? false,
-    send_message: sourceConfig?.send_message ?? '',
-    expected_substring: sourceConfig?.expected_substring ?? '',
-    warn_latency_ms: sourceConfig?.warn_latency_ms ? String(sourceConfig.warn_latency_ms) : '',
-    max_latency_ms: sourceConfig?.max_latency_ms ? String(sourceConfig.max_latency_ms) : '',
-    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? ([] as ChannelAssignment[]),
-    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
-    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
+  const [formData, setFormData] = useState(() => initialWebsocketFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors);
@@ -122,43 +84,7 @@ export default function WebsocketForm({
       return;
     }
 
-    const config: WebSocketMonitorConfig = { url };
-    const headers: Record<string, string> = {};
-    for (const row of formData.headers) {
-      if (row.key.trim()) headers[row.key.trim()] = row.value || (row.hasStoredValue ? '***' : '');
-    }
-    // On edit, always submit the object: an absent `headers` field means "keep
-    // the stored headers" server-side, so removing every row has to send an
-    // empty object to clear them.
-    if (Object.keys(headers).length > 0 || isEditMode) config.headers = headers;
-    if (isSecure && formData.tls_skip_verify) config.tls_skip_verify = true;
-    if (formData.send_message) config.send_message = formData.send_message;
-    if (formData.expected_substring) config.expected_substring = formData.expected_substring;
-    if (maxLatency) config.max_latency_ms = maxLatency;
-    if (warnLatency) config.warn_latency_ms = warnLatency;
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'websocket',
-      config,
-      interval_seconds: formData.interval_seconds,
-      timeout_seconds: formData.timeout_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map((t) => t.trim()).filter((t) => t);
-    }
-    requestData.depends_on_ids = formData.depends_on_ids;
-    requestData.location_ids = formData.location_ids;
-    requestData.location_quorum =
-      formData.location_ids.length >= 2
-        ? Math.min(formData.location_quorum, formData.location_ids.length)
-        : 1;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildWebsocketRequest(formData, isEditMode);
 
     await onSubmit(requestData);
   };
@@ -204,13 +130,7 @@ export default function WebsocketForm({
                   value={row.key}
                   onChange={(e) => {
                     const headers = [...formData.headers];
-                    const current = headers[i];
-                    const keepsStoredValue = Boolean(
-                      current.hasStoredValue &&
-                      current.originalKey &&
-                      current.originalKey.toLowerCase() === e.target.value.trim().toLowerCase()
-                    );
-                    headers[i] = { ...current, key: e.target.value, hasStoredValue: keepsStoredValue };
+                    headers[i] = renameWebsocketHeaderRow(headers[i], e.target.value);
                     setFormData({ ...formData, headers });
                   }}
                   placeholder="Authorization"

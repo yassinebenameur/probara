@@ -8,10 +8,8 @@ import {
   CreateMonitorRequest,
   UpdateMonitorRequest,
   PrometheusMonitorConfig,
-  DependencySuppression,
-  NotificationMode,
-  ChannelAssignment,
 } from '@/lib/types';
+import { buildPrometheusConfig, buildPrometheusRequest, initialPrometheusFormState } from '@/lib/monitor-form/prometheus';
 import Button from '@/components/ui/Button';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
@@ -45,33 +43,8 @@ export default function PrometheusForm({
   loading = false,
 }: PrometheusFormProps) {
   const isEditMode = Boolean(monitor);
-  const initialConfig =
-    !isEditMode && initialData?.type === 'prometheus' ? (initialData.config as PrometheusMonitorConfig) : undefined;
-  const existingConfig = monitor && monitor.type === 'prometheus' ? (monitor.config as PrometheusMonitorConfig) : undefined;
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    url: existingConfig?.url ?? initialConfig?.url ?? '',
-    query: existingConfig?.query ?? initialConfig?.query ?? '',
-    operator: existingConfig?.operator ?? initialConfig?.operator ?? 'lt',
-    threshold: existingConfig?.threshold ?? initialConfig?.threshold ?? 5,
-    no_data_status: existingConfig?.no_data_status ?? initialConfig?.no_data_status ?? 'failure',
-    auth_type: existingConfig?.auth_type ?? initialConfig?.auth_type ?? 'none',
-    username: existingConfig?.username ?? initialConfig?.username ?? '',
-    password: existingConfig?.password ?? initialConfig?.password ?? '',
-    bearer_token: existingConfig?.bearer_token ?? initialConfig?.bearer_token ?? '',
-    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? initialData?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? initialData?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? initialData?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? initialData?.notification_channels ?? [] as ChannelAssignment[],
-    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
-    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
+  const [formData, setFormData] = useState(() => initialPrometheusFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors);
@@ -84,14 +57,7 @@ export default function PrometheusForm({
   const [testing, setTesting] = useState(false);
   const [previewLocation, setPreviewLocation] = useState('');
   const [locations, setLocations] = useState<Location[]>([]);
-  const buildConfig = (): PrometheusMonitorConfig => ({
-    url: formData.url.trim(), query: formData.query.trim(),
-    operator: formData.operator, threshold: formData.threshold,
-    no_data_status: formData.no_data_status, auth_type: formData.auth_type,
-    username: formData.auth_type === 'basic' ? formData.username : '',
-    password: formData.auth_type === 'basic' ? formData.password : '',
-    bearer_token: formData.auth_type === 'bearer' ? formData.bearer_token : '',
-  });
+  const buildConfig = (): PrometheusMonitorConfig => buildPrometheusConfig(formData);
   const settingsKey = JSON.stringify([buildConfig(), formData.timeout_seconds, formData.location_ids, previewLocation]);
   const testQuery = async () => {
     setTesting(true); setPreview(null); setPreviewError(''); setPreviewSettings(settingsKey);
@@ -128,28 +94,7 @@ export default function PrometheusForm({
       return;
     }
 
-    const config = buildConfig();
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'prometheus',
-      config,
-      interval_seconds: formData.interval_seconds,
-      timeout_seconds: formData.timeout_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(Boolean);
-    requestData.depends_on_ids = formData.depends_on_ids;
-    requestData.location_ids = formData.location_ids;
-    requestData.location_quorum =
-      formData.location_ids.length >= 2
-        ? Math.min(formData.location_quorum, formData.location_ids.length)
-        : 1;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildPrometheusRequest(formData);
 
     await onSubmit(requestData);
   };
