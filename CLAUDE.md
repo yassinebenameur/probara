@@ -52,6 +52,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   head-only artifacts in `artifacts/<version>/`, training/validation scripts
   in `training/`, hash-locked `requirements*.lock`. `docs/local-ai.md` is its
   guide, `docs/local-ai-validation.md` the current model status
+- `scripts/seed-demo/` — dev-only Go tool that seeds the "Northwind" demo
+  tenant (structure via the API, history via SQL) and keeps it live with mock
+  targets (`targets` subcommand); see its README
 - `web/` — Next.js operator UI (`components/monitors/MonitorForm.tsx` is the type registry;
   "instrument glass" design, surface contract at the top of `app/globals.css`)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
@@ -660,6 +663,16 @@ or imported groups come back empty. Any other path that creates groups through
   `00000000-0000-0000-0000-000000000001`.
 - API auth is cookie-based: POST `/api/v1/auth/login`, keep a cookie jar, and
   pass `tenant_id` as a query param on tenant-scoped routes.
+- `make seed-demo` (re)builds the Northwind demo tenant
+  (`00000000-0000-0000-0000-00000000d3e0`, ~150 monitors, 110 days of
+  history) and leaves `seed-demo targets` running in the background (under
+  `caffeinate -i` on macOS; mock ports 19100–19199 behind
+  `*.northwind.localtest.me` hostnames, which need public DNS; three location
+  workers; log `/tmp/probara-seed-targets.log`; stop with
+  `make seed-demo-stop`). It only
+  ever deletes its own tenant and `@northwind.example` users. Its history
+  writer encodes the rollup/interval invariants in
+  `scripts/seed-demo/README.md` — keep it in step when those rules change.
 - Locally running binaries are stale after code changes — verify new worker/
   api behavior through unit tests, or restart the processes
   (`scripts/start-local-services.sh` rebuilds and restarts just the Go
