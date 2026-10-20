@@ -309,7 +309,11 @@ or imported groups come back empty. Any other path that creates groups through
   without running, a failed publish retries in place, never NAKs, and a result
   the worker's own shutdown produced (`CheckResult.Interrupted`) is acked
   unpublished. A checker that acts on the world (places calls, sends messages)
-  must implement it, deciding from non-secret config fields only. Scheduled
+  must implement it, deciding from non-secret config fields only. Test
+  checks (core-NATS request/reply, one goroutine per request) are not bounded
+  by `WORKER_CONCURRENCY`, so `handleTestCheck` refuses a side-effecting one
+  beyond `maxSideEffectTestChecks` (16) in flight; scheduled checks never
+  share that bound. Scheduled
   jobs carry a per-slot `Nats-Msg-Id` (`checkJobMsgID`, used by
   `publishMonitorJobs`), so a dispatch retried for the same `next_run_at` is a
   stream duplicate; keep the id deterministic per slot.
