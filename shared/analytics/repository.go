@@ -420,7 +420,60 @@ func (r *Repository) getRawAnalytics(ctx context.Context, tenantID uuid.UUID, mo
 		return nil, fmt.Errorf("error iterating raw analytics rows: %w", err)
 	}
 
-	return builder.result(), nil
+	res := builder.result()
+	downtime, err := r.loadTimelineDowntime(ctx, tenantID, monitorIDs, window.Start, window.End)
+	if err != nil {
+		return nil, err
+	}
+	res.Downtime = downtime
+	return res, nil
+}
+
+// loadTimelineDowntime is the short-range (raw path) downtime list: the
+// monitors' 'down' intervals from the state timeline (S-U4), read directly
+// through Outages rather than from check rows. A failed check is evidence,
+// not downtime: quorum and confirmation decide state, so a monitor failing
+// from one location of three (degraded) or a single flaky check (suspect)
+// has no downtime here, exactly as in the availability headline.
+//
+// Semantics deliberately match the rollup path's projection
+// (monitor_downtime_periods/monitor_downtime_open, written by the
+// scheduler's syncDowntimeFromIntervals): only state 'down' counts
+// (degraded, suspect, unknown and paused never do), down time inside
+// maintenance windows is still listed (the headline excludes it as planned,
+// S-M3), and a scope's periods are the union of its monitors' periods
+// (groups contribute their leaf members). The projection is not read here
+// because it trails the timeline by up to one rollup maintenance run, which
+// a 1h window would show as a missing or still-open outage. Time before a
+// monitor's first interval lists nothing; a short window reaches back past
+// the timeline only in the first day after migration 000082 seeded it.
+func (r *Repository) loadTimelineDowntime(ctx context.Context, tenantID uuid.UUID, monitorIDs []uuid.UUID, start, end time.Time) ([]DowntimePeriod, error) {
+	outages, err := r.Outages(ctx, tenantID, monitorIDs, TimeRange{Start: start, End: end}, TimelineOpts{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to load timeline downtime: %w", err)
+	}
+	return downtimeFromOutages(outages, end), nil
+}
+
+// downtimeFromOutages turns per-monitor outage spans into the merged
+// downtime list. The serial composite rows (nil MonitorID) are skipped: they
+// carry unplanned time only, while the list keeps planned down time like the
+// rollup path. An ongoing outage runs to the window end, as an open
+// projection row does.
+func downtimeFromOutages(outages []Outage, end time.Time) []DowntimePeriod {
+	periods := make([]DowntimePeriod, 0, len(outages))
+	for _, o := range outages {
+		if o.MonitorID == nil {
+			continue
+		}
+		period := DowntimePeriod{Start: o.Start, End: o.End}
+		if o.Ongoing {
+			period.End = end
+			period.IsOpen = true
+		}
+		periods = append(periods, period)
+	}
+	return mergeDowntimePeriods(periods)
 }
 
 func buildRawResult(window Window, generatedAt time.Time, rows []rawRow) *Result {
@@ -431,17 +484,17 @@ func buildRawResult(window Window, generatedAt time.Time, rows []rawRow) *Result
 	return builder.result()
 }
 
-// rawResultBuilder consumes database rows in (created_at, id) order. Counts,
-// sums, and downtime transitions do not retain check rows. Only one latency
-// vector is retained for exact interpolated percentiles; rollup percentiles
-// cannot be combined without changing the meaning of the result.
+// rawResultBuilder consumes database rows in (created_at, id) order. Counts
+// and sums do not retain check rows. Only one latency vector is retained for
+// exact interpolated percentiles; rollup percentiles cannot be combined
+// without changing the meaning of the result. It never derives downtime:
+// check rows are per-location evidence, and the downtime list comes from the
+// state timeline (loadTimelineDowntime).
 type rawResultBuilder struct {
 	window       Window
 	res          *Result
 	perMonitor   map[uuid.UUID]*uptimeAccumulator
 	perBucket    map[time.Time]map[uuid.UUID]*uptimeAccumulator
-	openDowntime map[uuid.UUID]time.Time
-	periods      []DowntimePeriod
 	allLatencies []float64
 }
 
@@ -451,9 +504,8 @@ func newRawResultBuilder(window Window, generatedAt time.Time) *rawResultBuilder
 		res: &Result{
 			Range: window.Range, GeneratedAt: generatedAt, Source: SourceRaw, IsPartial: true,
 		},
-		perMonitor:   make(map[uuid.UUID]*uptimeAccumulator),
-		perBucket:    make(map[time.Time]map[uuid.UUID]*uptimeAccumulator),
-		openDowntime: make(map[uuid.UUID]time.Time),
+		perMonitor: make(map[uuid.UUID]*uptimeAccumulator),
+		perBucket:  make(map[time.Time]map[uuid.UUID]*uptimeAccumulator),
 	}
 }
 
@@ -471,16 +523,8 @@ func (b *rawResultBuilder) consume(row rawRow) {
 		b.perBucket[bucket] = make(map[uuid.UUID]*uptimeAccumulator)
 	}
 	consumeRawRow(ensureRawAcc(b.perBucket[bucket], row.MonitorID), row)
-	if row.Status == "success" {
-		if row.LatencyMS.Valid {
-			b.allLatencies = append(b.allLatencies, float64(row.LatencyMS.Int64))
-		}
-		if start, open := b.openDowntime[row.MonitorID]; open {
-			b.periods = append(b.periods, DowntimePeriod{Start: start, End: ts})
-			delete(b.openDowntime, row.MonitorID)
-		}
-	} else if _, open := b.openDowntime[row.MonitorID]; !open {
-		b.openDowntime[row.MonitorID] = ts
+	if row.Status == "success" && row.LatencyMS.Valid {
+		b.allLatencies = append(b.allLatencies, float64(row.LatencyMS.Int64))
 	}
 }
 
@@ -521,10 +565,6 @@ func (b *rawResultBuilder) result() *Result {
 	res.Summary.LatestStatus = aggregateStatus(latestStatuses)
 	res.Summary.LatestCheckAt = latestCheckAt
 	res.Series = buildRawSeries(b.window, b.perBucket)
-	for _, start := range b.openDowntime {
-		b.periods = append(b.periods, DowntimePeriod{Start: start, End: b.window.End, IsOpen: true})
-	}
-	res.Downtime = mergeDowntimePeriods(b.periods)
 	return res
 }
 

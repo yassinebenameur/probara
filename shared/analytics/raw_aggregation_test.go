@@ -39,7 +39,7 @@ func BenchmarkBuildRawResultTenant24h(b *testing.B) {
 	}
 }
 
-func TestBuildRawResultWeightedMetricsAndDowntime(t *testing.T) {
+func TestBuildRawResultWeightedMetrics(t *testing.T) {
 	now := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
 	window, _ := ResolveWindow(Range1h, now)
 	a, b := uuid.New(), uuid.New()
@@ -71,8 +71,10 @@ func TestBuildRawResultWeightedMetricsAndDowntime(t *testing.T) {
 	if first.TotalChecks != 5 || !first.HasData {
 		t.Fatalf("incorrect series: %+v", first)
 	}
-	if len(res.Downtime) != 2 || !res.Downtime[0].Start.Equal(window.Start) || !res.Downtime[0].End.Equal(rows[3].CreatedAt) || res.Downtime[0].IsOpen || !res.Downtime[1].Start.Equal(rows[7].CreatedAt) || !res.Downtime[1].End.Equal(now) || !res.Downtime[1].IsOpen {
-		t.Fatalf("incorrect merged downtime: %+v", res.Downtime)
+	// Failed check rows are evidence, never downtime: the raw path reads the
+	// downtime list from the state timeline (loadTimelineDowntime).
+	if res.Downtime != nil {
+		t.Fatalf("raw builder derived downtime from check rows: %+v", res.Downtime)
 	}
 }
 
@@ -105,15 +107,36 @@ func TestBuildRawResultPreservesSameTimestampOrder(t *testing.T) {
 		if res.Summary.LatestStatus == nil || *res.Summary.LatestStatus != lastStatus {
 			t.Fatalf("latest status must follow database id order: %+v", res.Summary)
 		}
-		if len(res.Downtime) != 1 || !res.Downtime[0].Start.Equal(ts) || res.Downtime[0].IsOpen != (lastStatus == "failure") {
-			t.Fatalf("incorrect downtime for tied timestamps: %+v", res.Downtime)
+	}
+}
+
+func TestDowntimeFromOutages_PerMonitorSpansMergedCompositeSkipped(t *testing.T) {
+	end := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
+	at := func(min int) time.Time { return end.Add(time.Duration(min-60) * time.Minute) }
+	a, b := uuid.New(), uuid.New()
+	outages := []Outage{
+		// Serial composite (unplanned only): never listed on its own.
+		{MonitorID: nil, Start: at(0), End: at(5)},
+		{MonitorID: &a, Start: at(0), End: at(10), PlannedSeconds: 300},
+		// Overlaps A's span: one merged period for the scope.
+		{MonitorID: &b, Start: at(8), End: at(15)},
+		// Still down: runs to the window end, flagged open.
+		{MonitorID: &a, Start: at(50), End: at(59), Ongoing: true},
+	}
+	got := downtimeFromOutages(outages, end)
+	want := []DowntimePeriod{
+		{Start: at(0), End: at(15)},
+		{Start: at(50), End: end, IsOpen: true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("periods = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if !got[i].Start.Equal(want[i].Start) || !got[i].End.Equal(want[i].End) || got[i].IsOpen != want[i].IsOpen {
+			t.Fatalf("period %d = %+v, want %+v", i, got[i], want[i])
 		}
-		wantEnd := ts
-		if lastStatus == "failure" {
-			wantEnd = now
-		}
-		if !res.Downtime[0].End.Equal(wantEnd) {
-			t.Fatalf("downtime end = %s, want %s", res.Downtime[0].End, wantEnd)
-		}
+	}
+	if got := downtimeFromOutages(nil, end); got != nil {
+		t.Fatalf("no outages = %+v, want nil", got)
 	}
 }

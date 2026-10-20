@@ -191,6 +191,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
   field added later (e.g. `suspected_causes`) is nil on older reports, and
   every renderer must export those unchanged
   (`TestLegacyIssuedReportRendersUnchanged`, `slas/testdata` goldens).
+  Down spans come from its sibling `Outages`: analytics downtime periods
+  are `down` intervals on both paths (raw ranges via `loadTimelineDowntime`,
+  rollup ranges via the scheduler's `syncDowntimeFromIntervals` projection;
+  `TestDowntimeProjectionMatchesRawAnalyticsPath` pins the pair). Never
+  derive downtime from check rows.
 - **Local AI choices, wording and evidence**: `shared/ai/catalogue.json`
   (version `probara-evidence-v1`) is the closed set of hypotheses the model may
   pick and the only source of analysis/suggestion prose and actions; the
