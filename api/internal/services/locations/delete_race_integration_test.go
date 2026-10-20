@@ -1,3 +1,5 @@
+//go:build !unit
+
 package locations
 
 // Lock-order race test for S-O1 (docs/state-semantics.md): location deletion

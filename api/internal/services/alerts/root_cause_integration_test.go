@@ -1,3 +1,5 @@
+//go:build !unit
+
 package alerts_test
 
 import (

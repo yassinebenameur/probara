@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build build-collector-static kuma-export clean ps healthcheck migrate test test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
+.PHONY: help up down restart logs build build-collector-static kuma-export clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
 # Local AI runs beside the platform, never in its way: its image build fails on
 # purpose for an artifact that is not release-approved, and Compose aborts a
@@ -49,6 +49,7 @@ help:
 	@echo ""
 	@echo "Testing and CI:"
 	@echo "  make test        - Run all tests with race detection and coverage"
+	@echo "  make test-unit   - Run the fast suite without external services"
 	@echo "  make test-cover  - Run tests and open coverage report in browser"
 	@echo "  make lint        - Run go vet and fmt checks"
 	@echo "  make fmt         - Format Go code"
@@ -283,6 +284,9 @@ test:
 	go test -v -race -coverprofile=coverage.out $$(go list ./... | grep -v /scripts)
 	@echo "✅ Tests completed. Coverage report: coverage.out"
 
+test-unit:
+	go test -race -tags=unit $$(go list -tags=unit ./... | grep -v /scripts)
+
 test-cover: test
 	@echo "Opening coverage report..."
 	go tool cover -html=coverage.out
@@ -303,4 +307,6 @@ fmt:
 vet:
 	@echo "Running go vet..."
 	go vet ./...
+	go vet -tags=unit ./...
+	@python3 -m unittest discover -s .github/workflows/scripts -p test_ci.py -k LayoutTest
 	@echo "✅ go vet passed"

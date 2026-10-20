@@ -1,3 +1,5 @@
+//go:build !unit
+
 package ingest
 
 // Timeline write-path tests for docs/state-semantics.md: intervals are

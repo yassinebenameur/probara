@@ -85,6 +85,7 @@ def test_training_scripts_take_explicit_versions_and_paths():
         assert '"--version", required=True' in (ROOT / "training" / name).read_text().replace("'", '"'), name
 
 
+@pytest.mark.checkpoint
 @pytest.mark.parametrize("artifact", sorted(p for p in (ROOT / "artifacts").glob("probara-laya-*") if p.is_dir()), ids=lambda p: p.name)
 def test_committed_artifacts_are_head_only_and_intact(artifact):
     manifest = load_manifest(artifact)

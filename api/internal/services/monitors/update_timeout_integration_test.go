@@ -1,3 +1,5 @@
+//go:build !unit
+
 package monitors_test
 
 // Regression: the update path's timeout < interval check must apply only to

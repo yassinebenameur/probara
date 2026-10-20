@@ -1,3 +1,5 @@
+//go:build !unit
+
 package slas
 
 // SLA service tests (docs/state-semantics.md S-U6, S-U7): definitions,
@@ -27,8 +29,6 @@ func interval(ctx context.Context, t *testing.T, db *shareddb.Client, tenantID, 
 	`, tenantID, monitorID, state, start, end)
 	require.NoError(t, err)
 }
-
-func at(t time.Time) *time.Time { return &t }
 
 func TestSLAService(t *testing.T) {
 	ctx := context.Background()

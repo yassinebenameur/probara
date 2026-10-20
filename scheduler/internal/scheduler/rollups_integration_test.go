@@ -1,3 +1,5 @@
+//go:build !unit
+
 package scheduler
 
 // Integration tests for the dirty-ledger rollup consumer (rollups_dirty.go).
@@ -11,19 +13,18 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	testcontainers "github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/yassinebenameur/probara/shared/config"
 	shareddb "github.com/yassinebenameur/probara/shared/db"
 	"github.com/yassinebenameur/probara/shared/logger"
 	"github.com/yassinebenameur/probara/shared/metrics"
 	sharedmodels "github.com/yassinebenameur/probara/shared/models"
+	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
 // TestRollupMaintenance_ConsumesLedgerAndAdvancesWatermark is the core
@@ -468,22 +469,7 @@ func newTestScheduler(dbClient *shareddb.Client) *Scheduler {
 
 func setupRollupTestDB(ctx context.Context, t *testing.T) (*shareddb.Client, func()) {
 	t.Helper()
-	container, dsn := startSchedulerPostgresContainer(ctx, t)
-	dbClient, err := newSchedulerTestDBClient(ctx, dsn, 20*time.Second)
-	if err != nil {
-		_ = container.Terminate(ctx)
-		t.Fatalf("newSchedulerTestDBClient() error = %v", err)
-	}
-	migrationsPath := filepath.Join("..", "..", "..", "shared", "db", "migrations")
-	if err := shareddb.Migrate(dbClient.DB, migrationsPath); err != nil {
-		_ = container.Terminate(ctx)
-		dbClient.Close()
-		t.Fatalf("Migrate() error = %v", err)
-	}
-	return dbClient, func() {
-		dbClient.Close()
-		_ = container.Terminate(ctx)
-	}
+	return testutil.SetupPostgresDB(ctx, t)
 }
 
 func insertTenant(ctx context.Context, t *testing.T, dbClient *shareddb.Client) uuid.UUID {
@@ -569,63 +555,4 @@ func countRows(ctx context.Context, t *testing.T, dbClient *shareddb.Client, que
 		t.Fatalf("count query %q: %v", query, err)
 	}
 	return n
-}
-
-func startSchedulerPostgresContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
-	t.Helper()
-	const (
-		dbUser     = "uptime"
-		dbPassword = "uptime"
-		dbName     = "uptime"
-	)
-	req := testcontainers.ContainerRequest{
-		Image:        "postgres:16-alpine",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     dbUser,
-			"POSTGRES_PASSWORD": dbPassword,
-			"POSTGRES_DB":       dbName,
-		},
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("5432/tcp"),
-			wait.ForLog("database system is ready to accept connections"),
-		).WithDeadline(60 * time.Second),
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
-	if err != nil {
-		t.Fatalf("failed to start postgres container: %v", err)
-	}
-	host, err := container.Host(ctx)
-	if err != nil {
-		_ = container.Terminate(ctx)
-		t.Fatalf("failed to get postgres host: %v", err)
-	}
-	port, err := container.MappedPort(ctx, "5432/tcp")
-	if err != nil {
-		_ = container.Terminate(ctx)
-		t.Fatalf("failed to get postgres port: %v", err)
-	}
-	return container, fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", dbUser, dbPassword, host, port.Port(), dbName)
-}
-
-func newSchedulerTestDBClient(ctx context.Context, dsn string, timeout time.Duration) (*shareddb.Client, error) {
-	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	var lastErr error
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		client, err := shareddb.NewClient(dsn)
-		if err == nil {
-			return client, nil
-		}
-		lastErr = err
-		select {
-		case <-deadlineCtx.Done():
-			return nil, fmt.Errorf("timed out waiting for db readiness: %w", lastErr)
-		case <-ticker.C:
-		}
-	}
 }

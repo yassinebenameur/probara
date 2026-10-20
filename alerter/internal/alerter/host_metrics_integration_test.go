@@ -1,3 +1,5 @@
+//go:build !unit
+
 package alerter
 
 // Integration tests for metric-rule alerting over the generic metric store:
