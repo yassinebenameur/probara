@@ -38,9 +38,21 @@
 // that switches on req.Type() must return nil for event types it does not
 // handle.
 //
-// A plugin that fans out to several recipients must not return a mixed
-// errors.Join. IsPermanent walks the joined children, so one permanent child
-// would stop the retry for every other recipient. Return Permanent only when
-// every failure is permanent; otherwise flatten the join into a plain error
-// and carry the longest RetryAfterDelay onto it (see builtin/twilio).
+// A plugin that fans out to several recipients sends independently to each
+// one, so a retry of a partial failure must not reach the recipients the
+// provider already accepted. It asks DispatchRequest.Recipients which ones are
+// Delivered, sends to the rest, and Records each acceptance as soon as the
+// provider call returns; a nil ledger (test sends) means send to everyone.
+// When the ledger cannot be read, return a transient error rather than
+// sending to everyone. The ledger is durable (package recipientledger), so
+// the skip holds whichever alerter replica or worker runs the retry. Each
+// send has its own ledger, chosen by the delivery layer: a deliberate second
+// send of an event (the acknowledgement re-sent after a trigger it
+// overtook) starts empty, so a plugin never special-cases it.
+//
+// It must also not return a mixed errors.Join. IsPermanent walks the joined
+// children, so one permanent child would stop the retry for every other
+// recipient. Return Permanent only when every failure is permanent; otherwise
+// flatten the join into a plain error and carry the longest RetryAfterDelay
+// onto it (see builtin/twilio).
 package plugin

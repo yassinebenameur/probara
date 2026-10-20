@@ -466,7 +466,7 @@ func TestClaimSuspectedCause(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback() }()
-		ok, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0)
+		ok, _, err := claimNotificationTx(ctx, tx, c.alertID, channelID, "suspected_cause", time.Now(), 0)
 		if err != nil {
 			t.Fatal(err)
 		}

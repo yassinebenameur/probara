@@ -64,3 +64,29 @@ func TestDispatchEnvelope_JSONRoundtrip(t *testing.T) {
 		t.Errorf("event payload lost in roundtrip: %+v", got.Event)
 	}
 }
+
+func TestRecipientEventKey(t *testing.T) {
+	round := time.Date(2026, 5, 24, 12, 0, 0, 123456000, time.FixedZone("x", 3600))
+	if got := RecipientEventKey("created", round); got != "created" {
+		t.Fatalf("created key = %q, want the event type alone", got)
+	}
+	r1 := RecipientEventKey("reminder", round)
+	if r1 != RecipientEventKey("reminder", round.UTC()) {
+		t.Fatalf("reminder key must not depend on the time zone")
+	}
+	if r1 == RecipientEventKey("reminder", round.Add(time.Microsecond)) {
+		t.Fatalf("distinct reminder rounds must get distinct keys")
+	}
+}
+
+func TestDispatchEnvelope_RecipientKey(t *testing.T) {
+	ts := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	e := DispatchEnvelope{EventType: "reminder", Event: AlertEvent{Timestamp: ts}}
+	if got, want := e.RecipientKey(), RecipientEventKey("reminder", ts); got != want {
+		t.Fatalf("fallback key = %q, want %q", got, want)
+	}
+	e.DeliveryKey = "reminder:claimed"
+	if got := e.RecipientKey(); got != "reminder:claimed" {
+		t.Fatalf("key = %q, want the alerter's delivery_key", got)
+	}
+}

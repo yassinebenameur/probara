@@ -31,6 +31,7 @@ import (
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 	"github.com/yassinebenameur/probara/shared/notifications/present"
+	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/queue"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
@@ -226,19 +227,30 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 	}
 
 	attempt := deliveryAttempt(msg)
-	send := func(eventType string, event notifications.AlertEvent) error {
+	alertID, alertErr := uuid.Parse(envelope.AlertID)
+	channelID, channelErr := uuid.Parse(envelope.ChannelID)
+	send := func(eventType, deliveryKey string, event notifications.AlertEvent) error {
+		// A redelivery may reach another worker, or this one after a
+		// restart; the ledger lets it skip the recipients an earlier attempt
+		// already reached. It writes through the pool, never tx: tx only
+		// holds the alert lock and always rolls back.
+		var recipients plugin.RecipientLedger
+		if alertErr == nil && channelErr == nil {
+			recipients = recipientledger.For(c.db, alertID, channelID, deliveryKey)
+		}
 		return p.Send(ctx, plugin.DispatchRequest{
 			Channel: plugin.ChannelRef{
 				ID:     envelope.ChannelID,
 				Name:   channel.Name,
 				Config: configMap,
 			},
-			Event:     event,
-			EventType: eventType,
-			Attempt:   attempt,
+			Event:      event,
+			EventType:  eventType,
+			Attempt:    attempt,
+			Recipients: recipients,
 		})
 	}
-	err = send(envelope.EventType, envelope.Event)
+	err = send(envelope.EventType, envelope.RecipientKey(), envelope.Event)
 	if err == nil && ackOvertaken(p.Manifest(), envelope.EventType, alertStatus) {
 		// The operator acknowledged while this trigger sat on a retry
 		// backoff, so the "acknowledged" envelope has already been delivered
@@ -246,10 +258,12 @@ func (c *Consumer) handle(ctx context.Context, msg *queue.Message) (err error) {
 		// have yet. It is never re-sent (acknowledged_sent_at is set), so the
 		// incident just opened would escalate forever. Acknowledge it now,
 		// still under the share lock, so nothing else can reorder the pair.
+		// It has its own ledger key: under "acknowledged" a fan-out plugin
+		// would skip everyone the no-op ack reached.
 		ack := envelope.Event
 		ack.Type = present.EventAcknowledged
 		ack.Alert.Status = alertStatus
-		err = send(present.EventAcknowledged, ack)
+		err = send(present.EventAcknowledged, notifications.OvertakenAckKey, ack)
 	}
 	if err != nil {
 		if plugin.IsPermanent(err) {

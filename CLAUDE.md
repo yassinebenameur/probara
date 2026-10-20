@@ -457,6 +457,17 @@ or imported groups come back empty. Any other path that creates groups through
   (`suspected_cause`) by `CapabilityFollowUp`, never by plugin type: paging
   plugins (PagerDuty, Opsgenie) leave it off, everything else advertises it.
   Email follow-ups ignore channel template overrides (`effectiveTemplates`).
+- **Fan-out progress is durable, per recipient.** Every real send sets
+  `DispatchRequest.Recipients` (`shared/notifications/recipientledger`, table
+  `alert_notification_recipient_deliveries`) from the pool, never the claim or
+  lock transaction (both roll back), keyed by `notifications.RecipientEventKey`:
+  the event type, plus for reminders the `last_sent_at` the reminder claim
+  replaced (`claimNotificationTx`), carried to the worker as
+  `DispatchEnvelope.DeliveryKey`. A deliberate re-send of an event needs a key
+  of its own (`notifications.OvertakenAckKey`, the worker's re-ack), or it
+  inherits the first send's recipients and reaches nobody. A multi-recipient
+  plugin skips what it reports delivered and records each acceptance (the
+  `plugin` doc; `twilio` does).
 
 ## Status pages
 

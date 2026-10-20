@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/yassinebenameur/probara/shared/notifications"
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
 // SMTPParams are the inputs required to construct an SMTPMailer. Both the
@@ -95,14 +96,27 @@ func (m *SMTPMailer) SendAlert(ctx context.Context, event notifications.AlertEve
 		if err := m.sendWithTLS(addr, auth, message, to); err != nil {
 			return err
 		}
-		return renderErr
+		return deliveredDespite(renderErr)
 	}
 
 	if err := smtp.SendMail(addr, auth, m.cfg.From, to, []byte(message)); err != nil {
 		return err
 	}
 
-	return renderErr
+	return deliveredDespite(renderErr)
+}
+
+// deliveredDespite reports a template failure on a message that already went
+// out. It must be Permanent: a plain error reads as transient, so the alerter
+// rolls its claim back and the worker redelivers, and every recipient gets the
+// same email again each cycle. Re-rendering fails the same way, so nothing is
+// gained by retrying; the error only needs to reach the log (and a test send's
+// caller, so the operator sees the broken template).
+func deliveredDespite(renderErr error) error {
+	if renderErr == nil {
+		return nil
+	}
+	return plugin.Permanent(fmt.Errorf("email sent with built-in fallback: %w", renderErr))
 }
 
 func (m *SMTPMailer) sendWithTLS(addr string, auth smtp.Auth, message string, recipients []string) error {
@@ -168,7 +182,8 @@ func parseRecipients(value string) []string {
 
 // combineTemplateErrors reports every rendering failure at once. A failure is
 // non-fatal — the affected part falls back to the built-in rendering — so the
-// message still goes out and the error is returned for logging.
+// message still goes out and the error is returned, as Permanent
+// (deliveredDespite), for logging.
 func combineTemplateErrors(errs ...error) error {
 	var parts []string
 	for _, err := range errs {

@@ -180,6 +180,13 @@ Concretely:
   the window is usually seconds. Do not add a fallback query without the
   column: it would duplicate the due rules in `claimNotificationTx` and
   `shouldSendNotification`.
+- **Per-recipient delivery ledger**: until migration 000097 creates
+  `alert_notification_recipient_deliveries`, `recipientledger` reads report
+  nothing delivered (SQLSTATE 42P01 — exact, since nothing could have been
+  recorded) and writes fail, so SMS sends go out as before and a partial
+  failure in that window can still re-text recipients. Workers from before the
+  change ignore an envelope's `delivery_key`; new workers fall back to the
+  event timestamp for envelopes without one.
 
 For zero-error rollouts, when convenient, run the migration job manually
 before `helm upgrade` so the new schema is already in place when the new pods
