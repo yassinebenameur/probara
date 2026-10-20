@@ -145,7 +145,7 @@ func monitorTools() []spec {
 		{
 			Name:        "get_monitor_metrics_snapshots",
 			Title:       "Get metrics snapshots",
-			Description: "Downsampled metrics_data snapshots (the newest per bucket) over a window, e.g. DB server stats or SIP call timings.",
+			Description: "Downsampled metrics_data snapshots (the newest per bucket) over a window, e.g. DB server stats, or SIP call timings and call quality (loss, jitter, MOS estimate).",
 			Method:      http.MethodGet, Route: "/monitors/{id}/metrics-snapshots",
 			PathDocs: map[string]string{"id": "Monitor ID."},
 			Query:    []param{analyticsRange},

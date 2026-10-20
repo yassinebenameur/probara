@@ -865,7 +865,7 @@ export default function SipForm({
                         className="input font-mono"
                       />
                       {!errors.call_sdp_address && (
-                        <FieldHint>The public address a worker behind NAT puts in its audio offer. No media is sent.</FieldHint>
+                        <FieldHint>The public address a worker behind NAT puts in its audio offer, and where the far end sends audio when call quality is measured.</FieldHint>
                       )}
                     </>
                   )}

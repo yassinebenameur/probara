@@ -29,9 +29,11 @@ import (
 // the result is 24 s, inside the check-job AckWait, and the check-job
 // consumer never runs a call twice (SideEffecting, worker.go).
 //
-// Everything rides the one flow dialed through dialGuard: the Contact and
+// Signalling rides the one flow dialed through dialGuard: the Contact and
 // Record-Route of the answer only fill in-dialog Request-URIs and Route
-// headers, and the SDP answer's media address is recorded, never contacted.
+// headers. The SDP answer's media address is recorded and, only with
+// call.media, sent RTP during the hold (sip_media.go): from the bound pair,
+// and only to an address netguard.Policy.AllowsServerChosen admits.
 const (
 	sipCallTeardownBudget = 4 * time.Second
 	// sipCallLingerFor is Timer B / the 2xx retransmission window: 64·T1.
@@ -157,7 +159,7 @@ func newSIPCallTarget(config *models.SIPMonitorConfig) (sipCallTarget, error) {
 }
 
 // sipCallBudgets is the call's timeout and hold after the worker's own
-// clamps (D12), whatever the payload says (the test-check path allows 60 s,
+// clamps (D12), whatever the payload says (the test-check path allows 120 s,
 // and a payload may predate a rule): the timeout at most 20 s, the hold at
 // most 10 s and never more than leaves 2 s to ring and answer.
 func sipCallBudgets(timeoutSeconds, holdMs int) (timeout, hold time.Duration) {
@@ -362,6 +364,7 @@ type sipCall struct {
 	ep           *sipEndpoint
 	auth         *sipAuthState // nil without credentials
 	rtp          *sipRTPPair
+	media        *sipMediaSession // nil without call.media
 	metrics      *sipMetrics
 	cm           *sipCallMetrics
 	checkStart   time.Time
@@ -454,6 +457,10 @@ func (c *SIPChecker) runInviteCall(parent, callCtx context.Context, flow *sipFlo
 		return sipCallOutcome{result: CheckResult{Status: "error", ErrorMessage: &msg}}
 	}
 	s.rtp = rtp
+	s.media = s.newMediaSession(rtp, localIP)
+	// Teardown stops the sender first; this covers a call that never gets
+	// there, so a sender cannot outlive it.
+	defer func() { s.media.stop(time.Now()) }()
 	sdpAddr := localIP.String()
 	if config.Call.SDPAddress != "" {
 		sdpAddr = config.Call.SDPAddress
@@ -484,8 +491,26 @@ func (c *SIPChecker) runInviteCall(parent, callCtx context.Context, flow *sipFlo
 	cancelTeardown()
 	rtp.Close()
 	s.cm.RTPRxPackets = rtp.packets.Load()
+	// A verdict reached before a shutdown stands, but its media is
+	// interrupted: a deploy never records a quality failure.
+	s.cm.Media = s.media.finish(parent.Err() != nil)
+	if !s.failover {
+		// A 503 failover attempt's media block is overwritten by the next
+		// attempt's, so only the attempt that decides the check counts.
+		s.media.count()
+	}
 	metrics.recordEndpoint(s.ep)
 	s.applyThresholds()
+	s.applyMediaRules()
+	if s.cm.Teardown == "bye_unconfirmed" {
+		if count := c.mediaCounters.teardownUnconfirmed; count != nil {
+			evidence := "none"
+			if s.media.afterByeEvidence() {
+				evidence = "audio_after_bye"
+			}
+			count(evidence)
+		}
+	}
 
 	out := sipCallOutcome{result: s.result, err: s.resultErr, decisive: s.decisiveAt, failover: s.failover}
 	if !s.decided && !s.failover {
@@ -723,6 +748,10 @@ func (s *sipCall) drive(parent, callCtx context.Context) {
 			}
 			if s.phase == sipCallHolding && holdC == nil {
 				answerC = nil
+				// Media starts here, the one place the call is known to
+				// hold: never for a 2xx that crossed a CANCEL, a ring-mode
+				// answer or a status mismatch.
+				s.media.start(time.Now())
 				s.hook("holding")
 				holdTimer := time.NewTimer(min(s.hold, time.Until(s.callDeadline)))
 				defer holdTimer.Stop()
@@ -1075,10 +1104,19 @@ func (s *sipCall) onAnswered(inv *sipInviteTxn, d *sipDialog, in sipInbound) {
 	}
 }
 
-// onMediaReady is where RTP quality measurement will start, once the answer
-// names the far end's media (source: sipAnswerFrom2xx or sipAnswerFrom18x).
-// No media is sent or analysed yet.
-func (s *sipCall) onMediaReady(*sipSDPAnswer, string) {}
+// onMediaReady plans the call's media from the answered dialog's SDP answer
+// (source: sipAnswerFrom2xx or sipAnswerFrom18x). It sends nothing: media
+// starts with the hold (drive), which a CANCEL race, ring mode or a status
+// mismatch never reaches. An answer taken from the 18x is worth a warning.
+func (s *sipCall) onMediaReady(answer *sipSDPAnswer, source string) {
+	if s.media == nil {
+		return
+	}
+	s.media.prepare(answer, source)
+	if source == sipAnswerFrom18x {
+		s.metrics.warn("media: answer taken from the 18x (the 200 carried no SDP)")
+	}
+}
 
 // keepEarlyAnswer records an 18x's SDP as the latest answer of its early
 // dialog. An 18x without a To tag opens no dialog and is not kept.
@@ -1116,6 +1154,8 @@ func (s *sipCall) answerSDP(d *sipDialog, msg *sipMessage) (answer *sipSDPAnswer
 // pending INVITE (CANCEL once a provisional came, or listens for a late
 // answer), then BYEs every confirmed dialog, forks included.
 func (s *sipCall) teardown(ctx context.Context) {
+	// First, before any CANCEL or BYE: no RTP ever follows the hang-up.
+	s.media.stop(time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			s.decided = false
@@ -1128,9 +1168,13 @@ func (s *sipCall) teardown(ctx context.Context) {
 	}
 	s.byeAll(ctx)
 	if s.cm.Teardown == "bye_unconfirmed" {
-		s.metrics.warn("teardown: BYE unconfirmed")
+		s.metrics.warn(sipByeUnconfirmedWarning)
 	}
 }
+
+// sipByeUnconfirmedWarning is the warning an unanswered BYE adds; media
+// evidence that the far end kept sending rewrites it (addMediaNotes).
+const sipByeUnconfirmedWarning = "teardown: BYE unconfirmed"
 
 // settleInvite waits out a pending INVITE that was given up on.
 func (s *sipCall) settleInvite(ctx context.Context) {
@@ -1192,6 +1236,9 @@ func (s *sipCall) byeAll(ctx context.Context) {
 		if d == nil {
 			return
 		}
+		if d == s.primary {
+			s.media.markBye(time.Now())
+		}
 		outcome, status, ms := s.bye(ctx, d)
 		if d == s.primary {
 			if s.cm.Teardown == "none" || s.cm.Teardown == "" {
@@ -1203,7 +1250,7 @@ func (s *sipCall) byeAll(ctx context.Context) {
 			s.cm.ByeMs = ms
 		}
 		if outcome == "bye_unconfirmed" {
-			s.metrics.warn("teardown: BYE unconfirmed")
+			s.metrics.warn(sipByeUnconfirmedWarning)
 		}
 	}
 }

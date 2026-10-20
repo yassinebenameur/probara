@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -133,12 +134,12 @@ func (ports *sipRTPPorts) bind(ip net.IP) (*sipRTPPair, error) {
 			lastErr = errSIPRTPPairQuarantined
 			continue
 		}
-		rtp, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: port})
+		rtp, err := listenSIPRTPSocket(ip, port)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		rtcp, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: port + 1})
+		rtcp, err := listenSIPRTPSocket(ip, port+1)
 		if err != nil {
 			rtp.Close()
 			lastErr = err
@@ -153,6 +154,21 @@ func (ports *sipRTPPorts) bind(ip net.IP) (*sipRTPPair, error) {
 		return pair, nil
 	}
 	return nil, fmt.Errorf("cannot bind an RTP port pair on %s: %w", ip, lastErr)
+}
+
+// listenSIPRTPSocket binds one media socket on ip:port with SO_BROADCAST
+// cleared (sipRTPSocketControl).
+func listenSIPRTPSocket(ip net.IP, port int) (*net.UDPConn, error) {
+	host := "" // every address, as a nil IP in a UDPAddr means
+	if len(ip) > 0 {
+		host = ip.String()
+	}
+	lc := net.ListenConfig{Control: sipRTPSocketControl}
+	conn, err := lc.ListenPacket(context.Background(), "udp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return nil, err
+	}
+	return conn.(*net.UDPConn), nil
 }
 
 // readLoop reads conn until it is closed, counting RTP-socket datagrams and
@@ -234,8 +250,9 @@ func buildSDPOffer(addr string, port int, sessID uint64) []byte {
 // stream. The exported fields are metrics_data.sip.call.sdp_answer (the
 // first payload type's codec, the media address, the direction); the
 // unexported ones are the rest of the stream, which a call-quality
-// measurement plans from and which never reach the envelope. RemoteMedia is
-// recorded, never contacted.
+// measurement plans from (prepareMedia) and which never reach the envelope.
+// RemoteMedia is the record only: media is sent to the plan's vetted
+// destination, never to this string.
 type sipSDPAnswer struct {
 	Codec       string `json:"codec,omitempty"`
 	PayloadType *int   `json:"payload_type,omitempty"`

@@ -338,7 +338,12 @@ or imported groups come back empty. Any other path that creates groups through
   type/config/interval/timeout on every update. Workers read
   `SIP_CALL_ENABLED` (default true, false with `WORKER_LOCATION_ID`) and
   `SIP_CALL_ALLOWED_DESTINATIONS`; a `SIPChecker` never configured
-  (`ConfigureCalls`) places no call. Its web twin is `isSipCall`
+  (`ConfigureCalls`) places no call. `call.media` (`shared/models/sip_media.go`,
+  orchestrated by `worker/internal/worker/sip_media.go`) measures the hold's
+  audio; it rides `SIP_CALL_ENABLED` (no second switch), its keys are strict
+  (`UnmarshalJSON` records, never returns, what `Validate` refuses, so other
+  decoders of a SIP config never break), and a worker that predates a media
+  field fails the check closed before dialing. Its web twin is `isSipCall`
   (`web/lib/sip-config.ts`): the UI hides call run/pause/clone and locks the
   form for non-admins (`useIsTenantAdmin`), and confirms every Test and run.
 - **Compose and Helm move together**: a port, queue subject or credential
@@ -767,9 +772,15 @@ or imported groups come back empty. Any other path that creates groups through
 - SIP signalling rides one flow per attempt: every request, response and
   answer to a server-sent request goes over the connection `dialSIP` opened
   through `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a
-  Contact, Via, Record-Route or SDP address (in a call's dialogs they only
-  fill the Request-URI and Route headers). Requests are client transactions in
-  `sip_txn.go` (Timer E on UDP, matched by Via branch + CSeq method).
+  Contact, Via, Record-Route or SDP address for signalling (in a call's
+  dialogs they only fill the Request-URI and Route headers). Call media
+  writes RTP only from the call's bound, unconnected pair, only to addresses
+  `netguard.Policy.AllowsServerChosen` admits (`prepareMedia`, the latch),
+  starts only at HOLDING entry and stops first thing in `teardown`, so no
+  RTP follows a BYE; its error and warning text never names an address
+  (`present.Build` copies it into every notification). Requests are client
+  transactions in `sip_txn.go` (Timer E on UDP, matched by Via branch + CSeq
+  method).
 - INVITE responses reach `sipCall.onResponse` on the dispatcher goroutine,
   which sends every ACK itself (non-2xx in-transaction, each 2xx per To tag,
   re-sent for retransmissions) so ACKs go out during CANCEL/BYE waits and the

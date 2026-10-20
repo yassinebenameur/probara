@@ -13,10 +13,10 @@ import (
 // SIPCallConfig is the test call of a `sip` monitor with method "invite": the
 // worker places a real call (INVITE → 18x → 200 → ACK → hold → BYE, or CANCEL
 // once it rings in ring mode) over the monitor's transport and digest
-// credentials, and measures post-dial delay and answer time. Calls can be
-// billed, so the API keeps them to tenant admins and bounds the schedule
-// (ValidateSchedule), and each worker can refuse them (SIP_CALL_ENABLED,
-// SIP_CALL_ALLOWED_DESTINATIONS).
+// credentials, and measures post-dial delay and answer time and, with Media,
+// the call's audio. Calls can be billed, so the API keeps them to tenant
+// admins and bounds the schedule (ValidateSchedule), and each worker can
+// refuse them (SIP_CALL_ENABLED, SIP_CALL_ALLOWED_DESTINATIONS).
 type SIPCallConfig struct {
 	// Number is the called user part: sip:<number>@<domain or host>, with
 	// ;user=phone when it is a telephone number (digits, optional leading +).
@@ -44,13 +44,13 @@ type SIPCallConfig struct {
 	WarnAnswerMs *int `json:"warn_answer_ms,omitempty"`
 	MaxAnswerMs  *int `json:"max_answer_ms,omitempty"`
 	// SDPAddress replaces the offer's o=/c= address (a NATed worker's public
-	// address). The worker never sends media.
+	// address): where the far end sends audio when Media is set.
 	SDPAddress string `json:"sdp_address,omitempty"`
 	// ProbeHeader adds X-Probara-Probe: 1 so the far end can recognise
 	// probe calls.
 	ProbeHeader bool `json:"probe_header,omitempty"`
-	// Media is reserved for RTP quality analysis and must be absent.
-	Media json.RawMessage `json:"media,omitempty"`
+	// Media measures the call's audio during the hold (answer mode only).
+	Media *SIPMediaConfig `json:"media,omitempty"`
 }
 
 // Test-call modes.
@@ -191,8 +191,19 @@ func (c *SIPCallConfig) validate(expectedStatus *int) error {
 		}
 	}
 
-	if len(c.Media) > 0 && strings.TrimSpace(string(c.Media)) != "null" {
-		return fmt.Errorf("call.media: media analysis is not available yet")
+	if c.Media != nil {
+		if err := c.Media.Validate(); err != nil {
+			return err
+		}
+		if ring {
+			return fmt.Errorf("call.media requires answer mode (a ring-mode call is never answered)")
+		}
+		if c.HoldMs < SIPMediaMinHoldMs {
+			return fmt.Errorf("call.hold_ms must be at least %d when call.media is set", SIPMediaMinHoldMs)
+		}
+		if expectedStatus != nil && (*expectedStatus < 200 || *expectedStatus > 299) {
+			return fmt.Errorf("call.media needs an answered call: expected_status must be unset or 2xx")
+		}
 	}
 	return nil
 }

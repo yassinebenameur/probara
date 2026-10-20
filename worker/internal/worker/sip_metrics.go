@@ -76,8 +76,12 @@ type sipMetrics struct {
 	AssertionsFailed []string `json:"assertions_failed,omitempty"`
 }
 
-// sipMaxCallList caps the provisional, warnings and record_route lists.
-const sipMaxCallList = 8
+// sipMaxCallList caps the provisional and record_route lists;
+// sipMaxWarnings the warnings, which a measured call's media adds to.
+const (
+	sipMaxCallList = 8
+	sipMaxWarnings = 12
+)
 
 func (m *sipMetrics) warn(msg string) {
 	for _, w := range m.Warnings {
@@ -85,9 +89,21 @@ func (m *sipMetrics) warn(msg string) {
 			return
 		}
 	}
-	if len(m.Warnings) < sipMaxCallList {
+	if len(m.Warnings) < sipMaxWarnings {
 		m.Warnings = append(m.Warnings, msg)
 	}
+}
+
+// replaceWarning rewrites a warning already given (in place, so its order
+// stands); it adds msg when old is absent.
+func (m *sipMetrics) replaceWarning(old, msg string) {
+	for i, w := range m.Warnings {
+		if w == old {
+			m.Warnings[i] = msg
+			return
+		}
+	}
+	m.warn(msg)
 }
 
 // sipCallMetrics is metrics_data.sip.call. Timing anchors (integer ms):
@@ -120,6 +136,9 @@ type sipCallMetrics struct {
 	AnsweredBy    *sipAnsweredBy       `json:"answered_by,omitempty"`
 	SDPAnswer     *sipSDPAnswer        `json:"sdp_answer,omitempty"`
 	RTPRxPackets  int64                `json:"rtp_rx_packets"`
+	// Media is the call's audio measurement, when call.media is set
+	// (sip_media.go).
+	Media *sipMediaMetrics `json:"media,omitempty"`
 	// Teardown is how the call ended: bye_ok, bye_481, bye_<code>,
 	// bye_unconfirmed, cancelled, cancel_unconfirmed, answered_after_cancel,
 	// remote_bye, no_provisional or none; TeardownStatus is the final

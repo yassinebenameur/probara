@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -131,6 +132,16 @@ type SSRC uint32
 func (s SSRC) String() string { return fmt.Sprintf("%08x", uint32(s)) }
 
 func (s SSRC) MarshalText() ([]byte, error) { return []byte(s.String()), nil }
+
+// UnmarshalText reads the eight hex digits MarshalText writes.
+func (s *SSRC) UnmarshalText(b []byte) error {
+	v, err := strconv.ParseUint(string(b), 16, 32)
+	if err != nil || len(b) != 8 {
+		return fmt.Errorf("rtp: SSRC %q is not eight hex digits", b)
+	}
+	*s = SSRC(v)
+	return nil
+}
 
 // InboundStats is the probe's receiver report on the far end's stream.
 // Loss, duplicates, reordering and late discards are summed over every

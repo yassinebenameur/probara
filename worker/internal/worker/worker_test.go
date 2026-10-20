@@ -484,6 +484,13 @@ func TestProcessJob_RedeliveredSIPCallIsNotPlacedAgain(t *testing.T) {
 	if !isSideEffecting(sip, json.RawMessage(`{"host":"x","method":"invite","password":"{\"alg\":\"aes-256-gcm\",\"ct\":\"…\"}","call":{"number":"1"}}`)) {
 		t.Fatal("an INVITE with an encrypted password must be side-effecting")
 	}
+	// A media call is a call, a media key this worker does not know
+	// included: the config is refused at run time, never run twice.
+	for _, media := range []string{`{"expect":"echo"}`, `{"expect":"audio","dtmf":"1"}`, `"on"`} {
+		if !isSideEffecting(sip, json.RawMessage(`{"host":"x","method":"invite","call":{"number":"1","hold_ms":3000,"media":`+media+`}}`)) {
+			t.Fatalf("an INVITE with media %s must be side-effecting", media)
+		}
+	}
 }
 
 // NewWorker applies SIP_CALL_ENABLED / SIP_CALL_ALLOWED_DESTINATIONS to the
@@ -495,8 +502,12 @@ func TestNewWorker_ConfiguresSIPCalls(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := checker.(*SIPChecker).callsEnabled; got != enabled {
+		sip := checker.(*SIPChecker)
+		if got := sip.callsEnabled; got != enabled {
 			t.Fatalf("SIPCallEnabled=%v: checker calls enabled = %v", enabled, got)
+		}
+		if c := sip.mediaCounters; c.session == nil || c.refused == nil || c.rxDropped == nil || c.unreliable == nil || c.teardownUnconfirmed == nil {
+			t.Fatal("the media counters are not wired")
 		}
 	}
 }

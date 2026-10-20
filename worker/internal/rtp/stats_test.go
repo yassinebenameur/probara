@@ -667,3 +667,19 @@ func FuzzAnalyze(f *testing.F) {
 		checkReport(t, "fuzz", Analyze(recs, cfg))
 	})
 }
+
+func TestSSRCTextRoundTrip(t *testing.T) {
+	b, err := json.Marshal(struct{ S SSRC }{0x0000beef})
+	if err != nil || string(b) != `{"S":"0000beef"}` {
+		t.Fatalf("marshal = %s, %v", b, err)
+	}
+	var back struct{ S SSRC }
+	if err := json.Unmarshal(b, &back); err != nil || back.S != 0xbeef {
+		t.Fatalf("unmarshal = %#x, %v", back.S, err)
+	}
+	for _, bad := range []string{`"beef"`, `"0000beefa"`, `"zzzzzzzz"`} {
+		if err := json.Unmarshal([]byte(`{"S":`+bad+`}`), &back); err == nil {
+			t.Fatalf("unmarshal %s: want an error", bad)
+		}
+	}
+}

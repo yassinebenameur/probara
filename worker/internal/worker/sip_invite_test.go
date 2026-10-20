@@ -53,10 +53,17 @@ type fakeUASMsg struct {
 
 func startFakeUAS(t *testing.T, transport string, handler func(u *fakeUAS, msg string)) *fakeUAS {
 	t.Helper()
+	return startFakeUASOn(t, transport, "127.0.0.1", handler)
+}
+
+// startFakeUASOn is startFakeUAS listening on ip (127.0.0.1 or ::1).
+func startFakeUASOn(t *testing.T, transport, ip string, handler func(u *fakeUAS, msg string)) *fakeUAS {
+	t.Helper()
 	u := &fakeUAS{t: t, transport: transport, handler: handler, dropNth: map[int]bool{}}
+	listenAddr := net.JoinHostPort(ip, "0")
 	switch transport {
 	case "udp":
-		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		pc, err := net.ListenPacket("udp", listenAddr)
 		if err != nil {
 			t.Fatalf("ListenPacket: %v", err)
 		}
@@ -83,9 +90,9 @@ func startFakeUAS(t *testing.T, transport string, handler func(u *fakeUAS, msg s
 		)
 		if transport == "tls" {
 			cert := newSelfSignedTestCert(t, time.Now().Add(30*24*time.Hour))
-			listener, err = tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+			listener, err = tls.Listen("tcp", listenAddr, &tls.Config{Certificates: []tls.Certificate{cert}})
 		} else {
-			listener, err = net.Listen("tcp", "127.0.0.1:0")
+			listener, err = net.Listen("tcp", listenAddr)
 		}
 		if err != nil {
 			t.Fatalf("Listen: %v", err)
