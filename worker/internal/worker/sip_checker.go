@@ -40,6 +40,9 @@ type SIPChecker struct {
 	callsEnabled bool
 	callAllowed  []*regexp.Regexp
 	lingers      *sipLingerPool
+	// rtpPorts hands out the calls' RTP port pairs; nil binds random pairs
+	// with no reuse quarantine.
+	rtpPorts *sipRTPPorts
 	// callTimers and callHook are for tests only.
 	callTimers sipCallTimers
 	callHook   func(stage string)
@@ -52,6 +55,7 @@ func NewSIPChecker(blockPrivateIPs bool, allowedCIDRs []*net.IPNet) *SIPChecker 
 		blockPrivateIPs: blockPrivateIPs,
 		allowedCIDRs:    allowedCIDRs,
 		lingers:         newSIPLingerPool(sipCallLingerSlots),
+		rtpPorts:        newSIPRTPPorts(),
 	}
 }
 

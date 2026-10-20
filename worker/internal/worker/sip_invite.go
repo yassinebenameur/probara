@@ -396,7 +396,20 @@ type sipCall struct {
 	failover       bool
 	restartTimerA  bool
 	cancelSent     bool
+	// earlyAnswers is the SDP of the last 18x on each early dialog, by To
+	// tag (nil for an SDP without an audio stream), for at most
+	// sipCallMaxEarlyAnswers tags: see answerSDP.
+	earlyAnswers map[string]*sipSDPAnswer
 }
+
+// sipCallMaxEarlyAnswers bounds the early dialogs whose 18x SDP a call keeps.
+const sipCallMaxEarlyAnswers = 4
+
+// Where the SDP answer a call's media is planned from came from (answerSDP).
+const (
+	sipAnswerFrom2xx = "2xx"
+	sipAnswerFrom18x = "18x"
+)
 
 // sipCallOutcome is how a call on one flow ended.
 type sipCallOutcome struct {
@@ -434,7 +447,7 @@ func (c *SIPChecker) runInviteCall(parent, callCtx context.Context, flow *sipFlo
 	if localIP == nil {
 		localIP = net.IPv4zero
 	}
-	rtp, err := bindSIPRTPPair(localIP)
+	rtp, err := c.rtpPorts.bind(localIP)
 	if err != nil {
 		s.ep.Close()
 		msg := fmt.Sprintf("media: %v", err)
@@ -862,6 +875,7 @@ func (s *sipCall) onProvisional(inv *sipInviteTxn, in sipInbound) {
 	}
 	if code >= 180 && code <= 189 && sipBodyIsSDP(msg) {
 		s.cm.EarlyMedia = true
+		s.keepEarlyAnswer(msg)
 	}
 	s.anyProvisional = true
 	s.proceeding = true
@@ -1000,9 +1014,11 @@ func (s *sipCall) onAnswered(inv *sipInviteTxn, d *sipDialog, in sipInbound) {
 			s.cm.PDDSource = strconv.Itoa(code)
 			s.cm.SetupPDDMs = s.cm.SetupMs
 		}
-		if sipBodyIsSDP(msg) {
-			s.cm.SDPAnswer = parseSDPAnswer(msg.Body)
-			s.onMediaReady(s.cm.SDPAnswer)
+		if answer, source, ok := s.answerSDP(d, msg); ok {
+			if source == sipAnswerFrom2xx {
+				s.cm.SDPAnswer = answer // sdp_answer is always the 2xx's
+			}
+			s.onMediaReady(answer, source)
 		}
 		by := &sipAnsweredBy{ContactHost: sipContactHost(msg)}
 		if s.flow.peer != nil {
@@ -1060,8 +1076,41 @@ func (s *sipCall) onAnswered(inv *sipInviteTxn, d *sipDialog, in sipInbound) {
 }
 
 // onMediaReady is where RTP quality measurement will start, once the answer
-// names the far end's media. No media is sent or analysed yet.
-func (s *sipCall) onMediaReady(*sipSDPAnswer) {}
+// names the far end's media (source: sipAnswerFrom2xx or sipAnswerFrom18x).
+// No media is sent or analysed yet.
+func (s *sipCall) onMediaReady(*sipSDPAnswer, string) {}
+
+// keepEarlyAnswer records an 18x's SDP as the latest answer of its early
+// dialog. An 18x without a To tag opens no dialog and is not kept.
+func (s *sipCall) keepEarlyAnswer(msg *sipMessage) {
+	tag := sipHeaderTag(msg.Get("To"))
+	if tag == "" {
+		return
+	}
+	if _, known := s.earlyAnswers[tag]; !known && len(s.earlyAnswers) >= sipCallMaxEarlyAnswers {
+		return
+	}
+	if s.earlyAnswers == nil {
+		s.earlyAnswers = make(map[string]*sipSDPAnswer, sipCallMaxEarlyAnswers)
+	}
+	s.earlyAnswers[tag] = parseSDPAnswer(msg.Body)
+}
+
+// answerSDP is the SDP answer of the answered dialog d: the 2xx's own when it
+// carries one, else the last 18x SDP of the same dialog (same To tag). RFC
+// 3264 puts the answer in the 2xx when there is no reliable provisional, but
+// SBCs that treat a 183's SDP as the answer and send a bare 200 are common,
+// so the dialog's 18x stands in. An 18x of another dialog (another fork)
+// never does. ok is false when neither carried SDP.
+func (s *sipCall) answerSDP(d *sipDialog, msg *sipMessage) (answer *sipSDPAnswer, source string, ok bool) {
+	if sipBodyIsSDP(msg) {
+		return parseSDPAnswer(msg.Body), sipAnswerFrom2xx, true
+	}
+	if early, found := s.earlyAnswers[d.remoteTag]; found {
+		return early, sipAnswerFrom18x, true
+	}
+	return nil, "", false
+}
 
 // teardown always runs after drive, under its own budget: it settles a
 // pending INVITE (CANCEL once a provisional came, or listens for a late
