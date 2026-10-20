@@ -4,11 +4,13 @@ from collections import defaultdict, deque
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 MODULE = "github.com/yassinebenameur/probara/"
 SHARDS = ("api", "alerting-worker", "platform")
+SUMMARY_FAILURE_BYTES = 512 * 1024
 # These tests explicitly generate local previews or validate an optional binary.
 # Docker and Chrome skips are deliberately not allowed in the full CI suite.
 ALLOWED_SKIPS = {
@@ -22,6 +24,8 @@ ALLOWED_SKIPS = {
 
 
 def shard_for(package):
+    # A static path-prefix map, not timing-balanced; rebalance it (and the
+    # table in docs/testing.md) when a group's wall time drifts.
     if not package.startswith(MODULE):
         raise ValueError(f"package outside the module: {package}")
     path = package[len(MODULE):]
@@ -96,6 +100,36 @@ def go_report(lines):
     return failures, skips, sorted(timings, key=lambda pair: -pair[1])
 
 
+def failure_summary(failures, limit=SUMMARY_FAILURE_BYTES):
+    # GitHub drops a step summary over 1 MiB entirely, so a mass failure
+    # (e.g. a broken migration) is truncated rather than losing the digest.
+    lines, size = [], 0
+    for index, (package, test, detail) in enumerate(failures):
+        # A fence longer than any backtick run in the detail cannot be closed early.
+        fence = "`" * max(3, max((len(run) for run in re.findall(r"`+", detail)), default=0) + 1)
+        block = ["", f"**Failed:** `{package} {test}`", fence + "text", detail, fence]
+        block_size = sum(len(line.encode("utf-8")) + 1 for line in block)
+        if size + block_size > limit:
+            lines += ["", f"{len(failures) - index} more failures are in the JSON log artifact."]
+            break
+        lines += block
+        size += block_size
+    return lines
+
+
+def coverage_profiles(directory, allow_missing=False):
+    paths = sorted(Path(directory).glob("coverage-*.out"))
+    expected = {f"coverage-{shard}.out" for shard in SHARDS}
+    found = {path.name for path in paths}
+    if found != expected:
+        message = f"expected coverage profiles {sorted(expected)}, found {sorted(found)}"
+        # A failed shard may leave no profile; the others still report.
+        if not (allow_missing and paths and found <= expected):
+            raise ValueError(message)
+        print(f"::warning title=Partial coverage::{annotation(message)}")
+    return paths
+
+
 def merge_coverage(paths):
     blocks = defaultdict(int)
     for path in paths:
@@ -144,6 +178,7 @@ def main():
     report = commands.add_parser("go-report")
     report.add_argument("log", type=Path)
     coverage = commands.add_parser("merge-coverage")
+    coverage.add_argument("--allow-missing", action="store_true")
     coverage.add_argument("directory", type=Path)
     coverage.add_argument("output", type=Path)
     required = commands.add_parser("required-results")
@@ -170,19 +205,16 @@ def main():
         summary += ["", f"Passing packages: {len(timings)}. Skipped cases: {len(skips)}."]
         summary += [f"- Skipped `{package}/{test}`: {ALLOWED_SKIPS.get((package, test.split('/')[0]), 'see test log')}"
                     for package, test in skips]
+        summary += failure_summary(failures)
         for package, test, detail in failures:
             print(f"::error title=Go test failure::{annotation(package + ' ' + test + ': ' + detail)}")
-            summary += ["", f"**Failed:** `{package} {test}`", "```text", detail, "```"]
         print("\n".join(summary))
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
                 output.write("\n".join(summary) + "\n")
         return int(bool(failures))
     elif args.command == "merge-coverage":
-        paths = sorted(args.directory.glob("coverage-*.out"))
-        expected = {f"coverage-{shard}.out" for shard in SHARDS}
-        if {path.name for path in paths} != expected:
-            raise ValueError(f"expected coverage profiles {sorted(expected)}, found {[path.name for path in paths]}")
+        paths = coverage_profiles(args.directory, args.allow_missing)
         args.output.write_text(merge_coverage(paths), encoding="utf-8")
     else:
         failures = required_failures(json.loads(os.environ["CI_RESULTS"]), args.suite)

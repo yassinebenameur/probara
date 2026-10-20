@@ -4,13 +4,11 @@ package scheduler
 
 import (
 	"context"
-
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/yassinebenameur/probara/shared/models"
-
 	"github.com/yassinebenameur/probara/shared/testutil"
 )
 

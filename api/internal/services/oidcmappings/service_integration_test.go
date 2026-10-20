@@ -5,12 +5,14 @@ package oidcmappings
 import (
 	"context"
 	"errors"
+	"strings"
+	"testing"
+
 	"github.com/google/uuid"
+
 	"github.com/yassinebenameur/probara/api/internal/models"
 	"github.com/yassinebenameur/probara/shared/auth"
 	"github.com/yassinebenameur/probara/shared/testutil"
-	"strings"
-	"testing"
 )
 
 func TestMappingCRUD(t *testing.T) {

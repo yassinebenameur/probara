@@ -10,9 +10,14 @@ External-service tests belong in `*_integration_test.go` files with
 `//go:build !unit` before the package declaration. This excludes them only
 when the `unit` tag is selected, preserving ordinary `go test ./...` behavior.
 Keep shared assertions and pure fixture builders in ordinary `*_test.go`
-files so both modes compile. CI checks the file convention and runs both
-modes. A test's security, regression or contract purpose does not change its
-suite: classify it by the dependencies it needs.
+files so both modes compile: a plain test calling a helper that lives in an
+integration file builds under plain `go test` but not under `-tags=unit`.
+`make lint` vets both modes and checks that every `*_integration_test.go`
+carries the tag; CI runs the same checks. The fast job runs without Docker,
+so a Docker-backed test in a plain file fails there. Nothing detects other
+misclassified dependencies (Chrome, binaries, slow in-process peers), so
+classify each test by the dependencies it needs. A test's security,
+regression or contract purpose does not change its suite.
 
 ## Go jobs
 
@@ -20,7 +25,10 @@ suite: classify it by the dependencies it needs.
 complete package groups in parallel. The complete groups intentionally also
 run their cheap tests; this avoids changing the default full-suite behavior.
 `.github/workflows/scripts/ci.py packages` enumerates `go list ./...` and
-assigns every package exactly once:
+assigns every package exactly once through a static path-prefix map
+(`shard_for`); new top-level directories land in `platform`. Groups are not
+balanced by timing, so move packages when one group's wall time drifts and
+update this table with it:
 
 | Group | Packages |
 |---|---|
@@ -37,7 +45,8 @@ container to exercise client startup independently. NATS and SIPp tests also
 own their containers. Chrome must be installed for the worker group.
 
 Go output is recorded as JSON in seven-day workflow artifacts, with failures
-and package timings repeated in the step summary. Missing Docker or Chrome
+and package timings repeated in the step summary (failure detail is capped
+at 512 KiB; the rest stays in the artifact). Missing Docker or Chrome
 must fail the full suite rather than silently reduce coverage. The report
 allows only these documented skips:
 
@@ -52,8 +61,10 @@ dependency-related skips must be fixed or explicitly reviewed, not added to
 the allow-list just to make CI pass.
 
 Each full group uploads a separate atomic coverage profile. The aggregate
-requires all three profiles, sums matching block counts, and uploads one
-complete report with the existing Codecov `main` flag. Fast-job coverage is
+sums matching block counts and uploads one report with the existing Codecov
+`main` flag. It requires all three profiles when every group passed; when one
+failed it uploads whatever profiles exist, with a warning, before failing the
+check. Fast-job coverage is
 not uploaded a second time. `Go test (main module)` remains the stable required
 Go check and verifies all Go groups without waiting for AI reproduction.
 The existing frontend check names also remain unchanged. An unexpectedly
@@ -65,13 +76,16 @@ Install the existing hash-locked CPU test dependencies and pinned laya package
 before running Python tests; synthetic model fixtures still need Torch and
 laya. Generate the controlled dataset as described in `CLAUDE.md`.
 
-`python -m pytest ai-service/tests .github/workflows/scripts -m 'not checkpoint'
---strict-markers -q -rs` runs the fast Python lane. The `checkpoint` marker in
+`python -m pytest ai-service/tests
+.github/workflows/scripts/test_local_ai_artifact.py -m 'not checkpoint'
+--strict-markers -q -rs` runs the fast Python lane (`test_ci.py` runs in the
+Go formatting job). The `checkpoint` marker in
 `pytest.ini` identifies the committed LFS-head integrity test, real-base
 composition test and bundled CPU inference test. Running pytest without `-m`
 still selects both groups, with the existing real-model environment-variable
 requirements. The checkpoint job pulls and verifies the actual heads/base,
-runs `-m checkpoint`, and reproduces the held-out CPU release gate unchanged.
+reproduces the held-out CPU release gate unchanged, then runs
+`-m checkpoint`; the gate runs first so a test failure cannot hide it.
 
 The full checkpoint job runs on every protected-branch push and on PR changes
 to AI source, dependencies, artifacts, shared AI contracts, Helm, workflow helpers,
@@ -82,7 +96,9 @@ evaluation. Selection happens inside an always-triggered workflow; the final
 `Bundled CPU AI` check permits a skipped checkpoint job only when selection
 explicitly says it is unnecessary. Release approval checks are not relaxed.
 
-Superseded PR runs are cancelled. Protected-branch runs retain full validation.
+Superseded PR runs are cancelled. Every push runs in its own concurrency
+group, so protected-branch runs are never queued behind or cancelled by a
+later push.
 The two frontend jobs retain lint, type checking and production builds; the
 operator UI also runs its existing TypeScript tests. Extended fuzzing and Go
 benchmarks remain explicit local runs, separate from ordinary PR validation.

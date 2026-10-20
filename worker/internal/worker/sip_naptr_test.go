@@ -248,14 +248,25 @@ type fakeNAPTRServer struct {
 
 func startFakeNAPTRServer(t *testing.T, answer func(id uint16, name string, tcp bool) []byte) *fakeNAPTRServer {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("ListenPacket() error = %v", err)
-	}
-	ln, err := net.Listen("tcp", pc.LocalAddr().String())
-	if err != nil {
+	// The OS picks a free UDP port; its TCP twin may be taken on a busy
+	// host, so retry with a fresh port rather than skip (CI fails on skips).
+	var (
+		pc  net.PacketConn
+		ln  net.Listener
+		err error
+	)
+	for attempt := 0; attempt < 20; attempt++ {
+		pc, err = net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("ListenPacket() error = %v", err)
+		}
+		if ln, err = net.Listen("tcp", pc.LocalAddr().String()); err == nil {
+			break
+		}
 		pc.Close()
-		t.Skipf("TCP port %s not free alongside UDP: %v", pc.LocalAddr(), err)
+	}
+	if err != nil {
+		t.Fatalf("no loopback port free on both UDP and TCP: %v", err)
 	}
 	t.Cleanup(func() { pc.Close(); ln.Close() })
 	s := &fakeNAPTRServer{addr: pc.LocalAddr().String()}

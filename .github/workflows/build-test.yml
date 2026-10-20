@@ -9,9 +9,12 @@ on:
 permissions:
   contents: read
 
+# Only PR runs share a group, so a new commit cancels the superseded run.
+# Pushes get a per-run group: a ref-keyed group would queue each merge's
+# release-commit push behind it and cancel pending protected-branch runs.
 concurrency:
-  group: build-test-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: build-test-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   changes:
@@ -22,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # The merge base needs history, but a name-only diff needs no blobs.
           fetch-depth: 0
+          filter: blob:none
           lfs: false
       - name: Select expensive validation
         id: changes
@@ -224,7 +229,8 @@ jobs:
       - name: Generate controlled dataset
         run: python ai-service/training/generate.py --output ai-service/artifacts/dataset
       - name: Test contracts, packaging, server and synthetic fixtures
-        run: python -m pytest ai-service/tests .github/workflows/scripts -m 'not checkpoint' --strict-markers -q -rs
+        # test_ci.py runs once, in the Go formatting job.
+        run: python -m pytest ai-service/tests .github/workflows/scripts/test_local_ai_artifact.py -m 'not checkpoint' --strict-markers -q -rs
 
   ai-checkpoint:
     name: AI checkpoint validation
@@ -338,17 +344,6 @@ jobs:
       - name: Generate controlled dataset
         run: python ai-service/training/generate.py --output ai-service/artifacts/dataset
 
-      # PROBARA_LAYA_BASE runs the real-base reproduction test. Runtime
-      # refuses an unapproved checkpoint by design, so LOCAL_AI_ARTIFACT (the
-      # bundled-inference test) is set only for an approved one.
-      - name: Real checkpoint tests
-        env:
-          HF_HUB_OFFLINE: '1'
-          TRANSFORMERS_OFFLINE: '1'
-          PROBARA_LAYA_BASE: ${{ env.LAYA_BASE }}
-          LOCAL_AI_ARTIFACT: ${{ steps.artifact.outputs.approved == 'true' && steps.artifact.outputs.composed || '' }}
-        run: python -m pytest ai-service/tests -m checkpoint --strict-markers -q -rs
-
       # The approval run's CPU evaluation happened on the developer's machine;
       # the image runs linux/amd64, whose qnnpack int8 kernels differ. This
       # runner is linux/amd64 with the image's locked torch wheel, so re-score
@@ -362,6 +357,18 @@ jobs:
           COMPOSED: ${{ steps.artifact.outputs.composed }}
         run: python .github/workflows/scripts/local_ai_artifact.py reproduce --composed "$COMPOSED" --data ai-service/artifacts/dataset
 
+      # After the release-gate reproduction, so a test failure here cannot
+      # hide a gate regression. PROBARA_LAYA_BASE runs the real-base
+      # reproduction test. Runtime refuses an unapproved checkpoint by design,
+      # so LOCAL_AI_ARTIFACT (the bundled-inference test) is set only for an
+      # approved one.
+      - name: Real checkpoint tests
+        env:
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+          PROBARA_LAYA_BASE: ${{ env.LAYA_BASE }}
+          LOCAL_AI_ARTIFACT: ${{ steps.artifact.outputs.approved == 'true' && steps.artifact.outputs.composed || '' }}
+        run: python -m pytest ai-service/tests -m checkpoint --strict-markers -q -rs
 
   go-test:
     # Preserve the former required Go check without waiting for unrelated AI work.
@@ -374,22 +381,32 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: false
-      - name: Verify all required results
-        env:
-          CI_RESULTS: ${{ toJSON(needs) }}
-        run: python3 .github/workflows/scripts/ci.py required-results --suite go
+      # Coverage is uploaded before the result check, so a failing shard
+      # still reports the profiles the other shards produced.
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           pattern: coverage-*
           path: coverage-parts
           merge-multiple: true
-      - name: Merge complete coverage
-        run: python3 .github/workflows/scripts/ci.py merge-coverage coverage-parts coverage-main.out
+      - name: Merge coverage
+        id: coverage
+        if: always()
+        env:
+          # A missing profile is expected only when a shard did not succeed.
+          ALLOW_MISSING: ${{ needs.go-full.result != 'success' && '--allow-missing' || '' }}
+        run: python3 .github/workflows/scripts/ci.py merge-coverage $ALLOW_MISSING coverage-parts coverage-main.out
       - uses: codecov/codecov-action@v7
+        if: steps.coverage.outcome == 'success'
         with:
           files: ./coverage-main.out
           flags: main
           fail_ci_if_error: false
+      - name: Verify all required results
+        if: always()
+        env:
+          CI_RESULTS: ${{ toJSON(needs) }}
+        run: python3 .github/workflows/scripts/ci.py required-results --suite go
 
   local-ai:
     # The existing required AI status covers fast checks and selected validation.

@@ -76,6 +76,14 @@ class ReportsTest(unittest.TestCase):
                 failures, _, _ = ci.go_report(self.events(passed, {"Action": "skip", "Package": ci.MODULE + package, "Test": test}))
                 self.assertEqual(bool(failures), want_failure)
 
+    def test_summary_is_bounded_and_fences_hold(self):
+        lines = ci.failure_summary([("api", "TestFence", "got ```\nwant ````")])
+        self.assertIn("`````text", lines)
+        many = [("api", f"Test{i}", "x" * 1000) for i in range(100)]
+        lines = ci.failure_summary(many, limit=10_000)
+        self.assertLess(sum(len(line) + 1 for line in lines), 12_000)
+        self.assertIn("more failures are in the JSON log artifact", lines[-1])
+
     def test_empty_build_failure_and_raw_errors_are_not_success(self):
         self.assertTrue(ci.go_report([])[0])
         self.assertTrue(ci.go_report(self.events({"Action": "build-fail", "ImportPath": ci.MODULE + "api"}))[0])
@@ -94,6 +102,19 @@ class CoverageTest(unittest.TestCase):
             b.write_text("mode: set\nfile.go:1.1,2.1 1 1\n")
             with self.assertRaises(ValueError):
                 ci.merge_coverage([a, b])
+
+    def test_missing_profiles_only_allowed_after_a_failed_shard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ValueError):
+                ci.coverage_profiles(directory, allow_missing=True)
+            (Path(directory) / "coverage-api.out").write_text("mode: atomic\n")
+            with self.assertRaises(ValueError):
+                ci.coverage_profiles(directory)
+            self.assertEqual([p.name for p in ci.coverage_profiles(directory, allow_missing=True)],
+                             ["coverage-api.out"])
+            for shard in ci.SHARDS:
+                (Path(directory) / f"coverage-{shard}.out").write_text("mode: atomic\n")
+            self.assertEqual(len(ci.coverage_profiles(directory)), 3)
 
 
 class RequiredResultsTest(unittest.TestCase):

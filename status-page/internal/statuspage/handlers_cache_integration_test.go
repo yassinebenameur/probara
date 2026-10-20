@@ -4,14 +4,16 @@ package statuspage
 
 import (
 	"context"
-	testcontainers "github.com/testcontainers/testcontainers-go"
-	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
-	"github.com/yassinebenameur/probara/shared/logger"
-	"github.com/yassinebenameur/probara/shared/testutil"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	testcontainers "github.com/testcontainers/testcontainers-go"
+
+	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
+	"github.com/yassinebenameur/probara/shared/logger"
+	"github.com/yassinebenameur/probara/shared/testutil"
 )
 
 func TestHandleStatusPageETagRoundTrip(t *testing.T) {

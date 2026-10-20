@@ -4,13 +4,14 @@ package statuspage
 
 import (
 	"context"
+	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	testcontainers "github.com/testcontainers/testcontainers-go"
+
 	sharedanalytics "github.com/yassinebenameur/probara/shared/analytics"
 	"github.com/yassinebenameur/probara/shared/testutil"
-	"testing"
-	"time"
 )
 
 func TestService_GetStatusPageMonitors_GroupPresenterAggregatesNestedGroups(t *testing.T) {

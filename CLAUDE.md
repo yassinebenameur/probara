@@ -56,7 +56,8 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   "instrument glass" design, surface contract at the top of `app/globals.css`)
 - `website/` — Next.js landing + docs site (flight-recorder design: orange accent, Archivo + Plex Mono)
 - `docs/` — `architecture.md` (see below), `state-semantics.md`,
-  `auth-and-rbac.md`, `location-worker-auth.md`, `correctness-notes.md`
+  `auth-and-rbac.md`, `location-worker-auth.md`, `correctness-notes.md`,
+  `testing.md` (test suites and CI jobs)
 - `helm/monitoring-platform/` — chart; `docker-compose.yml` — full local stack;
   `infra/` — dev infra config (dex for the SSO profile)
 
@@ -570,13 +571,17 @@ or imported groups come back empty. Any other path that creates groups through
   there: `go build ./...`, then `go test` scoped to what you touched
   (`go test ./api/...`, `go test ./shared/notifications/...`). `make test`
   runs the whole module with `-race` (skipping `scripts/`); `make lint` fails
-  on gofmt drift or `go vet` findings. The full api suite takes >2 min — run
+  on gofmt drift, `go vet` findings in either build mode, or an
+  integration file missing its build tag. The full api suite takes >2 min — run
   it in the background.
 - Tests sit next to the code; external-service, browser and binary-backed
   cases are `*_integration_test.go` with `//go:build !unit`. Plain `go test`
   and `make test` still run everything; `make test-unit` / `go test -tags=unit`
-  exclude those files. Keep helpers needed by both suites in ordinary
-  `*_test.go` files. CI checks the classification and compiles/runs both modes.
+  exclude those files. Anything a plain `*_test.go` calls must live in an
+  untagged file, or only `-tags=unit` builds break. CI checks that every
+  `*_integration_test.go` carries the tag and runs the fast job without
+  Docker, so a Docker-backed test in a plain file fails there; it cannot
+  detect other misclassified dependencies (Chrome, binaries).
   `testutil.SetupPostgresDB` uses testcontainers and fails (not skips)
   without a Docker daemon — then set
   `PROBARA_TEST_POSTGRES_DSN=postgres://user@host:port/postgres?sslmode=disable`

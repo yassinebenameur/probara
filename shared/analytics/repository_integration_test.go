@@ -4,7 +4,6 @@ package analytics
 
 import (
 	"context"
-
 	"testing"
 	"time"
 

@@ -5,13 +5,14 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"github.com/yassinebenameur/probara/shared/models"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yassinebenameur/probara/shared/models"
 )
 
 func requireBrowserForTest(t *testing.T) {

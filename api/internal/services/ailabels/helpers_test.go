@@ -2,7 +2,6 @@ package ailabels
 
 import (
 	"encoding/json"
-
 	"strings"
 
 	"github.com/google/uuid"

@@ -285,7 +285,7 @@ test:
 	@echo "✅ Tests completed. Coverage report: coverage.out"
 
 test-unit:
-	go test -race -tags=unit ./...
+	go test -race -tags=unit $$(go list -tags=unit ./... | grep -v /scripts)
 
 test-cover: test
 	@echo "Opening coverage report..."
@@ -307,4 +307,6 @@ fmt:
 vet:
 	@echo "Running go vet..."
 	go vet ./...
+	go vet -tags=unit ./...
+	@python3 -m unittest discover -s .github/workflows/scripts -p test_ci.py -k LayoutTest
 	@echo "✅ go vet passed"
