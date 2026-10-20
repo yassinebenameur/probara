@@ -833,6 +833,12 @@ or imported groups come back empty. Any other path that creates groups through
   validation corpus must use. Add a new format for any wording change, never
   edit an existing renderer (`training/history/` regenerates old corpora
   byte for byte).
+- **Signed NATS structs** (`LocationHeartbeat`, `CheckResultMessage` and
+  its `MeshResultInfo`) are verified by re-marshalling the receiver's struct
+  (`locationauth.VerifyJSON`), so a new non-empty field breaks older
+  verifiers (an omitempty field left empty does not). Extend inside
+  `metrics_data` or reuse `LocationHeartbeat.Version`;
+  `TestSignedNATSStructsFrozen` (`scheduler/internal/ingest`) pins them.
 - **`monitor_state_intervals` is SLA history.** Nothing prunes it by time,
   and live SLA reports read it back as far as a period reaches (issued
   reports are frozen copies). Any future retention for it must keep what
