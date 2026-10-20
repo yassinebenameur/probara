@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Download } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentMonitorConfig, AgentInstallCommand, ApiKey, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, AgentInstallCommand, ApiKey } from '@/lib/types';
 import { getAgentInstallCommand, getApiKeys } from '@/lib/api';
 import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
+import { buildAgentRequest, initialAgentFormState, initialAgentRules } from '@/lib/monitor-form/heartbeat';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -78,27 +79,8 @@ export default function AgentForm({
   const [apiKeyError, setApiKeyError] = useState<string>('');
   const [apiKeysLoaded, setApiKeysLoaded] = useState(false);
   const isEditMode = Boolean(monitor);
-  const initialAgentConfig =
-    !isEditMode && initialData?.type === 'agent' ? (initialData.config as AgentMonitorConfig) : undefined;
-  const initialRules =
-    (monitor && monitor.type === 'agent'
-      ? (monitor.config as AgentMonitorConfig).metric_rules
-      : initialAgentConfig?.metric_rules) || [];
-
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    expected_interval_seconds: monitor && monitor.type === 'agent'
-      ? (monitor.config as AgentMonitorConfig).expected_interval_seconds
-      : initialAgentConfig?.expected_interval_seconds || 60,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
-  const [ruleDrafts, setRuleDrafts] = useState<MetricRuleDraft[]>(() => draftsFromRules(initialRules));
+  const [formData, setFormData] = useState(() => initialAgentFormState(monitor, initialData));
+  const [ruleDrafts, setRuleDrafts] = useState<MetricRuleDraft[]>(() => draftsFromRules(initialAgentRules(monitor, initialData)));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors);
@@ -130,31 +112,7 @@ export default function AgentForm({
       return;
     }
 
-    const config: AgentMonitorConfig = {
-      agent_id: isEditMode ? monitor?.agent_id || '' : '',
-      expected_interval_seconds: formData.expected_interval_seconds,
-    };
-    if (rules.length > 0) {
-      config.metric_rules = rules;
-    }
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'agent',
-      config,
-      interval_seconds: formData.expected_interval_seconds,
-      timeout_seconds: formData.expected_interval_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
-    }
-    requestData.depends_on_ids = formData.depends_on_ids;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildAgentRequest(formData, rules, monitor);
 
     try {
       await onSubmit(requestData);

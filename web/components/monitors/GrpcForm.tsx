@@ -5,11 +5,8 @@ import {
   Monitor,
   CreateMonitorRequest,
   UpdateMonitorRequest,
-  GRPCMonitorConfig,
-  DependencySuppression,
-  NotificationMode,
-  ChannelAssignment,
 } from '@/lib/types';
+import { buildGrpcRequest, initialGrpcFormState } from '@/lib/monitor-form/network';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -34,35 +31,8 @@ export default function GrpcForm({
   loading = false,
 }: GrpcFormProps) {
   const isEditMode = Boolean(monitor);
-  const initialGrpcConfig =
-    !isEditMode && initialData?.type === 'grpc' ? (initialData.config as GRPCMonitorConfig) : undefined;
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    host: monitor && monitor.type === 'grpc'
-      ? (monitor.config as GRPCMonitorConfig)?.host || ''
-      : initialGrpcConfig?.host || '',
-    port: monitor && monitor.type === 'grpc'
-      ? (monitor.config as GRPCMonitorConfig)?.port || 443
-      : initialGrpcConfig?.port || 443,
-    service: monitor && monitor.type === 'grpc'
-      ? (monitor.config as GRPCMonitorConfig)?.service || ''
-      : initialGrpcConfig?.service || '',
-    use_tls: monitor && monitor.type === 'grpc'
-      ? (monitor.config as GRPCMonitorConfig)?.use_tls ?? true
-      : initialGrpcConfig?.use_tls ?? true,
-    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
-    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
+  const [formData, setFormData] = useState(() => initialGrpcFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors);
@@ -88,38 +58,7 @@ export default function GrpcForm({
       return;
     }
 
-    const config: GRPCMonitorConfig = {
-      host: formData.host.trim(),
-      port: formData.port,
-      use_tls: formData.use_tls,
-    };
-
-    if (formData.service.trim()) {
-      config.service = formData.service.trim();
-    }
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'grpc',
-      config,
-      interval_seconds: formData.interval_seconds,
-      timeout_seconds: formData.timeout_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
-    }
-    requestData.depends_on_ids = formData.depends_on_ids;
-    requestData.location_ids = formData.location_ids;
-    requestData.location_quorum =
-      formData.location_ids.length >= 2
-        ? Math.min(formData.location_quorum, formData.location_ids.length)
-        : 1;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildGrpcRequest(formData);
 
     await onSubmit(requestData);
   };

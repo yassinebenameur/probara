@@ -16,8 +16,7 @@ import {
   HTTPJSONAssertion,
   HTTPJSONAssertionOp,
 } from '@/lib/types';
-
-type HeaderKV = { key: string; value: string; reveal?: boolean };
+import { HeaderKV, isSensitiveHeaderName } from '@/lib/monitor-form/http';
 
 export interface HttpFormData {
   url: string;
@@ -73,20 +72,6 @@ interface HttpMonitorFormProps {
   openSections?: Record<string, boolean>;
   onToggleSection?: (id: string, open: boolean) => void;
 }
-
-const isSensitiveHeaderName = (name: string) => {
-  const n = name.trim().toLowerCase();
-  if (!n) return false;
-  return (
-    n === 'authorization' ||
-    n === 'cookie' ||
-    n === 'x-api-key' ||
-    n === 'api-key' ||
-    n === 'x-auth-token' ||
-    n.includes('token') ||
-    n.includes('secret')
-  );
-};
 
 function MethodUrlRow({
   method,

@@ -2,13 +2,12 @@
 
 import { useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, PhoneCall, PlugZap, XCircle } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, DependencySuppression, NotificationMode, ChannelAssignment, Location } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, SIPMonitorConfig, Location } from '@/lib/types';
 import { testMonitorConfig, TestMonitorConfigResponse } from '@/lib/api';
 import {
   buildSipConfig,
   isSipCall,
   parseWhole,
-  sipCallFormFields,
   sipCallsPerDay,
   sipCallTarget,
   validateSipCallFields,
@@ -18,6 +17,7 @@ import {
   SIP_CALL_MIN_INTERVAL_SECONDS,
 } from '@/lib/sip-config';
 import { sipCallSummary, sipTestWarnings } from '@/lib/sip-metrics';
+import { buildSipRequest, initialSipFormState, sipFieldsFromForm } from '@/lib/monitor-form/sip';
 import { formatLatency, pluralize } from '@/lib/format';
 import { useCurrentUser, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import Button from '@/components/ui/Button';
@@ -92,11 +92,6 @@ const CALL_MODE_IDS = CALL_MODES.map((m) => m.mode);
 
 type SipMethod = SipFormFields['method'];
 
-const normalizeMethod = (method: string | undefined): SipMethod => {
-  const m = (method || '').trim().toLowerCase();
-  return m === 'register' || m === 'invite' ? m : 'options';
-};
-
 export default function SipForm({
   monitor,
   initialData,
@@ -119,52 +114,7 @@ export default function SipForm({
   // history), so edit mode locks the method class.
   const storedIsCall = isEditMode && isSipCall('sip', editSipConfig);
 
-  // RFC 3263 resolution ("Locate server via DNS") leaves port and transport
-  // to SRV when they are unset (0 and '').
-  // Read case-insensitively, as the worker does: a stored "RFC3263" is rfc3263.
-  const rawResolution = editSipConfig?.resolution ?? initialSipConfig?.resolution;
-  const initialResolution: SipFormFields['resolution'] =
-    typeof rawResolution === 'string' && rawResolution.trim().toLowerCase() === 'rfc3263' ? 'rfc3263' : 'a';
-  const initialRfc3263 = initialResolution === 'rfc3263';
-
-  // The API accepts transport in any case and port 0 (5060, or 5061 over
-  // TLS); normalize both so the select matches and a save keeps the port the
-  // worker actually dials. Under rfc3263 an empty transport is Auto and port
-  // 0 stays empty: SRV decides both.
-  const storedTransport = (editSipConfig?.transport || initialSipConfig?.transport || '').toLowerCase();
-  const initialTransport = (storedTransport || (initialRfc3263 ? 'auto' : 'udp')) as SipFormFields['transport'];
-
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    host: editSipConfig?.host || initialSipConfig?.host || '',
-    port:
-      editSipConfig?.port || initialSipConfig?.port || (initialRfc3263 ? 0 : initialTransport === 'tls' ? 5061 : 5060),
-    transport: initialTransport,
-    resolution: initialResolution,
-    nameserver: editSipConfig?.nameserver || initialSipConfig?.nameserver || '',
-    method: normalizeMethod(editSipConfig?.method || initialSipConfig?.method),
-    username: editSipConfig?.username || initialSipConfig?.username || '',
-    password: editSipConfig?.password || initialSipConfig?.password || '',
-    domain: editSipConfig?.domain || initialSipConfig?.domain || '',
-    tls_skip_verify: editSipConfig?.tls_skip_verify ?? initialSipConfig?.tls_skip_verify ?? false,
-    tls_server_name: editSipConfig?.tls_server_name || initialSipConfig?.tls_server_name || '',
-    tls_min_days_valid:
-      (editSipConfig?.tls_min_days_valid ?? initialSipConfig?.tls_min_days_valid)?.toString() ?? '',
-    expected_status: editSipConfig?.expected_status?.toString()
-      || initialSipConfig?.expected_status?.toString() || '',
-    ...sipCallFormFields(loadedConfig?.call),
-    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
-    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
+  const [formData, setFormData] = useState(() => initialSipFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors, SIP_RELATED_FIELDS);
@@ -226,35 +176,7 @@ export default function SipForm({
       };
     });
 
-  const sipFields = (): SipFormFields => ({
-    host: formData.host,
-    port: formData.port,
-    transport: formData.transport,
-    resolution: formData.resolution,
-    nameserver: formData.nameserver,
-    method: formData.method,
-    username: formData.username,
-    password: formData.password,
-    domain: formData.domain,
-    tls_skip_verify: formData.tls_skip_verify,
-    tls_server_name: formData.tls_server_name,
-    tls_min_days_valid: formData.tls_min_days_valid,
-    expected_status: formData.expected_status,
-    call_target_kind: formData.call_target_kind,
-    call_number: formData.call_number,
-    call_target_uri: formData.call_target_uri,
-    call_from_user: formData.call_from_user,
-    call_from_display: formData.call_from_display,
-    call_from_domain: formData.call_from_domain,
-    call_mode: formData.call_mode,
-    call_hold_ms: formData.call_hold_ms,
-    call_warn_pdd_ms: formData.call_warn_pdd_ms,
-    call_max_pdd_ms: formData.call_max_pdd_ms,
-    call_warn_answer_ms: formData.call_warn_answer_ms,
-    call_max_answer_ms: formData.call_max_answer_ms,
-    call_sdp_address: formData.call_sdp_address,
-    call_probe_header: formData.call_probe_header,
-  });
+  const sipFields = (): SipFormFields => sipFieldsFromForm(formData);
 
   // Built on top of the loaded config so keys this form does not render
   // survive the save (an update replaces the whole stored config).
@@ -340,28 +262,7 @@ export default function SipForm({
       return;
     }
 
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'sip',
-      config: buildConfig(),
-      interval_seconds: formData.interval_seconds,
-      timeout_seconds: formData.timeout_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
-    }
-    requestData.depends_on_ids = formData.depends_on_ids;
-    requestData.location_ids = formData.location_ids;
-    requestData.location_quorum =
-      formData.location_ids.length >= 2
-        ? Math.min(formData.location_quorum, formData.location_ids.length)
-        : 1;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildSipRequest(formData, loadedConfig);
 
     await onSubmit(requestData);
   };

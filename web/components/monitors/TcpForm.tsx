@@ -5,11 +5,8 @@ import {
   Monitor,
   CreateMonitorRequest,
   UpdateMonitorRequest,
-  TCPMonitorConfig,
-  DependencySuppression,
-  NotificationMode,
-  ChannelAssignment,
 } from '@/lib/types';
+import { buildTcpRequest, initialTcpFormState } from '@/lib/monitor-form/network';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -34,28 +31,8 @@ export default function TcpForm({
   loading = false,
 }: TcpFormProps) {
   const isEditMode = Boolean(monitor);
-  const initialTcpConfig =
-    !isEditMode && initialData?.type === 'tcp' ? (initialData.config as TCPMonitorConfig) : undefined;
-  const existingConfig = monitor && monitor.type === 'tcp' ? (monitor.config as TCPMonitorConfig) : undefined;
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    host: existingConfig?.host ?? initialTcpConfig?.host ?? '',
-    port: existingConfig?.port ?? initialTcpConfig?.port ?? 0,
-    use_tls: existingConfig?.use_tls ?? initialTcpConfig?.use_tls ?? false,
-    tls_skip_verify: existingConfig?.tls_skip_verify ?? initialTcpConfig?.tls_skip_verify ?? false,
-    interval_seconds: monitor?.interval_seconds || initialData?.interval_seconds || 60,
-    timeout_seconds: monitor?.timeout_seconds || initialData?.timeout_seconds || 10,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-    location_ids: monitor?.location_ids ?? initialData?.location_ids ?? ([] as string[]),
-    location_quorum: monitor?.location_quorum ?? initialData?.location_quorum ?? 1,
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
+  const [formData, setFormData] = useState(() => initialTcpFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors);
@@ -81,38 +58,7 @@ export default function TcpForm({
       return;
     }
 
-    const config: TCPMonitorConfig = {
-      host: formData.host.trim(),
-      port: formData.port,
-      use_tls: formData.use_tls,
-    };
-
-    if (formData.use_tls && formData.tls_skip_verify) {
-      config.tls_skip_verify = true;
-    }
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'tcp',
-      config,
-      interval_seconds: formData.interval_seconds,
-      timeout_seconds: formData.timeout_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
-    }
-    requestData.depends_on_ids = formData.depends_on_ids;
-    requestData.location_ids = formData.location_ids;
-    requestData.location_quorum =
-      formData.location_ids.length >= 2
-        ? Math.min(formData.location_quorum, formData.location_ids.length)
-        : 1;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildTcpRequest(formData);
 
     await onSubmit(requestData);
   };

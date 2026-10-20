@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Link2 } from 'lucide-react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, PushMonitorConfig, PushInfo, DependencySuppression, NotificationMode, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, PushMonitorConfig, PushInfo } from '@/lib/types';
 import { getPushInfo } from '@/lib/api';
+import { buildPushRequest, initialPushFormState } from '@/lib/monitor-form/heartbeat';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
@@ -42,22 +43,7 @@ export default function PushForm({
   const initialPushConfig =
     !isEditMode && initialData?.type === 'push' ? (initialData.config as PushMonitorConfig) : undefined;
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    expected_interval_seconds: monitor && monitor.type === 'push'
-      ? (monitor.config as PushMonitorConfig)?.expected_interval_seconds || 60
-      : initialPushConfig?.expected_interval_seconds || 60,
-    grace_period_seconds: monitor && monitor.type === 'push'
-      ? (monitor.config as PushMonitorConfig)?.grace_period_seconds || 120
-      : initialPushConfig?.grace_period_seconds || 120,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    consecutive_failures_threshold: monitor?.consecutive_failures_threshold ?? 2,
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-    depends_on_ids: monitor?.depends_on_ids ?? initialData?.depends_on_ids ?? ([] as string[]),
-  });
+  const [formData, setFormData] = useState(() => initialPushFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors);
@@ -89,29 +75,7 @@ export default function PushForm({
       return;
     }
 
-    const config: PushMonitorConfig = {
-      push_token: isEditMode ? monitor?.push_token || '' : '',
-      expected_interval_seconds: formData.expected_interval_seconds,
-      grace_period_seconds: formData.grace_period_seconds,
-    };
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'push',
-      config,
-      interval_seconds: formData.expected_interval_seconds,
-      timeout_seconds: formData.expected_interval_seconds,
-      enabled: formData.enabled,
-    };
-
-    requestData.consecutive_failures_threshold = formData.consecutive_failures_threshold;
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
-    }
-    requestData.depends_on_ids = formData.depends_on_ids;
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildPushRequest(formData, monitor);
 
     try {
       await onSubmit(requestData);

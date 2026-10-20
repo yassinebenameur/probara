@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, GroupMonitorConfig, DependencySuppression, NotificationMode, MemberAlertRollup, ChannelAssignment } from '@/lib/types';
+import { Monitor, CreateMonitorRequest, UpdateMonitorRequest } from '@/lib/types';
+import { buildGroupRequest, emptyGroupFormState, groupFormStateFromMonitor, initialGroupFormState } from '@/lib/monitor-form/group';
 import { getMonitors } from '@/lib/api';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
@@ -27,20 +28,8 @@ export default function GroupForm({
 }: GroupFormProps) {
   const [availableMonitors, setAvailableMonitors] = useState<Monitor[]>([]);
   const isEditMode = Boolean(monitor);
-  const initialGroupConfig =
-    !isEditMode && initialData?.type === 'group' ? (initialData.config as GroupMonitorConfig) : undefined;
-  const existingMemberIds = monitor?.member_ids || initialGroupConfig?.monitor_ids || [];
 
-  const [formData, setFormData] = useState({
-    name: monitor?.name || initialData?.name || '',
-    monitor_ids: existingMemberIds,
-    enabled: monitor?.enabled ?? initialData?.enabled ?? true,
-    tags: monitor?.tags?.join(', ') || (initialData?.tags || []).join(', '),
-    notification_mode: (monitor?.notification_mode ?? 'default') as NotificationMode,
-    dependency_suppression: (monitor?.dependency_suppression ?? 'inherit') as DependencySuppression,
-    member_alert_rollup: (monitor?.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
-    notification_channels: monitor?.notification_channels ?? [] as ChannelAssignment[],
-  });
+  const [formData, setFormData] = useState(() => initialGroupFormState(monitor, initialData));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useClearErrorsOnEdit(formData, setErrors);
@@ -56,28 +45,10 @@ export default function GroupForm({
 
   useEffect(() => {
     if (monitor && monitor.id !== initializedMonitorId) {
-      setFormData({
-        name: monitor.name || '',
-        monitor_ids: monitor.member_ids || [],
-        enabled: monitor.enabled ?? true,
-        tags: monitor.tags?.join(', ') || '',
-        notification_mode: (monitor.notification_mode ?? 'default') as NotificationMode,
-        dependency_suppression: (monitor.dependency_suppression ?? 'inherit') as DependencySuppression,
-        member_alert_rollup: (monitor.member_alert_rollup ?? 'per_monitor') as MemberAlertRollup,
-        notification_channels: monitor.notification_channels ?? [],
-      });
+      setFormData(groupFormStateFromMonitor(monitor));
       setInitializedMonitorId(monitor.id);
     } else if (!monitor && initializedMonitorId !== null) {
-      setFormData({
-        name: '',
-        monitor_ids: [],
-        enabled: true,
-        tags: '',
-        notification_mode: 'default',
-        member_alert_rollup: 'per_monitor',
-        dependency_suppression: 'inherit',
-        notification_channels: [],
-      });
+      setFormData(emptyGroupFormState());
       setInitializedMonitorId(null);
     }
     // Re-seed only when a different monitor is loaded, not on every parent render.
@@ -109,24 +80,7 @@ export default function GroupForm({
       return;
     }
 
-    const config: GroupMonitorConfig = { monitor_ids: formData.monitor_ids };
-
-    const requestData: CreateMonitorRequest | UpdateMonitorRequest = {
-      name: formData.name.trim(),
-      type: 'group',
-      config,
-      interval_seconds: 60,
-      timeout_seconds: 30,
-      enabled: formData.enabled,
-    };
-
-    requestData.notification_mode = formData.notification_mode;
-    requestData.dependency_suppression = formData.dependency_suppression;
-    requestData.member_alert_rollup = formData.member_alert_rollup;
-    requestData.notification_channels = formData.notification_mode === 'custom' ? formData.notification_channels : [];
-    if (formData.tags.trim()) {
-      requestData.tags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
-    }
+    const requestData: CreateMonitorRequest | UpdateMonitorRequest = buildGroupRequest(formData);
 
     await onSubmit(requestData);
   };
