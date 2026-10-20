@@ -49,6 +49,23 @@ type DispatchRequest struct {
 	// plugins resolve what they opened straight away so a test does not leave
 	// a real incident behind.
 	Test bool
+	// Recipients is the durable per-recipient progress of this event on this
+	// channel, shared by every attempt to deliver it. A plugin that fans out
+	// to several recipients skips the ones it reports delivered and records
+	// each one the provider accepts. Nil means untracked (test sends):
+	// deliver to everyone.
+	Recipients RecipientLedger
+}
+
+// RecipientLedger remembers which recipients of one event a provider has
+// already accepted, across retries, restarts and replicas. A retry of a
+// partial fan-out then reaches only the recipients that still lack it.
+type RecipientLedger interface {
+	// Delivered reports which of recipients were already accepted.
+	Delivered(ctx context.Context, recipients []string) (map[string]bool, error)
+	// Record notes that the provider accepted recipient. It runs right after
+	// the provider call returns, so it must outlive a ctx that expired then.
+	Record(ctx context.Context, recipient string) error
 }
 
 // Type returns the event type being delivered: "created", "reminder",

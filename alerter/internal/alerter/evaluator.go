@@ -15,6 +15,7 @@ import (
 
 	"github.com/yassinebenameur/probara/shared/notifications"
 	"github.com/yassinebenameur/probara/shared/notifications/plugin"
+	"github.com/yassinebenameur/probara/shared/notifications/recipientledger"
 	"github.com/yassinebenameur/probara/shared/secrets"
 )
 
@@ -1185,6 +1186,7 @@ func (a *Alerter) sendChannelNotification(
 		}
 	}
 	event := buildAlertEvent(eventType, binding, alert, resolvedAt, now)
+	deliveryKey := recipientKey(ctx, eventType, now)
 
 	if a.config.AsyncDispatch && a.nats != nil {
 		envelope := notifications.DispatchEnvelope{
@@ -1194,6 +1196,7 @@ func (a *Alerter) sendChannelNotification(
 			AlertID:     alert.ID.String(),
 			EventType:   eventType,
 			Event:       event,
+			DeliveryKey: deliveryKey,
 		}
 		subject := fmt.Sprintf("alerts.dispatch.%s", channel.Type)
 		messageID := envelope.IdempotencyKey()
@@ -1219,15 +1222,22 @@ func (a *Alerter) sendChannelNotification(
 		return fmt.Errorf("decrypt channel config: %w", err)
 	}
 
+	var recipients plugin.RecipientLedger
+	if a.db != nil {
+		// The pool, not deliverNotification's claim transaction: a failed
+		// send rolls that back, and the progress must survive it.
+		recipients = recipientledger.For(a.db, alert.ID, channel.ID, deliveryKey)
+	}
 	return p.Send(ctx, plugin.DispatchRequest{
 		Channel: plugin.ChannelRef{
 			ID:     channel.ID.String(),
 			Name:   channel.Name,
 			Config: configMap,
 		},
-		Event:     event,
-		EventType: eventType,
-		Attempt:   1,
+		Event:      event,
+		EventType:  eventType,
+		Attempt:    1,
+		Recipients: recipients,
 	})
 }
 

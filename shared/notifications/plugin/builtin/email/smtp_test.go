@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yassinebenameur/probara/shared/notifications/plugin"
 )
 
 // decodePart returns the decoded body of a base64 MIME part.
@@ -301,6 +303,41 @@ func TestSMTPMailer_SendAlertProducesParseableMIME(t *testing.T) {
 		if len(strings.TrimRight(line, "\r")) > 998 {
 			t.Fatalf("line exceeds the SMTP limit: %d octets", len(line))
 		}
+	}
+}
+
+// A template that parses but fails at Execute still sends the fallback
+// message; the error must then be Permanent, or the alerter rolls its claim
+// back and every recipient is mailed again on each cycle.
+func TestSMTPMailer_RenderFailureAfterSendIsPermanent(t *testing.T) {
+	addr, received := fakeSMTPServer(t)
+	host, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+
+	mailer, err := NewSMTPMailer(SMTPParams{Host: host, Port: port, From: "alerts@probara.example.com"})
+	if err != nil {
+		t.Fatalf("NewSMTPMailer: %v", err)
+	}
+
+	err = mailer.SendAlert(context.Background(), sampleEvent(), Templates{Subject: "[{{.status}}] {{.monitor_name.Foo}}"}, []string{"ops@example.com"})
+	if err == nil {
+		t.Fatal("expected the subject render failure to be reported")
+	}
+	if !plugin.IsPermanent(err) {
+		t.Fatalf("render failure after a successful send must be Permanent, got %v", err)
+	}
+
+	select {
+	case raw := <-received:
+		msg, perr := mail.ReadMessage(strings.NewReader(raw))
+		if perr != nil {
+			t.Fatalf("parse message: %v", perr)
+		}
+		if got := msg.Header.Get("Subject"); got != "[Alert Triggered] API health" {
+			t.Errorf("Subject = %q, want the built-in fallback", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the message")
 	}
 }
 

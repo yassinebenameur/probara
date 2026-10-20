@@ -115,7 +115,12 @@ after an alerter restart. Optional worker dispatch uses delayed retries and
 an acknowledgement timeout longer than the delivery deadline. Delivery to
 external providers is not an exactly-once transaction: a provider can accept
 a message before a client timeout or process failure. Receivers should use
-idempotency where supported.
+idempotency where supported. A channel that sends to several recipients one
+by one (SMS) records each accepted recipient in
+`alert_notification_recipient_deliveries` (migration 000097), outside the
+claim, so a retry on any replica or worker reaches only the rest; the
+dispatch envelope's `delivery_key` names the event (and reminder round) those
+rows belong to.
 
 ## Storage and maintenance
 

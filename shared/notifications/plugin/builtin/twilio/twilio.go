@@ -2,9 +2,9 @@
 // (https://www.twilio.com/docs/messaging/api/message-resource#create-a-message-resource).
 //
 // SMS is length-limited and billed per segment, so the body is the compact
-// present.Message.Short form, and one request goes out per recipient.
-// Delivery is at least once: when one recipient fails the whole send is
-// retried, so recipients that already succeeded can receive a duplicate.
+// present.Message.Short form, and one request goes out per recipient. Every
+// recipient Twilio accepts is recorded in DispatchRequest.Recipients, so a
+// retry after a partial failure texts only the recipients still missing it.
 package twilio
 
 import (
@@ -185,14 +185,33 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 	target := fmt.Sprintf("%s/2010-04-01/Accounts/%s/Messages.json", p.base, url.PathEscape(cfg.AccountSID))
 	body := truncate(req.View().Short(), maxBody)
 
+	// A retry of a partially delivered event texts only the recipients the
+	// provider has not accepted yet; the ledger outlives this process, so the
+	// skip holds whichever alerter replica or worker picks the retry up.
+	pending := to
+	if req.Recipients != nil {
+		done, err := req.Recipients.Delivered(ctx, to)
+		if err != nil {
+			// Without the progress there is no telling who already has this
+			// event. Retrying later beats texting them twice.
+			return fmt.Errorf("load sms delivery progress: %w", err)
+		}
+		pending = make([]string, 0, len(to))
+		for _, n := range to {
+			if !done[n] {
+				pending = append(pending, n)
+			}
+		}
+	}
+
 	// Text recipients concurrently. One after another, a slow API spends the
-	// dispatcher's deadline on the first few numbers, the rest fail with a
-	// context timeout, and the redelivery re-texts (and re-bills) everyone
-	// who already got it.
-	results := make([]error, len(to))
+	// dispatcher's deadline on the first few numbers and the rest fail with a
+	// context timeout, waiting a full backoff step for the redelivery.
+	sendErrs := make([]error, len(pending))
+	recordErrs := make([]error, len(pending))
 	sem := make(chan struct{}, maxConcurrentSends)
 	var wg sync.WaitGroup
-	for i, number := range to {
+	for i, number := range pending {
 		wg.Add(1)
 		go func(i int, number string) {
 			defer wg.Done()
@@ -205,28 +224,37 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 				form.Set("From", cfg.From)
 			}
 			if err := plugin.Post(ctx, p.httpClient, target, "application/x-www-form-urlencoded", []byte(form.Encode()), headers, "twilio messages api"); err != nil {
-				results[i] = fmt.Errorf("%s: %w", maskNumber(number), err)
+				sendErrs[i] = fmt.Errorf("%s: %w", maskNumber(number), err)
+				return
+			}
+			if req.Recipients != nil {
+				if err := req.Recipients.Record(ctx, number); err != nil {
+					recordErrs[i] = fmt.Errorf("%s: delivered but not recorded, a retry will text it again: %w", maskNumber(number), err)
+				}
 			}
 		}(i, number)
 	}
 	wg.Wait()
 	var errs []error
-	for _, err := range results {
+	for _, err := range sendErrs {
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if len(errs) == 0 {
+		// Nothing will be retried, so an unrecorded delivery costs nothing.
 		return nil
 	}
-	joined := errors.Join(errs...)
 	// Retry unless every failure was permanent (bad credentials, invalid
-	// numbers): a transient failure on one recipient is worth redelivering.
-	// The mixed case must be flattened: plugin.IsPermanent walks a joined
-	// error's children, so returning the join would let the permanent child
-	// mark the whole delivery permanent and drop the retryable recipient.
-	// The longest provider-requested delay (a 429's Retry-After) is carried
-	// over so the redelivery respects it for every recipient.
+	// numbers): a transient failure on one recipient is worth redelivering,
+	// and the ledger keeps that redelivery away from the recipients that
+	// already have it. The mixed case must be flattened: plugin.IsPermanent
+	// walks a joined error's children, so returning the join would let the
+	// permanent child mark the whole delivery permanent and drop the
+	// retryable recipient. The longest provider-requested delay (a 429's
+	// Retry-After) is carried over so the redelivery respects it. Record
+	// failures only ride along in the message: they do not change whether
+	// the send is retried.
 	retryable := false
 	var delay time.Duration
 	for _, e := range errs {
@@ -238,6 +266,12 @@ func (p *Plugin) Send(ctx context.Context, req plugin.DispatchRequest) error {
 			delay = d
 		}
 	}
+	for _, err := range recordErrs {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	joined := errors.Join(errs...)
 	if !retryable {
 		return plugin.Permanent(joined)
 	}

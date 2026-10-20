@@ -1,5 +1,7 @@
 package notifications
 
+import "time"
+
 // DispatchEnvelope is the wire format for async notification dispatch.
 //
 // Published by the alerter on subject "alerts.dispatch.<plugin_type>" and
@@ -33,7 +35,47 @@ type DispatchEnvelope struct {
 	// Event is the full alert event payload (already serialised by the alerter
 	// from the same source of truth used by the synchronous path).
 	Event AlertEvent `json:"event"`
+
+	// DeliveryKey names this event in the per-recipient delivery ledger (see
+	// RecipientEventKey). The alerter sets it from its claim; an envelope
+	// published before the field existed falls back to RecipientKey's
+	// derivation, which is stable across redeliveries of one message.
+	DeliveryKey string `json:"delivery_key,omitempty"`
 }
+
+// RecipientKey returns the ledger key for this envelope's event.
+func (e DispatchEnvelope) RecipientKey() string {
+	if e.DeliveryKey != "" {
+		return e.DeliveryKey
+	}
+	return RecipientEventKey(e.EventType, e.Event.Timestamp)
+}
+
+// RecipientEventKey names one event of one (alert, channel) pair in the
+// per-recipient delivery ledger (alert_notification_recipient_deliveries).
+// Every event type but reminder happens at most once per pair, so its type is
+// the key. Reminders repeat, so each round is keyed by round: the
+// last_sent_at the reminder claim found, which a retry of the same round
+// finds again (a failed sync send rolls the claim back) and the next round
+// does not.
+//
+// The key names one send, not one event type: a deliberate second send of an
+// event needs a key of its own (see OvertakenAckKey), or a plugin skips every
+// recipient the first send already reached and the re-send goes nowhere.
+func RecipientEventKey(eventType string, round time.Time) string {
+	if eventType == "reminder" && !round.IsZero() {
+		return "reminder:" + round.UTC().Format(time.RFC3339Nano)
+	}
+	return eventType
+}
+
+// OvertakenAckKey is the ledger key of the acknowledgement the delivery
+// worker re-sends after a trigger that the original acknowledgement overtook.
+// The original went out under "acknowledged" and was a no-op at the provider,
+// so the re-send must not inherit its progress; the key is still stable across
+// redeliveries of the one trigger message that fires it (created happens once
+// per alert and channel).
+const OvertakenAckKey = "acknowledged:after-trigger"
 
 // IdempotencyKey returns the deterministic key the alerter sets as the
 // x-idempotency-key NATS header and webhook plugins forward as
