@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs build build-collector-static kuma-export clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
+.PHONY: help up down restart logs build build-collector-static kuma-export seed-demo seed-demo-targets seed-demo-stop seed-demo-teardown clean ps healthcheck migrate test test-unit test-cover lint fmt vet start-all stop-all restart-all start-all-local stop-all-local restart-all-local dev-start dev-stop
 
 # Local AI runs beside the platform, never in its way: its image build fails on
 # purpose for an artifact that is not release-approved, and Compose aborts a
@@ -34,6 +34,8 @@ help:
 	@echo "  make build       - Build all Docker images"
 	@echo "  make build-collector-static - Build downloadable collector binaries"
 	@echo "  make kuma-export - Build the Uptime Kuma export helper"
+	@echo "  make seed-demo   - (Re)seed the Northwind demo tenant and keep it live (needs start-all-local)"
+	@echo "  make seed-demo-stop / seed-demo-teardown - Stop its targets / also delete the tenant"
 	@echo "  make rebuild     - Rebuild and restart all services"
 	@echo "  make clean       - Stop services and remove volumes"
 	@echo "  make ps          - Show running services"
@@ -106,6 +108,32 @@ build-collector-static:
 # Build the Uptime Kuma export helper (see scripts/kuma-export/README.md)
 kuma-export:
 	go build -o bin/kuma-export ./scripts/kuma-export
+
+# Northwind demo tenant (see scripts/seed-demo/README.md). targets runs in the
+# background first so the mocks answer as soon as seed enables the monitors.
+# On macOS both run under `caffeinate -i`, which holds off idle sleep while
+# they run (a sleeping Mac stops the heartbeats and turns monitors down).
+SEED_DEMO_PID := /tmp/probara-seed-targets.pid
+SEED_DEMO_AWAKE := $(shell [ "$$(uname -s)" = Darwin ] && command -v caffeinate >/dev/null 2>&1 && echo caffeinate -i)
+
+seed-demo: seed-demo-targets
+	$(SEED_DEMO_AWAKE) ./bin/seed-demo seed
+
+seed-demo-targets: seed-demo-stop
+	go build -o bin/seed-demo ./scripts/seed-demo
+	@nohup $(SEED_DEMO_AWAKE) ./bin/seed-demo targets -pid-file $(SEED_DEMO_PID) > /tmp/probara-seed-targets.log 2>&1 </dev/null &
+	@sleep 2
+	@echo "seed-demo targets running (log: /tmp/probara-seed-targets.log, stop: make seed-demo-stop)"
+
+seed-demo-stop:
+	@if [ -f $(SEED_DEMO_PID) ]; then \
+		pid=$$(cat $(SEED_DEMO_PID)); kill $$pid 2>/dev/null || true; \
+		for i in $$(seq 1 30); do kill -0 $$pid 2>/dev/null || break; sleep 0.5; done; \
+		rm -f $(SEED_DEMO_PID); \
+	fi
+
+seed-demo-teardown: seed-demo-stop
+	go run ./scripts/seed-demo teardown
 
 # Rebuild and restart
 rebuild:

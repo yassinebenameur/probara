@@ -118,7 +118,13 @@ are now a projection of `monitor_state_intervals` (closed `down` intervals →
 periods, open `down` interval → `monitor_downtime_open`); pre-timeline
 downtime rows are preserved, and group monitors (no timeline yet) keep their
 frozen rows until their state derivation is unified. The backfill script
-remains the repair tool for pre-ledger history.
+remains the repair tool for pre-ledger history. Short-range analytics (1h,
+6h, 24h) read the same `down` intervals straight from the timeline
+(`loadTimelineDowntime` in `shared/analytics/repository.go`) because the
+projection trails it by up to one rollup run; they no longer derive
+downtime from raw check rows, which opened a period at every failed row
+until the next success from any location (one failing location of three
+produced a period per check).
 
 ## Rollup-era failure vs error split
 
