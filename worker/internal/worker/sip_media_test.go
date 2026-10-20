@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -446,6 +447,9 @@ type fakeMediaPeer struct {
 	mu       sync.Mutex
 	received []fakeMediaPacket
 	reply    func(p rtp.Packet, raw []byte) []byte // nil: no echo
+	// onRTCP handles the RTCP the probe sends, to the RTP socket
+	// (multiplexed) or to the one listenRTCP opens; nil: ignored.
+	onRTCP func(raw []byte, src netip.AddrPort, conn *net.UDPConn)
 }
 
 type fakeMediaPacket struct {
@@ -471,6 +475,10 @@ func startMediaPeer(t *testing.T, ip string) *fakeMediaPeer {
 				return
 			}
 			raw := append([]byte(nil), buf[:n]...)
+			if rtp.IsRTCP(raw) {
+				p.handleRTCP(raw, src, conn)
+				continue
+			}
 			pkt, err := rtp.Parse(raw)
 			if err != nil {
 				continue
@@ -487,6 +495,110 @@ func startMediaPeer(t *testing.T, ip string) *fakeMediaPeer {
 		}
 	}()
 	return p
+}
+
+func (p *fakeMediaPeer) handleRTCP(raw []byte, src netip.AddrPort, conn *net.UDPConn) {
+	p.mu.Lock()
+	h := p.onRTCP
+	p.mu.Unlock()
+	if h != nil {
+		h(raw, src, conn)
+	}
+}
+
+// listenRTCP opens the peer's RTCP socket, which an a=rtcp line can name.
+func (p *fakeMediaPeer) listenRTCP() netip.AddrPort {
+	p.t.Helper()
+	conn, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(p.addr.Addr(), 0)))
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	p.t.Cleanup(func() { conn.Close() })
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, src, err := conn.ReadFromUDPAddrPort(buf)
+			if err != nil {
+				return
+			}
+			p.handleRTCP(append([]byte(nil), buf[:n]...), src, conn)
+		}
+	}()
+	return conn.LocalAddr().(*net.UDPAddr).AddrPort()
+}
+
+const fakePeerSSRC = 0x9f00aa01
+
+// answerSRs answers each of the probe's sender reports, after delay (the
+// network round trip the probe should measure), with a receiver report about
+// the probe's stream: its highest sequence number so far, lost as the
+// cumulative loss, and the SR's NTP middle 32 as LSR, with a DLSR of 0.
+//
+// muxed sends the report to the probe's RTP port (the SR's source port − 1)
+// instead, as a far end multiplexing RTCP on the RTP port would.
+func (p *fakeMediaPeer) answerSRs(delay time.Duration, lost int32, muxed bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onRTCP = func(raw []byte, src netip.AddrPort, conn *net.UDPConn) {
+		if len(raw) < 28 || raw[1] != rtp.RTCPSenderReport {
+			return
+		}
+		ssrc, ntp := binary.BigEndian.Uint32(raw[4:]), binary.BigEndian.Uint64(raw[8:])
+		highest, ok := highestSeq(p.packets(), ssrc)
+		if !ok {
+			return
+		}
+		block := rtp.ReportBlock{SSRC: ssrc, CumulativeLost: lost, HighestSeq: highest, Jitter: 16, LSR: rtp.NTPMiddle(ntp)}
+		to := src
+		if muxed {
+			to = netip.AddrPortFrom(src.Addr(), src.Port()-1)
+		}
+		time.AfterFunc(delay, func() { _, _ = conn.WriteToUDPAddrPort(testRR(fakePeerSSRC, block), to) })
+	}
+}
+
+// reportWithoutUs sends receiver reports with no block about the probe to
+// to, after each delay: a far end that hears none of the probe's audio.
+func (p *fakeMediaPeer) reportWithoutUs(to netip.AddrPort, delays ...time.Duration) {
+	for _, d := range delays {
+		time.AfterFunc(d, func() { _, _ = p.conn.WriteToUDPAddrPort(testRR(fakePeerSSRC), to) })
+	}
+}
+
+// highestSeq is the extended highest sequence number of ssrc's packets, as
+// an RFC 3550 receiver counts it from the first.
+func highestSeq(pkts []fakeMediaPacket, ssrc uint32) (uint32, bool) {
+	var ext uint32
+	found := false
+	for _, pkt := range pkts {
+		if pkt.SSRC != ssrc {
+			continue
+		}
+		if !found {
+			ext, found = uint32(pkt.Seq), true
+			continue
+		}
+		if d := int16(pkt.Seq - uint16(ext)); d > 0 {
+			ext += uint32(d)
+		}
+	}
+	return ext, found
+}
+
+// testRR is a receiver report from sender with the given blocks.
+func testRR(sender uint32, blocks ...rtp.ReportBlock) []byte {
+	b := []byte{0x80 | byte(len(blocks)), rtp.RTCPReceiverReport}
+	b = binary.BigEndian.AppendUint16(b, uint16(1+6*len(blocks)))
+	b = binary.BigEndian.AppendUint32(b, sender)
+	for _, rb := range blocks {
+		b = binary.BigEndian.AppendUint32(b, rb.SSRC)
+		b = binary.BigEndian.AppendUint32(b, uint32(rb.FractionLost)<<24|uint32(rb.CumulativeLost)&0xffffff)
+		b = binary.BigEndian.AppendUint32(b, rb.HighestSeq)
+		b = binary.BigEndian.AppendUint32(b, rb.Jitter)
+		b = binary.BigEndian.AppendUint32(b, rb.LSR)
+		b = binary.BigEndian.AppendUint32(b, rb.DLSR)
+	}
+	return b
 }
 
 // reflect sends every packet back unchanged: an echo application that keeps
@@ -545,7 +657,7 @@ func (p *fakeMediaPeer) stream(to netip.AddrPort, st mediaStream) {
 		st.ptime = 20 * time.Millisecond
 	}
 	if st.ssrc == 0 {
-		st.ssrc = 0x9f00aa01
+		st.ssrc = fakePeerSSRC
 	}
 	start := time.Now().Add(st.delay)
 	frame := func(i int) []byte {
@@ -710,7 +822,8 @@ func reliably(t *testing.T, scenario func() (CheckResult, *sipMetrics, *sipMedia
 	return result, metrics, media
 }
 
-// sendLog records every datagram the probe sends (SIPChecker.testSendTo).
+// sendLog records every datagram the probe sends, RTP and RTCP
+// (SIPChecker.testSendTo).
 type sendLog struct {
 	mu    sync.Mutex
 	times []time.Time
@@ -830,6 +943,11 @@ func TestSIPMedia_Echo(t *testing.T) {
 			if m.Call.Teardown != "bye_ok" {
 				t.Fatalf("teardown = %q, want bye_ok", m.Call.Teardown)
 			}
+			// A sender report 2.5 s into the hold and a BYE, to the port
+			// above the audio's.
+			if rtcpTo := netip.AddrPortFrom(peer.addr.Addr(), peer.addr.Port()+1); media.TX.RTCP != 2 || media.RTCPDestination != rtcpTo.String() {
+				t.Fatalf("tx.rtcp = %d rtcp_destination = %q, want 2 to %s", media.TX.RTCP, media.RTCPDestination, rtcpTo)
+			}
 			// Echo mode sends the tone with the marker, from the offered port.
 			got := peer.packets()
 			if len(got) == 0 || string(got[0].payload[:4]) != "PRB1" || got[0].payload[10] == rtp.PCMU.Silence() {
@@ -948,7 +1066,7 @@ func TestSIPMedia_Inbound(t *testing.T) {
 		"rtt unmeasured is a warning": func(t *testing.T) {
 			result, m, _ := lossy(t, map[string]any{"expect": "audio", "max_rtt_ms": 300})
 			requireStatus(t, result, "success")
-			requireWarning(t, m, "rtt: not measured (no echo)")
+			requireWarning(t, m, "rtt: not measured (no echo or RTCP)")
 		},
 		"silent peer": func(t *testing.T) {
 			for _, tc := range []struct{ expect, status string }{{"none", "success"}, {"audio", "failure"}} {

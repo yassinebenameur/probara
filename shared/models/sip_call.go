@@ -201,6 +201,9 @@ func (c *SIPCallConfig) validate(expectedStatus *int) error {
 		if c.HoldMs < SIPMediaMinHoldMs {
 			return fmt.Errorf("call.hold_ms must be at least %d when call.media is set", SIPMediaMinHoldMs)
 		}
+		if c.Media.Expect == SIPMediaExpectTwoWay && c.HoldMs < SIPMediaTwoWayMinHoldMs {
+			return fmt.Errorf("call.hold_ms must be at least %d when call.media.expect is two_way (the far end's first RTCP report can take that long)", SIPMediaTwoWayMinHoldMs)
+		}
 		if expectedStatus != nil && (*expectedStatus < 200 || *expectedStatus > 299) {
 			return fmt.Errorf("call.media needs an answered call: expected_status must be unset or 2xx")
 		}

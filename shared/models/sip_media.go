@@ -14,8 +14,8 @@ import (
 // the worker exchanges G.711 RTP with the address the far end's SDP answer
 // names (vetted by netguard.Policy.AllowsServerChosen) for the hold and
 // measures RFC 3550 loss and jitter, an E-model MOS-CQE estimate per evidence
-// basis, the round trip of an echo, and whether audio flowed
-// (worker/internal/worker/sip_media.go).
+// basis, the round trip (of an echo, or from RTCP), and whether audio flowed
+// each way (worker/internal/worker/sip_media.go).
 //
 // Keys are strict: anything but an exact field name (a field of a later
 // release, a case variant) makes Validate refuse the config, so a worker
@@ -24,21 +24,25 @@ import (
 // ValidateSIPSchedule and IsSIPCallConfig, always see the rest of it.
 type SIPMediaConfig struct {
 	// Expect is what the call must prove about audio (required):
-	//   "none"  measure and report only; media never fails the check
-	//   "audio" far-end audio reached the probe
-	//   "echo"  the probe's own audio came back (an echo test line)
+	//   "none"    measure and report only; media never fails the check
+	//   "audio"   far-end audio reached the probe
+	//   "two_way" that, and the probe's audio reached the far end (an echo
+	//             of it, or an RTCP report about it); needs a hold of at
+	//             least SIPMediaTwoWayMinHoldMs
+	//   "echo"    the probe's own audio came back (an echo test line)
 	Expect string `json:"expect"`
 
-	// Thresholds apply to every measured basis (the far end's stream, and
-	// the round trip of an echo). warn adds a warning; max and min fail the
-	// check. All optional, and refused with expect "none".
+	// Thresholds apply to every measured basis (the far end's stream, the
+	// far end's RTCP reports on the probe's, and the round trip of an
+	// echo). warn adds a warning; max and min fail the check. All optional,
+	// and refused with expect "none".
 	WarnLossPct  *float64 `json:"warn_loss_pct,omitempty"` // effective loss, (0, 100)
 	MaxLossPct   *float64 `json:"max_loss_pct,omitempty"`
 	WarnJitterMs *int     `json:"warn_jitter_ms,omitempty"` // mean RFC 3550 jitter, 1-1000
 	MaxJitterMs  *int     `json:"max_jitter_ms,omitempty"`
 	WarnMOS      *float64 `json:"warn_mos,omitempty"` // MOS-CQE estimate, [1, 4.3]
 	MinMOS       *float64 `json:"min_mos,omitempty"`
-	WarnRTTMs    *int     `json:"warn_rtt_ms,omitempty"` // echo round trip, 1-5000
+	WarnRTTMs    *int     `json:"warn_rtt_ms,omitempty"` // echo, else RTCP, round trip, 1-5000
 	MaxRTTMs     *int     `json:"max_rtt_ms,omitempty"`
 
 	// unknownKeys are the object's keys that are not an exact field name;
@@ -50,9 +54,10 @@ type SIPMediaConfig struct {
 
 // What a test call's media must prove (SIPMediaConfig.Expect).
 const (
-	SIPMediaExpectNone  = "none"
-	SIPMediaExpectAudio = "audio"
-	SIPMediaExpectEcho  = "echo"
+	SIPMediaExpectNone   = "none"
+	SIPMediaExpectAudio  = "audio"
+	SIPMediaExpectTwoWay = "two_way"
+	SIPMediaExpectEcho   = "echo"
 )
 
 const (
@@ -60,6 +65,12 @@ const (
 	// the 500 ms warm-up it leaves 2.5 s, past the 2 s and 50-packet gate a
 	// quality estimate needs.
 	SIPMediaMinHoldMs = 3000
+	// SIPMediaTwoWayMinHoldMs is the shortest hold for expect "two_way":
+	// RFC 3550 endpoints send their first report 1.25-3.75 s into the
+	// session and then every 2.5-7.5 s, and only about a source they have
+	// heard, so a shorter hold often ends before any report could confirm
+	// the probe's audio and would fail a healthy far end.
+	SIPMediaTwoWayMinHoldMs = 6000
 	// SIPMediaMaxMOS stays below the model's ceiling: G.711 with the
 	// reference 60 ms jitter buffer is MOS 4.37 at 20 ms ptime (4.35 at 60
 	// ms) before any network delay or loss, so a higher threshold could never
@@ -137,11 +148,11 @@ func (m SIPMediaConfig) Validate() error {
 		return fmt.Errorf("call.media: unknown key %q", m.unknownKeys[0])
 	}
 	switch m.Expect {
-	case SIPMediaExpectNone, SIPMediaExpectAudio, SIPMediaExpectEcho:
+	case SIPMediaExpectNone, SIPMediaExpectAudio, SIPMediaExpectTwoWay, SIPMediaExpectEcho:
 	case "":
-		return fmt.Errorf("call.media.expect is required (none, audio or echo)")
+		return fmt.Errorf("call.media.expect is required (none, audio, two_way or echo)")
 	default:
-		return fmt.Errorf("call.media.expect must be none, audio or echo")
+		return fmt.Errorf("call.media.expect must be none, audio, two_way or echo")
 	}
 
 	if m.Expect == SIPMediaExpectNone {
@@ -157,7 +168,7 @@ func (m SIPMediaConfig) Validate() error {
 			{"warn_rtt_ms", m.WarnRTTMs != nil}, {"max_rtt_ms", m.MaxRTTMs != nil},
 		} {
 			if f.set {
-				return fmt.Errorf("call.media.%s requires expect audio or echo", f.name)
+				return fmt.Errorf("call.media.%s requires expect audio, two_way or echo", f.name)
 			}
 		}
 		return nil

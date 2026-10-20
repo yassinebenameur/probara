@@ -23,8 +23,8 @@ website (`website/`) are separate applications.
 Worker checkers include HTTP, ping, DNS, TCP, gRPC, SIP (OPTIONS/REGISTER
 probes and INVITE test calls, the one side-effecting checker), synthetic
 API/browser, Redis, PostgreSQL, MongoDB, RabbitMQ, MySQL, and WebSocket checks.
-A test call with `call.media` also sends UDP RTP during its hold to the
-address the far end's SDP answer chose, vetted by
+A test call with `call.media` also sends UDP RTP and RTCP during its hold to
+the address the far end's SDP answer chose, vetted by
 `netguard.Policy.AllowsServerChosen`; its measurement rides inside the
 result's `metrics_data`, so no message, ingest or schema contract changes. `agent`,
 `push`, and `group` monitors are passive and are not dispatched as worker checks.

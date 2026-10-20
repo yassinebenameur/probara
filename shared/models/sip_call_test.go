@@ -70,6 +70,8 @@ func TestSIPCallConfigValidate(t *testing.T) {
 		{name: "media in ring mode", config: `{` + base + `,"call":{"number":"100","mode":"ring","media":{"expect":"none"}}}`, errContains: "call.media requires answer mode"},
 		{name: "media with a short hold", config: `{` + base + `,"call":{"number":"100","hold_ms":2999,"media":{"expect":"audio"}}}`, errContains: "call.hold_ms must be at least 3000 when call.media is set"},
 		{name: "media without a hold", config: `{` + base + `,"call":{"number":"100","media":{"expect":"none"}}}`, errContains: "call.hold_ms must be at least 3000"},
+		{name: "media two way", config: `{` + base + `,"call":{"number":"100","hold_ms":6000,"media":{"expect":"two_way"}}}`},
+		{name: "media two way with the media floor only", config: `{` + base + `,"call":{"number":"100","hold_ms":3000,"media":{"expect":"two_way"}}}`, errContains: "call.hold_ms must be at least 6000 when call.media.expect is two_way"},
 		{name: "media with a busy expected status", config: `{` + base + `,"expected_status":486,"call":{"number":"100","hold_ms":3000,"media":{"expect":"audio"}}}`, errContains: "expected_status must be unset or 2xx"},
 		{name: "domain", config: `{` + base + `,"domain":"carrier.example.com","call":{"number":"100"}}`},
 		{name: "domain ip", config: `{` + base + `,"domain":"203.0.113.9","call":{"number":"100"}}`},

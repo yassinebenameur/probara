@@ -32,8 +32,9 @@ import (
 // Signalling rides the one flow dialed through dialGuard: the Contact and
 // Record-Route of the answer only fill in-dialog Request-URIs and Route
 // headers. The SDP answer's media address is recorded and, only with
-// call.media, sent RTP during the hold (sip_media.go): from the bound pair,
-// and only to an address netguard.Policy.AllowsServerChosen admits.
+// call.media, sent RTP and RTCP during the hold (sip_media.go): from the
+// bound pair, and only to an address netguard.Policy.AllowsServerChosen
+// admits.
 const (
 	sipCallTeardownBudget = 4 * time.Second
 	// sipCallLingerFor is Timer B / the 2xx retransmission window: 64·T1.

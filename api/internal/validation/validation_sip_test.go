@@ -152,7 +152,8 @@ func TestValidateMonitorUpdate_SIPCallEffectiveSchedule(t *testing.T) {
 }
 
 // call.media is validated on save with the rest of the call: answer mode, a
-// hold long enough to measure, an answered call, and strict keys inside it.
+// hold long enough to measure (and, for two_way, for the far end's RTCP to
+// report), an answered call, and strict keys inside it.
 func TestValidateMonitorUpdate_SIPCallMedia(t *testing.T) {
 	const media = `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000,"media":{"expect":"echo","min_mos":3.6}}}`
 	existing := sipMonitor(media, 60, 10)
@@ -164,6 +165,8 @@ func TestValidateMonitorUpdate_SIPCallMedia(t *testing.T) {
 		{name: "busy line expected", config: `{"host":"trunk.example.com","method":"invite","expected_status":486,"call":{"number":"1","hold_ms":5000,"media":{"expect":"audio"}}}`, errContains: "expected_status must be unset or 2xx"},
 		{name: "hold too short", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":2999,"media":{"expect":"audio"}}}`, errContains: "call.hold_ms must be at least 3000"},
 		{name: "unknown media key", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000,"media":{"expect":"audio","DTMF":"1"}}}`, errContains: `call.media: unknown key "DTMF"`},
+		{name: "two way", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":6000,"media":{"expect":"two_way","max_rtt_ms":300}}}`},
+		{name: "two way with a short hold", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000,"media":{"expect":"two_way"}}}`, errContains: "call.hold_ms must be at least 6000 when call.media.expect is two_way"},
 		{name: "media removed", config: `{"host":"trunk.example.com","method":"invite","call":{"number":"1","hold_ms":5000}}`},
 	}
 	for _, tt := range tests {

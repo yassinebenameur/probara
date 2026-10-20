@@ -51,9 +51,10 @@ type SIPChecker struct {
 	callTimers sipCallTimers
 	callHook   func(stage string)
 	// Media test interposers (sip_media.go), nil outside tests: testSendTo
-	// sees every RTP datagram before it is written (a non-nil error is that
-	// write's error, and nothing is sent); testMediaSlot runs before each
-	// sender slot; schedLatencies replaces the scheduling-latency sample.
+	// sees every RTP and RTCP datagram before it is written (a non-nil error
+	// is that write's error, and nothing is sent); testMediaSlot runs before
+	// each sender slot; schedLatencies replaces the scheduling-latency
+	// sample.
 	testSendTo     func(b []byte, dst netip.AddrPort) error
 	testMediaSlot  func(slot int)
 	schedLatencies func() *metrics.Float64Histogram

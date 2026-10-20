@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,7 @@ func TestSIPMediaConfigValidate(t *testing.T) {
 	tests := []struct {
 		name        string
 		media       string
+		holdMs      int    // 0: 3000
 		errContains string // empty: must be valid
 	}{
 		{name: "measure only", media: `{"expect":"none"}`},
@@ -18,16 +20,16 @@ func TestSIPMediaConfigValidate(t *testing.T) {
 		{name: "fractional loss", media: `{"expect":"audio","max_loss_pct":0.5}`},
 		{name: "mos at its bounds", media: `{"expect":"audio","warn_mos":4.3,"min_mos":1}`},
 		{name: "rtt with audio", media: `{"expect":"audio","max_rtt_ms":5000}`},
+		{name: "two way with thresholds", media: `{"expect":"two_way","max_loss_pct":2,"min_mos":3.6,"max_rtt_ms":300}`, holdMs: 6000},
 
-		{name: "expect missing", media: `{}`, errContains: "call.media.expect is required (none, audio or echo)"},
+		{name: "expect missing", media: `{}`, errContains: "call.media.expect is required (none, audio, two_way or echo)"},
 		{name: "expect empty", media: `{"expect":""}`, errContains: "call.media.expect is required"},
-		{name: "expect unknown", media: `{"expect":"video"}`, errContains: "call.media.expect must be none, audio or echo"},
-		{name: "expect in another case", media: `{"expect":"Audio"}`, errContains: "call.media.expect must be none, audio or echo"},
-		// two_way needs the far end's RTCP reports, which this release does
-		// not read: refused like any unknown value.
-		{name: "two way not yet", media: `{"expect":"two_way"}`, errContains: "call.media.expect must be none, audio or echo"},
-		{name: "threshold with none", media: `{"expect":"none","max_loss_pct":2}`, errContains: "call.media.max_loss_pct requires expect audio or echo"},
-		{name: "rtt threshold with none", media: `{"expect":"none","warn_rtt_ms":100}`, errContains: "call.media.warn_rtt_ms requires expect audio or echo"},
+		{name: "expect unknown", media: `{"expect":"video"}`, errContains: "call.media.expect must be none, audio, two_way or echo"},
+		{name: "expect in another case", media: `{"expect":"Two_Way"}`, errContains: "call.media.expect must be none, audio, two_way or echo"},
+		// The far end's first RTCP report can take most of a 3 s hold.
+		{name: "two way with a short hold", media: `{"expect":"two_way"}`, holdMs: 5999, errContains: "call.hold_ms must be at least 6000 when call.media.expect is two_way"},
+		{name: "threshold with none", media: `{"expect":"none","max_loss_pct":2}`, errContains: "call.media.max_loss_pct requires expect audio, two_way or echo"},
+		{name: "rtt threshold with none", media: `{"expect":"none","warn_rtt_ms":100}`, errContains: "call.media.warn_rtt_ms requires expect audio, two_way or echo"},
 		{name: "zero loss", media: `{"expect":"audio","max_loss_pct":0}`, errContains: "call.media.max_loss_pct must be greater than 0 and less than 100"},
 		{name: "full loss", media: `{"expect":"audio","warn_loss_pct":100}`, errContains: "call.media.warn_loss_pct must be greater than 0"},
 		{name: "loss warn not below max", media: `{"expect":"audio","warn_loss_pct":2,"max_loss_pct":2}`, errContains: "call.media.warn_loss_pct must be less than call.media.max_loss_pct"},
@@ -58,7 +60,11 @@ func TestSIPMediaConfigValidate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw := `{"host":"trunk.example.com","method":"invite","call":{"number":"100","hold_ms":3000,"media":` + tt.media + `}}`
+			hold := tt.holdMs
+			if hold == 0 {
+				hold = 3000
+			}
+			raw := fmt.Sprintf(`{"host":"trunk.example.com","method":"invite","call":{"number":"100","hold_ms":%d,"media":%s}}`, hold, tt.media)
 			var cfg SIPMonitorConfig
 			if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 				t.Fatalf("unmarshal: %v (the media decode must never fail)", err)

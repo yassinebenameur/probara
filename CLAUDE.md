@@ -27,8 +27,8 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
   ingest (`internal/ingest/`)
 - `worker/` — check execution (all monitor types); checkers dial through
   `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`);
-  SIP call-quality math (RTP codec, RFC 3550 statistics, the G.107 E-model,
-  G.711 frames) is the I/O-free `internal/rtp`
+  SIP call-quality math (RTP and RTCP codecs, RFC 3550 statistics, the G.107
+  E-model, G.711 frames) is the I/O-free `internal/rtp`
 - `alerter/` — alert evaluation and notification delivery
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
@@ -774,8 +774,9 @@ or imported groups come back empty. Any other path that creates groups through
   through `dialGuard` (`worker/internal/worker/sip_flow.go`); never dial a
   Contact, Via, Record-Route or SDP address for signalling (in a call's
   dialogs they only fill the Request-URI and Route headers). Call media
-  writes RTP only from the call's bound, unconnected pair, only to addresses
-  `netguard.Policy.AllowsServerChosen` admits (`prepareMedia`, the latch),
+  writes RTP/RTCP only from the call's bound, unconnected pair, only to
+  addresses `netguard.Policy.AllowsServerChosen` admits (`prepareMedia`, the
+  latch; RTCP only to the media destination's IP),
   starts only at HOLDING entry and stops first thing in `teardown`, so no
   RTP follows a BYE; its error and warning text never names an address
   (`present.Build` copies it into every notification). Requests are client

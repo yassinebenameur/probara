@@ -20,10 +20,11 @@ const sipMediaMetrics = `{"sip":{"method":"INVITE","transport":"tls","request_ur
 "tls":{"not_after":"2027-02-01T00:00:00Z","days_until_expiry":12},
 "call":{"mode":"answer","answered":true,"sdp_answer":{"codec":"PCMU/8000","remote_media":"198.51.100.7:40012"},
 "answered_by":{"source":"203.0.113.9:5061","contact_host":"203.0.113.10"},
-"media":{"expect":"echo","status":"measured","codec":"PCMU/8000","destination":"198.51.100.7:40012",
+"media":{"expect":"two_way","status":"measured","codec":"PCMU/8000","destination":"198.51.100.7:40012","rtcp_destination":"198.51.100.7:40013",
 "tx":{"packets":250,"reliable":true},"rx":{"packets":251,"sources":["198.51.100.7:40012","192.0.2.44:31000"]},
 "inbound":{"ssrc":"9f00aa01","expected":225,"lost":1,"loss_pct":0.44,"quality":{"r_factor":89.2,"mos_cqe":4.31,"delay_ms":99,"delay_source":"echo"}},
 "round_trip":{"matched_by":"ssrc","expected":200,"matched":200,"rtt_ms":{"p50":38,"p95":44,"max":51},"quality":{"r_factor":90.8,"mos_cqe":4.36,"delay_ms":99,"delay_source":"echo"}},
+"outbound":{"reports":1,"expected":125,"loss_pct":0,"jitter_ms":1.3,"rtt_ms":41,"quality":{"r_factor":90.4,"mos_cqe":4.29,"delay_ms":100,"delay_source":"rtcp","burst_r":1,"burst_r_source":"assumed","discards":"not_reported"}},
 "model":"G.107 E-model","two_way":"verified"}}}}`
 
 // The status page reads a check's metrics_data only for its certificate
@@ -69,7 +70,7 @@ func TestStatusPage_SIPCallMediaDoesNotLeak(t *testing.T) {
 	for _, out := range []struct{ name, body string }{{"html", html}, {"json", string(asJSON)}} {
 		for _, secret := range []string{
 			"198.51.100.7", "40012", "192.0.2.44", "203.0.113.9", "203.0.113.10", "+33123456789", "carrier.example.com",
-			"mos_cqe", "4.31", "4.36", "destination", "sources", "round_trip", "9f00aa01",
+			"mos_cqe", "4.31", "4.36", "4.29", "destination", "40013", "sources", "round_trip", "outbound", "9f00aa01",
 		} {
 			if strings.Contains(out.body, secret) {
 				t.Errorf("the public %s contains %q", out.name, secret)

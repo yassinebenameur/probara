@@ -27,10 +27,19 @@ import (
 // is the orchestration:
 //
 //	2xx (or its dialog's 18x) → prepareMedia: plan from the SDP answer, no I/O
-//	HOLDING entry → start: arm the RTP reader, start the sender
-//	teardown entry → stop: the sender stops first, so no RTP follows our BYE
-//	rtp.Close() → finish: rtp.Analyze over the reader's records
+//	HOLDING entry → start: arm the readers, start the sender
+//	teardown entry → stop: the sender stops first (with an RTCP BYE), so no
+//	                 RTP follows our BYE
+//	rtp.Close() → finish: rtp.AnalyzeRTCP and rtp.Analyze over what the
+//	                 readers kept
 //	applyMediaRules: the outcome, after the call's own thresholds
+//
+// RTCP is a thin slice (rtp/rtcp.go): a sender report 2.5 s into the hold,
+// then every 5 s, and a BYE at stop, at most sipMediaMaxRTCPOut per call,
+// from the bound RTCP port to the media destination's IP only (the a=rtcp
+// port, or the RTP port + 1); the far end's reports about the probe's SSRC
+// are the outbound evidence, its loss and jitter, and the LSR/DLSR round
+// trip.
 //
 // The far end chooses where the probe sends, so every destination (the SDP
 // address, and a latch target) goes through netguard.Policy.AllowsServerChosen
@@ -41,9 +50,9 @@ import (
 // warning text names reason codes, never an address: it reaches every
 // notification channel (present.Build copies the error).
 //
-// Inbound packets are analysed only from the SDP address's IP (once vetted)
-// or the signalling peer's IP; anything else is counted as foreign, so a
-// spoofer who guesses the port cannot score the call.
+// Inbound packets, RTP and RTCP, are analysed only from the SDP address's IP
+// (once vetted) or the signalling peer's IP; anything else is counted as
+// foreign, so a spoofer who guesses the port cannot score the call.
 
 const (
 	// sipMediaMaxDatagram is the largest RTP datagram analysed (an Ethernet
@@ -69,6 +78,17 @@ const (
 	// sipMediaDefaultPtime is the packetisation time when the answer names
 	// none the probe sends with.
 	sipMediaDefaultPtime = 20 * time.Millisecond
+
+	// The RTCP schedule (RFC 3550 §6.2): the first report after half the
+	// 5 s minimum interval, then one per interval, without the
+	// randomisation, which is pointless for a two-party session of 10 s at
+	// most. With the BYE at stop that is at most 3 packets a call; the cap
+	// keeps room for the BYE whatever the hold.
+	sipMediaFirstSR    = 2500 * time.Millisecond
+	sipMediaSRInterval = 5 * time.Second
+	sipMediaMaxRTCPOut = 3
+	// sipMediaMaxRTCPIn bounds the far-end compound packets kept per call.
+	sipMediaMaxRTCPIn = 32
 )
 
 // The media block's status (metrics_data.sip.call.media.status).
@@ -126,6 +146,13 @@ type sipMediaPlan struct {
 
 	dst   netip.AddrPort // the vetted destination; invalid when refused
 	sdpIP netip.Addr     // the SDP address's IP once vetted: an accepted source
+	// rtcpDst is where RTCP goes: dst's IP, at the a=rtcp port or dst's
+	// port + 1, vetted like dst; invalid for none. rtcpOff: the answer's
+	// a=rtcp named another address, so no RTCP is sent at all, latched or
+	// not (a second destination the far end picks is not one the probe
+	// takes).
+	rtcpDst netip.AddrPort
+	rtcpOff bool
 }
 
 // sipMediaEnv is what prepareMedia needs about the call besides the answer.
@@ -197,10 +224,11 @@ func prepareMedia(answer *sipSDPAnswer, source string, env sipMediaEnv) *sipMedi
 		}
 	case "sendonly":
 		plan.send = false
-		if env.expect == models.SIPMediaExpectEcho {
+		if env.expect == models.SIPMediaExpectEcho || env.expect == models.SIPMediaExpectTwoWay {
 			return unusable(sipMediaSendOnly)
 		}
 	}
+	plan.rtcpOff = answer.rtcpAddr != "" && !sameSDPAddress(answer.rtcpAddr, answer.connAddr)
 
 	refuse := func(reason string) *sipMediaPlan {
 		plan.status, plan.detail = sipMediaRefused, reason
@@ -232,7 +260,37 @@ func prepareMedia(answer *sipSDPAnswer, source string, env sipMediaEnv) *sipMedi
 		return refuse(reason)
 	}
 	plan.dst, plan.sdpIP = dst, ip
+	port := int(dst.Port()) + 1
+	if answer.rtcpPort != 0 {
+		port = answer.rtcpPort
+	}
+	plan.rtcpDst = rtcpDestination(ip, port, plan.rtcpOff, env)
 	return plan
+}
+
+// rtcpDestination is where RTCP for media at ip goes, port being the RTCP
+// port (65536 for an RTP port of 65535, which has no RTCP): invalid when the
+// answer turned RTCP off or the address fails vetting.
+func rtcpDestination(ip netip.Addr, port int, off bool, env sipMediaEnv) netip.AddrPort {
+	if off || port > 65535 {
+		return netip.AddrPort{}
+	}
+	dst := netip.AddrPortFrom(ip, uint16(port))
+	if vetMediaDestination(dst, env) != "" {
+		return netip.AddrPort{}
+	}
+	return dst
+}
+
+// sameSDPAddress reports whether an a=rtcp address names the connection
+// address: the same text, or the same IP however written.
+func sameSDPAddress(a, b string) bool {
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	ipA, errA := netip.ParseAddr(a)
+	ipB, errB := netip.ParseAddr(b)
+	return errA == nil && errB == nil && ipA.Unmap() == ipB.Unmap()
 }
 
 // vetMediaDestination is the reason the probe may not send to dst, or "":
@@ -318,9 +376,10 @@ func (c *SIPChecker) ConfigureMediaMetrics(counters sipMediaCounters) {
 
 // sipMediaSession is one call's media. The call goroutine owns the plan and
 // the timeline; the sender goroutine owns what it sent until stop joins it;
-// the RTP reader owns what it recorded until the pair's Close joins it. The
-// destination is the one thing two goroutines share while both run (a latch
-// moves it), so it is atomic.
+// each reader (RTP, RTCP) owns what it recorded until the pair's Close joins
+// it. The destinations are what two goroutines share while both run (a latch
+// moves them), so they are atomic, as is the cap on the RTCP both readers
+// keep.
 type sipMediaSession struct {
 	cfg      *models.SIPMediaConfig
 	pair     *sipRTPPair
@@ -352,9 +411,10 @@ type sipMediaSession struct {
 	schedStart *metrics.Float64Histogram
 	schedP99   float64 // ms, over the window; NaN when unknown
 
-	dst  atomic.Pointer[netip.AddrPort]
-	done chan struct{}
-	wg   sync.WaitGroup
+	dst     atomic.Pointer[netip.AddrPort]
+	rtcpDst atomic.Pointer[netip.AddrPort]
+	done    chan struct{}
+	wg      sync.WaitGroup
 
 	// The sender's.
 	sent      []rtp.Sent
@@ -362,6 +422,10 @@ type sipMediaSession struct {
 	skipped   int
 	attempts  int
 	writeErrs [sipMediaWriteClasses]int
+	cname     string
+	srs       []uint32 // the NTP middle 32 of each SR sent, for LSR
+	rtcpSent  int
+	rtcpTo    netip.AddrPort // where the last RTCP went
 
 	// The reader's.
 	records   []rtp.Record
@@ -372,9 +436,21 @@ type sipMediaSession struct {
 	sources   []netip.AddrPort
 	latched   string
 	latchDone bool
+	// RTCP, from the RTCP socket's reader and multiplexed on the RTP
+	// port's (RFC 5761), each its own; rtcpKept caps them together.
+	rtcpIn, rtcpMux sipRTCPInbox
+	rtcpKept        atomic.Int32
 
-	report rtp.Report // finish's
+	report rtp.Report     // finish's
+	rtcp   rtp.RTCPReport // finish's
 	mm     *sipMediaMetrics
+}
+
+// sipRTCPInbox is one reader's far-end RTCP: what it kept and what it
+// ignored (foreign, malformed, oversized or beyond the cap).
+type sipRTCPInbox struct {
+	arrivals []rtp.RTCPArrival
+	ignored  int
 }
 
 // newMediaSession starts a call's media state when call.media is set; nil
@@ -401,6 +477,8 @@ func (s *sipCall) newMediaSession(pair *sipRTPPair, localIP net.IP) *sipMediaSes
 		ts0:           rand.Uint32(),
 		schedP99:      math.NaN(),
 		done:          make(chan struct{}),
+		// A random CNAME per call (RFC 7022): nothing about the worker.
+		cname: sipRandomToken(12) + "@probara",
 	}
 	m.env = sipMediaEnv{
 		expect: media.Expect,
@@ -457,8 +535,12 @@ func (m *sipMediaSession) start(at time.Time) {
 	if m.plan.dst.IsValid() && m.plan.send {
 		dst := m.plan.dst
 		m.dst.Store(&dst)
+		if m.plan.rtcpDst.IsValid() {
+			rtcpDst := m.plan.rtcpDst
+			m.rtcpDst.Store(&rtcpDst)
+		}
 	}
-	m.pair.arm(m.onRTP, nil)
+	m.pair.arm(m.onRTP, m.onRTCP)
 	if m.plan.send {
 		m.wg.Add(1)
 		go m.sendLoop(at)
@@ -494,7 +576,9 @@ func (m *sipMediaSession) markBye(at time.Time) {
 // contiguous; the timestamp moves on with the clock) and its lateness kept
 // for the self-timing guard. Nothing is sent while there is no destination
 // (a refused address waiting for the peer latch). The content is fixed: the
-// 1004 Hz tone with the echo marker in echo mode, else digital silence.
+// 1004 Hz tone with the echo marker in echo mode, else digital silence. RTCP
+// rides the same loop: a sender report once one is due (looked at every
+// slot, so it leaves within a ptime of its time), and a BYE as it ends.
 func (m *sipMediaSession) sendLoop(t0 time.Time) {
 	defer m.wg.Done()
 	plan := m.plan
@@ -511,6 +595,8 @@ func (m *sipMediaSession) sendLoop(t0 time.Time) {
 
 	timer := time.NewTimer(time.Hour)
 	defer timer.Stop()
+	defer m.sendRTCP(t0, samples, true) // the loop ends only when stop closes done
+	nextSR := t0.Add(sipMediaFirstSR)
 	seq, first := m.seq0, true
 	for slot := 0; ; slot++ {
 		due := t0.Add(time.Duration(slot) * plan.ptime)
@@ -533,6 +619,10 @@ func (m *sipMediaSession) sendLoop(t0 time.Time) {
 		}
 		late := time.Since(due)
 		m.lateness = append(m.lateness, late)
+		if !time.Now().Before(nextSR) {
+			m.sendRTCP(t0, samples, false)
+			nextSR = nextSR.Add(sipMediaSRInterval)
+		}
 		if late > plan.ptime {
 			m.skipped++
 			continue
@@ -562,13 +652,62 @@ func (m *sipMediaSession) sendLoop(t0 time.Time) {
 }
 
 func (m *sipMediaSession) write(b []byte, dst netip.AddrPort) error {
+	return m.writeTo(m.pair.rtp, b, dst)
+}
+
+func (m *sipMediaSession) writeTo(conn *net.UDPConn, b []byte, dst netip.AddrPort) error {
 	if m.sendTo != nil {
 		if err := m.sendTo(b, dst); err != nil {
 			return err
 		}
 	}
-	_, err := m.pair.rtp.WriteToUDPAddrPort(b, dst)
+	_, err := conn.WriteToUDPAddrPort(b, dst)
 	return err
+}
+
+// sendRTCP sends a compound sender report (RC 0, the CNAME), with a BYE
+// when bye, from the RTCP socket to the RTCP destination, if there is one.
+// Only a probe that sent something says BYE (RFC 3550 §6.3.7), and reports
+// stop one short of the cap so the BYE always fits. A failed write is not
+// retried and does not count against the RTP write errors.
+func (m *sipMediaSession) sendRTCP(t0 time.Time, samples int, bye bool) {
+	limit := sipMediaMaxRTCPOut - 1
+	if bye {
+		limit = sipMediaMaxRTCPOut
+		if len(m.sent) == 0 && m.rtcpSent == 0 {
+			return
+		}
+	}
+	dst := m.rtcpDst.Load()
+	if dst == nil || m.rtcpSent >= limit {
+		return
+	}
+	at := time.Now()
+	ntp := m.ntp(at.Sub(m.base))
+	b := rtp.AppendSenderReport(nil, rtp.SenderInfo{
+		SSRC:    m.ssrc,
+		NTP:     ntp,
+		RTPTime: m.ts0 + uint32(int64(at.Sub(t0))*rtp.ClockRate/int64(time.Second)),
+		Packets: uint32(len(m.sent)),
+		Octets:  uint32(len(m.sent) * samples),
+	}, m.cname)
+	if bye {
+		b = rtp.AppendBye(b, m.ssrc)
+	}
+	if err := m.writeTo(m.pair.rtcp, b, *dst); err != nil {
+		return
+	}
+	m.rtcpSent++
+	m.rtcpTo = *dst
+	m.srs = append(m.srs, rtp.NTPMiddle(ntp))
+}
+
+// ntp is the NTP timestamp of a session offset: the wall clock read once, at
+// the base, plus the monotonic offset, so the probe's SRs and the arrival
+// times their LSR/DLSR is measured against share one clock that an NTP step
+// mid-call cannot bend.
+func (m *sipMediaSession) ntp(off time.Duration) uint64 {
+	return rtp.NTPTime(m.base.Add(off))
 }
 
 // The classes of a failed write (tx.error_class).
@@ -606,7 +745,8 @@ func (m *sipMediaSession) onRTP(b []byte, src netip.AddrPort, at time.Time) {
 		return
 	}
 	if rtp.IsRTCP(b) {
-		return // RTCP multiplexed on the RTP port (RFC 5761): not audio
+		m.keepRTCP(&m.rtcpMux, b, src, at) // multiplexed on the RTP port (RFC 5761)
+		return
 	}
 	if len(m.sources) < sipMediaMaxSources && !slices.Contains(m.sources, src) {
 		m.sources = append(m.sources, src)
@@ -632,6 +772,33 @@ func (m *sipMediaSession) onRTP(b []byte, src netip.AddrPort, at time.Time) {
 	})
 }
 
+// onRTCP is the RTCP socket's sink, on its reader goroutine.
+func (m *sipMediaSession) onRTCP(b []byte, src netip.AddrPort, at time.Time) {
+	if len(b) > sipMediaMaxDatagram {
+		m.rtcpIn.ignored++
+		return
+	}
+	m.keepRTCP(&m.rtcpIn, b, src, at)
+}
+
+// keepRTCP keeps a far-end compound RTCP packet from an accepted source,
+// with only its report blocks about the probe's SSRC, until
+// sipMediaMaxRTCPIn are kept; box is the calling reader's own.
+func (m *sipMediaSession) keepRTCP(box *sipRTCPInbox, b []byte, src netip.AddrPort, at time.Time) {
+	if !m.accepts(src.Addr()) {
+		box.ignored++
+		return
+	}
+	c, err := rtp.ParseRTCP(b)
+	if err != nil || m.rtcpKept.Add(1) > sipMediaMaxRTCPIn {
+		box.ignored++
+		return
+	}
+	c.Blocks = slices.DeleteFunc(c.Blocks, func(rb rtp.ReportBlock) bool { return rb.SSRC != m.ssrc })
+	off := at.Sub(m.base)
+	box.arrivals = append(box.arrivals, rtp.RTCPArrival{At: off, NTPMiddle: rtp.NTPMiddle(m.ntp(off)), Compound: c})
+}
+
 // accepts reports a source whose packets are analysed: the vetted SDP
 // address's IP or the signalling peer's, on any port.
 func (m *sipMediaSession) accepts(ip netip.Addr) bool {
@@ -645,7 +812,8 @@ func (m *sipMediaSession) accepts(ip netip.Addr) bool {
 // the first packet from the signalling peer's IP becomes the destination.
 // The send IP never moves to any other address, and the target is vetted
 // again, so a spoofer can at most move the probe's audio to another port of
-// a host it was already allowed to reach.
+// a host it was already allowed to reach. RTCP follows to the new port + 1
+// (a NAT that moved the one moved the other), vetted the same way.
 func (m *sipMediaSession) latch(src netip.AddrPort) {
 	if m.latchDone || !m.plan.send {
 		return
@@ -672,6 +840,11 @@ func (m *sipMediaSession) latch(src netip.AddrPort) {
 	}
 	m.dst.Store(&src)
 	m.latched = kind
+	if rtcpDst := rtcpDestination(src.Addr(), int(src.Port())+1, m.plan.rtcpOff, m.env); rtcpDst.IsValid() {
+		m.rtcpDst.Store(&rtcpDst)
+	} else {
+		m.rtcpDst.Store(nil)
+	}
 }
 
 // readSched samples the process's goroutine scheduling latencies.
@@ -742,15 +915,19 @@ type sipMediaMetrics struct {
 	// Destination is where the probe's audio went (after any latch); absent
 	// when nothing was sent. Only metrics_data names addresses.
 	Destination string `json:"destination,omitempty"`
-	Latched     string `json:"latched,omitempty"`
-	WindowMs    int64  `json:"window_ms"`
-	WarmupMs    int64  `json:"warmup_ms"`
+	// RTCPDestination is where the probe's RTCP went; absent when none was
+	// sent.
+	RTCPDestination string `json:"rtcp_destination,omitempty"`
+	Latched         string `json:"latched,omitempty"`
+	WindowMs        int64  `json:"window_ms"`
+	WarmupMs        int64  `json:"warmup_ms"`
 
 	TX *sipMediaTx `json:"tx,omitempty"`
 	RX *sipMediaRx `json:"rx,omitempty"`
 
-	Inbound   *rtp.InboundStats `json:"inbound,omitempty"`
-	RoundTrip *rtp.EchoStats    `json:"round_trip,omitempty"`
+	Inbound   *rtp.InboundStats  `json:"inbound,omitempty"`
+	RoundTrip *rtp.EchoStats     `json:"round_trip,omitempty"`
+	Outbound  *rtp.OutboundStats `json:"outbound,omitempty"`
 
 	Model          string   `json:"model,omitempty"`
 	Assumptions    []string `json:"assumptions,omitempty"`
@@ -760,6 +937,7 @@ type sipMediaMetrics struct {
 
 type sipMediaTx struct {
 	Packets      int      `json:"packets"`
+	RTCP         int      `json:"rtcp"`
 	SkippedSlots int      `json:"skipped_slots"`
 	TimerP95Ms   float64  `json:"timer_p95_ms"`
 	SchedP99Ms   *float64 `json:"sched_p99_ms,omitempty"`
@@ -779,6 +957,10 @@ type sipMediaRx struct {
 	Sources         []string `json:"sources,omitempty"`
 	AfterByePackets int      `json:"after_bye_packets"`
 	FirstPacketMs   *int64   `json:"first_packet_ms,omitempty"`
+	// RTCP counts the far end's compound packets kept; RTCPIgnored those
+	// from another address, malformed, or beyond the cap.
+	RTCP        int `json:"rtcp,omitempty"`
+	RTCPIgnored int `json:"rtcp_ignored,omitempty"`
 }
 
 // window is the measured inbound window, [start + warm-up, stop].
@@ -843,22 +1025,30 @@ func (m *sipMediaSession) finish(interrupted bool) *sipMediaMetrics {
 	}
 
 	mm.WindowMs = m.window().Milliseconds()
+	rtcpCfg := rtp.RTCPConfig{SSRC: m.ssrc, FirstSeq: m.seq0, Sent: len(m.sent), SenderReports: m.srs, Sends: m.sent}
+	if len(m.sent) > 0 {
+		rtcpCfg.FirstSend = m.sent[0].At
+	}
+	m.rtcp = rtp.AnalyzeRTCP(append(m.rtcpIn.arrivals, m.rtcpMux.arrivals...), rtcpCfg)
 	m.report = rtp.Analyze(m.records, rtp.Config{
-		Answer:  m.startAt,
-		Stop:    m.stopAt,
-		Bye:     m.byeAt,
-		AudioPT: uint8(m.plan.law),
-		PtimeMs: mm.PtimeMs,
-		Sent:    m.sent,
+		Answer:        m.startAt,
+		Stop:          m.stopAt,
+		Bye:           m.byeAt,
+		AudioPT:       uint8(m.plan.law),
+		PtimeMs:       mm.PtimeMs,
+		Sent:          m.sent,
+		RTCPRoundTrip: m.rtcp.RoundTrip,
+		Outbound:      m.rtcp.Outbound,
 	})
 	rep := &m.report
-	mm.Inbound, mm.RoundTrip = rep.Inbound, rep.RoundTrip
-	if (rep.Inbound != nil && rep.Inbound.Quality != nil) || (rep.RoundTrip != nil && rep.RoundTrip.Quality != nil) {
+	mm.Inbound, mm.RoundTrip, mm.Outbound = rep.Inbound, rep.RoundTrip, rep.Outbound
+	if (rep.Inbound != nil && rep.Inbound.Quality != nil) || (rep.RoundTrip != nil && rep.RoundTrip.Quality != nil) ||
+		(rep.Outbound != nil && rep.Outbound.Quality != nil) {
 		mm.Model, mm.Assumptions = rtp.Model, []string{rtp.AssumptionPLC}
 	}
 
 	reliable, _ := m.reliable()
-	tx := &sipMediaTx{Packets: len(m.sent), SkippedSlots: m.skipped, Reliable: reliable}
+	tx := &sipMediaTx{Packets: len(m.sent), RTCP: m.rtcpSent, SkippedSlots: m.skipped, Reliable: reliable}
 	if len(m.lateness) > 0 {
 		tx.TimerP95Ms = sipRound(float64(sipLatenessP95(m.lateness))/float64(time.Millisecond), 2)
 	}
@@ -875,6 +1065,9 @@ func (m *sipMediaSession) finish(interrupted bool) *sipMediaMetrics {
 			mm.Destination = sipMetricsString(dst.String())
 		}
 	}
+	if m.rtcpSent > 0 {
+		mm.RTCPDestination = sipMetricsString(m.rtcpTo.String())
+	}
 	mm.Latched = m.latched
 
 	rx := &sipMediaRx{
@@ -888,6 +1081,8 @@ func (m *sipMediaSession) finish(interrupted bool) *sipMediaMetrics {
 		first := rep.FirstPacket.Milliseconds()
 		rx.FirstPacketMs = &first
 	}
+	rx.RTCP = len(m.rtcpIn.arrivals) + len(m.rtcpMux.arrivals)
+	rx.RTCPIgnored = m.rtcpIn.ignored + m.rtcpMux.ignored
 	mm.RX = rx
 
 	inbound, outbound := m.inboundEvidence(), m.outboundEvidence()
@@ -904,8 +1099,11 @@ func (m *sipMediaSession) finish(interrupted bool) *sipMediaMetrics {
 	if inbound {
 		mm.TwoWayEvidence = append(mm.TwoWayEvidence, "rx")
 	}
-	if outbound {
+	if m.echoEvidence() {
 		mm.TwoWayEvidence = append(mm.TwoWayEvidence, "echo")
+	}
+	if m.rtcp.Confirmed {
+		mm.TwoWayEvidence = append(mm.TwoWayEvidence, "rtcp")
 	}
 
 	switch {
@@ -954,8 +1152,11 @@ func (m *sipMediaSession) count() {
 // the window.
 func (m *sipMediaSession) inboundEvidence() bool { return m.report.Accepted >= sipMediaEvidence }
 
-// outboundEvidence: the probe's audio reached the far end, which echoed it.
-func (m *sipMediaSession) outboundEvidence() bool {
+// outboundEvidence: the probe's audio reached the far end, which echoed it
+// or said so in an RTCP report about the probe's SSRC.
+func (m *sipMediaSession) outboundEvidence() bool { return m.echoEvidence() || m.rtcp.Confirmed }
+
+func (m *sipMediaSession) echoEvidence() bool {
 	return m.report.RoundTrip != nil && m.report.RoundTrip.Matched >= sipMediaEvidence
 }
 
@@ -1004,6 +1205,10 @@ func (s *sipCall) applyMediaRules() {
 	expect := m.cfg.Expect
 	measureOnly := expect == models.SIPMediaExpectNone
 	echo := expect == models.SIPMediaExpectEcho
+	twoWay := expect == models.SIPMediaExpectTwoWay
+	// outbound: the expectation needs the probe's own audio to arrive, so a
+	// probe that could not send measured nothing about the target.
+	outbound := echo || twoWay
 	// assert fails the check on the far end's account; refuse makes it an
 	// error on the probe's own; note only warns.
 	note := func(msg string) { s.metrics.warn(msg) }
@@ -1038,7 +1243,7 @@ func (s *sipCall) applyMediaRules() {
 
 	if errs := m.writeErrors(); errs > 0 && errs*2 > m.attempts {
 		msg := fmt.Sprintf("media: probe audio could not be sent (%s)", m.writeErrorClass())
-		if echo {
+		if outbound {
 			refuse(msg)
 			return
 		}
@@ -1059,7 +1264,7 @@ func (s *sipCall) applyMediaRules() {
 		return
 	case refused:
 		msg := fmt.Sprintf("media: probe audio not sent (%s)", m.plan.detail)
-		if echo {
+		if outbound {
 			refuse(msg)
 			return
 		}
@@ -1106,6 +1311,19 @@ func (s *sipCall) applyMediaRules() {
 		assert(msg)
 		return
 	}
+	// Two-way: the far end's word that the probe's audio arrived, an echo
+	// or an RTCP report about its SSRC. A measure-only call that sent
+	// something reports it too.
+	if !echo && (twoWay || (measureOnly && len(m.sent) > 0)) && !m.outboundEvidence() {
+		if m.rtcp.Negative {
+			assert("media: far end reports receiving none of the probe's audio (RTCP)")
+		} else {
+			assert("media: far end never confirmed the probe's audio (no echo, no RTCP report)")
+		}
+		if twoWay {
+			return
+		}
+	}
 
 	if window < rtp.MinQualityWindow {
 		note(fmt.Sprintf("media: only %s measured; quality thresholds not applied", sipFormatSeconds(window)))
@@ -1142,7 +1360,7 @@ type sipMediaBasis struct {
 
 // applyMediaThresholds applies call.media's warn, max and min to every
 // basis with a quality estimate: max and min fail the check, warn adds a
-// warning. RTT is the echo's median round trip.
+// warning. RTT is the echo's median round trip, else RTCP's.
 func (s *sipCall) applyMediaThresholds() {
 	m, cfg := s.media, s.media.cfg
 	var bases []sipMediaBasis
@@ -1152,6 +1370,10 @@ func (s *sipCall) applyMediaThresholds() {
 	rt := m.report.RoundTrip
 	if rt != nil && rt.Quality != nil {
 		bases = append(bases, sipMediaBasis{"round trip", rt.EffectiveLossPct, rt.JitterMs, rt.Quality})
+	}
+	if ob := m.report.Outbound; ob != nil && ob.Quality != nil {
+		jitter := ob.JitterMs
+		bases = append(bases, sipMediaBasis{"outbound, RTCP", ob.LossPct, &jitter, &ob.Quality.Quality})
 	}
 	qualityThresholds := cfg.WarnLossPct != nil || cfg.MaxLossPct != nil || cfg.WarnJitterMs != nil ||
 		cfg.MaxJitterMs != nil || cfg.WarnMOS != nil || cfg.MinMOS != nil
@@ -1187,15 +1409,22 @@ func (s *sipCall) applyMediaThresholds() {
 	if cfg.WarnRTTMs == nil && cfg.MaxRTTMs == nil {
 		return
 	}
-	if rt == nil || rt.RTTMs == nil || rt.Matched < sipMediaEvidence {
-		s.metrics.warn("rtt: not measured (no echo)")
+	var rtt float64
+	var source string
+	switch {
+	case rt != nil && rt.RTTMs != nil && rt.Matched >= sipMediaEvidence:
+		rtt, source = rt.RTTMs.P50, "echo"
+	case m.rtcp.Measured:
+		rtt, source = float64(m.rtcp.RoundTrip)/float64(time.Millisecond), "RTCP"
+	default:
+		s.metrics.warn("rtt: not measured (no echo or RTCP)")
 		return
 	}
-	switch v := rt.RTTMs.P50; {
-	case cfg.MaxRTTMs != nil && v > float64(*cfg.MaxRTTMs):
-		fail(fmt.Sprintf("rtt: %sms > %dms (echo)", sipMediaNum(v, 0), *cfg.MaxRTTMs))
-	case cfg.WarnRTTMs != nil && v > float64(*cfg.WarnRTTMs):
-		s.metrics.warn(fmt.Sprintf("rtt: %sms > %dms (warn, echo)", sipMediaNum(v, 0), *cfg.WarnRTTMs))
+	switch {
+	case cfg.MaxRTTMs != nil && rtt > float64(*cfg.MaxRTTMs):
+		fail(fmt.Sprintf("rtt: %sms > %dms (%s)", sipMediaNum(rtt, 0), *cfg.MaxRTTMs, source))
+	case cfg.WarnRTTMs != nil && rtt > float64(*cfg.WarnRTTMs):
+		s.metrics.warn(fmt.Sprintf("rtt: %sms > %dms (warn, %s)", sipMediaNum(rtt, 0), *cfg.WarnRTTMs, source))
 	}
 }
 

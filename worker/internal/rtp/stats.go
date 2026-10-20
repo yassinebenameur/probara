@@ -101,15 +101,20 @@ type Config struct {
 
 	// RTCPRoundTrip is a round trip measured from RTCP (LSR/DLSR), the
 	// E-model's delay when too few echoes came back; zero: none.
+	// Outbound is the far end's report on the probe's stream; Analyze
+	// gives it a quality estimate on the same delay as the other bases.
+	// Both come from AnalyzeRTCP.
 	RTCPRoundTrip time.Duration
+	Outbound      *OutboundStats
 }
 
 // Report is the outcome of Analyze. Inbound and RoundTrip marshal to the
 // "inbound" and "round_trip" blocks of the call's media metrics; the
 // counters are for the session to fold into its own.
 type Report struct {
-	Inbound   *InboundStats // nil: no far-end stream in the window
-	RoundTrip *EchoStats    // nil: nothing of ours came back
+	Inbound   *InboundStats  // nil: no far-end stream in the window
+	RoundTrip *EchoStats     // nil: nothing of ours came back
+	Outbound  *OutboundStats // Config.Outbound with its estimate; nil without
 
 	// Accepted counts the packets, far-end or echo, that arrived in the
 	// inbound window: the evidence that audio reached the probe.
@@ -377,6 +382,9 @@ func Analyze(records []Record, cfg Config) Report {
 	if rt := rep.RoundTrip; rt != nil && cfg.Stop-EchoTail-ws >= MinQualityWindow && rt.Expected >= MinQualityExpected {
 		q := Estimate(rt.EffectiveLossPct, rt.BurstR, delay, source)
 		rt.Quality = &q
+	}
+	if cfg.Outbound != nil {
+		rep.Outbound = outboundQuality(cfg.Outbound, ptime, delay, source)
 	}
 	return rep
 }
