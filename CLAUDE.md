@@ -120,6 +120,11 @@ when a boundary or messaging contract moves. The rules that are easy to break:
 - **Passive types** (never dispatched, refused by run-now, skipped by the
   worker): `shared/models.PassiveMonitorTypes`; the monitor page's
   `PASSIVE_TYPES` is its UI mirror.
+- **Server-chosen destinations**: `netguard.Policy.AllowsServerChosen`
+  (`shared/netguard`) vets every address a remote server chose rather than
+  the operator (SDP media, latch targets, RTCP); never send to one without
+  it. Its extra ranges (`0.0.0.0/8`, NAT64/6to4 embedded IPv4, Teredo,
+  documentation) stay out of the shared `privateCIDRs` table.
 - **Monitor config secrets**: `shared/secrets/monitor_config.go`
   (`MonitorSecretFields` / `MonitorSecretMapFields`). One entry gives
   encryption at rest, `***` masking on reads, write-only merge on updates,
