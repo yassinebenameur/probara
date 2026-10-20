@@ -1141,9 +1141,16 @@ func TestSIPInvite_RemoteBye(t *testing.T) {
 	if n := len(u.requests("BYE")); n != 0 {
 		t.Fatalf("the probe sent %d BYEs after the callee hung up", n)
 	}
+	// The UAS reports the callee's BYE to the call before it writes the 200,
+	// so the result can be back before that 200 reaches the fake UAS: wait.
 	codes := map[string]bool{}
-	for _, r := range u.responses() {
-		codes[strings.Fields(r.raw)[1]] = true
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		for _, r := range u.responses() {
+			codes[strings.Fields(r.raw)[1]] = true
+		}
+		if codes["481"] && codes["200"] || time.Now().After(deadline) {
+			break
+		}
 	}
 	if !codes["481"] || !codes["200"] {
 		t.Fatalf("responses to the callee's BYEs = %v, want 481 (unknown dialog) and 200", codes)
