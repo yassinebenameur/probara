@@ -1,3 +1,16 @@
+# [2.0.0-alpha.4](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.3...v2.0.0-alpha.4) (2026-10-20)
+
+
+### Bug Fixes
+
+* **analytics:** derive raw-range downtime from the state timeline, not check rows ([5d9d941](https://github.com/yassinebenameur/probara/commit/5d9d9413aca333c3ea8d81f19cb4b83051b08172))
+* **notifications:** never re-send to recipients that already received an alert ([2e26593](https://github.com/yassinebenameur/probara/commit/2e26593135a1fc769e8de5bfcf6f3b0c45bfbfd5))
+
+
+### Features
+
+* **scripts:** add a seed-demo tool for the Northwind demo tenant ([e38bf3f](https://github.com/yassinebenameur/probara/commit/e38bf3f959e88d4582186e7c0751a61dd34febf3))
+
 # [2.0.0-alpha.3](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.2...v2.0.0-alpha.3) (2026-10-20)
 
 
