@@ -26,7 +26,9 @@ JetStream and Postgres, with a Next.js app and a marketing/docs site.
 - `scheduler/` — cron-style dispatch, JetStream stream provisioning, results
   ingest (`internal/ingest/`)
 - `worker/` — check execution (all monitor types); checkers dial through
-  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`)
+  `dialGuard` (`internal/worker/dial_guard.go`, an alias of `shared/netguard`);
+  SIP call-quality math (RTP codec, RFC 3550 statistics, the G.107 E-model,
+  G.711 frames) is the I/O-free `internal/rtp`
 - `alerter/` — alert evaluation and notification delivery
 - `status-page/` — public status pages (custom template engine)
 - `shared/` — cross-service models, config, secrets, queue, local AI evidence/decisions
