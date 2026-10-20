@@ -321,3 +321,147 @@ export function revealFirstError(root: HTMLElement | null) {
     })
   );
 }
+
+/** The label style of the plain field helpers below. */
+export const FIELD_LABEL = 'block text-ui font-medium text-slate-300';
+
+/** A picked tile (type picker, guided journey). Selected is neutral raised glass, never orange. */
+export const TILE_SELECTED = 'bg-glass-strong shadow-segment';
+
+// Plain labelled controls for the fields MonitorForm's inline editors draw
+// (name, host, DNS, synthetic steps). Each links its label to the control and
+// marks it invalid, so a failed submit can find and focus the first broken
+// field (see revealFirstError).
+function useFieldIds(error?: string, hint?: string) {
+  const id = useId();
+  const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
+  return {
+    id,
+    errorId,
+    hintId,
+    control: {
+      id,
+      'aria-invalid': error ? (true as const) : undefined,
+      'aria-describedby': error ? errorId : hint ? hintId : undefined,
+    },
+  };
+}
+
+export function FormInput({
+  label,
+  type = 'text',
+  value,
+  onChange,
+  placeholder,
+  error,
+  hint,
+  required,
+  ...props
+}: {
+  label: string;
+  type?: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  error?: string;
+  hint?: string;
+  required?: boolean;
+  [key: string]: any;
+}) {
+  const f = useFieldIds(error, hint);
+  return (
+    <div>
+      <label htmlFor={f.id} className={`${FIELD_LABEL} mb-1.5`}>
+        {label}
+        {required && <span className="ml-1 text-rose-300" aria-hidden="true">*</span>}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="input"
+        // The asterisk is aria-hidden; this is the required cue for AT.
+        aria-required={required || undefined}
+        {...f.control}
+        {...props}
+      />
+      {error && <p id={f.errorId} className="mt-1 text-xs text-rose-300">{error}</p>}
+      {hint && !error && <p id={f.hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
+    </div>
+  );
+}
+
+export function FormTextarea({
+  label,
+  value,
+  onChange,
+  placeholder,
+  error,
+  hint,
+  rows = 4,
+  ...props
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  error?: string;
+  hint?: string;
+  rows?: number;
+  [key: string]: any;
+}) {
+  const f = useFieldIds(error, hint);
+  return (
+    <div>
+      <label htmlFor={f.id} className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
+      <textarea
+        rows={rows}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="input min-h-[96px]"
+        {...f.control}
+        {...props}
+      />
+      {error && <p id={f.errorId} className="mt-1 text-xs text-rose-300">{error}</p>}
+      {hint && !error && <p id={f.hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
+    </div>
+  );
+}
+
+export function FormSelect({
+  label,
+  value,
+  onChange,
+  options,
+  hint,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const f = useFieldIds(undefined, hint);
+  return (
+    <div>
+      <label htmlFor={f.id} className={`${FIELD_LABEL} mb-1.5`}>{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="input"
+        {...f.control}
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>{opt.label}</option>
+        ))}
+      </select>
+      {hint && <p id={f.hintId} className="mt-1 text-xs text-slate-500">{hint}</p>}
+    </div>
+  );
+}

@@ -261,7 +261,8 @@ or imported groups come back empty. Any other path that creates groups through
    through `dialGuard` (SSRF policy)
 4. Secret fields → `MonitorSecretFields`
 5. UI: form component in `web/components/monitors/`, wire into
-   `MonitorForm.tsx` (`MONITOR_TYPE_META` + dispatch), types in `web/lib/types.ts`;
+   `MonitorForm.tsx` (`MONITOR_TYPE_META` + `TYPE_FORMS` dispatch), types in
+   `web/lib/types.ts`;
    its hydration and request builder in `web/lib/monitor-form/`, with exact
    payload tests (create, filled, an edit round trip that sets every field
    the form hydrates, clone, secret clears) in `web/lib/monitor-form-*.test.ts`
@@ -566,7 +567,13 @@ or imported groups come back empty. Any other path that creates groups through
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type
-  form does the same.
+  form does the same. MonitorForm itself is the shell: it owns the state and
+  submit of the types it edits inline (http, ping, dns, synthetic) and draws
+  their fields through field-only editors (`HttpMonitorForm`, `DnsEditor`,
+  `SyntheticApiEditor`, `SyntheticBrowserEditor`); synthetic "Test now" is
+  `useSyntheticLiveTest`. Labelled fields in a type form are
+  `components/ui/FormField`; form-kit's `FormInput`/`FormSelect`/
+  `FormTextarea` are only for those inline editors.
 - **Monitor form payloads are pure and pinned**: every form's initial state
   and submitted request come from `lib/monitor-form/` (`initial*FormState`,
   `build*Request`; the shared envelope is `common.ts`), never from inline
