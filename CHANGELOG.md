@@ -1,3 +1,10 @@
+# [2.0.0-alpha.3](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.2...v2.0.0-alpha.3) (2026-10-20)
+
+
+### Bug Fixes
+
+* **ci:** keep push runs, release-gate order and coverage intact ([be07666](https://github.com/yassinebenameur/probara/commit/be0766632666e93e80628a4a062f06b23562f767))
+
 # [2.0.0-alpha.2](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.1...v2.0.0-alpha.2) (2026-10-19)
 
 
