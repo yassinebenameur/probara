@@ -1,3 +1,11 @@
+# [2.0.0-alpha.8](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.7...v2.0.0-alpha.8) (2026-10-21)
+
+
+### Bug Fixes
+
+* **helm:** point install notes at the first-admin form and the release namespace ([ab3c8c5](https://github.com/yassinebenameur/probara/commit/ab3c8c510765c5fc134e06151e36a329923f8733))
+* **scripts:** fall back when nvm has no LTS and require Node 20.9 for the UI ([5fc9cc7](https://github.com/yassinebenameur/probara/commit/5fc9cc7dec3c0b54c8009e21654c6f663360a5c4))
+
 # [2.0.0-alpha.7](https://github.com/yassinebenameur/probara/compare/v2.0.0-alpha.6...v2.0.0-alpha.7) (2026-10-21)
 
 
