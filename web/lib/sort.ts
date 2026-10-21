@@ -10,7 +10,8 @@
  *
  * Sort state lives in the URL as `?sort=<key>&dir=asc|desc` with defaults
  * omitted (`readSortParams` / `writeSortParams`); the header control is
- * components/ui/SortableHeader.tsx. Sort the full filtered set, then page.
+ * components/ui/SortableHeader.tsx. Sort the full filtered set, then page;
+ * a server-paged list passes the sort to the API instead.
  */
 
 export type SortDir = 'asc' | 'desc';

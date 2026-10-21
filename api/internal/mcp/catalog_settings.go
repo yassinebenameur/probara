@@ -420,6 +420,8 @@ func workspaceTools() []spec {
 				{Name: "actor_id", Description: "Only this user or API key ID."},
 				{Name: "from", Description: "RFC 3339 lower bound."},
 				{Name: "to", Description: "RFC 3339 upper bound."},
+				{Name: "sort", Enum: []string{"occurred_at", "action", "resource", "outcome"}, Description: "Order (default occurred_at); ties read newest first."},
+				{Name: "dir", Enum: []string{"asc", "desc"}, Description: "Direction; default desc for occurred_at, asc otherwise."},
 				{Name: "page", Type: "integer", Description: "1-based page number (default 1)."},
 				{Name: "page_size", Type: "integer", Description: "Items per page, up to 200 (default 50)."},
 			},

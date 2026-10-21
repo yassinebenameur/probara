@@ -34,8 +34,9 @@ const JUSTIFY = { left: 'justify-start', right: 'justify-end', center: 'justify-
  * column), its content is a button. Active shows ArrowUp/ArrowDown; an
  * inactive column shows a faint ArrowUpDown on hover/focus, in a reserved
  * slot so the label never shifts. Right-aligned columns put the icon on the
- * inner side. Sort the full filtered set with lib/sort.ts, then page, and
- * keep the state in the URL (useUrlSort).
+ * inner side. Sort the full filtered set with lib/sort.ts, then page — or,
+ * for a server-paged list, pass the sort to the API — and keep the state in
+ * the URL (useUrlSort).
  */
 export default function SortableHeader<K extends string>({
   as = 'th',

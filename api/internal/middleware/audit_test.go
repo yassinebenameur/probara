@@ -75,3 +75,25 @@ func TestOutcomeFromStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestItemizedSuccess(t *testing.T) {
+	cases := []struct {
+		path   string
+		status int
+		want   bool
+	}{
+		{"/api/v1/alerts/bulk/acknowledge", http.StatusOK, true},
+		{"/api/v1/alerts/bulk/resolve", http.StatusOK, true},
+		// Refused or invalid bulk requests never reach the per-item records.
+		{"/api/v1/alerts/bulk/resolve", http.StatusForbidden, false},
+		{"/api/v1/alerts/bulk/acknowledge", http.StatusBadRequest, false},
+		{"/api/v1/alerts/bulk/acknowledge", http.StatusInternalServerError, false},
+		{"/api/v1/alerts/3f2a6c1e-0000-0000-0000-000000000001/acknowledge", http.StatusOK, false},
+		{"/api/v1/monitors/bulk/delete", http.StatusOK, false},
+	}
+	for _, tc := range cases {
+		if got := itemizedSuccess(tc.path, tc.status); got != tc.want {
+			t.Errorf("itemizedSuccess(%s, %d) = %v, want %v", tc.path, tc.status, got, tc.want)
+		}
+	}
+}

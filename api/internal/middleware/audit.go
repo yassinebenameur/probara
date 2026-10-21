@@ -16,6 +16,29 @@ var auditSkipPrefixes = []string{
 	"/api/v1/api-keys",
 }
 
+// auditItemizedPrefixes are routes whose handlers record one event per item
+// they act on (the alert bulk triage endpoints). A successful request is
+// already fully audited there, so the middleware records only what never
+// reaches those per-item records: refusals (403), invalid requests (400) and
+// server errors.
+var auditItemizedPrefixes = []string{
+	"/api/v1/alerts/bulk/",
+}
+
+// itemizedSuccess reports whether a request's own handler audited it item by
+// item, so a request-level record would duplicate those events.
+func itemizedSuccess(path string, status int) bool {
+	if status >= 300 {
+		return false
+	}
+	for _, prefix := range auditItemizedPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // AuditMutations records every mutating request (method, derived action,
 // resource, outcome) after it completes. Reads are not recorded.
 func AuditMutations(recorder *audit.Recorder) func(http.Handler) http.Handler {
@@ -36,6 +59,9 @@ func AuditMutations(recorder *audit.Recorder) func(http.Handler) http.Handler {
 
 			ww := chimiddleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r)
+			if itemizedSuccess(r.URL.Path, ww.Status()) {
+				return
+			}
 
 			event := audit.FromRequest(r)
 			event.Action = deriveAction(r.Method, r.URL.Path)

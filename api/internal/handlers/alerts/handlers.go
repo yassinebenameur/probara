@@ -21,6 +21,7 @@ type Handlers struct {
 	service alertservice.AlertService
 	hub     *alertservice.Hub
 	logger  *logger.Logger
+	audit   auditRecorder
 }
 
 // NewHandlers creates a new alerts handler
@@ -97,7 +98,15 @@ func (h *Handlers) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.service.ListAlerts(r.Context(), tenantUUID, params)
+	// sort=triggered_at|status|monitor|duration, dir=asc|desc (whitelisted
+	// in the service; anything else is a 400, not a silent default).
+	sort, err := alertservice.ParseListSort(r.URL.Query().Get("sort"), r.URL.Query().Get("dir"))
+	if err != nil {
+		errors.WriteValidationError(w, err.Error())
+		return
+	}
+
+	result, err := h.service.ListAlerts(r.Context(), tenantUUID, params, sort)
 	if err != nil {
 		h.logger.WithFields(map[string]interface{}{
 			"error":     err.Error(),

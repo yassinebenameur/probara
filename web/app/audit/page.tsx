@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw, ScrollText } from 'lucide-react';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
@@ -13,12 +13,27 @@ import EmptyState from '@/components/ui/EmptyState';
 import Select from '@/components/ui/Select';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import TableSkeleton from '@/components/ui/TableSkeleton';
+import SortableHeader, { useUrlSort } from '@/components/ui/SortableHeader';
 import { getAuditActions, getAuditLog, getUsers } from '@/lib/api';
 import { formatDateTimeFull, formatTimestamp, timezoneLabel } from '@/lib/format';
 import { auditActor, auditIp, knownActorLabels } from '@/lib/audit';
-import type { AuditEvent, AuditOutcome } from '@/lib/types';
+import type { AuditEvent, AuditOutcome, AuditSortColumn } from '@/lib/types';
 
 const PAGE_SIZE = 50;
+
+// The log is paged on the server, so its columns sort there (sort/dir, a
+// whitelist with newest-first ties); the URL keeps the order (?sort=&dir=).
+const AUDIT_SORT_KEYS = ['time', 'action', 'resource', 'outcome'] as const;
+type AuditSortKey = (typeof AUDIT_SORT_KEYS)[number];
+const AUDIT_SORT_DEFAULT = { key: 'time', dir: 'desc' } as const;
+/** Newest first; the text columns start A-Z. */
+const AUDIT_SORT_DEFAULT_DIR = { time: 'desc' } as const;
+const AUDIT_SORT_COLUMN: Record<AuditSortKey, AuditSortColumn> = {
+  time: 'occurred_at',
+  action: 'action',
+  resource: 'resource',
+  outcome: 'outcome',
+};
 
 const RANGE_PRESETS = [
   { label: 'Last 24 hours', hours: 24 },
@@ -49,14 +64,21 @@ export default function AuditLogPage() {
   const [outcomeFilter, setOutcomeFilter] = useState('');
   const [rangeHours, setRangeHours] = useState(24 * 7);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [sort, setSort] = useUrlSort<AuditSortKey>(AUDIT_SORT_KEYS, AUDIT_SORT_DEFAULT, AUDIT_SORT_DEFAULT_DIR);
+  // Primitives, so re-reading the same sort from the URL never refetches.
+  const { key: sortKey, dir: sortDir } = sort;
   // Rows on screen: a failed refresh keeps them (with the error above).
   const [loaded, setLoaded] = useState(false);
+  // Only the latest load may land: a slow response for an earlier sort or
+  // filter must not overwrite a newer one.
+  const requestRef = useRef(0);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
   const allowed = isSuperadmin || role === 'admin';
 
   const loadEvents = useCallback(
     async (targetPage: number) => {
+      const request = ++requestRef.current;
       try {
         setLoading(true);
         setError('');
@@ -70,18 +92,22 @@ export default function AuditLogPage() {
           from,
           page: targetPage,
           page_size: PAGE_SIZE,
+          sort: AUDIT_SORT_COLUMN[sortKey],
+          dir: sortDir,
         });
+        if (request !== requestRef.current) return;
         setEvents(response.items || []);
         setTotal(response.total || 0);
         setPage(response.page || targetPage);
         setLoaded(true);
       } catch (err: any) {
+        if (request !== requestRef.current) return;
         setError(err.message || 'Failed to load audit log');
       } finally {
-        setLoading(false);
+        if (request === requestRef.current) setLoading(false);
       }
     },
-    [actionFilter, outcomeFilter, rangeHours]
+    [actionFilter, outcomeFilter, rangeHours, sortKey, sortDir]
   );
 
   useEffect(() => {
@@ -110,10 +136,19 @@ export default function AuditLogPage() {
   useEffect(() => {
     if (userLoading || !allowed) return;
     loadEvents(1);
-    getAuditActions()
-      .then((response) => setActions(response.actions || []))
-      .catch(() => setActions([]));
   }, [userLoading, allowed, loadEvents]);
+
+  // The action filter's options: once per visit, not on every filter or sort.
+  useEffect(() => {
+    if (userLoading || !allowed) return;
+    let cancelled = false;
+    getAuditActions()
+      .then((response) => !cancelled && setActions(response.actions || []))
+      .catch(() => !cancelled && setActions([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [userLoading, allowed]);
 
   const header = (
     <PageHeader
@@ -218,12 +253,19 @@ export default function AuditLogPage() {
                   <th className="w-8 !pr-0">
                     <span className="sr-only">Details</span>
                   </th>
-                  {/* Server-paged, newest first (the API has no other order). */}
-                  <th title="Newest first">Time ({timezoneLabel()})</th>
+                  {/* Sorted on the server; ties read newest first. */}
+                  <SortableHeader
+                    label={`Time (${timezoneLabel()})`}
+                    sortKey="time"
+                    sort={sort}
+                    onSort={setSort}
+                    defaultDir={AUDIT_SORT_DEFAULT_DIR}
+                    title={sortKey === 'time' && sortDir === 'asc' ? 'Oldest first' : 'Newest first'}
+                  />
                   <th>Actor</th>
-                  <th>Action</th>
-                  <th>Resource</th>
-                  <th>Outcome</th>
+                  <SortableHeader label="Action" sortKey="action" sort={sort} onSort={setSort} defaultDir={AUDIT_SORT_DEFAULT_DIR} />
+                  <SortableHeader label="Resource" sortKey="resource" sort={sort} onSort={setSort} defaultDir={AUDIT_SORT_DEFAULT_DIR} />
+                  <SortableHeader label="Outcome" sortKey="outcome" sort={sort} onSort={setSort} defaultDir={AUDIT_SORT_DEFAULT_DIR} />
                   <th>IP</th>
                 </tr>
               </thead>

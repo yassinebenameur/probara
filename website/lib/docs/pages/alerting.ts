@@ -73,6 +73,11 @@ export const ALERTING_PAGE: DocPage = {
           text:
             "Acknowledging records operator ownership but leaves the condition open. Reminder notifications to chat, email, SMS and webhook channels continue at the configured interval until resolution or until reminders are disabled. Paging channels (PagerDuty, Opsgenie / JSM) are the exception: they receive the acknowledgement itself and never receive reminders, because the provider runs its own escalation.",
         },
+        {
+          type: "paragraph",
+          text:
+            "On the Alerts page, users who can write work the queue in bulk: tick open alerts (Shift-click selects a range, the header box selects every open alert on the page, Escape clears), then Acknowledge or Resolve from the bar. Each action sends only the selected alerts it applies to, and alerts that changed state meanwhile are reported as skipped rather than failing the batch. Bulk acknowledge and resolve notify and record incident recovery as the single actions do; they skip alerts of deleted monitors (reported as not found), which the list no longer shows. With a row focused, `A` acknowledges and `R` resolves that alert; these keys work only while focus is on an alert row, never while typing or with Ctrl, Alt or Cmd held, and a press on an alert that is already past that step says so instead of acting. Every view except Open sorts on the server, so a column sort orders every matching alert, not just the page; those views default to newest first, while Open (which loads the whole queue) defaults to active first. Under a one-status filter (Active, Acknowledged, Resolved) the Status column does not sort, since every row has the same status.",
+        },
       ],
     },
     {

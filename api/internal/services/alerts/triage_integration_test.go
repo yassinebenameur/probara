@@ -103,7 +103,7 @@ func TestAlertsCarryTriage(t *testing.T) {
 	foreign := insertTriageTestAlert(ctx, t, dbc, tenant, uuid.Nil, 1)
 	insertTriage(ctx, t, dbc, other, foreign, "ready", string(triageSnapshot(monitor)))
 
-	list, err := svc.ListAlerts(ctx, tenant, &models.AlertListParams{PageSize: 100})
+	list, err := svc.ListAlerts(ctx, tenant, &models.AlertListParams{PageSize: 100}, ListSort{})
 	if err != nil {
 		t.Fatal(err)
 	}

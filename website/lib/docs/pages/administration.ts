@@ -350,12 +350,21 @@ export const ADMINISTRATION_PAGE: DocPage = {
             ["`actor_id`", "Filter by actor identifier"],
             ["`from` / `to`", "RFC 3339 time bounds"],
             ["`page` / `page_size`", "Paginated results"],
+            [
+              "`sort` / `dir`",
+              "Order by `occurred_at` (the default, newest first), `action`, `resource` (type, then ID) or `outcome`, `asc` or `desc`; ties read newest first. Any other value is HTTP 400",
+            ],
           ],
         },
         {
           type: "paragraph",
           text:
             "AI labels record as `incident.label` (resource `incident/{id}`), `alert.label` (alert triage, resource `alert/{id}`), `monitor.label` (dependency suggestions), and `ai-label.export`; AI settings changes record as `ai-setting.update`. A viewer's refused label attempt is recorded as `denied`.",
+        },
+        {
+          type: "paragraph",
+          text:
+            "Bulk alert triage (`POST /alerts/bulk/acknowledge` and `/resolve`) records one `alert.acknowledge` or `alert.resolve` event per requested alert (resource `alert/{id}`), shaped like the single action's, with `details.bulk: true`. An alert the batch skipped records as `failure` (HTTP 404, as the single action would answer) with `details.reason`. These per-alert events are written before the response, so they are not subject to the recorder's buffer, and they replace the usual request-level event; a refused or invalid bulk request (403, 400) records one request-level event as any other write does.",
         },
         {
           type: "paragraph",
