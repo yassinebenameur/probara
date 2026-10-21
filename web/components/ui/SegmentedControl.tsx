@@ -33,6 +33,11 @@ interface SegmentedControlProps<T extends string> {
   equalWidth?: boolean;
   /** Fill the container width with equal segments (implies `equalWidth`). */
   stretch?: boolean;
+  /**
+   * Let long labels wrap onto further rows on a narrow screen instead of
+   * scrolling sideways (a few sentence-length choices, not short stops).
+   */
+  wrap?: boolean;
   className?: string;
 }
 
@@ -54,6 +59,7 @@ export default function SegmentedControl<T extends string>({
   disabled = false,
   equalWidth = false,
   stretch = false,
+  wrap = false,
   className = '',
 }: SegmentedControlProps<T>) {
   const equal = equalWidth || stretch;
@@ -64,10 +70,12 @@ export default function SegmentedControl<T extends string>({
   // Equal segments are a single-row grid of 1fr tracks: in a content-sized
   // grid each fr track resolves to the widest segment's max-content.
   const layout = stretch
-    ? 'grid w-full auto-cols-fr grid-flow-col'
+    ? 'grid w-full auto-cols-fr grid-flow-col overflow-x-auto'
     : equal
-      ? 'inline-grid w-fit max-w-full auto-cols-fr grid-flow-col'
-      : 'inline-flex w-fit max-w-full';
+      ? 'inline-grid w-fit max-w-full auto-cols-fr grid-flow-col overflow-x-auto'
+      : wrap
+        ? 'flex w-fit max-w-full flex-wrap'
+        : 'inline-flex w-fit max-w-full overflow-x-auto';
   const ids = options.map((o) => o.value);
   return (
     <div
@@ -79,7 +87,7 @@ export default function SegmentedControl<T extends string>({
       onKeyDown={(e) => {
         if (!disabled) handleRovingKeyDown(e, ids, value, onChange);
       }}
-      className={`${layout} items-center gap-0.5 overflow-x-auto rounded-lg bg-well p-0.5 shadow-[inset_0_0_0_1px_var(--glass-edge)] ${
+      className={`${layout} items-center gap-0.5 rounded-lg bg-well p-0.5 shadow-[inset_0_0_0_1px_var(--glass-edge)] ${
         disabled ? 'opacity-50' : ''
       } ${className}`.trim()}
     >

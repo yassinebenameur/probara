@@ -34,8 +34,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
-import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
-import { FOCUS_RING } from '@/components/ui/focus';
+import SegmentedControl from '@/components/ui/SegmentedControl';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
@@ -107,10 +106,10 @@ const CALL_MODES = [
   { mode: 'answer', label: 'Answer and hang up' },
   { mode: 'ring', label: 'Ring only' },
 ] as const;
-const CALL_MODE_IDS = CALL_MODES.map((m) => m.mode);
+const CALL_MODE_OPTIONS = CALL_MODES.map(({ mode, label }) => ({ value: mode, label }));
 
-// What a measured call must prove (call.media.expect), the same roving
-// segment as the mode.
+// What a measured call must prove (call.media.expect), a SegmentedControl
+// like the mode.
 const MEDIA_EXPECTS: { expect: SIPMediaExpect; label: string; hint: string }[] = [
   {
     expect: 'none',
@@ -133,7 +132,7 @@ const MEDIA_EXPECTS: { expect: SIPMediaExpect; label: string; hint: string }[] =
     hint: "For a number that plays the caller's audio back: sends a 1004 Hz tone and fails unless it comes back.",
   },
 ];
-const MEDIA_EXPECT_IDS = MEDIA_EXPECTS.map((m) => m.expect);
+const MEDIA_EXPECT_OPTIONS = MEDIA_EXPECTS.map(({ expect, label }) => ({ value: expect, label }));
 // The hold a call is raised to when call quality is turned on with less:
 // above the 3000 ms floor, so the measured window clears the 2 s a quality
 // estimate needs with room to spare.
@@ -815,33 +814,13 @@ export default function SipForm({
 
             <div>
               <p className="mb-2 text-xs font-medium text-slate-400">Mode</p>
-              <div
-                className="mb-2 flex w-fit max-w-full gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
-                role="radiogroup"
-                aria-label="Call mode"
-                onKeyDown={(e) =>
-                  handleRovingKeyDown(e, CALL_MODE_IDS, formData.call_mode, (mode) =>
-                    setFormData((prev) => ({ ...prev, call_mode: mode }))
-                  )
-                }
-              >
-                {CALL_MODES.map(({ mode, label }) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    data-roving-id={mode}
-                    tabIndex={formData.call_mode === mode ? 0 : -1}
-                    aria-checked={formData.call_mode === mode}
-                    onClick={() => setFormData((prev) => ({ ...prev, call_mode: mode }))}
-                    className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium ${SEGMENT_ITEM} ${FOCUS_RING} ${
-                      formData.call_mode === mode ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                className="mb-2"
+                label="Call mode"
+                options={CALL_MODE_OPTIONS}
+                value={formData.call_mode}
+                onChange={(mode) => setFormData((prev) => ({ ...prev, call_mode: mode }))}
+              />
               <FieldHint>
                 {ring
                   ? 'Succeeds on the first ringing (18x) and cancels, so the call is never answered or billed. A call answered anyway is hung up at once and flagged.'
@@ -1029,33 +1008,14 @@ export default function SipForm({
 
                 <div>
                   <p className="mb-2 text-xs font-medium text-slate-400">Expect</p>
-                  <div
-                    className="mb-2 flex w-fit max-w-full flex-wrap gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
-                    role="radiogroup"
-                    aria-label="What the call must prove about audio"
-                    onKeyDown={(e) =>
-                      handleRovingKeyDown(e, MEDIA_EXPECT_IDS, formData.call_media_expect, (expect) =>
-                        setMedia({ call_media_expect: expect })
-                      )
-                    }
-                  >
-                    {MEDIA_EXPECTS.map(({ expect, label }) => (
-                      <button
-                        key={expect}
-                        type="button"
-                        role="radio"
-                        data-roving-id={expect}
-                        tabIndex={formData.call_media_expect === expect ? 0 : -1}
-                        aria-checked={formData.call_media_expect === expect}
-                        onClick={() => setMedia({ call_media_expect: expect })}
-                        className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
-                          formData.call_media_expect === expect ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    className="mb-2"
+                    wrap
+                    label="What the call must prove about audio"
+                    options={MEDIA_EXPECT_OPTIONS}
+                    value={formData.call_media_expect}
+                    onChange={(expect) => setMedia({ call_media_expect: expect })}
+                  />
                   <FieldHint>{mediaExpect.hint}</FieldHint>
                 </div>
 
