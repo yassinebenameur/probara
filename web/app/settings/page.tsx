@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Callout from '@/components/ui/Callout';
 import FilterChip from '@/components/ui/FilterChip';
 import Input from '@/components/ui/Input';
@@ -25,8 +26,10 @@ import DashboardGroupsSection from '@/components/settings/DashboardGroupsSection
 import { NotificationsPanel } from '@/components/settings/NotificationsPanel';
 import { AISettingsPanel } from '@/components/settings/AISettingsPanel';
 import { MCPPanel } from '@/components/settings/MCPPanel';
+import { SETTINGS_COLUMNS, SETTINGS_COLUMNS_WIDE } from '@/components/settings/layout';
 import AlertChannelList from '@/components/alert-channels/AlertChannelList';
-import Tabs, { useUrlTab } from '@/components/ui/Tabs';
+import Tabs, { TabPanel, useUrlTab } from '@/components/ui/Tabs';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 
 const RETENTION_PRESETS: Array<{ label: string; value: string }> = [
   { label: 'Keep forever', value: '' },
@@ -41,6 +44,30 @@ function formatFingerprint(prefix: string | undefined): string {
 }
 
 const EXPIRY_WARN_DAYS = 14;
+
+type SettingsTab = 'channels' | 'general' | 'ai' | 'mcp' | 'access';
+
+// Per-tab layout on the full-width page. Notifications lays its section cards
+// into column stacks itself (sectionLayout) above the full-width
+// channel list, and AI is one wide panel that splits into columns inside, so
+// both tabs stack their top-level blocks; General and MCP
+// are two peer cards of similar height (stretched to match); Access puts the
+// API keys and SSO status beside the group mappings once both forms fit.
+// grid-cols-1 (minmax(0,1fr)), never a bare `grid`: an implicit auto track
+// grows to its widest unbreakable row (channel table, picker rows) and pushes
+// the panels past a phone viewport instead of letting them scroll inside.
+//
+// While Notifications' unsaved-changes bar floats over the bottom of the
+// viewport (data-floating-bar), the tab grows room under its last panel so
+// the end of the channel list can scroll clear of the bar. Padding at the
+// end moves nothing above it.
+const TAB_LAYOUT: Record<SettingsTab, string> = {
+  channels: 'grid grid-cols-1 gap-6 [html:has([data-floating-bar])_&]:pb-24',
+  general: `${SETTINGS_COLUMNS} items-stretch`,
+  ai: 'grid grid-cols-1 gap-6',
+  mcp: `${SETTINGS_COLUMNS} items-stretch`,
+  access: `${SETTINGS_COLUMNS_WIDE} items-start`,
+};
 
 function expiryTone(expiresAt: string): 'danger' | 'warning' | 'neutral' {
   const remainingMs = new Date(expiresAt).getTime() - Date.now();
@@ -94,7 +121,7 @@ export default function SettingsPage() {
   const [showInactiveKeys, setShowInactiveKeys] = useState(false);
   // Notifications (default routing above the channel list) leads; its id stays
   // `channels` because /alert-channels and the routing badges link to it.
-  const [tab, setTab] = useUrlTab(['channels', 'general', 'ai', 'mcp', 'access'] as const);
+  const [tab, setTab] = useUrlTab<SettingsTab>(['channels', 'general', 'ai', 'mcp', 'access']);
 
   useEffect(() => {
     setBrowserKeyPresent(Boolean(getApiKey()));
@@ -248,7 +275,7 @@ export default function SettingsPage() {
     (!/^\d+$/.test(retentionInput.trim()) || customRetentionDays < 30 || customRetentionDays > 3650);
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         title="Settings"
         subtitle="Notifications, data retention, AI, agent connections (MCP) and access for this workspace."
@@ -264,13 +291,17 @@ export default function SettingsPage() {
         ]}
         active={tab}
         onChange={setTab}
+        idBase="settings"
       />
 
+      <TabPanel idBase="settings" id={tab} className={TAB_LAYOUT[tab]}>
       {(tab === 'channels' || tab === 'ai') && !userLoading && !canWrite && (
-        <Callout tone="info">You have read-only access to this workspace.</Callout>
+        <Callout tone="info" className="col-span-full">You have read-only access to this workspace.</Callout>
       )}
       {tab === 'general' && !userLoading && !isTenantAdmin && (
-        <Callout tone="info">Only workspace admins can change data retention and dashboard groups.</Callout>
+        <Callout tone="info" className="col-span-full">
+          Only workspace admins can change data retention and dashboard groups.
+        </Callout>
       )}
 
       {tab === 'channels' && !userLoading && <NotificationsPanel readOnly={!canWrite} />}
@@ -281,9 +312,6 @@ export default function SettingsPage() {
 
       {tab === 'mcp' && <MCPPanel />}
 
-      {tab === 'access' && isSuperadmin && <SSOPanel />}
-
-      {tab === 'access' && isSuperadmin && <OidcGroupMappingsPanel />}
 
       {tab === 'general' && <Panel
         title="Data retention"
@@ -338,7 +366,7 @@ export default function SettingsPage() {
                   />
                 </div>
               )}
-              <p className="mt-3 max-w-2xl text-xs text-slate-500">
+              <p className="mt-3 max-w-prose text-xs text-slate-500">
                 Raw check results are always kept 30 days; uptime and latency history comes from hourly
                 rollups kept 400 days.
               </p>
@@ -376,7 +404,11 @@ export default function SettingsPage() {
         />
       ))}
 
-      {tab === 'access' && <Panel
+      {/* Two column wrappers: API keys with the (short) SSO status on the left,
+          the group mappings on the right, so the columns end at similar
+          heights. Non-superadmins get the API keys column alone, full width. */}
+      {tab === 'access' && <div className="min-w-0 space-y-6">
+      <Panel
         title="API keys"
         subtitle="Keys used by agents, scripts, and integrations."
       >
@@ -398,8 +430,8 @@ export default function SettingsPage() {
                 )}
 
                 {canManageKeys && (
-                  <form onSubmit={handleCreate} className="flex flex-col gap-3 lg:flex-row lg:items-end">
-                    <div className="flex-1">
+                  <form onSubmit={handleCreate} className="flex flex-wrap items-end gap-3">
+                    <div className="min-w-0 max-w-md grow basis-60">
                       <Input
                         label="API key name"
                         type="text"
@@ -408,7 +440,7 @@ export default function SettingsPage() {
                         placeholder="e.g. Production agents"
                       />
                     </div>
-                    <div className="w-full lg:w-44">
+                    <div className="w-full sm:w-40">
                       <Select
                         label="Scope"
                         className="h-10"
@@ -419,7 +451,7 @@ export default function SettingsPage() {
                         <option value="read">Read-only</option>
                       </Select>
                     </div>
-                    <div className="w-full lg:w-44">
+                    <div className="w-full sm:w-40">
                       <Select
                         label="Expires"
                         className="h-10"
@@ -493,7 +525,7 @@ export default function SettingsPage() {
                               Fingerprint <span className="font-mono">{formatFingerprint(key.key_prefix)}</span>
                             </span>
                             <span>Created {formatDateTime(key.created_at)}</span>
-                            {key.last_used_at && <span>Last used {formatDateTime(key.last_used_at)}</span>}
+                            {key.last_used_at && <RelativeTime value={key.last_used_at} prefix="Last used " />}
                           </p>
                           {key.revoked_at && (
                             <p className="mt-0.5 text-xs text-rose-300">
@@ -540,7 +572,16 @@ export default function SettingsPage() {
             </div>
           </>
         )}
-      </Panel>}
+      </Panel>
+      {isSuperadmin && <SSOPanel />}
+      </div>}
+
+      {tab === 'access' && isSuperadmin && (
+        <div className="min-w-0">
+          <OidcGroupMappingsPanel />
+        </div>
+      )}
+      </TabPanel>
 
       <ConfirmDialog
         open={pendingRevoke !== null}
@@ -555,6 +596,6 @@ export default function SettingsPage() {
         onConfirm={handleRevoke}
         onCancel={() => !revoking && setPendingRevoke(null)}
       />
-    </div>
+    </Page>
   );
 }

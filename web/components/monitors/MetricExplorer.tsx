@@ -14,6 +14,8 @@ import {
   metricUnitKind,
 } from '@/lib/metrics';
 import Callout from '@/components/ui/Callout';
+import Checkbox from '@/components/ui/Checkbox';
+import { FOCUS_RING_INSET } from '@/components/ui/focus';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import {
   ChartSeriesInput,
@@ -220,11 +222,12 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
         <div className="grid gap-6 2xl:grid-cols-[280px_1fr]">
           <div className="space-y-2">
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" strokeWidth={1.75} aria-hidden="true" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search metrics"
                 placeholder="Search metrics"
                 className="input input-sm !pl-8"
               />
@@ -242,7 +245,8 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                     <button
                       type="button"
                       onClick={() => toggleMetricExpanded(metricName)}
-                      className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well"
+                      aria-expanded={expanded}
+                      className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well active:bg-well-hover ${FOCUS_RING_INSET}`}
                     >
                       {expanded ? (
                         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" strokeWidth={1.75} />
@@ -256,6 +260,7 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                       {selectedInGroup > 0 && (
                         <span className="shrink-0 rounded-full bg-well-hover px-1.5 text-2xs tabular-nums text-slate-300">
                           {selectedInGroup}
+                          <span className="sr-only"> selected</span>
                         </span>
                       )}
                     </button>
@@ -265,22 +270,27 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                           const selected = selectedKeys.includes(series.series_key);
                           const disabled = !selected && selectedKeys.length >= MAX_SELECTED_SERIES;
                           return (
-                            <label
+                            <Checkbox
                               key={series.series_key}
-                              className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-xs transition-colors ${
-                                selected ? 'bg-well text-white' : 'text-slate-400 hover:bg-well hover:text-white'
-                              } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selected}
-                                disabled={disabled}
-                                onChange={() => toggleSeries(series.series_key)}
-                                className="h-3.5 w-3.5 accent-cyan-500"
-                              />
-                              <span className="min-w-0 flex-1 truncate font-mono">{seriesLabel(series)}</span>
-                              <span className="shrink-0 text-2xs text-slate-500">{series.metric_type}</span>
-                            </label>
+                              size="sm"
+                              checked={selected}
+                              disabled={disabled}
+                              onChange={() => toggleSeries(series.series_key)}
+                              stretch
+                              className={`w-full !items-center !gap-2 rounded-lg px-2 !py-1 transition-colors ${
+                                selected ? 'bg-well' : 'hover:bg-well'
+                              }`}
+                              label={
+                                <span
+                                  className={`flex items-center gap-2 text-xs ${
+                                    selected ? 'text-white' : 'text-slate-400 hover:text-white'
+                                  }`}
+                                >
+                                  <span className="min-w-0 flex-1 truncate font-mono">{seriesLabel(series)}</span>
+                                  <span className="shrink-0 text-2xs text-slate-500">{series.metric_type}</span>
+                                </span>
+                              }
+                            />
                           );
                         })}
                       </div>
@@ -308,21 +318,16 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                   <option value="max">max</option>
                 </select>
               </label>
-              <label
-                className="flex items-center gap-2 text-xs text-slate-400"
+              <Checkbox
+                size="sm"
+                checked={hasCounterSelected}
+                disabled
                 title="Counters always render as per-second rates; gauges never do."
-              >
-                <input
-                  type="checkbox"
-                  checked={hasCounterSelected}
-                  disabled
-                  readOnly
-                  className="h-3.5 w-3.5 accent-cyan-500"
-                />
-                Per-second rate (auto for counters)
-              </label>
-              {queryLoading && <span className="text-xs text-slate-500">Loading…</span>}
-              {queryError && <span className="text-xs text-rose-300">{queryError}</span>}
+                className="!items-center !py-0"
+                label={<span className="text-xs text-slate-400">Per-second rate (auto for counters)</span>}
+              />
+              {queryLoading && <span role="status" className="text-xs text-slate-500">Loading…</span>}
+              {queryError && <span role="alert" className="text-xs text-rose-300">{queryError}</span>}
             </div>
 
             {selectedSeries.length === 0 ? (
@@ -344,7 +349,7 @@ export default function MetricExplorer({ monitorId, timeRange }: MetricExplorerP
                 <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                   {chartSeries.map((series) => (
                     <span key={series.key} className="flex items-center gap-1.5">
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: series.color }} />
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: series.color }} aria-hidden="true" />
                       <span className="max-w-[320px] truncate font-mono">{series.name}</span>
                     </span>
                   ))}

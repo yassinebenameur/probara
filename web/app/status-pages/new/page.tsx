@@ -6,6 +6,7 @@ import { CreateStatusPageRequest, UpdateStatusPageRequest } from '@/lib/types';
 import { createStatusPage } from '@/lib/api';
 import StatusPageForm from '@/components/status-pages/StatusPageForm';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import { useToast } from '@/components/ui/ToastProvider';
 
 export default function NewStatusPagePage() {
@@ -28,7 +29,7 @@ export default function NewStatusPagePage() {
   };
 
   return (
-    <div className="space-y-6">
+    <Page width="wide">
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: 'New' }]}
         title="New status page"
@@ -40,6 +41,6 @@ export default function NewStatusPagePage() {
         onCancel={() => router.push('/status-pages')}
         loading={loading}
       />
-    </div>
+    </Page>
   );
 }

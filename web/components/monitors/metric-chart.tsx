@@ -7,6 +7,7 @@ import {
   Area,
   AreaChart,
   Brush,
+  CartesianGrid,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -41,7 +42,25 @@ export const RANGE_STEP_SECONDS: Record<TimeRange, number> = {
 
 export const METRIC_SYNC_ID = 'agent-metrics';
 
-export const SERIES_COLORS = ['#e6b23f', '#ff8a5c', '#6fb5dd', '#46d17f', '#f472b6', '#fb923c'];
+// Categorical series colours, theme-aware through the --chart-* tokens in
+// app/globals.css: no status hue (a series is not "up" or "warning") and no
+// orange (that means "act"), >= 3:1 on glass and wells in both themes.
+// Order matters: charts pair adjacent entries (1+2, 2+3, 3+4 ...), so
+// neighbours are far apart in hue.
+export const SERIES_COLORS = [
+  'var(--chart-1)',
+  'var(--chart-2)',
+  'var(--chart-3)',
+  'var(--chart-4)',
+  'var(--chart-5)',
+  'var(--chart-6)',
+];
+
+/** Latency (dashboard trend, monitor response time): the first series colour. */
+export const LATENCY_COLOR = SERIES_COLORS[0];
+
+/** Horizontal gridlines for every chart: quiet, but enough to read a value across a wide chart. */
+export const CHART_GRID = { stroke: 'var(--chart-grid)', vertical: false } as const;
 
 // Chart chrome shared by every chart in the monitor views: a frosted tooltip,
 // muted axis ticks and a hairline hover cursor, all theme-aware.
@@ -67,7 +86,16 @@ export function isolatedDot(rows: ReadonlyArray<Record<string, unknown> | undefi
     const isNum = (row?: Record<string, unknown>) => typeof row?.[key] === 'number';
     const isolated = isNum(rows[i]) && !isNum(rows[i - 1]) && !isNum(rows[i + 1]);
     return isolated && props.cx !== undefined && props.cy !== undefined ? (
-      <circle key={`${key}-${i}`} cx={props.cx} cy={props.cy} r={2.5} fill={color} />
+      // A ring of panel colour keeps the point a distinct mark, not a speck.
+      <circle
+        key={`${key}-${i}`}
+        cx={props.cx}
+        cy={props.cy}
+        r={3.5}
+        fill={color}
+        stroke="rgb(var(--panel-rgb))"
+        strokeWidth={1.5}
+      />
     ) : (
       <g key={`${key}-${i}`} />
     );
@@ -156,7 +184,7 @@ export function MetricTooltip({
       <p className="text-xs text-slate-400">{formatTimeLabel(label, range)}</p>
       {entries.map((entry, index) => (
         <p key={`${entry.name}-${index}`} className="mt-1 flex items-center gap-2 text-sm">
-          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} aria-hidden="true" />
           <span className="text-slate-400">{entry.name}</span>
           <span className="font-medium tabular-nums">{formatter(entry.value as number)}</span>
         </p>
@@ -181,6 +209,7 @@ export function MetricChart({
   referenceLines,
   syncId = METRIC_SYNC_ID,
   yAxisWidth = 56,
+  ariaLabel,
 }: {
   data: ChartRow[];
   series: ChartSeries[];
@@ -195,14 +224,30 @@ export function MetricChart({
   syncId?: string;
   // Widen for long tick labels (byte values) so they don't wrap.
   yAxisWidth?: number;
+  /** Text alternative; defaults to each series' latest value. */
+  ariaLabel?: string;
 }) {
   const hasData = data.some((row) => series.some((s) => row[s.key] !== null && row[s.key] !== undefined));
   if (!hasData) {
     return <p className="py-3 text-center text-ui text-slate-500">No data in range</p>;
   }
 
+  // The SVG says nothing to a screen reader; name the chart by the values a
+  // sighted reader takes from its right edge.
+  const summary =
+    ariaLabel ??
+    `Chart, latest values: ${series
+      .map((s) => {
+        for (let i = data.length - 1; i >= 0; i--) {
+          const v = data[i][s.key];
+          if (typeof v === 'number') return `${s.name} ${valueFormatter(v)}`;
+        }
+        return `${s.name} no data`;
+      })
+      .join(', ')}`;
+
   return (
-    <div style={{ height }}>
+    <div style={{ height }} role="img" aria-label={summary}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} syncId={syncId || undefined} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
           <defs>
@@ -213,6 +258,7 @@ export function MetricChart({
               </linearGradient>
             ))}
           </defs>
+          <CartesianGrid {...CHART_GRID} />
           <XAxis
             dataKey="ts"
             type="number"
@@ -241,9 +287,10 @@ export function MetricChart({
             <ReferenceLine
               key={`ref-${line.label}-${line.y}`}
               y={line.y}
-              stroke="#f04a5a"
+              // Full-strength danger, dashed so it stays distinct from the
+              // series (a faded stroke drops under 3:1 on a well).
+              stroke="var(--danger)"
               strokeDasharray="4 4"
-              strokeOpacity={0.7}
               ifOverflow="extendDomain"
               label={{ value: line.label, position: 'insideTopRight', fill: 'var(--danger)', fontSize: 11 }}
             />

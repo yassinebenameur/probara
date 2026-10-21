@@ -47,9 +47,16 @@ import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
 import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
-import { SELECTED_SEGMENT } from '@/components/ui/roving';
+import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
+import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 
 export type { DatabaseMonitorType } from '@/lib/monitor-form/database';
+
+const CONNECTION_MODES: { mode: ConnectionMode; label: string }[] = [
+  { mode: 'fields', label: 'Form fields' },
+  { mode: 'connection_string', label: 'Connection string' },
+];
+const CONNECTION_MODE_IDS = CONNECTION_MODES.map((m) => m.mode);
 
 const QUERY_VALUE_OPS: { value: DBQueryValueOp; label: string }[] = [
   { value: 'equals', label: 'equals' },
@@ -73,6 +80,7 @@ function SecretInput({
   storedPlaceholder,
   mono = false,
   error,
+  ariaLabel,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -82,6 +90,8 @@ function SecretInput({
   storedPlaceholder: string;
   mono?: boolean;
   error?: string;
+  /** The field's name; FormField cannot link its label through this wrapper. */
+  ariaLabel?: string;
 }) {
   const [reveal, setReveal] = useState(false);
   return (
@@ -92,6 +102,7 @@ function SecretInput({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={hasStored ? storedPlaceholder : placeholder}
+          aria-label={ariaLabel}
           autoComplete="new-password"
           className={`input ${hasStored && !value ? '!pr-28' : '!pr-10'} ${mono ? 'font-mono' : ''}`}
         />
@@ -104,7 +115,7 @@ function SecretInput({
                 <button
                   type="button"
                   onClick={onClear}
-                  className="rounded-full p-0.5 text-slate-400 transition-colors hover:bg-control-hover hover:text-white"
+                  className={`rounded-full p-0.5 text-slate-400 transition-colors hover:bg-control-hover hover:text-white ${FOCUS_RING}`}
                   aria-label="Clear stored value"
                   title="Clear the stored value"
                 >
@@ -116,9 +127,9 @@ function SecretInput({
           <button
             type="button"
             onClick={() => setReveal(!reveal)}
-            className="rounded-lg p-1 text-slate-400 transition-colors hover:text-white"
+            className={`rounded-lg p-1 text-slate-400 transition-colors hover:text-white ${FOCUS_RING}`}
             aria-label={reveal ? 'Hide value' : 'Show value'}
-            tabIndex={-1}
+            aria-pressed={reveal}
           >
             {reveal ? <EyeOff className="h-4 w-4" strokeWidth={1.75} /> : <Eye className="h-4 w-4" strokeWidth={1.75} />}
           </button>
@@ -361,20 +372,26 @@ export default function DatabaseForm({
         </FormField>
 
         <div>
-          <div className="mb-2 flex w-fit max-w-full gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]" role="radiogroup" aria-label="Connection mode">
-            {(
-              [
-                { mode: 'fields' as ConnectionMode, label: 'Form fields' },
-                { mode: 'connection_string' as ConnectionMode, label: 'Connection string' },
-              ]
-            ).map(({ mode, label }) => (
+          <div
+            className="mb-2 flex w-fit max-w-full gap-0.5 rounded-xl bg-well p-1 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
+            role="radiogroup"
+            aria-label="Connection mode"
+            onKeyDown={(e) =>
+              handleRovingKeyDown(e, CONNECTION_MODE_IDS, formData.connection_mode, (mode) =>
+                setFormData({ ...formData, connection_mode: mode })
+              )
+            }
+          >
+            {CONNECTION_MODES.map(({ mode, label }) => (
               <button
                 key={mode}
                 type="button"
                 role="radio"
                 aria-checked={formData.connection_mode === mode}
+                data-roving-id={mode}
+                tabIndex={formData.connection_mode === mode ? 0 : -1}
                 onClick={() => setFormData({ ...formData, connection_mode: mode })}
-                className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium ${SEGMENT_ITEM} ${FOCUS_RING} ${
                   formData.connection_mode === mode
                     ? SELECTED_SEGMENT
                     : 'text-slate-400 hover:text-slate-100'
@@ -401,6 +418,7 @@ export default function DatabaseForm({
                 placeholder={meta.csPlaceholder}
                 storedPlaceholder="Unchanged — paste a new connection string to replace"
                 mono
+                ariaLabel="Connection string"
               />
               <p className="mt-1 text-xs text-slate-500">{meta.csHint}</p>
             </FormField>
@@ -476,6 +494,7 @@ export default function DatabaseForm({
                   onClear={() => setCleared({ ...cleared, password: true })}
                   placeholder="••••••••"
                   storedPlaceholder="Unchanged"
+                  ariaLabel="Password"
                 />
                 {!errors.password && (
                   <p className="mt-1 text-xs text-slate-500">
@@ -635,8 +654,9 @@ export default function DatabaseForm({
             <button
               type="button"
               onClick={() => setCertsOpen(!certsOpen)}
-              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+              className={`flex w-full items-center justify-between gap-3 rounded-[inherit] px-4 py-3 text-left transition-colors hover:bg-well-hover ${FOCUS_RING_INSET}`}
               aria-expanded={certsOpen}
+              aria-controls="db-tls-material"
             >
               <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-slate-200">
                 <ShieldCheck className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
@@ -649,13 +669,13 @@ export default function DatabaseForm({
                 )}
               </span>
               {certsOpen ? (
-                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
+                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
               ) : (
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
               )}
             </button>
             {certsOpen && (
-              <div className="space-y-4 px-4 pb-4 pt-1">
+              <div id="db-tls-material" className="space-y-4 px-4 pb-4 pt-1">
                 <FormField label="CA certificate (PEM, optional)">
                   {(control) => (
                     <>
@@ -704,6 +724,7 @@ export default function DatabaseForm({
                     )}
                     <textarea
                       rows={4}
+                      aria-label="Client key (PEM)"
                       value={formData.tls_client_key_pem}
                       onChange={(e) => setFormData({ ...formData, tls_client_key_pem: e.target.value })}
                       placeholder={hasStoredClientKey ? 'Unchanged — paste a new key to replace' : '-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----'}
@@ -858,8 +879,9 @@ export default function DatabaseForm({
             <button
               type="button"
               onClick={() => setClusterChecksOpen(!clusterChecksOpen)}
-              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+              className={`flex w-full items-center justify-between gap-3 rounded-[inherit] px-4 py-3 text-left transition-colors hover:bg-well-hover ${FOCUS_RING_INSET}`}
               aria-expanded={clusterChecksOpen}
+              aria-controls="db-cluster-checks"
             >
               <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-slate-200">
                 <Activity className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
@@ -875,13 +897,13 @@ export default function DatabaseForm({
                 )}
               </span>
               {clusterChecksOpen ? (
-                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
+                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
               ) : (
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
               )}
             </button>
             {clusterChecksOpen && (
-              <div className="space-y-3 px-4 pb-4 pt-1">
+              <div id="db-cluster-checks" className="space-y-3 px-4 pb-4 pt-1">
                 <div className="flex items-center gap-1.5 text-xs text-slate-500">
                   Read-only admin commands — skipped and flagged when the role is missing, never failing the check.
                   <InfoTip inLabel ariaLabel="About cluster checks and permissions">

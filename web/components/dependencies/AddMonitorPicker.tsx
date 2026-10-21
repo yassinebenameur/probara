@@ -5,6 +5,7 @@ import { Plus, Workflow } from 'lucide-react';
 import { DependencyMonitor, MonitorState } from '@/lib/types';
 import { getMonitors } from '@/lib/api';
 import Button from '@/components/ui/Button';
+import { FOCUS_RING_INSET } from '@/components/ui/focus';
 import { stateStyle, TYPE_ICONS } from './graphTheme';
 
 // Toolbar popover: search any monitor and drop it onto the canvas so it can
@@ -90,7 +91,8 @@ export function AddMonitorPicker({
       {open && (
         <div
           className={`glass-overlay absolute top-full z-20 mt-2 w-72 !rounded-xl p-1.5 text-left ${
-            align === 'center' ? 'left-1/2 -translate-x-1/2' : 'right-0'
+            // pop-in animates transform, so the centred (translated) variant fades instead.
+            align === 'center' ? 'left-1/2 -translate-x-1/2 animate-fade-in' : 'right-0 origin-top-right animate-pop-in'
           }`}
         >
           <input
@@ -100,11 +102,12 @@ export function AddMonitorPicker({
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
             placeholder="Search monitors…"
+            aria-label="Search monitors"
             className="input input-sm mb-1.5"
           />
           <div className="dashboard-scroll max-h-64 space-y-px overflow-y-auto">
             {allMonitors === null ? (
-              <p className="px-2 py-3 text-center text-xs text-slate-500">Loading…</p>
+              <p role="status" className="px-2 py-3 text-center text-xs text-slate-500">Loading…</p>
             ) : candidates.length === 0 ? (
               <p className="px-2 py-3 text-center text-xs text-slate-500">
                 {query ? 'No monitors match' : 'Everything is already on the canvas'}
@@ -122,13 +125,14 @@ export function AddMonitorPicker({
                       setOpen(false);
                       setQuery('');
                     }}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well-hover"
+                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-well-hover active:bg-control-hover ${FOCUS_RING_INSET}`}
                   >
                     <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${s.iconTile}`}>
-                      <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      <Icon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
                     </span>
                     <span className="min-w-0 flex-1 truncate text-xs text-slate-200">{m.name}</span>
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.dot}`} />
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.dot}`} aria-hidden="true" />
+                    <span className="sr-only">, {m.current_state ?? 'unknown'}</span>
                   </button>
                 );
               })

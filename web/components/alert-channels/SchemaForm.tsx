@@ -263,8 +263,9 @@ function SecretField({
           value={text}
           onChange={(e) => onChange(e.target.value)}
           autoComplete="off"
+          aria-label={field.label}
         />
-        <Button variant="ghost" size="sm" type="button" onClick={() => setReveal(!reveal)}>
+        <Button variant="ghost" size="sm" type="button" onClick={() => setReveal(!reveal)} aria-pressed={reveal}>
           {reveal ? 'Hide' : 'Show'}
         </Button>
       </div>

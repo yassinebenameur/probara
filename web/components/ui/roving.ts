@@ -38,5 +38,17 @@ export function handleRovingKeyDown<T extends string>(
   target?.focus();
 }
 
-/** Neutral raised glass: the one "selected" look for tabs, chips and segments. */
-export const SELECTED_SEGMENT = 'bg-glass-strong text-white shadow-segment';
+/**
+ * Neutral raised glass: the one "selected" look for tabs, chips and segments.
+ * bg-selected is the brightest neutral fill in each theme, so a selected item
+ * never reads darker than its idle or hovered neighbours.
+ */
+export const SELECTED_SEGMENT = 'bg-selected text-white shadow-segment';
+
+/**
+ * Motion for a segment (tab, range button): the raised fill and shadow ease
+ * in on selection, and a press dips it slightly.
+ */
+export const SEGMENT_ITEM =
+  'transition-[background-color,color,box-shadow,transform] duration-fast ease-standard ' +
+  'active:scale-[0.97] motion-reduce:active:scale-100';

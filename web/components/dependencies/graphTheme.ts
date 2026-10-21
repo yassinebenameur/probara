@@ -93,11 +93,14 @@ export function stateStyle(state?: MonitorState) {
 }
 
 // Literal colours, not CSS variables: React Flow bakes a marker's colour into
-// its SVG id, which a var() reference would break.
+// its SVG id, which a var() reference would break. So each is a mid-tone
+// that clears 3:1 on the graph's panel in BOTH themes (white and #13161d):
+// down 4.4 / 4.1, suspect 3.3 / 5.5, up 3.3 / 5.4, default 3.9 / 4.7.
 export const EDGE_COLORS: Record<string, string> = {
-  down: '#f4707d',
-  suspect: '#e6b23f',
-  degraded: '#e6b23f',
+  down: '#dc3a4b',
+  suspect: '#b98317',
+  degraded: '#b98317',
+  up: '#2ba05d',
   default: '#79828f',
 };
 

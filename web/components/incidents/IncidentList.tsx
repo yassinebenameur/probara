@@ -13,19 +13,31 @@ import {
 } from '@/lib/status-tones';
 import EmptyState from '@/components/ui/EmptyState';
 import Pill from '@/components/ui/Pill';
+import SortableHeader from '@/components/ui/SortableHeader';
+import type { SortState } from '@/lib/sort';
 
 export type IncidentRow = IncidentListItem;
+
+export const INCIDENT_SORT_KEYS = ['triage', 'title', 'severity', 'state', 'updated'] as const;
+export type IncidentSortKey = (typeof INCIDENT_SORT_KEYS)[number];
+/** Worst severity, earliest lifecycle state and newest update lead. */
+export const INCIDENT_SORT_DEFAULT_DIR = { updated: 'desc' } as const;
 
 interface IncidentListProps {
   incidents: IncidentRow[];
   emptyTitle?: string;
   emptyDescription?: string;
+  /** Column sorting; the owner sorts `incidents` (all of them, before paging). */
+  sort?: SortState<IncidentSortKey>;
+  onSort?: (next: SortState<IncidentSortKey>) => void;
 }
 
 export default function IncidentList({
   incidents,
   emptyTitle = 'No incidents yet',
   emptyDescription = 'Create one manually, or have monitors open incidents automatically in Settings.',
+  sort,
+  onSort,
 }: IncidentListProps) {
   if (incidents.length === 0) {
     return (
@@ -42,12 +54,36 @@ export default function IncidentList({
       <div className="overflow-x-auto">
         <table className="data-table text-ui">
           <thead>
-            <tr>
-              <th className="w-full">Incident</th>
-              <th className="hidden sm:table-cell">Severity</th>
-              <th>State</th>
-              <th className="hidden md:table-cell">Updated</th>
-            </tr>
+            {sort && onSort ? (
+              <tr>
+                <SortableHeader label="Incident" sortKey="title" sort={sort} onSort={onSort} className="w-full" />
+                <SortableHeader
+                  label="Severity"
+                  sortKey="severity"
+                  sort={sort}
+                  onSort={onSort}
+                  title="Worst first"
+                  className="hidden sm:table-cell"
+                />
+                <SortableHeader label="State" sortKey="state" sort={sort} onSort={onSort} title="Investigating first" />
+                <SortableHeader
+                  label="Updated"
+                  sortKey="updated"
+                  sort={sort}
+                  onSort={onSort}
+                  defaultDir={INCIDENT_SORT_DEFAULT_DIR}
+                  title="Most recent first"
+                  className="hidden md:table-cell"
+                />
+              </tr>
+            ) : (
+              <tr>
+                <th className="w-full">Incident</th>
+                <th className="hidden sm:table-cell">Severity</th>
+                <th>State</th>
+                <th className="hidden md:table-cell">Updated</th>
+              </tr>
+            )}
           </thead>
           <tbody>
             {incidents.map((incident) => {
@@ -75,7 +111,7 @@ export default function IncidentList({
                     <div className="flex min-w-0 items-center gap-2">
                       <Link
                         href={`/incidents/${incident.id}`}
-                        className="row-link truncate text-sm font-medium text-white transition-colors hover:text-cyan-300 focus:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-cyan-500/50"
+                        className="row-link truncate text-sm font-medium text-white transition-colors hover:text-cyan-300 focus:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-focus"
                       >
                         {incident.title}
                       </Link>

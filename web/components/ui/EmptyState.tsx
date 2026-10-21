@@ -23,13 +23,22 @@ interface EmptyStateProps {
   action?: ReactNode | EmptyStateAction;
   /** `inline` drops the glass panel, for an empty list inside a panel. */
   variant?: 'panel' | 'inline';
+  /** Heading level for the title: 2 under a page h1 (default), 3 inside a titled panel. */
+  headingLevel?: 2 | 3;
 }
 
 function isActionConfig(value: unknown): value is EmptyStateAction {
   return typeof value === 'object' && value !== null && !('type' in value) && 'label' in value;
 }
 
-export default function EmptyState({ icon, title, description, action, variant = 'panel' }: EmptyStateProps) {
+export default function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+  variant = 'panel',
+  headingLevel = 2,
+}: EmptyStateProps) {
   let renderedAction: ReactNode = null;
   if (isActionConfig(action)) {
     renderedAction = action.href ? (
@@ -45,9 +54,12 @@ export default function EmptyState({ icon, title, description, action, variant =
     renderedAction = action as ReactNode;
   }
 
+  const Heading = headingLevel === 3 ? 'h3' : 'h2';
+
+  // Fades in so it does not hard-cut over the skeleton it replaces.
   return (
     <div
-      className={`${variant === 'panel' ? 'glass py-14' : 'py-10'} flex flex-col items-center justify-center px-6 text-center`}
+      className={`${variant === 'panel' ? 'glass py-14' : 'py-10'} flex animate-fade-in flex-col items-center justify-center px-6 text-center`}
     >
       {icon && (
         <span
@@ -57,7 +69,7 @@ export default function EmptyState({ icon, title, description, action, variant =
           {icon}
         </span>
       )}
-      <h3 className="text-title font-semibold text-white">{title}</h3>
+      <Heading className="text-title font-semibold text-white">{title}</Heading>
       {description && (
         <p className="mt-1.5 max-w-sm text-sm text-slate-400">{description}</p>
       )}

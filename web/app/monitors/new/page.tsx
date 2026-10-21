@@ -7,6 +7,7 @@ import { createMonitor, getMonitor } from '@/lib/api';
 import { buildClonedMonitorInitialData } from '@/lib/monitor-clone';
 import MonitorForm from '@/components/monitors/MonitorForm';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import { useToast } from '@/components/ui/ToastProvider';
 
 export default function NewMonitorPage() {
@@ -70,7 +71,7 @@ export default function NewMonitorPage() {
   };
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <Page width="wide">
       <PageHeader
         breadcrumb={[
           { label: 'Monitors', href: '/monitors' },
@@ -98,6 +99,6 @@ export default function NewMonitorPage() {
           loading={loading}
         />
       )}
-    </div>
+    </Page>
   );
 }

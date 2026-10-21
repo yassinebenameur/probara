@@ -1,12 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
 import AILabelControl from '@/components/incidents/AILabelControl';
 import TriagePill from '@/components/alerts/TriagePill';
 import Callout from '@/components/ui/Callout';
-import IconButton from '@/components/ui/IconButton';
-import ModalPortal from '@/components/ui/ModalPortal';
+import Dialog from '@/components/ui/Dialog';
 import { getAlert, labelAlertTriage } from '@/lib/api';
 import { labelErrorMessage } from '@/lib/ai-labels';
 import { buildTriageLabelRequest } from '@/lib/ai-triage';
@@ -44,49 +42,35 @@ export default function TriageLabelDialog({ alert, initialMode, onClose, onLabel
     : alert.monitor_name || alert.monitor_id || 'Alert';
 
   return (
-    <ModalPortal onEscape={onClose}>
-      <div className="glass-scrim fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div
-          className="glass-overlay flex max-h-[90vh] w-full max-w-lg flex-col"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="triage-label-title"
-        >
-          <div className="flex items-start justify-between gap-4 px-6 pt-5">
-            <div className="min-w-0">
-              <h2 id="triage-label-title" className="text-base font-semibold text-white">Label suspected cause</h2>
-              <p className="mt-1 truncate text-ui text-slate-400">{subject}</p>
-            </div>
-            <IconButton icon={<X strokeWidth={1.75} />} label="Close" onClick={onClose} />
+    <Dialog
+      onClose={onClose}
+      title="Label suspected cause"
+      description={<span className="block truncate">{subject}</span>}
+      bodyClassName="space-y-4"
+    >
+      {error && <Callout tone="danger">{error}</Callout>}
+      {!triage && !error && <p role="status" className="text-sm text-slate-400">Loading…</p>}
+      {triage?.label_context && (
+        <>
+          <div className="space-y-2">
+            <TriagePill triage={triage} />
+            {triage.summary && <p className="text-ui leading-relaxed text-slate-300">{triage.summary}</p>}
+            <p className="text-xs text-slate-500">
+              Labels are kept for retraining the local model. Triage never changes who is paged or when; correcting the cause stops any follow-up not sent yet.
+            </p>
           </div>
-
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-5 pt-4">
-            {error && <Callout tone="danger">{error}</Callout>}
-            {!triage && !error && <p className="text-sm text-slate-400">Loading…</p>}
-            {triage?.label_context && (
-              <>
-                <div className="space-y-2">
-                  <TriagePill triage={triage} />
-                  {triage.summary && <p className="text-ui leading-relaxed text-slate-300">{triage.summary}</p>}
-                  <p className="text-xs text-slate-500">
-                    Labels are kept for retraining the local model. Triage never changes who is paged or when; correcting the cause stops any follow-up not sent yet.
-                  </p>
-                </div>
-                <AILabelControl
-                  key={triage.id}
-                  bare
-                  noun="triage"
-                  initialMode={initialMode}
-                  context={triage.label_context}
-                  submit={(verdict, cause, overrides) =>
-                    labelAlertTriage(alert.id, buildTriageLabelRequest(verdict, cause, overrides))}
-                  onLabelled={onLabelled}
-                />
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    </ModalPortal>
+          <AILabelControl
+            key={triage.id}
+            bare
+            noun="triage"
+            initialMode={initialMode}
+            context={triage.label_context}
+            submit={(verdict, cause, overrides) =>
+              labelAlertTriage(alert.id, buildTriageLabelRequest(verdict, cause, overrides))}
+            onLabelled={onLabelled}
+          />
+        </>
+      )}
+    </Dialog>
   );
 }

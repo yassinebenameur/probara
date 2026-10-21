@@ -22,7 +22,7 @@ import { DependencyMonitor } from '@/lib/types';
 import { addMonitorDependency, removeMonitorDependency } from '@/lib/api';
 import { useToast } from '@/components/ui/ToastProvider';
 import Button from '@/components/ui/Button';
-import { apiErrorMessage, LEGEND, stateStyle, styleEdge } from './graphTheme';
+import { apiErrorMessage, EDGE_COLORS, LEGEND, stateStyle, styleEdge } from './graphTheme';
 import { isGroupId, type AppNode, type MonitorNodeData } from './graphModel';
 import { MonitorNode } from './MonitorNode';
 import { GroupNode } from './GroupNode';
@@ -221,7 +221,9 @@ export function GraphCanvas({
         </div>
 
         {focusMonitor && (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/40 bg-cyan-500/[0.14] py-0.5 pl-2.5 pr-1 text-xs font-medium text-cyan-300">
+          // The focused service is a selection, so it is neutral (selected
+          // is never orange; orange would also merge with a red Down node).
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-edge-strong bg-selected py-0.5 pl-2.5 pr-1 text-xs font-medium text-white shadow-glass">
             <Focus className="h-3 w-3" strokeWidth={2} />
             <span className="max-w-[180px] truncate" title={focusMonitor.name}>
               {focusMonitor.name}
@@ -230,7 +232,7 @@ export function GraphCanvas({
               type="button"
               onClick={onClearFocus}
               title="Leave focus"
-              className="flex h-4 w-4 items-center justify-center rounded-full transition-colors hover:bg-cyan-500/20 hover:text-cyan-200"
+              className="flex h-4 w-4 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-well-hover hover:text-white"
             >
               <X className="h-3 w-3" strokeWidth={2} />
             </button>
@@ -352,9 +354,9 @@ export function GraphCanvas({
               nodeColor={(node) => {
                 const data = node.data as MonitorNodeData | undefined;
                 const state = data?.monitor?.current_state;
-                if (state === 'down') return '#f04a5a';
-                if (state === 'suspect' || state === 'degraded') return '#e6b23f';
-                if (state === 'up') return '#46d17f';
+                if (state === 'down') return EDGE_COLORS.down;
+                if (state === 'suspect' || state === 'degraded') return EDGE_COLORS.suspect;
+                if (state === 'up') return EDGE_COLORS.up;
                 return 'rgb(var(--tw-slate-600))';
               }}
               className="overflow-hidden !rounded-lg border border-edge"

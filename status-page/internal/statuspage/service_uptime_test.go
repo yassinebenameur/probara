@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
@@ -58,5 +59,65 @@ func TestUptimeForMonitorsBindsWindowAsInterval(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The 1h strip is 60 clock-aligned minutes ending with the current one, read
+// in one raw query with Go-computed bounds and platform results excluded. The
+// page-level series sums every monitor's checks per minute.
+func TestGetGlobalMinuteUptime_SumsMinuteBucketsAcrossMonitors(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer sqlDB.Close()
+
+	tenantID := uuid.New()
+	monitorA := uuid.New()
+	monitorB := uuid.New()
+	now := time.Date(2026, 6, 2, 10, 30, 42, 0, time.UTC)
+	wantStart := time.Date(2026, 6, 2, 9, 31, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 6, 2, 10, 31, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`(?s)date_trunc\('minute', cr.created_at\).*result_source <> 'platform'.*created_at >= \$3.*created_at < \$4`).
+		WithArgs(tenantID, sqlmock.AnyArg(), wantStart, wantEnd).
+		WillReturnRows(sqlmock.NewRows([]string{"monitor_id", "bucket", "total", "successful"}).
+			AddRow(monitorA, wantStart, int64(1), int64(1)).
+			AddRow(monitorB, wantStart, int64(1), int64(0)).
+			AddRow(monitorA, time.Date(2026, 6, 2, 10, 30, 0, 0, time.UTC), int64(2), int64(2)))
+
+	svc := NewService(&shareddb.Client{DB: sqlDB}, nil)
+	svc.now = func() time.Time { return now }
+	got, err := svc.GetGlobalMinuteUptime(context.Background(), []uuid.UUID{monitorA, monitorB}, tenantID)
+	if err != nil {
+		t.Fatalf("GetGlobalMinuteUptime() error = %v", err)
+	}
+	if len(got) != 60 {
+		t.Fatalf("buckets = %d, want 60", len(got))
+	}
+	if got[0] != (MinuteUptime{Time: "09:31", Uptime: 50}) {
+		t.Fatalf("first bucket = %+v, want 09:31 at 50%%", got[0])
+	}
+	if got[59] != (MinuteUptime{Time: "10:30", Uptime: 100}) {
+		t.Fatalf("last bucket = %+v, want the current minute 10:30 at 100%%", got[59])
+	}
+	if got[30].Uptime != -1 {
+		t.Fatalf("empty minute = %+v, want -1 (no data)", got[30])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMinuteUptime_EmptyCountsSpanTheHour(t *testing.T) {
+	start := time.Date(2026, 6, 2, 9, 31, 0, 0, time.UTC)
+	got := minuteUptime(nil, start)
+	if len(got) != 60 || got[0].Time != "09:31" || got[59].Time != "10:30" {
+		t.Fatalf("minuteUptime(nil) = %d buckets %q..%q, want 60 from 09:31 to 10:30", len(got), got[0].Time, got[len(got)-1].Time)
+	}
+	for _, b := range got {
+		if b.Uptime != -1 {
+			t.Fatalf("bucket %+v, want -1", b)
+		}
 	}
 }

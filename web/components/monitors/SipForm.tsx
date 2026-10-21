@@ -27,7 +27,8 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import FormField from '@/components/ui/FormField';
 import FormSection from '@/components/ui/FormSection';
 import FormActions from '@/components/ui/FormActions';
-import { handleRovingKeyDown, SELECTED_SEGMENT } from '@/components/ui/roving';
+import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
@@ -721,7 +722,7 @@ export default function SipForm({
                     tabIndex={formData.call_mode === mode ? 0 : -1}
                     aria-checked={formData.call_mode === mode}
                     onClick={() => setFormData((prev) => ({ ...prev, call_mode: mode }))}
-                    className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                    className={`whitespace-nowrap rounded-lg px-3.5 py-1.5 text-ui font-medium ${SEGMENT_ITEM} ${FOCUS_RING} ${
                       formData.call_mode === mode ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
                     }`}
                   >

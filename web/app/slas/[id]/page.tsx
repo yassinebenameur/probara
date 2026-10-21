@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { ChevronLeft, ChevronRight, Download, FileBraces, FileSpreadsheet, FileText, Pencil, Stamp } from 'lucide-react';
 import {
@@ -11,11 +11,15 @@ import {
   type Sla, type SlaExportFormat, type SlaReport, type SlaReportQuery, type SlaReportRef,
 } from '@/lib/sla';
 import { formatDateTime } from '@/lib/format';
+import { sortRows, type SortState, type SortValue } from '@/lib/sort';
+import useDocumentTitle from '@/lib/useDocumentTitle';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import PageHeader from '@/components/ui/PageHeader';
-import Tabs, { useUrlTab } from '@/components/ui/Tabs';
+import Page from '@/components/ui/Page';
+import Tabs, { TabPanel, useUrlTab } from '@/components/ui/Tabs';
+import SortableHeader, { useUrlSort } from '@/components/ui/SortableHeader';
 import EmptyState from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
@@ -35,6 +39,17 @@ const FORMATS: { format: SlaExportFormat; label: string; icon: React.ReactNode }
   { format: 'csv', label: 'CSV', icon: <FileSpreadsheet strokeWidth={1.75} /> },
   { format: 'json', label: 'JSON', icon: <FileBraces strokeWidth={1.75} /> },
 ];
+
+const ISSUED_SORT_KEYS = ['period', 'availability', 'issued'] as const;
+type IssuedSortKey = (typeof ISSUED_SORT_KEYS)[number];
+const ISSUED_SORT_DEFAULT: SortState<IssuedSortKey> = { key: 'period', dir: 'desc' };
+// Newest first; Availability ascending is worst first.
+const ISSUED_DEFAULT_DIR = { period: 'desc', issued: 'desc' } as const;
+const ISSUED_SORT_VALUE: Record<IssuedSortKey, (r: SlaReportRef) => SortValue> = {
+  period: (r) => Date.parse(r.period_start),
+  availability: (r) => r.availability_pct,
+  issued: (r) => Date.parse(r.issued_at),
+};
 
 function errorText(err: unknown, fallback: string): string {
   if (err instanceof Error) return err.message;
@@ -58,6 +73,12 @@ export default function SlaDetailPage() {
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [issuedSort, setIssuedSort] = useUrlSort(ISSUED_SORT_KEYS, ISSUED_SORT_DEFAULT, ISSUED_DEFAULT_DIR);
+  useDocumentTitle(sla?.name);
+  const sortedIssued = useMemo(
+    () => sortRows(issued, ISSUED_SORT_VALUE[issuedSort.key], issuedSort.dir, (r) => -Date.parse(r.period_start)),
+    [issued, issuedSort]
+  );
   const [issuing, setIssuing] = useState(false);
 
   const loadIssued = useCallback(async () => {
@@ -151,7 +172,13 @@ export default function SlaDetailPage() {
     }
   };
 
-  if (loading) return <div className="glass p-8 text-center text-sm text-slate-500">Loading…</div>;
+  if (loading) {
+    return (
+      <div className="glass mx-auto w-full max-w-[100rem] p-8 text-center text-sm text-slate-500" role="status">
+        Loading…
+      </div>
+    );
+  }
   if (!sla) {
     return <Callout tone="danger">{error || 'SLA not found'}</Callout>;
   }
@@ -159,7 +186,7 @@ export default function SlaDetailPage() {
   const period = report?.period;
 
   return (
-    <div className="space-y-6">
+    <Page width="detail">
       <PageHeader
         breadcrumb={[{ label: 'SLAs', href: '/slas' }, { label: sla.name }]}
         title={sla.name}
@@ -179,7 +206,7 @@ export default function SlaDetailPage() {
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs tabs={TABS} active={tab} onChange={setTab} />
+        <Tabs tabs={TABS} active={tab} onChange={setTab} idBase="sla" />
         {tab === 'report' && (
           <div className="flex flex-wrap items-center gap-1.5">
             {FORMATS.map((f) => (
@@ -205,6 +232,7 @@ export default function SlaDetailPage() {
         )}
       </div>
 
+      <TabPanel idBase="sla" id={tab}>
       {tab === 'report' ? (
         <div className="space-y-4">
           <div className="glass flex flex-wrap items-center gap-3 px-2.5 py-2">
@@ -265,16 +293,39 @@ export default function SlaDetailPage() {
             <table className="data-table min-w-[640px] text-sm">
               <thead>
                 <tr>
-                  <th>Period</th>
-                  <th>Availability</th>
+                  <SortableHeader
+                    label="Period"
+                    sortKey="period"
+                    sort={issuedSort}
+                    onSort={setIssuedSort}
+                    defaultDir={ISSUED_DEFAULT_DIR}
+                    title="Most recent first"
+                  />
+                  <SortableHeader
+                    label="Availability"
+                    sortKey="availability"
+                    sort={issuedSort}
+                    onSort={setIssuedSort}
+                    defaultDir={ISSUED_DEFAULT_DIR}
+                    title="Lowest first"
+                  />
                   <th>Target</th>
                   <th>Status</th>
-                  <th>Issued</th>
-                  <th />
+                  <SortableHeader
+                    label="Issued"
+                    sortKey="issued"
+                    sort={issuedSort}
+                    onSort={setIssuedSort}
+                    defaultDir={ISSUED_DEFAULT_DIR}
+                    title="Most recent first"
+                  />
+                  <th>
+                    <span className="sr-only">Downloads</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {issued.map((r) => (
+                {sortedIssued.map((r) => (
                   <tr key={r.id}>
                     <td className="whitespace-nowrap tabular-nums text-white" title={r.period_key}>
                       {formatSlaPeriodRange(r.period_start, r.period_end, sla.timezone)}
@@ -301,6 +352,7 @@ export default function SlaDetailPage() {
           </div>
         </div>
       )}
+      </TabPanel>
 
       {editing && (
         <SlaFormModal
@@ -313,6 +365,6 @@ export default function SlaDetailPage() {
           onCancel={() => setEditing(false)}
         />
       )}
-    </div>
+    </Page>
   );
 }

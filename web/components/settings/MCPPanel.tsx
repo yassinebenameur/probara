@@ -132,7 +132,7 @@ export function MCPPanel() {
             </pre>
             <IconButton icon={<Copy strokeWidth={1.75} />} label="Copy" onClick={() => copy(code)} />
           </div>
-          <p className="text-xs text-slate-400">{hint(client)}</p>
+          <p className="max-w-prose text-xs text-slate-400">{hint(client)}</p>
         </div>
       </Panel>
 

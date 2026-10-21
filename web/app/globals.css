@@ -5,22 +5,29 @@
 /*
  * Probara operator UI: "instrument glass".
  *
- * The console is frosted glass laid over a faint instrument field
- * (components/layout/AmbientBackdrop.tsx). Surfaces come in three weights;
- * reach for these classes instead of hand-rolling bg/border/blur combos:
+ * Canvas: flat and neutral (--bg-base: a cool #f3f4f6 in light, near-black
+ * #0b0d12 in dark). No gradients, grid or tinted blooms behind the page, and
+ * nothing tints the page with fleet health: that lives in the sidebar's
+ * FleetHealth row only. Surfaces come in three weights; reach for these
+ * classes instead of hand-rolling bg/border/shadow combos:
  *
- *   .glass          panels, cards, table containers: frosted and blurred
+ *   .glass          panels, cards, table containers: near-opaque fill, 1px
+ *                   edge, one small soft shadow, no blur
  *   .glass-overlay  modals, menus, popovers, toasts, sticky action bars:
- *                   denser fill, stronger blur, deeper shadow
- *   .glass-well     a group *inside* a panel: tinted fill, no blur, no shadow
+ *                   denser fill, light blur (content does sit behind it),
+ *                   deeper shadow
+ *   .glass-well     a group *inside* a panel: tinted fill, no edge, no shadow
  *
- * Never put a blurred surface inside another (.glass in .glass). The inner
- * blur re-samples an already frosted layer, costs a compositing pass, and
- * reads as a box in a box. Inside a panel, group with .glass-well or space.
+ * Tinted fills step up: --well (a group, a hovered row), --well-hover (a
+ * hovered control inside a group, the previewed row), --well-strong (a
+ * checked row: it must not look like a merely hovered one).
  *
- * backdrop-filter makes an element the containing block for position:fixed
- * descendants, so a fixed menu or modal rendered inside a .glass panel is
- * positioned and clipped by the panel. Overlays must portal to <body>
+ * Never put a surface inside another of the same weight (.glass in .glass):
+ * it reads as a box in a box. Inside a panel, group with .glass-well or space.
+ *
+ * backdrop-filter (overlays) makes an element the containing block for
+ * position:fixed descendants, so a fixed menu or modal rendered inside one is
+ * positioned and clipped by it. Overlays must portal to <body>
  * (components/ui/ModalPortal.tsx, or createPortal as RowMenu/InfoTip do).
  *
  * Radii by level (Tailwind's scale, tailwind.config.ts): shell 22px
@@ -28,18 +35,58 @@
  * (rounded-lg), chip full.
  *
  * Orange (the `cyan` scale, see tailwind.config.ts) means "act": primary
- * buttons, links, focus rings. "Selected" is never orange: chips, tabs and
- * range buttons select to neutral raised glass (border-edge-strong
- * bg-glass-strong text-white), and the active nav item gets a neutral fill
- * plus a 2px accent rail. Status colours are only for status, and numbers
- * stay neutral unless a lib/status-tones.ts rule colours them. Text on
- * orange uses --accent-ink (text-onaccent): white on #ff5a24 is 3:1.
+ * buttons and links. "Selected" is never orange: chips, tabs, range buttons
+ * and the active nav item are neutral raised glass (SELECTED_SEGMENT in
+ * components/ui/roving.ts: bg-selected text-white shadow-segment), with no
+ * rail or coloured edge. --segment-selected is the brightest neutral fill in
+ * each theme (white in light, white/12% in dark), so selected always reads
+ * above rest and hover; a selected FilterChip on a panel adds an
+ * --input-edge outline, since white-on-white has no fill step. Status colours
+ * are only for status, and numbers stay neutral unless a lib/status-tones.ts
+ * rule colours them. Text on orange uses --accent-ink (text-onaccent).
+ *
+ * Charts: series take --chart-1..6 (SERIES_COLORS / LATENCY_COLOR in
+ * components/monitors/metric-chart.tsx), a categorical ramp with no status
+ * hue and no orange, >= 3:1 on glass and wells in both themes. Status lines
+ * (uptime, thresholds, downtime bands) use --success/--warning/--danger at
+ * full opacity. Gridlines are --chart-grid (horizontal only).
+ *
+ * Contrast tokens (checked on glass, well and well-hover in both themes):
+ *   --focus         the focus indicator, >= 3:1 everywhere. Use FOCUS_RING
+ *                   (components/ui/focus.ts, Tailwind `ring-focus`); the
+ *                   global :focus-visible outline uses it too.
+ *   --input-edge    the boundary of inputs, selects, checkboxes and radios,
+ *                   >= 3:1 (WCAG 1.4.11). --control-edge stays for buttons
+ *                   and chips, which their text identifies.
+ *   --switch-off    the Switch's off track, >= 3:1.
+ * Captions use slate-500 / --text-muted at the lightest: >= 4.5:1 on glass,
+ * well, well-hover, well-strong and control-hover (a focused input's
+ * placeholder). Caption text on a chip that is itself on a well (a stacked
+ * well-hover) takes slate-400. Status dots and trace bars (the -500 status
+ * steps) are >= 3:1 on the same surfaces. An empty trace slot or no-data
+ * bucket is NO_DATA_BAR (lib/status-tones.ts): a hollow bar with a >= 3:1
+ * edge, never a faint fill that could pass for a solid "not run" bar. Light
+ * rose-500 is darker than emerald/amber-500 so statuses differ in lightness.
+ * --divider separates rows (about 1.2:1 light, 1.3:1 dark), decorative.
+ * prefers-contrast: more raises edges and captions.
  *
  * Type: Archivo for every label; Plex Mono (font-mono) only for machine
  * values (URLs, hosts, IDs, raw errors, table timestamps). Scale:
  * text-2xs 11px, text-xs 12px, text-ui 13px, text-sm 14px, text-title 16px
- * (panel titles), text-2xl 24px (page h1). Metrics take tabular-nums.
- * Captions use slate-500 at the lightest: it is tuned for AA in both themes.
+ * (panel titles), text-metric 24px (KPI numbers), text-2xl 24px (page h1).
+ * Metrics take tabular-nums.
+ *
+ * Motion: durations --dur-fast 120ms (hover, press), --dur-base 180ms
+ * (fades, popovers), --dur-slow 240ms (dialogs, toasts); easings
+ * --ease-standard, --ease-emphasized (entrances), --ease-exit. Tailwind's
+ * bare `transition-*` and `duration-fast|base|slow` / `ease-standard|
+ * emphasized|exit` read them. Entrances are the animate-* utilities in
+ * tailwind.config.ts (fade-in, pop-in, dialog-in, toast-in, row-flash,
+ * bar-in, value-in, live-ping, status-pulse); their keyframes live below. row-flash and
+ * live-ping take their colour from --flash, set inline by the caller
+ * (style={{ '--flash': 'rgb(var(--tw-rose-500) / 0.16)' }}). Under
+ * prefers-reduced-motion every animation and transition collapses to ~0ms
+ * except spinners. Never hard-code a duration in a component.
  *
  * Do NOT add new `.btn-*`, `.badge-*`, or `.status-pill` classes here.
  * Use the React primitives in components/ui/ (Button, Pill, FilterChip, ...).
@@ -47,24 +94,27 @@
 
 :root {
   /* Base (dark values; the light theme overrides them further down) */
-  --bg-base: #080b12;
-  --bg-elevated: #131721;
-  --panel-rgb: 19 23 33;
+  --bg-base: #0b0d12;
+  --bg-elevated: #141720;
+  --panel-rgb: 19 22 29;
   --ink-rgb: 255 255 255;
 
-  /* Glass surfaces */
-  --glass-fill: rgb(24 29 42 / 0.5);
-  --glass-fill-strong: rgb(18 22 32 / 0.86);
-  --glass-edge: rgb(255 255 255 / 0.08);
-  --glass-edge-strong: rgb(255 255 255 / 0.15);
-  --glass-highlight: rgb(255 255 255 / 0.06);
-  --glass-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 18px 40px -18px rgb(0 0 0 / 0.6);
-  --glass-shadow-overlay: 0 2px 6px rgb(0 0 0 / 0.3), 0 32px 80px -20px rgb(0 0 0 / 0.75);
-  --glass-blur: 20px;
-  --glass-blur-strong: 32px;
+  /* Surfaces */
+  --glass-fill: rgb(19 22 29 / 0.96);
+  --glass-fill-strong: rgb(25 29 38 / 0.94);
+  --glass-edge: rgb(255 255 255 / 0.075);
+  --glass-edge-strong: rgb(255 255 255 / 0.14);
+  --glass-highlight: rgb(255 255 255 / 0.035);
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  --glass-shadow-overlay: 0 4px 12px rgb(0 0 0 / 0.3), 0 24px 56px -16px rgb(0 0 0 / 0.6);
+  --glass-blur-strong: 16px;
   --well: rgb(255 255 255 / 0.035);
   --well-hover: rgb(255 255 255 / 0.065);
-  --divider: rgb(255 255 255 / 0.065);
+  --well-strong: rgb(255 255 255 / 0.085);
+  --divider: rgb(255 255 255 / 0.09);
+  --segment-selected: rgb(255 255 255 / 0.12);
+  /* The active nav item: a filled step above hover (bg-well) on the shell. */
+  --nav-selected: rgb(255 255 255 / 0.1);
 
   /* Controls: inputs, secondary buttons, chips */
   --control: rgb(255 255 255 / 0.045);
@@ -72,12 +122,10 @@
   --control-edge: rgb(255 255 255 / 0.1);
   --control-edge-strong: rgb(255 255 255 / 0.2);
 
-  /* Ambient field */
-  --ambient-ember: rgb(255 90 36 / 0.15);
-  --ambient-calm: rgb(83 157 201 / 0.2);
-  --ambient-deep: rgb(108 99 194 / 0.17);
-  --ambient-alarm: rgb(240 74 90 / 0.26);
-  --ambient-grid: rgb(255 255 255 / 0.04);
+  /* Contrast tokens (see the header) */
+  --focus: #ff5a24;
+  --input-edge: rgb(255 255 255 / 0.4);
+  --switch-off: rgb(110 118 130);
 
   /* Accents */
   --accent: #ff5a24;
@@ -87,12 +135,35 @@
   /* Text */
   --text-primary: #eef1f6;
   --text-secondary: #aeb6c2;
-  --text-muted: #7c8595;
+  --text-muted: #8a929e;
 
   /* Status */
   --success: #46d17f;
   --warning: #e6b23f;
   --danger: #f04a5a;
+
+  /* Chart series (categorical, see the header). Never a status hue or the
+     accent: a latency line is not "healthy" and a CPU line is not "act". */
+  --chart-1: #6fb5dd;
+  --chart-2: #d98bd3;
+  --chart-3: #4cc8b5;
+  --chart-4: #9d98e8;
+  --chart-5: #aeb6c2;
+  --chart-6: #7c9ef2;
+  --chart-grid: rgb(255 255 255 / 0.12);
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+  --dur-decay: 1600ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* Modal backdrop */
+  --scrim-rgb: 4 6 10;
+  --scrim-alpha: 0.68;
 
   /* Typography */
   --sans:
@@ -103,12 +174,36 @@
   color-scheme: dark;
 }
 
+/* Sidebar footprint. From md the sidebar is expanded (15rem) or the
+   collapsed icon rail (4rem); html[data-sidebar="collapsed"] is set before
+   first paint by the boot script in app/layout.tsx and toggled by
+   components/layout/useSidebarCollapsed.ts. --sidebar-offset is the space it
+   takes from the left edge including its md:ml-3 gutter (252px / 76px, 0
+   below md, where it is a drawer over the page): fixed overlays that clear
+   the sidebar use md:left-[var(--sidebar-offset)], never a literal. */
+:root {
+  --sidebar-width: 15rem;
+  --sidebar-offset: 0px;
+}
+
+:root[data-sidebar='collapsed'] {
+  --sidebar-width: 4rem;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --sidebar-offset: calc(var(--sidebar-width) + 0.75rem);
+  }
+}
+
 * {
   box-sizing: border-box;
 }
 
-html {
-  scroll-behavior: smooth;
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
 }
 
 /* A sticky FormActions bar (data-sticky-actions) covers the bottom of the
@@ -122,6 +217,27 @@ html:has([data-sticky-actions]) {
 @media (min-width: 640px) {
   html:has([data-sticky-actions]) {
     scroll-padding-bottom: 6.5rem;
+  }
+}
+
+/* The toast stack's distance from the bottom edge. A floating action bar
+   (data-floating-bar, the monitors list's bulk actions) sits there, so the
+   stack lifts above it instead of covering its controls. */
+:root {
+  --toast-offset: 1rem;
+}
+
+html:has([data-floating-bar]) {
+  --toast-offset: 8.5rem;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --toast-offset: 1.5rem;
+  }
+
+  html:has([data-floating-bar]) {
+    --toast-offset: 5.5rem;
   }
 }
 
@@ -146,66 +262,13 @@ body {
   min-height: 100vh;
 }
 
-/* ── Ambient field ────────────────────────────────────────────────────────
-   Three soft light sources over a faint instrument grid. The grid is what
-   makes the glass read as frosted: it stays crisp in the gutters and blurs
-   out under every panel. The alarm layer fades in while the workspace has
-   active alerts (html[data-health='alert'], set by the sidebar's fleet-health
-   line) and is the only thing on screen that moves on its own. */
-.ambient {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-  background: var(--bg-base);
-}
-
-.ambient-light,
-.ambient-alarm {
-  position: absolute;
-  inset: -10%;
-}
-
-.ambient-light {
-  background:
-    radial-gradient(38% 42% at 10% 4%, var(--ambient-ember), transparent 70%),
-    radial-gradient(44% 50% at 92% 14%, var(--ambient-calm), transparent 72%),
-    radial-gradient(52% 46% at 55% 104%, var(--ambient-deep), transparent 70%);
-}
-
-.ambient-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--ambient-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--ambient-grid) 1px, transparent 1px);
-  background-size: 56px 56px;
-  -webkit-mask-image: radial-gradient(130% 95% at 40% 0%, #000 30%, transparent 78%);
-  mask-image: radial-gradient(130% 95% at 40% 0%, #000 30%, transparent 78%);
-}
-
-.ambient-alarm {
-  background:
-    radial-gradient(48% 36% at 38% -4%, var(--ambient-alarm), transparent 74%),
-    radial-gradient(30% 30% at 0% 0%, var(--ambient-alarm), transparent 70%);
-  opacity: 0;
-  transition: opacity 1.6s ease;
-}
-
-html[data-health='alert'] .ambient-alarm {
-  opacity: 1;
-}
-
-/* ── Glass surfaces ───────────────────────────────────────────────────── */
+/* ── Surfaces ─────────────────────────────────────────────────────────── */
 @layer components {
   .glass {
     background: var(--glass-fill);
     border: 1px solid var(--glass-edge);
     border-radius: 16px;
     box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
-    backdrop-filter: blur(var(--glass-blur)) saturate(170%);
   }
 
   .glass-overlay {
@@ -213,17 +276,19 @@ html[data-health='alert'] .ambient-alarm {
     border: 1px solid var(--glass-edge-strong);
     border-radius: 18px;
     box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow-overlay);
-    -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(180%);
-    backdrop-filter: blur(var(--glass-blur-strong)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--glass-blur-strong));
+    backdrop-filter: blur(var(--glass-blur-strong));
   }
 
+  /* The sidebar and the small-screen top bar. The bar is sticky over
+     scrolling content, so the shell keeps the overlay's light blur. */
   .glass-shell {
     background: var(--glass-fill);
     border: 1px solid var(--glass-edge);
     border-radius: 22px;
     box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
-    -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(180%);
-    backdrop-filter: blur(var(--glass-blur-strong)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--glass-blur-strong));
+    backdrop-filter: blur(var(--glass-blur-strong));
   }
 
   .glass-well {
@@ -235,8 +300,8 @@ html[data-health='alert'] .ambient-alarm {
      does not lift or glow. */
   .glass-hover {
     transition:
-      border-color 0.15s ease,
-      background-color 0.15s ease;
+      border-color var(--dur-fast) var(--ease-standard),
+      background-color var(--dur-fast) var(--ease-standard);
   }
 
   .glass-hover:hover {
@@ -244,27 +309,22 @@ html[data-health='alert'] .ambient-alarm {
     background-color: var(--glass-fill-strong);
   }
 
-  /* Modal backdrop: dims and frosts the page behind a dialog. */
+  /* Modal backdrop: dims the page behind a dialog. It fades in, and the
+     dialog panel directly inside it rises in, so every modal gets the same
+     entrance without per-component code. */
   .glass-scrim {
     background: rgb(var(--scrim-rgb) / var(--scrim-alpha));
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
+    animation: fade-in var(--dur-base) var(--ease-standard) backwards;
   }
-}
 
-:root {
-  --scrim-rgb: 4 6 10;
-  --scrim-alpha: 0.45;
+  .glass-scrim > .glass-overlay {
+    animation: dialog-in var(--dur-slow) var(--ease-emphasized) backwards;
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
   .glass,
-  .glass-shell {
-    background: rgb(var(--panel-rgb) / 0.97);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-
+  .glass-shell,
   .glass-overlay {
     background: rgb(var(--panel-rgb));
     -webkit-backdrop-filter: none;
@@ -273,12 +333,8 @@ html[data-health='alert'] .ambient-alarm {
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass,
+  .glass-overlay,
   .glass-shell {
-    background: rgb(var(--panel-rgb) / 0.95);
-  }
-
-  .glass-overlay {
     background: rgb(var(--panel-rgb));
   }
 }
@@ -331,20 +387,20 @@ html[data-health='alert'] .ambient-alarm {
   color: var(--text-primary);
 }
 
-/* Focus styles */
+/* Focus styles: the fallback for anything without FOCUS_RING. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
-/* Animations */
+/* ── Motion ───────────────────────────────────────────────────────────────
+   Keyframes for the animate-* utilities in tailwind.config.ts. Entrances
+   define only their `from` state and run with fill-mode backwards, so the
+   element ends on its own styles (a translate used for positioning, a hover
+   background) rather than on a frozen keyframe. */
 @keyframes fade-in {
   from {
     opacity: 0;
-  }
-
-  to {
-    opacity: 1;
   }
 }
 
@@ -353,10 +409,83 @@ html[data-health='alert'] .ambient-alarm {
     opacity: 0;
     transform: translateY(6px);
   }
+}
+
+/* Menus and popovers: a small scale from the anchor (set origin-* on the
+   element) plus a fade. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+/* A row whose status just changed: a tint that decays back to the row's own
+   background. --flash picks the tint (default: a faint accent). */
+@keyframes row-flash {
+  from {
+    background-color: var(--flash, rgb(var(--tw-cyan-500) / 0.14));
+  }
+}
+
+/* The newest check-trace bar grows up from the baseline. */
+@keyframes bar-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0.3);
+    transform-origin: bottom;
+  }
 
   to {
+    transform-origin: bottom;
+  }
+}
+
+/* A KPI number that changed. */
+@keyframes value-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
+/* The newest trace bar of a monitor degraded right now (CheckTrace): a slow
+   fade, well under 3 flashes a second (WCAG 2.3.1); reduced motion ends it
+   on the solid frame. */
+@keyframes status-pulse {
+  0%,
+  100% {
     opacity: 1;
-    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Live indicator: a ring that expands out of a status dot and fades. */
+@keyframes live-ping {
+  0% {
+    box-shadow: 0 0 0 0 var(--flash, rgb(var(--tw-emerald-500) / 0.5));
+  }
+
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
   }
 }
 
@@ -381,12 +510,8 @@ html[data-health='alert'] .ambient-alarm {
   }
 }
 
-.animate-fade-in {
-  animation: fade-in 0.2s ease-out;
-}
-
 .animate-slide-up {
-  animation: slide-up 0.25s ease-out;
+  animation: slide-up var(--dur-slow) var(--ease-emphasized) backwards;
 }
 
 .animate-pulse-soft {
@@ -398,22 +523,35 @@ html[data-health='alert'] .ambient-alarm {
   animation: toast-progress linear forwards;
 }
 
-/* Section entrance: one quiet fade, no stagger */
-.dash-enter {
-  animation: fade-in 0.3s ease-out backwards;
-}
-
+/* Reduced motion: every animation and transition collapses to an instant
+   change (end states still apply), smooth scrolling is off (see html above),
+   and only spinners keep turning, since they are the one cue that work is in
+   progress. The timer bar on toasts is hidden rather than snapped empty. */
 @media (prefers-reduced-motion: reduce) {
-  .dash-enter,
-  .animate-fade-in,
-  .animate-slide-up,
-  .animate-pulse-soft,
-  .animate-pulse {
-    animation: none;
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
   }
 
-  .ambient-alarm {
-    transition: none;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  .animate-toast-progress {
+    visibility: hidden;
   }
 }
 
@@ -433,7 +571,7 @@ html[data-health='alert'] .ambient-alarm {
   }
 
   .data-table th {
-    padding: 10px 16px;
+    padding: 8px 16px;
     font-size: 0.75rem;
     font-weight: 500;
     color: var(--text-muted);
@@ -441,8 +579,12 @@ html[data-health='alert'] .ambient-alarm {
   }
 
   .data-table td {
-    padding: 14px 16px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--divider);
+  }
+
+  .data-table tbody tr {
+    transition: background-color var(--dur-fast) var(--ease-standard);
   }
 
   .data-table tbody tr:last-child td {
@@ -467,24 +609,24 @@ html[data-health='alert'] .ambient-alarm {
     font-size: 0.875rem;
     line-height: 1.25rem;
     background-color: var(--control);
-    border: 1px solid var(--control-edge);
+    border: 1px solid var(--input-edge);
     border-radius: 10px;
     color: var(--text-primary);
     transition:
-      border-color 0.15s ease,
-      background-color 0.15s ease,
-      box-shadow 0.15s ease;
+      border-color var(--dur-fast) var(--ease-standard),
+      background-color var(--dur-fast) var(--ease-standard),
+      box-shadow var(--dur-fast) var(--ease-standard);
   }
 
   .input:hover {
-    border-color: var(--control-edge-strong);
+    border-color: rgb(var(--tw-slate-400));
   }
 
   .input:focus {
     outline: none;
     background-color: var(--control-hover);
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.16);
+    border-color: var(--focus);
+    box-shadow: 0 0 0 1px var(--focus);
   }
 
   .input::placeholder {
@@ -504,7 +646,7 @@ html[data-health='alert'] .ambient-alarm {
 
   .input-xs {
     padding: 4px 8px;
-    font-size: 0.7rem;
+    font-size: 0.6875rem;
     border-radius: 7px;
   }
 
@@ -542,6 +684,13 @@ html[data-health='alert'] .ambient-alarm {
     padding-right: 12px;
     background-image: none;
   }
+
+  /* A select still on its prompt option ("Select an owner") reads as a
+     placeholder, not as a chosen value. Prompts opt in with data-prompt:
+     an empty value is often a real choice ("All"), which must not fade. */
+  select.input:has(> option[data-prompt]:checked) {
+    color: var(--text-muted);
+  }
 }
 
 select option,
@@ -559,8 +708,10 @@ select optgroup {
   --tw-slate-100: 226 229 234;
   --tw-slate-200: 200 204 212;
   --tw-slate-300: 174 182 194;
-  --tw-slate-400: 139 147 160;
-  --tw-slate-500: 121 130 143;
+  --tw-slate-400: 148 155 167;
+  /* Caption step: >= 4.5:1 on glass, wells, well-hover and control-hover
+     (a focused input), like --text-muted. */
+  --tw-slate-500: 138 146 158;
   --tw-slate-600: 92 100 112;
   --tw-slate-700: 58 64 77;
   --tw-slate-800: 34 39 50;
@@ -746,8 +897,8 @@ select optgroup {
   --tw-gray-100: 226 229 234;
   --tw-gray-200: 200 204 212;
   --tw-gray-300: 174 182 194;
-  --tw-gray-400: 139 147 160;
-  --tw-gray-500: 121 130 143;
+  --tw-gray-400: 148 155 167;
+  --tw-gray-500: 138 146 158;
   --tw-gray-600: 92 100 112;
   --tw-gray-700: 58 64 77;
   --tw-gray-800: 34 39 50;
@@ -764,8 +915,9 @@ html:not([data-theme]) {
   --tw-slate-300: 69 77 89;
   --tw-slate-400: 92 100 112;
   /* Darker than a straight inversion: slate-500 is the caption colour at
-     11-12px and needs AA (4.5:1) on white glass. Same value as --text-muted. */
-  --tw-slate-500: 104 113 128;
+     11-12px and needs AA (4.5:1) on glass, wells and well-hover. Same value
+     as --text-muted. */
+  --tw-slate-500: 98 106 120;
   --tw-slate-600: 168 176 186;
   --tw-slate-700: 213 218 226;
   --tw-slate-800: 230 233 239;
@@ -776,7 +928,7 @@ html:not([data-theme]) {
   --tw-cyan-200: 153 47 16;
   --tw-cyan-300: 191 58 16;
   --tw-cyan-400: 230 74 23;
-  --tw-cyan-500: 255 90 36;
+  --tw-cyan-500: 233 82 33;
   --tw-cyan-600: 255 138 92;
   --tw-cyan-700: 255 168 126;
   --tw-cyan-800: 255 201 173;
@@ -785,9 +937,11 @@ html:not([data-theme]) {
   --tw-emerald-50: 9 45 26;
   --tw-emerald-100: 23 80 49;
   --tw-emerald-200: 27 97 58;
-  --tw-emerald-300: 29 123 70;
+  --tw-emerald-300: 27 113 64;
   --tw-emerald-400: 33 154 85;
-  --tw-emerald-500: 47 189 106;
+  /* Status dots and trace bars: >= 3:1 on glass, wells and a hovered or
+     checked row (well-strong). */
+  --tw-emerald-500: 34 152 86;
   --tw-emerald-600: 70 209 127;
   --tw-emerald-700: 125 227 167;
   --tw-emerald-800: 174 238 199;
@@ -798,7 +952,9 @@ html:not([data-theme]) {
   --tw-rose-200: 148 32 47;
   --tw-rose-300: 177 34 51;
   --tw-rose-400: 211 46 63;
-  --tw-rose-500: 240 74 90;
+  /* Darker than emerald/amber-500 on purpose: the three status fills differ in
+     lightness, not only hue, so down still reads for colour-blind viewers. */
+  --tw-rose-500: 205 40 58;
   --tw-rose-600: 244 112 125;
   --tw-rose-700: 247 151 162;
   --tw-rose-800: 251 197 203;
@@ -807,9 +963,9 @@ html:not([data-theme]) {
   --tw-amber-50: 62 32 12;
   --tw-amber-100: 107 63 27;
   --tw-amber-200: 126 76 27;
-  --tw-amber-300: 145 88 22; /* AA (4.5:1) on the warning Pill fill */
+  --tw-amber-300: 142 86 22; /* AA (4.5:1) on the warning Pill fill, on glass and wells */
   --tw-amber-400: 192 127 28;
-  --tw-amber-500: 220 158 38;
+  --tw-amber-500: 173 124 29; /* >= 3:1 like emerald-500 */
   --tw-amber-600: 230 178 63;
   --tw-amber-700: 238 202 107;
   --tw-amber-800: 245 224 163;
@@ -862,7 +1018,7 @@ html:not([data-theme]) {
   --tw-teal-50: 13 43 40;
   --tw-teal-100: 31 75 69;
   --tw-teal-200: 33 90 83;
-  --tw-teal-300: 36 112 102;
+  --tw-teal-300: 35 110 100;
   --tw-teal-400: 40 139 126;
   --tw-teal-500: 53 173 155;
   --tw-teal-600: 76 200 181;
@@ -873,7 +1029,7 @@ html:not([data-theme]) {
   --tw-lime-50: 35 43 13;
   --tw-lime-100: 68 78 32;
   --tw-lime-200: 80 92 33;
-  --tw-lime-300: 100 116 35;
+  --tw-lime-300: 93 107 32;
   --tw-lime-400: 130 152 44;
   --tw-lime-500: 163 189 63;
   --tw-lime-600: 188 210 94;
@@ -939,9 +1095,9 @@ html:not([data-theme]) {
   --tw-green-50: 9 45 26;
   --tw-green-100: 23 80 49;
   --tw-green-200: 27 97 58;
-  --tw-green-300: 29 123 70;
+  --tw-green-300: 27 113 64;
   --tw-green-400: 33 154 85;
-  --tw-green-500: 47 189 106;
+  --tw-green-500: 34 152 86;
   --tw-green-600: 70 209 127;
   --tw-green-700: 125 227 167;
   --tw-green-800: 174 238 199;
@@ -952,7 +1108,7 @@ html:not([data-theme]) {
   --tw-gray-200: 46 52 61;
   --tw-gray-300: 69 77 89;
   --tw-gray-400: 92 100 112;
-  --tw-gray-500: 104 113 128;
+  --tw-gray-500: 98 106 120;
   --tw-gray-600: 168 176 186;
   --tw-gray-700: 213 218 226;
   --tw-gray-800: 230 233 239;
@@ -960,40 +1116,130 @@ html:not([data-theme]) {
   --tw-gray-950: 237 240 245;
   color-scheme: light;
 
-  --bg-base: #edf0f5;
+  --bg-base: #f3f4f6;
   --bg-elevated: #ffffff;
   --panel-rgb: 255 255 255;
   --ink-rgb: 15 18 24;
   --scrim-rgb: 30 38 56;
-  --scrim-alpha: 0.2;
+  --scrim-alpha: 0.24;
 
-  --glass-fill: rgb(255 255 255 / 0.66);
-  --glass-fill-strong: rgb(255 255 255 / 0.86);
-  --glass-edge: rgb(20 28 48 / 0.08);
-  --glass-edge-strong: rgb(20 28 48 / 0.15);
+  --glass-fill: rgb(255 255 255 / 0.98);
+  --glass-fill-strong: rgb(255 255 255 / 0.94);
+  --glass-edge: rgb(20 28 48 / 0.09);
+  --glass-edge-strong: rgb(20 28 48 / 0.16);
   --glass-highlight: rgb(255 255 255 / 0.85);
-  --glass-shadow: 0 1px 2px rgb(22 30 54 / 0.04), 0 14px 34px -16px rgb(22 30 54 / 0.18);
-  --glass-shadow-overlay: 0 2px 6px rgb(22 30 54 / 0.06), 0 30px 70px -20px rgb(22 30 54 / 0.3);
+  --glass-shadow: 0 1px 2px rgb(16 24 40 / 0.05);
+  --glass-shadow-overlay: 0 4px 12px rgb(16 24 40 / 0.08), 0 24px 56px -16px rgb(16 24 40 / 0.22);
   --well: rgb(20 28 48 / 0.035);
   --well-hover: rgb(20 28 48 / 0.06);
-  --divider: rgb(20 28 48 / 0.075);
+  --well-strong: rgb(20 28 48 / 0.085);
+  --divider: rgb(20 28 48 / 0.1);
+  --segment-selected: rgb(255 255 255);
+  /* White would vanish on the white shell: the light nav uses an ink step. */
+  --nav-selected: rgb(20 28 48 / 0.075);
 
   --control: rgb(255 255 255 / 0.62);
   --control-hover: rgb(255 255 255 / 0.9);
   --control-edge: rgb(20 28 48 / 0.12);
   --control-edge-strong: rgb(20 28 48 / 0.22);
 
-  --ambient-ember: rgb(255 90 36 / 0.16);
-  --ambient-calm: rgb(111 181 221 / 0.26);
-  --ambient-deep: rgb(157 152 232 / 0.3);
-  --ambient-alarm: rgb(240 74 90 / 0.2);
-  --ambient-grid: rgb(20 28 48 / 0.035);
+  --focus: #e95221;
+  --input-edge: #7f8794;
+  --switch-off: #7f8792;
+
+  --accent: #e95221;
+  --accent-rgb: 233, 82, 33;
 
   --text-primary: #131722;
   --text-secondary: #474f5d;
-  --text-muted: #687180;
+  --text-muted: #626a78;
   --success: #219a55;
   --warning: #c07f1c;
   --danger: #d32e3f;
+
+  --chart-1: #3f81ab;
+  --chart-2: #ab4da3;
+  --chart-3: #288b7e;
+  --chart-4: #6c63c2;
+  --chart-5: #626a78;
+  --chart-6: #4a6cd0;
+  --chart-grid: rgb(15 18 24 / 0.12);
 }
 
+/* Range sliders (one shared look; the native track is a heavy OS bar). Set
+   --pct on the element to fill the track up to the thumb in WebKit; Firefox
+   fills it natively. */
+@layer components {
+  input[type='range'] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 1rem;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  input[type='range']::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background:
+      linear-gradient(rgb(var(--tw-cyan-500)) 0 0) 0 / var(--pct, 0%) 100% no-repeat,
+      rgb(var(--ink-rgb) / 0.28);
+  }
+
+  input[type='range']::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background: rgb(var(--ink-rgb) / 0.28);
+  }
+
+  input[type='range']::-moz-range-progress {
+    height: 4px;
+    border-radius: 999px;
+    background: rgb(var(--tw-cyan-500));
+  }
+
+  input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border: 2px solid rgb(var(--panel-rgb));
+    border-radius: 999px;
+    background: rgb(var(--tw-cyan-500));
+    box-shadow: 0 0 0 1px var(--input-edge), 0 1px 2px rgb(0 0 0 / 0.2);
+  }
+
+  input[type='range']::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgb(var(--panel-rgb));
+    border-radius: 999px;
+    background: rgb(var(--tw-cyan-500));
+    box-shadow: 0 0 0 1px var(--input-edge), 0 1px 2px rgb(0 0 0 / 0.2);
+  }
+
+  input[type='range']:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+/* prefers-contrast: more. Firmer edges and dividers, captions at the
+   secondary step, opaque panels. The selector matches both themes at the
+   light block's specificity, so it wins by source order; every value is
+   relative to the theme's own tokens. */
+@media (prefers-contrast: more) {
+  html[data-theme],
+  html:not([data-theme]) {
+    --glass-fill: rgb(var(--panel-rgb));
+    --glass-fill-strong: rgb(var(--panel-rgb));
+    --glass-edge: rgb(var(--ink-rgb) / 0.22);
+    --glass-edge-strong: rgb(var(--ink-rgb) / 0.32);
+    --divider: rgb(var(--ink-rgb) / 0.16);
+    --control-edge: var(--input-edge);
+    --control-edge-strong: var(--input-edge);
+    --tw-slate-500: var(--tw-slate-400);
+    --tw-gray-500: var(--tw-gray-400);
+    --text-muted: var(--text-secondary);
+  }
+}

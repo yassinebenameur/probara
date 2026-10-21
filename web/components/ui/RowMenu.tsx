@@ -1,10 +1,12 @@
 'use client';
 
-import { createContext, KeyboardEvent, ReactNode, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, KeyboardEvent, ReactNode, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import { MoreVertical } from 'lucide-react';
 import { ICON_BUTTON_CLASS, ICON_BUTTON_SM_CLASS } from './IconButton';
+import { FOCUS_RING_INSET } from './focus';
+import { useTooltip } from './Tooltip';
 
 const CloseContext = createContext<() => void>(() => {});
 
@@ -37,8 +39,10 @@ export default function RowMenu({
   size?: 'sm' | 'md';
 }) {
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; up: boolean } | null>(null);
+  const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const tip = useTooltip<HTMLButtonElement>({ label, side: 'top', anchorRef: triggerRef });
   const menuRef = useRef<HTMLDivElement>(null);
   const close = () => {
     setAnchor(null);
@@ -57,6 +61,7 @@ export default function RowMenu({
     setPos({
       top: openUp ? anchor.top - 4 - height : anchor.bottom + 4,
       left: Math.max(8, anchor.right - MENU_WIDTH),
+      up: openUp,
     });
   }, [anchor]);
 
@@ -108,25 +113,34 @@ export default function RowMenu({
       <button
         ref={triggerRef}
         type="button"
+        {...tip.triggerProps}
         onClick={(e) => {
           e.stopPropagation();
           if (anchor) close();
           else setAnchor(triggerRef.current?.getBoundingClientRect() ?? null);
         }}
-        title={label}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={Boolean(anchor)}
+        aria-controls={anchor ? menuId : undefined}
         disabled={disabled}
         className={`${ICON_BUTTON_CLASS} ${size === 'sm' ? ICON_BUTTON_SM_CLASS : ''}`}
       >
         <MoreVertical strokeWidth={1.75} />
       </button>
+      {!anchor && tip.tooltip}
       {anchor && createPortal(
         <div
           ref={menuRef}
+          id={menuId}
           role="menu"
-          className="glass-overlay fixed z-50 !rounded-xl p-1"
+          aria-label={label}
+          // Grows out of the corner nearest the trigger: top-right when it
+          // opens below, bottom-right when it flips up. Mounted once placed,
+          // so the animation runs from the final position.
+          className={`glass-overlay fixed z-50 !rounded-xl p-1 ${
+            pos ? `animate-pop-in ${pos.up ? 'origin-bottom-right' : 'origin-top-right'}` : ''
+          }`}
           style={{
             width: MENU_WIDTH,
             top: pos?.top ?? 0,
@@ -160,10 +174,12 @@ export function RowMenuItem({
   children: ReactNode;
 }) {
   const close = useContext(CloseContext);
-  const className = `flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-ui transition-colors focus:outline-none ${
+  // Focus is the item fill (the menu's roving highlight) plus an inset ring:
+  // the fill alone is a ~6% tint, too faint to find the keyboard by.
+  const className = `flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-ui transition-colors duration-fast ${FOCUS_RING_INSET} ${
     danger
-      ? 'text-rose-300 hover:bg-rose-500/10 hover:text-rose-200 focus-visible:bg-rose-500/10 focus-visible:text-rose-200'
-      : 'text-slate-300 hover:bg-well-hover hover:text-white focus-visible:bg-well-hover focus-visible:text-white'
+      ? 'text-rose-300 hover:bg-rose-500/10 hover:text-rose-200 focus-visible:bg-rose-500/10 focus-visible:text-rose-200 active:bg-rose-500/20'
+      : 'text-slate-300 hover:bg-well-hover hover:text-white focus-visible:bg-well-hover focus-visible:text-white active:bg-control-hover'
   }`;
   const content = (
     <>
@@ -173,7 +189,7 @@ export function RowMenuItem({
   );
   if (href) {
     return (
-      <Link href={href} role="menuitem" className={className} onClick={close}>
+      <Link href={href} role="menuitem" tabIndex={-1} className={className} onClick={close}>
         {content}
       </Link>
     );
@@ -182,6 +198,7 @@ export function RowMenuItem({
     <button
       type="button"
       role="menuitem"
+      tabIndex={-1}
       className={className}
       onClick={() => {
         close();
@@ -194,7 +211,22 @@ export function RowMenuItem({
 }
 
 export function RowMenuSeparator() {
-  return <div className="my-1 border-t border-divider" />;
+  return <div role="separator" className="my-1 border-t border-divider" />;
+}
+
+/**
+ * A labelled run of items inside a RowMenu ("Snooze alerts" + 1h/4h/24h).
+ * The caption is visible; the group carries the same name for screen readers.
+ */
+export function RowMenuGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label}>
+      <div className="px-2.5 pb-1 pt-1.5 text-2xs font-medium text-slate-500" aria-hidden="true">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
 }
 
 // Closes the menu from custom content (e.g. a row of option buttons).

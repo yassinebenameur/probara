@@ -12,12 +12,16 @@ import {
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import EmptyState from '@/components/ui/EmptyState';
-import IconButton from '@/components/ui/IconButton';
+import LiveStatus from '@/components/ui/LiveStatus';
+import Page from '@/components/ui/Page';
 import PageHeader from '@/components/ui/PageHeader';
 import Pill from '@/components/ui/Pill';
 import FilterChip from '@/components/ui/FilterChip';
 import RangePicker from '@/components/ui/RangePicker';
+import ScrollList from '@/components/ui/ScrollList';
 import TableSkeleton from '@/components/ui/TableSkeleton';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import {
   Alert,
@@ -37,7 +41,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { ChevronDown, Plus, RefreshCw, Tags, X } from 'lucide-react';
+import { ChevronDown, Plus, Tags, X } from 'lucide-react';
 import {
   ActivityTimelineItem,
   OperationalSummary,
@@ -49,15 +53,21 @@ import {
   problemMonitorStatus,
   sortNeedsAttention,
 } from '@/lib/dashboard-view-model';
-import { formatDateTimeFull, formatLatency, formatRelativeTime, formatUptime, RANGES, rangeStart } from '@/lib/format';
+import { formatLatency, formatUptime, RANGES, rangeStart } from '@/lib/format';
 import { shortFailureReason } from '@/lib/monitor-utils';
 import {
+  MONITOR_STATUS_DOT,
   MONITOR_STATUS_LABEL,
   MONITOR_STATUS_TONE,
+  TONE_TEXT,
   UPTIME_TONE_VAR,
   uptimeTone,
 } from '@/lib/status-tones';
+import { useLiveRefresh, type LiveLoadOptions } from '@/lib/useLiveRefresh';
+import { flashStyle, useRowFlash } from '@/lib/useRowFlash';
+import { useDocumentTitle } from '@/lib/useDocumentTitle';
 import CheckTrace from '@/components/monitors/CheckTrace';
+import { CHART_GRID, LATENCY_COLOR } from '@/components/monitors/metric-chart';
 import ServiceGroupsPanel from '@/components/dashboard/ServiceGroupsPanel';
 import { NotificationNudge } from '@/components/layout/NotificationNudge';
 
@@ -69,14 +79,44 @@ type DashboardPageRange = (typeof DASHBOARD_RANGE_OPTIONS)[number];
 // The API's cap for every dashboard list. What changed keeps one row per
 // monitor, so it reads the full cap of failed checks to reach enough monitors;
 // the problem list is fetched whole so its states (the degraded count, group
-// members) and the Needs attention total are complete.
+// members) and the Needs attention total are complete. Needs attention draws
+// every row and scrolls inside its card.
 const DASHBOARD_LIST_LIMIT = 50;
 
-/** Rows Needs attention draws; the rest are counted in its header. */
-const NEEDS_ATTENTION_ROWS = 8;
+/** What changed rows; the card scrolls, so this only bounds the DOM. */
+const TIMELINE_ROWS = 40;
 
 /** Checks per Needs attention trace. */
 const TRACE_SLOTS = 20;
+
+// ─── Grid ──────────────────────────────────────────────────────────────────────
+//
+// One 12-column grid from xl. The first rows have fixed (clamped) heights, so
+// the cards in them line up and their lists scroll inside instead of growing
+// the page; Service groups takes a full-width row below.
+//
+//   xl  (1280)  chart 7 | attention 5 (spans two rows)
+//               changes 7 |
+//   3xl (1920)  chart 5 | attention 4 | changes 3
+//   4xl (2400)  chart 6 | attention 3 | changes 3
+//
+// Below xl the cards stack, Needs attention first (DOM order), and the lists
+// cap their own height.
+const GRID =
+  'grid grid-cols-1 gap-6 xl:grid-cols-12 ' +
+  'xl:grid-rows-[clamp(20rem,40vh,26rem)_clamp(20rem,46vh,32rem)_auto] ' +
+  '3xl:grid-rows-[clamp(26rem,56vh,40rem)_auto]';
+const CELL_ATTENTION =
+  'min-h-0 min-w-0 xl:col-span-5 xl:col-start-8 xl:row-span-2 xl:row-start-1 ' +
+  '3xl:col-span-4 3xl:col-start-6 3xl:row-span-1 4xl:col-span-3 4xl:col-start-7';
+const CELL_CHART = 'min-h-0 min-w-0 xl:col-span-7 xl:col-start-1 xl:row-start-1 3xl:col-span-5 4xl:col-span-6';
+const CELL_CHANGES =
+  'min-h-0 min-w-0 xl:col-span-7 xl:col-start-1 xl:row-start-2 ' +
+  '3xl:col-span-3 3xl:col-start-10 3xl:row-start-1';
+const CELL_GROUPS = 'min-w-0 xl:col-span-12 xl:row-start-3 3xl:row-start-2';
+
+/** Lists below xl, where the card has no grid height to fill. */
+const LIST_HEIGHT = 'max-h-[32rem] xl:max-h-none';
 
 function TagFilterPicker({
   availableTags,
@@ -117,9 +157,13 @@ function TagFilterPicker({
         variant="ghost"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
+        aria-controls={open ? 'dashboard-tag-filter' : undefined}
         icon={<Tags className="h-4 w-4" strokeWidth={1.75} />}
         iconTrailing={
-          <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={1.75} />
+          <ChevronDown
+            className={`h-4 w-4 text-slate-500 transition-transform duration-base ease-standard ${open ? 'rotate-180' : ''}`}
+            strokeWidth={1.75}
+          />
         }
         // Selected is neutral, like a selected chip: orange is for actions.
         className={hasSelection ? '!border-edge-strong !text-white' : ''}
@@ -133,7 +177,10 @@ function TagFilterPicker({
       </Button>
 
       {open && (
-        <div className="glass-overlay absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] !rounded-xl p-3">
+        <div
+          id="dashboard-tag-filter"
+          className="glass-overlay absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] origin-top-right animate-pop-in !rounded-xl p-3"
+        >
           <div className="mb-3 flex h-7 items-center justify-between">
             <p className="text-xs font-medium text-slate-400">Filter dashboard by tags</p>
             {hasSelection && (
@@ -159,12 +206,11 @@ function TagFilterPicker({
   );
 }
 
-// Scrolling lists fade out at the bottom edge instead of slicing a row in half.
-const SCROLL_LIST =
-  'dashboard-scroll divide-y divide-divider overflow-y-auto pb-4 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1.5rem),transparent)]';
+// `relative` keeps sr-only text inside the row: absolutely positioned, it
+// would otherwise escape the scroll card's clip and stretch the page.
+const ROW_LINK = `relative block px-5 py-2.5 transition-colors duration-fast hover:bg-well active:bg-well-hover focus-visible:bg-well ${FOCUS_RING_INSET}`;
 
-const ROW_LINK =
-  'block px-5 py-3 transition-colors hover:bg-well focus:outline-none focus-visible:bg-well focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500/50';
+const TEXT_LINK = `rounded text-cyan-300 transition-colors hover:text-cyan-200 hover:underline ${FOCUS_RING}`;
 
 // ─── Failure reason ────────────────────────────────────────────────────────────
 
@@ -180,50 +226,123 @@ function ReasonText({ message, className = '' }: { message: string | null | unde
   );
 }
 
+// ─── Visible rows ──────────────────────────────────────────────────────────────
+
+/**
+ * Ids of rows on screen (inside their scroll card and the viewport), so the
+ * per-row trace fetch covers only what can be seen: Needs attention draws up
+ * to DASHBOARD_LIST_LIMIT rows but fetches results for the dozen visible.
+ * Without IntersectionObserver every row counts as visible.
+ */
+function useVisibleRows() {
+  const [visible, setVisible] = useState<ReadonlySet<string>>(() => new Set());
+  const supported = typeof window !== 'undefined' && 'IntersectionObserver' in window;
+  const ids = useRef(new Map<Element, string>());
+  const observer = useRef<IntersectionObserver | null>(null);
+
+  const getObserver = useCallback(() => {
+    if (!supported) return null;
+    if (!observer.current) {
+      observer.current = new IntersectionObserver(
+        (entries) => {
+          setVisible((prev) => {
+            let next: Set<string> | null = null;
+            for (const entry of entries) {
+              const id = ids.current.get(entry.target);
+              if (!id || entry.isIntersecting === prev.has(id)) continue;
+              next ??= new Set(prev);
+              if (entry.isIntersecting) next.add(id);
+              else next.delete(id);
+            }
+            return next ?? prev;
+          });
+        },
+        // Fetch a little ahead of the scroll.
+        { rootMargin: '160px 0px' },
+      );
+    }
+    return observer.current;
+  }, [supported]);
+
+  useEffect(() => () => observer.current?.disconnect(), []);
+
+  const observe = useCallback(
+    (el: Element | null, id: string) => {
+      const io = getObserver();
+      if (!el || !io) return undefined;
+      ids.current.set(el, id);
+      io.observe(el);
+      return () => {
+        io.unobserve(el);
+        ids.current.delete(el);
+        setVisible((prev) => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      };
+    },
+    [getObserver],
+  );
+
+  return { visible, observe, supported };
+}
+
 // ─── Problem Monitor Item ──────────────────────────────────────────────────────
 
 function ProblemMonitorItem({
   monitor,
   results,
   rangeLabel,
+  observe,
+  flashClass,
 }: {
   monitor: DashboardProblemMonitor;
   results: CheckResult[] | null;
   rangeLabel: string;
+  observe: (el: Element | null, id: string) => (() => void) | undefined;
+  flashClass: string;
 }) {
+  const ref = useRef<HTMLAnchorElement>(null);
+  useEffect(() => observe(ref.current, monitor.monitor_id), [observe, monitor.monitor_id]);
+
   const issueCount = monitor.failure_count + monitor.error_count;
   // The monitor's current state, never inferred from its latest check: a
   // monitor failing from one location is degraded whatever its last check did.
   const status = problemMonitorStatus(monitor);
+  const tone = MONITOR_STATUS_TONE[status];
 
+  // Two lines: state, name, trace and uptime; then the state in words, the
+  // short reason and how much and how recently it failed.
   return (
-    <Link href={`/monitors/${monitor.monitor_id}`} className={ROW_LINK}>
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <span className="min-w-0 truncate text-sm font-medium text-white">{monitor.monitor_name}</span>
-        <Pill tone={MONITOR_STATUS_TONE[status]} size="xs" dot className="shrink-0">
-          {MONITOR_STATUS_LABEL[status]}
-        </Pill>
-      </div>
-      <div className="mt-2 flex items-center gap-3">
-        <CheckTrace results={results} slots={TRACE_SLOTS} className="min-w-0 flex-1" />
+    <Link
+      ref={ref}
+      href={`/monitors/${monitor.monitor_id}`}
+      className={`${ROW_LINK} ${flashClass}`}
+      style={flashStyle(tone)}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${MONITOR_STATUS_DOT[status]}`} aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-white">{monitor.monitor_name}</span>
+        <CheckTrace results={results} slots={TRACE_SLOTS} className="hidden w-[80px] shrink-0 sm:flex" />
         <span
           className="w-12 shrink-0 text-right text-ui font-medium tabular-nums text-slate-300"
           title={`Uptime, ${rangeLabel.toLowerCase()}`}
         >
+          <span className="sr-only">Uptime </span>
           {formatUptime(monitor.uptime)}
         </span>
       </div>
-      <div className="mt-1.5 flex min-w-0 items-center justify-between gap-3 text-xs">
+      <div className="mt-0.5 flex min-w-0 items-center gap-2 pl-5 text-xs">
+        <span className={`shrink-0 font-medium ${TONE_TEXT[tone]}`}>{MONITOR_STATUS_LABEL[status]}</span>
         <ReasonText message={monitor.latest_error_message} />
         <span className="ml-auto flex shrink-0 gap-2 tabular-nums text-slate-500">
           <span>{issueCount} failed</span>
-          {monitor.latest_failure_at && (
-            <span title={formatDateTimeFull(monitor.latest_failure_at)}>
-              {formatRelativeTime(monitor.latest_failure_at)}
-            </span>
-          )}
+          {monitor.latest_failure_at && <RelativeTime value={monitor.latest_failure_at} />}
         </span>
       </div>
+      <CheckTrace results={results} slots={TRACE_SLOTS} className="mt-1.5 pl-5 sm:hidden" />
     </Link>
   );
 }
@@ -234,16 +353,13 @@ const TOOLTIP_STYLE: React.CSSProperties = {
   background: 'var(--glass-fill-strong)',
   border: '1px solid var(--glass-edge-strong)',
   borderRadius: 12,
-  backdropFilter: 'blur(20px)',
-  WebkitBackdropFilter: 'blur(20px)',
+  boxShadow: 'var(--glass-shadow-overlay)',
   color: 'var(--text-primary)',
 };
 
 const AXIS_TICK = { fill: 'var(--text-muted)', fontSize: 11 };
 
 const UPTIME_TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 25];
-
-const LATENCY_COLOR = '#6fb5dd';
 
 function CustomTooltip({ active, payload, label, uptimeColor }: any) {
   if (!active || !payload?.length) return null;
@@ -276,19 +392,25 @@ function CustomTooltip({ active, payload, label, uptimeColor }: any) {
 
 // ─── Loading Skeleton ──────────────────────────────────────────────────────────
 
+// Mirrors the page: header, KPI strip, the grid's first rows and the groups
+// row, so the first paint does not jump.
 function LoadingSkeleton() {
   return (
-    <div className="animate-pulse space-y-6" role="status" aria-label="Loading dashboard">
-      <div className="flex items-center justify-between">
-        <div className="h-8 w-40 rounded-lg bg-well-hover" />
-        <div className="hidden h-9 w-72 rounded-lg bg-well-hover sm:block" />
+    <Page width="data" className="animate-pulse">
+      <div role="status" aria-label="Loading dashboard" className="space-y-6">
+        <div className="mb-7 flex items-center justify-between">
+          <div className="h-8 w-40 rounded-lg bg-well-hover" />
+          <div className="hidden h-9 w-72 rounded-lg bg-well-hover sm:block" />
+        </div>
+        <div className="glass h-36" />
+        <div className={GRID}>
+          <div className={`glass h-[22rem] xl:h-auto ${CELL_ATTENTION}`} />
+          <div className={`glass h-[20rem] xl:h-auto ${CELL_CHART}`} />
+          <div className={`glass h-[20rem] xl:h-auto ${CELL_CHANGES}`} />
+          <div className={`glass h-40 ${CELL_GROUPS}`} />
+        </div>
       </div>
-      <div className="glass h-36" />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)]">
-        <div className="glass h-[22rem]" />
-        <div className="glass h-[22rem]" />
-      </div>
-    </div>
+    </Page>
   );
 }
 
@@ -306,9 +428,9 @@ function SectionCard({
   className?: string;
 }) {
   return (
-    <section className={`glass flex min-w-0 flex-col overflow-hidden ${className ?? ''}`}>
+    <section className={`glass flex min-w-0 flex-col overflow-hidden xl:h-full ${className ?? ''}`}>
       <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 px-5 py-4">
-        <h3 className="min-w-0 text-title font-semibold text-white">{title}</h3>
+        <h2 className="min-w-0 text-title font-semibold text-white">{title}</h2>
         {action && <div className="min-w-0 text-ui text-slate-500">{action}</div>}
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
@@ -341,11 +463,48 @@ function HeadlineFacts({ label }: { label: string }) {
   );
 }
 
+type Metric = OperationalSummary['metrics'][number];
+
+function MetricTile({ metric }: { metric: Metric }) {
+  // Healthy values stay neutral so only a problem carries colour.
+  const valueTone =
+    metric.tone === 'critical'
+      ? 'text-rose-300'
+      : metric.tone === 'attention'
+        ? 'text-amber-300'
+        : 'text-white';
+  const body = (
+    <>
+      <p className="truncate text-xs text-slate-400">{metric.label}</p>
+      {/* Keyed on the value: a changed number rises in once, the true value
+          at once (no count-up). */}
+      <p key={metric.value} className={`mt-0.5 animate-value-in text-xl font-semibold tabular-nums sm:text-metric ${valueTone}`}>
+        {metric.value}
+      </p>
+      {metric.detail && <p className="mt-0.5 hidden truncate text-xs text-slate-500 sm:block">{metric.detail}</p>}
+    </>
+  );
+  const base = `glass-well min-w-0 px-3.5 py-3 ${metric.wideOnly ? 'hidden 3xl:block' : ''}`;
+  return metric.href ? (
+    <Link
+      href={metric.href}
+      title={metric.title}
+      className={`${base} transition-colors duration-fast hover:bg-well-hover active:scale-[0.99] ${FOCUS_RING}`}
+    >
+      {body}
+    </Link>
+  ) : (
+    <div className={base} title={metric.title}>
+      {body}
+    </div>
+  );
+}
+
 function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
   const action = summary.primaryAction;
 
   return (
-    <section className="glass grid gap-4 p-4 sm:gap-6 sm:p-5 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] lg:items-center">
+    <section className="glass grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(18rem,26rem)_minmax(0,1fr)] lg:items-center lg:gap-6">
       <div className="min-w-0">
         <div className="flex items-start gap-2.5">
           <span className={`mt-2.5 h-2 w-2 shrink-0 rounded-full ${SUMMARY_DOT[summary.tone]}`} aria-hidden="true" />
@@ -356,7 +515,7 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
               // it wears the link colour and underline that touch can't hover for.
               <Link
                 href={action.href}
-                className="text-cyan-300 underline decoration-cyan-500/40 underline-offset-4 transition-colors sm:text-white sm:no-underline sm:hover:text-cyan-300 sm:hover:underline"
+                className={`rounded text-cyan-300 underline decoration-cyan-500/40 underline-offset-4 transition-colors sm:text-white sm:no-underline sm:hover:text-cyan-300 sm:hover:underline ${FOCUS_RING}`}
               >
                 <HeadlineFacts label={summary.label} />
               </Link>
@@ -369,44 +528,45 @@ function OperationalSummaryCard({ summary }: { summary: OperationalSummary }) {
           <p className="mt-1 hidden max-w-xl pl-[1.125rem] text-sm text-slate-400 sm:block">{summary.description}</p>
         )}
         {action && (
-          <div className="mt-4 hidden pl-[1.125rem] sm:block">
-            <Button variant="ghost" asChild>
+          <div className="mt-3 hidden pl-[1.125rem] sm:block">
+            <Button variant="ghost" size="sm" asChild>
               <Link href={action.href}>{action.label}</Link>
             </Button>
           </div>
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        {summary.metrics.map((metric) => {
-          // Healthy values stay neutral so only a problem carries colour.
-          const valueTone =
-            metric.tone === 'critical'
-              ? 'text-rose-300'
-              : metric.tone === 'attention'
-                ? 'text-amber-300'
-                : 'text-white';
-          return (
-            <div key={metric.label} className="glass-well min-w-0 p-3 sm:p-4" title={metric.title}>
-              <p className="truncate text-xs text-slate-400">{metric.label}</p>
-              <p className={`mt-1 text-xl font-semibold tabular-nums sm:text-2xl ${valueTone}`}>{metric.value}</p>
-              {metric.detail && <p className="mt-1 hidden truncate text-xs text-slate-500 sm:block">{metric.detail}</p>}
-            </div>
-          );
-        })}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 3xl:grid-cols-6">
+        {summary.metrics.map((metric) => (
+          <MetricTile key={metric.label} metric={metric} />
+        ))}
       </div>
     </section>
   );
+}
+
+function chartSummary(trendData: TrendPoint[], rangeLabel: string): string {
+  const uptimes = trendData.map((p) => p.uptime).filter((v): v is number => typeof v === 'number');
+  const latencies = trendData.map((p) => p.responseTime).filter((v): v is number => typeof v === 'number' && v > 0);
+  if (uptimes.length === 0) return `Uptime and latency, ${rangeLabel.toLowerCase()}: no data`;
+  const avg = uptimes.reduce((a, b) => a + b, 0) / uptimes.length;
+  const parts = [`Uptime ${formatUptime(avg)} on average over the ${rangeLabel.toLowerCase()}, lowest ${formatUptime(Math.min(...uptimes))}`];
+  if (latencies.length > 0) {
+    parts.push(`average HTTP latency ${formatLatency(latencies.reduce((a, b) => a + b, 0) / latencies.length)}`);
+  }
+  return parts.join('; ');
 }
 
 function UptimeResponseChart({
   trendData,
   hasEnoughTrendData,
   noMatchingMonitors,
+  rangeLabel,
 }: {
   trendData: TrendPoint[];
   hasEnoughTrendData: boolean;
   noMatchingMonitors: boolean;
+  rangeLabel: string;
 }) {
   const { uptimeAxis, uptimeColor } = useMemo(() => {
     const values = trendData
@@ -428,22 +588,22 @@ function UptimeResponseChart({
   }, [trendData]);
 
   return (
-    <section className="glass min-w-0 overflow-hidden">
-      <div className="px-5 py-4">
-        <h3 className="text-title font-semibold text-white">Uptime and latency</h3>
+    <section className="glass flex min-w-0 flex-col overflow-hidden xl:h-full">
+      <div className="shrink-0 px-5 py-4">
+        <h2 className="text-title font-semibold text-white">Uptime and latency</h2>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full" style={{ background: uptimeColor }} /> Uptime
+            <span className="h-2 w-2 rounded-full" style={{ background: uptimeColor }} aria-hidden="true" /> Uptime
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full" style={{ background: LATENCY_COLOR }} /> Avg HTTP latency
+            <span className="h-2 w-2 rounded-full" style={{ background: LATENCY_COLOR }} aria-hidden="true" /> Avg HTTP latency
           </span>
         </div>
       </div>
 
-      <div className="px-5 pb-5">
+      <div className="flex min-h-0 flex-1 flex-col px-5 pb-5">
         {hasEnoughTrendData ? (
-          <div className="h-64 min-w-0">
+          <div className="h-64 min-w-0 xl:h-auto xl:min-h-0 xl:flex-1" role="img" aria-label={chartSummary(trendData, rangeLabel)}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={trendData} margin={{ top: 10, right: 6, bottom: 0, left: 4 }}>
                 <defs>
@@ -452,7 +612,7 @@ function UptimeResponseChart({
                     <stop offset="100%" stopColor={uptimeColor} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid stroke="var(--divider)" vertical={false} />
+                <CartesianGrid {...CHART_GRID} />
                 <XAxis dataKey="date" axisLine={false} tickLine={false} tick={AXIS_TICK} minTickGap={24} />
                 <YAxis
                   yAxisId="uptime"
@@ -507,7 +667,7 @@ function UptimeResponseChart({
             </ResponsiveContainer>
           </div>
         ) : (
-          <div className="glass-well flex h-64 items-center justify-center px-4 text-center">
+          <div className="glass-well flex h-64 items-center justify-center px-4 text-center xl:h-auto xl:flex-1">
             <div>
               <p className="text-sm font-medium text-slate-300">
                 {noMatchingMonitors ? 'No monitors match these tags' : 'Not enough trend data yet'}
@@ -547,10 +707,13 @@ function NeedsAttentionPanel({
   onRetry,
   noMatchingMonitors,
   rangeLabel,
+  observe,
+  flashClass,
 }: {
+  /** Every problem monitor fetched, sorted; the card scrolls. */
   monitors: DashboardProblemMonitor[];
   traces: Record<string, CheckResult[]>;
-  /** Every monitor needing attention; the panel draws the first NEEDS_ATTENTION_ROWS. */
+  /** Every monitor needing attention (above `monitors.length` only when the list was capped). */
   total: number;
   /** Monitors down or degraded now. */
   unhealthyCount: number;
@@ -562,12 +725,10 @@ function NeedsAttentionPanel({
   onRetry: () => void;
   noMatchingMonitors: boolean;
   rangeLabel: string;
+  observe: (el: Element | null, id: string) => (() => void) | undefined;
+  flashClass: (id: string) => string;
 }) {
   const shown = monitors.length;
-  const unhealthyShown = monitors.filter((m) => {
-    const status = problemMonitorStatus(m);
-    return status === 'down' || status === 'degraded';
-  }).length;
   return (
     <SectionCard
       title="Needs attention"
@@ -585,20 +746,25 @@ function NeedsAttentionPanel({
         <TableSkeleton rows={3} columns={1} bare label="Loading monitors needing attention" />
       ) : shown > 0 ? (
         <>
-          <div className="divide-y divide-divider">
-            {monitors.map((monitor) => (
-              <ProblemMonitorItem
-                key={monitor.monitor_id}
-                monitor={monitor}
-                results={traces[monitor.monitor_id] ?? null}
-                rangeLabel={rangeLabel}
-              />
-            ))}
-          </div>
-          {unhealthyCount > unhealthyShown && (
+          <ScrollList label="Monitors needing attention" className={`min-h-0 flex-1 ${LIST_HEIGHT}`}>
+            <div className="divide-y divide-divider">
+              {monitors.map((monitor) => (
+                <ProblemMonitorItem
+                  key={monitor.monitor_id}
+                  monitor={monitor}
+                  results={traces[monitor.monitor_id] ?? null}
+                  rangeLabel={rangeLabel}
+                  observe={observe}
+                  flashClass={flashClass(monitor.monitor_id)}
+                />
+              ))}
+            </div>
+          </ScrollList>
+          {/* Outside the scroll area: always reachable, whatever the list's length. */}
+          {unhealthyCount > 0 && (
             <Link
               href={downHref}
-              className="border-t border-divider px-5 py-3 text-sm text-cyan-300 transition-colors hover:bg-well hover:text-cyan-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500/50"
+              className={`shrink-0 border-t border-divider px-5 py-3 text-sm text-cyan-300 transition-colors hover:bg-well hover:text-cyan-200 ${FOCUS_RING_INSET}`}
             >
               View all {unhealthyCount} down or degraded
             </Link>
@@ -607,6 +773,7 @@ function NeedsAttentionPanel({
       ) : (
         <EmptyState
           variant="inline"
+          headingLevel={3}
           title={noMatchingMonitors ? 'No monitors match these tags' : 'Nothing needs attention'}
           description={
             noMatchingMonitors
@@ -619,7 +786,7 @@ function NeedsAttentionPanel({
   );
 }
 
-function TimelineRow({ item }: { item: ActivityTimelineItem }) {
+function TimelineRow({ item, flashClass }: { item: ActivityTimelineItem; flashClass: string }) {
   const body = (
     <>
       <div className="flex min-w-0 items-center justify-between gap-3">
@@ -629,22 +796,35 @@ function TimelineRow({ item }: { item: ActivityTimelineItem }) {
             {item.event}
           </Pill>
         </div>
-        <span className="shrink-0 text-xs tabular-nums text-slate-500" title={formatDateTimeFull(item.occurredAt)}>
-          {item.relativeTime}
-        </span>
+        <RelativeTime value={item.occurredAt} className="shrink-0 text-xs tabular-nums text-slate-500" />
       </div>
       {(item.reason || item.detail) && (
-        <div className="mt-1 flex min-w-0 items-center justify-between gap-3 text-xs">
+        <div className="mt-0.5 flex min-w-0 items-center justify-between gap-3 text-xs">
           <ReasonText message={item.reason} />
-          {item.detail && <span className="ml-auto shrink-0 tabular-nums text-slate-500">{item.detail}</span>}
+          {item.detail && (
+            <span className="ml-auto shrink-0 tabular-nums text-slate-500">
+              {item.detail}
+              {item.detailAt && (
+                <>
+                  {' '}
+                  <RelativeTime value={item.detailAt} />
+                </>
+              )}
+            </span>
+          )}
         </div>
       )}
     </>
   );
+  const style = flashStyle(item.tone);
   return item.href ? (
-    <Link href={item.href} className={ROW_LINK}>{body}</Link>
+    <Link href={item.href} className={`${ROW_LINK} ${flashClass}`} style={style}>
+      {body}
+    </Link>
   ) : (
-    <div className="px-5 py-3">{body}</div>
+    <div className={`px-5 py-2.5 ${flashClass}`} style={style}>
+      {body}
+    </div>
   );
 }
 
@@ -654,6 +834,7 @@ function WhatChangedTimeline({
   loadFailed,
   onRetry,
   rangeLabel,
+  flashClass,
 }: {
   items: ActivityTimelineItem[];
   loading: boolean;
@@ -661,12 +842,13 @@ function WhatChangedTimeline({
   loadFailed: boolean;
   onRetry: () => void;
   rangeLabel: string;
+  flashClass: (id: string) => string;
 }) {
   return (
     <SectionCard
       title="What changed"
       action={
-        <Link href="/alerts" className="text-cyan-300 transition-colors hover:text-cyan-200 hover:underline">
+        <Link href="/alerts" className={TEXT_LINK}>
           Alert history
         </Link>
       }
@@ -676,14 +858,17 @@ function WhatChangedTimeline({
       ) : loading ? (
         <TableSkeleton rows={3} columns={1} bare label="Loading recent activity" />
       ) : items.length > 0 ? (
-        <div className={`${SCROLL_LIST} max-h-[28rem]`}>
-          {items.map((item) => (
-            <TimelineRow key={item.id} item={item} />
-          ))}
-        </div>
+        <ScrollList label="Recent changes" className={`min-h-0 flex-1 ${LIST_HEIGHT}`}>
+          <div className="divide-y divide-divider">
+            {items.map((item) => (
+              <TimelineRow key={item.id} item={item} flashClass={flashClass(item.id)} />
+            ))}
+          </div>
+        </ScrollList>
       ) : (
         <EmptyState
           variant="inline"
+          headingLevel={3}
           title="No changes"
           description={`Failing monitors and alerts in the ${rangeLabel.toLowerCase()} appear here.`}
         />
@@ -695,6 +880,7 @@ function WhatChangedTimeline({
 // ─── Dashboard Page ────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  useDocumentTitle('Dashboard');
   const canWrite = useCanWrite();
   const [dashboard, setDashboard] = useState<DashboardSummaryResponse | null>(null);
   const [problemMonitorsData, setProblemMonitorsData] = useState<DashboardProblemMonitor[] | null>(null);
@@ -702,7 +888,6 @@ export default function DashboardPage() {
   const [recentAlertsData, setRecentAlertsData] = useState<Alert[] | null>(null);
   const [traces, setTraces] = useState<Record<string, CheckResult[]>>({});
   const [tenantRetentionDays, setTenantRetentionDays] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Set when the panels' data failed to load; a section that has no data then
   // renders the failure instead of an empty (all-clear) state.
@@ -710,98 +895,112 @@ export default function DashboardPage() {
   const [timeRange, setTimeRange] = useState<DashboardPageRange>('1h');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const requestSequenceRef = useRef(0);
+  const hasDataRef = useRef(false);
 
+  // Retention is a tenant setting, not live data: read it once.
+  useEffect(() => {
+    let cancelled = false;
+    getTenantSettings()
+      .then((settings) => {
+        if (!cancelled) setTenantRetentionDays(settings.data_retention_days);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** False when the sections failed; stale responses are dropped. */
   const loadSecondarySections = useCallback(async (
     requestID: number,
     range: DashboardPageRange,
     tags: string[]
-  ) => {
+  ): Promise<boolean> => {
     try {
       const [problemResponse, failuresResponse, alertsResponse] = await Promise.all([
         getDashboardProblemMonitors({ range, limit: DASHBOARD_LIST_LIMIT, tags }),
         getDashboardRecentFailures({ range, limit: DASHBOARD_LIST_LIMIT, tags }),
         getDashboardRecentAlerts({ range, limit: DASHBOARD_LIST_LIMIT, tags }),
       ]);
-
-      if (requestSequenceRef.current !== requestID) {
-        return;
-      }
+      if (requestSequenceRef.current !== requestID) return true;
 
       setProblemMonitorsData(problemResponse.problem_monitors);
       setRecentFailuresData(failuresResponse.recent_failures);
       setRecentAlertsData(alertsResponse.recent_alerts);
       setSectionsError(false);
+      return true;
     } catch (err) {
       console.error('Failed to load dashboard secondary sections:', err);
-      if (requestSequenceRef.current !== requestID) {
-        return;
-      }
+      if (requestSequenceRef.current !== requestID) return true;
       // Keep whatever was on screen; sections with nothing show the failure.
       setSectionsError(true);
+      return false;
     }
   }, []);
 
-  // A refetch (range, tags, refresh) keeps the current sections on screen
-  // until the new data lands; only the first load shows skeletons.
-  const loadData = useCallback(async () => {
+  // Every load keeps what is on screen until new data lands; only the first
+  // load shows skeletons. A silent (background) refresh that fails leaves the
+  // page as it was and LiveStatus says "Update failed"; a visible one (first
+  // load, range or tag change, Refresh) raises the error callout.
+  const loadData = useCallback(async ({ silent }: LiveLoadOptions): Promise<boolean> => {
     const requestID = requestSequenceRef.current + 1;
     requestSequenceRef.current = requestID;
+    const range = timeRange;
+    const tags = selectedTags;
 
     try {
-      setLoading(true);
-      setError(null);
-      setSectionsError(false);
-
-      const [response, settings] = await Promise.all([
-        getDashboardSummary({
-          range: timeRange,
-          tags: selectedTags,
-        }),
-        getTenantSettings().catch(() => null),
-      ]);
-
-      if (requestSequenceRef.current !== requestID) {
-        return;
-      }
+      const response = await getDashboardSummary({ range, tags });
+      if (requestSequenceRef.current !== requestID) return true;
 
       setDashboard(response);
-      if (settings) setTenantRetentionDays(settings.data_retention_days);
-
-      if (typeof window !== 'undefined') {
-        window.requestAnimationFrame(() => {
-          void loadSecondarySections(requestID, timeRange, selectedTags);
-        });
-      } else {
-        void loadSecondarySections(requestID, timeRange, selectedTags);
-      }
+      setError(null);
+      hasDataRef.current = true;
+      // The summary paints first; the lists follow.
+      return await loadSecondarySections(requestID, range, tags);
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
-      if (requestSequenceRef.current === requestID) {
+      if (requestSequenceRef.current === requestID && (!silent || !hasDataRef.current)) {
         setError('Failed to load dashboard data');
         setSectionsError(true);
       }
-    } finally {
-      if (requestSequenceRef.current === requestID) {
-        setLoading(false);
-      }
+      return false;
     }
   }, [loadSecondarySections, selectedTags, timeRange]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  // Loads on mount and on range/tag change, then polls every 30s while the
+  // tab is visible and reloads (debounced) on alert-stream events.
+  const live = useLiveRefresh(loadData);
+  const { refresh } = live;
+  const retry = useCallback(() => void refresh(), [refresh]);
 
   const problemMonitors = useMemo(() => problemMonitorsData || [], [problemMonitorsData]);
   const sortedProblems = useMemo(() => sortNeedsAttention(problemMonitors), [problemMonitors]);
-  const needsAttention = useMemo(() => sortedProblems.slice(0, NEEDS_ATTENTION_ROWS), [sortedProblems]);
+  const problemFlash = useRowFlash(sortedProblems, (m) => m.monitor_id, (m) => problemMonitorStatus(m));
 
-  // Each Needs attention row draws its recent checks. Fetched per drawn row
-  // (at most NEEDS_ATTENTION_ROWS) whenever the list reloads.
+  // Each Needs attention row draws its recent checks, fetched for the rows on
+  // screen only: again whenever the list reloads, and when a row scrolls
+  // into view with traces older than the current list.
+  const { visible, observe, supported: observing } = useVisibleRows();
+  // Which list load each row's trace was fetched for: a row is fetched once
+  // per load, and a batch in flight is never cancelled (scrolling would
+  // otherwise refetch the same rows over and over).
+  const traceGeneration = useRef(new Map<string, DashboardProblemMonitor[]>());
+  const mounted = useRef(true);
   useEffect(() => {
-    if (needsAttention.length === 0) return;
-    let cancelled = false;
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!problemMonitorsData || sortedProblems.length === 0) return;
+    const due = sortedProblems.filter(
+      (m) => (!observing || visible.has(m.monitor_id)) && traceGeneration.current.get(m.monitor_id) !== problemMonitorsData,
+    );
+    if (due.length === 0) return;
+    due.forEach((m) => traceGeneration.current.set(m.monitor_id, problemMonitorsData));
     void Promise.all(
-      needsAttention.map(async (monitor) => {
+      due.map(async (monitor) => {
         try {
           const response = await getMonitorResults(monitor.monitor_id, { limit: TRACE_SLOTS });
           return [monitor.monitor_id, response.results] as const;
@@ -810,13 +1009,9 @@ export default function DashboardPage() {
         }
       }),
     ).then((entries) => {
-      if (cancelled) return;
-      setTraces((current) => ({ ...current, ...Object.fromEntries(entries) }));
+      if (mounted.current) setTraces((current) => ({ ...current, ...Object.fromEntries(entries) }));
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [needsAttention]);
+  }, [sortedProblems, visible, observing, problemMonitorsData]);
 
   const availableTags = useMemo(() => dashboard?.available_tags || [], [dashboard]);
 
@@ -894,24 +1089,41 @@ export default function DashboardPage() {
       alerts: recentAlerts,
       monitors: problemMonitors,
       since: rangeStart(timeRange),
-    }).slice(0, 8),
+    }).slice(0, TIMELINE_ROWS),
     [problemMonitors, recentAlerts, recentFailures, timeRange],
   );
+  // A row that appears or changes event between refreshes flashes once.
+  const timelineFlash = useRowFlash(timelineItems, (item) => item.id, (item) => `${item.event}|${item.occurredAt}`, {
+    includeNew: true,
+  });
+
+  // The headline, spoken when a refresh changes it (not on first load).
+  const [announcement, setAnnouncement] = useState('');
+  const lastHeadline = useRef<string | null>(null);
+  useEffect(() => {
+    if (!dashboard) return;
+    const headline = operationalSummary.label;
+    if (lastHeadline.current !== null && lastHeadline.current !== headline) setAnnouncement(`Dashboard updated: ${headline}`);
+    lastHeadline.current = headline;
+  }, [dashboard, operationalSummary.label]);
 
   const selectedRangeDays = Math.floor((RANGES[timeRange].ms ?? 0) / 86_400_000);
   const showRetentionWarning =
     tenantRetentionDays !== null && tenantRetentionDays > 0 && selectedRangeDays > tenantRetentionDays;
 
-  if (loading && dashboard === null && !error) return <LoadingSkeleton />;
+  if (dashboard === null && !error) return <LoadingSkeleton />;
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
+      <p role="status" className="sr-only">
+        {announcement}
+      </p>
       <NotificationNudge unroutedMonitors={opsSummary?.unrouted_monitors ?? 0} />
 
       {error && (
         <Callout
           tone="danger"
-          action={<Button variant="danger" size="xs" onClick={loadData}>Retry</Button>}
+          action={<Button variant="danger" size="xs" onClick={retry}>Retry</Button>}
         >
           {error}
         </Callout>
@@ -919,6 +1131,15 @@ export default function DashboardPage() {
 
       <PageHeader
         title="Dashboard"
+        titleAside={
+          <LiveStatus
+            updatedAt={live.updatedAt}
+            refreshing={live.refreshing}
+            failed={live.failed}
+            onRefresh={retry}
+            refreshLabel="Refresh dashboard"
+          />
+        }
         action={
           <>
             {/* The range scopes every panel on the page, so it lives here. */}
@@ -928,12 +1149,6 @@ export default function DashboardPage() {
               selectedTags={selectedTags}
               onToggleTag={toggleTag}
               onClear={clearTags}
-            />
-            <IconButton
-              icon={<RefreshCw strokeWidth={1.75} />}
-              label="Refresh dashboard"
-              onClick={loadData}
-              loading={loading}
             />
             {canWrite && (
               <Button variant="accent" icon={<Plus className="h-4 w-4" strokeWidth={1.75} />} asChild>
@@ -972,53 +1187,50 @@ export default function DashboardPage() {
       )}
 
       {dashboard && (
-        <div className="dash-enter">
+        <div className="animate-fade-in">
           <OperationalSummaryCard summary={operationalSummary} />
         </div>
       )}
 
-      {/* Two independent columns at xl (chart + changes | attention + groups),
-          so a short card never leaves a hole beside a tall one. Below xl the
-          column wrappers dissolve (`contents`) and `order` puts the problem
-          list first. */}
       {/* Without a summary there is nothing true to draw: the error callout
           above carries Retry, and empty panels would read as an all-clear. */}
       {dashboard && (
-      <div className="dash-enter flex flex-col gap-6 xl:grid xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.8fr)] xl:items-start">
-        <div className="contents xl:flex xl:min-w-0 xl:flex-col xl:gap-6">
-          <div className="order-2 min-w-0 xl:order-none">
-            <UptimeResponseChart
-              trendData={trendData}
-              hasEnoughTrendData={hasEnoughTrendData}
-              noMatchingMonitors={noMatchingMonitors}
-            />
-          </div>
-          <div className="order-3 min-w-0 xl:order-none">
-            <WhatChangedTimeline
-              items={timelineItems}
-              loading={recentFailuresData === null || recentAlertsData === null}
-              loadFailed={sectionsError && (recentFailuresData === null || recentAlertsData === null)}
-              onRetry={loadData}
-              rangeLabel={rangeLabel}
-            />
-          </div>
-        </div>
-        <div className="contents xl:flex xl:min-w-0 xl:flex-col xl:gap-6">
-          <div className="order-1 min-w-0 xl:order-none">
+        <div className={`animate-fade-in ${GRID}`}>
+          <div className={CELL_ATTENTION}>
             <NeedsAttentionPanel
-              monitors={needsAttention}
+              monitors={sortedProblems}
               traces={traces}
               total={attentionTotals.total}
               unhealthyCount={attentionTotals.unhealthy}
               downHref={downHref}
-              loading={problemMonitorsData === null}
+              loading={problemMonitorsData === null && !sectionsError}
               loadFailed={sectionsError && problemMonitorsData === null}
-              onRetry={loadData}
+              onRetry={retry}
+              noMatchingMonitors={noMatchingMonitors}
+              rangeLabel={rangeLabel}
+              observe={observe}
+              flashClass={problemFlash.flashClass}
+            />
+          </div>
+          <div className={CELL_CHART}>
+            <UptimeResponseChart
+              trendData={trendData}
+              hasEnoughTrendData={hasEnoughTrendData}
               noMatchingMonitors={noMatchingMonitors}
               rangeLabel={rangeLabel}
             />
           </div>
-          <div className="order-4 min-w-0 xl:order-none">
+          <div className={CELL_CHANGES}>
+            <WhatChangedTimeline
+              items={timelineItems}
+              loading={(recentFailuresData === null || recentAlertsData === null) && !sectionsError}
+              loadFailed={sectionsError && (recentFailuresData === null || recentAlertsData === null)}
+              onRetry={retry}
+              rangeLabel={rangeLabel}
+              flashClass={timelineFlash.flashClass}
+            />
+          </div>
+          <div className={CELL_GROUPS}>
             <ServiceGroupsPanel
               groupTags={dashboard.group_tags ?? []}
               groups={dashboard.groups ?? []}
@@ -1028,8 +1240,7 @@ export default function DashboardPage() {
             />
           </div>
         </div>
-      </div>
       )}
-    </div>
+    </Page>
   );
 }

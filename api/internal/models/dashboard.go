@@ -194,7 +194,8 @@ type DashboardFailureEvent struct {
 	ResolvedAt    *time.Time            `json:"resolved_at"`
 }
 
-// DashboardGroupMember is a preview row inside a group: top members sorted worst-uptime-first.
+// DashboardGroupMember is a preview row inside a group: members ordered down,
+// then degraded, then the rest, each by uptime ascending.
 // Uptime is null when the member had no checks in the window (paused, new) —
 // never a synthetic 100% (S-D1).
 type DashboardGroupMember struct {
@@ -207,6 +208,10 @@ type DashboardGroupMember struct {
 // DashboardGroup is a single tag-derived service group.
 // Tag is *string so the sentinel for the ungrouped row can be nil (rendered as `"tag": null` in JSON).
 // Uptime is the mean over members WITH data; null when no member has any.
+// AttentionCount counts members down or degraded NOW (monitors.current_state
+// down/degraded/suspect), not members with failed checks earlier in the range;
+// those show only in Uptime. WorstMember is the first member in the order down,
+// degraded, rest, then uptime ascending; set only when AttentionCount > 0.
 type DashboardGroup struct {
 	Tag            *string                `json:"tag"`
 	MonitorCount   int                    `json:"monitor_count"`

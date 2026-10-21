@@ -5,12 +5,15 @@ import {
   buildOperationalSummary,
   countDegraded,
   downMonitorsHref,
+  groupAttentionCount,
+  groupHealth,
+  sortServiceGroups,
   needsAttentionTotals,
   parseFailureReason,
   problemMonitorStatus,
   sortNeedsAttention,
 } from './dashboard-view-model';
-import type { Alert, DashboardFailureEvent, DashboardProblemMonitor } from './types';
+import type { Alert, DashboardFailureEvent, DashboardGroup, DashboardGroupMember, DashboardProblemMonitor } from './types';
 
 const now = new Date('2026-04-24T12:00:00.000Z');
 
@@ -295,12 +298,15 @@ test('buildActivityTimeline joins an alert in range to its monitor row and keeps
   assert.deepEqual(
     items.map((item) => [item.title, item.event, item.detail]),
     [
-      ['m2', 'Down', 'Alert fired 30 min ago'],
+      ['m2', 'Down', 'Alert fired'],
       // Not on the problem list: the row claims only what the checks show.
       ['Unlisted', 'Checks failing', ''],
       ['Search', 'Alert resolved', 'Lasted 13m'],
     ],
   );
+  // The alert's time is a timestamp the page renders live, never a frozen string.
+  assert.equal(items[0].detailAt, '2026-04-24T11:30:00.000Z');
+  assert.equal(items[1].detailAt, undefined);
 });
 
 test('buildActivityTimeline shows a monitor that is up again as Up', () => {
@@ -428,4 +434,66 @@ test('parseFailureReason categorizes known worker prefixes and passes through th
   assert.equal(parseFailureReason('   '), null);
   assert.equal(parseFailureReason(null), null);
   assert.equal(parseFailureReason(undefined), null);
+});
+
+// ─── Service groups ──────────────────────────────────────────────────────────
+
+const member = (id: string, status: string | null, uptime: number | null = 100): DashboardGroupMember => ({
+  monitor_id: id,
+  monitor_name: id,
+  uptime,
+  current_status: status,
+});
+
+const group = (tag: string | null, members: DashboardGroupMember[], over: Partial<DashboardGroup> = {}): DashboardGroup => ({
+  tag,
+  monitor_count: members.length,
+  uptime: 99.95,
+  attention_count: 0,
+  worst_member: null,
+  members,
+  ...over,
+});
+
+test('groupHealth: failed checks earlier in the range alone never make a group amber', () => {
+  // 30d: a group at 99.93% whose members all had a failure somewhere in the
+  // range (an older API counted that as attention), every member up now.
+  const g = group('checkout', [member('a', 'success', 99.9), member('b', 'success', 99.96)], {
+    uptime: 99.93,
+    attention_count: 2,
+    worst_member: member('a', 'success', 99.9),
+  });
+  assert.equal(groupHealth(g), 'up');
+  assert.equal(groupAttentionCount(g), 0);
+  // A member whose last check failed but whose state is up again is up.
+  const flapped = group('api', [member('c', 'failure', 99.5)]);
+  const states = new Map([['c', problem('c', 'up', 2)]]);
+  assert.equal(groupHealth(flapped, states), 'up');
+});
+
+test('groupHealth follows the worst member state now', () => {
+  const states = new Map([
+    ['d', problem('d', 'degraded', 3)],
+    ['x', problem('x', 'down', 1)],
+  ]);
+  assert.equal(groupHealth(group('a', [member('u', 'success'), member('d', 'success')]), states), 'degraded');
+  assert.equal(groupHealth(group('a', [member('u', 'success'), member('d', 'success'), member('x', 'success')]), states), 'down');
+  assert.equal(groupAttentionCount(group('a', [member('u', 'success'), member('d', 'success'), member('x', 'success')]), states), 2);
+  assert.equal(groupHealth(group('a', [member('n', null, null)], { uptime: null })), 'unknown');
+  assert.equal(groupHealth(group('a', [], { monitor_count: 0 })), 'empty');
+});
+
+test('sortServiceGroups puts the worst groups first and Ungrouped last', () => {
+  const states = new Map([['down-1', problem('down-1', 'down', 9)]]);
+  const sorted = sortServiceGroups(
+    [
+      group(null, [member('x', null, null)], { uptime: null }),
+      group('alpha', [member('a1', 'success')], { uptime: 100 }),
+      group('beta', [member('b1', 'success')], { uptime: 97.5 }),
+      group('zulu', [member('down-1', 'success', 99.99)], { uptime: 99.99 }),
+      group('gamma', [member('g1', null, null)], { uptime: null }),
+    ],
+    states,
+  );
+  assert.deepEqual(sorted.map((g) => g.tag), ['zulu', 'beta', 'alpha', 'gamma', null]);
 });

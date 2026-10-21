@@ -1,5 +1,6 @@
 import { formatLatency, formatRelativeTime } from './format';
 import { sipCallTarget } from './sip-config';
+import { sortRows } from './sort';
 import { CheckResult, HTTPDisplayValue, Monitor, MonitorState, MonitorType, SIPMonitorConfig } from './types';
 
 export type MonitorHealthStatus = 'up' | 'down' | 'degraded' | 'unknown';
@@ -245,11 +246,7 @@ export function sortBySeverity<T>(
   getStatus: (item: T) => MonitorDisplayStatus,
   getName: (item: T) => string
 ): T[] {
-  return [...items].sort(
-    (a, b) =>
-      STATUS_RANK[getStatus(a)] - STATUS_RANK[getStatus(b)] ||
-      getName(a).localeCompare(getName(b), undefined, { sensitivity: 'base' })
-  );
+  return sortRows(items, (item) => STATUS_RANK[getStatus(item)], 'asc', getName);
 }
 
 /**

@@ -989,6 +989,11 @@ func (s *Service) attachLatestProblemErrors(ctx context.Context, tenantID uuid.U
 	return nil
 }
 
+// Problem monitors are ordered by current state first (currentStateRank) on
+// every range, BEFORE the limit cuts the list: the dashboard re-sorts Needs
+// attention by state, and ordering by failure count alone dropped a monitor
+// that is down now but failed few checks in the range (it just went down, or
+// runs on a long interval) once a larger fleet filled the limit.
 func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, rangeStart, rangeEndExclusive time.Time, limit int, tags []string) ([]models.DashboardProblemMonitor, error) {
 	tagClause := ""
 	limitPlaceholder := 4
@@ -1034,9 +1039,9 @@ func (s *Service) getProblemMonitors1h(ctx context.Context, tenantID uuid.UUID, 
 		FROM problem_stats ps
 		JOIN monitors m ON m.id = ps.monitor_id AND m.tenant_id = $1 AND m.deleted_at IS NULL
 		WHERE (ps.failure_count + ps.error_count) > 0
-		ORDER BY (ps.failure_count + ps.error_count) DESC, ps.latest_failure_at DESC NULLS LAST, m.name ASC
+		ORDER BY %s, (ps.failure_count + ps.error_count) DESC, ps.latest_failure_at DESC NULLS LAST, m.name ASC
 		LIMIT $%d
-	`, tagClause, limitPlaceholder)
+	`, tagClause, currentStateRankSQL("m.current_state"), limitPlaceholder)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1096,7 +1101,44 @@ func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID,
 		return []models.DashboardProblemMonitor{}, nil
 	}
 
+	// Names + current_state for every candidate, before the cut, so the
+	// current state can lead the order.
+	candidateIDs := make([]uuid.UUID, 0, len(cands))
+	for _, c := range cands {
+		candidateIDs = append(candidateIDs, c.monitorID)
+	}
+	nameRows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, current_state
+		FROM monitors
+		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+	`, tenantID, pq.Array(candidateIDs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to load problem-monitor names: %w", err)
+	}
+	defer nameRows.Close()
+	type monitorMeta struct {
+		name         string
+		currentState string
+	}
+	meta := make(map[uuid.UUID]monitorMeta, len(candidateIDs))
+	for nameRows.Next() {
+		var id uuid.UUID
+		var m monitorMeta
+		if err := nameRows.Scan(&id, &m.name, &m.currentState); err != nil {
+			return nil, fmt.Errorf("failed to scan problem-monitor name: %w", err)
+		}
+		meta[id] = m
+	}
+	if err := nameRows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating problem-monitor names: %w", err)
+	}
+
 	sort.Slice(cands, func(i, j int) bool {
+		ri := currentStateRank(meta[cands[i].monitorID].currentState)
+		rj := currentStateRank(meta[cands[j].monitorID].currentState)
+		if ri != rj {
+			return ri < rj
+		}
 		li := cands[i].failureCount + cands[i].errorCount
 		lj := cands[j].failureCount + cands[j].errorCount
 		if li != lj {
@@ -1115,37 +1157,6 @@ func (s *Service) getProblemMonitors24h(ctx context.Context, tenantID uuid.UUID,
 	})
 	if len(cands) > limit {
 		cands = cands[:limit]
-	}
-
-	// Fetch names + current_state for the top-N candidates.
-	topIDs := make([]uuid.UUID, 0, len(cands))
-	for _, c := range cands {
-		topIDs = append(topIDs, c.monitorID)
-	}
-	nameRows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, current_state
-		FROM monitors
-		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
-	`, tenantID, pq.Array(topIDs))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load problem-monitor names: %w", err)
-	}
-	defer nameRows.Close()
-	type monitorMeta struct {
-		name         string
-		currentState string
-	}
-	meta := make(map[uuid.UUID]monitorMeta, len(topIDs))
-	for nameRows.Next() {
-		var id uuid.UUID
-		var m monitorMeta
-		if err := nameRows.Scan(&id, &m.name, &m.currentState); err != nil {
-			return nil, fmt.Errorf("failed to scan problem-monitor name: %w", err)
-		}
-		meta[id] = m
-	}
-	if err := nameRows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating problem-monitor names: %w", err)
 	}
 
 	out := make([]models.DashboardProblemMonitor, 0, len(cands))
@@ -1222,6 +1233,9 @@ func (s *Service) getProblemMonitorsLongRange(ctx context.Context, tenantID uuid
 	}
 
 	sort.Slice(monitors, func(i, j int) bool {
+		if ri, rj := currentStateRank(monitors[i].CurrentState), currentStateRank(monitors[j].CurrentState); ri != rj {
+			return ri < rj
+		}
 		leftCount := monitors[i].FailureCount + monitors[i].ErrorCount
 		rightCount := monitors[j].FailureCount + monitors[j].ErrorCount
 		if leftCount != rightCount {
@@ -1283,17 +1297,17 @@ func (s *Service) listProblemMonitorCandidates(ctx context.Context, tenantID uui
 			  AND m.enabled = TRUE
 			  AND m.type <> 'group'
 			  AND m.deleted_at IS NULL
-			  %s
+			  %[1]s
 			GROUP BY m.id, m.name, m.current_state, latest.latest_check_at
 			HAVING COALESCE(SUM(mdr.total_checks - mdr.success_checks), 0) > 0
 			    OR m.current_state IN ('down', 'degraded')
-			ORDER BY problem_checks DESC, name ASC
+			ORDER BY %[2]s, problem_checks DESC, name ASC
 			LIMIT $4
 		)
 		SELECT id, name, current_state, total_checks, success_checks, problem_checks, latest_check_at
 		FROM rollup_candidates
-		ORDER BY problem_checks DESC, name ASC
-	`, tagClause)
+		ORDER BY %[3]s, problem_checks DESC, name ASC
+	`, tagClause, currentStateRankSQL("m.current_state"), currentStateRankSQL("current_state"))
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

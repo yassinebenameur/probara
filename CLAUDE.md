@@ -525,22 +525,72 @@ or imported groups come back empty. Any other path that creates groups through
 - **Row actions** in tables and lists use `components/ui/IconButton.tsx`
   (icon only, named by its tooltip, `danger` last) for up to three
   actions, and `components/ui/RowMenu.tsx` (⋮, position:fixed, flips up)
-  beyond that. Don't put text buttons in rows.
+  beyond that. Don't put text buttons in rows — except a lifecycle list's one
+  labelled next step (alerts: Acknowledge → Resolve, the rest in ⋮; see
+  `components/alerts/AlertTable.tsx`).
 - **Shell**: the sidebar (`components/layout/Sidebar.tsx`) is the only chrome
   — no desktop top bar; below `md` it is a drawer opened from `TopBar`. It is
   ONE instance on every breakpoint, so `TenantSwitcher`'s tenant bootstrap
   (load, settle, `emitTenantChange`) runs once; never render a second copy.
-  `useFleetHealth` (called once, in `Layout`'s `Shell`) owns
-  `html[data-health]`, which drives the ambient alarm bloom.
-- **Glass surfaces**: panels use `.glass` (or `Panel`/`FormCard`/
-  `FormSection`), overlays `.glass-overlay`, groups inside a panel
-  `.glass-well`, banners `components/ui/Callout.tsx`; never nest a blurred
-  surface in another. Orange (`cyan-*`) is for actions only; text on it is
-  `text-onaccent`. "Selected" (chips, tabs, segments) is neutral raised
-  glass (`SELECTED_SEGMENT` in `components/ui/roving.ts`), never orange.
-  Type scale is `text-2xs`/`xs`/`ui`/`sm`/`title`, no arbitrary px sizes.
-  The rules and token list sit in the comment at the top of
-  `app/globals.css` and in `tailwind.config.ts`.
+  From `md` it collapses to a 64px icon rail (header toggle or `[`): the same
+  instance with `rail` props, rows folding via `components/layout/rail.ts`.
+  Nothing may change height while the width animates: rows keep one
+  structure, the header is one fixed row (the rail toggle overlays the mark),
+  and the footer swaps layout only once the width settles.
+  State is `html[data-sidebar="collapsed"]`, set pre-paint by the boot script
+  in `app/layout.tsx` from localStorage `probara-sidebar` and owned by
+  `useSidebarCollapsed`; widths are CSS keyed on it, and fixed overlays that
+  clear the sidebar use `md:left-[var(--sidebar-offset)]`, never a literal.
+  Rail labels are `components/ui/Tooltip.tsx` (`useTooltip`, portaled).
+  `useFleetHealth` (called once, in `Layout`'s `Shell`) feeds the sidebar
+  FleetHealth row and TopBar; fleet health never tints the page. The shell
+  has no content cap below 2560px (`max-w-[160rem]`, gutters only); each page
+  picks its width with `components/ui/Page.tsx` (`<Page width="data|detail|
+  wide|reading|form">`, the page root). Settings is `data` too: its tabs
+  lay panels into container-width columns from
+  `components/settings/layout.ts`, never viewport breakpoints (the sidebar
+  changes the main width). Tailwind screens add `3xl` 1920 / `4xl` 2400.
+- **Route titles**: every route folder has a server `layout.tsx` that only
+  exports `metadata.title` (the root template appends ` · Probara`); nested
+  segments under a titled parent use `title: { absolute: '… · Probara' }`,
+  since a parent's string title stops the root template. Client detail pages
+  name themselves with `useDocumentTitle` (`lib/useDocumentTitle.ts`).
+- **Glass surfaces**: the canvas is flat (no gradients, grid or bloom).
+  Panels use `.glass` (or `Panel`/`FormCard`/`FormSection`, near-opaque, no
+  blur), overlays `.glass-overlay`, groups inside a panel `.glass-well`,
+  banners `components/ui/Callout.tsx`; only overlays and the shell blur, and
+  never nest a blurred surface in another. Orange (`cyan-*`) is for actions
+  only; text on it is `text-onaccent`. "Selected" tabs and segments are
+  neutral raised glass (`SELECTED_SEGMENT` in `components/ui/roving.ts`,
+  fill `bg-selected`/`--segment-selected`); a selected `FilterChip` is
+  inverted ink (`bg-white` + panel-coloured text) so applied filters read
+  at a glance; the active nav item is
+  `bg-nav-selected` (a filled step above hover on the shell); never orange
+  and never a rail; checked list rows use `bg-well-strong`. Icon-only
+  buttons are named by `useTooltip` (`components/ui/Tooltip.tsx`, fast,
+  shows on focus), never a native `title`.
+  Chart series take `--chart-1..6` (`SERIES_COLORS`/`LATENCY_COLOR`/
+  `CHART_GRID` in `components/monitors/metric-chart.tsx`), never a hex or a
+  status colour; an empty trace slot or no-data bucket is `NO_DATA_BAR`
+  (`lib/status-tones.ts`, hollow). Text meets 4.5:1 and meaningful marks
+  3:1 on every surface they sit on (contrast notes per token in the
+  `globals.css` header). Focus is
+  `FOCUS_RING`/`FOCUS_RING_INSET` (`components/ui/focus.ts`, the `--focus`
+  token); input, select, checkbox and radio borders use `--input-edge`, the
+  Switch off track `--switch-off`. Type scale is `text-2xs`/`xs`/`ui`/`sm`/
+  `title`, plus `text-metric` for KPI numbers; no arbitrary px sizes. The
+  rules and token list sit in the comment at the top of `app/globals.css`
+  and in `tailwind.config.ts`.
+- **Theme** follows `prefers-color-scheme` unless `probara-theme` is stored
+  (boot script in `app/layout.tsx`); `ThemeToggle` cycles light/dark/system.
+- **Motion**: `--dur-*`/`--ease-*` in `globals.css`; Tailwind
+  `duration-fast|base|slow`, `ease-standard|emphasized|exit` and
+  `animate-fade-in|pop-in|dialog-in|toast-in|row-flash|bar-in|value-in|
+  live-ping|status-pulse` (row-flash/live-ping take their colour from the
+  `--flash` CSS var, see `flashStyle` in `lib/useRowFlash.ts`). Only one
+  thing loops: `status-pulse`, on the newest CheckTrace bar of a monitor
+  degraded right now — never pulse whole traces or lists. Reduced motion is
+  handled globally in `globals.css`; never hard-code a duration.
 - **Formatting and tones have one home each**: dates, recency, durations,
   uptime %, latency and the `RANGES` table live in `lib/format.ts`
   (`formatDateTime`, `formatTimestamp`, `formatRelativeTime`, `formatUptime`,
@@ -553,7 +603,13 @@ or imported groups come back empty. Any other path that creates groups through
   target and short failure reasons are `STATUS_RANK`/`sortBySeverity`,
   `monitorTarget`, `shortFailureReason` in `lib/monitor-utils.ts`.
 - **Shared controls**: time ranges use `components/ui/RangePicker.tsx`
-  (page-scoped: header or Tabs `trailing`, never inside one card); monitor
+  (page-scoped: header or Tabs `trailing`, never inside one card); a setting
+  with a few discrete stops (sensitivity, a window length) is
+  `components/ui/SegmentedControl.tsx` (radiogroup, roving arrows,
+  `SELECTED_SEGMENT`), never a stepped range slider; a Switch's on track is
+  neutral ink like a checked Checkbox, never orange; a save bar shown only
+  while a form is dirty floats over the page (portaled, `data-floating-bar`,
+  as in Settings → Notifications) so its arrival never shifts content; monitor
   types render as `components/ui/TypeBadge.tsx` (pass `config` where it is at
   hand so a SIP test call reads `CALL`, via `monitorTypeDisplay`), labels from
   `lib/monitor-type-labels.ts` only; write affordances gate on
@@ -561,14 +617,44 @@ or imported groups come back empty. Any other path that creates groups through
   read false while identity loads, so "read-only" copy also waits for
   `useCurrentUser().loading` to clear). Recent
   checks draw as `components/monitors/CheckTrace.tsx`, the one check-history
-  trace (monitors list, dashboard) — never a second bar strip.
+  trace (monitors list, dashboard; fixed 79px, equal-height bars)
+  — never a second bar strip. Multi-select list filters (Type, Tags) are
+  `components/ui/FilterPopover.tsx`: a FilterChip trigger with a portaled,
+  anchored popup — never an inline panel that pushes the content down.
+  Checkboxes and radios are
+  `components/ui/Checkbox.tsx` / `Radio.tsx` (`onChange` receives the boolean
+  first; never a native `accent-*` box). Every modal is
+  `components/ui/Dialog.tsx` (form modals put the submit button in `footer`
+  with `form={id}`); scrolling lists inside a card use
+  `components/ui/ScrollList.tsx`.
+- **Sorting**: list columns use `components/ui/SortableHeader.tsx` over
+  `lib/sort.ts` (nulls last in both directions), with state in
+  `?sort=&dir=` through `useUrlSort` (defaults left out), and sort the whole
+  filtered set before paging. Server-paged views (alerts Resolved/All, audit)
+  have no column sort until their API gains sort parameters.
+- **Live pages and feedback**: relative times render as `RelativeTime` /
+  `ElapsedTime` (`components/ui/RelativeTime.tsx`, on the shared `useNow`
+  clock), never a frozen `formatRelativeTime` string. Live pages load through
+  `useLiveRefresh` with `LiveStatus` in the header and flash changed rows with
+  `useRowFlash`. Toasts go through `showToast` (`group` coalesces bursts); no
+  success toast for a change already visible in place, and an own
+  acknowledge/resolve calls `markLocalAction` first so the stream echo stays
+  quiet.
+- **Dashboard**: `app/page.tsx` `GRID`/`CELL_*` constants own the 12-column
+  xl/3xl/4xl layout; a service group's tone is `groupHealth()` in
+  `lib/dashboard-view-model.ts` (current worst member state; history only
+  through `uptimeTone`), never `attention_count`.
   Per-check `metrics_data` charts on the detail page (`MongoClusterPanels`,
   `SipCallPanels`) fetch through `lib/useMetricsSnapshots.ts` and pick and
   grid their points with `lib/metric-snapshots.ts`; a new panel does the same.
 - **`/monitors` deep links** (`?status=`, repeatable `?tag=`,
-  `?routing=unrouted`, `?sort=name`) are parsed and written only by
-  `parseMonitorListParams`/`formatMonitorListParams` in `lib/monitor-list.ts`;
-  link to the filtered list rather than adding page-local query handling.
+  `?routing=unrouted`, `?sort=status|name|success|latency|last_check` with
+  `?dir=asc|desc`, defaults left out per `MONITOR_SORT_DEFAULT_DIR`) are
+  parsed and written only by `parseMonitorListParams`/
+  `formatMonitorListParams` in `lib/monitor-list.ts`; link to the filtered
+  list rather than adding page-local query handling. The list order is
+  `sortMonitorList`: groups and monitors sort together, a group ranking by
+  its worst member under status.
   Likewise the one-alert `/alerts?alert=<id>&tenant=<id>` link notifications
   carry (built in `present.suspectedCauseAction`) is parsed only by
   `lib/alert-links.ts`.
@@ -581,8 +667,9 @@ or imported groups come back empty. Any other path that creates groups through
   ancestor's `backdrop-filter` becomes the containing block of a `fixed`
   child, offsetting and clipping it. Wrap modal roots in
   `components/ui/ModalPortal.tsx` (menus/popovers: `createPortal`, as
-  `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus and restores
-  it on close; pass `onEscape` unless the modal handles Escape itself.
+  `RowMenu` and `InfoTip` do). ModalPortal also traps Tab focus, marks
+  `#app-root` inert while open and restores focus on close; pass `onEscape`
+  unless the modal handles Escape itself (`Dialog` does).
 - **Monitor forms are `noValidate`**: each calls `reportConstraintViolation`
   (brings back native min/max checks), `useClearErrorsOnEdit` and
   `useFollowEnabled` from `components/monitors/form-kit.tsx`; a new type

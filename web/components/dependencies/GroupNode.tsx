@@ -17,7 +17,7 @@ function GroupNodeImpl({ id, data }: NodeProps<GroupFlowNode>) {
   const allQuiet = data.downCount === 0 && data.warnCount === 0;
 
   return (
-    <div className={`relative w-[216px] transition-opacity duration-200 ${dimmed ? 'opacity-20' : 'opacity-100'}`}>
+    <div className={`relative w-[216px] transition-opacity duration-base ${dimmed ? 'opacity-20' : 'opacity-100'}`}>
       <div className="relative rounded-xl border border-dashed border-slate-500/50 bg-glass-strong shadow-[0_1px_2px_rgb(0_0_0/0.12)]">
         <Handle
           type="target"

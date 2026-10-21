@@ -18,6 +18,11 @@ import { createPortal } from 'react-dom';
  * e.g. with autoFocus), Tab and Shift+Tab wrap inside it, and on close it
  * returns to whatever had it before. `onEscape` closes the overlay from the
  * keyboard; leave it out when the overlay handles Escape itself.
+ *
+ * While any overlay is open the app shell (#app-root, when the layout sets
+ * it) is `inert`, so a screen reader's virtual cursor cannot wander into the
+ * page behind the modal. Prefer components/ui/Dialog.tsx for modals: it adds
+ * the dialog role, labelling and entrance on top of this.
  */
 export default function ModalPortal({
   children,
@@ -49,6 +54,12 @@ const FOCUSABLE =
 // Open scopes, innermost last: only the top one traps (a confirm over a modal).
 const scopes: HTMLElement[] = [];
 
+// The page behind an open overlay. Overlays portal to <body>, outside it.
+function syncBackgroundInert() {
+  const root = typeof document !== 'undefined' ? document.getElementById('app-root') : null;
+  if (root) root.inert = scopes.length > 0;
+}
+
 function FocusScope({
   children,
   onEscape,
@@ -69,6 +80,7 @@ function FocusScope({
     if (!scope) return;
     const previous = returnFocusTo;
     scopes.push(scope);
+    syncBackgroundInert();
 
     const focusables = () =>
       Array.from(scope.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0);
@@ -106,6 +118,7 @@ function FocusScope({
       document.removeEventListener('keydown', onKeyDown);
       const index = scopes.indexOf(scope);
       if (index >= 0) scopes.splice(index, 1);
+      syncBackgroundInert();
       if (previous?.isConnected) previous.focus({ preventScroll: true });
     };
   }, [returnFocusTo]);

@@ -3,6 +3,7 @@
 import { Dispatch, ReactNode, SetStateAction } from 'react';
 import { ChevronDown, ChevronUp, Eye, EyeOff, Plus, Trash2, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
+import Checkbox from '@/components/ui/Checkbox';
 import FormSection from '@/components/ui/FormSection';
 import IconButton from '@/components/ui/IconButton';
 import { SyntheticAPIExtractConfig } from '@/lib/types';
@@ -236,12 +237,14 @@ function SyntheticApiStepCard({
                   <input
                     className="input col-span-4"
                     placeholder="Header name"
+                    aria-label={`Header ${headerIdx + 1} name`}
                     value={h.key}
                     onChange={(e) => patchHeader(headerIdx, { key: e.target.value })}
                   />
                   <input
                     className="input col-span-6"
                     placeholder="Header value"
+                    aria-label={`Header ${headerIdx + 1} value`}
                     type={sensitive && !h.reveal ? 'password' : 'text'}
                     value={h.value}
                     onChange={(e) => patchHeader(headerIdx, { value: e.target.value })}
@@ -351,6 +354,7 @@ function SyntheticApiStepCard({
                 <div key={`synthetic-api-step-${index}-assertion-${assertionIdx}`} className="grid grid-cols-12 gap-2">
                   <select
                     className="input col-span-2"
+                    aria-label={`Assertion ${assertionIdx + 1} target`}
                     value={target}
                     onChange={(e) =>
                       // A new target resets the assertion but keeps the typed value.
@@ -368,6 +372,7 @@ function SyntheticApiStepCard({
 
                   <select
                     className="input col-span-2"
+                    aria-label={`Assertion ${assertionIdx + 1} operator`}
                     value={op}
                     onChange={(e) => setAssertion(assertionIdx, { ...assertion, op: e.target.value })}
                   >
@@ -379,6 +384,7 @@ function SyntheticApiStepCard({
                   <input
                     className="input col-span-3"
                     placeholder={target === 'header' ? 'Header name' : target === 'json' ? 'JSON path' : 'Path (unused)'}
+                    aria-label={`Assertion ${assertionIdx + 1} ${target === 'header' ? 'header name' : 'path'}`}
                     value={assertion.path}
                     disabled={!needsPath}
                     onChange={(e) => setAssertion(assertionIdx, { ...assertion, path: e.target.value })}
@@ -387,6 +393,7 @@ function SyntheticApiStepCard({
                   <input
                     className="input col-span-4"
                     placeholder={assertionValuePlaceholder(target, op)}
+                    aria-label={`Assertion ${assertionIdx + 1} value`}
                     value={assertion.value_input}
                     disabled={!needsValue}
                     onChange={(e) => setAssertion(assertionIdx, { ...assertion, value_input: e.target.value })}
@@ -428,11 +435,13 @@ function SyntheticApiStepCard({
                 <input
                   className="input col-span-3"
                   placeholder="Variable name"
+                  aria-label="Variable name"
                   value={extract.name}
                   onChange={(e) => patchExtract(extractIdx, { name: e.target.value })}
                 />
                 <select
                   className="input col-span-2"
+                  aria-label="Extract from"
                   value={extract.from}
                   onChange={(e) => patchExtract(extractIdx, { from: e.target.value as SyntheticAPIExtractConfig['from'] })}
                 >
@@ -442,18 +451,17 @@ function SyntheticApiStepCard({
                 <input
                   className="input col-span-5"
                   placeholder={extract.from === 'header' ? 'Header name' : 'JSON path'}
+                  aria-label={extract.from === 'header' ? 'Header name' : 'JSON path'}
                   value={extract.path}
                   onChange={(e) => patchExtract(extractIdx, { path: e.target.value })}
                 />
-                <label className="col-span-1 flex items-center justify-center gap-1 text-xs text-slate-400">
-                  <input
-                    type="checkbox"
-                    className="accent-cyan-500"
-                    checked={extract.sensitive}
-                    onChange={(e) => patchExtract(extractIdx, { sensitive: e.target.checked })}
-                  />
-                  Secret
-                </label>
+                <Checkbox
+                  size="sm"
+                  checked={extract.sensitive}
+                  onChange={(checked) => patchExtract(extractIdx, { sensitive: checked })}
+                  className="col-span-1 !items-center justify-center !gap-1.5"
+                  label={<span className="text-xs text-slate-400">Secret</span>}
+                />
                 <div className="col-span-1 flex items-center justify-center">
                   <IconButton
                     icon={<X strokeWidth={1.75} />}

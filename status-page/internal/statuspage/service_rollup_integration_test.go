@@ -125,9 +125,9 @@ func TestService_GetStatusPageBySlug_GlobalUptimeUsesOperationalLeafMonitorIDsFo
 		t.Fatalf("GetStatusPageBySlug() error = %v", err)
 	}
 
-	expected1h, err := svc.GetMonitor5MinuteUptime(ctx, leafMonitorID, tenantID)
+	expected1h, err := svc.GetGlobalMinuteUptime(ctx, []uuid.UUID{leafMonitorID}, tenantID)
 	if err != nil {
-		t.Fatalf("GetMonitor5MinuteUptime() error = %v", err)
+		t.Fatalf("GetGlobalMinuteUptime() error = %v", err)
 	}
 	assertDeepEqual(t, page.UptimeHistory1h, expected1h)
 
@@ -146,6 +146,77 @@ func TestService_GetStatusPageBySlug_GlobalUptimeUsesOperationalLeafMonitorIDsFo
 
 	groupMonitor := findMonitorStatus(t, page.Monitors, groupMonitorID)
 	assertDeepEqual(t, groupMonitor.UptimeHistory7d, expectedDaily)
+}
+
+// The 1h strip is 60 one-minute buckets from raw check_results. A group's
+// strip sums its members' checks per minute, the page-level strip sums every
+// operational leaf, and platform-source results (freshness failures) are
+// excluded from all of them.
+func TestService_GetStatusPageBySlug_OneHourStripUsesMinuteBuckets(t *testing.T) {
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	dbClient, cleanup := testutil.SetupPostgresDB(ctx, t)
+	defer cleanup()
+
+	svc := NewService(dbClient, sharedanalytics.NewRepository(dbClient))
+	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
+
+	tenantID := testutil.InsertTenant(ctx, t, dbClient, "status-page-1h")
+	memberA := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "member-a")
+	memberB := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "member-b")
+	leafC := testutil.InsertHTTPMonitor(ctx, t, dbClient, tenantID, "leaf-c")
+	groupID := testutil.InsertGroupMonitor(ctx, t, dbClient, tenantID, "group")
+	testutil.AddMonitorToGroup(ctx, t, dbClient, memberA, groupID)
+	testutil.AddMonitorToGroup(ctx, t, dbClient, memberB, groupID)
+	statusPageID := testutil.InsertStatusPage(ctx, t, dbClient, tenantID, "one-hour", "One Hour")
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, groupID, 0)
+	testutil.AddMonitorToStatusPage(ctx, t, dbClient, statusPageID, leafC, 1)
+
+	recent := now.Add(-3 * time.Minute)
+	older := now.Add(-40 * time.Minute)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, memberA, recent, "success", "monitor", testutil.IntPtr(100))
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, memberA, recent, "failure", "platform", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, memberB, recent, "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, leafC, older, "failure", "monitor", nil)
+	testutil.InsertCheckResult(ctx, t, dbClient, tenantID, leafC, now.Add(-2*time.Hour), "success", "monitor", testutil.IntPtr(90))
+
+	page, err := svc.GetStatusPageBySlug(ctx, "one-hour")
+	if err != nil {
+		t.Fatalf("GetStatusPageBySlug() error = %v", err)
+	}
+
+	start, _ := oneHourWindow(now)
+	bucket := func(at time.Time) int { return int(at.Truncate(time.Minute).Sub(start) / time.Minute) }
+	uptimeAt := func(series []MinuteUptime, idx int) float64 {
+		t.Helper()
+		if len(series) != 60 {
+			t.Fatalf("1h series has %d buckets, want 60", len(series))
+		}
+		return series[idx].Uptime
+	}
+
+	group := findMonitorStatus(t, page.Monitors, groupID)
+	leaf := findMonitorStatus(t, page.Monitors, leafC)
+	if got := uptimeAt(group.UptimeHistory1h, bucket(recent)); got != 50 {
+		t.Fatalf("group 1h bucket = %v, want 50 (one success, one failure; platform row excluded)", got)
+	}
+	if got := uptimeAt(leaf.UptimeHistory1h, bucket(older)); got != 0 {
+		t.Fatalf("leaf 1h bucket = %v, want 0", got)
+	}
+	if got := uptimeAt(leaf.UptimeHistory1h, bucket(recent)); got != -1 {
+		t.Fatalf("leaf 1h empty bucket = %v, want -1", got)
+	}
+	if got := uptimeAt(page.UptimeHistory1h, bucket(recent)); got != 50 {
+		t.Fatalf("global 1h bucket = %v, want 50", got)
+	}
+	if got := uptimeAt(page.UptimeHistory1h, bucket(older)); got != 0 {
+		t.Fatalf("global 1h bucket = %v, want 0", got)
+	}
+	if want := now.Truncate(time.Minute).Format("15:04"); page.UptimeHistory1h[59].Time != want {
+		t.Fatalf("newest 1h bucket = %q, want the current minute %q", page.UptimeHistory1h[59].Time, want)
+	}
 }
 
 func findMonitorStatus(t *testing.T, monitors []MonitorStatus, monitorID uuid.UUID) MonitorStatus {

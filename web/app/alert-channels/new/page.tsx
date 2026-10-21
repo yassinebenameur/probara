@@ -8,6 +8,7 @@ import AlertChannelForm from '@/components/alert-channels/AlertChannelForm';
 import { useToast } from '@/components/ui/ToastProvider';
 import PageHeader from '@/components/ui/PageHeader';
 import FormCard from '@/components/ui/FormCard';
+import Page from '@/components/ui/Page';
 
 export default function NewAlertChannelPage() {
   return (
@@ -44,7 +45,7 @@ function NewAlertChannelPageInner() {
   };
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <Page width="form">
       <PageHeader
         breadcrumb={[{ label: 'Settings', href: '/settings' }, { label: 'Notifications', href: '/settings?tab=channels' }, { label: 'New' }]}
         title="New alert channel"
@@ -59,6 +60,6 @@ function NewAlertChannelPageInner() {
           loading={loading}
         />
       </FormCard>
-    </div>
+    </Page>
   );
 }

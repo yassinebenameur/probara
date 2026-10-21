@@ -13,6 +13,7 @@ import {
 } from '@/lib/api';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 import PageHeader from '@/components/ui/PageHeader';
+import Page from '@/components/ui/Page';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import FormField from '@/components/ui/FormField';
@@ -141,19 +142,18 @@ export default function StatusPageTemplateLibraryPage() {
 
   if (loading) {
     return (
-      <div className="animate-pulse space-y-6">
-        <div className="space-y-2">
+      <div className="animate-pulse space-y-6" role="status" aria-label="Loading template library">
+        <div className="space-y-2" aria-hidden="true">
           <div className="h-4 w-44 rounded-md bg-well-hover" />
           <div className="h-8 w-56 rounded-lg bg-well-hover" />
         </div>
-        <div className="glass h-[72px]" />
-        <span className="sr-only">Loading template library…</span>
+        <div className="glass h-[72px]" aria-hidden="true" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <Page width="data">
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: 'Template library' }]}
         title="Template library"
@@ -213,7 +213,7 @@ export default function StatusPageTemplateLibraryPage() {
               spellCheck={false}
               wrap="off"
               placeholder="Paste a Go html/template here, or upload a file"
-              className="glass-well block w-full p-3 font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-500/50"
+              className="glass-well block w-full p-3 font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
             />
           </div>
           <div className="flex justify-end gap-2">
@@ -298,6 +298,6 @@ export default function StatusPageTemplateLibraryPage() {
         className="hidden"
         onChange={handleUpload}
       />
-    </div>
+    </Page>
   );
 }
