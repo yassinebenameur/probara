@@ -193,6 +193,16 @@ API_KEY="__API_KEY__"
 
 echo "Installing Probara Collector..."
 
+# The key is embedded only when the script was fetched with a tenant API key
+# with write scope (a cookie session, MCP token or read-scope key yields an
+# empty one). Without it every export is rejected, so refuse to install a
+# collector that can never report.
+if [ -z "$API_KEY" ]; then
+  echo "This installer has no API key embedded. Fetch it with a write-scope tenant API key:"
+  echo "  curl -fsSL -H \"Authorization: Bearer <write-scope-api-key>\" <install script URL> | sudo bash"
+  exit 1
+fi
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
@@ -241,7 +251,17 @@ echo "Downloading collector for ${OS}-${ARCH}..."
 curl -fsSL -o "$COLLECTOR_BIN.tmp" "$DOWNLOAD_URL"
 
 echo "Verifying checksum..."
-EXPECTED=$(curl -fsSL "$CHECKSUMS_URL" | grep "probara-collector-${OS}-${ARCH}$" | awk '{print $1}')
+# A failed checksums.txt fetch aborts: build-collector.sh always publishes it,
+# so an unreachable file means a broken deployment or network, never a reason
+# to install unverified. Only a missing ENTRY falls through to the warning
+# ("|| true": an unmatched grep would otherwise end the script silently under
+# set -e/pipefail).
+if ! CHECKSUMS=$(curl -fsSL "$CHECKSUMS_URL"); then
+  echo "Could not download $CHECKSUMS_URL; refusing to install an unverified binary."
+  rm -f "$COLLECTOR_BIN.tmp"
+  exit 1
+fi
+EXPECTED=$(printf '%s\n' "$CHECKSUMS" | grep "probara-collector-${OS}-${ARCH}$" | awk '{print $1}' || true)
 if [ -n "$EXPECTED" ]; then
   if command -v sha256sum >/dev/null 2>&1; then
     ACTUAL=$(sha256sum "$COLLECTOR_BIN.tmp" | awk '{print $1}')
@@ -257,11 +277,18 @@ fi
 mv "$COLLECTOR_BIN.tmp" "$COLLECTOR_BIN"
 chmod +x "$COLLECTOR_BIN"
 
+# Created 0600 (umask in a subshell), never chmod-ed after the fact: the
+# config dir is 0755, so a default-umask write would expose the key to every
+# local user until the chmod. rm first because umask does not narrow an
+# existing file's mode (an older install may have left it 0644).
+rm -f "$ENV_FILE"
+(
+umask 077
 cat > "$ENV_FILE" <<PROBARA_ENV
 PROBARA_API_KEY=$API_KEY
 PROBARA_AGENT_ID=$AGENT_ID
 PROBARA_ENV
-chmod 600 "$ENV_FILE"
+)
 
 if [ "$OS" = "linux" ]; then
 cat > "$CONFIG_FILE" <<'PROBARA_CONFIG'
@@ -305,7 +332,11 @@ WantedBy=multi-user.target
 PROBARA_SYSTEMD
 
   systemctl daemon-reload
-  systemctl enable --now probara-collector.service
+  systemctl enable probara-collector.service
+  # restart, not enable --now: on a re-run (upgrade, new key or interval) the
+  # service is already active and --now would leave the old process running
+  # on the previous binary, config and credentials.
+  systemctl restart probara-collector.service
   echo "Probara Collector installed as a system systemd service."
   echo "Status: systemctl status probara-collector.service"
   echo "Logs: journalctl -u probara-collector.service -f"
@@ -401,21 +432,39 @@ $ChecksumsURL = "$BackendURL/static/collector/checksums.txt"
 
 Write-Host "Installing Probara Collector..."
 
-# Remove any legacy probara-agent install (previous generation, NSSM-based).
-$LegacyDir = Join-Path $env:ProgramFiles "ProbaraAgent"
-$LegacyNssm = Join-Path $LegacyDir "nssm.exe"
-if (Get-Service -Name "ProbaraAgent" -ErrorAction SilentlyContinue) {
-  if (Test-Path $LegacyNssm) {
-    & $LegacyNssm stop ProbaraAgent 2>$null | Out-Null
-    & $LegacyNssm remove ProbaraAgent confirm 2>$null | Out-Null
-  } else {
-    Stop-Service -Name "ProbaraAgent" -Force -ErrorAction SilentlyContinue
-    sc.exe delete ProbaraAgent | Out-Null
-  }
+# The key is embedded only when the script was fetched with a tenant API key
+# with write scope (a cookie session, MCP token or read-scope key yields an
+# empty one). Without it every export is rejected, so refuse to install a
+# collector that can never report.
+if (-not $ApiKey) {
+  throw "This installer has no API key embedded. Fetch it with a write-scope tenant API key (Authorization: Bearer <write-scope-api-key>)."
 }
-if (Test-Path $LegacyDir) { Remove-Item -Recurse -Force $LegacyDir -ErrorAction SilentlyContinue }
-$LegacyLogs = Join-Path $env:ProgramData "ProbaraAgent"
-if (Test-Path $LegacyLogs) { Remove-Item -Recurse -Force $LegacyLogs -ErrorAction SilentlyContinue }
+
+# Windows PowerShell 5.1 redraws a progress bar per received chunk, which
+# slows the ~100 MB binary download by an order of magnitude.
+$ProgressPreference = "SilentlyContinue"
+
+# Remove any legacy probara-agent install (previous generation, NSSM-based).
+# Runs with Continue: nssm reports state (e.g. "service not started") on
+# stderr, and Windows PowerShell 5.1 turns a redirected native stderr line
+# into a terminating error under the script-wide Stop preference.
+& {
+  $ErrorActionPreference = "Continue"
+  $LegacyDir = Join-Path $env:ProgramFiles "ProbaraAgent"
+  $LegacyNssm = Join-Path $LegacyDir "nssm.exe"
+  if (Get-Service -Name "ProbaraAgent" -ErrorAction SilentlyContinue) {
+    if (Test-Path $LegacyNssm) {
+      & $LegacyNssm stop ProbaraAgent 2>$null | Out-Null
+      & $LegacyNssm remove ProbaraAgent confirm 2>$null | Out-Null
+    } else {
+      Stop-Service -Name "ProbaraAgent" -Force -ErrorAction SilentlyContinue
+      sc.exe delete ProbaraAgent | Out-Null
+    }
+  }
+  if (Test-Path $LegacyDir) { Remove-Item -Recurse -Force $LegacyDir -ErrorAction SilentlyContinue }
+  $LegacyLogs = Join-Path $env:ProgramData "ProbaraAgent"
+  if (Test-Path $LegacyLogs) { Remove-Item -Recurse -Force $LegacyLogs -ErrorAction SilentlyContinue }
+}
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
@@ -423,7 +472,15 @@ Write-Host "Downloading collector..."
 Invoke-WebRequest -UseBasicParsing -Uri $DownloadURL -OutFile "$CollectorPath.tmp"
 
 Write-Host "Verifying checksum..."
-$ChecksumLine = (Invoke-WebRequest -UseBasicParsing -Uri $ChecksumsURL).Content -split "` + "`" + `n" | Where-Object { $_ -match "probara-collector-windows-amd64.exe" }
+# A failed checksums.txt fetch aborts (as on Unix); only a missing entry
+# falls through to the warning below.
+try {
+  $Checksums = (Invoke-WebRequest -UseBasicParsing -Uri $ChecksumsURL).Content
+} catch {
+  Remove-Item "$CollectorPath.tmp" -Force -ErrorAction SilentlyContinue
+  throw "Could not download $ChecksumsURL; refusing to install an unverified binary. $_"
+}
+$ChecksumLine = $Checksums -split "` + "`" + `n" | Where-Object { $_ -match "probara-collector-windows-amd64.exe" }
 if ($ChecksumLine) {
   $Expected = ($ChecksumLine -split "\s+")[0].ToLower()
   $Actual = (Get-FileHash -Algorithm SHA256 "$CollectorPath.tmp").Hash.ToLower()
@@ -434,7 +491,37 @@ if ($ChecksumLine) {
 } else {
   Write-Warning "No checksum published for the Windows binary; skipping verification."
 }
-Move-Item -Force "$CollectorPath.tmp" $CollectorPath
+
+# Swap the binary BEFORE touching the service. Windows refuses to overwrite a
+# running .exe but does allow renaming it, so on a re-run (upgrade, new key or
+# interval) the old image moves aside while it keeps running; if the swap
+# fails, the existing service is still registered and running.
+Get-ChildItem -Path $InstallDir -Filter "probara-collector.exe.*.old" -ErrorAction SilentlyContinue |
+  Remove-Item -Force -ErrorAction SilentlyContinue
+$OldPath = $null
+if (Test-Path $CollectorPath) {
+  $OldPath = "$CollectorPath.$([DateTime]::UtcNow.Ticks).old"
+  Move-Item $CollectorPath $OldPath
+}
+try {
+  Move-Item "$CollectorPath.tmp" $CollectorPath
+} catch {
+  if ($OldPath) { Move-Item $OldPath $CollectorPath -ErrorAction SilentlyContinue }
+  throw
+}
+
+# Re-create the service so a changed binPath, key or interval takes effect.
+if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+  Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+  Get-Process -Name "probara-collector" -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
+  sc.exe delete $ServiceName | Out-Null
+  for ($i = 0; $i -lt 20 -and (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue); $i++) {
+    Start-Sleep -Milliseconds 500
+  }
+}
+# Best effort: the old image is still locked if its process outlived the
+# wait; the next run (or the uninstaller) removes it.
+if ($OldPath) { Remove-Item -Force $OldPath -ErrorAction SilentlyContinue }
 
 @'
 __COLLECTOR_CONFIG__
@@ -444,17 +531,13 @@ __COLLECTOR_CONFIG__
 __WINDOWS_UNINSTALL_SCRIPT__
 '@ | Set-Content -Path $UninstallScript -Encoding UTF8
 
-if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-  Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-  sc.exe delete $ServiceName | Out-Null
-  Start-Sleep -Seconds 1
-}
-
 # The collector has native Windows service support (no NSSM). Credentials are
 # delivered through the service's registry Environment value, never the
-# world-readable config file.
+# world-readable config file. New-Service, not sc.exe create: Windows
+# PowerShell 5.1 re-quotes a native argument that holds both quotes and
+# spaces, so the quoted binPath reached sc.exe split at "Program Files".
 $BinPath = '"' + $CollectorPath + '" --config "' + $ConfigPath + '"'
-sc.exe create $ServiceName binPath= $BinPath start= auto DisplayName= "Probara Collector" | Out-Null
+New-Service -Name $ServiceName -BinaryPathName $BinPath -DisplayName "Probara Collector" -StartupType Automatic | Out-Null
 $RegPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
 Set-ItemProperty -Path $RegPath -Name Environment -Type MultiString -Value @(
   "PROBARA_API_KEY=$ApiKey",
@@ -548,6 +631,9 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
   Stop-Service -Name $ServiceName -Force
   sc.exe delete $ServiceName | Out-Null
 }
+# The .exe stays locked until the process exits, which can lag the service's
+# Stopped state; deleting earlier leaves the binary behind.
+Get-Process -Name "probara-collector" | Wait-Process -Timeout 15
 Remove-Item -Recurse -Force $InstallDir
 
 # Legacy probara-agent leftovers (previous generation, NSSM-based).
