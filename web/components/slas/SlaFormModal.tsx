@@ -126,14 +126,6 @@ export function SlaFormModal({ sla, onDone, onCancel }: SlaFormModalProps) {
     }
   };
 
-  const toggleTag = (tag: string) =>
-    setTags((prev) => {
-      const next = new Set(prev);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-      return next;
-    });
-
   const label = 'mb-1.5 block text-ui font-medium text-slate-300';
   const labelHint = 'font-normal text-slate-500';
 
@@ -254,7 +246,7 @@ export function SlaFormModal({ sla, onDone, onCancel }: SlaFormModalProps) {
         <span className={label}>
           Tags <span className={labelHint}>— monitors carrying any of them join automatically</span>
         </span>
-        <TagFilter tags={tagOptions} selected={tags} onToggle={toggleTag} onClear={() => setTags(new Set())} />
+        <TagFilter tags={tagOptions} selected={tags} onChange={setTags} asValue accessibleLabel="SLA tags" />
       </div>
 
       {(error || (validation && (name || selectedIds.length > 0 || tags.size > 0))) && (

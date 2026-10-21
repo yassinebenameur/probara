@@ -544,11 +544,23 @@ or imported groups come back empty. Any other path that creates groups through
   beyond that. Don't put text buttons in rows — except a lifecycle list's one
   labelled next step (alerts: Acknowledge → Resolve, the rest in ⋮; see
   `components/alerts/AlertTable.tsx`).
+  Bulk selection (monitors, alerts) is a hover-revealed box in a reserved
+  lead slot (pinned once anything is selected, always on touch), Shift-click
+  ranges, Escape clears, and a portaled bar at `md:left-[var(--sidebar-offset)]`
+  for writers only (alerts: `useAlertSelection`, `AlertBulkBar`). A
+  single-key row shortcut (alerts' A / R) fires only from a focused row and
+  never in text fields — WCAG 2.1.4; the guard, range and prune rules are
+  pure functions in `lib/alert-list.ts` with node tests.
 - **Shell**: the sidebar (`components/layout/Sidebar.tsx`) is the only chrome
   — no desktop top bar; below `md` it is a drawer opened from `TopBar`. It is
   ONE instance on every breakpoint, so `TenantSwitcher`'s tenant bootstrap
   (load, settle, `emitTenantChange`) runs once; never render a second copy.
-  From `md` it collapses to a 64px icon rail (header toggle or `[`): the same
+  From `md` it collapses to a 64px icon rail (header toggle, or Ctrl+B / ⌘B —
+  a modifier chord, never a bare character key, WCAG 2.1.4; its rules are
+  `lib/sidebar-shortcut.ts`, unit-tested; every page-level modifier chord
+  takes its ⌘/Ctrl label and platform check from `lib/shortcuts.ts`
+  (`shortcutLabel`/`shortcutAria`, `isApplePlatform`) and stands down behind
+  a dialog via `modalOpen`): the same
   instance with `rail` props, rows folding via `components/layout/rail.ts`.
   Nothing may change height while the width animates: rows keep one
   structure, the header is one fixed row (the rail toggle overlays the mark),
@@ -572,7 +584,7 @@ or imported groups come back empty. Any other path that creates groups through
   since a parent's string title stops the root template. Client detail pages
   name themselves with `useDocumentTitle` (`lib/useDocumentTitle.ts`).
 - **Glass surfaces**: the canvas is flat (no gradients, grid or bloom).
-  Panels use `.glass` (or `Panel`/`FormCard`/`FormSection`, near-opaque, no
+  Panels use `.glass` (or `Panel`/`FormCard`, near-opaque, no
   blur), overlays `.glass-overlay`, groups inside a panel `.glass-well`,
   banners `components/ui/Callout.tsx`; only overlays and the shell blur, and
   never nest a blurred surface in another. Orange (`cyan-*`) is for actions
@@ -587,7 +599,10 @@ or imported groups come back empty. Any other path that creates groups through
   shows on focus), never a native `title`.
   Chart series take `--chart-1..6` (`SERIES_COLORS`/`LATENCY_COLOR`/
   `CHART_GRID` in `components/monitors/metric-chart.tsx`), never a hex or a
-  status colour; an empty trace slot or no-data bucket is `NO_DATA_BAR`
+  status colour; monitor-detail charts are that file's `ChartTile`/
+  `ChartLegend`/`MetricChart` (`xDomain` spans the page range), never a
+  per-view copy, and detail side panels are `DetailRow`/`DetailList` from
+  `components/monitors/MonitorFactsCard.tsx`; an empty trace slot or no-data bucket is `NO_DATA_BAR`
   (`lib/status-tones.ts`, hollow). Text meets 4.5:1 and meaningful marks
   3:1 on every surface they sit on (contrast notes per token in the
   `globals.css` header). Focus is
@@ -625,8 +640,8 @@ or imported groups come back empty. Any other path that creates groups through
   (page-scoped: header or Tabs `trailing`, never inside one card); a setting
   with a few discrete stops (sensitivity, a window length) is
   `components/ui/SegmentedControl.tsx` (radiogroup, roving arrows,
-  `SELECTED_SEGMENT`), never a stepped range slider; a Switch's on track is
-  neutral ink like a checked Checkbox, never orange; a save bar shown only
+  `SELECTED_SEGMENT`), never a range slider (there is no slider style); a
+  Switch's on track is neutral ink like a checked Checkbox, never orange; a save bar shown only
   while a form is dirty floats over the page (portaled, `data-floating-bar`,
   as in Settings → Notifications) so its arrival never shifts content; monitor
   types render as `components/ui/TypeBadge.tsx` (pass `config` where it is at
@@ -637,9 +652,16 @@ or imported groups come back empty. Any other path that creates groups through
   `useCurrentUser().loading` to clear). Recent
   checks draw as `components/monitors/CheckTrace.tsx`, the one check-history
   trace (monitors list, dashboard; fixed 79px, equal-height bars)
-  — never a second bar strip. Multi-select list filters (Type, Tags) are
+  — never a second bar strip. Multi-select list filters and tag pickers
+  (/monitors Type and Tags, the dashboard's tag scope, `TagFilter` in
+  `MonitorMultiSelect` and the SLA form) are
   `components/ui/FilterPopover.tsx`: a FilterChip trigger with a portaled,
-  anchored popup — never an inline panel that pushes the content down.
+  anchored popup — never an inline panel that pushes the content down. In a
+  dialog it stacks above the scrim (z-60) and its `data-popover-layer` keeps
+  ModalPortal's focus trap off its Tab order; Escape and an outside click
+  (whose mousedown and click it swallows) close only the popup. Tag pickers
+  that set a value (SLA tags, Settings dashboard groups) use `TagFilter`
+  `asValue`.
   Checkboxes and radios are
   `components/ui/Checkbox.tsx` / `Radio.tsx` (`onChange` receives the boolean
   first; never a native `accent-*` box). Every modal is
@@ -649,8 +671,13 @@ or imported groups come back empty. Any other path that creates groups through
 - **Sorting**: list columns use `components/ui/SortableHeader.tsx` over
   `lib/sort.ts` (nulls last in both directions), with state in
   `?sort=&dir=` through `useUrlSort` (defaults left out), and sort the whole
-  filtered set before paging. Server-paged views (alerts Resolved/All, audit)
-  have no column sort until their API gains sort parameters.
+  filtered set before paging. Server-paged views (every alerts view but
+  Open, audit) pass the sort to the API instead (`sort=`/`dir=`, a whitelist
+  in the service — `ParseListSort` in `services/alerts/sort.go`, `ParseSort`
+  in `services/audit/sort.go` — ending in an id tiebreaker so pages never
+  overlap); keep client sort wherever the whole set is loaded. A header shows
+  the order the rows are in: /alerts defaults per view and maps a status sort
+  under a one-status filter to newest first (`lib/alert-list.ts`).
 - **Live pages and feedback**: relative times render as `RelativeTime` /
   `ElapsedTime` (`components/ui/RelativeTime.tsx`, on the shared `useNow`
   clock), never a frozen `formatRelativeTime` string. Live pages load through
@@ -698,7 +725,14 @@ or imported groups come back empty. Any other path that creates groups through
   `SyntheticApiEditor`, `SyntheticBrowserEditor`); synthetic "Test now" is
   `useSyntheticLiveTest`. Labelled fields in a type form are
   `components/ui/FormField`; form-kit's `FormInput`/`FormSelect`/
-  `FormTextarea` are only for those inline editors.
+  `FormTextarea` are only for those inline editors. Form layout is form-kit
+  too: sections are `FormPanel`, settings are
+  `FormRow`/`ToggleRow`, the sticky bar is `FormActionBar`, and the form
+  root carries `data-form-stack`; MonitorForm's shell switches the
+  two-column (section rail + card) layout on from its measured width
+  (`useWideForm`). Child forms update state functionally
+  (`setFormData((prev) => …)`): AlertingSection fires two changes in one
+  event when switching to Custom.
 - **Monitor form payloads are pure and pinned**: every form's initial state
   and submitted request come from `lib/monitor-form/` (`initial*FormState`,
   `build*Request`; the shared envelope is `common.ts`), never from inline

@@ -18,8 +18,15 @@ const VIEWPORT_PADDING = 8;
 
 interface UseTooltipOptions {
   label: ReactNode;
-  /** Shown as a key cap after the label (also set aria-keyshortcuts on the trigger). */
+  /**
+   * Shown as a key cap after the label, and used as the trigger's
+   * aria-keyshortcuts unless `ariaShortcut` is given. A display cap like `⌘B`
+   * or `Ctrl+B` is not ARIA syntax, so pass `ariaShortcut` (`Meta+B`,
+   * `Control+B`) whenever the two differ.
+   */
   shortcut?: string;
+  /** aria-keyshortcuts value (ARIA syntax); defaults to `shortcut`. */
+  ariaShortcut?: string;
   /** No tooltip at all (for example while the label is visible next to the icon). */
   disabled?: boolean;
   /**
@@ -54,6 +61,7 @@ const TOP_EDGE_CLEARANCE = 72;
 export function useTooltip<T extends HTMLElement>({
   label,
   shortcut,
+  ariaShortcut,
   disabled = false,
   describe = false,
   side = 'right',
@@ -162,7 +170,7 @@ export function useTooltip<T extends HTMLElement>({
     },
     onBlur: hide,
     'aria-describedby': describe && visible ? id : undefined,
-    'aria-keyshortcuts': shortcut,
+    'aria-keyshortcuts': ariaShortcut ?? shortcut,
   };
 
   // Keep a rendered tooltip inside the viewport: the anchor position is set

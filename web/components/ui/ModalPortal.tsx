@@ -48,6 +48,12 @@ export default function ModalPortal({
   );
 }
 
+/**
+ * Marks a portaled popup opened from inside a modal (FilterPopover) as a
+ * layer that runs its own focus: the trap leaves Tab inside it alone.
+ */
+export const POPOVER_LAYER_ATTR = 'data-popover-layer';
+
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -93,7 +99,12 @@ function FocusScope({
         onEscapeRef.current();
         return;
       }
-      if (event.key !== 'Tab') return;
+      // A Tab someone already handled (a popup moving focus itself) stays so.
+      if (event.key !== 'Tab' || event.defaultPrevented) return;
+      // A popup opened from inside the modal (FilterPopover) is portaled
+      // outside this scope and runs its own Tab order, closing back to its
+      // trigger in here; pulling focus to the first field would break it.
+      if (document.activeElement?.closest(`[${POPOVER_LAYER_ATTR}]`)) return;
       const list = focusables();
       if (list.length === 0) {
         event.preventDefault();
