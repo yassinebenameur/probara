@@ -9,7 +9,7 @@ import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { pluralize } from '@/lib/format';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
 import Button from '@/components/ui/Button';
-import IconButton, { ICON_BUTTON_CLASS } from '@/components/ui/IconButton';
+import IconButton from '@/components/ui/IconButton';
 import Pill from '@/components/ui/Pill';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
@@ -215,16 +215,12 @@ export default function StatusPagesPage() {
                     <span className="text-xs tabular-nums text-slate-500">{pluralize(monitorCount, 'monitor')}</span>
                   )}
                   <div className="relative -mb-1.5 -mr-1.5 flex items-center gap-0.5">
-                    <a
+                    <IconButton
+                      icon={<ArrowUpRight strokeWidth={1.75} />}
+                      label={`Open the public page of ${page.title}`}
                       href={publicUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Open public page"
-                      aria-label={`Open the public page of ${page.title}`}
-                      className={ICON_BUTTON_CLASS}
-                    >
-                      <ArrowUpRight strokeWidth={1.75} />
-                    </a>
+                      external
+                    />
                     {canWrite && (
                       <>
                         <IconButton

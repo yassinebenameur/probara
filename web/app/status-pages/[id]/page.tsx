@@ -13,6 +13,7 @@ import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { useToast } from '@/components/ui/ToastProvider';
 import useDocumentTitle from '@/lib/useDocumentTitle';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 
 export default function EditStatusPagePage() {
   const router = useRouter();
@@ -63,8 +64,13 @@ export default function EditStatusPagePage() {
           <div className="h-4 w-40 rounded-md bg-well-hover" />
           <div className="h-8 w-64 rounded-lg bg-well-hover" />
         </div>
-        <div className="glass h-[590px]" aria-hidden="true" />
-        <div className="glass h-40" aria-hidden="true" />
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]" aria-hidden="true">
+          <div className="space-y-6">
+            <div className="glass h-[460px]" />
+            <div className="glass h-64" />
+          </div>
+          <div className="glass hidden h-[520px] xl:block" />
+        </div>
       </div>
     );
   }
@@ -91,7 +97,10 @@ export default function EditStatusPagePage() {
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: statusPage.title }]}
         title={statusPage.title}
-        subtitle={<span className="font-mono text-ui">/{statusPage.slug}</span>}
+        subtitle={[
+          <span key="slug" className="font-mono text-ui">/{statusPage.slug}</span>,
+          <RelativeTime key="updated" prefix="Updated " value={statusPage.updated_at} />,
+        ]}
         action={
           <>
             <Button
@@ -114,7 +123,6 @@ export default function EditStatusPagePage() {
       <StatusPageForm
         statusPage={statusPage}
         onSubmit={handleSubmit}
-        onCancel={() => router.push('/status-pages')}
         loading={saving}
       />
     </Page>

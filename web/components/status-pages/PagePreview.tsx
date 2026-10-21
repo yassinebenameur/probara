@@ -75,9 +75,13 @@ const HEADLINE_STYLE = {
   maintenance: { box: 'border-sky-500/25 bg-sky-500/[0.08]', dot: 'bg-sky-400', text: 'text-sky-300' },
 } as const;
 
+/** Rows a section shows before folding the rest into "+ N more". */
+const ROWS_PER_SECTION = 6;
+
 /**
- * Stylized live mock of the public status page. Reflects branding, title,
- * and the first section's monitors so edits give immediate visual feedback.
+ * Stylized live mock of the public status page: branding, title, the page
+ * headline and every section with its components' current public status, so
+ * structure edits give immediate visual feedback.
  */
 export default function PagePreview({
   basics,
@@ -101,13 +105,6 @@ export default function PagePreview({
     return map;
   }, [monitors]);
 
-  const previewSection = sections.find((section) => section.monitors.length > 0) ?? sections[0];
-  const previewRows = (previewSection?.monitors ?? []).slice(0, 3).map((entry) => ({
-    id: entry.monitor_id,
-    name: entry.display_name.trim() || monitorNames.get(entry.monitor_id) || 'Monitor',
-    status: statuses.get(entry.monitor_id) ?? null,
-  }));
-
   // The headline counts every component on the page, like the public page;
   // it waits until each one's status is known rather than guess "operational".
   const allStatuses = sections.flatMap((section) =>
@@ -121,7 +118,6 @@ export default function PagePreview({
       : allStatuses.length === 0
         ? null
         : pageHeadline(allStatuses as ComponentStatus[]);
-  const overflow = (previewSection?.monitors.length ?? 0) - previewRows.length;
 
   const handleCopy = async () => {
     try {
@@ -134,12 +130,18 @@ export default function PagePreview({
   };
 
   const showLogo = /^https?:\/\//.test(basics.logo_url.trim()) && !logoBroken;
+  const shownSections = sections.length > 0 ? sections : [{ id: 'placeholder', title: '', monitors: [] }];
 
   return (
-    <div className="self-start">
+    <div className="mx-auto w-full max-w-xl xl:max-w-none">
       <div className="glass-well overflow-hidden">
         {/* Browser chrome */}
         <div className="flex items-center gap-1.5 py-1 pl-2 pr-1">
+          <span className="flex flex-shrink-0 gap-1 pl-1 pr-1.5" aria-hidden="true">
+            {[0, 1, 2].map((i) => (
+              <span key={i} className="h-2 w-2 rounded-full bg-well-hover" />
+            ))}
+          </span>
           <span className="min-w-0 flex-1 truncate rounded-md bg-well-hover px-2 py-1 text-center font-mono text-2xs text-slate-400">
             {displayUrl}
           </span>
@@ -157,14 +159,22 @@ export default function PagePreview({
           />
         </div>
 
-        {/* Page body */}
-        <div className="bg-[#0a0a0f]" style={DARK_PAGE_PALETTE}>
+        {/* Page body: scrolls inside its frame, so a long page neither runs past
+            the pinned pane nor pushes the editor far down on a phone. Focusable
+            so keyboard users can scroll to the lower sections too. */}
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="Status page preview"
+          className="max-h-[26rem] overflow-y-auto bg-[#0a0a0f] [scrollbar-width:thin] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus xl:max-h-[calc(100dvh-10.5rem)]"
+          style={DARK_PAGE_PALETTE}
+        >
           <div
             aria-hidden="true"
             className="h-0.5 w-full"
             style={{ background: `linear-gradient(90deg, ${primary}, ${secondary})` }}
           />
-          <div className="space-y-3.5 p-4">
+          <div className="space-y-4 p-4">
             <div className="flex items-center gap-3">
               {showLogo ? (
                 // eslint-disable-next-line @next/next/no-img-element -- arbitrary user-supplied logo URL
@@ -190,7 +200,7 @@ export default function PagePreview({
                 <p className="truncate text-sm font-semibold text-white">
                   {basics.title.trim() || 'Untitled status page'}
                 </p>
-                <p className="truncate text-2xs text-slate-500">
+                <p className="line-clamp-2 text-2xs text-slate-500">
                   {basics.description.trim() || 'System status'}
                 </p>
               </div>
@@ -218,46 +228,58 @@ export default function PagePreview({
               />
             )}
 
-            <div className="space-y-2">
-              <p className="text-2xs font-medium uppercase tracking-[0.14em] text-slate-500">
-                {previewSection?.title.trim() || 'Services'}
-              </p>
-              {previewRows.length === 0 ? (
-                <div className="space-y-1.5" aria-hidden="true">
-                  {[0, 1].map((i) => (
-                    <div
-                      key={i}
-                      className="flex items-center justify-between rounded-lg border border-dashed border-white/[0.07] px-3 py-2"
-                    >
-                      <span className="h-2 w-24 rounded bg-white/[0.05]" />
-                      <PlaceholderBars />
+            {shownSections.map((section) => {
+              const rows = section.monitors.slice(0, ROWS_PER_SECTION).map((entry) => ({
+                id: entry.monitor_id,
+                name: entry.display_name.trim() || monitorNames.get(entry.monitor_id) || 'Monitor',
+                status: statuses.get(entry.monitor_id) ?? null,
+              }));
+              const overflow = section.monitors.length - rows.length;
+              return (
+                <div key={section.id} className="space-y-1.5">
+                  <p className="truncate text-2xs font-medium uppercase tracking-[0.14em] text-slate-500">
+                    {section.title.trim() || 'Untitled section'}
+                  </p>
+                  {rows.length === 0 ? (
+                    <div className="space-y-1.5" aria-hidden="true">
+                      {[0, 1].map((i) => (
+                        <div
+                          key={i}
+                          className="flex items-center justify-between rounded-lg border border-dashed border-white/[0.07] px-3 py-2"
+                        >
+                          <span className="h-2 w-24 rounded bg-white/[0.05]" />
+                          <PlaceholderBars />
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {previewRows.map((row) => (
-                    <div
-                      key={row.id}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
-                    >
-                      <span className="min-w-0 truncate text-xs text-slate-300">{row.name}</span>
-                      <ComponentState status={row.status} />
+                  ) : (
+                    <div className="overflow-hidden rounded-lg border border-white/[0.05] bg-white/[0.02]">
+                      {rows.map((row, index) => (
+                        <div
+                          key={row.id}
+                          className={`flex items-center justify-between gap-3 px-3 py-1.5 ${
+                            index > 0 ? 'border-t border-white/[0.04]' : ''
+                          }`}
+                        >
+                          <span className="min-w-0 truncate text-xs text-slate-300">{row.name}</span>
+                          <ComponentState status={row.status} />
+                        </div>
+                      ))}
+                      {overflow > 0 && (
+                        <p className="border-t border-white/[0.04] px-3 py-1.5 text-2xs text-slate-500">
+                          + {overflow} more
+                        </p>
+                      )}
                     </div>
-                  ))}
-                  {overflow > 0 && (
-                    <p className="px-1 text-2xs text-slate-500">
-                      + {overflow} more in this section
-                    </p>
                   )}
                 </div>
-              )}
-            </div>
+              );
+            })}
           </div>
         </div>
       </div>
       <p className="mt-2 text-center text-xs text-slate-500">
-        Preview with current status, updates as you edit
+        Live preview with current status · updates as you edit
       </p>
     </div>
   );

@@ -48,13 +48,26 @@ import Callout from '@/components/ui/Callout';
 import IconButton from '@/components/ui/IconButton';
 import FormField from '@/components/ui/FormField';
 import Pill from '@/components/ui/Pill';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Dialog from '@/components/ui/Dialog';
+import Input from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
 import { formatDateTime, formatDateTimeFull } from '@/lib/format';
 import useDocumentTitle from '@/lib/useDocumentTitle';
+import { followLiveSource, templateEditorState } from '@/lib/template-editor';
+import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 
 const CODE_AREA =
   'glass-well block w-full font-mono text-xs leading-5 text-slate-200 placeholder:text-slate-500 ' +
   'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus';
+
+interface PendingConfirm {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  tone: 'danger' | 'default';
+  run: () => Promise<unknown>;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -74,7 +87,11 @@ export default function StatusPageTemplatePage() {
   const [error, setError] = useState('');
 
   const [source, setSource] = useState('');
-  const [savedDraftSource, setSavedDraftSource] = useState<string | null>(null);
+  // What the editor's text is compared against: the stored draft, or the live
+  // source while no draft exists. "Unsaved" means the text differs from it,
+  // not merely that no draft exists yet, so every action that changes the
+  // draft or what is live moves it (lib/template-editor.ts).
+  const [baseline, setBaseline] = useState('');
   const [busy, setBusy] = useState(false);
   const [previewNonce, setPreviewNonce] = useState(0);
 
@@ -84,8 +101,12 @@ export default function StatusPageTemplatePage() {
   const [savingBranding, setSavingBranding] = useState(false);
 
   const [libraryItems, setLibraryItems] = useState<StatusPageLibraryTemplate[]>([]);
+  const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
+  const [libraryName, setLibraryName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Read once: the app shell renders client-only.
+  const [apple] = useState(isApplePlatform);
 
   const applySettings = (settings?: StatusPageSettings) => {
     setBrandingCSS(settings?.custom_css || '');
@@ -107,21 +128,16 @@ export default function StatusPageTemplatePage() {
 
       // Seed the editor: draft first, then the published version, then the
       // built-in default as the starting point.
+      let seed: string;
       if (template.draft_source != null) {
-        setSource(template.draft_source);
-        setSavedDraftSource(template.draft_source);
+        seed = template.draft_source;
       } else if (template.published_version != null) {
-        const published = await getStatusPageTemplateVersionSource(
-          id,
-          template.published_version
-        );
-        setSource(published);
-        setSavedDraftSource(null);
+        seed = await getStatusPageTemplateVersionSource(id, template.published_version);
       } else {
-        const fallback = await getStatusPageDefaultTemplateSource(id);
-        setSource(fallback);
-        setSavedDraftSource(null);
+        seed = await getStatusPageDefaultTemplateSource(id);
       }
+      setSource(seed);
+      setBaseline(seed);
     } catch (err: any) {
       setError(err.message || 'Failed to load template');
     } finally {
@@ -141,8 +157,8 @@ export default function StatusPageTemplatePage() {
       });
   }, []);
 
-  const dirty = savedDraftSource === null || source !== savedDraftSource;
   const hasDraft = templateState?.draft_source != null;
+  const { dirty, needsSave, status } = templateEditorState({ source, baseline, hasDraft });
 
   const previewUrl = useMemo(() => {
     if (!statusPage) return '';
@@ -153,6 +169,32 @@ export default function StatusPageTemplatePage() {
     const separator = base.includes('?') ? '&' : '?';
     return `${base}${separator}_=${previewNonce}`;
   }, [statusPage, templateState?.preview_token, previewNonce]);
+
+  // ⌘S / Ctrl+S saves the draft. A ref keeps the listener stable while the
+  // handler closes over the latest source; it stands down while a dialog is
+  // open so it never saves behind a confirmation.
+  const saveDraftRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        saveDraftRef.current();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []);
+
+  // Unsaved editor text survives neither a reload nor closing the tab.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   const runAction = async (
     action: () => Promise<StatusPageTemplateState>,
@@ -179,24 +221,17 @@ export default function StatusPageTemplatePage() {
       'Draft saved'
     );
     if (state) {
-      setSavedDraftSource(source);
+      setBaseline(source);
     }
     return state;
   };
 
   const handlePublish = async () => {
-    if (
-      !window.confirm(
-        'Publish this template? The public status page will render with it immediately.'
-      )
-    ) {
-      return;
-    }
-    if (dirty) {
+    if (needsSave) {
       try {
         setBusy(true);
         await saveStatusPageTemplateDraft(id, source);
-        setSavedDraftSource(source);
+        setBaseline(source);
       } catch (err: any) {
         showToast(err.message || 'Draft is invalid; fix it before publishing', 'error');
         setBusy(false);
@@ -207,9 +242,6 @@ export default function StatusPageTemplatePage() {
   };
 
   const handleDiscardDraft = async () => {
-    if (!window.confirm('Discard the draft? Unpublished changes will be lost.')) {
-      return;
-    }
     const state = await runAction(
       () => discardStatusPageTemplateDraft(id),
       'Draft discarded'
@@ -219,25 +251,37 @@ export default function StatusPageTemplatePage() {
     }
   };
 
-  const handleReset = async () => {
-    if (
-      !window.confirm(
-        'Reset to the built-in template? The public page stops using your custom template (versions stay available for revert).'
-      )
-    ) {
-      return;
+  // Reset and republish change what is live but leave any draft alone. With
+  // no draft the baseline is the live source, so it must follow: a clean
+  // editor reloads the new live template, edits are kept and read unsaved.
+  const followLive = async (state: StatusPageTemplateState) => {
+    if (state.draft_source != null) return;
+    try {
+      const live =
+        state.published_version != null
+          ? await getStatusPageTemplateVersionSource(id, state.published_version)
+          : await getStatusPageDefaultTemplateSource(id);
+      const next = followLiveSource({ source, baseline }, live);
+      setSource(next.source);
+      setBaseline(next.baseline);
+    } catch {
+      // Could not read the new live source: reload everything rather than
+      // leave a status line comparing against the old one.
+      await load();
     }
-    await runAction(() => resetStatusPageTemplate(id), 'Reverted to the built-in template');
+  };
+
+  const handleReset = async () => {
+    const state = await runAction(() => resetStatusPageTemplate(id), 'Reverted to the built-in template');
+    if (state) await followLive(state);
   };
 
   const handleRevert = async (version: number) => {
-    if (!window.confirm(`Republish version ${version}?`)) {
-      return;
-    }
-    await runAction(
+    const state = await runAction(
       () => revertStatusPageTemplate(id, version),
       `Version ${version} republished`
     );
+    if (state) await followLive(state);
   };
 
   const handleLoadDefault = async () => {
@@ -281,12 +325,12 @@ export default function StatusPageTemplatePage() {
     }
   };
 
-  const handleSaveToLibrary = async () => {
-    const templateName = window.prompt('Save current editor content to the library as:');
-    if (!templateName?.trim()) return;
+  const handleSaveToLibrary = async (templateName: string) => {
+    if (!templateName.trim()) return;
     try {
       setBusy(true);
-      const created = await createLibraryTemplate({ name: templateName, source });
+      const created = await createLibraryTemplate({ name: templateName.trim(), source });
+      setLibraryName(null);
       setLibraryItems((prev) =>
         [...prev, created].sort((a, b) => a.name.localeCompare(b.name))
       );
@@ -334,6 +378,11 @@ export default function StatusPageTemplatePage() {
     } finally {
       setSavingBranding(false);
     }
+  };
+
+  saveDraftRef.current = () => {
+    if (busy || !needsSave || confirm !== null || libraryName !== null || modalOpen()) return;
+    void handleSaveDraft();
   };
 
   if (loading) {
@@ -454,7 +503,13 @@ export default function StatusPageTemplatePage() {
               <span className="tabular-nums">
                 {formatBytes(source.length)} / {formatBytes(maxSize)}
               </span>
-              {dirty && <span className="text-amber-300">Unsaved changes</span>}
+              {status === 'unsaved' ? (
+                <span className="text-amber-300">Unsaved changes</span>
+              ) : status === 'draft' ? (
+                <span className="text-sky-300">Draft saved, not published</span>
+              ) : (
+                <span>Same as the live template</span>
+              )}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-1">
@@ -479,7 +534,7 @@ export default function StatusPageTemplatePage() {
               variant="subtle"
               size="sm"
               icon={<BookmarkPlus strokeWidth={1.75} />}
-              onClick={handleSaveToLibrary}
+              onClick={() => setLibraryName(`${statusPage.title} template`)}
               disabled={busy}
             >
               Save to library
@@ -522,18 +577,28 @@ export default function StatusPageTemplatePage() {
           </div>
         </div>
 
-        <div className="grid gap-4 px-5 xl:grid-cols-2">
+        {/* Editor and preview share the viewport height on wide screens, so
+            the code and its result stay side by side without page scroll. */}
+        <div className="grid gap-4 px-5 xl:h-[max(560px,calc(100dvh-19rem))] xl:grid-cols-2">
           <textarea
             value={source}
             onChange={(e) => setSource(e.target.value)}
             spellCheck={false}
             wrap="off"
-            className={`${CODE_AREA} min-h-[560px] resize-y p-4`}
+            aria-label="Template source"
+            className={`${CODE_AREA} min-h-[420px] resize-y p-4 xl:h-full xl:min-h-0 xl:resize-none`}
           />
-          <div className="glass-well flex min-h-[560px] flex-col overflow-hidden">
+          <div className="glass-well flex min-h-[420px] flex-col overflow-hidden xl:min-h-0">
             <div className="flex items-center justify-between gap-2 py-1.5 pl-4 pr-1.5">
               <span className="min-w-0 truncate text-ui font-medium text-slate-300">
-                Draft preview <span className="ml-2 font-normal text-slate-500">live data</span>
+                {hasDraft ? 'Draft preview' : 'Live page'}
+                <span className={`ml-2 hidden font-normal sm:inline ${dirty ? 'text-amber-300' : 'text-slate-500'}`}>
+                  {dirty
+                    ? 'save the draft to preview your edits'
+                    : hasDraft
+                      ? 'with live data'
+                      : 'save a draft to preview changes'}
+                </span>
               </span>
               <div className="flex flex-shrink-0 items-center gap-1">
                 <Button
@@ -551,19 +616,15 @@ export default function StatusPageTemplatePage() {
                 </Button>
               </div>
             </div>
-            {hasDraft || previewNonce > 0 ? (
-              <iframe
-                key={previewNonce}
-                src={previewUrl}
-                title="Draft template preview"
-                className="min-h-0 w-full flex-1 bg-[#fff]"
-                sandbox="allow-scripts allow-same-origin"
-              />
-            ) : (
-              <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-slate-500">
-                Save a draft to preview it here against the page&apos;s live data.
-              </div>
-            )}
+            {/* The draft route renders the published (or built-in) page while
+                no draft exists, so there is always something real to show. */}
+            <iframe
+              key={previewNonce}
+              src={previewUrl}
+              title={hasDraft ? 'Draft template preview' : 'Live status page preview'}
+              className="min-h-0 w-full flex-1 bg-[#fff]"
+              sandbox="allow-scripts allow-same-origin"
+            />
           </div>
         </div>
 
@@ -574,7 +635,15 @@ export default function StatusPageTemplatePage() {
                 variant="ghost"
                 size="sm"
                 icon={<Trash2 strokeWidth={1.75} />}
-                onClick={handleDiscardDraft}
+                onClick={() =>
+                  setConfirm({
+                    title: 'Discard the draft?',
+                    description: 'The saved draft is deleted and the editor reloads the live template. Visitors are not affected.',
+                    confirmLabel: 'Discard draft',
+                    tone: 'danger',
+                    run: handleDiscardDraft,
+                  })
+                }
                 disabled={busy}
               >
                 Discard draft
@@ -585,7 +654,15 @@ export default function StatusPageTemplatePage() {
                 variant="ghost"
                 size="sm"
                 icon={<RotateCcw strokeWidth={1.75} />}
-                onClick={handleReset}
+                onClick={() =>
+                  setConfirm({
+                    title: 'Reset to the built-in template?',
+                    description: 'The public page stops using your custom template right away. Every version stays in the history for republishing.',
+                    confirmLabel: 'Reset to built-in',
+                    tone: 'danger',
+                    run: handleReset,
+                  })
+                }
                 disabled={busy}
               >
                 Reset to built-in
@@ -598,8 +675,9 @@ export default function StatusPageTemplatePage() {
               size="sm"
               icon={<Save strokeWidth={1.75} />}
               onClick={handleSaveDraft}
-              loading={busy}
-              disabled={!dirty && hasDraft}
+              loading={busy && !confirm}
+              disabled={busy || !needsSave}
+              title={shortcutLabel('S', apple)}
             >
               Save draft
             </Button>
@@ -607,7 +685,17 @@ export default function StatusPageTemplatePage() {
               variant="accent"
               size="sm"
               icon={<Rocket strokeWidth={1.75} />}
-              onClick={handlePublish}
+              onClick={() =>
+                setConfirm({
+                  title: 'Publish this template?',
+                  description: needsSave
+                    ? 'The editor content is saved as the draft, then published: the public status page renders with it immediately.'
+                    : 'The public status page renders with this draft immediately.',
+                  confirmLabel: 'Publish',
+                  tone: 'default',
+                  run: handlePublish,
+                })
+              }
               disabled={busy}
             >
               Publish
@@ -656,7 +744,15 @@ export default function StatusPageTemplatePage() {
                         <IconButton
                           icon={<Rocket strokeWidth={1.75} />}
                           label="Republish"
-                          onClick={() => handleRevert(v.version!)}
+                          onClick={() =>
+                            setConfirm({
+                              title: `Republish version ${v.version}?`,
+                              description: 'It becomes the live template again as a new version; the history stays append-only.',
+                              confirmLabel: 'Republish',
+                              tone: 'default',
+                              run: () => handleRevert(v.version!),
+                            })
+                          }
                           disabled={busy}
                         />
                       )}
@@ -668,6 +764,64 @@ export default function StatusPageTemplatePage() {
           </div>
         </CollapsibleSection>
       )}
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel}
+        tone={confirm?.tone ?? 'default'}
+        loading={busy}
+        onConfirm={async () => {
+          const pending = confirm;
+          if (!pending) return;
+          await pending.run();
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+
+      <Dialog
+        open={libraryName !== null}
+        onClose={() => setLibraryName(null)}
+        busy={busy}
+        title="Save to library"
+        description="Stores a copy of the editor content as a reusable template. Pages that apply it later get their own copy."
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setLibraryName(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              variant="accent"
+              size="sm"
+              type="submit"
+              form="save-library-form"
+              loading={busy}
+              disabled={busy || !libraryName?.trim()}
+            >
+              Save to library
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="save-library-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSaveToLibrary(libraryName ?? '');
+          }}
+        >
+          <Input
+            label="Template name"
+            value={libraryName ?? ''}
+            onChange={(event) => setLibraryName(event.target.value)}
+            placeholder={`${statusPage.title} template`}
+            maxLength={120}
+            autoFocus
+          />
+        </form>
+      </Dialog>
 
       <input
         ref={fileInputRef}
