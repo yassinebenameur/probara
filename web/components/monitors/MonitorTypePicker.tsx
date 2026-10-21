@@ -154,21 +154,24 @@ export function MonitorTypeBar({
 }) {
   const Icon = meta.icon;
   return (
-    <div className="glass flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+    // One line at every width: the description truncates rather than pushing
+    // the button under it.
+    <div className="glass flex items-center justify-between gap-3 px-5 py-4 sm:px-6">
       <div className="flex min-w-0 items-center gap-3">
         <Icon className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
         <div className="min-w-0">
-          <p className="text-sm font-medium text-white">{meta.label} monitor</p>
+          <p className="truncate text-sm font-medium text-white">{meta.label} monitor</p>
           <p className="truncate text-xs text-slate-500">{meta.description}</p>
         </div>
       </div>
       {locked ? (
-        <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+        <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500" title="Type is fixed after creation">
           <Lock className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-          Type is fixed after creation
+          <span className="hidden sm:inline">Type is fixed after creation</span>
+          <span className="sm:hidden">Fixed</span>
         </span>
       ) : (
-        <Button type="button" variant="ghost" size="sm" onClick={onChange}>
+        <Button type="button" variant="ghost" size="sm" onClick={onChange} className="shrink-0">
           Change type
         </Button>
       )}

@@ -27,7 +27,6 @@ import {
   Activity,
   CheckCircle2,
   ChevronDown,
-  ChevronRight,
   Eye,
   EyeOff,
   KeyRound,
@@ -38,15 +37,13 @@ import {
   XCircle,
 } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
 import InfoTip from '@/components/ui/InfoTip';
-import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import Pill from '@/components/ui/Pill';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 
@@ -359,8 +356,8 @@ export default function DatabaseForm({
   })();
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -658,7 +655,7 @@ export default function DatabaseForm({
               aria-expanded={certsOpen}
               aria-controls="db-tls-material"
             >
-              <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-slate-200">
+              <span className="flex min-w-0 flex-wrap items-center gap-2 text-ui font-medium text-slate-200">
                 <ShieldCheck className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
                 Custom certificates
                 <span className="text-xs font-normal text-slate-500">private CA / mutual TLS</span>
@@ -668,11 +665,11 @@ export default function DatabaseForm({
                   </Pill>
                 )}
               </span>
-              {certsOpen ? (
-                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
-              ) : (
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
-              )}
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-base ease-standard motion-reduce:transition-none ${certsOpen ? 'rotate-180' : ''}`}
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
             </button>
             {certsOpen && (
               <div id="db-tls-material" className="space-y-4 px-4 pb-4 pt-1">
@@ -805,9 +802,9 @@ export default function DatabaseForm({
             </p>
           )}
         </div>
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Check">
+      <FormPanel title="Check">
         {QUERY_CAPABLE_TYPES.includes(type) && (
           <>
             <FormField
@@ -883,7 +880,7 @@ export default function DatabaseForm({
               aria-expanded={clusterChecksOpen}
               aria-controls="db-cluster-checks"
             >
-              <span className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-slate-200">
+              <span className="flex min-w-0 flex-wrap items-center gap-2 text-ui font-medium text-slate-200">
                 <Activity className="h-4 w-4 text-slate-400" strokeWidth={1.75} />
                 Cluster checks
                 <span className="text-xs font-normal text-slate-500">serverStatus / replSetGetStatus</span>
@@ -896,11 +893,11 @@ export default function DatabaseForm({
                   </Pill>
                 )}
               </span>
-              {clusterChecksOpen ? (
-                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
-              ) : (
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" strokeWidth={1.75} aria-hidden="true" />
-              )}
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-base ease-standard motion-reduce:transition-none ${clusterChecksOpen ? 'rotate-180' : ''}`}
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
             </button>
             {clusterChecksOpen && (
               <div id="db-cluster-checks" className="space-y-3 px-4 pb-4 pt-1">
@@ -1023,7 +1020,7 @@ export default function DatabaseForm({
             />
           </FormField>
         </div>
-      </FormSection>
+      </FormPanel>
 
       <ScheduleSection
         intervalSeconds={formData.interval_seconds}
@@ -1058,14 +1055,14 @@ export default function DatabaseForm({
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
         />
       </FormPanel>
 
@@ -1075,8 +1072,8 @@ export default function DatabaseForm({
         placeholder={`production, ${type}, critical`}
       />
 
-      <FormActions
-        middle={<PlanSummary parts={planParts} errors={errors} />}
+      <FormActionBar
+        summary={<PlanSummary parts={planParts} errors={errors} />}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',

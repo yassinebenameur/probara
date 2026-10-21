@@ -340,8 +340,7 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                 {(data.body_assertions || []).map((a, idx) => (
                   <div
                     key={`body-${idx}`}
-                    className="grid gap-2 items-center"
-                    style={{ gridTemplateColumns: '140px 1fr auto auto' }}
+                    className="grid grid-cols-[7.5rem_minmax(0,1fr)_auto_auto] items-center gap-2 sm:grid-cols-[140px_minmax(0,1fr)_auto_auto]"
                   >
                     <select
                       className="input"
@@ -416,11 +415,10 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                   return (
                     <div
                       key={`hdr-${idx}`}
-                      className="grid gap-2 items-center"
-                      style={{ gridTemplateColumns: '1fr 140px 1fr auto auto' }}
+                      className="grid grid-cols-[7.5rem_minmax(0,1fr)_auto_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_140px_minmax(0,1fr)_auto_auto]"
                     >
                       <input
-                        className="input"
+                        className="input col-span-full sm:col-span-1"
                         placeholder="Header name"
                         aria-label={`Header assertion ${idx + 1} name`}
                         value={a.name}
@@ -508,11 +506,10 @@ export default function HttpMonitorForm({ data, onChange, errors, openSections, 
                   return (
                     <div
                       key={`json-${idx}`}
-                      className="grid gap-2 items-center"
-                      style={{ gridTemplateColumns: '1fr 140px 1fr auto auto' }}
+                      className="grid grid-cols-[7.5rem_minmax(0,1fr)_auto_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_140px_minmax(0,1fr)_auto_auto]"
                     >
                       <input
-                        className="input font-mono"
+                        className="input font-mono col-span-full sm:col-span-1"
                         placeholder="Path (e.g. data.status)"
                         aria-label={`JSON assertion ${idx + 1} path`}
                         value={a.path}

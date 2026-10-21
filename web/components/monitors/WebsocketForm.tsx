@@ -9,14 +9,12 @@ import {
 import { buildWebsocketRequest, initialWebsocketFormState, renameWebsocketHeaderRow } from '@/lib/monitor-form/websocket';
 import { Plus, X } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import IconButton from '@/components/ui/IconButton';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 interface WebsocketFormProps {
   monitor?: Monitor;
@@ -90,8 +88,8 @@ export default function WebsocketForm({
   };
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -179,9 +177,9 @@ export default function WebsocketForm({
             tone="warning"
           />
         )}
-      </FormSection>
+      </FormPanel>
 
-      <FormSection title="Check">
+      <FormPanel title="Check">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField label="Send message">
             {(control) => (
@@ -248,7 +246,7 @@ export default function WebsocketForm({
             )}
           </FormField>
         </div>
-      </FormSection>
+      </FormPanel>
 
       <ScheduleSection
         intervalSeconds={formData.interval_seconds}
@@ -282,14 +280,14 @@ export default function WebsocketForm({
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
         />
       </FormPanel>
 
@@ -299,8 +297,8 @@ export default function WebsocketForm({
         placeholder="production, realtime, critical"
       />
 
-      <FormActions
-        middle={
+      <FormActionBar
+        summary={
           <PlanSummary
             errors={errors}
             parts={

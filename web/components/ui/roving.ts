@@ -33,7 +33,8 @@ export function handleRovingKeyDown<T extends string>(
   }
   event.preventDefault();
   const id = ids[next];
-  onChange(id);
+  // Home/End (or a one-item list) can land on the active item: not a change.
+  if (id !== active) onChange(id);
   const target = event.currentTarget.querySelector<HTMLElement>(`[data-roving-id="${CSS.escape(id)}"]`);
   target?.focus();
 }

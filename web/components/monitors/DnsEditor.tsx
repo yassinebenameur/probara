@@ -1,8 +1,7 @@
 'use client';
 
-import FormSection from '@/components/ui/FormSection';
 import { MonitorFormState } from '@/lib/monitor-form/inline';
-import { FormInput, FormSelect } from './form-kit';
+import { FormInput, FormSelect, FormPanel } from './form-kit';
 
 const RECORD_TYPES = [
   { value: 'A', label: 'A (IPv4)' },
@@ -24,7 +23,7 @@ export default function DnsEditor({
   onChange: (patch: Partial<DnsFields>) => void;
 }) {
   return (
-    <FormSection title="Check">
+    <FormPanel title="Check">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <FormSelect
           label="Record type"
@@ -50,6 +49,6 @@ export default function DnsEditor({
         hint="Optional. Query this DNS server instead of the worker's system resolver, for private zones and VPC resolvers."
         className="input font-mono"
       />
-    </FormSection>
+    </FormPanel>
   );
 }

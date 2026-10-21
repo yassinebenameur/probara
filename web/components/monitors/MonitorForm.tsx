@@ -22,9 +22,7 @@ import {
   validateMonitorForm,
 } from '@/lib/monitor-form/inline';
 import { Globe, Radio, Search, Folder, Server, Webhook, Phone, Network, Code, MousePointer2, Database, Leaf, Zap, MessageSquare, PlugZap, Cylinder, Cable, Flame } from 'lucide-react';
-import FormSection from '@/components/ui/FormSection';
 import DisplayFieldsEditor from '@/components/monitors/DisplayFieldsEditor';
-import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import GroupForm from './GroupForm';
 import AgentForm from './AgentForm';
@@ -44,7 +42,7 @@ import { useSyntheticLiveTest } from './useSyntheticLiveTest';
 import { MonitorTypeBar, MonitorTypePicker, type MonitorTypeMeta } from './MonitorTypePicker';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FormInput, FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { FormInput, FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar, WIDE_STACK_OFFSET, useWideForm } from './form-kit';
 import { monitorTypeLabel } from '@/lib/monitor-type-labels';
 
 interface MonitorFormProps {
@@ -146,6 +144,12 @@ export default function MonitorForm({
   const [typeChosen, setTypeChosen] = useState(isEditMode || Boolean(initialData));
   const [typePickerOpen, setTypePickerOpen] = useState(!typeChosen);
   const formRef = useRef<HTMLFormElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const wide = useWideForm(shellRef);
+  // Wide, 72rem is Page width="wide" (max-w-6xl): on /monitors/new the form
+  // shares the type picker's edges, and on the edit tab it fills the detail
+  // column up to that cap instead of stopping just short of it.
+  const formWidth = wide ? 'max-w-6xl' : 'max-w-3xl';
   const formBodyRef = useRef<HTMLDivElement>(null);
   const typeBarRef = useRef<HTMLDivElement>(null);
 
@@ -209,19 +213,30 @@ export default function MonitorForm({
       }
     />
   ) : (
-    <div ref={typeBarRef} className="max-w-3xl">
-      <MonitorTypeBar meta={getTypeMeta(monitorType)} locked={isEditMode} onChange={() => setTypePickerOpen(true)} />
+    <div ref={typeBarRef} className={formWidth}>
+      <FormPanel
+        bare
+        title="Type"
+        description={isEditMode ? 'Fixed once the monitor exists.' : 'What this monitor watches.'}
+      >
+        <MonitorTypeBar meta={getTypeMeta(monitorType)} locked={isEditMode} onChange={() => setTypePickerOpen(true)} />
+      </FormPanel>
     </div>
   );
 
-  // The picker spans the page; the form itself is capped to a readable width.
+  // The picker spans the page; the form itself is capped to a readable width
+  // (wide: the section rail plus a card of up to about 56rem).
   const shell = (body: ReactNode) => (
-    <div className="space-y-5">
+    <div
+      ref={shellRef}
+      data-wide={wide || undefined}
+      className="group/form space-y-5"
+    >
       {typeHeader}
       {typeChosen && (
         // Hidden rather than unmounted while the picker is reopened, so a
         // half-filled form survives a look at the other types.
-        <div ref={formBodyRef} hidden={typePickerOpen} className="max-w-3xl">
+        <div ref={formBodyRef} hidden={typePickerOpen} className={`${formWidth} ${wide ? WIDE_STACK_OFFSET : ''}`}>
           {body}
         </div>
       )}
@@ -237,7 +252,10 @@ export default function MonitorForm({
     return shell(<DatabaseForm key={monitorType} type={monitorType} {...typeFormProps} />);
   }
 
-  const patchForm = (patch: Partial<typeof formData>) => setFormData({ ...formData, ...patch });
+  // Functional: AlertingSection's switch to Custom sends the pre-checked
+  // default channels and the mode as two calls in one event, and a patch on
+  // the render's formData would let the second drop the first.
+  const patchForm = (patch: Partial<typeof formData>) => setFormData((prev) => ({ ...prev, ...patch }));
 
   const liveTestPanel = (
     <SyntheticLiveTestPanel
@@ -286,8 +304,8 @@ export default function MonitorForm({
     : [];
 
   return shell(
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target">
         <FormInput
           label="Monitor name"
           required
@@ -318,7 +336,7 @@ export default function MonitorForm({
             className="input font-mono"
           />
         )}
-      </FormSection>
+      </FormPanel>
 
       {monitorType === 'http' && (
         <HttpMonitorForm
@@ -410,8 +428,8 @@ export default function MonitorForm({
         )}
       </LabelsSection>
 
-      <FormActions
-        middle={<PlanSummary parts={planParts} errors={errors} />}
+      <FormActionBar
+        summary={<PlanSummary parts={planParts} errors={errors} />}
         cancel={onCancel ? { label: 'Cancel', onClick: onCancel, disabled: loading } : undefined}
         submit={{
           label: loading ? 'Saving…' : isEditMode ? 'Save changes' : 'Create monitor',

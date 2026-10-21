@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
-import { getMonitors } from '@/lib/api';
+import { getAllMonitors } from '@/lib/monitor-list';
 import type { Monitor } from '@/lib/types';
 import { MonitorMultiSelect } from './MonitorMultiSelect';
 
@@ -26,9 +26,10 @@ export default function DependenciesField({ selectedIds, onChange, excludeId, er
 
   useEffect(() => {
     let cancelled = false;
-    getMonitors({ page_size: 100 })
-      .then((res) => {
-        if (!cancelled) setMonitors(res.items || []);
+    // Every page: a workspace can hold more monitors than one page.
+    getAllMonitors()
+      .then((all) => {
+        if (!cancelled) setMonitors(all);
       })
       .catch(() => {
         // The picker degrades to empty; not fatal for the form.
@@ -47,21 +48,23 @@ export default function DependenciesField({ selectedIds, onChange, excludeId, er
       isOpen={open || Boolean(error)}
       onToggle={setOpen}
     >
-      <p className="text-ui text-slate-400">
-        Upstream monitors this one relies on, such as the database behind an API. While one of them is down,
-        this monitor&apos;s alerts name it as the likely root cause.
-      </p>
-      <MonitorMultiSelect
-        monitors={monitors}
-        selectedIds={selectedIds}
-        onChange={onChange}
-        excludeIds={excludeId ? [excludeId] : []}
-      />
-      {error && (
-        <p data-form-error className="text-xs text-rose-300">
-          {error}
+      <div className="space-y-4">
+        <p className="text-ui text-slate-400">
+          Upstream monitors this one relies on, such as the database behind an API. While one of them is down,
+          this monitor&apos;s alerts name it as the likely root cause.
         </p>
-      )}
+        <MonitorMultiSelect
+          monitors={monitors}
+          selectedIds={selectedIds}
+          onChange={onChange}
+          excludeIds={excludeId ? [excludeId] : []}
+        />
+        {error && (
+          <p data-form-error className="text-xs text-rose-300">
+            {error}
+          </p>
+        )}
+      </div>
     </CollapsibleSection>
   );
 }

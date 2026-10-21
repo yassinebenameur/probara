@@ -3,13 +3,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { Monitor, CreateMonitorRequest, UpdateMonitorRequest } from '@/lib/types';
 import { buildGroupRequest, emptyGroupFormState, groupFormStateFromMonitor, initialGroupFormState } from '@/lib/monitor-form/group';
-import { getMonitors } from '@/lib/api';
+import { getAllMonitors } from '@/lib/monitor-list';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import { MonitorMultiSelect } from './MonitorMultiSelect';
-import { FormPanel, LabelsSection, PlanSummary, ToggleRow, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { FormPanel, LabelsSection, PlanSummary, ToggleRow, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 interface GroupFormProps {
   monitor?: Monitor;
@@ -57,8 +55,8 @@ export default function GroupForm({
 
   const loadAvailableMonitors = async () => {
     try {
-      const response = await getMonitors({ page_size: 100 });
-      const selectableMonitors = (response?.items || []).filter((m) => m.id !== monitor?.id);
+      // Every page: a workspace can hold more monitors than one page.
+      const selectableMonitors = (await getAllMonitors()).filter((m) => m.id !== monitor?.id);
       setAvailableMonitors(selectableMonitors);
     } catch (error) {
       console.error('Failed to load monitors:', error);
@@ -86,8 +84,8 @@ export default function GroupForm({
   };
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target" description="The monitors this group rolls up into one status.">
         <FormField label="Group name" required error={errors.name}>
           <input
             type="text"
@@ -122,7 +120,7 @@ export default function GroupForm({
           checked={formData.enabled}
           onChange={(v) => setFormData((prev) => ({ ...prev, enabled: v }))}
         />
-      </FormSection>
+      </FormPanel>
 
       <FormPanel title="Alerting">
         <AlertingSection
@@ -131,14 +129,14 @@ export default function GroupForm({
           threshold={2}
           onThresholdChange={() => {}}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={(monitor?.depends_on_ids?.length ?? 0) > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
           rollup={formData.member_alert_rollup}
-          onRollupChange={(r) => setFormData({ ...formData, member_alert_rollup: r })}
+          onRollupChange={(r) => setFormData((prev) => ({ ...prev, member_alert_rollup: r }))}
         />
       </FormPanel>
 
@@ -148,8 +146,8 @@ export default function GroupForm({
         placeholder="production, critical"
       />
 
-      <FormActions
-        middle={
+      <FormActionBar
+        summary={
           <PlanSummary
             errors={errors}
             parts={[

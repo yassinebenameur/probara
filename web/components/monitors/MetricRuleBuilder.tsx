@@ -214,7 +214,9 @@ export default function MetricRuleBuilder({
                   id={`${datalistId}-${index}-op`}
                   value={draft.operator}
                   onChange={(e) => updateDraft(index, { operator: e.target.value as MetricRuleDraft['operator'] })}
-                  className="input input-sm h-9"
+                  // !h-9: select.input-sm pins 34px, which drops its label 2px
+                  // below the inputs' on this bottom-aligned row.
+                  className="input input-sm !h-9"
                 >
                   <option value=">=">≥</option>
                   <option value="<=">≤</option>
@@ -240,7 +242,9 @@ export default function MetricRuleBuilder({
                   id={`${datalistId}-${index}-duration`}
                   value={draft.for_duration_seconds}
                   onChange={(e) => updateDraft(index, { for_duration_seconds: Number(e.target.value) })}
-                  className="input input-sm h-9"
+                  // !h-9: select.input-sm pins 34px, which drops its label 2px
+                  // below the inputs' on this bottom-aligned row.
+                  className="input input-sm !h-9"
                 >
                   {DURATION_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>

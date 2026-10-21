@@ -4,7 +4,6 @@ import { Dispatch, ReactNode, SetStateAction, useEffect, useState } from 'react'
 import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import FilterChip from '@/components/ui/FilterChip';
-import FormSection from '@/components/ui/FormSection';
 import IconButton from '@/components/ui/IconButton';
 import Tabs from '@/components/ui/Tabs';
 import { MonitorType, SyntheticBrowserAction } from '@/lib/types';
@@ -25,7 +24,7 @@ import {
   defaultSyntheticBrowserStep,
   syntheticBrowserActionMeta,
 } from '@/lib/monitor-form/synthetic';
-import { FIELD_LABEL, FormInput, FormSelect, TILE_SELECTED, ToggleRow } from './form-kit';
+import { FIELD_LABEL, FormInput, FormSelect, TILE_SELECTED, ToggleRow, FormPanel } from './form-kit';
 import { SyntheticModeHeader, SyntheticTemplatesWell, SyntheticVariablesField, swapped, withItem, withoutItem } from './synthetic-kit';
 
 const BROWSER_SETUP_TABS = [
@@ -114,7 +113,7 @@ export default function SyntheticBrowserEditor({
   };
 
   return (
-    <FormSection title="Check">
+    <FormPanel title="Check">
       <div>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -155,7 +154,7 @@ export default function SyntheticBrowserEditor({
           liveTest={liveTest}
         />
       )}
-    </FormSection>
+    </FormPanel>
   );
 }
 
