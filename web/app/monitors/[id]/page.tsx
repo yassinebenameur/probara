@@ -29,6 +29,7 @@ import Button from '@/components/ui/Button';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import ModalPortal from '@/components/ui/ModalPortal';
 import CopyableTarget from '@/components/ui/CopyableTarget';
+import InfoTip from '@/components/ui/InfoTip';
 import { useToast } from '@/components/ui/ToastProvider';
 import { useCanWrite, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { getEffectiveMonitorStatus, monitorTarget, monitorTargetLabel, shortFailureReason } from '@/lib/monitor-utils';
@@ -38,7 +39,7 @@ import { isSipCall } from '@/lib/sip-config';
 import { strictestTarget, type Sla } from '@/lib/sla';
 import { RANGE_MS as AGENT_RANGE_MS, type TimeRange as AgentTimeRange } from '@/components/monitors/metric-chart';
 import { formatBytes } from '@/lib/metrics';
-import { latestSIPMetrics, sipFacts } from '@/lib/sip-metrics';
+import { latestSIPMetrics, sipFacts, sipMediaOutdatedWorkersHint } from '@/lib/sip-metrics';
 
 const TAB_IDS = ['overview', 'history', 'settings', 'json'] as const;
 
@@ -223,15 +224,34 @@ function serverFactRows(monitor: Monitor, results: CheckResult[]): ReactNode[] {
   }
   if (monitor.type === 'sip') {
     const sip = latestSIPMetrics(results);
-    const minDaysValid = (monitor.config as SIPMonitorConfig).tls_min_days_valid;
-    for (const fact of sip ? sipFacts(sip, minDaysValid) : []) {
+    const config = monitor.config as SIPMonitorConfig;
+    for (const fact of sip ? sipFacts(sip, config.tls_min_days_valid, config.call?.media) : []) {
       rows.push(
         <DetailRow key={fact.key} label={fact.label} tone={fact.tone}>
           {fact.copyable ? (
             <CopyableTarget value={fact.value} label={fact.label} href={null} size="xs" className="min-w-0 justify-end" />
+          ) : fact.tip ? (
+            // Only the text truncates: the row's value cell clips, and the
+            // tip at the end would be the first thing cut off.
+            <span className="inline-flex max-w-full items-center gap-1">
+              <span className="min-w-0 truncate">{fact.value}</span>
+              <InfoTip inLabel ariaLabel={`About ${fact.label.toLowerCase()}`}>
+                {fact.tip}
+              </InfoTip>
+            </span>
           ) : (
             fact.value
           )}
+        </DetailRow>
+      );
+    }
+    // A worker that predates call quality refuses the check before it gets
+    // far enough to write a SIP envelope, so this reads the error.
+    const outdated = config.call?.media ? sipMediaOutdatedWorkersHint(results) : '';
+    if (outdated) {
+      rows.push(
+        <DetailRow key="media-outdated" label="Workers" tone="warning">
+          {outdated}
         </DetailRow>
       );
     }

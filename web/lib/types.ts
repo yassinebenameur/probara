@@ -2034,10 +2034,128 @@ export interface SIPCallMetrics {
   answered_by?: { source?: string; contact_host?: string; record_route?: string[] };
   sdp_answer?: { codec?: string; payload_type?: number; remote_media?: string; direction?: string };
   rtp_rx_packets: number;
+  // With call.media: the hold's audio, measured.
+  media?: SIPMediaMetrics;
   // bye_ok, bye_481, bye_<code>, bye_unconfirmed, cancelled,
   // cancel_unconfirmed, answered_after_cancel, remote_bye, no_provisional, none.
   teardown: string;
   teardown_status?: number;
+}
+
+// metrics_data.sip.call.media (worker sip_media.go sipMediaMetrics, with the
+// statistics of worker/internal/rtp). Quality figures appear for a basis only
+// when its window was long enough to judge; floats are rounded and finite.
+export interface SIPMediaMetrics {
+  expect: SIPMediaExpect;
+  // truncated: under 2 s measured; interrupted: a worker shutdown mid-hold;
+  // not_held: the call never reached its hold; refused: the answer's address
+  // was refused and nothing latched.
+  status: 'measured' | 'truncated' | 'interrupted' | 'not_held' | 'unusable_answer' | 'refused';
+  // The reason code of an unusable or refused answer (inactive, recvonly,
+  // private_behind_public, ...).
+  detail?: string;
+  // Which SDP the plan used: the 200's, or the dialog's last 18x.
+  answer_source?: '2xx' | '18x';
+  codec?: string;
+  tx_payload_type?: number;
+  ptime_ms?: number;
+  direction?: string;
+  destination?: string;
+  rtcp_destination?: string;
+  // port: the SDP address's IP on another port; peer: the signalling peer.
+  latched?: '' | 'port' | 'peer';
+  window_ms: number;
+  warmup_ms: number;
+  tx?: {
+    packets: number;
+    rtcp: number;
+    skipped_slots: number;
+    timer_p95_ms: number;
+    sched_p99_ms?: number;
+    // The worker's own timing was trustworthy; without it no quality
+    // threshold applied.
+    reliable: boolean;
+    errors?: number;
+    error_class?: string;
+  };
+  rx?: {
+    packets: number;
+    invalid: number;
+    foreign: number;
+    overflow: number;
+    unknown_pt: number;
+    sources?: string[];
+    after_bye_packets: number;
+    first_packet_ms?: number;
+    rtcp?: number;
+    rtcp_ignored?: number;
+  };
+  // The probe's receiver report on the far end's stream.
+  inbound?: {
+    ssrc: string;
+    ssrc_changes: number;
+    ssrc_overflow?: number;
+    expected: number;
+    lost: number;
+    loss_pct: number;
+    cumulative_lost: number;
+    duplicates: number;
+    reordered: number;
+    late: number;
+    // Network loss plus the reference jitter buffer's late discards: the
+    // figure the loss thresholds judge.
+    effective_loss_pct: number;
+    burst_r: number;
+    jitter_ms?: number;
+    jitter_max_ms?: number;
+    jitter_last_ms?: number;
+    max_gap_ms: number;
+    stall_ms: number;
+    comfort_noise: number;
+    telephone_events: number;
+    pt_mismatch?: number;
+    quality?: SIPMediaQuality;
+  };
+  // The probe's own audio echoed back (an echo test line).
+  round_trip?: {
+    matched_by: 'ssrc' | 'marker';
+    expected: number;
+    matched: number;
+    loss_pct: number;
+    duplicates: number;
+    late: number;
+    effective_loss_pct: number;
+    burst_r: number;
+    jitter_ms?: number;
+    rtt_ms?: { p50: number; p95: number; max: number };
+    quality?: SIPMediaQuality;
+  };
+  // The far end's RTCP reports on the probe's stream.
+  outbound?: {
+    reports: number;
+    expected: number;
+    // The probe's packets the last report should have reached but did not
+    // (a far end that stopped hearing it); counted in expected and as lost.
+    unreported?: number;
+    loss_pct: number;
+    cumulative_lost: number;
+    jitter_ms: number;
+    rtt_ms?: number;
+    quality?: SIPMediaQuality & { burst_r: number; burst_r_source: string; discards: string };
+  };
+  model?: string;
+  assumptions?: string[];
+  two_way?: 'verified' | 'inbound_only' | 'outbound_only' | 'none';
+  two_way_evidence?: ('rx' | 'echo' | 'rtcp')[];
+}
+
+// One evidence basis's E-model estimate. delay_source unmeasured: no network
+// delay was counted, so the MOS is an upper bound.
+export interface SIPMediaQuality {
+  r_factor: number;
+  mos_cqe: number;
+  delay_ms: number;
+  delay_source: 'echo' | 'rtcp' | 'unmeasured';
 }
 
 export interface SIPReasonHeader {

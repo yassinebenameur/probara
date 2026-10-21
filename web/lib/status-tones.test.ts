@@ -4,11 +4,18 @@ import {
   alertStatusTone,
   checkResultLabel,
   checkResultTone,
+  DEFAULT_LOSS_MAX_PCT,
+  DEFAULT_LOSS_WARN_PCT,
+  DEFAULT_MOS_MIN,
+  DEFAULT_MOS_WARN,
   DEFAULT_UTILIZATION_ALERT,
   failedChecksTone,
   incidentSeverityLabel,
   incidentSeverityTone,
   incidentStateTone,
+  lossTone,
+  mosTone,
+  thresholdTone,
   uptimeTone,
   UPTIME_TONE_TEXT,
   utilizationTone,
@@ -98,4 +105,41 @@ test('utilizationTone handles <= rules and takes the worst of several', () => {
     { metric_name: 'm', operator: '>=', threshold: 0.6 },
   ];
   assert.equal(utilizationTone(0.65, 'm', {}, both), 'bad');
+});
+
+test('mosTone judges a MOS as the worker does: below the minimum fails, below the warning warns', () => {
+  assert.equal(mosTone(4.2, 4.0, 3.6), 'good');
+  assert.equal(mosTone(4.0, 4.0, 3.6), 'good');
+  assert.equal(mosTone(3.9, 4.0, 3.6), 'warn');
+  assert.equal(mosTone(3.59, 4.0, 3.6), 'bad');
+  // Without thresholds of its own, the default bands stand in.
+  assert.equal(mosTone(DEFAULT_MOS_WARN - 0.01), 'warn');
+  assert.equal(mosTone(DEFAULT_MOS_MIN - 0.01), 'bad');
+  assert.equal(mosTone(4.37), 'good');
+  // One threshold of its own: only it applies.
+  assert.equal(mosTone(3.0, 3.5), 'warn');
+  assert.equal(mosTone(3.9, undefined, 3.0), 'good');
+  assert.equal(mosTone(undefined), 'none');
+});
+
+test('lossTone judges loss as the worker does: above the maximum fails, above the warning warns', () => {
+  assert.equal(lossTone(0.5, 1, 2), 'good');
+  assert.equal(lossTone(1, 1, 2), 'good');
+  assert.equal(lossTone(1.5, 1, 2), 'warn');
+  assert.equal(lossTone(2.01, 1, 2), 'bad');
+  assert.equal(lossTone(DEFAULT_LOSS_WARN_PCT + 0.01), 'warn');
+  assert.equal(lossTone(DEFAULT_LOSS_MAX_PCT + 0.01), 'bad');
+  assert.equal(lossTone(0), 'good');
+  assert.equal(lossTone(3, undefined, 2), 'bad');
+  assert.equal(lossTone(10, 5), 'warn');
+  assert.equal(lossTone(null), 'none');
+});
+
+test('thresholdTone judges jitter and round trip by the monitor\'s own warn and max only', () => {
+  assert.equal(thresholdTone(34, 20, 30), 'bad');
+  assert.equal(thresholdTone(30, 20, 30), 'warn');
+  assert.equal(thresholdTone(20, 20, 30), 'good');
+  assert.equal(thresholdTone(600, undefined, 500), 'bad');
+  assert.equal(thresholdTone(600), 'good');
+  assert.equal(thresholdTone(undefined, 1, 2), 'none');
 });

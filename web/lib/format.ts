@@ -1,5 +1,6 @@
 // Display formatting for the operator UI: the one place dates, recency,
-// durations, uptime percentages, latency and time ranges are turned into text.
+// durations, uptime percentages, latency, call quality (MOS, loss, jitter)
+// and time ranges are turned into text.
 // Pages call these rather than toLocaleString()/toFixed() so the same value
 // reads the same on every screen. Tones (what colour a value gets) live in
 // lib/status-tones.ts.
@@ -161,6 +162,36 @@ export function formatLatency(ms: number | null | undefined): string {
   if (Math.round(ms) < 1000) return `${Math.round(ms)} ms`;
   const tenths = Math.round(ms / 100) / 10;
   return tenths < 10 ? `${tenths.toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
+}
+
+/**
+ * A MOS (mean opinion score, 1-5): two decimals, `4.31`, as the worker
+ * rounds and its threshold messages print it. Missing is `—`.
+ */
+export function formatMOS(mos: number | null | undefined): string {
+  if (mos === null || mos === undefined || !Number.isFinite(mos)) return '—';
+  return mos.toFixed(2);
+}
+
+/**
+ * Packet loss in percent: `0%` for none, else two decimals (`0.44%`,
+ * `5.00%`), as the worker's threshold messages print it, since one packet is
+ * a fraction of a percent of a short call. Missing or negative is `—`.
+ */
+export function formatLossPct(pct: number | null | undefined): string {
+  if (pct === null || pct === undefined || !Number.isFinite(pct) || pct < 0) return '—';
+  return pct === 0 ? '0%' : `${pct.toFixed(2)}%`;
+}
+
+/**
+ * Audio jitter in milliseconds: one decimal below 10 ms (`2.1 ms`), where a
+ * millisecond matters, else as formatLatency (`34 ms`). Missing or negative
+ * is `—`.
+ */
+export function formatJitter(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return '—';
+  const tenths = Math.round(ms * 10) / 10;
+  return tenths < 10 ? `${tenths.toFixed(1)} ms` : formatLatency(ms);
 }
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {

@@ -133,6 +133,62 @@ export function utilizationTone(
   return worst;
 }
 
+// ── Call quality ─────────────────────────────────────────────────────────
+
+/**
+ * Call-quality bands assumed when a SIP test call sets no threshold of its
+ * own. MOS follows ITU-T G.109's user-satisfaction categories: R 80 (MOS
+ * 4.03) is the bottom of "satisfied", R 70 (MOS 3.6) of "some users
+ * dissatisfied". Loss is G.711 with packet-loss concealment in the same
+ * model: 1% costs about 0.1 MOS, 5% about 0.5.
+ */
+export const DEFAULT_MOS_WARN = 4.0;
+export const DEFAULT_MOS_MIN = 3.6;
+export const DEFAULT_LOSS_WARN_PCT = 1;
+export const DEFAULT_LOSS_MAX_PCT = 5;
+
+/**
+ * Tone of a MOS estimate against the monitor's `warn_mos` / `min_mos`
+ * (call.media), as the worker judges them: bad below the minimum, warn below
+ * the warning, good otherwise. A monitor that sets neither is toned by
+ * DEFAULT_MOS_WARN / DEFAULT_MOS_MIN; one that sets only one is toned by it
+ * alone.
+ */
+export function mosTone(mos: number | null | undefined, warn?: number, min?: number): UptimeTone {
+  if (mos === null || mos === undefined || !Number.isFinite(mos)) return 'none';
+  const ownRules = warn !== undefined || min !== undefined;
+  const warnAt = ownRules ? warn : DEFAULT_MOS_WARN;
+  const minAt = ownRules ? min : DEFAULT_MOS_MIN;
+  if (minAt !== undefined && mos < minAt) return 'bad';
+  if (warnAt !== undefined && mos < warnAt) return 'warn';
+  return 'good';
+}
+
+/**
+ * Tone of a loss percentage against the monitor's `warn_loss_pct` /
+ * `max_loss_pct`: bad above the maximum, warn above the warning, good
+ * otherwise, with DEFAULT_LOSS_WARN_PCT / DEFAULT_LOSS_MAX_PCT standing in
+ * as for mosTone.
+ */
+export function lossTone(pct: number | null | undefined, warn?: number, max?: number): UptimeTone {
+  const ownRules = warn !== undefined || max !== undefined;
+  return thresholdTone(pct, ownRules ? warn : DEFAULT_LOSS_WARN_PCT, ownRules ? max : DEFAULT_LOSS_MAX_PCT);
+}
+
+/**
+ * Tone of a figure where higher is worse against a monitor's own warn / max
+ * pair, as the worker judges them: bad above the maximum, warn above the
+ * warning, good otherwise (no defaults: good without either). For a SIP
+ * call's jitter (`warn_jitter_ms` / `max_jitter_ms`) and round trip
+ * (`warn_rtt_ms` / `max_rtt_ms`).
+ */
+export function thresholdTone(value: number | null | undefined, warn?: number, max?: number): UptimeTone {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'none';
+  if (max !== undefined && value > max) return 'bad';
+  if (warn !== undefined && value > warn) return 'warn';
+  return 'good';
+}
+
 // ── Monitor status ───────────────────────────────────────────────────────
 
 export const MONITOR_STATUS_LABEL: Record<MonitorDisplayStatus, string> = {

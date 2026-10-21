@@ -23,7 +23,7 @@ import {
   SIP_MEDIA_MAX_RTT_MS,
   SIP_MEDIA_MIN_MOS,
 } from '@/lib/sip-config';
-import { sipCallSummary, sipTestWarnings } from '@/lib/sip-metrics';
+import { sipCallSummary, sipMediaUnsupportedHint, sipTestWarnings } from '@/lib/sip-metrics';
 import { buildSipRequest, initialSipFormState, sipFieldsFromForm } from '@/lib/monitor-form/sip';
 import { formatLatency, pluralize } from '@/lib/format';
 import { useCurrentUser, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
@@ -357,6 +357,8 @@ export default function SipForm({
   // was answered (billable), an unconfirmed BYE or CANCEL, a warn threshold.
   const testWarnings =
     test.phase === 'done' && test.result.status === 'success' ? sipTestWarnings(test.result.metrics_data?.sip) : [];
+  // A worker that predates call quality refuses the test before dialing.
+  const mediaUnsupported = test.phase === 'done' ? sipMediaUnsupportedHint(test.result.error_message) : '';
 
   const thresholdInput = (
     key: 'call_warn_pdd_ms' | 'call_max_pdd_ms' | 'call_warn_answer_ms' | 'call_max_answer_ms',
@@ -645,12 +647,15 @@ export default function SipForm({
               </div>
             )}
             {test.phase === 'done' && test.result.status !== 'success' && (
-              <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-300">
-                <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-                <span className="truncate" title={test.result.error_message}>
-                  {test.result.error_message || 'Check failed'}
-                </span>
-              </p>
+              <div className="min-w-0">
+                <p className="flex min-w-0 items-center gap-1.5 text-xs text-rose-300">
+                  <XCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                  <span className="truncate" title={test.result.error_message}>
+                    {test.result.error_message || 'Check failed'}
+                  </span>
+                </p>
+                {mediaUnsupported && <p className="text-xs text-amber-300">{mediaUnsupported}</p>}
+              </div>
             )}
             {test.phase === 'request_failed' && (
               <p className="flex min-w-0 items-center gap-1.5 text-xs text-amber-300">

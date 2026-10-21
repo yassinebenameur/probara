@@ -558,13 +558,16 @@ or imported groups come back empty. Any other path that creates groups through
   The rules and token list sit in the comment at the top of
   `app/globals.css` and in `tailwind.config.ts`.
 - **Formatting and tones have one home each**: dates, recency, durations,
-  uptime %, latency and the `RANGES` table live in `lib/format.ts`
-  (`formatDateTime`, `formatTimestamp`, `formatRelativeTime`, `formatUptime`,
-  `formatLatency`, …); what colour a state or number gets lives in
+  uptime %, latency, call quality and the `RANGES` table live in
+  `lib/format.ts` (`formatDateTime`, `formatTimestamp`, `formatRelativeTime`,
+  `formatUptime`, `formatLatency`, `formatMOS`/`formatLossPct`/
+  `formatJitter`, …); what colour a state or number gets lives in
   `lib/status-tones.ts` (`uptimeTone(pct, target)` for availability only;
   `failedChecksTone` for check-bucket trace bars, `utilizationTone` for
-  agent gauges from the monitor's `metric_rules`; alert/incident/check/
-  monitor-status tones). Never `toLocaleString()`, `toFixed()` on a percent,
+  agent gauges from the monitor's `metric_rules`, `mosTone`/`lossTone` for
+  SIP call quality from the monitor's `call.media` thresholds (with default
+  bands), `thresholdTone` for its jitter and round trip (own thresholds only);
+  alert/incident/check/monitor-status tones). Never `toLocaleString()`, `toFixed()` on a percent,
   or an inline uptime threshold in a component. Severity order, monitor
   target and short failure reasons are `STATUS_RANK`/`sortBySeverity`,
   `monitorTarget`, `shortFailureReason` in `lib/monitor-utils.ts`.
