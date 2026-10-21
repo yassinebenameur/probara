@@ -158,7 +158,8 @@ secrets:
   adminJwtSecret: "change-me-in-production-jwt-secret-minimum-32-chars"
   adminJwtSecretExistingSecret: ""
   adminJwtSecretExistingSecretKey: admin_jwt_secret
-  # Initial API key for first login - CHANGE IN PRODUCTION
+  # Unused: stored in the chart Secret, but nothing reads it and it creates no
+  # API key. The first administrator is created on the UI login page.
   initialApiKey: "probara-initial-api-key-change-me"
   # At-rest encryption key for monitor/channel config secrets (DB passwords,
   # connection strings, webhook tokens). 32 random bytes, base64-encoded:
