@@ -3,7 +3,7 @@
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import FormField from '@/components/ui/FormField';
 import { handleRovingKeyDown, SEGMENT_ITEM, SELECTED_SEGMENT } from '@/components/ui/roving';
-import { FOCUS_RING } from '@/components/ui/focus';
+import { FOCUS_RING_INSET } from '@/components/ui/focus';
 import { formatDuration } from '@/lib/format';
 import type { Location } from '@/lib/types';
 import { LocationsSection } from './LocationsSection';
@@ -41,11 +41,14 @@ export function IntervalField({
     <FormField label={label} error={error}>
       {(control) => (
         <>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div
               role="radiogroup"
               aria-label={`${label} presets`}
               onKeyDown={(e) => handleRovingKeyDown(e, ids, active, (id) => onChange(Number(id)))}
+              // SegmentedControl's well and segments, hand-rolled only because
+              // a typed custom value leaves no segment selected and the first
+              // one must still take Tab.
               className="inline-flex items-center gap-0.5 rounded-lg bg-well p-0.5 shadow-[inset_0_0_0_1px_var(--glass-edge)]"
             >
               {presets.map((seconds, i) => {
@@ -59,8 +62,8 @@ export function IntervalField({
                     data-roving-id={String(seconds)}
                     tabIndex={selected || (!anySelected && i === 0) ? 0 : -1}
                     onClick={() => onChange(seconds)}
-                    className={`inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium tabular-nums ${SEGMENT_ITEM} ${FOCUS_RING} ${
-                      selected ? SELECTED_SEGMENT : 'text-slate-400 hover:text-slate-100'
+                    className={`inline-flex h-[1.875rem] min-w-[2.75rem] items-center justify-center whitespace-nowrap rounded-md px-2.5 text-xs font-medium tabular-nums ${SEGMENT_ITEM} ${FOCUS_RING_INSET} ${
+                      selected ? SELECTED_SEGMENT : 'text-slate-400 hover:bg-well-hover hover:text-slate-100'
                     }`}
                   >
                     {formatDuration(seconds)}

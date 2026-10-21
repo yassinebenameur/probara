@@ -194,11 +194,15 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "Monitors",
-              "`tag` (repeatable where supported), `enabled`, `page`, `page_size` (default 20, max 100)",
+              "`tag` (repeatable where supported), `enabled`, `page`, `page_size` (default 20, max 100); newest first by creation time, ties broken by id, so pages never overlap",
             ],
             [
               "Monitor results",
               "`limit`, optional RFC 3339 `since`",
+            ],
+            [
+              "Batch monitor results",
+              "`ids` (comma-separated or repeated, up to 100), `limit` per monitor (default 20, max 100)",
             ],
             [
               "Monitor analytics",
@@ -255,6 +259,10 @@ export const API_PAGE: DocPage = {
               "List raw check results",
             ],
             [
+              "`GET /api/v1/monitors/results/batch?ids=...&limit=20`",
+              "The newest results for up to 100 monitors in one request, plus each group's direct member ids (see below)",
+            ],
+            [
               "`GET /api/v1/monitors/{id}/metrics-snapshots?range=24h`",
               "Per-check `metrics_data` over a range, newest snapshot per bucket (≤720), clamped to 30-day raw retention",
             ],
@@ -282,6 +290,11 @@ export const API_PAGE: DocPage = {
           title: "Create an HTTP monitor",
           code:
             '{\n  "name": "Public API",\n  "type": "http",\n  "config": {\n    "url": "https://api.example.com/health",\n    "method": "GET",\n    "expected_status_classes": ["2xx"],\n    "json_assertions": [\n      {"path": "status", "op": "equals", "value": "ok"}\n    ],\n    "max_latency_ms": 1500\n  },\n  "interval_seconds": 60,\n  "timeout_seconds": 15,\n  "enabled": true,\n  "tags": ["api", "production"],\n  "consecutive_failures_threshold": 2,\n  "notification_mode": "default",\n  "location_ids": [],\n  "location_quorum": 1\n}',
+        },
+        {
+          type: "paragraph",
+          text:
+            "`GET /monitors/results/batch` answers `{\"limit\", \"results\": {monitor_id: [...]}, \"members\": {group_id: [member_id, ...]}}`. Each `results` list is what `GET /monitors/{id}/results?limit=N` returns for that monitor: a group's list merges its nested members' newest results under a derived group-status row, and `members` lists a group's direct members (by name). Ids that are not live monitors of the workspace are left out rather than failing the request; more than 100 ids, a malformed id, or a `limit` outside 1-100 is a 400. Raw results are kept 30 days, so a monitor that has not run for longer than that comes back with an empty list (here and on the per-monitor endpoint alike). Viewers and read-scope keys may call it.",
         },
         {
           type: "callout",
@@ -515,7 +528,7 @@ export const API_PAGE: DocPage = {
           rows: [
             [
               "`GET /api/v1/alerts`",
-              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`); items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
+              "Paginated/filterable alert list (`status`, `monitor_id`, `since` — alerts open at any point after it, so still-open alerts always match — `suppressed=true|false`), ordered by `sort` (`triggered_at`, the default; `status`, ranked active, acknowledged, resolved; `monitor`, the subject name, case-insensitive; `duration`, counting open alerts to now) and `dir` (`asc`/`desc`; defaults to `desc` for `triggered_at` and `duration`, so newest and longest first, and `asc` otherwise: lifecycle rank for `status`, A-Z for `monitor`). Under a single `status` filter a `status` sort is the default newest-first order. Ties read newest first, then by ID, so pages never overlap; any other value is HTTP 400. Items carry `suppression_reason` and `impacted_count` when [dependency suppression](/docs/alerting/#dependencies) applies, and `triage` when the alert has an [automatic triage](/docs/alerting/#ai-triage)",
             ],
             ["`GET /api/v1/alerts/recent`", "Recent alerts with bounded limit"],
             [
@@ -530,6 +543,14 @@ export const API_PAGE: DocPage = {
             [
               "`POST /api/v1/alerts/{id}/resolve`",
               "Manually close an alert lifecycle",
+            ],
+            [
+              "`POST /api/v1/alerts/bulk/acknowledge`",
+              "Write; acknowledge many alerts, body `{\"ids\": [...]}` (1-500). Never all-or-nothing: HTTP 200 with `items` (the alerts acknowledged, in their new state) and `failed` (`{id, reason}`, reason `not_found` (missing, another tenant's, or its monitor was deleted), `already_acknowledged` or `already_resolved`). Each requested alert gets its own `alert.acknowledge` audit event, as the single endpoint records it, with `details.bulk`",
+            ],
+            [
+              "`POST /api/v1/alerts/bulk/resolve`",
+              "Write; resolve many open alerts, same body and response shape (reason `not_found` or `already_resolved`), one `alert.resolve` audit event per alert",
             ],
             [
               "`POST /api/v1/alerts/{id}/triage/label`",
@@ -917,7 +938,7 @@ export const API_PAGE: DocPage = {
             ],
             [
               "`GET /api/v1/audit-log`",
-              "Tenant admin; filtered [audit records](/docs/administration/#audit)",
+              "Tenant admin; filtered, sortable [audit records](/docs/administration/#audit)",
             ],
             [
               "`GET /api/v1/audit-log/actions`",

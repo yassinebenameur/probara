@@ -8,12 +8,10 @@ import {
 } from '@/lib/types';
 import { buildGrpcRequest, initialGrpcFormState } from '@/lib/monitor-form/network';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 interface GrpcFormProps {
   monitor?: Monitor;
@@ -64,8 +62,8 @@ export default function GrpcForm({
   };
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -140,7 +138,7 @@ export default function GrpcForm({
             </>
           )}
         </FormField>
-      </FormSection>
+      </FormPanel>
 
       <ScheduleSection
         intervalSeconds={formData.interval_seconds}
@@ -174,14 +172,14 @@ export default function GrpcForm({
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
         />
       </FormPanel>
 
@@ -191,8 +189,8 @@ export default function GrpcForm({
         placeholder="production, grpc, critical"
       />
 
-      <FormActions
-        middle={
+      <FormActionBar
+        summary={
           <PlanSummary
             errors={errors}
             parts={

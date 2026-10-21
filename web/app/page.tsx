@@ -16,7 +16,7 @@ import LiveStatus from '@/components/ui/LiveStatus';
 import Page from '@/components/ui/Page';
 import PageHeader from '@/components/ui/PageHeader';
 import Pill from '@/components/ui/Pill';
-import FilterChip from '@/components/ui/FilterChip';
+import FilterPopover, { type FilterOption } from '@/components/ui/FilterPopover';
 import RangePicker from '@/components/ui/RangePicker';
 import ScrollList from '@/components/ui/ScrollList';
 import TableSkeleton from '@/components/ui/TableSkeleton';
@@ -41,7 +41,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { ChevronDown, Plus, Tags, X } from 'lucide-react';
+import { Plus, Tag, X } from 'lucide-react';
 import {
   ActivityTimelineItem,
   OperationalSummary,
@@ -67,6 +67,7 @@ import { useLiveRefresh, type LiveLoadOptions } from '@/lib/useLiveRefresh';
 import { flashStyle, useRowFlash } from '@/lib/useRowFlash';
 import { useDocumentTitle } from '@/lib/useDocumentTitle';
 import CheckTrace from '@/components/monitors/CheckTrace';
+import { getTagColor } from '@/components/monitors/TagPill';
 import { CHART_GRID, LATENCY_COLOR } from '@/components/monitors/metric-chart';
 import ServiceGroupsPanel from '@/components/dashboard/ServiceGroupsPanel';
 import { NotificationNudge } from '@/components/layout/NotificationNudge';
@@ -118,6 +119,14 @@ const CELL_GROUPS = 'min-w-0 xl:col-span-12 xl:row-start-3 3xl:row-start-2';
 /** Lists below xl, where the card has no grid height to fill. */
 const LIST_HEIGHT = 'max-h-[32rem] xl:max-h-none';
 
+/**
+ * The dashboard's tag scope: the shared FilterPopover (as on /monitors), fed
+ * the tags the dashboard reports. It has no per-tag counts, so rows carry
+ * none; the page keeps its sorted array, so each change maps back onto
+ * toggle/clear. Unlike /monitors (any tag), the dashboard API scopes to
+ * monitors carrying every selected tag (`tags @>`), so the popup says so.
+ * Sized md to line up with the RangePicker and button beside it.
+ */
 function TagFilterPicker({
   availableTags,
   selectedTags,
@@ -129,80 +138,33 @@ function TagFilterPicker({
   onToggleTag: (tag: string) => void;
   onClear: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const hasSelection = selectedTags.length > 0;
-
-  useEffect(() => {
-    if (!open) return;
-    function onClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('mousedown', onClickOutside);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onClickOutside);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  const options = useMemo<FilterOption[]>(
+    () => availableTags.map((tag) => ({ value: tag, label: tag, dotClassName: getTagColor(tag).dot })),
+    [availableTags]
+  );
+  const selected = useMemo(() => new Set(selectedTags), [selectedTags]);
 
   if (availableTags.length === 0) return null;
 
   return (
-    <div className="relative" ref={ref}>
-      <Button
-        variant="ghost"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-controls={open ? 'dashboard-tag-filter' : undefined}
-        icon={<Tags className="h-4 w-4" strokeWidth={1.75} />}
-        iconTrailing={
-          <ChevronDown
-            className={`h-4 w-4 text-slate-500 transition-transform duration-base ease-standard ${open ? 'rotate-180' : ''}`}
-            strokeWidth={1.75}
-          />
+    <FilterPopover
+      label="Tags"
+      noun="tag"
+      icon={<Tag strokeWidth={1.75} />}
+      options={options}
+      selected={selected}
+      size="md"
+      popupLabel="Scope to monitors with all of these tags"
+      hint="Monitors must carry every selected tag."
+      onChange={(next) => {
+        if (next.size === 0) {
+          onClear();
+          return;
         }
-        // Selected is neutral, like a selected chip: orange is for actions.
-        className={hasSelection ? '!border-edge-strong !text-white' : ''}
-      >
-        Tags
-        {hasSelection && (
-          <span className="ml-1.5 rounded-full bg-well-hover px-1.5 py-px text-2xs tabular-nums text-slate-200">
-            {selectedTags.length}
-          </span>
-        )}
-      </Button>
-
-      {open && (
-        <div
-          id="dashboard-tag-filter"
-          className="glass-overlay absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] origin-top-right animate-pop-in !rounded-xl p-3"
-        >
-          <div className="mb-3 flex h-7 items-center justify-between">
-            <p className="text-xs font-medium text-slate-400">Filter dashboard by tags</p>
-            {hasSelection && (
-              <Button variant="subtle" size="xs" onClick={onClear}>
-                Clear all
-              </Button>
-            )}
-          </div>
-          <div className="flex max-h-56 flex-wrap gap-2 overflow-y-auto pr-1">
-            {availableTags.map((tag) => (
-              <FilterChip
-                key={tag}
-                selected={selectedTags.includes(tag)}
-                onClick={() => onToggleTag(tag)}
-              >
-                {tag}
-              </FilterChip>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+        for (const tag of selectedTags) if (!next.has(tag)) onToggleTag(tag);
+        for (const tag of next) if (!selected.has(tag)) onToggleTag(tag);
+      }}
+    />
   );
 }
 

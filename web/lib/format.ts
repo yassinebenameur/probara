@@ -61,6 +61,24 @@ export function formatTimestamp(
 }
 
 /**
+ * Clock time only, `HH:mm` (or `HH:mm:ss` with `seconds`), the time half of
+ * formatTimestamp, for rows already grouped under a date heading.
+ */
+export function formatClock(
+  value?: DateInput,
+  opts: { tz?: TimestampZone; seconds?: boolean } = {},
+  fallback = '—'
+): string {
+  const date = toDate(value);
+  if (!date) return value ? String(value) : fallback;
+  const utc = opts.tz === 'utc';
+  const h = utc ? date.getUTCHours() : date.getHours();
+  const mi = utc ? date.getUTCMinutes() : date.getMinutes();
+  const s = utc ? date.getUTCSeconds() : date.getSeconds();
+  return `${pad2(h)}:${pad2(mi)}${opts.seconds ? `:${pad2(s)}` : ''}`;
+}
+
+/**
  * Short zone name for a column header: `UTC`, `UTC+2`, `UTC−5`, `UTC+5:30`.
  * Local uses the offset in effect at `at` (now by default).
  */
@@ -192,6 +210,18 @@ export function formatJitter(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return '—';
   const tenths = Math.round(ms * 10) / 10;
   return tenths < 10 ? `${tenths.toFixed(1)} ms` : formatLatency(ms);
+}
+
+/**
+ * A whole count with thousands separators, `12,345`, the same on every
+ * browser (toLocaleString would follow the viewer's locale). Missing or
+ * non-finite is `—`.
+ */
+export function formatCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  const rounded = Math.round(value);
+  const digits = String(Math.abs(rounded)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return rounded < 0 ? `-${digits}` : digits;
 }
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {

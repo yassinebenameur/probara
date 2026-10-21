@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { bulkUpdateAlerting } from '@/lib/api';
 import type { ChannelAssignment, NotificationMode } from '@/lib/types';
 import ChannelPicker from '@/components/channels/ChannelPicker';
@@ -9,7 +9,13 @@ import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import Checkbox from '@/components/ui/Checkbox';
 import Dialog from '@/components/ui/Dialog';
-import Radio from '@/components/ui/Radio';
+import SegmentedControl from '@/components/ui/SegmentedControl';
+import { FormRow } from './form-kit';
+
+const NOTIFY_OPTIONS = [
+  { value: 'default', label: 'Workspace default' },
+  { value: 'custom', label: 'Custom' },
+] as const satisfies readonly { value: NotificationMode; label: string }[];
 
 interface BulkAlertingModalProps {
   monitorIds: string[];
@@ -25,6 +31,7 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
   const [channels, setChannels] = useState<ChannelAssignment[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const notifyTitleId = useId();
 
   const canApply = !saving && (touchSensitivity || touchRouting);
 
@@ -78,21 +85,26 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
         />
 
         {touchSensitivity && (
-          <div className="mt-2 pl-[26px]">
-            <label className="text-ui text-slate-300">
-              Mark down after{' '}
-              <select
-                value={threshold}
-                onChange={(e) => setThreshold(Number(e.target.value))}
-                className="input input-xs mx-1 !w-auto cursor-pointer"
-                aria-label="Consecutive failures threshold"
-              >
-                {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-              consecutive failed check{threshold === 1 ? '' : 's'}
-            </label>
+          <div className="mt-3 pl-[26px]">
+            <FormRow
+              title="Mark down after"
+              description="Consecutive failed checks before a monitor counts as down."
+              control={({ titleId, descriptionId }) => (
+                <select
+                  value={threshold}
+                  onChange={(e) => setThreshold(Number(e.target.value))}
+                  className="input input-sm !w-44 cursor-pointer"
+                  aria-labelledby={titleId}
+                  aria-describedby={descriptionId}
+                >
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>
+                      {n} failed check{n === 1 ? '' : 's'}
+                    </option>
+                  ))}
+                </select>
+              )}
+            />
           </div>
         )}
       </div>
@@ -107,36 +119,38 @@ export function BulkAlertingModal({ monitorIds, onDone, onCancel }: BulkAlerting
         />
 
         {touchRouting && (
-          <div className="mt-2 space-y-3 pl-[26px]">
-            {/* Mode radios */}
-            <div role="radiogroup" aria-label="Notification routing" className="flex flex-col">
-              <Radio
-                name="bulk-notification-mode"
-                value="default"
-                checked={mode === 'default'}
-                onChange={() => setMode('default')}
-                label={<span className="text-ui text-slate-300">Workspace default</span>}
-              />
-              <Radio
-                name="bulk-notification-mode"
-                value="custom"
-                checked={mode === 'custom'}
-                onChange={() => setMode('custom')}
-                label={<span className="text-ui text-slate-300">Custom channel list</span>}
-              />
-            </div>
-
-            {/* Channel picker when custom */}
-            {mode === 'custom' && (
-              <div className="space-y-2 pt-1">
-                <ChannelPicker value={channels} onChange={setChannels} />
-                {channels.length === 0 && (
-                  <Callout tone="danger" icon={<BellOff strokeWidth={1.75} />}>
-                    This will mute all {monitorIds.length} selected monitors — alerts fire but notify no one.
-                  </Callout>
-                )}
-              </div>
-            )}
+          <div className="mt-3 pl-[26px]">
+            {/* The monitor form's Notify row (AlertingSection), so the two read the same. */}
+            <FormRow
+              title="Notify"
+              titleId={notifyTitleId}
+              description={
+                mode === 'custom'
+                  ? 'Only the channels picked below, on every selected monitor.'
+                  : 'The workspace default channels.'
+              }
+              control={({ titleId, descriptionId }) => (
+                <SegmentedControl
+                  options={NOTIFY_OPTIONS}
+                  value={mode}
+                  onChange={setMode}
+                  labelledBy={titleId}
+                  describedBy={descriptionId}
+                  equalWidth
+                />
+              )}
+            >
+              {mode === 'custom' && (
+                <div className="mt-3 space-y-2">
+                  <ChannelPicker value={channels} onChange={setChannels} ariaLabelledBy={notifyTitleId} />
+                  {channels.length === 0 && (
+                    <Callout tone="danger" icon={<BellOff strokeWidth={1.75} />}>
+                      This will mute all {monitorIds.length} selected monitors: alerts fire but notify no one.
+                    </Callout>
+                  )}
+                </div>
+              )}
+            </FormRow>
           </div>
         )}
       </div>

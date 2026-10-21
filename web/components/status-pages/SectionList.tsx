@@ -403,8 +403,9 @@ function MonitorRow({
     setEditing(false);
   };
 
+  // A renamed row says what it stands for; the rename button is beside it.
   const subtitle = renamed
-    ? monitor.name
+    ? `Renamed from ${monitor.name}`
     : isGroup
       ? memberCount === undefined
         ? ''
@@ -463,16 +464,7 @@ function MonitorRow({
         />
       ) : (
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm text-slate-200">
-            {renamed ? displayName : monitor.name}
-            {renamed && (
-              <Pencil
-                className="ml-1.5 inline h-3 w-3 text-slate-500"
-                strokeWidth={1.75}
-                aria-hidden="true"
-              />
-            )}
-          </p>
+          <p className="truncate text-sm text-slate-200">{renamed ? displayName : monitor.name}</p>
           {subtitle && <p className="truncate text-xs text-slate-500">{subtitle}</p>}
         </div>
       )}

@@ -50,7 +50,7 @@ func TestAlertReadPathsReturnRootCause(t *testing.T) {
 	}
 
 	t.Run("ListAlerts", func(t *testing.T) {
-		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{})
+		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{}, alertsvc.ListSort{})
 		require.NoError(t, err)
 		require.Len(t, resp.Items, 1)
 		assertRootCause(t, resp.Items[0])

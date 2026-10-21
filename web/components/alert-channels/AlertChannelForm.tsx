@@ -127,7 +127,7 @@ export default function AlertChannelForm({
   // The type is fixed once a channel exists, so edit shows just that one.
   const catalogManifests = isEdit && selectedManifest ? [selectedManifest] : manifests;
 
-  // Plain sections rather than FormSection panels: the form is embedded in a
+  // Plain sections rather than glass panels: the form is embedded in a
   // FormCard on its own pages and in a well inside ChannelPicker.
   return (
     <form onSubmit={handleSubmit} className="space-y-6">

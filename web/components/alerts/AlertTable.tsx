@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useState } from 'react';
+import { KeyboardEvent, ReactNode, useState } from 'react';
 import Link from 'next/link';
 import { Bell, BellOff, Check, CircleCheck, Network, PencilLine, Tag, UserCheck } from 'lucide-react';
 import { Alert } from '@/lib/types';
@@ -13,6 +13,8 @@ import { shortFailureReason } from '@/lib/monitor-utils';
 import { ALERT_STATUS_LABEL, TONE_DOT, alertStatusTone } from '@/lib/status-tones';
 import { useCanWrite } from '@/components/providers/CurrentUserProvider';
 import Button from '@/components/ui/Button';
+import Checkbox from '@/components/ui/Checkbox';
+import SelectCheckbox from '@/components/ui/SelectCheckbox';
 import EmptyState from '@/components/ui/EmptyState';
 import Pill from '@/components/ui/Pill';
 import RowMenu, { RowMenuItem } from '@/components/ui/RowMenu';
@@ -24,21 +26,30 @@ import { ElapsedTime } from '@/components/ui/RelativeTime';
 import SortableHeader from '@/components/ui/SortableHeader';
 import { FOCUS_RING } from '@/components/ui/focus';
 import { useOptionalAlertEvents } from '@/components/alerts/AlertStreamProvider';
+import type { AlertSelection } from '@/components/alerts/useAlertSelection';
 import { sortRows, type SortState, type SortValue } from '@/lib/sort';
+import {
+  ALERT_SORT_DEFAULT_DIR,
+  SHORTCUT_EXEMPT,
+  rowShortcut,
+  shortcutEffect,
+  type AlertSortKey,
+} from '@/lib/alert-list';
 import { flashStyle } from '@/lib/useRowFlash';
 
 // The row's one primary action (Acknowledge or Resolve) sits in a fixed
 // slot so it lines up down the column; an icon square below sm.
 const PRIMARY_SLOT = 'shrink-0 max-sm:w-8 max-sm:px-0 sm:w-[7.5rem]';
 
-export const ALERT_SORT_KEYS = ['status', 'monitor', 'started', 'duration'] as const;
-export type AlertSortKey = (typeof ALERT_SORT_KEYS)[number];
-/** The queue order: unhandled (active) first, then acknowledged; newest first within each. */
-export const ALERT_SORT_DEFAULT: SortState<AlertSortKey> = { key: 'status', dir: 'asc' };
-/** Newest and longest first; Status and Monitor start ascending. */
-export const ALERT_SORT_DEFAULT_DIR = { started: 'desc', duration: 'desc' } as const;
-
 const STATUS_ORDER: Record<string, number> = { active: 0, acknowledged: 1, resolved: 2 };
+
+// A row's selection box keeps its slot (nothing shifts when a selection
+// starts) but shows only on row hover or keyboard focus, always once a
+// selection exists, and always on touch screens, which have no hover.
+const REVEAL_ON_ROW_HOVER =
+  'opacity-0 transition-opacity duration-fast ease-standard focus-within:opacity-100 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100';
+const REVEAL_ON_LIST_HOVER =
+  'opacity-0 transition-opacity duration-fast ease-standard focus-within:opacity-100 group-hover/list:opacity-100 [@media(hover:none)]:opacity-100';
 
 function alertSubject(alert: Alert): string {
   return alert.kind === 'mesh_edge'
@@ -75,17 +86,30 @@ interface AlertTableProps {
   loading?: boolean;
   emptyTitle?: string;
   /**
-   * Column sorting. Only where the owner holds the whole list (it sorts
-   * with sortAlerts before paging); a server-paged list leaves it out and
-   * reads newest first.
+   * Column sorting. The owner applies it: sortAlerts before paging where it
+   * holds the whole list, the API's sort (ALERT_SORT_COLUMN) where it pages
+   * on the server. Left out, the header is static and the rows read newest
+   * first.
    */
   sort?: SortState<AlertSortKey>;
   onSort?: (next: SortState<AlertSortKey>) => void;
+  /**
+   * False under a one-status filter, where Status orders nothing: its header
+   * is then plain text (lib/alert-list effectiveAlertSort).
+   */
+  statusSortable?: boolean;
+  /**
+   * Row selection for bulk triage (useAlertSelection over the open rows on
+   * screen). Shown to writers only; resolved rows keep an empty slot.
+   */
+  selection?: AlertSelection;
   /** useRowFlash().flashClass: rows whose status just changed flash in their new tone. */
   flashClass?: (id: string) => string;
 }
 
 const DETAIL = 'mt-0.5 text-xs tabular-nums text-slate-400';
+// The key cap the sidebar's tooltips use (components/ui/Tooltip.tsx).
+const KBD = 'rounded border border-edge px-1 font-mono text-2xs leading-4 text-slate-400';
 const CHIP = 'inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-medium';
 
 function KindTag({ title, children }: { title: string; children: ReactNode }) {
@@ -108,13 +132,18 @@ export default function AlertTable({
   emptyTitle = 'No alerts found',
   sort,
   onSort,
+  statusSortable = true,
+  selection,
   flashClass,
 }: AlertTableProps) {
   const [processing, setProcessing] = useState<{ id: string; action: 'ack' | 'resolve' | 'label' } | null>(null);
   const [labelling, setLabelling] = useState<{ alert: Alert; mode: 'prompt' | 'correct' } | null>(null);
   // Screen-reader echo of the user's own ack/resolve; sighted users see the
-  // row change (and flash), so there is no success toast.
-  const [announcement, setAnnouncement] = useState('');
+  // row change (and flash), so there is no success toast. `seq` alternates a
+  // trailing no-break space so a repeat of the same text still changes the
+  // live region and is read again.
+  const [announcement, setAnnouncementState] = useState({ text: '', seq: 0 });
+  const setAnnouncement = (text: string) => setAnnouncementState((prev) => ({ text, seq: prev.seq + 1 }));
   const canWrite = useCanWrite();
   const { showToast } = useToast();
   const stream = useOptionalAlertEvents();
@@ -128,6 +157,8 @@ export default function AlertTable({
       onAlertUpdate?.(updated);
       setAnnouncement(`Alert for ${alertSubject(updated)} acknowledged`);
     } catch (err) {
+      // The (assertive) error toast is the announcement; drop the stale one.
+      setAnnouncement('');
       showToast(errorMessage(err, 'Failed to acknowledge alert'), 'error');
     } finally {
       setProcessing(null);
@@ -142,10 +173,48 @@ export default function AlertTable({
       onAlertUpdate?.(updated);
       setAnnouncement(`Alert for ${alertSubject(updated)} resolved`);
     } catch (err) {
+      setAnnouncement('');
       showToast(errorMessage(err, 'Failed to resolve alert'), 'error');
     } finally {
       setProcessing(null);
     }
+  };
+
+  // A / R act on the row that has focus (its link, buttons or box), so the
+  // single-key shortcuts are scoped to the list as WCAG 2.1.4 allows: they
+  // never fire while typing, and do nothing outside an alert row. Arrow keys
+  // move between the rows' subject links.
+  // The guard (exempt targets, modifiers) is lib/alert-list rowShortcut.
+  const handleRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, alert: Alert) => {
+    const target = event.target as HTMLElement;
+    const shortcut = rowShortcut(event, target.isContentEditable || target.closest(SHORTCUT_EXEMPT) !== null);
+    if (!shortcut) return;
+
+    if (shortcut === 'next' || shortcut === 'previous') {
+      const links = Array.from(event.currentTarget.closest('tbody')?.querySelectorAll<HTMLElement>('.alert-row-link') ?? []);
+      const current = event.currentTarget.querySelector<HTMLElement>('.alert-row-link');
+      const next = links[links.indexOf(current as HTMLElement) + (shortcut === 'next' ? 1 : -1)];
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+      return;
+    }
+
+    if (!canWrite) return;
+    event.preventDefault();
+    if (event.repeat || processing?.id === alert.id) return;
+    const effect = shortcutEffect(shortcut, alert.status);
+    if (effect === 'apply') {
+      void (shortcut === 'acknowledge' ? handleAcknowledge(alert.id) : handleResolve(alert.id));
+      return;
+    }
+    // A press that changes nothing says so on screen too (the toast region
+    // announces it), so a sighted keyboard user is not left guessing.
+    setAnnouncement('');
+    showToast(
+      `Alert for ${alertSubject(alert)} is already ${effect === 'already_resolved' ? 'resolved' : 'acknowledged'}`,
+      'info'
+    );
   };
 
   // Pills reflect the last fetch only; a saved label flips this row's
@@ -191,19 +260,40 @@ export default function AlertTable({
   const anyOpen = alerts.some((alert) => alert.status !== 'resolved');
   const anyLabelable = alerts.some((alert) => alert.triage?.labelable);
   const showActions = canWrite && (anyOpen || anyLabelable);
+  // The selection slot stays whenever selection is on, even in a view with
+  // nothing open to select, so switching the status filter never shifts the
+  // columns.
+  const selectable = canWrite && selection !== undefined;
+  const selectionPinned = (selection?.selected.size ?? 0) > 0;
+  const selectHeader = selectable && selection && (
+    <th className="w-px !pr-0">
+      {anyOpen ? (
+        <Checkbox
+          checked={selection.allSelected}
+          indeterminate={selection.someSelected}
+          onChange={selection.toggleAll}
+          aria-label={selection.allSelected ? 'Deselect all open alerts shown' : 'Select all open alerts shown'}
+          className={selectionPinned || selection.allSelected ? 'opacity-100' : REVEAL_ON_LIST_HOVER}
+        />
+      ) : (
+        <span className="block h-4 w-4" aria-hidden="true" />
+      )}
+    </th>
+  );
+
 
   return (
     // The dim waits 300ms, so a quick refresh never blinks the table.
     <div
-      className={`glass overflow-hidden transition-opacity duration-base ${
+      className={`group/table glass overflow-hidden transition-opacity duration-base ${
         loading ? 'pointer-events-none opacity-60 delay-300' : 'delay-0'
       }`}
       aria-busy={loading || undefined}
     >
       <p role="status" className="sr-only">
-        {announcement}
+        {announcement.text && `${announcement.text}${announcement.seq % 2 ? '\u00a0' : ''}`}
       </p>
-      <div className="overflow-x-auto">
+      <div className="group/list overflow-x-auto">
         <table className="data-table text-ui">
           <thead>
             {/* Fixed-width labels (Status fits "Acknowledged") set each
@@ -211,15 +301,22 @@ export default function AlertTable({
                 shifts the columns; Monitor (w-full) takes the rest. */}
             {sort && onSort ? (
               <tr>
-                <SortableHeader
-                  label={<span className="max-sm:sr-only">Status</span>}
-                  sortKey="status"
-                  sort={sort}
-                  onSort={onSort}
-                  defaultDir={ALERT_SORT_DEFAULT_DIR}
-                  title="Active first"
-                  className="max-sm:w-8 sm:w-36"
-                />
+                {selectHeader}
+                {statusSortable ? (
+                  <SortableHeader
+                    label={<span className="max-sm:sr-only">Status</span>}
+                    sortKey="status"
+                    sort={sort}
+                    onSort={onSort}
+                    defaultDir={ALERT_SORT_DEFAULT_DIR}
+                    title={sort.key === 'status' && sort.dir === 'desc' ? 'Resolved first' : 'Active first'}
+                    className="max-sm:w-8 sm:w-36"
+                  />
+                ) : (
+                  <th className="max-sm:w-8 sm:w-36">
+                    <span className="max-sm:sr-only">Status</span>
+                  </th>
+                )}
                 <SortableHeader
                   label="Monitor"
                   sortKey="monitor"
@@ -234,7 +331,7 @@ export default function AlertTable({
                   sort={sort}
                   onSort={onSort}
                   defaultDir={ALERT_SORT_DEFAULT_DIR}
-                  title="Newest first"
+                  title={sort.key === 'started' && sort.dir === 'asc' ? 'Oldest first' : 'Newest first'}
                   className="hidden md:table-cell md:w-36"
                 />
                 <SortableHeader
@@ -243,7 +340,7 @@ export default function AlertTable({
                   sort={sort}
                   onSort={onSort}
                   defaultDir={ALERT_SORT_DEFAULT_DIR}
-                  title="Longest first"
+                  title={sort.key === 'duration' && sort.dir === 'asc' ? 'Shortest first' : 'Longest first'}
                   className="hidden md:table-cell md:w-44"
                 />
                 {showActions && (
@@ -254,6 +351,7 @@ export default function AlertTable({
               </tr>
             ) : (
             <tr>
+              {selectHeader}
               <th className="max-sm:w-8">
                 <span className="max-sm:sr-only sm:inline-block sm:w-28">Status</span>
               </th>
@@ -277,9 +375,28 @@ export default function AlertTable({
             {alerts.map((alert) => (
               <tr
                 key={alert.id}
-                className={flashClass?.(alert.id) || undefined}
+                // Checked rows fill like the monitors list (never orange);
+                // the focused row is the one A / R act on, so it shows.
+                className={`group/row has-[:focus-visible]:bg-well ${
+                  selection?.selected.has(alert.id) ? '!bg-well-strong' : ''
+                } ${flashClass?.(alert.id) || ''}`}
                 style={flashClass?.(alert.id) ? flashStyle(alertStatusTone(alert.status)) : undefined}
+                onKeyDown={(event) => handleRowKeyDown(event, alert)}
               >
+                {selectable && selection && (
+                  <td className="w-px !pr-0">
+                    {alert.status !== 'resolved' ? (
+                      <SelectCheckbox
+                        checked={selection.selected.has(alert.id)}
+                        onChange={() => selection.toggle(alert.id)}
+                        label={`Select alert for ${alertSubject(alert)}`}
+                        className={selectionPinned ? 'opacity-100' : REVEAL_ON_ROW_HOVER}
+                      />
+                    ) : (
+                      <span className="block h-4 w-4" aria-hidden="true" />
+                    )}
+                  </td>
+                )}
                 <td className="max-sm:pr-0">
                   <span className="max-sm:hidden">
                     <Pill size="sm" dot tone={alertStatusTone(alert.status)}>{ALERT_STATUS_LABEL[alert.status]}</Pill>
@@ -295,7 +412,7 @@ export default function AlertTable({
                   {alert.kind === 'mesh_edge' ? (
                     <Link
                       href="/locations?tab=mesh"
-                      className={`inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
+                      className={`alert-row-link inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
                       title="Inter-location mesh path down — view the connectivity matrix"
                     >
                       <Network className="h-3.5 w-3.5 text-slate-400" strokeWidth={1.75} />
@@ -304,7 +421,7 @@ export default function AlertTable({
                   ) : (
                     <Link
                       href={`/monitors/${alert.monitor_id}`}
-                      className={`rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
+                      className={`alert-row-link rounded-sm text-sm font-medium text-white transition-colors hover:text-cyan-300 ${FOCUS_RING}`}
                     >
                       {alert.monitor_name || alert.monitor_id}
                     </Link>
@@ -439,6 +556,8 @@ export default function AlertTable({
                           disabled={processing?.id === alert.id}
                           loading={processing?.id === alert.id && processing.action === 'ack'}
                           aria-label={`Acknowledge ${alertSubject(alert)}`}
+                          aria-keyshortcuts="A"
+                          title="Acknowledge (A)"
                           className={PRIMARY_SLOT}
                         >
                           <span className="max-sm:sr-only">Acknowledge</span>
@@ -452,6 +571,8 @@ export default function AlertTable({
                           disabled={processing?.id === alert.id}
                           loading={processing?.id === alert.id && processing.action === 'resolve'}
                           aria-label={`Resolve ${alertSubject(alert)}`}
+                          aria-keyshortcuts="R"
+                          title="Resolve (R)"
                           className={PRIMARY_SLOT}
                         >
                           <span className="max-sm:sr-only">Resolve</span>
@@ -496,6 +617,16 @@ export default function AlertTable({
           </tbody>
         </table>
       </div>
+      {/* Shortcut hint, for keyboard users only: it shows while a control in
+          the list has keyboard focus (the buttons also carry
+          aria-keyshortcuts for screen readers). */}
+      {canWrite && anyOpen && (
+        <p className="hidden items-center gap-1.5 border-t border-divider px-4 py-2 text-xs text-slate-500 group-has-[:focus-visible]/table:flex">
+          On a focused row: <kbd className={KBD}>A</kbd> acknowledge · <kbd className={KBD}>R</kbd> resolve ·{' '}
+          <kbd className={KBD}>↑</kbd>
+          <kbd className={KBD}>↓</kbd> move
+        </p>
+      )}
       {labelling && (
         <TriageLabelDialog
           alert={labelling.alert}

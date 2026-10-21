@@ -4,7 +4,6 @@ import { Dispatch, ReactNode, SetStateAction } from 'react';
 import { ChevronDown, ChevronUp, Eye, EyeOff, Plus, Trash2, X } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
-import FormSection from '@/components/ui/FormSection';
 import IconButton from '@/components/ui/IconButton';
 import { SyntheticAPIExtractConfig } from '@/lib/types';
 import { isSensitiveHeaderName } from '@/lib/monitor-form/http';
@@ -24,7 +23,7 @@ import {
   normalizeAssertionTarget,
   syntheticAssertionOpsByTarget,
 } from '@/lib/monitor-form/synthetic';
-import { FIELD_LABEL, FormInput, FormSelect, FormTextarea, ToggleRow } from './form-kit';
+import { FIELD_LABEL, FormInput, FormSelect, FormTextarea, ToggleRow, FormPanel } from './form-kit';
 import { SyntheticModeHeader, SyntheticTemplatesWell, SyntheticVariablesField, swapped, withItem, withoutItem } from './synthetic-kit';
 
 const STEP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'].map((m) => ({ value: m, label: m }));
@@ -67,7 +66,7 @@ export default function SyntheticApiEditor({
   };
 
   return (
-    <FormSection title="Check">
+    <FormPanel title="Check">
       <SyntheticModeHeader
         mode={mode}
         onModeChange={onModeChange}
@@ -148,7 +147,7 @@ export default function SyntheticApiEditor({
           />
         ))}
       </div>
-    </FormSection>
+    </FormPanel>
   );
 }
 

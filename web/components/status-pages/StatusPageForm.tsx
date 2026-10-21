@@ -13,6 +13,7 @@ import { getMonitor, getMonitors } from '@/lib/api';
 import { componentStatus, type ComponentStatus } from '@/lib/status-page-status';
 import { resolveStatusPagePublicUrl } from '@/lib/statusPageUrl';
 import { pluralize } from '@/lib/format';
+import { isApplePlatform, modalOpen, shortcutLabel } from '@/lib/shortcuts';
 import FormField from '@/components/ui/FormField';
 import Button from '@/components/ui/Button';
 import Checkbox from '@/components/ui/Checkbox';
@@ -176,12 +177,13 @@ export default function StatusPageForm({
     return map;
   }, [state.sections, monitorsById, groupMembers]);
 
-  // ⌘S / Ctrl+S saves the page.
+  // ⌘S / Ctrl+S saves the page, except behind an open dialog.
+  const [apple] = useState(isApplePlatform);
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
-        formRef.current?.requestSubmit();
+        if (!modalOpen()) formRef.current?.requestSubmit();
       }
     };
     window.addEventListener('keydown', handleKey);
@@ -302,119 +304,151 @@ export default function StatusPageForm({
   const sectionCount = state.sections.length;
   const monitorCount = derived.membershipCount;
 
+  // Leaving with unsaved edits asks first (reload, tab close, external link).
+  useEffect(() => {
+    if (!isDirty || loading) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty, loading]);
+
+  const handleDiscard = () => {
+    dispatch({ type: 'reset', statusPage });
+    slugTouchedRef.current = !!statusPage;
+    setErrors({});
+  };
+
   return (
-    <form ref={formRef} onSubmit={handleSubmit} className="space-y-6">
-      <section className="glass p-6">
-        <h3 className="mb-5 text-title font-semibold text-white">Identity & branding</h3>
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
-          <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField label="Title" required error={errors.title}>
+    // Two panes from xl: the editor on the left, the live preview pinned on the
+    // right for the whole scroll, so structure edits show up next to where they
+    // are made. Below xl the preview sits between identity and structure.
+    <form
+      ref={formRef}
+      onSubmit={handleSubmit}
+      className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]"
+    >
+      <section className="glass p-6 xl:col-start-1 xl:row-start-1" aria-labelledby="sp-identity-heading">
+        <h3 id="sp-identity-heading" className="mb-5 text-title font-semibold text-white">Identity & branding</h3>
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label="Title" required error={errors.title}>
+              <input
+                type="text"
+                value={state.basics.title}
+                onChange={(event) => handleTitleChange(event.target.value)}
+                placeholder="My service status"
+                className="input"
+                autoFocus={!statusPage}
+              />
+            </FormField>
+            <FormField label="URL slug" required error={errors.slug || liveSlugError}>
+              <input
+                type="text"
+                value={state.basics.slug}
+                onChange={(event) => handleSlugChange(event.target.value)}
+                placeholder="my-status-page"
+                className="input font-mono"
+                spellCheck={false}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                {!statusPage && !slugTouchedRef.current
+                  ? 'Generated from the title — edit to customize'
+                  : 'Lowercase letters, numbers, and hyphens'}
+              </p>
+            </FormField>
+          </div>
+
+          <FormField label="Description">
+            <textarea
+              value={state.basics.description}
+              onChange={(event) => setBasic('description', event.target.value)}
+              placeholder="Shown under the page title — e.g. “Live status for all Acme services.”"
+              rows={2}
+              className="input min-h-[72px] resize-none"
+            />
+          </FormField>
+
+          <div className="grid grid-cols-2 gap-4 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="col-span-2 2xl:col-span-1">
+              <FormField label="Logo URL">
                 <input
-                  type="text"
-                  value={state.basics.title}
-                  onChange={(event) => handleTitleChange(event.target.value)}
-                  placeholder="My service status"
+                  type="url"
+                  value={state.basics.logo_url}
+                  onChange={(event) => setBasic('logo_url', event.target.value)}
+                  placeholder="https://example.com/logo.png"
                   className="input"
-                  autoFocus={!statusPage}
-                />
-              </FormField>
-              <FormField label="URL slug" required error={errors.slug || liveSlugError}>
-                <input
-                  type="text"
-                  value={state.basics.slug}
-                  onChange={(event) => handleSlugChange(event.target.value)}
-                  placeholder="my-status-page"
-                  className="input font-mono"
-                  spellCheck={false}
                 />
                 <p className="mt-1 text-xs text-slate-500">
-                  {!statusPage && !slugTouchedRef.current
-                    ? 'Generated from the title — edit to customize'
-                    : 'Lowercase letters, numbers, and hyphens'}
+                  Square image works best; leave empty for a brand-colored mark
                 </p>
               </FormField>
             </div>
-
-            <FormField label="Description">
-              <textarea
-                value={state.basics.description}
-                onChange={(event) => setBasic('description', event.target.value)}
-                placeholder="Shown under the page title — e.g. “Live status for all Acme services.”"
-                rows={2}
-                className="input min-h-[72px] resize-none"
-              />
-            </FormField>
-
-            <FormField label="Logo URL">
-              <input
-                type="url"
-                value={state.basics.logo_url}
-                onChange={(event) => setBasic('logo_url', event.target.value)}
-                placeholder="https://example.com/logo.png"
-                className="input"
-              />
-              <p className="mt-1 text-xs text-slate-500">
-                Square image works best; leave empty for a brand-colored mark
-              </p>
-            </FormField>
-
-            <div className="grid grid-cols-2 gap-4">
-              <ColorField
-                label="Primary color"
-                value={state.basics.primary_color}
-                onChange={(value) => setBasic('primary_color', value)}
-              />
-              <ColorField
-                label="Secondary color"
-                value={state.basics.secondary_color}
-                onChange={(value) => setBasic('secondary_color', value)}
-              />
-            </div>
-
-            <div className="glass-well p-4">
-              <Checkbox
-                checked={state.enablePushNotifications}
-                onChange={(checked) => dispatch({ type: 'set_push_notifications', value: checked })}
-                className="!py-0"
-                label={<span className="font-medium text-white">Browser notifications</span>}
-                description="Let visitors opt in to a browser notification when a component here goes down, and when it recovers. Requires a VAPID keypair on the status-page service; without one the control is not shown."
-              />
-            </div>
+            <ColorField
+              label="Primary color"
+              value={state.basics.primary_color}
+              onChange={(value) => setBasic('primary_color', value)}
+            />
+            <ColorField
+              label="Secondary color"
+              value={state.basics.secondary_color}
+              onChange={(value) => setBasic('secondary_color', value)}
+            />
           </div>
 
-          <PagePreview
-            basics={state.basics}
-            sections={state.sections}
-            monitors={monitors}
-            statuses={componentStatuses}
-            statusLoading={monitorsLoading}
-            publicUrl={publicUrl}
-          />
+          <div className="glass-well p-4">
+            <Checkbox
+              checked={state.enablePushNotifications}
+              onChange={(checked) => dispatch({ type: 'set_push_notifications', value: checked })}
+              className="!py-0"
+              label={<span className="font-medium text-white">Browser notifications</span>}
+              description="Let visitors opt in to a browser notification when a component here goes down, and when it recovers. Requires a VAPID keypair on the status-page service; without one the control is not shown."
+            />
+          </div>
         </div>
       </section>
 
-      <SectionList
-        sections={state.sections}
-        monitors={monitors}
-        monitorsLoading={monitorsLoading}
-        statuses={componentStatuses}
-        groupMembers={groupMembers}
-        derived={derived}
-        errors={errors}
-        dispatch={dispatch}
-        onAddSection={handleAddSection}
-      />
+      <aside
+        aria-label="Live preview"
+        className="min-w-0 self-start xl:sticky xl:top-6 xl:col-start-2 xl:row-span-2 xl:row-start-1"
+      >
+        <PagePreview
+          basics={state.basics}
+          sections={state.sections}
+          monitors={monitors}
+          statuses={componentStatuses}
+          statusLoading={monitorsLoading}
+          publicUrl={publicUrl}
+        />
+      </aside>
+
+      <div className="min-w-0 xl:col-start-1 xl:row-start-2">
+        <SectionList
+          sections={state.sections}
+          monitors={monitors}
+          monitorsLoading={monitorsLoading}
+          statuses={componentStatuses}
+          groupMembers={groupMembers}
+          derived={derived}
+          errors={errors}
+          dispatch={dispatch}
+          onAddSection={handleAddSection}
+        />
+      </div>
 
       {/* Pinned to the viewport only while there is something to save: a clean
           page keeps the bar at the end of the form instead of over the sections. */}
       <div
-        className={`glass-overlay z-20 flex flex-wrap items-center gap-3 !rounded-2xl px-4 py-3 ${
+        className={`glass-overlay z-20 flex flex-wrap items-center gap-3 !rounded-2xl px-4 py-3 xl:col-span-2 ${
           isDirty || !statusPage ? 'sticky bottom-4' : ''
         }`}
       >
-        <div className="mr-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          {isDirty ? (
+        <div className="mr-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs" aria-live="polite">
+          {loading ? (
+            <span className="text-slate-400">{statusPage ? 'Saving…' : 'Creating…'}</span>
+          ) : isDirty && statusPage ? (
             <span className="flex items-center gap-1.5 text-amber-300">
               <CircleDot className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
               Unsaved changes
@@ -425,20 +459,29 @@ export default function StatusPageForm({
               All changes saved
             </span>
           ) : null}
+          {/* Counts drop on phones so the bar stays one row. */}
           {sectionCount === 0 ? (
             <span className="text-slate-500">Add at least one section to publish.</span>
           ) : (
             <>
-              <span className="tabular-nums text-slate-500">{pluralize(sectionCount, 'section')}</span>
-              <span className="tabular-nums text-slate-500">{pluralize(monitorCount, 'monitor')}</span>
+              <span className="hidden tabular-nums text-slate-500 sm:inline">{pluralize(sectionCount, 'section')}</span>
+              <span className="hidden tabular-nums text-slate-500 sm:inline">{pluralize(monitorCount, 'monitor')}</span>
             </>
           )}
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {onCancel && (
-            <Button variant="ghost" size="sm" type="button" onClick={onCancel} disabled={loading}>
-              Cancel
-            </Button>
+          {statusPage ? (
+            isDirty && (
+              <Button variant="ghost" size="sm" type="button" onClick={handleDiscard} disabled={loading}>
+                Discard
+              </Button>
+            )
+          ) : (
+            onCancel && (
+              <Button variant="ghost" size="sm" type="button" onClick={onCancel} disabled={loading}>
+                Cancel
+              </Button>
+            )
           )}
           <Button
             variant="accent"
@@ -446,7 +489,7 @@ export default function StatusPageForm({
             type="submit"
             loading={loading}
             disabled={loading || (!!statusPage && !isDirty)}
-            title="⌘S"
+            title={shortcutLabel('S', apple)}
           >
             {statusPage ? 'Save changes' : 'Create status page'}
           </Button>

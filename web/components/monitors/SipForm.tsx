@@ -32,13 +32,11 @@ import Callout from '@/components/ui/Callout';
 import CollapsibleSection from '@/components/ui/CollapsibleSection';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, ToggleRow, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 interface SipFormProps {
   monitor?: Monitor;
@@ -416,7 +414,7 @@ export default function SipForm({
 
   return (
     <>
-      <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+      <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
         {showCallLockedNotice && (
           <Callout tone="info" title="Read-only test call">
             Only a tenant admin signed in to Probara can create, change, run or test a SIP test-call monitor, since
@@ -424,7 +422,7 @@ export default function SipForm({
           </Callout>
         )}
 
-        <FormSection title="Target">
+        <FormPanel title="Target">
           <FormField label="Monitor name" required error={errors.name}>
             <input
               type="text"
@@ -664,9 +662,9 @@ export default function SipForm({
               </p>
             )}
           </div>
-        </FormSection>
+        </FormPanel>
 
-        <FormSection title="Check">
+        <FormPanel title="Check">
           <FormField label="Method">
             {(control) => (
               <>
@@ -773,10 +771,10 @@ export default function SipForm({
               )}
             </FormField>
           )}
-        </FormSection>
+        </FormPanel>
 
         {isCall && (
-          <FormSection title="Call">
+          <FormPanel title="Call">
             <Callout tone="warning" title="Each check places a real call">
               About {pluralize(callsPerDay, 'call')} a day
               {callLocations > 1 ? ` (${callLocations} locations)` : ''}, plus Run check and Test. Use a dedicated test
@@ -980,11 +978,11 @@ export default function SipForm({
                 />
               </div>
             </CollapsibleSection>
-          </FormSection>
+          </FormPanel>
         )}
 
         {isCall && !ring && (
-          <FormSection title="Call quality">
+          <FormPanel title="Call quality">
             <ToggleRow
               title="Measure call quality"
               description="Exchange audio with the far end during the hold and measure loss, jitter, a MOS estimate and the round trip"
@@ -1068,7 +1066,7 @@ export default function SipForm({
                 )}
               </>
             )}
-          </FormSection>
+          </FormPanel>
         )}
 
         <ScheduleSection
@@ -1117,14 +1115,14 @@ export default function SipForm({
             isGroup={false}
             intervalSeconds={formData.interval_seconds}
             threshold={formData.consecutive_failures_threshold}
-            onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+            onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
             mode={formData.notification_mode}
-            onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+            onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
             dependencySuppression={formData.dependency_suppression}
             hasDependencies={formData.depends_on_ids.length > 0}
-            onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+            onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
             customChannels={formData.notification_channels}
-            onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+            onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
           />
         </FormPanel>
 
@@ -1134,8 +1132,8 @@ export default function SipForm({
           placeholder="production, voip, critical"
         />
 
-        <FormActions
-          middle={
+        <FormActionBar
+          summary={
             <PlanSummary
               errors={errors}
               parts={

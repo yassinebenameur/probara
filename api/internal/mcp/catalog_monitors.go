@@ -143,6 +143,18 @@ func monitorTools() []spec {
 			},
 		},
 		{
+			Name:  "get_monitor_results_batch",
+			Title: "Get check results for many monitors",
+			Description: "The newest check results for up to 100 monitors in one call, keyed by monitor ID " +
+				"(each list is what get_monitor_results returns with the same limit), plus each group's direct member IDs. " +
+				"IDs that are not monitors of this workspace are left out.",
+			Method: http.MethodGet, Route: "/monitors/results/batch",
+			Query: []param{
+				{Name: "ids", Type: "array", Required: true, Description: "Monitor IDs (up to 100)."},
+				{Name: "limit", Type: "integer", Description: "Results per monitor, 1-100 (default 20)."},
+			},
+		},
+		{
 			Name:        "get_monitor_metrics_snapshots",
 			Title:       "Get metrics snapshots",
 			Description: "Downsampled metrics_data snapshots (the newest per bucket) over a window, e.g. DB server stats, or SIP call timings and call quality (loss, jitter, MOS estimate).",

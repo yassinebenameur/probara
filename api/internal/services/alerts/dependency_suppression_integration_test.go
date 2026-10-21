@@ -57,7 +57,7 @@ func TestAlertReadPathsReportDependencySuppression(t *testing.T) {
 	}
 
 	t.Run("policy on", func(t *testing.T) {
-		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{})
+		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{}, alertsvc.ListSort{})
 		require.NoError(t, err)
 		got := byID(resp.Items)
 
@@ -80,13 +80,13 @@ func TestAlertReadPathsReportDependencySuppression(t *testing.T) {
 
 		// suppressed=true / false filters.
 		yes := true
-		resp, err = svc.ListAlerts(ctx, tenantID, &models.AlertListParams{Suppressed: &yes})
+		resp, err = svc.ListAlerts(ctx, tenantID, &models.AlertListParams{Suppressed: &yes}, alertsvc.ListSort{})
 		require.NoError(t, err)
 		require.Len(t, resp.Items, 1)
 		require.Equal(t, downstreamAlertID, resp.Items[0].ID)
 		require.Equal(t, 1, resp.Total)
 		no := false
-		resp, err = svc.ListAlerts(ctx, tenantID, &models.AlertListParams{Suppressed: &no})
+		resp, err = svc.ListAlerts(ctx, tenantID, &models.AlertListParams{Suppressed: &no}, alertsvc.ListSort{})
 		require.NoError(t, err)
 		require.Len(t, resp.Items, 1)
 		require.Equal(t, upstreamAlertID, resp.Items[0].ID)
@@ -134,7 +134,7 @@ func TestAlertReadPathsReportDependencySuppression(t *testing.T) {
 		_, err := dbClient.ExecContext(ctx,
 			`UPDATE tenants SET dependency_suppression_enabled = FALSE WHERE id = $1`, tenantID)
 		require.NoError(t, err)
-		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{})
+		resp, err := svc.ListAlerts(ctx, tenantID, &models.AlertListParams{}, alertsvc.ListSort{})
 		require.NoError(t, err)
 		for _, a := range resp.Items {
 			require.Nil(t, a.SuppressionReason)

@@ -103,7 +103,10 @@ export default function SegmentedControl<T extends string>({
             title={option.title}
             tabIndex={selected ? 0 : -1}
             disabled={disabled}
-            onClick={() => onChange(option.value)}
+            // Like a native radio: choosing the selected stop is not a change.
+            onClick={() => {
+              if (!selected) onChange(option.value);
+            }}
             className={`inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium tabular-nums ${SEGMENT_ITEM} ${FOCUS_RING_INSET} ${item} disabled:cursor-not-allowed ${
               selected
                 ? SELECTED_SEGMENT

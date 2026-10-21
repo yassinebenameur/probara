@@ -3,6 +3,7 @@
 // Reusable Recharts internals for metric-store charts (agent dashboard and
 // the metric explorer): synced area charts, tooltip, gap-row building.
 
+import type { ReactNode } from 'react';
 import {
   Area,
   AreaChart,
@@ -193,6 +194,11 @@ export function MetricTooltip({
   );
 }
 
+/** Five evenly spaced ticks across a time window, ends included. */
+function windowTicks([start, end]: [number, number]): number[] {
+  return [0, 1, 2, 3, 4].map((i) => Math.round(start + ((end - start) * i) / 4));
+}
+
 function BrushHandle({ x, y, width, height }: { x: number; y: number; width: number; height: number }) {
   return <rect x={x} y={y} width={width} height={height} rx={3} fill="var(--control-edge-strong)" />;
 }
@@ -210,6 +216,7 @@ export function MetricChart({
   syncId = METRIC_SYNC_ID,
   yAxisWidth = 56,
   ariaLabel,
+  xDomain,
 }: {
   data: ChartRow[];
   series: ChartSeries[];
@@ -226,6 +233,13 @@ export function MetricChart({
   yAxisWidth?: number;
   /** Text alternative; defaults to each series' latest value. */
   ariaLabel?: string;
+  /**
+   * The x window in epoch ms. Charts that sit under the monitor overview pass
+   * the selected range, so a series that only covers its last hour reads as
+   * such and lines up with the response-time chart; omitted, the axis spans
+   * the data.
+   */
+  xDomain?: [number, number];
 }) {
   const hasData = data.some((row) => series.some((s) => row[s.key] !== null && row[s.key] !== undefined));
   if (!hasData) {
@@ -262,7 +276,11 @@ export function MetricChart({
           <XAxis
             dataKey="ts"
             type="number"
-            domain={['dataMin', 'dataMax']}
+            domain={xDomain ?? ['dataMin', 'dataMax']}
+            allowDataOverflow={xDomain !== undefined}
+            // A fixed window gets evenly spaced ticks across it; left to
+            // itself the axis ticks only where the data is.
+            ticks={xDomain ? windowTicks(xDomain) : undefined}
             scale="time"
             axisLine={false}
             tickLine={false}
@@ -322,6 +340,49 @@ export function MetricChart({
           )}
         </AreaChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Colour key for a chart with more than one series. */
+export function ChartLegend({ series }: { series: ChartSeries[] }) {
+  if (series.length < 2) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+      {series.map((s) => (
+        <span key={s.key} className="flex items-center gap-1.5">
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} aria-hidden="true" />
+          {s.name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One chart inside a metrics panel (agent host, Mongo cluster, SIP call
+ * timing): a well with the title left, the latest reading right, and the
+ * legend under the chart when it draws more than one series.
+ */
+export function ChartTile({
+  title,
+  headline,
+  legend,
+  children,
+}: {
+  title: string;
+  headline: ReactNode;
+  legend?: ChartSeries[];
+  children: ReactNode;
+}) {
+  return (
+    <div className="glass-well min-w-0 p-4">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <span className="truncate text-ui font-medium text-slate-200">{title}</span>
+        <span className="shrink-0 text-xs tabular-nums text-slate-400">{headline}</span>
+      </div>
+      {children}
+      {legend && <ChartLegend series={legend} />}
     </div>
   );
 }

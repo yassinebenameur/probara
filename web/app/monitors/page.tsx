@@ -36,8 +36,7 @@ import { flashStyle, useRowFlash } from '@/lib/useRowFlash';
 import { Monitor, CheckResult, AgentMetrics, HTTPDisplayValue } from '@/lib/types';
 import {
   deleteMonitor,
-  getMonitorResults,
-  getGroupMembers,
+  MONITOR_RESULTS_BATCH_MAX_IDS,
   createMonitor,
   addMonitorsToGroup,
   removeMonitorsFromGroup,
@@ -62,6 +61,7 @@ import {
   sortMonitorList,
   sortMonitorsByName,
 } from '@/lib/monitor-list';
+import { fetchResultsBatches, resultsBatchError } from '@/lib/monitor-results';
 import { getApiKey } from '@/lib/auth';
 import { useCanWrite, useIsTenantAdmin } from '@/components/providers/CurrentUserProvider';
 import { isSipCall } from '@/lib/sip-config';
@@ -135,11 +135,12 @@ function groupContainsGroup(
 }
 
 // Live refresh: the monitor list is one request and polls every 30s. Results
-// are one request per monitor, so a background tick refetches only the
+// come from GET /monitors/results/batch, MONITOR_RESULTS_BATCH_MAX_IDS
+// monitors per request with every chunk in flight at once, so the first load
+// ranks the list in one round trip. A background tick refetches only the
 // monitors that changed state, that an alert event named, or whose next
-// check is due, at most this many per tick (stalest first).
-const RESULTS_PER_TICK = 30;
-const RESULTS_CHUNK = 6;
+// check is due, at most this many per tick (stalest first): one request.
+const RESULTS_PER_TICK = MONITOR_RESULTS_BATCH_MAX_IDS;
 
 // ── Row layout ───────────────────────────────────────────────────────────
 //
@@ -1548,7 +1549,21 @@ export default function MonitorsPage() {
   // without results reads as "unknown" and would sort above "up", so rows
   // keep name order and re-rank once instead of jumping with every chunk.
   const [resultsReady, setResultsReady] = useState(false);
-  const [groupMembersMap, setGroupMembersMap] = useState<Record<string, Monitor[]>>({});
+  // Group membership as ids (monitor_groups, from the results batch); the
+  // member rows themselves are the list's own monitors, so they stay as
+  // fresh as the list and a monitor in two groups is one object.
+  const [memberIdsByGroup, setMemberIdsByGroup] = useState<Record<string, string[]>>({});
+  const groupMembersMap = useMemo(() => {
+    const byId = new Map(monitors.map((monitor) => [monitor.id, monitor]));
+    const map: Record<string, Monitor[]> = {};
+    Object.entries(memberIdsByGroup).forEach(([groupId, ids]) => {
+      if (!byId.has(groupId)) return;
+      map[groupId] = sortMonitorsByName(
+        ids.map((id) => byId.get(id)).filter((member): member is Monitor => Boolean(member))
+      );
+    });
+    return map;
+  }, [monitors, memberIdsByGroup]);
   const { showToast } = useToast();
   const [pendingDelete, setPendingDelete] = useState<Monitor | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
@@ -1583,55 +1598,51 @@ export default function MonitorsPage() {
   // ── Loading and live refresh ──
   //
   // The first load (and a manual refresh) fetches the list, then every
-  // monitor's recent results and every group's members in chunks, rendering
-  // as they land. Background ticks (useLiveRefresh: 30s while visible, alert
-  // events, stream reconnects) refetch the list and only the results that
-  // can have changed. A failed refresh keeps the rows on screen.
+  // monitor's recent results and every group's member ids in one batched
+  // round trip (fetchResultsBatches). Background ticks (useLiveRefresh: 30s
+  // while visible, alert events, stream reconnects) refetch the list and
+  // only the results that can have changed. A failed refresh keeps the rows
+  // on screen.
   const monitorsRef = useRef<Monitor[]>([]);
-  const resultsRef = useRef<Record<string, CheckResult[]>>({});
   const fetchedAtRef = useRef(new Map<string, number>());
   const streamIdsRef = useRef(new Set<string>());
   const fullPassDone = useRef(false);
-  useEffect(() => {
-    resultsRef.current = checkResultsMap;
-  }, [checkResultsMap]);
 
   const loadAllResults = useCallback(async (list: Monitor[]) => {
-    const resultsMap: Record<string, CheckResult[]> = {};
-    const membersMap: Record<string, Monitor[]> = {};
-    for (let i = 0; i < list.length; i += RESULTS_CHUNK) {
-      const chunk = list.slice(i, i + RESULTS_CHUNK);
-      await Promise.all(
-        chunk.map(async (monitor) => {
-          try {
-            const results = await getMonitorResults(monitor.id, { limit: RECENT_CHECKS });
-            resultsMap[monitor.id] = results.results || [];
-            fetchedAtRef.current.set(monitor.id, Date.now());
-          } catch {
-            resultsMap[monitor.id] = resultsRef.current[monitor.id] ?? [];
-          }
-          if (monitor.type === 'group') {
-            try {
-              membersMap[monitor.id] = sortMonitorsByName(await getGroupMembers(monitor.id));
-            } catch {
-              membersMap[monitor.id] = [];
-            }
-          }
-        })
-      );
-      // Update after each chunk so rows fill in progressively. Merge over the
-      // previous maps so a refetch never blanks rows already on screen; the
-      // exact maps replace them once all chunks land.
-      setCheckResultsMap((prev) => ({ ...prev, ...resultsMap }));
-      setGroupMembersMap((prev) => ({ ...prev, ...membersMap }));
-    }
-    setCheckResultsMap({ ...resultsMap });
-    setGroupMembersMap({ ...membersMap });
+    const batch = await fetchResultsBatches(list.map((monitor) => monitor.id), RECENT_CHECKS);
+    const now = Date.now();
+    Object.keys(batch.results).forEach((id) => fetchedAtRef.current.set(id, now));
+    const listed = new Set(list.map((monitor) => monitor.id));
+    const keepFailed = <T,>(prev: Record<string, T>, next: Record<string, T>) => {
+      batch.failed.forEach((id) => {
+        if (id in prev) next[id] = prev[id];
+      });
+      return next;
+    };
+    // The exact maps replace the old ones (monitors that left the list drop
+    // out); ids whose request failed keep what is on screen.
+    setCheckResultsMap((prev) => keepFailed(prev, { ...batch.results }));
+    setMemberIdsByGroup((prev) => {
+      const next = keepFailed(prev, { ...batch.members });
+      list.forEach((monitor) => {
+        if (monitor.type === 'group' && !(monitor.id in next)) next[monitor.id] = [];
+      });
+      Object.keys(next).forEach((id) => {
+        if (!listed.has(id)) delete next[id];
+      });
+      return next;
+    });
+    // Then say so: loadMonitors reports it (error callout or live status)
+    // and, with the full pass not done, the next tick retries all of it.
+    const failure = resultsBatchError(batch, list.length);
+    if (failure) throw failure;
   }, []);
 
   // A background tick: results for monitors that changed state, that an
   // alert event named, or new to the list first, then those whose next
-  // check is due since they were last fetched (stalest first), capped.
+  // check is due since they were last fetched (stalest first), capped. The
+  // batch returns member ids for any group among them, so a group that just
+  // appeared (or changed state) gets its members too.
   const refreshChangedResults = useCallback(async (previous: Monitor[], list: Monitor[]) => {
     const before = new Map(previous.map((m) => [m.id, m]));
     const now = Date.now();
@@ -1664,32 +1675,20 @@ export default function MonitorsPage() {
     );
     if (ids.length === 0) return;
 
-    const byId = new Map(list.map((m) => [m.id, m]));
-    const updates: Record<string, CheckResult[]> = {};
-    const memberUpdates: Record<string, Monitor[]> = {};
-    for (let i = 0; i < ids.length; i += RESULTS_CHUNK) {
-      await Promise.all(
-        ids.slice(i, i + RESULTS_CHUNK).map(async (id) => {
-          try {
-            const results = await getMonitorResults(id, { limit: RECENT_CHECKS });
-            updates[id] = results.results || [];
-            fetchedAtRef.current.set(id, Date.now());
-          } catch {
-            // Keep what is on screen; the next tick tries again.
-          }
-          // A group that just appeared needs its members too.
-          if (byId.get(id)?.type === 'group' && !before.has(id)) {
-            try {
-              memberUpdates[id] = sortMonitorsByName(await getGroupMembers(id));
-            } catch {
-              memberUpdates[id] = [];
-            }
-          }
-        })
-      );
+    // Failed ids keep what is on screen (the live status reports the
+    // failure) and stay due, so the next tick tries them again.
+    const batch = await fetchResultsBatches(ids, RECENT_CHECKS);
+    const fetchedAt = Date.now();
+    Object.keys(batch.results).forEach((id) => fetchedAtRef.current.set(id, fetchedAt));
+    if (Object.keys(batch.results).length > 0) setCheckResultsMap((prev) => ({ ...prev, ...batch.results }));
+    if (Object.keys(batch.members).length > 0) setMemberIdsByGroup((prev) => ({ ...prev, ...batch.members }));
+    const failure = resultsBatchError(batch, ids.length);
+    if (failure) {
+      batch.failed.forEach((id) => {
+        if (priority.has(id)) streamIdsRef.current.add(id);
+      });
+      throw failure;
     }
-    if (Object.keys(updates).length > 0) setCheckResultsMap((prev) => ({ ...prev, ...updates }));
-    if (Object.keys(memberUpdates).length > 0) setGroupMembersMap((prev) => ({ ...prev, ...memberUpdates }));
   }, []);
 
   const loadMonitors = useCallback(
@@ -1762,8 +1761,7 @@ export default function MonitorsPage() {
   };
 
   const requestDeleteById = (id: string) => {
-    const all = [...monitors, ...Object.values(groupMembersMap).flat()];
-    const target = all.find((m) => m.id === id);
+    const target = monitors.find((m) => m.id === id);
     if (target) setPendingDelete(target);
   };
 
@@ -1790,13 +1788,6 @@ export default function MonitorsPage() {
     try {
       const updated = await toggleMonitorEnabled(monitor.id, !monitor.enabled);
       setMonitors((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-      setGroupMembersMap((prev) => {
-        const nextEntries = Object.entries(prev).map(([groupId, members]) => [
-          groupId,
-          members.map((member) => (member.id === updated.id ? updated : member)),
-        ] as const);
-        return Object.fromEntries(nextEntries);
-      });
       showToast({
         message: `${updated.name} ${updated.enabled ? 'resumed' : 'paused'}`,
         type: 'success',
@@ -1813,13 +1804,6 @@ export default function MonitorsPage() {
       const window = await snoozeMonitor(monitor.id, { duration_minutes: durationMinutes });
       const updated: Monitor = { ...monitor, in_maintenance: true, maintenance_until: window.ends_at };
       setMonitors((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-      setGroupMembersMap((prev) => {
-        const nextEntries = Object.entries(prev).map(([groupId, members]) => [
-          groupId,
-          members.map((member) => (member.id === updated.id ? updated : member)),
-        ] as const);
-        return Object.fromEntries(nextEntries);
-      });
       showToast(`Alerts snoozed until ${formatDateTime(window.ends_at)}`, 'success');
     } catch (err: any) {
       showToast(err.message || 'Failed to snooze monitor', 'error');

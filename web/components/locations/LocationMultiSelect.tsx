@@ -75,7 +75,8 @@ export function LocationMultiSelect({
         </div>
       </div>
 
-      <div className="glass-well max-h-56 overflow-y-auto p-1.5">
+      {/* relative: keeps any sr-only (absolute) row text inside the scroll box. */}
+      <div className="glass-well relative max-h-56 overflow-y-auto p-1.5">
         {filtered.length === 0 ? (
           <p className="py-6 text-center text-sm text-slate-500">
             {locations.length === 0 ? emptyMessage : 'No locations match your search'}

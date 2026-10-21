@@ -12,12 +12,10 @@ import {
 import { buildPrometheusConfig, buildPrometheusRequest, initialPrometheusFormState } from '@/lib/monitor-form/prometheus';
 import Button from '@/components/ui/Button';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import { AlertingSection } from './AlertingSection';
 import ScheduleSection from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, PlanTarget, downAfterLabel, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 const PREVIEW_STATUS_COLORS: Record<string, string> = {
   success: 'text-emerald-300',
@@ -100,8 +98,8 @@ export default function PrometheusForm({
   };
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target">
         <FormField label="Monitor name" required error={errors.name}>
           <input className="input" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="API error rate" />
         </FormField>
@@ -123,8 +121,8 @@ export default function PrometheusForm({
           <FormField label="Password">{(control) => <><input {...control} className="input" type="password" autoComplete="new-password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} /><FieldHint>Stored encrypted. Leave the masked value to keep the saved password.</FieldHint></>}</FormField>
         </div>}
         {formData.auth_type === 'bearer' && <FormField label="Bearer token" required error={errors.bearer_token}>{(control) => <><input {...control} className="input" type="password" autoComplete="new-password" value={formData.bearer_token} onChange={e => setFormData({...formData, bearer_token: e.target.value})} /><FieldHint>Stored encrypted. Leave the masked value to keep the saved token.</FieldHint></>}</FormField>}
-      </FormSection>
-      <FormSection title="Check">
+      </FormPanel>
+      <FormPanel title="Check">
         <FormField label="PromQL query" required error={errors.query}>
           {(control) => (
             <>
@@ -205,7 +203,7 @@ export default function PrometheusForm({
             )}
           </div>
         </div>
-      </FormSection>
+      </FormPanel>
 
       <ScheduleSection
         intervalSeconds={formData.interval_seconds}
@@ -240,14 +238,14 @@ export default function PrometheusForm({
           isGroup={false}
           intervalSeconds={formData.interval_seconds}
           threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
         />
       </FormPanel>
 
@@ -257,8 +255,8 @@ export default function PrometheusForm({
         placeholder="production, network, critical"
       />
 
-      <FormActions
-        middle={
+      <FormActionBar
+        summary={
           <PlanSummary
             errors={errors}
             parts={

@@ -75,6 +75,9 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
   }, []);
 
   const isPending = analysis?.status === 'pending';
+  // Disabled or offline: the callout says why, so the empty state does not
+  // also invite a run the button refuses.
+  const unavailable = availability?.enabled === false || availability?.available === false;
   const buttonLabel = analysis ? 'Re-analyze' : 'Analyze';
 
   return (
@@ -86,20 +89,24 @@ export default function AIRootCausePanel({ incidentId, initial }: AIRootCausePan
           variant="ghost"
           size="xs"
           loading={requesting || isPending}
-          disabled={requesting || isPending || !canWrite || availability?.enabled === false || availability?.available === false}
+          disabled={requesting || isPending || !canWrite || unavailable}
           onClick={handleAnalyze}
-          title={viewer ? 'Editors can run analysis' : undefined}
+          title={viewer ? 'Editors can run analysis' : unavailable ? (availability?.enabled === false ? 'AI analysis is disabled' : 'Local analysis service is unavailable') : undefined}
         >
           {buttonLabel}
         </Button>
       )}
     >
-      {availability && (!availability.available || !availability.enabled) && <Callout tone="warning" className="mb-4">{!availability.enabled ? 'AI analysis is disabled for this workspace or installation.' : 'Local analysis service is unavailable. Check Settings → AI.'}</Callout>}
+      {/* A ready analysis stays readable offline: the warning matters only when
+          there is nothing to read; the button's tooltip covers re-runs. */}
+      {availability && unavailable && analysis?.status !== 'ready' && <Callout tone="warning" className="mb-4">{!availability.enabled ? 'AI analysis is disabled for this workspace or installation.' : 'Local analysis service is unavailable. Check Settings → AI.'}</Callout>}
       {error && <Callout tone="danger" className="mb-4">{error}</Callout>}
 
       {!analysis && !error && (
         <p className="text-sm text-slate-400">
-          {canWrite
+          {unavailable
+            ? 'No analysis yet.'
+            : canWrite
             ? 'No analysis yet. Run one to assess the linked monitor checks and configured upstream evidence.'
             : viewer
               ? 'No analysis yet. Editors can run one to assess the linked monitor checks and configured upstream evidence.'

@@ -29,6 +29,7 @@ import { UPTIME_TONE_TEXT, lossTone, mosTone, thresholdTone } from '@/lib/status
 import { useMetricsSnapshots } from '@/lib/useMetricsSnapshots';
 import InfoTip from '@/components/ui/InfoTip';
 import {
+  ChartTile,
   MetricChart,
   buildChartRows,
   chartRangeFor,
@@ -212,6 +213,13 @@ export default function SipCallPanels({
     return { timing: specs, quality };
   }, [data, monitor.interval_seconds, ringMode, call, media]);
 
+  // The range window, clamped like the snapshots to raw retention, so the
+  // charts line up with the response-time chart above them.
+  const xDomain = useMemo<[number, number] | undefined>(() => {
+    const start = data ? Date.parse(data.coverage_start) : NaN;
+    return Number.isFinite(start) ? [start, Date.now()] : undefined;
+  }, [data]);
+
   if (panels.timing.length === 0) return null;
 
   // Snapshots are the newest check per bucket on long ranges, from whichever
@@ -235,6 +243,7 @@ export default function SipCallPanels({
         partial={data?.is_partial}
         panels={panels.timing}
         timeRange={timeRange}
+        xDomain={xDomain}
       />
       {panels.quality.length > 0 && (
         <PanelCard
@@ -254,6 +263,7 @@ export default function SipCallPanels({
           partial={data?.is_partial}
           panels={panels.quality}
           timeRange={timeRange}
+          xDomain={xDomain}
         />
       )}
     </>
@@ -270,6 +280,7 @@ function PanelCard({
   partial,
   panels,
   timeRange,
+  xDomain,
 }: {
   title: string;
   subtitle?: string;
@@ -277,9 +288,10 @@ function PanelCard({
   partial?: boolean;
   panels: PanelSpec[];
   timeRange: MonitorAnalyticsRange;
+  xDomain?: [number, number];
 }) {
   return (
-    <div className="glass p-5">
+    <section className="glass p-5">
       <div className={`${subtitle ? 'mb-1' : 'mb-4'} flex items-center gap-1.5`}>
         <h3 className="text-title font-semibold text-white">{title}</h3>
         <InfoTip inLabel ariaLabel={`About ${title.toLowerCase()}`}>
@@ -288,38 +300,30 @@ function PanelCard({
         {partial && <span className="ml-auto text-xs text-slate-400">Last 30 days — raw check retention</span>}
       </div>
       {subtitle && <p className="mb-4 text-xs text-slate-500">{subtitle}</p>}
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2 lg:[&>*:last-child:nth-child(odd)]:col-span-2">
         {panels.map((panel) => (
-          <div key={panel.title} className="glass-well p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <span className="text-ui font-medium text-slate-200">{panel.title}</span>
-              <span className={`text-xs tabular-nums ${panel.headlineClass ?? 'text-slate-400'}`}>{panel.headline}</span>
-            </div>
+          <ChartTile
+            key={panel.title}
+            title={panel.title}
+            headline={panel.headlineClass ? <span className={panel.headlineClass}>{panel.headline}</span> : panel.headline}
+            legend={panel.series.length > 1 ? panel.series : undefined}
+          >
             <MetricChart
               data={panel.rows}
               series={panel.series}
               range={chartRangeFor(timeRange)}
+              xDomain={xDomain}
               yDomain={panel.yDomain}
               yTickFormatter={panel.format}
               valueFormatter={panel.format}
-              height={150}
+              height={160}
               referenceLines={panel.referenceLines}
               syncId=""
               yAxisWidth={64}
             />
-            {panel.series.length > 1 && (
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                {panel.series.map((s) => (
-                  <span key={s.key} className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} aria-hidden="true" />
-                    {s.name}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          </ChartTile>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

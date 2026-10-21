@@ -13,6 +13,11 @@ interface IconButtonProps {
   label: string;
   onClick?: () => void;
   href?: string;
+  /**
+   * With `href`: open it in a new tab as a plain anchor (another origin, such
+   * as a public status page) instead of an in-app Link.
+   */
+  external?: boolean;
   danger?: boolean;
   disabled?: boolean;
   loading?: boolean;
@@ -45,6 +50,7 @@ export default function IconButton({
   label,
   onClick,
   href,
+  external = false,
   danger,
   disabled,
   loading = false,
@@ -62,6 +68,24 @@ export default function IconButton({
     busy && spinIcon ? '[&_svg]:animate-spin' : ''
   } ${extra}`;
   const content = busy && !spinIcon ? <Loader2 className="animate-spin" aria-hidden="true" /> : icon;
+  if (href && external) {
+    return (
+      <>
+        <a
+          ref={tip.ref as RefObject<HTMLAnchorElement>}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={label}
+          className={className}
+          {...tip.triggerProps}
+        >
+          {content}
+        </a>
+        {tip.tooltip}
+      </>
+    );
+  }
   if (href) {
     return (
       <>

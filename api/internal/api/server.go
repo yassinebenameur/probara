@@ -323,7 +323,7 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 			// Alert service and handlers (shared across alerts + dashboard routes)
 			alertSvc := alertservice.NewService(dbClient, incidentService)
 			analyticsRepo := sharedanalytics.NewRepository(dbClient)
-			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log)
+			alertHandlers := alerthandlers.NewHandlers(alertSvc, alertHub, log).WithAudit(auditRecorder)
 
 			// Tenant service (constructed early so dashboardSvc can read group tags)
 			tenantSvc := tenantservice.NewService(dbClient)
@@ -399,6 +399,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
 				// Dependency graph (must be before /{id} to avoid conflicts)
 				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
+				// Recent results for many monitors (the list's one round trip)
+				r.Get("/results/batch", monitorHandlers.GetMonitorResultsBatch)
 				r.Post("/dependency-suggestions", depSuggestHdlrs.Suggest)
 				r.Post("/dependency-suggestions/label", aiLabelHdlrs.LabelDependencySuggestion)
 				r.Get("/{id}", monitorHandlers.GetMonitor)
@@ -463,6 +465,9 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Get("/{id}", alertHandlers.GetAlert)
 				r.Post("/{id}/acknowledge", alertHandlers.AcknowledgeAlert)
 				r.Post("/{id}/resolve", alertHandlers.ResolveAlert)
+				// Bulk triage: per-alert results and one audit event per alert.
+				r.Post("/bulk/acknowledge", alertHandlers.BulkAcknowledgeAlerts)
+				r.Post("/bulk/resolve", alertHandlers.BulkResolveAlerts)
 				// Triage training label (audited write; not in postReadPaths).
 				// A corrected label also stops the alert's pending
 				// suspected-cause follow-ups.

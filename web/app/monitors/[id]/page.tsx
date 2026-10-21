@@ -16,6 +16,7 @@ import MonitorDetailJson from '@/components/monitors/MonitorDetailJson';
 import { GroupMembersCard } from '@/components/monitors/GroupMembersCard';
 import { MonitorDependenciesCard } from '@/components/monitors/MonitorDependenciesCard';
 import { MonitorLocationStrip } from '@/components/monitors/MonitorLocationStrip';
+import MonitorFactsCard, { DetailList, DetailRow } from '@/components/monitors/MonitorFactsCard';
 import PageHeader from '@/components/ui/PageHeader';
 import Page from '@/components/ui/Page';
 import Panel from '@/components/ui/Panel';
@@ -77,32 +78,6 @@ function mergeAndSortResults(newResults: CheckResult[], existingResults: CheckRe
 
   return Array.from(byID.values()).sort(
     (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
-  );
-}
-
-// Label/value line in the overview sidebar. Warnings and notes wrap instead
-// of truncating so the whole message stays readable.
-function DetailRow({
-  label,
-  tone = 'default',
-  children,
-}: {
-  label: string;
-  tone?: 'default' | 'warning' | 'note';
-  children: ReactNode;
-}) {
-  const labelClass = tone === 'warning' ? 'text-amber-300' : 'text-slate-400';
-  const valueClass =
-    tone === 'warning'
-      ? 'text-right text-amber-300'
-      : tone === 'note'
-        ? 'text-right text-slate-400'
-        : 'min-w-0 truncate text-right text-slate-200';
-  return (
-    <div className="flex justify-between gap-3">
-      <span className={`shrink-0 ${labelClass}`}>{label}</span>
-      <span className={valueClass}>{children}</span>
-    </div>
   );
 }
 
@@ -827,10 +802,18 @@ export default function EditMonitorPage() {
   }, [syntheticBrowserScreenshotURL]);
 
   if (loading) {
+    // The header's shape, so the page does not jump when the monitor lands;
+    // the overview brings its own skeleton.
     return (
-      <div className="flex h-64 items-center justify-center text-sm text-slate-500">
-        Loading monitor...
-      </div>
+      <Page width="detail">
+        <div className="mb-7 space-y-3" aria-busy="true" aria-label="Loading monitor">
+          <div className="h-3 w-40 animate-pulse rounded bg-well-hover" />
+          <div className="h-7 w-72 animate-pulse rounded bg-well-hover" />
+          <div className="h-4 w-96 max-w-full animate-pulse rounded bg-well" />
+        </div>
+        <div className="h-9 w-80 max-w-full animate-pulse rounded-xl bg-well" />
+        <div className="glass h-36 animate-pulse" />
+      </Page>
     );
   }
 
@@ -880,20 +863,26 @@ export default function EditMonitorPage() {
   const serverRows = serverFactRows(monitor, results?.results || []);
   const isGroup = monitor.type === 'group';
 
+  // Side column, most specific first: what this monitor is made of or
+  // talking to (members, the server, the query), then its standing
+  // configuration, then its place in the dependency graph.
   const aside = (
     <>
       {isGroup && <GroupMembersCard groupId={monitor.id} />}
 
-      {(monitor.type === 'prometheus' || serverRows.length > 0) && (
-        <Panel title={monitor.type === 'prometheus' ? 'Query' : 'Server'}>
-          <div className="space-y-2.5 text-sm">
-            {monitor.type === 'prometheus' && (
-              <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
-            )}
-            {serverRows}
-          </div>
+      {monitor.type === 'prometheus' && (
+        <Panel title="Query">
+          <PrometheusDetails monitor={monitor} result={results?.results?.[0]} />
         </Panel>
       )}
+
+      {serverRows.length > 0 && (
+        <Panel title="Server">
+          <DetailList>{serverRows}</DetailList>
+        </Panel>
+      )}
+
+      <MonitorFactsCard monitor={monitor} passive={isPassive} lastCheckAt={lastCheckAt} />
 
       <MonitorDependenciesCard monitorId={monitor.id} monitorType={monitor.type} />
 
@@ -1110,6 +1099,8 @@ export default function EditMonitorPage() {
           analytics={historyAnalytics}
           slaTarget={slaTarget}
           timeoutSeconds={monitor.timeout_seconds}
+          intervalSeconds={monitor.interval_seconds}
+          createdAt={monitor.created_at}
           loading={resultsLoading}
         />
       )}

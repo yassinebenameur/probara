@@ -96,8 +96,9 @@ func scanAlertWithDetails(scan func(dest ...interface{}) error) (*models.AlertWi
 	return &alert, nil
 }
 
-// ListAlerts lists alerts with filtering and pagination
-func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams) (*models.AlertListResponse, error) {
+// ListAlerts lists alerts with filtering, sorting (ListSort; the zero value
+// is newest first) and pagination.
+func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *models.AlertListParams, sort ListSort) (*models.AlertListResponse, error) {
 	if params.Page < 1 {
 		params.Page = 1
 	}
@@ -145,6 +146,13 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 
 	whereClause := strings.Join(whereParts, " AND ")
 
+	// Under a one-status filter every row ranks the same, so a status sort is
+	// its tiebreak order (newest first): say so, and the triggered_at index
+	// serves it instead of a sort over the computed rank.
+	if params.Status != nil && sort.Column == SortStatus {
+		sort = ListSort{}
+	}
+
 	// Count total
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(*)
@@ -162,9 +170,9 @@ func (s *Service) ListAlerts(ctx context.Context, tenantID uuid.UUID, params *mo
 	query := fmt.Sprintf(`
 		%s
 		WHERE %s AND %s
-		ORDER BY a.triggered_at DESC
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d
-	`, alertDetailSelect, whereClause, alertVisibleClause, argIndex, argIndex+1)
+	`, alertDetailSelect, whereClause, alertVisibleClause, sort.orderBy(), argIndex, argIndex+1)
 
 	args = append(args, params.PageSize, offset)
 

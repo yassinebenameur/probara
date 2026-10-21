@@ -133,3 +133,26 @@ export function buildHeartbeatMonitorRequest(
   requestData.depends_on_ids = form.depends_on_ids;
   return requestData;
 }
+
+/**
+ * The alerting change a Notify choice makes, or null for none. A segmented
+ * control re-fires its selected segment (a click, Home/End), so re-choosing
+ * the current mode is a no-op: re-picking Custom must not re-tick the
+ * defaults on a monitor muted on purpose (custom, no channels). Switching to
+ * Custom with nothing picked pre-checks the workspace default channels.
+ */
+export function notifyModeChange(
+  next: NotificationMode,
+  current: NotificationMode,
+  customChannels: ChannelAssignment[],
+  defaultChannels: ChannelAssignment[],
+): { mode: NotificationMode; channels?: ChannelAssignment[] } | null {
+  if (next === current) return null;
+  if (next === 'custom' && customChannels.length === 0 && defaultChannels.length > 0) {
+    return {
+      mode: next,
+      channels: defaultChannels.map((c) => ({ channel_id: c.channel_id, delay_seconds: c.delay_seconds })),
+    };
+  }
+  return { mode: next };
+}

@@ -109,6 +109,37 @@ export function getLatestStatus(results: CheckResult[]): MonitorHealthStatus {
   return 'unknown';
 }
 
+/**
+ * A persisted state (the server's verdict: a monitor's current_state, or one
+ * location's) as a display status: paused, then maintenance, then the
+ * state, with suspect read as degraded. Surfaces that have the state and no
+ * results (group members, location tiles) use this, never their own switch.
+ */
+export function displayStatusFromState(monitor: {
+  enabled?: boolean;
+  in_maintenance?: boolean;
+  current_state?: MonitorState;
+}): MonitorDisplayStatus {
+  if (monitor.enabled === false) return 'paused';
+  if (monitor.in_maintenance) return 'maintenance';
+  switch (monitor.current_state) {
+    case 'up':
+      return 'up';
+    case 'down':
+      return 'down';
+    case 'degraded':
+    case 'suspect':
+      return 'degraded';
+    default:
+      return 'unknown';
+  }
+}
+
+/** Down or degraded: what a "N failing" count counts. */
+export function isFailingStatus(status: MonitorDisplayStatus): boolean {
+  return status === 'down' || status === 'degraded';
+}
+
 export function getEffectiveMonitorStatus(
   monitor: Pick<Monitor, 'enabled' | 'in_maintenance' | 'current_state' | 'location_ids'>,
   results: CheckResult[]
@@ -123,17 +154,7 @@ export function getEffectiveMonitorStatus(
   // Multi-location monitors: the server's quorum verdict is authoritative —
   // per-result derivation would misread a below-quorum location failure as down.
   if (monitor.location_ids?.length && monitor.current_state) {
-    switch (monitor.current_state) {
-      case 'up':
-        return 'up';
-      case 'down':
-        return 'down';
-      case 'degraded':
-      case 'suspect':
-        return 'degraded';
-      default:
-        return 'unknown';
-    }
+    return displayStatusFromState(monitor);
   }
 
   return getLatestStatus(results);

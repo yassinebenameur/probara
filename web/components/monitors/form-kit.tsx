@@ -1,9 +1,11 @@
 'use client';
 
-import { Dispatch, ReactNode, SetStateAction, useEffect, useId, useRef, useState } from 'react';
+import { Dispatch, ReactNode, RefObject, SetStateAction, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import FormField from '@/components/ui/FormField';
+import Button from '@/components/ui/Button';
 import Switch from '@/components/ui/Switch';
+import { FOCUS_RING } from '@/components/ui/focus';
 import { formatDuration } from '@/lib/format';
 
 // Building blocks shared by every monitor type form, so the forms keep one
@@ -11,37 +13,155 @@ import { formatDuration } from '@/lib/format';
 // and one look for the pieces they all have.
 
 /**
- * A form panel whose trailing disclosure rows (CollapsibleSection
+ * The wide layout. MonitorForm's shell is `group/form` and carries
+ * `data-wide` once it is at least WIDE_FORM_PX wide (measured, not a viewport
+ * breakpoint: the collapsible sidebar and the detail page's own width move it
+ * at one viewport). Wide, every section is a grid row: its heading and blurb
+ * in a 13rem rail on the left, its card on the right; anything else in a form
+ * stack (`data-form-stack`: callouts, the action bar) lines up with the cards
+ * through WIDE_STACK_OFFSET. Narrow, the heading sits inside the card.
+ */
+export const WIDE_FORM_PX = 960;
+/** Literal so Tailwind sees it: rail (13rem) + gap (2.5rem). */
+export const WIDE_STACK_OFFSET = '[&_[data-form-stack]>:not([data-form-row])]:ml-[15.5rem]';
+
+/** Tracks whether `ref`'s element is wide enough for the two-column layout. */
+export function useWideForm(ref: RefObject<HTMLElement | null>): boolean {
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setWide(el.getBoundingClientRect().width >= WIDE_FORM_PX);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return wide;
+}
+
+// One line under each standard section's heading in the wide layout, so the
+// forms keep one section vocabulary. A form passes `description` to override.
+const SECTION_BLURBS: Record<string, string> = {
+  Target: 'What this monitor connects to.',
+  Check: 'What has to hold for a check to pass.',
+  Schedule: 'How often it runs, and from where.',
+  Alerting: 'When it counts as down, and who hears about it.',
+  'Labels & display': 'How it is found and shown in lists.',
+};
+
+/**
+ * A form section. Its trailing disclosure rows (CollapsibleSection
  * variant="row") sit under a hairline, so related optional settings share one
- * card instead of stacking as separate one-line panels.
+ * card instead of stacking as separate one-line panels. `bare` drops the card
+ * for content that is its own surface (the type bar).
  */
 export function FormPanel({
   title,
+  description,
   children,
   rows,
+  bare = false,
 }: {
   title: string;
+  description?: ReactNode;
   children?: ReactNode;
   rows?: ReactNode;
+  bare?: boolean;
 }) {
   const headingId = useId();
+  const blurb = description ?? SECTION_BLURBS[title];
+  // Exactly one of the two headings is displayed at a time (the other is
+  // display:none, so out of the accessibility tree); the section is named by
+  // the rail's, which aria-labelledby resolves even while it is hidden.
   return (
-    <section aria-labelledby={headingId} className={`glass px-6 pt-6 ${rows ? 'pb-2' : 'pb-6'}`}>
-      <h3 id={headingId} className="mb-4 text-title font-semibold text-white">
-        {title}
-      </h3>
-      {children && <div className="space-y-4">{children}</div>}
-      {rows && <div className={children ? 'mt-4 border-t border-divider' : ''}>{rows}</div>}
+    <section
+      aria-labelledby={headingId}
+      data-form-row
+      className="group-data-[wide]/form:grid group-data-[wide]/form:grid-cols-[13rem_minmax(0,1fr)] group-data-[wide]/form:gap-x-10"
+    >
+      <div className="hidden group-data-[wide]/form:block">
+        <div className={`sticky top-6 ${bare ? 'pt-4' : 'pt-6'}`}>
+          <h3 id={headingId} className="text-title font-semibold text-white">
+            {title}
+          </h3>
+          {blurb && <p className="mt-1 text-pretty text-xs text-slate-500">{blurb}</p>}
+        </div>
+      </div>
+      {bare ? (
+        <div className="min-w-0">{children}</div>
+      ) : (
+        <div className={`glass min-w-0 px-5 pt-5 sm:px-6 sm:pt-6 ${rows ? 'pb-2' : 'pb-5 sm:pb-6'}`}>
+          <h3 className="mb-4 text-title font-semibold text-white group-data-[wide]/form:hidden">{title}</h3>
+          {children && <div className="space-y-4">{children}</div>}
+          {rows && <div className={children ? 'mt-4 border-t border-divider' : ''}>{rows}</div>}
+        </div>
+      )}
     </section>
   );
 }
 
-/** Helper text under a control. */
+/**
+ * Helper text under a control. It steps aside for the field's error: inside
+ * a FormField the error message (`…-error`) follows the control's content, so
+ * a hint directly before it hides and the field shows one line, in rose.
+ */
 export function FieldHint({ children, tone = 'muted', id }: { children: ReactNode; tone?: 'muted' | 'warning'; id?: string }) {
   return (
-    <p id={id} className={`mt-1 text-xs ${tone === 'warning' ? 'text-amber-300' : 'text-slate-500'}`}>
+    <p
+      id={id}
+      className={`mt-1 text-xs [&:has(+[id$=-error])]:hidden ${tone === 'warning' ? 'text-amber-300' : 'text-slate-500'}`}
+    >
       {children}
     </p>
+  );
+}
+
+/**
+ * One setting: title and description on the left, its control on the right,
+ * the settings page's SettingRow vocabulary (text-ui title, text-xs
+ * description, control top-aligned). The text has a 12rem basis and the row
+ * wraps, so in a narrow card a wide control (a SegmentedControl, a select)
+ * drops under the description instead of squeezing it. `children` render
+ * under the row at full width (a channel list, a callout).
+ */
+export function FormRow({
+  title,
+  titleId: fixedTitleId,
+  description,
+  control,
+  children,
+  inline = false,
+}: {
+  title: ReactNode;
+  /** Fixed id for the title, when content below the row points at it. */
+  titleId?: string;
+  description?: ReactNode;
+  control?: (ids: { titleId: string; descriptionId?: string }) => ReactNode;
+  children?: ReactNode;
+  /** Keep the control beside the text at every width (a Switch is small enough). */
+  inline?: boolean;
+}) {
+  const autoTitleId = useId();
+  const titleId = fixedTitleId ?? autoTitleId;
+  const descriptionId = useId();
+  return (
+    <div>
+      <div className={`flex items-start justify-between gap-x-6 gap-y-2.5 ${inline ? '' : 'flex-wrap'}`}>
+        <div className={`min-w-0 max-w-prose grow ${inline ? 'basis-0' : 'basis-48'}`}>
+          <p id={titleId} className="text-pretty text-ui font-medium text-slate-200">
+            {title}
+          </p>
+          {description && (
+            <p id={descriptionId} className="mt-0.5 text-pretty text-xs text-slate-500">
+              {description}
+            </p>
+          )}
+        </div>
+        {control && <div className="min-w-0 max-w-full shrink-0">{control({ titleId, descriptionId: description ? descriptionId : undefined })}</div>}
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -60,13 +180,12 @@ export function ToggleRow({
   tone?: 'accent' | 'warning';
 }) {
   return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-200">{title}</p>
-        {description && <p className="text-xs text-slate-500">{description}</p>}
-      </div>
-      <Switch checked={checked} onChange={onChange} label={title} tone={tone} />
-    </div>
+    <FormRow
+      inline
+      title={title}
+      description={description}
+      control={() => <Switch checked={checked} onChange={onChange} label={title} tone={tone} />}
+    />
   );
 }
 
@@ -152,10 +271,18 @@ export function PlanSummary({
 }) {
   const errorCount = errors ? Object.values(errors).filter(Boolean).length : 0;
   if (errorCount > 0) {
+    // A button: on a long form the first broken field is often far off
+    // screen, and the bar is the one thing still in view.
     return (
-      <span role="status" className="inline-flex items-center gap-1.5 text-rose-300">
-        <AlertCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden="true" />
-        {errorCount === 1 ? '1 field needs attention' : `${errorCount} fields need attention`}
+      <span role="status">
+        <button
+          type="button"
+          onClick={(e) => revealFirstError(e.currentTarget.closest('form'))}
+          className={`inline-flex items-center gap-1.5 rounded text-rose-300 underline decoration-rose-300/40 underline-offset-2 transition-colors hover:text-rose-200 hover:decoration-rose-200 ${FOCUS_RING}`}
+        >
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+          {errorCount === 1 ? '1 field needs attention' : `${errorCount} fields need attention`}
+        </button>
       </span>
     );
   }
@@ -175,6 +302,60 @@ export function PlanSummary({
 /** A machine value (host, URL) inside a plan line. */
 export function PlanTarget({ children }: { children: ReactNode }) {
   return <span className="break-all font-mono text-slate-400">{children}</span>;
+}
+
+interface BarAction {
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  type?: 'button' | 'submit';
+}
+
+/**
+ * The monitor forms' sticky action bar: the plan (PlanSummary) on the left,
+ * Cancel and Save on the right. The plan takes the free width and wraps
+ * inside it, so a long target never pushes Save onto a second line; below sm
+ * it gets a line of its own above the buttons. data-sticky-actions is the
+ * marker globals.css reserves scroll room from.
+ */
+export function FormActionBar({
+  summary,
+  cancel,
+  submit,
+}: {
+  summary?: ReactNode;
+  cancel?: BarAction;
+  submit: BarAction;
+}) {
+  return (
+    <div
+      // globals.css reserves scroll room for the sticky bar from this marker.
+      data-sticky-actions
+      className="glass-overlay sticky bottom-3 z-10 mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 !rounded-2xl px-4 py-3 sm:bottom-4 sm:flex-nowrap"
+    >
+      {/* empty:hidden: a plan with nothing to say yet renders nothing, and
+          below sm the empty line would still take a row of the bar. */}
+      <div className="min-w-0 basis-full text-xs text-slate-500 empty:hidden sm:basis-auto sm:flex-1">{summary}</div>
+      <div className="ml-auto flex shrink-0 items-center gap-3">
+        {cancel && (
+          <Button variant="ghost" size="sm" type={cancel.type ?? 'button'} onClick={cancel.onClick} disabled={cancel.disabled}>
+            {cancel.label}
+          </Button>
+        )}
+        <Button
+          variant="accent"
+          size="sm"
+          type={submit.type ?? 'submit'}
+          onClick={submit.onClick}
+          disabled={submit.disabled}
+          loading={submit.loading}
+        >
+          {submit.label}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 /**

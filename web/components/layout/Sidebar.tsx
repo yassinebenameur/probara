@@ -30,6 +30,13 @@ import ThemeToggle from '@/components/ui/ThemeToggle';
 import { ICON_BUTTON_CLASS } from '@/components/ui/IconButton';
 import { FOCUS_RING, FOCUS_RING_INSET } from '@/components/ui/focus';
 import { useTooltip } from '@/components/ui/Tooltip';
+import {
+  SHORTCUT_BLOCKING_POPUPS,
+  isApplePlatform,
+  matchSidebarShortcut,
+  sidebarShortcutAria,
+  sidebarShortcutLabel,
+} from '@/lib/sidebar-shortcut';
 import TenantSwitcher from './TenantSwitcher';
 import FleetHealth, { CountBadge } from './FleetHealth';
 import { RAIL_ROW_MOTION, railGutter, railLabel, railRowPadding } from './rail';
@@ -81,43 +88,8 @@ const navGroups: { key: string; items: NavItem[] }[] = [
 // The toggle's aria-controls target.
 const SIDEBAR_ID = 'app-sidebar';
 
-// "[" toggles the rail unless the key is meant for something else: typing in
-// a field, a Cmd/Ctrl chord (Cmd+[ is browser Back), a held key's auto-repeat,
-// or an open popup — a modal, or a menu whose fixed position and focus would
-// be orphaned when the sidebar resizes or the rail's workspace menu unmounts.
-// AltGr, or Alt on a key other than the "[" key itself, is how layouts such as
-// FR, DE and macOS DE type "[" (event.key is already "["), so those count;
-// Alt on the physical "[" key is a chord and does not.
-//
-// Known WCAG 2.1.4 (character key shortcuts) exception: a bare key, with no
-// setting to turn it off or remap it. The header toggle is the equivalent
-// control, and the key is inert in every text field.
-function isShortcutTarget(event: KeyboardEvent) {
-  const altGraph = event.getModifierState?.('AltGraph') ?? false;
-  const layoutComposed = altGraph || event.code !== 'BracketLeft';
-  if (
-    event.key !== '[' ||
-    event.repeat ||
-    event.metaKey ||
-    (event.ctrlKey && !altGraph) ||
-    (event.altKey && !layoutComposed) ||
-    event.defaultPrevented ||
-    event.isComposing
-  ) {
-    return false;
-  }
-  const target = event.target;
-  if (
-    target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      target.closest(
-        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="listbox"], [role="dialog"], [role="combobox"]'
-      ))
-  ) {
-    return false;
-  }
-  return !document.querySelector('[aria-modal="true"], [role="menu"]');
-}
+// Ctrl+B / ⌘B toggles the rail; the rules (WCAG 2.1.4, when the chord is
+// left to the browser or a field) live in lib/sidebar-shortcut.ts.
 
 // A CSS <time> in ms. The token is written "240ms" but the CSS build may
 // minify it to ".24s", so the unit matters.
@@ -173,7 +145,7 @@ interface SidebarProps {
  * the tenant bootstrap in TenantSwitcher and the counts here load once.
  *
  * From md the sidebar is expanded or collapsed to a 64px icon rail (header
- * toggle or "["; useSidebarCollapsed). The width is CSS keyed on
+ * toggle or Ctrl+B / ⌘B; useSidebarCollapsed). The width is CSS keyed on
  * html[data-sidebar] (--sidebar-width / --sidebar-offset, app/globals.css);
  * every row keeps one structure in both states and only fades its label and
  * eases its padding (./rail.ts), so the same elements stay mounted and
@@ -202,9 +174,12 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
   const rail = collapsed && !isDrawer;
   const { footerRail, footerSettling } = useSettledFooter(rail, footerRef);
 
+  // Read once: the shell renders on the client only (see isDrawer).
+  const [apple] = useState(isApplePlatform);
   const toggleTip = useTooltip<HTMLButtonElement>({
     label: collapsed ? 'Expand sidebar' : 'Collapse sidebar',
-    shortcut: '[',
+    shortcut: sidebarShortcutLabel(apple),
+    ariaShortcut: sidebarShortcutAria(apple),
   });
   const hideToggleTip = toggleTip.hide;
   const toggleCollapsed = useCallback(() => {
@@ -215,13 +190,14 @@ export default function Sidebar({ open, onClose, openAlerts }: SidebarProps) {
   useEffect(() => {
     if (isDrawer) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isShortcutTarget(event)) return;
+      const match = matchSidebarShortcut(event, apple, () => !!document.querySelector(SHORTCUT_BLOCKING_POPUPS));
+      if (!match) return;
       event.preventDefault();
-      toggleCollapsed();
+      if (match === 'toggle') toggleCollapsed();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isDrawer, toggleCollapsed]);
+  }, [isDrawer, toggleCollapsed, apple]);
   useEffect(() => {
     const query = window.matchMedia('(max-width: 767px)');
     const update = () => setIsDrawer(query.matches);

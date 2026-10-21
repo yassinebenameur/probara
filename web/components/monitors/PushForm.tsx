@@ -6,15 +6,14 @@ import { Monitor, CreateMonitorRequest, UpdateMonitorRequest, PushMonitorConfig,
 import { getPushInfo } from '@/lib/api';
 import { buildPushRequest, initialPushFormState } from '@/lib/monitor-form/heartbeat';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { AlertingSection } from './AlertingSection';
 import { useCurrentUser } from '@/components/providers/CurrentUserProvider';
 import { IntervalField } from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FieldHint, FormPanel, LabelsSection, NumberInput, PlanSummary, ToggleRow, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { formatDuration } from '@/lib/format';
+import { FieldHint, FormPanel, LabelsSection, NumberInput, PlanSummary, ToggleRow, everyLabel, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 interface PushFormProps {
   monitor?: Monitor;
@@ -105,8 +104,8 @@ export default function PushForm({
 
   if (canViewCredentials && isEditMode && monitor && showWebhookInfo) {
     return (
-      <div className="space-y-5">
-        <FormSection title="Webhook information">
+      <div data-form-stack className="space-y-5">
+        <FormPanel title="Webhook information">
           {loadingPushInfo ? (
             <div className="text-sm text-slate-500">Loading webhook details…</div>
           ) : pushInfo ? (
@@ -179,7 +178,7 @@ export default function PushForm({
           ) : (
             <Callout tone="danger">Failed to load webhook details</Callout>
           )}
-        </FormSection>
+        </FormPanel>
 
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" size="sm" type="button" onClick={() => setShowWebhookInfo(false)}>
@@ -196,8 +195,8 @@ export default function PushForm({
   }
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target" description="Your service calls this monitor's webhook; nothing is polled.">
         <FormField label="Monitor name" required error={errors.name}>
           <input
             type="text"
@@ -221,9 +220,9 @@ export default function PushForm({
         ) : (
           !isEditMode && <p className="text-xs text-slate-500">After creating, open the monitor&apos;s Settings tab to copy its webhook URL and token.</p>
         )}
-      </FormSection>
+      </FormPanel>
 
-      <FormPanel title="Schedule">
+      <FormPanel title="Schedule" description="How often a push should arrive.">
         <IntervalField
           label="Expect a push every"
           value={formData.expected_interval_seconds}
@@ -281,14 +280,14 @@ export default function PushForm({
           isGroup={false}
           intervalSeconds={formData.expected_interval_seconds}
           threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
         />
       </FormPanel>
 
@@ -298,13 +297,13 @@ export default function PushForm({
         placeholder="production, backend, critical"
       />
 
-      <FormActions
-        middle={
+      <FormActionBar
+        summary={
           <PlanSummary
             errors={errors}
             parts={[
-              `Expect a push every ${formData.expected_interval_seconds}s`,
-              `down if none arrives within ${formData.expected_interval_seconds + formData.grace_period_seconds}s`,
+              `Expect a push every ${formatDuration(formData.expected_interval_seconds)}`,
+              `down if none arrives within ${formatDuration(formData.expected_interval_seconds + formData.grace_period_seconds)}`,
             ]}
           />
         }

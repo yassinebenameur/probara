@@ -17,6 +17,7 @@ import FilterChip, { FILTER_CHIP_SELECTED, FilterChipCount } from './FilterChip'
 import Button from './Button';
 import { CHECK_GLYPH_CLASS } from './Checkbox';
 import { FOCUS_RING_INSET } from './focus';
+import { POPOVER_LAYER_ATTR } from './ModalPortal';
 
 export interface FilterOption {
   value: string;
@@ -43,6 +44,30 @@ interface FilterPopoverProps {
   /** Show the search field above this many options. */
   searchThreshold?: number;
   className?: string;
+  /**
+   * The popup's accessible name; defaults to "Filter by {noun}". A picker
+   * that sets a value rather than filtering a list (an SLA's tags) names it.
+   */
+  popupLabel?: string;
+  /** The ×'s name; defaults to "Clear {noun} filter". */
+  clearLabel?: string;
+  /**
+   * Always summarise a selection as "Label ⓝ", even one short value: for a
+   * caller that lists the selected values beside the chip itself.
+   */
+  summarizeAsCount?: boolean;
+  /**
+   * The chip's accessible name when the visible label is ambiguous on its
+   * screen (two "Tags" chips in one dialog); the selection is appended.
+   */
+  accessibleLabel?: string;
+  /**
+   * One line at the top of the popup saying how the selection combines
+   * ("Monitors must carry every selected tag"); also its description.
+   */
+  hint?: string;
+  /** `md` (32px) lines the chip up with RangePicker and buttons in a page header. */
+  size?: 'sm' | 'md';
 }
 
 const PANEL_WIDTH = 280;
@@ -60,24 +85,38 @@ const FADE = 28;
 let closeOpenPopover: (() => void) | null = null;
 
 /**
- * Swallow the click that follows a dismissing pointerdown, so closing the
- * popup by clicking the page never also follows a link or presses a button
- * underneath (Linear, Radix). Dropped after the pointer is released, so a
- * drag that never clicks cannot eat a later click.
+ * Swallow the mousedown and click that follow a dismissing pointerdown, so
+ * closing the popup by clicking the page never also follows a link, presses
+ * a button or dismisses a dialog underneath (Linear, Radix): Dialog closes
+ * on a backdrop mousedown, so letting that through would close the whole
+ * form along with the popup. The mousedown only stops propagating — its
+ * default (focusing what was clicked) still runs. Window capture listeners
+ * run before React's root listener, so no React handler sees either event.
+ * Dropped once the pointer is released, so a drag that never clicks cannot
+ * eat a later one.
  */
-function swallowNextClick() {
-  const swallow = (e: MouseEvent) => {
+function swallowFollowingMouseEvents() {
+  const stopMouseDown = (e: MouseEvent) => {
+    e.stopPropagation();
+    window.removeEventListener('mousedown', stopMouseDown, true);
+  };
+  const swallowClick = (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     cleanup();
   };
-  const later = () => window.setTimeout(cleanup, 0);
+  // A mouse's mousedown/click come in the same turn as its pointerup; a
+  // tap's compatibility mouse events follow as a separate gesture event, so
+  // give those a moment.
+  const later = (e: PointerEvent) => window.setTimeout(cleanup, e.pointerType === 'mouse' ? 0 : 350);
   const cleanup = () => {
-    window.removeEventListener('click', swallow, true);
+    window.removeEventListener('mousedown', stopMouseDown, true);
+    window.removeEventListener('click', swallowClick, true);
     window.removeEventListener('pointerup', later, true);
     window.removeEventListener('pointercancel', later, true);
   };
-  window.addEventListener('click', swallow, true);
+  window.addEventListener('mousedown', stopMouseDown, true);
+  window.addEventListener('click', swallowClick, true);
   window.addEventListener('pointerup', later, true);
   window.addEventListener('pointercancel', later, true);
 }
@@ -114,7 +153,13 @@ const samePosition = (a: Position | null, b: Position) =>
  * back to the chip wherever focus is. Tab past the last control closes and
  * moves on from the chip (to its × when a filter is set); Shift+Tab from
  * the first returns to the chip. Focus leaving the popup closes it; clicking
- * outside closes it and swallows that click.
+ * outside closes it and swallows that click (and its mousedown, so a
+ * dialog's backdrop under the click stays open).
+ *
+ * Inside a modal (MonitorMultiSelect and the SLA form's tag pickers) the
+ * popup stacks above the dialog (z-60 over its z-50 scrim) and is exempt from
+ * its focus trap (POPOVER_LAYER_ATTR); Escape is caught in the capture phase
+ * and stopped, so it closes the popup back to the chip and never the dialog.
  *
  * Unlike RowMenu, which closes on scroll, the popup follows its chip on
  * scroll and resize: focusing the search field on a phone scrolls and
@@ -132,6 +177,12 @@ export default function FilterPopover({
   onChange,
   searchThreshold = 7,
   className = 'shrink-0',
+  popupLabel = `Filter by ${noun}`,
+  clearLabel = `Clear ${noun} filter`,
+  summarizeAsCount = false,
+  accessibleLabel,
+  hint,
+  size = 'sm',
 }: FilterPopoverProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<Position | null>(null);
@@ -149,6 +200,7 @@ export default function FilterPopover({
   const baseId = useId();
   const dialogId = `${baseId}-dialog`;
   const listId = `${baseId}-list`;
+  const hintId = `${baseId}-hint`;
   const optionId = (index: number) => `${baseId}-opt-${index}`;
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -274,7 +326,7 @@ export default function FilterPopover({
       close();
       // Another filter chip opens its own popup on this click; anything
       // else only dismisses.
-      if (!target.closest?.('[data-filter-popover-trigger]')) swallowNextClick();
+      if (!target.closest?.('[data-filter-popover-trigger]')) swallowFollowingMouseEvents();
     };
     // Escape works wherever focus is, and stops here so the page's own
     // Escape handlers (clearing a bulk selection) do not also run.
@@ -388,7 +440,7 @@ export default function FilterPopover({
   const hasSelection = selectedList.length > 0;
   const selectedLabels = selectedList.map((v) => byValue.get(v)?.label ?? v);
   const single =
-    selectedList.length === 1 && selectedLabels[0].length <= SUMMARY_MAX_CHARS
+    !summarizeAsCount && selectedList.length === 1 && selectedLabels[0].length <= SUMMARY_MAX_CHARS
       ? { label: selectedLabels[0], dotClassName: byValue.get(selectedList[0])?.dotClassName }
       : undefined;
 
@@ -424,7 +476,14 @@ export default function FilterPopover({
         aria-expanded={open}
         aria-controls={open ? dialogId : undefined}
         title={hasSelection ? `${label}: ${selectedLabels.join(', ')}` : undefined}
-        className={hasSelection ? 'rounded-r-none border-r-0 pr-2' : ''}
+        aria-label={
+          accessibleLabel
+            ? hasSelection
+              ? `${accessibleLabel}: ${selectedLabels.join(', ')}`
+              : accessibleLabel
+            : undefined
+        }
+        className={`${size === 'md' ? '!h-8' : ''} ${hasSelection ? 'rounded-r-none border-r-0 pr-2' : ''}`.trim()}
       >
         <span className="flex items-center gap-1">
           {single ? (
@@ -458,8 +517,8 @@ export default function FilterPopover({
       {hasSelection && (
         <button
           type="button"
-          aria-label={`Clear ${noun} filter`}
-          title={`Clear ${noun} filter`}
+          aria-label={clearLabel}
+          title={clearLabel}
           onClick={() => {
             onChange(new Set());
             // This button unmounts with the selection: keep focus on the chip.
@@ -467,7 +526,7 @@ export default function FilterPopover({
             triggerRef.current?.focus();
           }}
           // The chip's right half: same fill and outline, split by a hairline.
-          className={`relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-r-full border border-l-0 pr-0.5 transition-colors duration-fast before:absolute before:inset-y-1.5 before:left-0 before:w-px before:bg-current before:opacity-25 before:content-[''] ${FILTER_CHIP_SELECTED} ${FOCUS_RING_INSET}`}
+          className={`relative inline-flex ${size === 'md' ? 'h-8 w-8' : 'h-7 w-7'} shrink-0 items-center justify-center rounded-r-full border border-l-0 pr-0.5 transition-colors duration-fast before:absolute before:inset-y-1.5 before:left-0 before:w-px before:bg-current before:opacity-25 before:content-[''] ${FILTER_CHIP_SELECTED} ${FOCUS_RING_INSET}`}
         >
           <X className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
         </button>
@@ -478,8 +537,10 @@ export default function FilterPopover({
             ref={panelRef}
             id={dialogId}
             role="dialog"
-            aria-label={`Filter by ${noun}`}
-            className={`glass-overlay fixed z-50 flex flex-col overflow-hidden !rounded-xl ${
+            aria-label={popupLabel}
+            aria-describedby={hint ? hintId : undefined}
+            {...{ [POPOVER_LAYER_ATTR]: '' }}
+            className={`glass-overlay fixed z-[60] flex flex-col overflow-hidden !rounded-xl ${
               pos ? `animate-pop-in ${pos.up ? 'origin-bottom-left' : 'origin-top-left'}` : ''
             }`}
             style={{
@@ -504,6 +565,11 @@ export default function FilterPopover({
               close();
             }}
           >
+            {hint && (
+              <p id={hintId} className="shrink-0 border-b border-divider px-2.5 py-1.5 text-xs text-slate-500">
+                {hint}
+              </p>
+            )}
             {searchable && (
               <div className="relative shrink-0 border-b border-divider p-2">
                 <Search

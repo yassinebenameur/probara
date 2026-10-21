@@ -53,6 +53,22 @@ test('getAllMonitors fetches every API page when there are more than 100 monitor
   assert.ok(monitors.some((item) => item.id === 'monitor-125'));
 });
 
+test('getAllMonitors keeps a monitor repeated across pages once', async () => {
+  // A monitor created between page fetches shifts page 2 by one row.
+  const pages = [
+    page([monitor(1), monitor(2)], 1, 3),
+    page([monitor(2), monitor(3)], 2, 4),
+    page([], 3, 4),
+  ];
+
+  const monitors = await getAllMonitors(async (params) => pages[(params?.page || 1) - 1]);
+
+  assert.deepEqual(
+    monitors.map((item) => item.id),
+    ['monitor-1', 'monitor-2', 'monitor-3'],
+  );
+});
+
 test('getAllMonitors returns monitors alphabetically by name', async () => {
   const pages = [
     page(

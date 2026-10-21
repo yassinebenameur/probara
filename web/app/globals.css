@@ -206,10 +206,11 @@
   }
 }
 
-/* A sticky FormActions bar (data-sticky-actions) covers the bottom of the
-   viewport; reserve its height so a control scrolled into view by keyboard
-   focus lands above it, not under it (WCAG 2.4.11). Taller below sm, where
-   the plan summary wraps onto its own line. */
+/* A sticky action bar (data-sticky-actions: form-kit's FormActionBar, the
+   notification settings save bar) covers the bottom of the viewport; reserve
+   its height so a control scrolled into view by keyboard focus lands above
+   it, not under it (WCAG 2.4.11). Taller below sm, where the plan summary
+   wraps onto its own line. */
 html:has([data-sticky-actions]) {
   scroll-padding-bottom: 10rem;
 }
@@ -627,6 +628,18 @@ body {
     background-color: var(--control-hover);
     border-color: var(--focus);
     box-shadow: 0 0 0 1px var(--focus);
+  }
+
+  /* A control marked invalid (aria-invalid, set by FormField and the
+     form-kit inputs next to their message) gets a rose edge in every form;
+     focus keeps the focus colour so the keyboard position stays visible. */
+  .input[aria-invalid="true"],
+  .input[aria-invalid="true"]:hover {
+    border-color: rgb(var(--tw-rose-500) / 0.6);
+  }
+
+  .input[aria-invalid="true"]:focus {
+    border-color: var(--focus);
   }
 
   .input::placeholder {
@@ -1164,64 +1177,6 @@ html:not([data-theme]) {
   --chart-5: #626a78;
   --chart-6: #4a6cd0;
   --chart-grid: rgb(15 18 24 / 0.12);
-}
-
-/* Range sliders (one shared look; the native track is a heavy OS bar). Set
-   --pct on the element to fill the track up to the thumb in WebKit; Firefox
-   fills it natively. */
-@layer components {
-  input[type='range'] {
-    -webkit-appearance: none;
-    appearance: none;
-    height: 1rem;
-    background: transparent;
-    cursor: pointer;
-  }
-
-  input[type='range']::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: 999px;
-    background:
-      linear-gradient(rgb(var(--tw-cyan-500)) 0 0) 0 / var(--pct, 0%) 100% no-repeat,
-      rgb(var(--ink-rgb) / 0.28);
-  }
-
-  input[type='range']::-moz-range-track {
-    height: 4px;
-    border-radius: 999px;
-    background: rgb(var(--ink-rgb) / 0.28);
-  }
-
-  input[type='range']::-moz-range-progress {
-    height: 4px;
-    border-radius: 999px;
-    background: rgb(var(--tw-cyan-500));
-  }
-
-  input[type='range']::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    margin-top: -5px;
-    border: 2px solid rgb(var(--panel-rgb));
-    border-radius: 999px;
-    background: rgb(var(--tw-cyan-500));
-    box-shadow: 0 0 0 1px var(--input-edge), 0 1px 2px rgb(0 0 0 / 0.2);
-  }
-
-  input[type='range']::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgb(var(--panel-rgb));
-    border-radius: 999px;
-    background: rgb(var(--tw-cyan-500));
-    box-shadow: 0 0 0 1px var(--input-edge), 0 1px 2px rgb(0 0 0 / 0.2);
-  }
-
-  input[type='range']:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
 }
 
 /* prefers-contrast: more. Firmer edges and dividers, captions at the

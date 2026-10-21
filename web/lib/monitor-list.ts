@@ -21,16 +21,23 @@ export function sortMonitorsByName(monitors: Monitor[]): Monitor[] {
   });
 }
 
+// Pages are offset-based, so a monitor created while they load shifts the
+// next page and repeats a row already fetched: keep each id once (callers
+// key rows by id).
 export async function getAllMonitors(fetchPage: FetchMonitorsPage = getMonitors): Promise<Monitor[]> {
-  const monitors: Monitor[] = [];
+  const monitors = new Map<string, Monitor>();
+  let fetched = 0;
 
   for (let page = 1; ; page += 1) {
     const response = await fetchPage({ page, page_size: MONITOR_PAGE_SIZE });
     const items = response.items || [];
-    monitors.push(...items);
+    fetched += items.length;
+    items.forEach((monitor) => {
+      if (!monitors.has(monitor.id)) monitors.set(monitor.id, monitor);
+    });
 
-    if (monitors.length >= response.total || items.length === 0) {
-      return sortMonitorsByName(monitors);
+    if (fetched >= response.total || items.length === 0) {
+      return sortMonitorsByName(Array.from(monitors.values()));
     }
   }
 }

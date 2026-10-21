@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Layers, Search } from 'lucide-react';
 import { Monitor } from '@/lib/types';
 import Button from '@/components/ui/Button';
@@ -79,16 +79,23 @@ export function MonitorMultiSelect({
 
   const filtering = query !== '' || selectedTags.size > 0;
 
-  const toggleTag = (tag: string) => {
-    setSelectedTags((prev) => {
-      const next = new Set(prev);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-      return next;
-    });
-  };
+  // What was already selected when the list arrived (an edited group's
+  // members) leads the flat list, so an edit form opens on its own selection
+  // instead of "4 of 99 selected" with none of the 4 in view. The snapshot is
+  // taken once, so ticking a row never makes it jump.
+  const [pinned, setPinned] = useState<Set<string>>(() => new Set(monitors.length > 0 ? selectedIds : []));
+  const pinnedTaken = useRef(monitors.length > 0);
+  useEffect(() => {
+    if (pinnedTaken.current || monitors.length === 0) return;
+    pinnedTaken.current = true;
+    setPinned(new Set(selectedIds));
+  }, [monitors.length, selectedIds]);
 
-  const filtered = useMemo(() => selectable.filter(matches), [selectable, matches]);
+  const filtered = useMemo(() => {
+    const hits = selectable.filter(matches);
+    if (pinned.size === 0) return hits;
+    return [...hits.filter((m) => pinned.has(m.id)), ...hits.filter((m) => !pinned.has(m.id))];
+  }, [selectable, matches, pinned]);
 
   const grouped = groupMembers !== undefined;
 
@@ -272,30 +279,25 @@ export function MonitorMultiSelect({
         />
       </div>
 
-      {allTags.length > 0 && (
-        <TagFilter
-          tags={allTags}
-          selected={selectedTags}
-          onToggle={toggleTag}
-          onClear={() => setSelectedTags(new Set())}
-        />
-      )}
-
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-400" role="status">
-          {grouped ? (
-            <>
-              {selectedIds.length} selected
-              {coveredCount !== selectedIds.length && (
-                <span className="ml-3 text-slate-500">covers {coveredCount} monitors</span>
-              )}
-            </>
-          ) : (
-            <>
-              {selectedIds.length} of {selectable.length} selected
-            </>
-          )}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-0 items-center gap-3">
+          {/* Portaled over the dialog, so the tag list never pushes the picker down. */}
+          {allTags.length > 0 && <TagFilter tags={allTags} selected={selectedTags} onChange={setSelectedTags} />}
+          <span className="text-xs text-slate-400" role="status">
+            {grouped ? (
+              <>
+                {selectedIds.length} selected
+                {coveredCount !== selectedIds.length && (
+                  <span className="ml-3 text-slate-500">covers {coveredCount} monitors</span>
+                )}
+              </>
+            ) : (
+              <>
+                {selectedIds.length} of {selectable.length} selected
+              </>
+            )}
+          </span>
+        </div>
         <div className="flex gap-1.5">
           <Button variant="ghost" size="xs" type="button" onClick={selectAllFiltered}>
             {/* Say which "all" is meant — with a filter on, it's only the matches. */}
@@ -307,9 +309,10 @@ export function MonitorMultiSelect({
         </div>
       </div>
 
-      <div
-        className={`${maxHeightClass} glass-well overflow-y-auto p-1.5`}
-      >
+      {/* relative: each row's TypeBadge carries sr-only (absolute) text; the
+          scroll box must be its containing block or that text escapes it and
+          stretches the page by the whole list's height. */}
+      <div className={`${maxHeightClass} glass-well relative overflow-y-auto p-1.5`}>
         {nothingVisible ? (
           <p className="py-6 text-center text-sm text-slate-500">
             {selectable.length === 0 ? emptyMessage : 'No monitors match your filters'}

@@ -17,11 +17,11 @@ export default function NewStatusPagePage() {
   const handleSubmit = async (data: CreateStatusPageRequest | UpdateStatusPageRequest) => {
     try {
       setLoading(true);
-      await createStatusPage(data as CreateStatusPageRequest);
-      showToast('Status page created successfully', 'success');
-      setTimeout(() => {
-        router.push('/status-pages');
-      }, 1000);
+      const created = await createStatusPage(data as CreateStatusPageRequest);
+      showToast('Status page created', 'success');
+      // Straight into the editor: the template, and the page's public link,
+      // live there.
+      router.push(`/status-pages/${created.id}`);
     } catch (err: any) {
       showToast(err.message || 'Failed to create status page', 'error');
       setLoading(false);
@@ -29,11 +29,11 @@ export default function NewStatusPagePage() {
   };
 
   return (
-    <Page width="wide">
+    <Page width="detail">
       <PageHeader
         breadcrumb={[{ label: 'Status pages', href: '/status-pages' }, { label: 'New' }]}
         title="New status page"
-        subtitle="Pick the monitors to publish; you can add sections, branding and a custom template later."
+        subtitle="Name the page and arrange its monitors into sections; a custom template can follow once it exists."
       />
 
       <StatusPageForm

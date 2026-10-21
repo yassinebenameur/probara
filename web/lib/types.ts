@@ -190,6 +190,9 @@ export interface AuditEvent {
   details?: Record<string, unknown>;
 }
 
+/** `GET /audit-log?sort=` columns (with `dir=asc|desc`). */
+export type AuditSortColumn = 'occurred_at' | 'action' | 'resource' | 'outcome';
+
 export interface AuditListResponse {
   items: AuditEvent[];
   page: number;
@@ -1129,6 +1132,20 @@ export interface AlertListResponse {
   page: number;
   page_size: number;
   total: number;
+}
+
+/** `GET /alerts?sort=` columns (with `dir=asc|desc`). */
+export type AlertSortColumn = 'triggered_at' | 'status' | 'monitor' | 'duration';
+
+/** Why a bulk acknowledge/resolve left an alert unchanged. */
+export type AlertBulkFailureReason = 'not_found' | 'already_acknowledged' | 'already_resolved';
+
+/** `POST /alerts/bulk/{acknowledge,resolve}`: per-alert results, never all-or-nothing. */
+export interface AlertBulkResult {
+  /** The alerts changed, in their new state (request order). */
+  items: Alert[];
+  /** The requested alerts left unchanged. */
+  failed: { id: string; reason: AlertBulkFailureReason }[];
 }
 
 export type AlertStreamEventType = 'created' | 'acknowledged' | 'resolved';
@@ -2267,6 +2284,15 @@ export interface SyntheticBrowserArtifactMetrics {
 export interface MonitorResultsResponse {
   monitor_id: string;
   results: CheckResult[];
+}
+
+/** GET /monitors/results/batch: per monitor, what GET /monitors/{id}/results
+ * returns for it; per group, its direct member ids. Ids that are not live
+ * monitors of the tenant are absent from both maps. */
+export interface MonitorResultsBatchResponse {
+  limit: number;
+  results: Record<string, CheckResult[]>;
+  members: Record<string, string[]>;
 }
 
 export type MonitorAnalyticsRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' | '365d';

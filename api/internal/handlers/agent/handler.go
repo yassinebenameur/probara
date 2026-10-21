@@ -378,9 +378,14 @@ func (h *Handler) HandleGetWindowsUninstallScript(w http.ResponseWriter, r *http
 // install script, but only when it is a tenant API key. A cookie session has
 // no bearer, and an MCP OAuth access token is a short-lived credential of a
 // person: written onto a host it would leak that user's session and stop
-// working within the hour. Those callers get a script with an empty key.
+// working within the hour. A read-scope key cannot submit metrics, so the
+// collector it installed would have every export rejected. Those callers get
+// a script with an empty key, which the installer refuses up front.
 func embeddableAPIKey(r *http.Request) string {
 	if actor, ok := context.GetActorType(r.Context()); !ok || actor != context.ActorTypeAPIKey {
+		return ""
+	}
+	if scope, ok := context.GetAuthScope(r.Context()); !ok || scope != "write" {
 		return ""
 	}
 	authHeader := r.Header.Get("Authorization")

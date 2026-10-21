@@ -8,8 +8,6 @@ import { getApiKey } from '@/lib/auth';
 import { loadStoredApiKeys } from '@/lib/api-keys';
 import { buildAgentRequest, initialAgentFormState, initialAgentRules } from '@/lib/monitor-form/heartbeat';
 import FormField from '@/components/ui/FormField';
-import FormSection from '@/components/ui/FormSection';
-import FormActions from '@/components/ui/FormActions';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import { AlertingSection } from './AlertingSection';
@@ -20,7 +18,8 @@ import MetricRuleBuilder, {
 } from './MetricRuleBuilder';
 import { IntervalField } from './ScheduleSection';
 import DependenciesField from './DependenciesField';
-import { FieldHint, FormPanel, LabelsSection, PlanSummary, ToggleRow, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled } from './form-kit';
+import { formatDuration } from '@/lib/format';
+import { FieldHint, FormPanel, LabelsSection, PlanSummary, ToggleRow, revealFirstError, reportConstraintViolation, useClearErrorsOnEdit, useFollowEnabled, FormActionBar } from './form-kit';
 
 type ServerType =
   | 'linux-amd64'
@@ -297,8 +296,8 @@ export default function AgentForm({
       : '';
 
     return (
-      <div className="space-y-5">
-        <FormSection title="Collector installation">
+      <div data-form-stack className="space-y-5">
+        <FormPanel title="Collector installation">
           {loadingInstallCmd ? (
             <p className="text-sm text-slate-500">Loading installation details…</p>
           ) : installCommand ? (
@@ -448,7 +447,7 @@ export default function AgentForm({
           ) : (
             <Callout tone="danger">Failed to load installation details</Callout>
           )}
-        </FormSection>
+        </FormPanel>
 
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" type="button" onClick={() => setShowInstallInstructions(false)}>
@@ -465,8 +464,8 @@ export default function AgentForm({
   }
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
-      <FormSection title="Target">
+    <form ref={formRef} onSubmit={handleSubmit} noValidate data-form-stack className="space-y-5">
+      <FormPanel title="Target" description="The host this collector reports for.">
         <FormField label="Agent name" required error={errors.name}>
           {(control) => (
             <>
@@ -499,9 +498,9 @@ export default function AgentForm({
             After creating, open the monitor&apos;s Settings tab for the collector install command.
           </p>
         )}
-      </FormSection>
+      </FormPanel>
 
-      <FormPanel title="Schedule">
+      <FormPanel title="Schedule" description="How often the collector should report.">
         <IntervalField
           label="Expect a report every"
           value={formData.expected_interval_seconds}
@@ -535,18 +534,18 @@ export default function AgentForm({
           isGroup={false}
           intervalSeconds={formData.expected_interval_seconds}
           threshold={formData.consecutive_failures_threshold}
-          onThresholdChange={(n) => setFormData({ ...formData, consecutive_failures_threshold: n })}
+          onThresholdChange={(n) => setFormData((prev) => ({ ...prev, consecutive_failures_threshold: n }))}
           mode={formData.notification_mode}
-          onModeChange={(m) => setFormData({ ...formData, notification_mode: m })}
+          onModeChange={(m) => setFormData((prev) => ({ ...prev, notification_mode: m }))}
           dependencySuppression={formData.dependency_suppression}
           hasDependencies={formData.depends_on_ids.length > 0}
-          onDependencySuppressionChange={(d) => setFormData({ ...formData, dependency_suppression: d })}
+          onDependencySuppressionChange={(d) => setFormData((prev) => ({ ...prev, dependency_suppression: d }))}
           customChannels={formData.notification_channels}
-          onCustomChannelsChange={(next) => setFormData({ ...formData, notification_channels: next })}
+          onCustomChannelsChange={(next) => setFormData((prev) => ({ ...prev, notification_channels: next }))}
         />
       </FormPanel>
 
-      <FormSection title="Metric alert rules">
+      <FormPanel title="Metric alert rules" description="Alerts on host metric thresholds.">
         <p className="text-ui text-slate-400">
           Open an alert when a reported metric breaches its threshold, optionally only after it is
           sustained for a duration. Utilization thresholds are entered as percentages. Evaluated
@@ -558,7 +557,7 @@ export default function AgentForm({
           errors={ruleErrors}
           monitorId={isEditMode ? monitor?.id : undefined}
         />
-      </FormSection>
+      </FormPanel>
 
       <LabelsSection
         tags={formData.tags}
@@ -566,12 +565,12 @@ export default function AgentForm({
         placeholder="production, us-east-1"
       />
 
-      <FormActions
-        middle={
+      <FormActionBar
+        summary={
           <PlanSummary
             errors={{ ...errors, ...Object.fromEntries(Object.entries(ruleErrors).map(([k, v]) => [`rule_${k}`, v])) }}
             parts={[
-              `Expect a report every ${formData.expected_interval_seconds}s`,
+              `Expect a report every ${formatDuration(formData.expected_interval_seconds)}`,
               ruleDrafts.length > 0 && `${ruleDrafts.length} metric rule${ruleDrafts.length === 1 ? '' : 's'}`,
             ]}
           />

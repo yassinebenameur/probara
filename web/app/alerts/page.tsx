@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Alert, AlertStatus } from '@/lib/types';
+import { Alert, AlertBulkResult, AlertStatus } from '@/lib/types';
 import { getAlert, getAlerts, getTenants } from '@/lib/api';
 import { markTriageLabelled, mergeAlertUpdate } from '@/lib/ai-triage';
 import { focusTenantSwitch, parseAlertFocus, withoutAlertFocus } from '@/lib/alert-links';
@@ -10,13 +10,21 @@ import { emitTenantChange, setSelectedTenantId } from '@/lib/tenant';
 import { useSelectedTenantId } from '@/components/providers/TenantProvider';
 import { RANGES, RangeId, rangeStart } from '@/lib/format';
 import { useAlertEvents } from '@/components/alerts/AlertStreamProvider';
-import AlertTable, {
-  ALERT_SORT_DEFAULT,
+import AlertTable, { sortAlerts } from '@/components/alerts/AlertTable';
+import {
+  ALERT_SORT_COLUMN,
   ALERT_SORT_DEFAULT_DIR,
   ALERT_SORT_KEYS,
-  sortAlerts,
+  alertSortFallback,
+  effectiveAlertSort,
+  isClientSorted,
+  newAlertLeads,
+  statusSortApplies,
   type AlertSortKey,
-} from '@/components/alerts/AlertTable';
+  type AlertStatusFilter,
+} from '@/lib/alert-list';
+import AlertBulkBar from '@/components/alerts/AlertBulkBar';
+import { useAlertSelection } from '@/components/alerts/useAlertSelection';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
 import ChipGroup from '@/components/ui/ChipGroup';
@@ -25,13 +33,12 @@ import LiveStatus from '@/components/ui/LiveStatus';
 import Page from '@/components/ui/Page';
 import PageHeader from '@/components/ui/PageHeader';
 import Select from '@/components/ui/Select';
-import { useUrlSort } from '@/components/ui/SortableHeader';
-import type { SortState } from '@/lib/sort';
+import { readSortParams, writeSortParams, type SortState } from '@/lib/sort';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import { useRowFlash } from '@/lib/useRowFlash';
 
 // 'open' (active + acknowledged) is the default: the queue an operator works.
-type StatusFilter = 'open' | AlertStatus | 'all';
+type StatusFilter = AlertStatusFilter;
 const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: 'open', label: 'Open' },
   { value: 'active', label: 'Active' },
@@ -53,7 +60,7 @@ const PAGE_SIZE = 20;
 const MAX_API_PAGE = 100;
 // The Open view reads the whole queue (each status up to this many) so a
 // column sort orders every open alert, not one page. The other views page on
-// the server, newest first (the API has no sort parameter).
+// the server and sort there (the API's sort/dir, ALERT_SORT_COLUMN).
 const MAX_OPEN = 1000;
 
 function parseStatus(value: string | null): StatusFilter {
@@ -97,12 +104,27 @@ function AlertsView() {
   // server's current page.
   const [rows, setRows] = useState<Alert[]>([]);
   const [error, setError] = useState<string>('');
-  const [sort, setSort] = useUrlSort(ALERT_SORT_KEYS, ALERT_SORT_DEFAULT, ALERT_SORT_DEFAULT_DIR);
-  const clientSorted = statusFilter === 'open';
-  // The page belongs to the filters (and, in the Open view, the sort) it was
-  // chosen under: any change reads as page 1 in the same render, so no
-  // request ever goes out for the old page under the new filter.
-  const filterKey = `${statusFilter}|${windowFilter}${clientSorted ? `|${sort.key}:${sort.dir}` : ''}`;
+  // Sort lives in `?sort=&dir=`, read with the view's own default (the queue
+  // order for Open, newest first for the server-paged views) and left out of
+  // the URL when it is that default. What the header shows is the sort the
+  // view applies: a status sort under a one-status filter is newest first.
+  const clientSorted = isClientSorted(statusFilter);
+  const sortFallback = alertSortFallback(statusFilter);
+  const requested = readSortParams(
+    new URLSearchParams(searchParams.toString()),
+    ALERT_SORT_KEYS,
+    sortFallback,
+    ALERT_SORT_DEFAULT_DIR
+  );
+  const effective = effectiveAlertSort(requested, statusFilter);
+  // Primitives in, one object out, so a re-render never looks like a new sort.
+  const sortKey = effective.key;
+  const sortDir = effective.dir;
+  const sort = useMemo<SortState<AlertSortKey>>(() => ({ key: sortKey, dir: sortDir }), [sortKey, sortDir]);
+  // The page belongs to the filters and sort it was chosen under: any change
+  // reads as page 1 in the same render, so no request ever goes out for the
+  // old page under the new filter.
+  const filterKey = `${statusFilter}|${windowFilter}|${sort.key}:${sort.dir}`;
   const [pageState, setPageState] = useState({ key: filterKey, page: 1 });
   const page = pageState.key === filterKey ? pageState.page : 1;
   const setPage = (update: (current: number) => number) =>
@@ -116,14 +138,25 @@ function AlertsView() {
 
   const sorted = useMemo(() => (clientSorted ? sortAlerts(rows, sort) : rows), [rows, sort, clientSorted]);
   const total = clientSorted ? sorted.length : serverTotal;
-  // The Open view is read whole, so its page never refetches.
+  // The Open view is read whole, so neither its page nor its sort refetches.
   const serverPage = clientSorted ? 1 : page;
+  // Primitives, so re-reading the same sort from the URL never refetches.
+  const serverSortKey = clientSorted ? null : sort.key;
+  const serverSortDir = clientSorted ? null : sort.dir;
   const rowsRef = useRef(rows);
   useEffect(() => {
     rowsRef.current = rows;
   });
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const visible = clientSorted ? sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) : rows;
+  // Bulk triage selects among the open alerts on screen; the selection
+  // belongs to this page of this view.
+  const selectableIds = useMemo(() => visible.filter((a) => a.status !== 'resolved').map((a) => a.id), [visible]);
+  const selection = useAlertSelection(selectableIds, `${filterKey}|${page}`);
+  const selectedAlerts = useMemo(
+    () => visible.filter((a) => selection.selected.has(a.id)),
+    [visible, selection.selected]
+  );
 
   // Filters live in the URL (the sidebar links to ?status=active), so a
   // change replaces the query and the page re-renders from it.
@@ -177,6 +210,7 @@ function AlertsView() {
           const response = await getAlerts({
             page: serverPage,
             page_size: PAGE_SIZE,
+            ...(serverSortKey && serverSortDir && { sort: ALERT_SORT_COLUMN[serverSortKey], dir: serverSortDir }),
             ...(statusFilter !== 'all' && { status: statusFilter }),
             ...(since && { since }),
           });
@@ -194,7 +228,7 @@ function AlertsView() {
         return false;
       }
     },
-    [serverPage, statusFilter, windowFilter, focusAlertId, loadCounts]
+    [serverPage, statusFilter, windowFilter, focusAlertId, loadCounts, serverSortKey, serverSortDir]
   );
 
   // Stream events update rows in place (below), so they don't reload; the
@@ -247,10 +281,12 @@ function AlertsView() {
   // jump away mid-scan) and flash when their status changes (useRowFlash);
   // an alert not listed yet whose new status matches the filter (created, or
   // newly acknowledged/resolved) is added and flashed: in the Open view it
-  // takes its place in the sort, elsewhere it leads page 1. Stream events
-  // never carry triage (core NATS), so a listed row keeps its pill until the
-  // next fetch.
+  // takes its place in the sort, elsewhere it leads page 1 (newLeads).
+  // Stream events never carry triage (core NATS), so a listed row keeps its
+  // pill until the next fetch.
   const { flash } = rowFlash;
+  // In a server-paged view a new alert leads page 1 only where the sort puts
+  // it there (newAlertLeads); anything else waits for the poll.
   const handleAlertUpdate = useCallback(
     (alert: Alert) => {
       if (rowsRef.current.some((a) => a.id === alert.id)) {
@@ -261,7 +297,8 @@ function AlertsView() {
         statusFilter === 'all' ||
         alert.status === statusFilter ||
         (statusFilter === 'open' && alert.status !== 'resolved');
-      if (!matches || (statusFilter !== 'open' && page !== 1)) return;
+      if (!matches) return;
+      if (!clientSorted && (page !== 1 || !newAlertLeads({ key: sortKey, dir: sortDir }, alert.status))) return;
       setRows((prev) => {
         if (prev.some((a) => a.id === alert.id)) return prev;
         return statusFilter === 'open' ? [...prev, alert] : [alert, ...prev].slice(0, PAGE_SIZE);
@@ -270,7 +307,7 @@ function AlertsView() {
       // After the row mounts, so the animation starts on screen.
       window.requestAnimationFrame(() => flash(alert.id));
     },
-    [statusFilter, page, flash]
+    [statusFilter, clientSorted, page, flash, sortKey, sortDir]
   );
 
   useEffect(() => {
@@ -290,11 +327,25 @@ function AlertsView() {
     void loadCounts();
   };
 
+  // A bulk action's changed alerts, in place like a single action's. Skipped
+  // ones changed elsewhere meanwhile (already resolved, acknowledged, gone):
+  // a silent reload shows their real state instead of the stale row.
+  const handleBulkApplied = (result: AlertBulkResult) => {
+    const changed = new Map(result.items.map((a) => [a.id, a]));
+    setRows((prev) => prev.map((a) => (changed.has(a.id) ? mergeAlertUpdate(a, changed.get(a.id)!) : a)));
+    if (result.failed.length > 0) void loadAlerts({ silent: true });
+    else void loadCounts();
+  };
+
   const handleTriageLabelled = (alertId: string) => {
     setRows((prev) => markTriageLabelled(prev, alertId));
   };
 
-  const changeSort = (next: SortState<AlertSortKey>) => setSort(next);
+  const changeSort = (next: SortState<AlertSortKey>) => {
+    const params = writeSortParams(new URLSearchParams(searchParams.toString()), next, sortFallback, ALERT_SORT_DEFAULT_DIR);
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
 
   const chipCount = (value: StatusFilter): number | undefined => {
     if (!counts) return undefined;
@@ -408,7 +459,10 @@ function AlertsView() {
         // Before the first load lands the table is loading, not empty.
         loading={live.loading || (live.updatedAt === null && !error)}
         flashClass={rowFlash.flashClass}
-        {...(clientSorted ? { sort, onSort: changeSort } : {})}
+        sort={sort}
+        onSort={changeSort}
+        statusSortable={statusSortApplies(statusFilter)}
+        selection={selection}
         emptyTitle={
           statusFilter === 'open' ? 'No open alerts' : statusFilter === 'active' ? 'No active alerts' : 'No alerts found'
         }
@@ -419,6 +473,8 @@ function AlertsView() {
           Sorting the newest {rows.length} of {openTotal} open alerts.
         </p>
       )}
+
+      <AlertBulkBar selected={selectedAlerts} onApplied={handleBulkApplied} onClear={selection.clear} />
 
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">

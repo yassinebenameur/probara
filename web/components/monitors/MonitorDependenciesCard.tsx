@@ -7,9 +7,9 @@ import { DependencyMonitor, Monitor } from '@/lib/types';
 import {
   getMonitorDependencies,
   getMonitorDependents,
-  getMonitors,
   updateMonitor,
 } from '@/lib/api';
+import { getAllMonitors } from '@/lib/monitor-list';
 import { monitorStateColors } from '@/lib/monitor-utils';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
@@ -66,8 +66,9 @@ function EditDependenciesModal({
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getMonitors({ page_size: 100 })
-      .then((res) => setMonitors(res.items || []))
+    // Every page: a dependency can be any monitor in the workspace.
+    getAllMonitors()
+      .then(setMonitors)
       .catch(() => setMonitors([]));
   }, []);
 

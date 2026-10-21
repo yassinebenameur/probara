@@ -3,6 +3,7 @@ package mcp
 import (
 	"net/http"
 
+	alerthandlers "github.com/yassinebenameur/probara/api/internal/handlers/alerts"
 	"github.com/yassinebenameur/probara/api/internal/models"
 )
 
@@ -19,6 +20,8 @@ func alertTools() []spec {
 				param{Name: "monitor_id", Description: "Only this monitor's alerts."},
 				param{Name: "since", Description: "RFC 3339; alerts open at any point after it."},
 				param{Name: "suppressed", Type: "boolean", Description: "true: only alerts whose notifications are suppressed (e.g. upstream dependency down); false: only unsuppressed."},
+				param{Name: "sort", Enum: []string{"triggered_at", "status", "monitor", "duration"}, Description: "Order (default triggered_at): status ranks active, acknowledged, resolved; monitor is the subject name; duration counts open alerts to now."},
+				param{Name: "dir", Enum: []string{"asc", "desc"}, Description: "Direction; default desc for triggered_at and duration, asc otherwise."},
 			),
 		},
 		{
@@ -63,6 +66,26 @@ func alertTools() []spec {
 				"\"resolved\" notification. If the monitor is still failing, a new alert can open.",
 			Method: http.MethodPost, Route: "/alerts/{id}/resolve",
 			PathDocs: map[string]string{"id": "Alert ID."},
+		},
+		{
+			Name:  "bulk_acknowledge_alerts",
+			Title: "Acknowledge alerts in bulk",
+			Description: "Acknowledge many active alerts at once (up to 500 IDs). Never all-or-nothing: items are the " +
+				"alerts acknowledged, failed lists the others with a reason (not_found, already_acknowledged, " +
+				"already_resolved). Each alert is audited like acknowledge_alert.",
+			Method: http.MethodPost, Route: "/alerts/bulk/acknowledge",
+			Body: typeOf[alerthandlers.BulkAlertsRequest](), Required: []string{"ids"},
+			FieldDocs: map[string]string{"ids": "Alert IDs, 1-500."},
+		},
+		{
+			Name:  "bulk_resolve_alerts",
+			Title: "Resolve alerts in bulk",
+			Description: "Resolve many active or acknowledged alerts at once (up to 500 IDs), as resolve_alert does for " +
+				"one. Never all-or-nothing: items are the alerts resolved, failed lists the others with a reason " +
+				"(not_found, already_resolved).",
+			Method: http.MethodPost, Route: "/alerts/bulk/resolve",
+			Body: typeOf[alerthandlers.BulkAlertsRequest](), Required: []string{"ids"},
+			FieldDocs: map[string]string{"ids": "Alert IDs, 1-500."},
 		},
 		{
 			Name:  "label_alert_triage",
