@@ -24,7 +24,7 @@ export default function Panel({
           <div>
             {title && <h2 className="text-title font-semibold text-white">{title}</h2>}
             {subtitle && (
-              <p className="mt-0.5 max-w-prose text-xs text-slate-500">{subtitle}</p>
+              <p className="mt-0.5 max-w-prose text-pretty text-xs text-slate-500">{subtitle}</p>
             )}
           </div>
           {actions && (

@@ -196,7 +196,7 @@ export default function ChannelPicker({
 
               return (
                 // Wraps instead of squeezing: once the name column would drop
-                // below 12rem the delay select moves to its own line, where
+                // below 10rem the delay select moves to its own line, where
                 // justify-between leaves it at the start, under the name.
                 // A checked row takes one --well step over the list's own
                 // well, and any row a --well-hover on hover: the checkbox and
@@ -223,9 +223,9 @@ export default function ChannelPicker({
                         the name keeps the width beside a delay select. */}
                     <label
                       htmlFor={`channel-${channel.id}`}
-                      className={`min-w-0 grow basis-48 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                      className={`min-w-0 grow basis-40 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
-                      <span className={`block truncate text-sm ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
+                      <span className={`block truncate text-ui ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
                         {channel.name}
                       </span>
                       <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
@@ -233,8 +233,10 @@ export default function ChannelPicker({
                         {isDefault && <span className="text-slate-400">(default)</span>}
                         {channel.is_active === false && (
                           // Same wording as the channel list's Status column,
-                          // as plain caption text: a chip here made inactive
-                          // rows taller and louder than the active ones.
+                          // but deliberately caption text rather than its Pill:
+                          // a chip here made inactive rows taller and louder
+                          // than the active ones. The table keeps the Pill, as
+                          // every Status column in the app does.
                           <span
                             title="This channel is inactive — selecting it delivers nothing"
                             className="inline-flex items-center gap-1.5"

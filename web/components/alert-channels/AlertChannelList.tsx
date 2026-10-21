@@ -70,6 +70,12 @@ export default function AlertChannelList() {
     }
   };
 
+  const status = (channel: AlertChannel) => (
+    <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
+      {channel.is_active ? 'Active' : 'Inactive'}
+    </Pill>
+  );
+
   // Ghost "New channel": the page's one accent button is Save notifications
   // above, and the empty state carries its own.
   const actions = (
@@ -125,13 +131,15 @@ export default function AlertChannelList() {
               </Callout>
             </div>
           ) : (
+            // Below sm the Type and Status columns fold under the name, so the
+            // name keeps the width and the row actions stay on screen.
             <div className="overflow-x-auto">
               <table className="data-table text-sm">
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Type</th>
-                    <th>Status</th>
+                    <th className="hidden sm:table-cell">Type</th>
+                    <th className="hidden sm:table-cell">Status</th>
                     <th><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
@@ -145,13 +153,13 @@ export default function AlertChannelList() {
                         >
                           {channel.name}
                         </Link>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400 sm:hidden">
+                          <span>{pluginName(channel.type)}</span>
+                          {status(channel)}
+                        </div>
                       </td>
-                      <td className="text-ui text-slate-400">{pluginName(channel.type)}</td>
-                      <td>
-                        <Pill tone={channel.is_active ? 'success' : 'neutral'} size="xs" dot>
-                          {channel.is_active ? 'Active' : 'Inactive'}
-                        </Pill>
-                      </td>
+                      <td className="hidden text-ui text-slate-400 sm:table-cell">{pluginName(channel.type)}</td>
+                      <td className="hidden sm:table-cell">{status(channel)}</td>
                       <td className="text-right">
                         {canWrite && <div className="inline-flex items-center gap-0.5">
                           <IconButton

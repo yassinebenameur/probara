@@ -20,14 +20,22 @@ export const SETTINGS_COLUMNS_WIDE =
 // (NotificationsPanel), not grid cells, so a short card never leaves a hole
 // beside a tall one and each card is only as wide as its column. The count
 // comes from the panel's own width (it moves with the sidebar): three
-// columns once each gets 35rem, two once each gets about 34rem (where a
-// parameter row keeps its segmented control beside its text), one
-// below that. gap-6 between columns.
+// columns once each gets 35rem, two once each gets 26rem, one below that,
+// so no card is ever wide enough to strand a short row's text far from its
+// control. Columns under 540px are `stacked`: a parameter row puts its
+// segmented control under its text, stretched to the row width, because
+// beside the text it would squeeze the description to a few words.
 export const SECTION_GAP_PX = 24;
-export function sectionColumnCount(width: number): 1 | 2 | 3 {
-  if (width >= 3 * 560 + 2 * SECTION_GAP_PX) return 3;
-  if (width >= 2 * 540 + SECTION_GAP_PX) return 2;
-  return 1;
+const STACKED_BELOW_PX = 540;
+export interface SectionLayout {
+  columns: 1 | 2 | 3;
+  stacked: boolean;
+}
+export function sectionLayout(width: number): SectionLayout {
+  const columns: 1 | 2 | 3 =
+    width >= 3 * 560 + 2 * SECTION_GAP_PX ? 3 : width >= 2 * 416 + SECTION_GAP_PX ? 2 : 1;
+  const columnWidth = (width - (columns - 1) * SECTION_GAP_PX) / columns;
+  return { columns, stacked: columnWidth < STACKED_BELOW_PX };
 }
 
 // The same flow inside one wide panel (AI): two sections side

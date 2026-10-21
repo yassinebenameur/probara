@@ -48,7 +48,7 @@ const EXPIRY_WARN_DAYS = 14;
 type SettingsTab = 'channels' | 'general' | 'ai' | 'mcp' | 'access';
 
 // Per-tab layout on the full-width page. Notifications lays its section cards
-// into column stacks itself (sectionColumnCount) above the full-width
+// into column stacks itself (sectionLayout) above the full-width
 // channel list, and AI is one wide panel that splits into columns inside, so
 // both tabs stack their top-level blocks; General and MCP
 // are two peer cards of similar height (stretched to match); Access puts the

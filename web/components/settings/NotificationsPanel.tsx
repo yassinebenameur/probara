@@ -11,7 +11,7 @@ import Switch from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
 import ChannelPicker from '@/components/channels/ChannelPicker';
 import { getNotificationSettings, updateNotificationSettings } from '@/lib/api';
-import { sectionColumnCount } from './layout';
+import { sectionLayout, type SectionLayout } from './layout';
 import type { ChannelAssignment, NotificationSettings } from '@/lib/types';
 
 const REMINDER_OPTIONS = [
@@ -99,6 +99,12 @@ interface SettingRowProps {
    * enough); wider controls wrap below the text in a narrow card.
    */
   inline?: boolean;
+  /**
+   * Put the control under the text at the full row width (a parameter row
+   * in a narrow column, see sectionLayout), so every stacked control shares
+   * both edges of the well instead of wrapping one by one.
+   */
+  stacked?: boolean;
 }
 
 // One setting: title and description on the left, its control on the right.
@@ -110,8 +116,10 @@ interface SettingRowProps {
 // The text column has a 12rem basis and the row wraps, so in a narrow card
 // the control drops under the description instead of squeezing it; with
 // justify-between a control alone on its line sits at the start, under the
-// text it belongs to. Titles are text-ui so they read a level below the
-// card's text-title.
+// text it belongs to. A `stacked` row always puts it there, full width.
+// Titles are text-ui so they read a level below the card's text-title;
+// descriptions are text-pretty so a narrow column never ends one on a
+// lone word.
 function SettingRow({
   title,
   titleId: fixedTitleId,
@@ -121,25 +129,34 @@ function SettingRow({
   muted = false,
   size = 'md',
   inline = false,
+  stacked = false,
 }: SettingRowProps) {
   const autoTitleId = useId();
   const titleId = fixedTitleId ?? autoTitleId;
   const descriptionId = useId();
   return (
     <div className={`${size === 'sm' ? 'py-3' : 'py-4'} first:pt-0 last:pb-0`}>
-      <div className={`flex items-start justify-between gap-x-6 gap-y-3 ${inline ? '' : 'flex-wrap'}`}>
-        <div className={`min-w-0 max-w-prose grow ${inline ? 'basis-0' : 'basis-48'} transition-opacity duration-base ${muted ? 'opacity-60' : ''}`}>
-          <p id={titleId} className="text-ui font-medium text-slate-200">
+      <div
+        className={`flex justify-between gap-x-6 gap-y-3 ${
+          stacked ? 'flex-col' : `items-start ${inline ? '' : 'flex-wrap'}`
+        }`}
+      >
+        <div
+          className={`min-w-0 max-w-prose ${stacked ? '' : `grow ${inline ? 'basis-0' : 'basis-48'}`} transition-opacity duration-base ${
+            muted ? 'opacity-60' : ''
+          }`}
+        >
+          <p id={titleId} className="text-pretty text-ui font-medium text-slate-200">
             {title}
           </p>
           {description && (
-            <p id={descriptionId} className="mt-0.5 text-xs text-slate-500">
+            <p id={descriptionId} className="mt-0.5 text-pretty text-xs text-slate-500">
               {description}
             </p>
           )}
         </div>
         {control && (
-          <div className={`shrink-0 ${size === 'sm' ? '' : 'pr-4'}`.trim()}>
+          <div className={stacked ? 'min-w-0' : `shrink-0 ${size === 'sm' ? '' : 'pr-4'}`.trim()}>
             {control({ titleId, descriptionId: description ? descriptionId : undefined })}
           </div>
         )}
@@ -183,25 +200,28 @@ function comparable(s: Snapshot): string {
   });
 }
 
-// The section column count for the cards' container: measured before paint
+// The section layout for the cards' container: measured before paint
 // (layout effect + ResizeObserver), so the cards never flash in one column.
-function useSectionColumns(el: HTMLElement | null): 1 | 2 | 3 {
-  const [columns, setColumns] = useState<1 | 2 | 3>(1);
+function useSectionLayout(el: HTMLElement | null): SectionLayout {
+  const [layout, setLayout] = useState<SectionLayout>({ columns: 1, stacked: true });
   useLayoutEffect(() => {
     if (!el) return;
-    const measure = () => setColumns(sectionColumnCount(el.getBoundingClientRect().width));
+    const measure = () => {
+      const next = sectionLayout(el.getBoundingClientRect().width);
+      setLayout((prev) => (prev.columns === next.columns && prev.stacked === next.stacked ? prev : next));
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, [el]);
-  return columns;
+  return layout;
 }
 
 // Workspace notification policy, as four section cards in balanced column
 // stacks: Routing | Latency | Dependency + Incidents on a wide screen,
 // Routing + Incidents | Latency + Dependency at laptop widths, one column
-// below that (sectionColumnCount in ./layout). Save and Discard float in a bar over the bottom of the page
+// below that (sectionLayout in ./layout). Save and Discard float in a bar over the bottom of the page
 // (the monitors list's bulk-action pattern, data-floating-bar) only while
 // the form differs from the server: floating, so its arrival never moves
 // the page. Read-only users see every control disabled and no bar (the
@@ -226,7 +246,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
   // What the server holds; the save bar only appears when the form differs.
   const [saved, setSaved] = useState<Snapshot | null>(null);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
-  const columns = useSectionColumns(gridEl);
+  const { columns, stacked } = useSectionLayout(gridEl);
 
   const current: Snapshot = {
     defaultChannels,
@@ -446,6 +466,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         <ParameterGroup label="Latency degradation parameters">
           <SettingRow
             size="sm"
+            stacked={stacked}
             muted={latencyOff}
             title="Sensitivity"
             description={SENSITIVITY_LEVELS[sensitivityIdx].hint}
@@ -457,11 +478,14 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
                 labelledBy={titleId}
                 describedBy={descriptionId}
                 disabled={latencyOff}
+                equalWidth
+                stretch={stacked}
               />
             )}
           />
           <SettingRow
             size="sm"
+            stacked={stacked}
             muted={latencyOff}
             title="Baseline window"
             description="How much history to compare recent latency against."
@@ -473,11 +497,14 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
                 labelledBy={titleId}
                 describedBy={descriptionId}
                 disabled={latencyOff}
+                equalWidth
+                stretch={stacked}
               />
             )}
           />
           <SettingRow
             size="sm"
+            stacked={stacked}
             muted={latencyOff}
             title="Must stay slow for"
             description="Ignore brief spikes shorter than this."
@@ -489,6 +516,8 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
                 labelledBy={titleId}
                 describedBy={descriptionId}
                 disabled={latencyOff}
+                equalWidth
+                stretch={stacked}
               />
             )}
           />
@@ -515,6 +544,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         <ParameterGroup label="Dependency suppression parameters">
           <SettingRow
             size="sm"
+            stacked={stacked}
             muted={graceOff}
             title="After the upstream recovers, hold for"
             description="A downstream still down after this pages as a normal outage."
@@ -526,6 +556,8 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
                 labelledBy={titleId}
                 describedBy={descriptionId}
                 disabled={graceOff}
+                equalWidth
+                stretch={stacked}
               />
             )}
           />
