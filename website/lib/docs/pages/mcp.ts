@@ -151,11 +151,11 @@ export const MCP_PAGE: DocPage = {
           rows: [
             ["Fleet", "`whoami`, `get_dashboard_overview`, `list_problem_monitors`, `list_recent_failures`, `get_group_sparkline`"],
             ["Monitors", "`list_monitors`, `get_monitor`, `create_monitor`, `update_monitor`, `delete_monitor`, `test_monitor_config`, `run_monitor_now`, `snooze_monitor`, `bulk_update_alerting`, `bulk_delete_monitors`"],
-            ["History", "`get_monitor_analytics`, `get_monitor_results`, `get_monitor_metrics_snapshots`, `get_synthetic_screenshot` (returns the image), `delete_monitor_history`"],
+            ["History", "`get_monitor_analytics`, `get_monitor_results`, `get_monitor_results_batch` (up to 100 monitors per call), `get_monitor_metrics_snapshots`, `get_synthetic_screenshot` (returns the image), `delete_monitor_history`"],
             ["Structure", "group members, `get_dependency_graph`, dependency add/remove, `suggest_dependencies` (local AI)"],
             ["Host agents", "`list_metric_series`, `query_metrics`, collector config and install/uninstall scripts, `get_push_info`"],
             ["Import / export", "`export_monitors`, `preview_monitor_import` (send the file's text), `import_monitors`"],
-            ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `label_alert_triage`, `wait_for_alert_events`"],
+            ["Alerts", "`list_alerts`, `get_alert` (with AI triage), `acknowledge_alert`, `resolve_alert`, `bulk_acknowledge_alerts`, `bulk_resolve_alerts`, `label_alert_triage`, `wait_for_alert_events`"],
             ["Incidents", "create, update, state transitions, timeline entries, alert/monitor links, status-page publishing, AI analysis request/read/label"],
             ["Operations", "maintenance windows, private locations and their deploy info, `get_mesh`, `get_mesh_edge_history`, `probe_mesh_edge`"],
             ["Reporting", "SLAs, live reports (`format` json/csv/pdf returns a file), issued reports"],

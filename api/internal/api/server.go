@@ -399,6 +399,8 @@ func NewServer(cfg *config.APIConfig, log *logger.Logger, metricsRegistry *metri
 				r.Post("/bulk/delete", monitorHandlers.BulkDeleteMonitors)
 				// Dependency graph (must be before /{id} to avoid conflicts)
 				r.Get("/dependency-graph", monitorHandlers.GetDependencyGraph)
+				// Recent results for many monitors (the list's one round trip)
+				r.Get("/results/batch", monitorHandlers.GetMonitorResultsBatch)
 				r.Post("/dependency-suggestions", depSuggestHdlrs.Suggest)
 				r.Post("/dependency-suggestions/label", aiLabelHdlrs.LabelDependencySuggestion)
 				r.Get("/{id}", monitorHandlers.GetMonitor)

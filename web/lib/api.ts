@@ -17,6 +17,8 @@ import type {
   SIPMetricsEnvelope,
   Alert,
   AlertListResponse,
+  AlertBulkResult,
+  AlertSortColumn,
   AlertChannel,
   CreateAlertChannelRequest,
   UpdateAlertChannelRequest,
@@ -29,6 +31,7 @@ import type {
   StatusPageLibraryTemplate,
   StatusPageLibraryTemplateListResponse,
   MonitorResultsResponse,
+  MonitorResultsBatchResponse,
   MonitorAnalyticsResponse,
   MonitorMetricsSnapshotsResponse,
   MonitorAnalyticsRange,
@@ -66,6 +69,7 @@ import type {
   OidcGroupMappingListResponse,
   CreateOidcGroupMappingRequest,
   AuditListResponse,
+  AuditSortColumn,
   IncidentListResponse,
   AISettings,
   AISettingsUpdate,
@@ -574,6 +578,9 @@ export async function getAlerts(params?: {
   since?: string;
   page?: number;
   page_size?: number;
+  /** Server-side order for paged views (default triggered_at, newest first). */
+  sort?: AlertSortColumn;
+  dir?: 'asc' | 'desc';
 }): Promise<AlertListResponse> {
   const queryParams = new URLSearchParams();
   if (params?.status) queryParams.append('status', params.status);
@@ -581,6 +588,8 @@ export async function getAlerts(params?: {
   if (params?.since) queryParams.append('since', params.since);
   if (params?.page) queryParams.append('page', String(params.page));
   if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+  if (params?.sort) queryParams.append('sort', params.sort);
+  if (params?.dir) queryParams.append('dir', params.dir);
 
   const queryString = queryParams.toString();
   const path = `/v1/alerts${queryString ? `?${queryString}` : ''}`;
@@ -611,6 +620,16 @@ export async function acknowledgeAlert(id: string): Promise<Alert> {
 
 export async function resolveAlert(id: string): Promise<Alert> {
   return apiRequest<Alert>('POST', `/v1/alerts/${id}/resolve`);
+}
+
+// Bulk triage (writes; at most 500 ids). Never all-or-nothing: `items` are
+// the alerts changed, `failed` the rest with a reason.
+export async function bulkAcknowledgeAlerts(ids: string[]): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/acknowledge', { ids });
+}
+
+export async function bulkResolveAlerts(ids: string[]): Promise<AlertBulkResult> {
+  return apiRequest<AlertBulkResult>('POST', '/v1/alerts/bulk/resolve', { ids });
 }
 
 // Alert Channel API functions
@@ -810,6 +829,9 @@ export interface GetAuditLogParams {
   to?: string;
   page?: number;
   page_size?: number;
+  /** Server-side order (default occurred_at, newest first). */
+  sort?: AuditSortColumn;
+  dir?: 'asc' | 'desc';
 }
 
 export async function getAuditLog(params?: GetAuditLogParams): Promise<AuditListResponse> {
@@ -821,6 +843,8 @@ export async function getAuditLog(params?: GetAuditLogParams): Promise<AuditList
   if (params?.to) queryParams.append('to', params.to);
   if (params?.page) queryParams.append('page', String(params.page));
   if (params?.page_size) queryParams.append('page_size', String(params.page_size));
+  if (params?.sort) queryParams.append('sort', params.sort);
+  if (params?.dir) queryParams.append('dir', params.dir);
 
   const queryString = queryParams.toString();
   const path = `/v1/audit-log${queryString ? `?${queryString}` : ''}`;
@@ -964,6 +988,21 @@ export async function getMonitorResults(
   const queryString = queryParams.toString();
   const path = `/v1/monitors/${id}/results${queryString ? `?${queryString}` : ''}`;
   return apiRequest<MonitorResultsResponse>('GET', path);
+}
+
+// Monitor ids per GET /monitors/results/batch call (the server's cap; it
+// keeps the URL well under proxy request-line limits).
+export const MONITOR_RESULTS_BATCH_MAX_IDS = 100;
+
+/** The newest `limit` results for up to MONITOR_RESULTS_BATCH_MAX_IDS
+ * monitors, plus each group's direct member ids, in one request. */
+export async function getMonitorResultsBatch(
+  ids: string[],
+  params?: { limit?: number }
+): Promise<MonitorResultsBatchResponse> {
+  const queryParams = new URLSearchParams({ ids: ids.join(',') });
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  return apiRequest<MonitorResultsBatchResponse>('GET', `/v1/monitors/results/batch?${queryParams.toString()}`);
 }
 
 export async function getMonitorAnalytics(
