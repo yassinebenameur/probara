@@ -422,7 +422,7 @@ kubectl -n probara get jobs`,
             [
               '`secrets.initialApiKey`',
               'Insecure placeholder',
-              'Stored and printed by notes but not consumed by any bootstrap path. It does not create an API key.',
+              'Stored in the chart Secret but not consumed by any bootstrap path. It does not create an API key.',
             ],
             [
               '`secrets.probaraSecretsKey`',
@@ -881,7 +881,7 @@ api:
             ],
             [
               '`initialApiKey` is unused',
-              'Installation notes show a credential that authentication never recognizes.',
+              'The chart Secret carries a credential that authentication never recognizes; the install notes point to the first-administrator form instead.',
             ],
             [
               'Public Next variables are runtime-only',
