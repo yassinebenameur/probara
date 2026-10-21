@@ -56,8 +56,13 @@ type SettingsTab = 'channels' | 'general' | 'ai' | 'mcp' | 'access';
 // grid-cols-1 (minmax(0,1fr)), never a bare `grid`: an implicit auto track
 // grows to its widest unbreakable row (channel table, picker rows) and pushes
 // the panels past a phone viewport instead of letting them scroll inside.
+//
+// While Notifications' unsaved-changes bar floats over the bottom of the
+// viewport (data-floating-bar), the tab grows room under its last panel so
+// the end of the channel list can scroll clear of the bar. Padding at the
+// end moves nothing above it.
 const TAB_LAYOUT: Record<SettingsTab, string> = {
-  channels: 'grid grid-cols-1 gap-6',
+  channels: 'grid grid-cols-1 gap-6 [html:has([data-floating-bar])_&]:pb-24',
   general: `${SETTINGS_COLUMNS} items-stretch`,
   ai: 'grid grid-cols-1 gap-6',
   mcp: `${SETTINGS_COLUMNS} items-stretch`,

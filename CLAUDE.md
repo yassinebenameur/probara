@@ -607,7 +607,9 @@ or imported groups come back empty. Any other path that creates groups through
   with a few discrete stops (sensitivity, a window length) is
   `components/ui/SegmentedControl.tsx` (radiogroup, roving arrows,
   `SELECTED_SEGMENT`), never a stepped range slider; a Switch's on track is
-  neutral ink like a checked Checkbox, never orange; monitor
+  neutral ink like a checked Checkbox, never orange; a save bar shown only
+  while a form is dirty floats over the page (portaled, `data-floating-bar`,
+  as in Settings → Notifications) so its arrival never shifts content; monitor
   types render as `components/ui/TypeBadge.tsx` (pass `config` where it is at
   hand so a SIP test call reads `CALL`, via `monitorTypeDisplay`), labels from
   `lib/monitor-type-labels.ts` only; write affordances gate on

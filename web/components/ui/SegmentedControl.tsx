@@ -7,7 +7,11 @@ export interface SegmentOption<T extends string> {
   value: T;
   /** Visible text; keep it short ("7d", "Medium"). */
   label: string;
-  /** Long name ("7 days"): tooltip and accessible name when it differs from the label. */
+  /**
+   * Long name ("7 days"), shown as a tooltip and announced as the
+   * description. The visible label stays the accessible name, so voice
+   * control ("click 7d") matches what is on screen (WCAG 2.5.3).
+   */
   title?: string;
 }
 
@@ -19,7 +23,7 @@ interface SegmentedControlProps<T extends string> {
   label?: string;
   labelledBy?: string;
   describedBy?: string;
-  /** `sm` (32px, beside `input-sm` selects) default; `xs` (28px) in dense toolbars. */
+  /** `sm` (34px, the height of an `input-sm` select) default; `xs` (28px) in dense toolbars. */
   size?: 'sm' | 'xs';
   disabled?: boolean;
   className?: string;
@@ -43,7 +47,7 @@ export default function SegmentedControl<T extends string>({
   disabled = false,
   className = '',
 }: SegmentedControlProps<T>) {
-  const item = size === 'xs' ? 'h-6 px-2 text-2xs' : 'h-7 min-w-[2.75rem] px-2.5 text-xs';
+  const item = size === 'xs' ? 'h-6 px-2 text-2xs' : 'h-[1.875rem] min-w-[2.75rem] px-2.5 text-xs';
   const ids = options.map((o) => o.value);
   return (
     <div
@@ -68,7 +72,6 @@ export default function SegmentedControl<T extends string>({
             role="radio"
             data-roving-id={option.value}
             aria-checked={selected}
-            aria-label={option.title}
             title={option.title}
             tabIndex={selected ? 0 : -1}
             disabled={disabled}

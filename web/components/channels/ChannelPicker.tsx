@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   AlertChannel,
@@ -111,19 +111,28 @@ export default function ChannelPicker({
 
   const selectedIds = new Set(value.map((a) => a.channel_id));
 
+  // An unchecked channel's assignment and position, so checking it again
+  // in the same session restores its delay where it was instead of
+  // appending it at delay 0 (which also left the parent form dirty).
+  const removedRef = useRef(new Map<string, { assignment: ChannelAssignment; index: number }>());
+
   const handleToggle = (channel: AlertChannel) => {
     if (selectedIds.has(channel.id)) {
+      const index = value.findIndex((a) => a.channel_id === channel.id);
+      removedRef.current.set(channel.id, { assignment: value[index], index });
       onChange(value.filter((a) => a.channel_id !== channel.id));
     } else {
-      onChange([
-        ...value,
-        {
-          channel_id: channel.id,
-          channel_name: channel.name,
-          channel_type: channel.type,
-          delay_seconds: 0,
-        },
-      ]);
+      const removed = removedRef.current.get(channel.id);
+      removedRef.current.delete(channel.id);
+      const assignment: ChannelAssignment = removed?.assignment ?? {
+        channel_id: channel.id,
+        channel_name: channel.name,
+        channel_type: channel.type,
+        delay_seconds: 0,
+      };
+      const next = [...value];
+      next.splice(removed ? Math.min(removed.index, next.length) : next.length, 0, assignment);
+      onChange(next);
     }
   };
 
@@ -188,58 +197,64 @@ export default function ChannelPicker({
 
               return (
                 // Wraps instead of squeezing: once the name column would drop
-                // below 12rem the delay select moves to its own line.
+                // below 12rem the delay select moves to its own line, where
+                // justify-between leaves it at the start, under the name.
                 <li
                   key={channel.id}
-                  className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 transition-colors ${
+                  className={`flex items-start gap-3 px-4 py-2.5 transition-colors ${
                     isSelected ? 'bg-well-strong' : 'hover:bg-well-hover'
                   }`}
                 >
-                  <Checkbox
-                    id={`channel-${channel.id}`}
-                    checked={isSelected}
-                    onChange={() => handleToggle(channel)}
-                    disabled={disabled}
-                  />
-
-                  {/* Name over a muted meta line (plugin, default, status), so
-                      the name keeps the width beside a delay select. */}
-                  <label
-                    htmlFor={`channel-${channel.id}`}
-                    className={`min-w-0 grow basis-48 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                  >
-                    <span className={`block truncate text-sm ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
-                      {channel.name}
-                    </span>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                      <span>{pluginName(channel.type)}</span>
-                      {isDefault && <span className="text-slate-400">(default)</span>}
-                      {channel.is_active === false && (
-                        // Same wording and tone as the channel list's Status column.
-                        <span title="This channel is inactive — selecting it delivers nothing">
-                          <Pill tone="neutral" size="xs" dot>Inactive</Pill>
-                        </span>
-                      )}
-                    </span>
-                  </label>
-
-                  {showDelays && isSelected && assignment && (
-                    <select
-                      value={assignment.delay_seconds}
-                      onChange={(e) =>
-                        handleDelayChange(channel.id, Number(e.target.value))
-                      }
-                      className="input input-sm ml-auto !w-44 flex-shrink-0 cursor-pointer"
-                      aria-label={`Delay for ${channel.name}`}
+                  {/* Centred on the name's line, not on the whole row. */}
+                  <span className="flex h-5 shrink-0 items-center">
+                    <Checkbox
+                      id={`channel-${channel.id}`}
+                      checked={isSelected}
+                      onChange={() => handleToggle(channel)}
                       disabled={disabled}
+                    />
+                  </span>
+
+                  <div className="flex min-w-0 grow flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                    {/* Name over a muted meta line (plugin, default, status), so
+                        the name keeps the width beside a delay select. */}
+                    <label
+                      htmlFor={`channel-${channel.id}`}
+                      className={`min-w-0 grow basis-48 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
-                      {delayOptions(assignment.delay_seconds).map((preset) => (
-                        <option key={preset.value} value={preset.value}>
-                          {preset.label}
-                        </option>
-                      ))}
-                    </select>
-                  )}
+                      <span className={`block truncate text-sm ${channel.is_active === false ? 'text-slate-400' : 'text-slate-200'}`}>
+                        {channel.name}
+                      </span>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                        <span>{pluginName(channel.type)}</span>
+                        {isDefault && <span className="text-slate-400">(default)</span>}
+                        {channel.is_active === false && (
+                          // Same wording and tone as the channel list's Status column.
+                          <span title="This channel is inactive — selecting it delivers nothing">
+                            <Pill tone="neutral" size="xs" dot>Inactive</Pill>
+                          </span>
+                        )}
+                      </span>
+                    </label>
+
+                    {showDelays && isSelected && assignment && (
+                      <select
+                        value={assignment.delay_seconds}
+                        onChange={(e) =>
+                          handleDelayChange(channel.id, Number(e.target.value))
+                        }
+                        className="input input-sm !w-44 flex-shrink-0 cursor-pointer"
+                        aria-label={`Delay for ${channel.name}`}
+                        disabled={disabled}
+                      >
+                        {delayOptions(assignment.delay_seconds).map((preset) => (
+                          <option key={preset.value} value={preset.value}>
+                            {preset.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 </li>
               );
             })}

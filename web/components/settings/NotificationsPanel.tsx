@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import Panel from '@/components/ui/Panel';
 import Button from '@/components/ui/Button';
 import Callout from '@/components/ui/Callout';
-import FormActions from '@/components/ui/FormActions';
 import SegmentedControl, { type SegmentOption } from '@/components/ui/SegmentedControl';
 import Switch from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -23,7 +23,7 @@ const REMINDER_OPTIONS = [
 
 // Latency anomaly presets — users pick a level, not a raw number. Each
 // sensitivity level bundles the statistical sigma + the minimum increase.
-// `short` is the segment text; `label` its tooltip and accessible name.
+// `short` is the segment text; `label` its tooltip when the two differ.
 const SENSITIVITY_LEVELS = [
   { label: 'Low', short: 'Low', sigma: 4.5, deltaPct: 30, hint: 'Only flags large, obvious slowdowns.' },
   { label: 'Medium', short: 'Medium', sigma: 3.5, deltaPct: 20, hint: 'Balanced — recommended for most monitors.' },
@@ -35,19 +35,21 @@ const BASELINE_LEVELS = [
   { label: '7 days', short: '7d', hours: 168 },
   { label: '14 days', short: '14d', hours: 336 },
 ];
+// Minutes read "N min" everywhere in the panel, as the delay and reminder
+// selects do.
 const SUSTAINED_LEVELS = [
-  { label: '1 min', short: '1m', seconds: 60 },
-  { label: '2 min', short: '2m', seconds: 120 },
-  { label: '5 min', short: '5m', seconds: 300 },
-  { label: '10 min', short: '10m', seconds: 600 },
+  { label: '1 min', short: '1 min', seconds: 60 },
+  { label: '2 min', short: '2 min', seconds: 120 },
+  { label: '5 min', short: '5 min', seconds: 300 },
+  { label: '10 min', short: '10 min', seconds: 600 },
 ];
 // How long a downstream stays quiet after its upstream recovers before paging
 // if it is still down itself. Long enough for one or two checks to confirm.
 const DEPENDENCY_GRACE_LEVELS = [
   { label: 'None', short: 'None', seconds: 0 },
-  { label: '2 min', short: '2m', seconds: 120 },
-  { label: '5 min', short: '5m', seconds: 300 },
-  { label: '15 min', short: '15m', seconds: 900 },
+  { label: '2 min', short: '2 min', seconds: 120 },
+  { label: '5 min', short: '5 min', seconds: 300 },
+  { label: '15 min', short: '15 min', seconds: 900 },
 ];
 
 // nearestIndex maps a stored numeric value back to the closest preset step.
@@ -102,11 +104,17 @@ interface SettingRowProps {
    * enough); wider controls wrap below the text in a narrow card.
    */
   inline?: boolean;
+  /** Extra classes on the control's box (an inset to line up with a list). */
+  controlClassName?: string;
 }
 
 // One setting: title and description on the left, its control on the right.
 // The text column has a 14rem basis and the row wraps, so in a narrow card
-// the control drops under the description instead of squeezing it.
+// the control drops under the description instead of squeezing it; with
+// justify-between a control alone on its line sits at the start, under the
+// text it belongs to. Top-level rows cap at max-w-2xl so on a wide card a
+// control stays near its text (and the channel delays near their channel).
+// Titles are text-ui so they read a level below the card's text-title.
 function SettingRow({
   title,
   titleId: fixedTitleId,
@@ -116,16 +124,17 @@ function SettingRow({
   muted = false,
   size = 'md',
   inline = false,
+  controlClassName = '',
 }: SettingRowProps) {
   const autoTitleId = useId();
   const titleId = fixedTitleId ?? autoTitleId;
   const descriptionId = useId();
-  const pad = size === 'sm' ? 'py-3' : 'py-4';
+  const pad = size === 'sm' ? 'py-3' : 'max-w-2xl py-4';
   return (
     <div className={`${pad} first:pt-0 last:pb-0`}>
       <div className={`flex items-start justify-between gap-x-6 gap-y-3 ${inline ? '' : 'flex-wrap'}`}>
         <div className={`min-w-0 max-w-prose grow ${inline ? 'basis-0' : 'basis-56'} transition-opacity duration-base ${muted ? 'opacity-60' : ''}`}>
-          <p id={titleId} className={`${size === 'sm' ? 'text-ui' : 'text-sm'} font-medium text-slate-200`}>
+          <p id={titleId} className="text-ui font-medium text-slate-200">
             {title}
           </p>
           {description && (
@@ -135,7 +144,7 @@ function SettingRow({
           )}
         </div>
         {control && (
-          <div className="shrink-0">{control({ titleId, descriptionId: description ? descriptionId : undefined })}</div>
+          <div className={`shrink-0 ${controlClassName}`.trim()}>{control({ titleId, descriptionId: description ? descriptionId : undefined })}</div>
         )}
       </div>
       {children}
@@ -166,11 +175,24 @@ interface Snapshot {
   dependencyGraceIdx: number;
 }
 
+// Dirty check: channel assignments compare by channel and delay only, in any
+// order, so unchecking and re-checking a channel is no change.
+function comparable(s: Snapshot): string {
+  return JSON.stringify({
+    ...s,
+    defaultChannels: s.defaultChannels
+      .map((a) => [a.channel_id, a.delay_seconds])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  });
+}
+
 // Workspace notification policy, as four section cards in two balanced
 // columns (Routing + Incidents, Latency + Dependency; stacked in that order
-// when narrow). Save and Discard sit in the shared sticky FormActions bar,
-// shown only while the form differs from the server. Read-only users see
-// every control disabled and no bar (the parent page says why, once).
+// when narrow). Save and Discard float in a bar over the bottom of the page
+// (the monitors list's bulk-action pattern, data-floating-bar) only while
+// the form differs from the server: floating, so its arrival never moves
+// the page. Read-only users see every control disabled and no bar (the
+// parent page says why, once).
 export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -202,7 +224,44 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
     dependencySuppression,
     dependencyGraceIdx,
   };
-  const dirty = saved !== null && JSON.stringify(current) !== JSON.stringify(saved);
+  const dirty = saved !== null && comparable(current) !== comparable(saved);
+
+  // Saving or discarding unmounts the bar under the focused button. Focus
+  // goes back to the control last edited (the checked radio of a segmented
+  // control; the Routing heading when that control is gone or disabled),
+  // after the render that removes the bar, so the reader is not dropped on
+  // <body>.
+  const barRef = useRef<HTMLDivElement>(null);
+  const routingHeadingRef = useRef<HTMLSpanElement>(null);
+  const lastControlRef = useRef<HTMLElement | null>(null);
+  const returnFocusRef = useRef(false);
+  const [announcement, setAnnouncement] = useState('');
+
+  const markFocusReturn = () => {
+    returnFocusRef.current = !!barRef.current?.contains(document.activeElement);
+  };
+
+  useEffect(() => {
+    if (dirty) {
+      setAnnouncement('');
+      return;
+    }
+    if (!returnFocusRef.current) return;
+    returnFocusRef.current = false;
+    let target = lastControlRef.current;
+    if (target?.getAttribute('role') === 'radio') {
+      target = target.closest('[role=radiogroup]')?.querySelector<HTMLElement>('[aria-checked="true"]') ?? target;
+    }
+    if (target && target.isConnected && !target.matches(':disabled')) target.focus();
+    else routingHeadingRef.current?.focus();
+  }, [dirty]);
+
+  const handleDiscard = () => {
+    if (!saved) return;
+    markFocusReturn();
+    apply(saved);
+    setAnnouncement('Changes discarded');
+  };
 
   const apply = (s: Snapshot) => {
     setDefaultChannels(s.defaultChannels);
@@ -261,6 +320,7 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         dependency_suppression_enabled: dependencySuppression,
         dependency_suppression_grace_seconds: DEPENDENCY_GRACE_LEVELS[dependencyGraceIdx].seconds,
       });
+      markFocusReturn();
       setSaved(current);
       showToast('Notification settings saved', 'success');
     } catch (err: unknown) {
@@ -292,17 +352,26 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
 
   return (
     <div>
-      <div className={SETTINGS_SECTION_COLUMNS}>
+      <div
+        className={SETTINGS_SECTION_COLUMNS}
+        onFocus={(e) => {
+          lastControlRef.current = e.target;
+        }}
+      >
         <div className="grid min-w-0 content-start gap-6">
-          <Panel title="Routing">
+          <Panel
+            title={
+              <span ref={routingHeadingRef} tabIndex={-1} className="outline-none">
+                Routing
+              </span>
+            }
+          >
             <div className="divide-y divide-divider">
               <SettingRow
                 title="Default channels"
                 titleId="default-channels-label"
                 description="Every monitor notifies these channels unless it has a custom list. A delay holds a channel back until the alert has lasted that long."
               >
-                {/* Full row width: the delay selects share the right edge
-                    with the reminder select below, at every card width. */}
                 <div className="mt-3">
                   <ChannelPicker
                     value={defaultChannels}
@@ -327,9 +396,12 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
                 </div>
               </SettingRow>
 
+              {/* pr-4 matches the channel list's row inset, so this select
+                  ends on the same edge as the delay selects above it. */}
               <SettingRow
                 title="Alert reminder"
                 description="Re-notify on still-open alerts at this interval."
+                controlClassName="pr-4"
                 control={({ titleId, descriptionId }) => (
                   <select
                     value={reminderSeconds}
@@ -471,20 +543,41 @@ export function NotificationsPanel({ readOnly = false }: { readOnly?: boolean })
         </div>
       </div>
 
-      {!readOnly && dirty && (
-        <FormActions
-          sticky
-          middle="Unsaved changes"
-          cancel={{ label: 'Discard', onClick: () => saved && apply(saved), disabled: saving }}
-          submit={{
-            label: saving ? 'Saving…' : 'Save changes',
-            type: 'button',
-            onClick: handleSave,
-            disabled: saving,
-            loading: saving,
-          }}
-        />
-      )}
+      <p role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
+
+      {!readOnly &&
+        dirty &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          // Portaled: a fixed bar inside a .glass would be offset by its
+          // backdrop-filter. data-floating-bar lifts the toast stack above
+          // it; data-sticky-actions keeps keyboard focus scrolled clear of it.
+          <div
+            data-floating-bar
+            data-sticky-actions
+            className="pointer-events-none fixed inset-x-0 bottom-4 z-30 flex justify-center px-4 transition-[left] duration-slow ease-emphasized sm:bottom-6 md:left-[var(--sidebar-offset)]"
+          >
+            <div
+              ref={barRef}
+              role="region"
+              aria-label="Unsaved notification settings"
+              className="glass-overlay pointer-events-auto flex max-w-full animate-toast-in flex-wrap items-center justify-end gap-3 !rounded-2xl py-2.5 pl-4 pr-2.5"
+            >
+              <span className="mr-auto text-xs text-slate-400">Unsaved changes</span>
+              <Button variant="ghost" size="sm" type="button" onClick={handleDiscard} disabled={saving}>
+                Discard
+              </Button>
+              {/* loading, not disabled: Button keeps a busy button focusable
+                  (aria-disabled), so focus survives until the bar closes. */}
+              <Button variant="accent" size="sm" type="button" onClick={handleSave} loading={saving}>
+                {saving ? 'Saving…' : 'Save changes'}
+              </Button>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
